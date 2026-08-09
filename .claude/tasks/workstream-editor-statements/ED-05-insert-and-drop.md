@@ -1,6 +1,93 @@
 # ED-05 · INSERT (native, target-gated) + DROP TABLE (both origins)
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-04
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-04
+
+## As built (2026-08-08) — where it differs from the draft below, and why
+
+The shape is the draft's: one `drop_table` both surfaces reach, an origin-gated `INSERT`, the
+dialog as the confirm in front of the funnel. Nine things were settled while building it.
+
+1. **`ddl::execute` takes the internal-name set** (`InternalTables`, an `Arc`-shared handle on
+   `Engine`). Both arms ask `is_internal` about a name only the *parse* produces, so neither can
+   be gated from `Engine::run`; and the task `bookkeep` spawns must **not** hold an `Arc<Engine>`,
+   because `Engine::drop` is what aborts that task — a task keeping the engine alive would keep
+   the abort from ever arriving. The set holds names only, so it outlives an engine harmlessly.
+   ED-06+ inherit the parameter.
+2. **The engine's own bookkeeping is folded off the returned effect**, in one place —
+   `Engine::settle_effect`, which `run` and `drop_table` both call. `TableRemoved` cancels the
+   table's profile scan and clears its internal flag; `TableUpserted` records the origin as
+   before. `cancel_profile` therefore lands *after* the deregister rather than before it: it
+   needs the lifecycle lock, which the spawned task cannot reach, and the end state is identical
+   (the scan is aborted either way and no new plan can resolve the name).
+3. **The app-facing name is `Engine::drop_table`**, delegating to `ddl::tables::drop_table`. The
+   pane has an `&Engine`, not a `SessionContext`, so it cannot call the free function directly —
+   same funnel, one hop.
+4. **Dependent views are read from the providers** (`catalog::dependent_views`), not from the
+   store's `ViewInfo`. The report is the *engine's* sentence and ED-02's fold already said so
+   ("named in the report's own sentence"); a view is anything in the schema still carrying a
+   plan, and the plan was inlined at creation, so the nested reader is found with no recursion.
+   The pane's before-the-fact warning still reads the store's recorded copy — the same fact from
+   before the drop.
+5. **Refusal wording stays in `Blocked`**, so `INSERT` into an external table answers
+   `Blocked::InsertExternal` verbatim ("INSERT targets internal tables. Load external table data
+   through Table Config") rather than the draft's name-carrying sentence. `Blocked` is `Copy` and
+   is the one place a refusal is worded (validate.rs says so itself); a variant carrying a name
+   would be a second vocabulary for one refusal.
+6. **`Blocked::InsertOverwrite` was reworded** to "An INSERT that replaces rows is not supported…"
+   because `REPLACE INTO` reaches the arm — only the *plan* names it, so the router cannot — and
+   DataFusion folds it onto the same `InsertOp` the Arrow sink refuses. Not an agent-path message,
+   so nothing pinned moved.
+7. **INSERT drives the plan it gated** rather than re-dispatching the text through
+   `ctx.sql_with_options`. `execute_logical_plan` special-cases only `Ddl` and `Statement` and
+   hands a DML node to exactly this, so it *is* the native dispatch minus a second parse — and a
+   second parse would gate one value and execute another. The dml-only `SQLOptions` triple is
+   applied to the same plan as defense in depth.
+8. **`DropTarget::Table` carries the `TableOrigin`**, set from the row the gesture started on.
+   Resolving it inside the dialog would need either a lookup that cannot fail or a default, and a
+   default reads "the source files on disk are not deleted" at the one moment that is false.
+9. **The dialog's *title* keeps "Drop table" for both origins**; only the body copy reads the
+   origin. The action is the same one, the button label and the log entry share that verb with the
+   other three targets, and what the user needs to know — that the data goes — is what the body
+   sentence now says in the engine's own words.
+
+Then two more, settled in review:
+
+10. **The data is discarded by rename** (`ddl::tables::discard`), the mirror of the spool's
+    publish-by-rename. Deleting in place is interruptible at every step, and what an interruption
+    leaves is a half-emptied directory under a live table name that nothing collects — the def is
+    already gone and `tidy_strata_dir` sweeps only `.tmp-…`. The rename is the operation; the
+    removal that follows is housekeeping, logged rather than returned.
+11. **A drop is background work.** One `INSERT` is one file with no compaction, so a heavily
+    written table is thousands of files and the delete is not instant. `Engine::drop_table` holds
+    a `BackgroundGuard` — `Lifecycle::exports` generalized to `background`, since the
+    close-while-running flag is its only consumer and it asks one question — so a window closing
+    over a running delete asks first. The confirm's copy grew a third arm with it (`whose_work` →
+    `Mine`/`Agent`/`Background`): "Queries are running" was already inaccurate for a profile scan
+    and an export, and a table delete made it plainly wrong.
+
+12. **`RescanTable` re-reads the table's facts rather than re-registering it.** The draft said
+    "`StoreEffect::RescanTable` so `TableMeta.rows` refreshes through the scan driver", and that
+    is what shipped first — but the scan driver re-*registers*, which replaces the provider and
+    strands the `Arc` every view above it captured (D10/D11), which is the only reason a table
+    Refresh re-creates them. An append cannot do that: the sink schema-checks first, so the shape
+    a view captured is still there, and the provider re-LISTs per scan so it finds the new file
+    unaided. The fold is now `refresh_table_rows` → `Engine::table_meta` → `table_registered`:
+    no re-inference, no view churn, no epoch bump, no `Loading` flash, and the count still read
+    from the footers. A table **Refresh** keeps the full pass — it may genuinely move the schema.
+13. **The runtime's per-file statistics cache is handed to the table** (`ListingTable::with_cache`
+    in `register_external`). Not ED-05's by rights, but ED-05 is what made it bite: statistics are
+    collected per scan *and* per registration, and an `INSERT` asked for a re-scan, so the *k*th
+    write re-read *k* footers. `SessionContext::register_listing_table` does this for itself, so
+    snapshots always had it and only our hand-built config did not — the second default the
+    convenience constructor applies that we had to re-apply by hand, after `collect_stat`.
+
+Landed with it: the invariant amendments (AGENTS.md §2 + `reference/INVARIANTS.md` +
+`reference/ENGINE.md`), and both statements documented as built in `STATEMENTS_SPEC.md` — out of
+its *Not yet implemented* list and into a section of their own, per this workstream's own rule.
+(The spec's old amendment table went with the docs rebuild that made the file a record of the code
+as built rather than a plan for it.)
+
+---
 
 ## Goal
 
@@ -58,7 +145,7 @@ these ride on is documented in `docs/STATEMENTS_SPEC.md` §6.1.
   snapshots themselves unaffected (materialized copies).
 - Update the drop-routing invariant text (AGENTS.md §2 + `docs/reference/INVARIANTS.md`) in this
   change — DROP TABLE works on both origins from the editor; the catalog confirm remains for the
-  pointer gesture — and move INSERT/DROP out of `docs/STATEMENTS_SPEC.md` §6.2, documenting the
+  pointer gesture — and move INSERT/DROP out of `docs/STATEMENTS_SPEC.md`'s *Not yet implemented* list, documenting the
   built behaviour there.
 
 **The sidebar drop is the same destructive action, so it goes through the same funnel** (gap found

@@ -71,6 +71,25 @@ to `0`, because DF 54's 1 MiB / infinite-TTL default makes every re-listing answ
 previous file set; and `register_external` refuses a `__snap_`-prefixed name outright, so a
 hand-edited `project.json` cannot do what a typed statement cannot.
 
+The two statements that then write over such a table are ED-05, in the same module. `INSERT` plans
+the statement and gates only the **target** — outside `Engine::is_internal` (an external table, or
+a view) it is refused, as is any write op that is not `Append`; everything after that is
+DataFusion's own INSERT path, appending one LZ4-frame IPC file per statement with no compaction,
+and the plan that was gated is the plan that runs. `DROP TABLE` works on **both** origins and is
+the one place a table is dropped: `ddl::tables::drop_table` deregisters first, discards
+`.strata/tables/<slug>/` only where the def is internal, names the dependent views without
+cascading, and answers with `StoreEffect::TableRemoved`. The catalog pane's confirm is a gesture in
+front of that same call (`Engine::drop_table`, after its store-first write), not a second copy of
+it — before ED-05 the pane's `deregister` orphaned an internal table's data forever — and the
+sentence it shows before the fact is the engine's `ddl::drop_intent`, paired with the report's own.
+The discard is **by rename** (`ddl::tables::discard`): the directory moves into a `.tmp-…` sibling
+and is only then walked, the mirror of the spool's publish-by-rename, so an interrupted delete
+leaves what `tidy_strata_dir` sweeps rather than a half-emptied directory under a live table name.
+The rename is the operation and the removal is housekeeping — a failure to finish it is logged, not
+returned. And because an `INSERT` is one file with no compaction, that delete is not instant, so
+`Engine::drop_table` holds a `BackgroundGuard` (`Lifecycle::background`, the count `export`
+already used) and the close-while-running confirm asks before a window takes the runtime away.
+
 **A remote scheme is something we register, and a connection is what registers it.** DataFusion
 core resolves nothing: there is no built-in "read `s3://…`", so an embedder builds an
 `object_store` and calls `register_object_store` **per bucket** or every scan of it fails with *no

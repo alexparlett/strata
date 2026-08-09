@@ -77,10 +77,40 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   never a second catalog), does a drop delete data, can Configure edit it (no: the item is
   *absent*). The def travels and the data does not, and the failed row says so in its own words.
   The spool is the **parsed plan**, never re-rendered SQL.
+- **A table is dropped in one place, on both origins, and a confirm is a gesture in front of that
+  place — never a second implementation of it.** `ddl::tables::drop_table` resolves the target,
+  deregisters, deletes `.strata/tables/<slug>/` **only** for an internal def, and names the
+  dependent views without cascading; the catalog pane reaches it through `Engine::drop_table` after
+  its store-first write, a typed `DROP TABLE` through the router. The pane's own `deregister`
+  orphaned an internal table's data forever. The two wordings (`ddl::drop_intent` before,
+  the report after) are the engine's, so the card cannot promise what the report then contradicts.
+- **A table's data is discarded by rename, and the drop that does it is background work.** The
+  directory moves to a `.tmp-…` sibling and is only then walked (`ddl::tables::discard`), so an
+  interruption leaves what `tidy_strata_dir` already sweeps rather than a half-emptied directory
+  under a live table name; the rename is the operation and the removal is housekeeping, so a
+  failure to finish it is logged, never reported as a failed drop. And because one `INSERT` is one
+  file with no compaction, that delete is not instant — so it holds a `BackgroundGuard`
+  (`Lifecycle::background`, shared with export) and the close confirm asks before a window takes
+  the runtime away mid-delete.
+- **A write statement only ever reaches files Strata owns, and the gate is the *parsed* target.**
+  `INSERT` asks `Engine::is_internal` about the target its plan names and otherwise runs
+  DataFusion's own INSERT path — one appended IPC file per statement, no compaction, and the
+  schema check is DataFusion's. The plan that was judged is the plan that runs; `Blocked` carries
+  every refusal's wording, including the two only a plan can name.
+- **An append re-reads the table's facts; it does not re-register it, and it leaves the views
+  alone.** Re-registering replaces the provider, and *that* is what strands the `Arc` a view
+  captured — which is why a table Refresh re-creates them. An `INSERT` cannot change the shape a
+  view captured (the sink schema-checks first) and the old provider re-LISTs per scan anyway, so
+  `refresh_table_rows` → `Engine::table_meta` → `table_registered` is the whole fold: no
+  re-inference, no view churn, no epoch bump, no `Loading` flash. Still read from the files,
+  never added up store-side.
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DF 54
   turns one on by default with an infinite TTL, which silently serves ↻, Configure's re-inference
   and `CREATE OR REPLACE` the previous file set. `ENGINE_KEYS` defaults it to `0` and
-  `build_runtime` applies that before any override.
+  `build_runtime` applies that before any override. **The per-file statistics cache is the
+  opposite call** — keyed per object, invalidated on size/mtime, so it spares only an unchanged
+  file — and `register_external` must hand it over by hand (`ListingTable::with_cache`), as
+  `register_listing_table` already does for snapshots.
 - **A reader that outlives one Run pins the snapshot it reads** (`Engine::pin_snapshot`, RAII).
   Never a staleness check or warning instead.
 - **The snapshot is Arrow IPC, so a result's type survives it.** Parquet cannot write a union at

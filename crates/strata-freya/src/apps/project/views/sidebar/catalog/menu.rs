@@ -216,14 +216,18 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
     // makes "Refreshing…" mean *this* table rather than "some pass is running": the row's status
     // glyph says the same thing from the other side.
     let scanning = actions.catalog.peek().is_scanning();
-    let (loading, internal) = {
+    // The origin travels with the drop gesture (`DropTarget::Table`) as well as gating Configure:
+    // it is what decides whether the confirm says the data goes, and this is the last place the
+    // def is in hand.
+    let (loading, origin) = {
         let p = actions.project.peek();
         let row = p.tables.iter().find(|t| t.def.name == name);
         (
             matches!(row.map(|t| &t.reg), Some(Reg::Loading)),
-            row.is_some_and(|t| t.def.origin.is_internal()),
+            row.map(|t| t.def.origin).unwrap_or_default(),
         )
     };
+    let internal = origin.is_internal();
     let registered = actions.registered(CatalogKind::Table, &name);
 
     Menu::new()
@@ -273,7 +277,10 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
         .child(Divider::menu())
         .child(actions.danger("Drop table", move |a| {
             let mut slot = a.drop_target;
-            slot.set(Some(DropTarget::Table(name.clone())));
+            slot.set(Some(DropTarget::Table {
+                name: name.clone(),
+                origin,
+            }));
         }))
 }
 

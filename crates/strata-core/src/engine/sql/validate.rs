@@ -398,7 +398,10 @@ pub enum Blocked {
     // decided.
     /// `INSERT` into an external table or a view — only internal tables take writes.
     InsertExternal,
-    /// `INSERT OVERWRITE` — no internal-table implementation, and the Arrow sink has none.
+    /// An `INSERT` that replaces rows rather than appending — `INSERT OVERWRITE` (refused
+    /// here, off the parsed statement) and `REPLACE INTO` (refused at dispatch, since only
+    /// the plan names it). DataFusion folds both onto the one thing the Arrow sink has no
+    /// implementation for, so they are one refusal.
     InsertOverwrite,
     /// `SET` of a key Strata owns (`is_owned_key`).
     SetOwned,
@@ -454,8 +457,8 @@ impl Blocked {
                 "INSERT targets internal tables. Load external table data through Table Config"
             }
             Blocked::InsertOverwrite => {
-                "INSERT OVERWRITE is not supported. Drop the table and recreate it with \
-                 CREATE TABLE AS"
+                "An INSERT that replaces rows is not supported. Drop the table and recreate it \
+                 with CREATE TABLE AS"
             }
             Blocked::SetOwned => "This option is managed by Strata and cannot be set",
             Blocked::SetRuntime => "Engine runtime options are set in Settings",
