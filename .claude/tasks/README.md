@@ -48,6 +48,7 @@ Read this index first, then open only the phase/workstream file you're working i
 - 🟢 **UI only** — the view exists but is a shell: on fixture data, decorative, or not dispatched.
 - 🟡 **partial** — some of it works; specifics in the task.
 - ⬜ **todo** — not started in Freya.
+- ➡ **graduated** — the task moved to its own workstream; its file is the pointer.
 - `[core ✓]` — the underlying logic already exists in `strata-core`; only Freya UI/wiring remains.
 
 ## Where we are
@@ -87,7 +88,14 @@ Read this index first, then open only the phase/workstream file you're working i
   frontends — an in-app MCP server first (agent queries land as **real query tabs** on the
   ordinary press → snapshot machinery), a native chat pane as the flagship follow-on, a headless
   `strata mcp <project>` stdio host third. Spec: `docs/AGENT_ACCESS_SPEC.md` (+
-  `docs/agent-access-dataflow.mermaid`).
+  `docs/agent-access-dataflow.mermaid`). AA-01..05 are done; the chat pane graduated to its
+  own workstream (below).
+- **Assistant** (`workstream-assistant/`, AS) — the native chat pane, graduated from AA-06
+  with its brain decision settled: an app-owned agentic loop over a **pluggable provider
+  seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama, OpenAI-compatible), driving
+  the AA tool vocabulary in-process. Four tasks: in-process facade + tool manifest, provider
+  seam + loop, Settings ▸ Assistant, the pane. Decision record in that workstream's README;
+  spec: `docs/AGENT_ACCESS_SPEC.md` §9.
 - **Editor statements** (`workstream-editor-statements/`, ED) — lifting the
   managed-DDL policy into a full-statement editor: internal tables persisted under
   `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`, editor

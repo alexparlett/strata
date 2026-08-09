@@ -27,7 +27,7 @@ same UI seam the MCP server does.
 | 03c | Seam hardening: one identity per session, per client | ✅ | — | 03b |
 | 04 | Settings ▸ Agent access (enable · port · token) | ✅ | — | 03 |
 | 05 | Headless host: `strata mcp <project>` over stdio | ✅ | — | 01, 02 |
-| 06 | Chat pane (flagship; may graduate to its own workstream) | ⬜ | — | 03 |
+| 06 | Chat pane — **graduated** to `../workstream-assistant/` (AS-01..04) | ➡ | — | 03 |
 
 ## Why the order
 
@@ -48,8 +48,10 @@ the whole vocabulary against a **mock host** — testable without a renderer or 
 is wiring a proven surface into the app rather than debugging both halves at once. 04 is the
 control for a capability 03 already ships dark (off by default). 05 is deliberately after 02,
 not after 03 — it shares the vocabulary and the registration pass but none of the bridge. 06 is
-the flagship and the largest: it starts with the deferred brain decision (native Anthropic
-client vs Agent SDK sidecar) and reuses everything below it unchanged.
+the flagship and the largest, and it graduated: the brain decision it deferred is settled
+(app-owned loop over a pluggable `genai` provider seam — decision record in
+`../workstream-assistant/README.md`), and the work is decomposed there as AS-01..04, reusing
+everything below it unchanged.
 
 ## Standing rules this workstream inherits (AGENTS.md §2)
 
@@ -78,4 +80,5 @@ client vs Agent SDK sidecar) and reuses everything below it unchanged.
   the window and the user is looking at it.
 
 ## Legend
-✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.
+✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · ➡ graduated to another workstream ·
+`[core ✓]` logic in `strata-core`.
