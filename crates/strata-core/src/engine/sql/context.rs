@@ -26,6 +26,10 @@ pub enum Clause {
     /// `DESCRIBE <relation>` — an inspection statement whose operand is a relation
     /// name, like a FROM target.
     Describe,
+    /// `EXECUTE <name>` / `DEALLOCATE <name>` — a session statement whose operand is a
+    /// **prepared statement** name (ED-08). One clause for both, because the operand is
+    /// the same set of names and nothing else can complete either.
+    Execute,
     Unknown,
 }
 
@@ -187,6 +191,9 @@ fn clause_of(word: &str) -> Clause {
         "LIMIT" => Clause::Limit,
         "OFFSET" => Clause::Offset,
         "DESCRIBE" => Clause::Describe,
+        "EXECUTE" | "DEALLOCATE" => Clause::Execute,
+        // `PREPARE` is deliberately absent: it also appears *inside* `DEALLOCATE PREPARE p`,
+        // where the nearest-clause scan would take it and lose the prepared-name offer.
         _ => Clause::Unknown,
     }
 }
@@ -240,6 +247,20 @@ fn role_at(clause: Clause, prev: Option<&Tok>, prev2: Option<&Tok>) -> Role {
         Clause::Describe => {
             // `DESCRIBE |` expects the relation; after it, the statement is done.
             if prev.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("DESCRIBE")) {
+                Role::Operand
+            } else {
+                Role::Continuation
+            }
+        }
+        Clause::Execute => {
+            // `EXECUTE |` / `DEALLOCATE [PREPARE] |` expects the prepared name; after it, the
+            // rest is arguments. Postgres lets `DEALLOCATE` take an optional `PREPARE` (which
+            // sqlparser and DataFusion both ignore), so the name follows either word.
+            let named = prev.is_some_and(|t| {
+                t.kind == TokKind::Keyword
+                    && (t.eq_ci("EXECUTE") || t.eq_ci("DEALLOCATE") || t.eq_ci("PREPARE"))
+            });
+            if named {
                 Role::Operand
             } else {
                 Role::Continuation

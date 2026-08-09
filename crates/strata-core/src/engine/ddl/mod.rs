@@ -22,9 +22,11 @@
 //! by the task that owns its capability, and until then answers with its stub refusal.
 
 mod copy;
+mod session;
 mod tables;
 mod views;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -41,6 +43,8 @@ use crate::engine::{fold_ident, InternalTables, CATALOG, SCHEMA};
 use crate::util::plural;
 use strata_model::{TableDef, ViewDef};
 
+/// The session state a statement can move (ED-08) — held by the engine, reached by the arms.
+pub use session::SessionScope;
 /// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
 /// catalog pane says them too, and `ddl` is the vocabulary module the app already reads.
 pub use tables::drop_intent;
@@ -110,6 +114,11 @@ pub enum StoreEffect {
     /// session-scoped (spec §8) — but names that did not resolve a moment ago now do, so the
     /// catalog epoch has to move with them.
     FunctionsChanged,
+    /// The session's prepared statements moved (ED-08) — a `PREPARE` or a `DEALLOCATE`. Nothing
+    /// persists either, and for the same reason it is still an effect: `EXECUTE p` resolves now
+    /// and did not a moment ago, so both the language service's snapshot and every tab's
+    /// diagnostics have to be re-derived against the session the engine now holds.
+    PreparedChanged,
 }
 
 /// Where an intercepted statement may write, and what it may write **relative to**.
@@ -129,14 +138,19 @@ pub type DataRoot = Option<PathBuf>;
 ///
 /// The timer and the kind are stamped here rather than in the arms, so a report can never
 /// disagree with the statement that produced it.
-#[allow(unused_variables)] // …until each arm's own ED task fills it in (module doc).
+///
+/// `baseline` is the engine's `datafusion.*` overrides cloned at dispatch — what a `RESET` puts a
+/// key back to (`session::reset`). A clone rather than a handle, because nothing reached from here
+/// may hold the engine: the arms run in the task `Engine::bookkeep` spawned, and the engine's
+/// `Drop` is what aborts it.
 pub async fn execute(
     ctx: &SessionContext,
     kind: StmtKind,
     stmt: DFStatement,
-    sql: String,
     root: DataRoot,
     internal: InternalTables,
+    scope: SessionScope,
+    baseline: BTreeMap<String, String>,
 ) -> Result<StatementReport, String> {
     let start = Instant::now();
     // Exhaustive on `StmtKind` with no wildcard, so a kind the router learns to intercept is a
@@ -156,8 +170,10 @@ pub async fn execute(
         // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
         StmtKind::Copy => copy::copy_to(ctx, stmt).await,
         // ED-08 — the session overlay and prepared statements.
-        StmtKind::Set | StmtKind::Reset => Err(unimplemented(kind)),
-        StmtKind::Prepare | StmtKind::Deallocate => Err(unimplemented(kind)),
+        StmtKind::Set => session::set(ctx, stmt, &scope).await,
+        StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,
+        StmtKind::Prepare => session::prepare(ctx, stmt, &scope).await,
+        StmtKind::Deallocate => session::deallocate(ctx, stmt, &scope).await,
         // ED-09 — the function factory and the swappable function catalog.
         StmtKind::CreateFunction | StmtKind::DropFunction => Err(unimplemented(kind)),
         // ED-10 — the typed form of Table Config's registration.

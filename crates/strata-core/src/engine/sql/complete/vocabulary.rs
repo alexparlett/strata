@@ -128,8 +128,9 @@ pub(super) fn continuation_keywords(clause: Clause) -> Vec<&'static str> {
         Clause::Limit | Clause::Offset => {
             v.extend(ladder_after(clause));
         }
-        // `DESCRIBE t` is complete — nothing follows.
-        Clause::Describe => {}
+        // `DESCRIBE t` is complete — nothing follows. `EXECUTE p` / `DEALLOCATE p` likewise:
+        // what may follow an `EXECUTE`'s name is its arguments, and no keyword opens those.
+        Clause::Describe | Clause::Execute => {}
         Clause::Start | Clause::Unknown => {
             v.extend(ladder_after(Clause::Select));
             v.extend(EXPR_OPS);

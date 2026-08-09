@@ -43,7 +43,7 @@ use datafusion::sql::sqlparser::ast::{
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 
-use crate::engine::query::is_snapshot_name;
+use crate::engine::query::{is_snapshot_name, ReadPolicy};
 use crate::engine::sql::lex::{
     is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -410,6 +410,12 @@ pub enum Blocked {
     /// `SET datafusion.format.*` — display keys, which the grid and the chart read
     /// from the Settings store.
     SetFormat,
+    /// `SET datafusion.sql_parser.dialect` — the key the *language service* reads from
+    /// the Settings store while the planner reads it from the session, so a session
+    /// value leaves the editor lexing the buffer by rules the planner has stopped
+    /// using (WJ-04). The same rule as [`SetFormat`](Blocked::SetFormat); a different
+    /// surface, so a different sentence.
+    SetDialect,
     /// `PREPARE` of a non-query body: `verify_plan` cannot see through the later
     /// `EXECUTE`, so the fence is here.
     PrepareNonQuery,
@@ -461,8 +467,9 @@ impl Blocked {
                  with CREATE TABLE AS"
             }
             Blocked::SetOwned => "This option is managed by Strata and cannot be set",
-            Blocked::SetRuntime => "Engine runtime options are set in Settings",
+            Blocked::SetRuntime => "Engine runtime options require a restart. Set them in Settings",
             Blocked::SetFormat => "Display options are set in Settings",
+            Blocked::SetDialect => "The SQL dialect is set in Settings",
             Blocked::PrepareNonQuery => "PREPARE supports queries only",
             Blocked::ReservedName => "Names starting with '__snap_' are reserved for query results",
         }
@@ -531,12 +538,11 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
         // the inner plan. The agent surface cannot `PREPARE`, so `EXECUTE` is nothing
         // it can name, and it keeps the wildcard answer it shipped with.
         //
-        // The one `Verdict::Query` the query path cannot run **yet**: `run_and_snapshot`
-        // sets `with_allow_statements(false)` (`query.rs`), so `verify_plan` rejects
-        // `LogicalPlan::Statement(Execute)` with DataFusion's wording. Widening that to
-        // statements-only for this arm is ED-08's, and it must stay per-dispatch — the
-        // read path's triple is all-false on purpose. (`EXECUTE IMMEDIATE` is not a hole:
-        // DataFusion answers `not_impl` before any string is planned.)
+        // The one `Verdict::Query` whose plan is not a plain query: it is a
+        // `LogicalPlan::Statement`, which the read path's all-false triple refuses. That
+        // widening is [`read_policy`]'s, per dispatch, because it is only sound for a
+        // statement this router judged. (`EXECUTE IMMEDIATE` is not a hole: DataFusion
+        // answers `not_impl` before any string is planned.)
         SqlStatement::Execute { .. } => (Verdict::Query, Some(Blocked::Unsupported)),
         SqlStatement::CreateView(_) => intercept(StmtKind::CreateView, Blocked::CreateView),
         SqlStatement::Drop { object_type, .. } => match object_type {
@@ -579,6 +585,24 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
 /// A form both surfaces run.
 fn runnable() -> (Verdict, Option<Blocked>) {
     (Verdict::Query, None)
+}
+
+/// How a [`Verdict::Query`] statement has to be **planned** (ED-08) — the second half of the
+/// router's answer for the one query form whose plan is not a plain query.
+///
+/// `EXECUTE` returns rows and rides the snapshot pipeline whole, but its plan is a
+/// `LogicalPlan::Statement`, which the read path's all-false triple refuses. Widening rides the
+/// **dispatch** rather than the path, because the widening is only sound for a statement that came
+/// through this router: `PREPARE` verified the prepared plan under the read triple, and
+/// `verify_plan` cannot see through an `Execute` node to check it again. Held here, beside
+/// [`classify`], so the form that needs it is named once.
+pub fn read_policy(stmt: &DFStatement) -> ReadPolicy {
+    match stmt {
+        DFStatement::Statement(s) if matches!(s.as_ref(), SqlStatement::Execute { .. }) => {
+            ReadPolicy::Statements
+        }
+        _ => ReadPolicy::ReadOnly,
+    }
 }
 
 /// A form the editor implements as `kind` and the agent surface refuses as `agent`.

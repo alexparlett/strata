@@ -57,7 +57,7 @@ pub use chart::MAX_BINS;
 /// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
 /// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
 /// (ED-05) — the catalog's confirm says before the fact what the report says after it.
-pub use ddl::{drop_intent, StatementOutcome, StatementReport, StoreEffect};
+pub use ddl::{drop_intent, SessionScope, StatementOutcome, StatementReport, StoreEffect};
 pub use query::purge_snapshot_root;
 
 use sql::{PolicyRefusal, Verdict};
@@ -113,8 +113,9 @@ use crate::engine::plan::QueryPlan;
 use providers::StrataCatalogProvider;
 use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
+    ReadPolicy,
 };
-use sql::FunctionCatalog;
+use sql::{FunctionCatalog, PreparedSym};
 use strata_model::{
     Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId,
 };
@@ -329,6 +330,9 @@ pub struct Engine {
     data_root: Mutex<Option<PathBuf>>,
     /// Which registered tables are **internal** — see [`InternalTables`].
     internal: InternalTables,
+    /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
+    /// Default on a fresh engine, which is what makes a restart clear the session.
+    session: SessionScope,
 }
 
 /// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
@@ -407,6 +411,7 @@ impl Engine {
             functions,
             data_root: Mutex::default(),
             internal: InternalTables::default(),
+            session: SessionScope::default(),
         }
     }
 
@@ -533,6 +538,12 @@ impl Engine {
     /// `datafusion.runtime.*` is the exception, and the reason this returns anything: those
     /// configure the `RuntimeEnv`, which is fixed when the `SessionContext` is built. They
     /// are recorded, not applied, and `true` means the caller owes the user a restart.
+    ///
+    /// A key the **session overlay** holds is recorded and not applied either (ED-08): a typed
+    /// `SET` wins for its key until `RESET` or restart, so the new value becomes the baseline a
+    /// `RESET` will land on rather than something that quietly overwrites what the user just
+    /// typed. That is the whole precedence rule, and it lives here because this is the only place
+    /// the two writers meet.
     pub fn set_config(&self, overrides: BTreeMap<String, String>) -> bool {
         let mut current = self.overrides.lock().unwrap();
         if *current != overrides {
@@ -541,7 +552,10 @@ impl Engine {
             let options = state.config_mut().options_mut();
             let touched: BTreeSet<&String> = current.keys().chain(overrides.keys()).collect();
             for key in touched {
-                if config::is_restart_key(key) || config::is_owned_key(key) {
+                if config::is_restart_key(key)
+                    || config::is_owned_key(key)
+                    || self.session.overlaid(key)
+                {
                     continue;
                 }
                 let value = match overrides.get(key) {
@@ -571,6 +585,15 @@ impl Engine {
     /// The `datafusion.*` overrides this engine is running with.
     pub fn overrides(&self) -> BTreeMap<String, String> {
         self.overrides.lock().unwrap().clone()
+    }
+
+    /// The statements `PREPARE` has left in this session (ED-08), as language-service symbols —
+    /// what completion offers at an `EXECUTE` / `DEALLOCATE` operand.
+    ///
+    /// Off the engine's own mirror, because DataFusion's `SessionState::prepared_plans` is
+    /// `pub(crate)` and has no public enumeration.
+    pub fn prepared(&self) -> Vec<PreparedSym> {
+        self.session.prepared()
     }
 
     /// Validate `sql` against this engine's live session (P2-18): lexical lints,
@@ -614,9 +637,11 @@ impl Engine {
     /// underline is a statement Run is prepared to perform, and a refusal fails the run with
     /// the words the squiggle showed rather than a DataFusion error about a rule that is ours.
     ///
-    /// - `Query` delegates to [`query`](Engine::query) **byte-for-byte**. It is the only arm
-    ///   that touches the snapshot lifecycle, which is what keeps "DDL does not retire
-    ///   snapshots" true by construction rather than by care.
+    /// - `Query` delegates to [`query`](Engine::query)'s body **byte-for-byte**, carrying only
+    ///   the one thing the router knows and the read path cannot: the [`ReadPolicy`] an `EXECUTE`
+    ///   needs ([`sql::read_policy`], ED-08). It is the only arm that touches the snapshot
+    ///   lifecycle, which is what keeps "DDL does not retire snapshots" true by construction
+    ///   rather than by care.
     /// - `Intercept(kind)` goes to `ddl::execute`, bracketed by
     ///   [`bookkeep`](Engine::bookkeep) so `cancel` / `is_running` / the close-while-running
     ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
@@ -625,10 +650,9 @@ impl Engine {
     ///   precisely because DDL executes *eagerly* inside it (spec §3), so anything that must
     ///   not run cannot be allowed to plan.
     ///
-    /// The `SQLOptions` triple the read path carries (`query::materialize`) stays all-false and
-    /// becomes defense in depth behind this: it is no longer the gate, and it never had the
-    /// vocabulary to be one — it can refuse a class of plan, not name the surface that owns the
-    /// capability.
+    /// The `SQLOptions` triple the read path carries (`query::materialize`) stays defense in
+    /// depth behind this: it is no longer the gate, and it never had the vocabulary to be one —
+    /// it can refuse a class of plan, not name the surface that owns the capability.
     pub async fn run(
         &self,
         ws: WsId,
@@ -648,16 +672,18 @@ impl Engine {
         };
         match verdict {
             Verdict::Query => self
-                .query(ws, tag, sql, page_size)
+                .read(ws, tag, sql, page_size, sql::read_policy(&stmt))
                 .await
                 .map(|(output, batch)| RunOutcome::Rows(output, batch)),
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
                 let root = self.data_root.lock().unwrap().clone();
                 let internal = self.internal.clone();
+                let scope = self.session.clone();
+                let baseline = self.overrides();
                 let report = self
                     .bookkeep(ws, tag, "statement", async move {
-                        ddl::execute(&ctx, kind, stmt, sql, root, internal).await
+                        ddl::execute(&ctx, kind, stmt, root, internal, scope, baseline).await
                     })
                     .await?;
                 self.settle_effect(report.effect.as_ref());
@@ -704,8 +730,11 @@ impl Engine {
                 self.cancel_profile(name);
             }
             // Nothing for the engine to learn. An `INSERT` moves data under a registration that
-            // is unchanged, and the function catalog is not a table.
-            StoreEffect::RescanTable { .. } | StoreEffect::FunctionsChanged => {}
+            // is unchanged; the function catalog is not a table; and a prepared statement's
+            // bookkeeping is the session's, already applied by the arm that moved it.
+            StoreEffect::RescanTable { .. }
+            | StoreEffect::FunctionsChanged
+            | StoreEffect::PreparedChanged => {}
         }
     }
 
@@ -822,6 +851,24 @@ impl Engine {
         sql: String,
         page_size: usize,
     ) -> Result<(QueryOutput, RecordBatch), String> {
+        self.read(ws, tag, sql, page_size, ReadPolicy::default())
+            .await
+    }
+
+    /// [`query`](Engine::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
+    ///
+    /// Private, and `query` is the read-only entry every other caller keeps: the widening is only
+    /// ever sound for a statement [`sql::read_policy`] judged, so the ability to ask for it does
+    /// not belong on the facade (spec §1). One body either way — the lifecycle is identical, and a
+    /// second copy of it is what the whole snapshot discipline exists to avoid.
+    async fn read(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        sql: String,
+        page_size: usize,
+        policy: ReadPolicy,
+    ) -> Result<(QueryOutput, RecordBatch), String> {
         let snapshot = SnapshotId(self.snap_seq.fetch_add(1, Ordering::Relaxed));
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
@@ -841,7 +888,7 @@ impl Engine {
             let ctx = self.ctx.clone();
             let engine_id = self.engine_id;
             let task = self.rt().spawn(async move {
-                run_and_snapshot(&ctx, engine_id, snapshot, &sql, page_size, &fmt).await
+                run_and_snapshot(&ctx, engine_id, snapshot, &sql, page_size, &fmt, policy).await
             });
             lc.inflight.insert(
                 ws,
@@ -2714,13 +2761,13 @@ mod tests {
             .run(
                 WsId(1),
                 RunTag(1),
-                "SET datafusion.execution.batch_size = 2".into(),
+                "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'x.csv'".into(),
                 10,
             )
             .await
             .err()
             .expect("not implemented yet");
-        assert_eq!(err, "SET is not implemented yet");
+        assert_eq!(err, "CREATE EXTERNAL TABLE is not implemented yet");
     }
 
     /// A statement that **is** implemented still needs somewhere to put what it makes, and an

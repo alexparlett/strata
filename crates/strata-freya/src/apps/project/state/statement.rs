@@ -91,8 +91,9 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
 /// The engine rides beside the `Copy` handles rather than on [`Settle`], exactly as `drop_row`
 /// takes it: `EngineCtx` is an `Arc` and would cost the struct its `Copy`, for one arm.
 fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) {
-    // No effect is not a failure: `SET`, `PREPARE` and `DEALLOCATE` change the session and
-    // nothing the catalog holds, so there is nothing to persist and the report stands on its own.
+    // No effect is not a failure: a `SET` and a `COPY` change the session and the disk
+    // respectively and nothing the catalog holds, so there is nothing to persist and the report
+    // stands on its own.
     let landed = match &report.effect {
         None => true,
         Some(effect) => apply(to, engine, effect),
@@ -163,9 +164,10 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
             refresh_table_rows(engine.clone(), to.project, name.clone());
             true
         }
-        // Nothing persists (functions are session-scoped) and no row changes, but names that
-        // did not resolve a moment ago now do — and diagnostics resolve against the engine.
-        StoreEffect::FunctionsChanged => {
+        // Nothing persists (functions and prepared statements are both session-scoped) and no row
+        // changes, but names that did not resolve a moment ago now do — and diagnostics and
+        // completion both resolve against the engine.
+        StoreEffect::FunctionsChanged | StoreEffect::PreparedChanged => {
             catalog_settled(to.catalog);
             true
         }

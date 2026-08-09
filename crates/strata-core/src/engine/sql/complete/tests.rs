@@ -39,6 +39,7 @@ fn catalog() -> Catalog {
             aggregate: vec!["sum".into(), "count".into()],
             window: vec!["row_number".into()],
         },
+        Vec::new(),
         "generic".into(),
     )
 }
@@ -466,6 +467,7 @@ fn weird_identifiers_insert_quoted() {
         [("t", &cols[..])],
         [],
         FunctionCatalog::default(),
+        Vec::new(),
         "generic".into(),
     );
     let items = complete("SELECT  FROM t", 7, &cat, false);
@@ -618,6 +620,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
         [("t", &cols[..])],
         [],
         FunctionCatalog::default(),
+        Vec::new(),
         "generic".into(),
     );
     let items = complete("SELECT  FROM t", 7, &cat, false);
