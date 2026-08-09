@@ -283,6 +283,13 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   same `util::collapse_sql` that renders the preview.
 - **Silent corruption is refused, never warned about — and the refusal is checked against read data,
   not declared metadata** (the Hive NULL-partition gate reads the footer, proceeds only on exact zero).
+- **A secret Strata must keep lives in the OS keystore, and config holds a reference to it — which
+  is a property of the types, not a rule to remember.** `strata_core::secret`: `SecretRef` is a
+  minted id that rides `settings_merge!`; `Secret` derives no `Serialize`, has no `Display`, and
+  redacts its `Debug`. Empty is not a secret, absence is not an error, `open_keystore` runs once in
+  `main`, and `APP_ID` is the bundle id `bundle-macos.sh` reads. Never a plaintext fallback.
+  In memory it is **zeroed, not guarded** — mlock/mprotect would cover one link of six and read as
+  stronger than it is; exposure is managed by lifetime (read per use, never cache).
 - **One app-global config store.** Disk is a startup input read **once** — no file watching, ever.
   `write_config` is the sole write path. Settings is a **channel**, not its own global.
 - **A draft of shared state commits a per-field diff against its seed, never the whole struct**

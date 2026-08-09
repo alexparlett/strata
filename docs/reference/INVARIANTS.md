@@ -1024,6 +1024,45 @@ Things that must not regress. Each was fought for once already.
   tab's `CREATE TABLE` still has to reach the sidebar and `project.json`), and it **owns the log
   entry**: `run_event` returns `None` for a statement, because a message claiming something
   durable must not be logged over a `project.json` write that failed — the `save_view` lesson.
+- **A secret Strata must keep lives in the OS keystore, and config holds a reference to it —
+  which is a property of the types, not a rule to remember.** `strata_core::secret` is the one
+  mechanism (AS-05): `SecretRef` is a minted id, `Clone + PartialEq + Serialize + Deserialize` so
+  it rides `settings_merge!` like any other field, and `Secret` — the pasted value on its way to
+  the store, or one just read back — derives **no** `Serialize`, has no `Display`, and prints
+  `Secret(<redacted>)`. So a provider key reaching `config.json` is not carelessness, it is a
+  program that does not compile. This extends the connections posture ("no arm of `engine::store`
+  takes a secret") to the case where the app really must hold one: third-party API keys for the
+  assistant's provider roster. The agent-access bearer token stays a plain config string on
+  purpose — locally minted, for our own loopback server, worthless elsewhere — and "stored like
+  the token" was the wrong precedent to extend to a billing credential; migrating it here is a
+  recorded follow-on that needs a config upgrade path.
+  Four consequences worth naming. **Empty is not a secret**: `Secret::new` returns `None` for a
+  blank field, which is what makes the Settings draft rule fall out of the types rather than
+  being restated — a cleared field yields no `Secret`, and no `Secret` is a `delete`. **Absence
+  is not an error**: `get` answers `Ok(None)` for a marker whose entry is gone, because "no key
+  set" and "the keystore is broken" are different sentences on screen; `SecretError` is
+  `Unavailable` (unlock it, allow it) or `Failed` (report it), and never a plaintext fallback,
+  which is the exact failure the module exists to prevent. **The store is opened once**, by
+  `open_keystore` in `main` — explicit rather than lazy, because `keyring-core`'s default store is
+  process-wide and a module that installed itself on first touch could never be handed the mock
+  that proves a refusal surfaces. That is also why the app links `keyring-core` plus a per-target
+  platform store instead of the all-in-one `keyring` crate, whose `Entry::new` installs its own
+  store from a `LazyLock`. **And the service is the app id**: `secret::APP_ID` is the macOS bundle
+  identifier, read out of that constant by `scripts/bundle-macos.sh`, because Keychain access is
+  scoped per code signature and a bundle claiming a different identity than the items it writes is
+  a bug nobody would go looking for. Every call blocks — `task::offload`, like any other blocking
+  read.
+  **In memory the value is zeroed, not guarded, and the difference is stated rather than blurred.**
+  `Secret` zeroes its buffer on drop and `get` zeroes the string the store returned once it has
+  been wrapped; that narrows a window and is described as nothing more. mlock/mprotect-style
+  guarding (`secrets`) was rejected: it would guard **one link of six** — the text field's own
+  `String`, the draft, `security-framework`'s buffer, then the HTTP header and TLS write buffers —
+  and a measure that reads as stronger than it is, is worse than none; the threats it addresses
+  (swap, core dumps, cross-process reads) are already macOS's; and it links libsodium, which the
+  self-contained universal bundle cannot have for free, while setting `RLIMIT_CORE` to 0 for the
+  whole process on the way past. What reduces exposure here is **lifetime** — read a key per use,
+  never cache one, never let it reach a buffer that outlives the call. Reopen only with a change
+  that closes the chain, not a better allocator for one link of it.
 - **One app-global config store.** `RadioStation<AppConfig, ConfigChan>` created once in `main`,
   shared into every window (`use_share_config`). Disk is a startup input, read **once** — no file
   watching, ever; after launch only the UI writes. `write_config` (src/state/config.rs) is the

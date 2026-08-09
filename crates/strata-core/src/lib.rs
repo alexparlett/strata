@@ -14,6 +14,7 @@
 //!   (query / plan / profile / serialize) and its snapshot lifecycle.
 //! - [`register`] — the project registration pass: make the engine match a set of defs,
 //!   reporting per-def outcomes (shared by the app's catalog passes and headless hosts).
+//! - [`secret`] — the OS-keystore secret store: config holds a reference, never the secret.
 
 use engine::profile;
 
@@ -22,5 +23,6 @@ pub mod engine;
 pub mod keymap;
 pub mod project;
 pub mod register;
+pub mod secret;
 pub mod theme;
 pub mod util;

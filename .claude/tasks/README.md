@@ -99,8 +99,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   + tool manifest, provider seam + loop, Settings ▸ Assistant (a **roster** of provider
   entries — the per-conversation pick of entry/model/effort lives on the pane's composer, a
   split settled 2026-08-09), the pane, and the **secret store** (OS keystore; config holds
-  references, never keys). Decision records in that workstream's README; the doc records the
-  pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
+  references, never keys). **05 ✅** (`strata_core::secret` — a `SecretRef` in config, a
+  `Secret` with no serde path at all); 01–04 open. Decision records in that workstream's
+  README; the doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not
+  built").
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
