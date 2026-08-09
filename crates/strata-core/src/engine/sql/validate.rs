@@ -47,7 +47,7 @@ use crate::engine::query::{is_snapshot_name, ReadPolicy};
 use crate::engine::sql::lex::{
     is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
-use crate::engine::sql::resolve::resolve;
+use crate::engine::sql::resolve::{resolve, unwrap_statement};
 use crate::engine::sql::FunctionCatalog;
 use strata_model::{Diagnostic, Severity};
 
@@ -596,11 +596,19 @@ fn runnable() -> (Verdict, Option<Blocked>) {
 /// through this router: `PREPARE` verified the prepared plan under the read triple, and
 /// `verify_plan` cannot see through an `Execute` node to check it again. Held here, beside
 /// [`classify`], so the form that needs it is named once.
+///
+/// **Through `EXPLAIN`, because `verify_plan` visits the whole tree.** An `EXPLAIN EXECUTE p`
+/// plans to `Explain { Statement(Execute) }` and the visitor reaches that child, so a typed
+/// `EXPLAIN` of a prepared statement needs the same widening the run of one does — it comes back
+/// as DataFusion's own textual explain rows. (The Explain *gesture* is a different path and
+/// cannot serve this form at all: it unwraps to the explained plan and asks for a **physical**
+/// one, which a `Statement(Execute)` has none of. `engine::explain` says so where it keeps its
+/// own all-false triple.) Unwrapped through the resolver's own
+/// [`unwrap_statement`](super::resolve::unwrap_statement), because DataFusion spells `EXPLAIN`
+/// twice and answering differently by parser arm is the drift one shared unwrap prevents.
 pub fn read_policy(stmt: &DFStatement) -> ReadPolicy {
-    match stmt {
-        DFStatement::Statement(s) if matches!(s.as_ref(), SqlStatement::Execute { .. }) => {
-            ReadPolicy::Statements
-        }
+    match unwrap_statement(stmt) {
+        Some(SqlStatement::Execute { .. }) => ReadPolicy::Statements,
         _ => ReadPolicy::ReadOnly,
     }
 }

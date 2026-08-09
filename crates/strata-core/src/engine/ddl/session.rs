@@ -53,7 +53,8 @@ use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::engine::catalog::short_type;
-use crate::engine::config;
+use crate::engine::config::{effective, is_display_key, is_owned_key, is_restart_key, DIALECT_KEY};
+use crate::engine::refresh_config_dependent_udfs;
 use crate::engine::sql::{Blocked, PreparedSym, StmtKind};
 
 use super::{StatementOutcome, StoreEffect};
@@ -122,9 +123,11 @@ pub async fn set(
     };
     refuse_reserved_key(&set.variable)?;
 
-    // The same call `Engine::set_config` makes, so the two ways an option moves cannot land
+    // The same two calls `Engine::set_config` makes, so the two ways an option moves cannot land
     // differently — and DataFusion's own rejection of an unknown key or a bad value is the error
-    // the user reads.
+    // the user reads. The refresh is half of applying a setting, not a flourish: without it
+    // `SET datafusion.execution.time_zone` would move `SHOW` and leave `now()` in the zone the
+    // engine was built with (see [`refresh_config_dependent_udfs`]).
     {
         let state = ctx.state_ref();
         let mut state = state.write();
@@ -133,6 +136,7 @@ pub async fn set(
             .options_mut()
             .set(&set.variable, &set.value)
             .map_err(|e| e.to_string())?;
+        refresh_config_dependent_udfs(&mut state);
     }
     scope
         .overlay
@@ -175,7 +179,7 @@ pub async fn reset(
     };
     refuse_reserved_key(&reset.variable)?;
 
-    let restored = config::effective(baseline, &reset.variable);
+    let restored = effective(baseline, &reset.variable);
     {
         let state = ctx.state_ref();
         let mut state = state.write();
@@ -185,6 +189,9 @@ pub async fn reset(
             None => options.reset(&reset.variable),
         }
         .map_err(|e| e.to_string())?;
+        // As in `set`, and for the same reason: DataFusion's own `reset_variable` refreshes here
+        // too, and a `RESET` that moved `SHOW` without moving `now()` would be the same silence.
+        refresh_config_dependent_udfs(&mut state);
     }
     // After the apply, not before: a key DataFusion refuses leaves the session exactly as it was,
     // overlay included, so a failed `RESET` is not a half-reset.
@@ -212,16 +219,16 @@ pub async fn reset(
 /// engine to ask — while the planner and the validator read it live. A session value there leaves
 /// the editor lexing the buffer by rules the planner has stopped using, which is WJ-04 exactly.
 fn refuse_reserved_key(key: &str) -> Result<(), String> {
-    if config::is_owned_key(key) {
+    if is_owned_key(key) {
         return Err(Blocked::SetOwned.editor_message());
     }
-    if config::is_restart_key(key) {
+    if is_restart_key(key) {
         return Err(Blocked::SetRuntime.editor_message());
     }
-    if config::is_display_key(key) {
+    if is_display_key(key) {
         return Err(Blocked::SetFormat.editor_message());
     }
-    if key.trim() == config::DIALECT_KEY {
+    if key.trim() == DIALECT_KEY {
         return Err(Blocked::SetDialect.editor_message());
     }
     Ok(())
@@ -395,6 +402,88 @@ mod tests {
         assert_eq!(report.count, None, "a SET moves no rows");
         assert_eq!(report.effect, None, "and changes nothing the catalog holds");
         assert_eq!(live(&eng, "datafusion.execution.batch_size").await, "1024");
+    }
+
+    /// **Applying an option is not just writing it.** `NowFunc` captures `execution.time_zone`
+    /// when it is *registered* and bakes it into the literal its `simplify` returns, so a write
+    /// without DataFusion's own UDF refresh moves `SHOW` and leaves `now()` answering in the zone
+    /// the engine was built with — success reported, nothing changed, until a restart.
+    ///
+    /// All three writers are checked, because the failure is a writer forgetting the second half:
+    /// a typed `SET`, a typed `RESET`, and a Settings Apply. (`Engine::set_config` had the same
+    /// gap before this task and it is fixed with them — otherwise "the two ways an option moves
+    /// cannot land differently" would be true only because both were wrong.)
+    #[tokio::test]
+    async fn moving_an_option_re_registers_the_functions_that_captured_it() {
+        /// The Arrow type `now()` reports — which carries the zone the UDF captured when it was
+        /// registered, and so is the only thing that can tell a written option from an applied one.
+        async fn zone_of(eng: &Engine) -> String {
+            let RunOutcome::Rows(output, _) = eng
+                .run(WsId(3), RunTag(3), "SELECT arrow_typeof(now())".into(), 1)
+                .await
+                .expect("now()")
+            else {
+                panic!("not rows");
+            };
+            output.rows[0][0].text.clone()
+        }
+
+        let eng = engine(&[]);
+        assert_eq!(zone_of(&eng).await, "Timestamp(ns)", "the built-with zone");
+
+        statement(&eng, "SET datafusion.execution.time_zone = '+05:00'")
+            .await
+            .expect("set");
+        assert_eq!(zone_of(&eng).await, "Timestamp(ns, \"+05:00\")");
+
+        statement(&eng, "RESET datafusion.execution.time_zone")
+            .await
+            .expect("reset");
+        assert_eq!(zone_of(&eng).await, "Timestamp(ns, \"+00:00\")");
+
+        eng.set_config(
+            [(
+                "datafusion.execution.time_zone".to_string(),
+                "+09:00".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(zone_of(&eng).await, "Timestamp(ns, \"+09:00\")");
+    }
+
+    /// **A typed `EXPLAIN EXECUTE` needs the same widening the run of one does.** `verify_plan`
+    /// visits the whole tree, so `Explain { Statement(Execute) }` is refused at its child — and
+    /// the router draws no squiggle on the form, so without [`read_policy`] unwrapping the
+    /// `EXPLAIN` the user gets DataFusion's internal "Statement not supported: Execute" from a
+    /// statement the editor accepted.
+    ///
+    /// The Explain **gesture** is a different path and is asserted to still refuse, because that
+    /// is the honest end-state rather than an oversight: it unwraps to the explained plan and asks
+    /// for a *physical* one, and a `Statement(Execute)` has none — the bound plan exists only
+    /// inside DataFusion's `execute_prepared`. Widening its options would move the failure one
+    /// step, not remove it, so the widening is not there.
+    #[tokio::test]
+    async fn a_typed_explain_of_a_prepared_statement_runs() {
+        let eng = engine(&[]);
+        statement(&eng, "PREPARE p(INT) AS SELECT $1 + 1 AS n")
+            .await
+            .expect("prepared");
+
+        let RunOutcome::Rows(output, _) = eng
+            .run(WsId(1), RunTag(2), "EXPLAIN EXECUTE p(1)".into(), 10)
+            .await
+            .expect("explained")
+        else {
+            panic!("EXPLAIN did not return rows");
+        };
+        assert!(!output.rows.is_empty(), "and it is a real plan");
+
+        assert!(eng
+            .explain(WsId(1), RunTag(3), "EXPLAIN EXECUTE p(1)".into())
+            .await
+            .expect_err("the gesture cannot build a physical plan for a Statement node")
+            .contains("Execute"));
     }
 
     /// **A `RESET` lands on the Settings baseline, not on DataFusion's default.** That is the

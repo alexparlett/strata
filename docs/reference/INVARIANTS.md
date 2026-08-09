@@ -862,6 +862,16 @@ Things that must not regress. Each was fought for once already.
   runtime key can never enter the overlay. The statement is **planned**, never read off the AST,
   because the planner is what refuses scope modifiers and `HIVEVAR`, folds `SET TIMEZONE` onto
   `datafusion.execution.time_zone`, lower-cases the key and renders the value.
+  **And writing the option is only half of applying it.** `NowFunc` captures
+  `execution.time_zone` when it is *registered* and bakes it into the literal its `simplify`
+  returns (the `to_timestamp` family too), so every writer also calls
+  `engine::refresh_config_dependent_udfs` — which is what DataFusion's own `set_variable` /
+  `reset_variable` do after the same `options.set`, and what `SessionStateBuilder` does at
+  construction, which is why a launch override always worked and a live change silently did not.
+  Skipped, a `SET` reports success, moves `SHOW`, and leaves `now()` in the zone the engine was
+  built with until a restart. The Settings Apply had the same gap and is fixed with the typed
+  statements, because "the two ways an option moves cannot land differently" is worth nothing if
+  both land wrong.
   Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.5.
 - **`PREPARE` runs natively because DataFusion owns the plan; the fence and the mirror are ours,
   and the fence can be nowhere else.** `SQLOptions::verify_plan` descends into a `Prepare` node's

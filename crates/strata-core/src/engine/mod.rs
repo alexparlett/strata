@@ -105,6 +105,9 @@ use std::time::Instant;
 
 use datafusion::common::TableReference;
 use datafusion::execution::runtime_env::RuntimeEnv;
+// `register_udf` is `FunctionRegistry`'s, not an inherent method on `SessionState`.
+use datafusion::execution::{FunctionRegistry, SessionState};
+use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::*;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
@@ -570,6 +573,8 @@ impl Engine {
                     tracing::warn!("engine config: skipping {key}={value}: {e}");
                 }
             }
+            // Once, after the batch rather than per key — see the function.
+            refresh_config_dependent_udfs(&mut state);
             *current = overrides;
         }
         runtime_subset(&current) != self.built_runtime
@@ -1741,6 +1746,35 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
 /// The catalog + schema **we own** — see [`build_context`].
 const CATALOG: &str = "strata";
 const SCHEMA: &str = "public";
+
+/// Re-initialise the UDFs that read `ConfigOptions` **when they were registered**, after a write
+/// to a live session's options. Call from every path that moves an option: a Settings Apply
+/// ([`Engine::set_config`]) and a typed `SET` / `RESET` (`ddl::session`).
+///
+/// Writing `ConfigOptions` is not the whole of applying a setting, and the gap is silent rather
+/// than loud. `NowFunc` captures `execution.time_zone` in `new_with_config` and bakes it into the
+/// literal its `simplify` returns, and the `to_timestamp` family does the same — so an option
+/// written without this reports success, moves `SHOW`, and leaves `now()` / `current_timestamp`
+/// answering in the zone the engine was *built* with until a restart. DataFusion's own
+/// `set_variable` and `reset_variable` do this immediately after the same `options.set` call
+/// (`context/mod.rs`); the `SessionStateBuilder` does it at construction, which is why a launch
+/// override always worked and only a live change did not.
+///
+/// `with_updated_config` returning `None` is the overwhelmingly common answer (the trait's own
+/// default), so this walks the registry and re-registers the handful that opt in.
+fn refresh_config_dependent_udfs(state: &mut SessionState) {
+    let options = state.config().options();
+    let updated: Vec<Arc<ScalarUDF>> = state
+        .scalar_functions()
+        .values()
+        .filter_map(|udf| udf.inner().with_updated_config(options).map(Arc::new))
+        .collect();
+    for udf in updated {
+        if let Err(e) = state.register_udf(udf) {
+            tracing::warn!("engine config: could not re-register a config-dependent function: {e}");
+        }
+    }
+}
 
 /// Just the `datafusion.runtime.*` entries of `overrides` — the half that
 /// [`build_runtime`] reads, and so the half a restart would change.

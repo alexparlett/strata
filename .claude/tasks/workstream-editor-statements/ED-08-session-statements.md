@@ -26,6 +26,16 @@ while building:
   rules the planner had already stopped using, which is WJ-04 exactly, and nothing would have
   reported it. It is the same rule as `format.*` one surface over, so it is stated as one rule
   with two surfaces rather than as a second mechanism.
+- **Writing a `ConfigOptions` key is only half of applying it.** Found by adversarial review, and
+  it was a call made deliberately while building and made wrong: the plan said "the `set_config`
+  apply path's options-set call", so that is all this did — but DataFusion's own `set_variable`
+  makes the *same* call and then re-registers every UDF whose `with_updated_config` answers, and
+  `NowFunc` captures `execution.time_zone` at registration and bakes it into the literal its
+  `simplify` returns. So `SET datafusion.execution.time_zone` reported success, moved `SHOW`, and
+  left `now()` in the zone the engine was built with. `Engine::set_config` had the identical gap,
+  which is why the fix is a shared `refresh_config_dependent_udfs` called by all three writers
+  rather than a patch on the new arm: "the two ways an option moves cannot land differently" was
+  true and worth nothing, because both landed wrong.
 
 Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand (`Clause::Execute`) and
 nowhere else. The rest of the session statements' completion — statement leads, `SET`/`RESET`

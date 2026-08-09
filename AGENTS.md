@@ -127,7 +127,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   a session value, or two layers answer differently about one buffer). The
   overlay is engine-wide, and `set_config` skips a key it holds, so a Settings Apply records the
   baseline the eventual `RESET` lands on rather than overwriting what the user typed.
-  `restart_owed` unchanged.
+  `restart_owed` unchanged. And **writing an option is only half of applying it** — every writer
+  also calls `refresh_config_dependent_udfs`, or `SET …time_zone` moves `SHOW` and leaves `now()`
+  in the build-time zone.
 - **`PREPARE` runs natively because DataFusion owns the plan; the fence and the mirror are ours,
   and the fence can be nowhere else.** `verify_plan` descends into a `Prepare`'s input and an
   `Execute` has none, so a DML/DDL body is refused at `PREPARE` or never. The mirror exists only

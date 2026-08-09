@@ -60,10 +60,14 @@ the reason this is a task rather than a table entry.
   at `SET datafusion.|` appends a second copy of the namespace. That is a change to the caret model,
   narrow but real; it wants its own tests over `SET |`, `SET dat|`, `SET datafusion.|`,
   `SET datafusion.execution.b|`.
-- The offer is `config::ENGINE_KEYS`, **minus the three classes the dispatch refuses**
-  (`is_owned_key`, `is_restart_key`, `is_display_key`) — the `BLOCKED_KEYWORDS` rule applied to
-  keys: offering what Run refuses misleads. Assert that agreement by test, from the predicates
-  themselves rather than a second list.
+- The offer is `config::ENGINE_KEYS`, **minus every class the dispatch refuses** — the
+  `BLOCKED_KEYWORDS` rule applied to keys: offering what Run refuses misleads. That is currently
+  **four**: `is_owned_key`, `is_restart_key`, `is_display_key`, and `config::DIALECT_KEY`
+  (`ddl::session::refuse_reserved_key` is the list). The fourth is the one to be careful about —
+  it is a plain `datafusion.sql_parser.*` key with no predicate of its own, so a filter written
+  from the three predicates alone would offer it. Assert the agreement by test **against
+  `refuse_reserved_key` itself**, not against a copy of its list, or this drifts the moment a
+  fifth class lands.
 - The **value** position (`SET k = |`) is worth having and comes free from the same table:
   `EngineKey::kind` already names `Kind::Bool` (`true` / `false`) and `Kind::Enum(opts)`. Every
   other kind offers nothing, which is the correct empty offer. Telling the key position from the

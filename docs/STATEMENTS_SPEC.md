@@ -163,10 +163,15 @@ older build.
 | `DROP` of a non-table, non-view object | "DROP is not supported in the editor. Deregister tables from the catalog" |
 | `INSERT OVERWRITE` | "INSERT OVERWRITE is not supported. Drop the table and recreate it with CREATE TABLE AS" |
 | `PREPARE` of a non-query body | "PREPARE supports queries only" |
-| `SET` / `RESET` of an owned, runtime or display key | the three wordings in §6.5 |
 | A `__snap_` name in an intercepted statement | "Names starting with '__snap_' are reserved for query results" |
 | A multi-statement buffer | "Run executes one statement at a time" |
 | An empty buffer | "Nothing to run" |
+
+**The dispatch-time refusals are deliberately not in that table**, because they draw no squiggle:
+they need context the parsed statement does not carry, so the editor cannot know them while the
+user is typing and the refusal arrives at Run. They share the `Blocked` vocabulary and nothing
+else. Today they are an `INSERT`'s target origin and write op (§6.2, `Blocked::InsertExternal` /
+`InsertOverwrite`) and a `SET` / `RESET` key's class (§6.5, four of them).
 
 Known wording drift: the `Unsupported` message still says "Only SELECT, EXPLAIN, SHOW and DESCRIBE
 can run here", which is stale now that `CREATE TABLE` / CTAS run. The older `Blocked` variants
@@ -442,6 +447,15 @@ catalogue names no default for. The statement is **planned**, not read off the A
 what refuses scope modifiers and `HIVEVAR`, folds `SET TIMEZONE` onto
 `datafusion.execution.time_zone`, lower-cases the key and renders the value.
 
+**Writing the option is only half of applying it**, and the other half is silent if you skip it.
+`NowFunc` captures `execution.time_zone` when it is *registered* and bakes it into the literal its
+`simplify` returns; the `to_timestamp` family does the same. So every path that moves an option
+also calls `engine::refresh_config_dependent_udfs` — DataFusion's own `set_variable` and
+`reset_variable` do exactly this after the same `options.set`, and the `SessionStateBuilder` does
+it at construction, which is why a launch override always worked. Without it a `SET` reports
+success, moves `SHOW`, and leaves `now()` answering in the zone the engine was *built* with until a
+restart. Both typed statements and the Settings Apply share the one call.
+
 The overlay is **engine-wide** — every tab and every agent read plans against the one
 `SessionState` — and it **wins for its keys until `RESET` or restart**: a Settings Apply over an
 overlaid key records the new baseline and leaves the live value alone (`Engine::set_config` skips
@@ -481,8 +495,21 @@ fence and the mirror:
 
 `EXECUTE`'s widening is `sql::read_policy` (§1) — a `ReadPolicy` carried on the dispatch, never a
 mode the read path offers: `Engine::query` stays the read-only entry, and the widened body is
-private. Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand
-(`Clause::Execute`) and nowhere else; the rest of the session statements' completion is ED-11.
+private. It unwraps `EXPLAIN`, because `verify_plan` visits the whole tree and would otherwise
+refuse `Explain { Statement(Execute) }` at its child, so a typed `EXPLAIN EXECUTE p` runs and comes
+back as DataFusion's own textual explain rows.
+
+**The Explain *gesture* cannot serve that form, and is left refusing it.** It unwraps to the
+explained plan and asks for a **physical** one, and a `Statement(Execute)` has none — the bound
+plan exists only inside DataFusion's `execute_prepared`. Widening `run_explain`'s options would
+move the failure one step rather than remove it, so the widening is not there and `engine::explain`
+says why where it keeps its own all-false triple.
+
+Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand (`Clause::Execute`) and
+nowhere else — and only where that word **leads the statement**, because sqlparser classes every
+word in its dictionary as a keyword, so a table with an `execute` column would otherwise have that
+column govern the rest of its SELECT list and empty the offer there
+(`context::leads_statement_only`). The rest of the session statements' completion is ED-11.
 
 ### 6.6 Not yet implemented
 
