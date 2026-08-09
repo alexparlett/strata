@@ -185,11 +185,11 @@ impl Component for ValueField {
                 .enabled(self.enabled)
                 .maybe(self.masked, |el| el.mode(InputMode::new_password()))
                 .compact()
-                .map(self.a11y_id, |el, id| el.a11y_id(id))
+                .map(self.a11y_id, Input::a11y_id)
                 .maybe(self.placeholder.is_some(), |el| {
                     el.placeholder(self.placeholder.unwrap_or_default())
                 })
-                .map(self.leading.clone(), |el, leading| el.leading(leading))
+                .map(self.leading.clone(), Input::leading)
                 .maybe(self.bare, |el| {
                     el.background(Color::TRANSPARENT)
                         .focus_background(Color::TRANSPARENT)

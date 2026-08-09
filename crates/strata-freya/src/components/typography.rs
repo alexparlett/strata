@@ -6,7 +6,7 @@
 //!
 //! Roles (family · weight · size): **Title** (ui 600 14.5) · **Strong** (ui 600 13) ·
 //! **Body** (ui 500 13, default UI text) · **Control** (ui 600 12.5, button/control label) ·
-//! **Prose** (ui 400 12.5) · **Caption** (ui 400 11) · **MonoValue** (mono 500 12.5) ·
+//! **Prose** (ui 400 12.5) · **Caption** (ui 400 11) · **`MonoValue`** (mono 500 12.5) ·
 //! **Readout** (mono 400 12) · **Eyebrow** (mono 600 10, tracked) · **Meta** (mono 500 10) ·
 //! **Path** (mono 400 11).
 //!
@@ -58,7 +58,7 @@ struct TextOverrides {
 
 // Fully qualified: `CursorIcon::Default` is imported into scope above, so name `Default` on its own
 // is ambiguous here.
-impl std::default::Default for TextOverrides {
+impl Default for TextOverrides {
     fn default() -> Self {
         Self {
             color: None,
@@ -258,7 +258,7 @@ impl Component for InputTypography {
             .font_family(style.family.clone())
             .font_size(style.size)
             .font_weight(style.weight)
-            .map(self.width.clone(), |el, width| el.width(width))
+            .map(self.width.clone(), ContainerSizeExt::width)
             .child(self.child.clone())
     }
 }

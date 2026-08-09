@@ -114,7 +114,7 @@ fn syntax_error(e: serde_json::Error) -> DataFusionError {
 /// *diagnosis* the user gets — "Cannot read 't' as JSON: the source is a JSON array. Set the JSON
 /// shape to array in Table Config" is a far better message than any raw error, and it is keyed on
 /// this prefix. So we speak arrow's dialect deliberately.
-fn json_error(detail: impl std::fmt::Display) -> DataFusionError {
+fn json_error(detail: impl fmt::Display) -> DataFusionError {
     DataFusionError::Execution(format!("Json error: {detail}"))
 }
 

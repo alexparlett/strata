@@ -88,7 +88,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             id,
             WindowKind::Configure {
                 owner,
-                target: launch.target.clone(),
+                target: launch.target,
             },
         );
         ctx.set_window_parent(id, Some(owner));

@@ -74,16 +74,35 @@ jobs:
           # change (a path dep, not a lockfile entry) reuses the cache and only
           # rebuilds the fork crates.
           cache: true
-          # This action defaults `rustflags` to `-D warnings`, which would make CI
-          # assert something stricter than the check AGENTS.md §7 describes and
-          # every local `cargo test` runs. The first run of this workflow failed on
-          # exactly that: two long-standing warnings (a dead initial assignment in
-          # `drop_confirm.rs`, an unconstructed `CellRole::None`) became hard errors
-          # in a PR that changed no Rust at all. Denying warnings is a worthwhile
-          # policy but a separate decision - it needs those two resolved first, and
-          # one of them is a design call about a variant that is documented and
-          # deliberately unused. Empty keeps RUSTFLAGS unset.
+          # This action defaults `rustflags` to `-D warnings`, which would apply to
+          # every cargo invocation in the job - including the dependency builds. The
+          # first run of this workflow failed on exactly that: two long-standing
+          # warnings (a dead initial assignment in `drop_confirm.rs`, an
+          # unconstructed `CellRole::None`) became hard errors in a PR that changed
+          # no Rust at all. Denying warnings *is* the policy now, but it belongs to
+          # the clippy step below, where it is scoped to one invocation over the
+          # workspace's own crates and cannot be tripped by a dependency. Empty keeps
+          # RUSTFLAGS unset for the build and test steps.
           rustflags: ''
+
+      # The lint gate. `-D warnings` after the `--` applies to this invocation only,
+      # so the `rustflags: ''` above still governs the build and test steps; what is
+      # denied here is the curated set in the root `Cargo.toml` `[workspace.lints]`
+      # (thresholds in `clippy.toml`) plus rustc's own warnings, over workspace
+      # members only - `crates/freya` is a workspace `exclude` resolved by path, and
+      # `cargo clippy` runs clippy-driver over members, so the fork is never linted
+      # by us and keeps answering to its own CI.
+      #
+      # Before `cargo test` on purpose. Clippy is check-only: no codegen, no linking,
+      # no test binaries, so a lint failure lands minutes before a full test build
+      # would have finished, and the dependency artifacts it does build are plain
+      # rustc output the test step reuses.
+      #
+      # `--all-targets` so the inline `#[cfg(test)]` modules and the integration
+      # tests are held to the same bar as the code they cover - most of this
+      # workspace's tests live in the same file as their subject.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # `--workspace` rather than a bare `cargo test`: the root sets
       # `default-members = ["crates/strata-freya"]`, so a bare run would silently skip

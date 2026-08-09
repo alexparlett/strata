@@ -281,6 +281,10 @@ impl EntryRow {
 }
 
 impl Component for EntryRow {
+    // A catalog row is its own section subscription, its hover/press state and the whole
+    // nested-column tree under it. The hooks cannot move into a helper without changing this
+    // component's hook order, and what is left is one declarative tree.
+    #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         // Subscribe on this entry's own section channel, so the row flips `Loading → Ready`
         // in place as its registration answer lands.
@@ -415,7 +419,7 @@ impl Component for EntryRow {
         let entry_key = format!("{:?}::{}", self.kind, self.name);
         let is_open = self.open_entries.read().contains(&entry_key);
         let mut open_entries = self.open_entries;
-        let toggle_key = entry_key.clone();
+        let toggle_key = entry_key;
 
         // The glyph is the shared mapping (the palette lists the same things); the tint is this
         // surface's own — and a table Strata owns takes its own entity colour, because the

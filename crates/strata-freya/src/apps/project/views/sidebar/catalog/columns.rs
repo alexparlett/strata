@@ -92,7 +92,7 @@ mod tests {
     }
 
     fn flatten(cols: &[ColumnInfo], parts: &[(String, String)], expanded: &[&str]) -> Vec<ColRow> {
-        let exp: HashSet<String> = expanded.iter().map(|s| s.to_string()).collect();
+        let exp: HashSet<String> = expanded.iter().map(ToString::to_string).collect();
         let mut out = Vec::new();
         flatten_cols("orders", &[], 0, cols, parts, &exp, &mut out);
         out

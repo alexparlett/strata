@@ -116,7 +116,6 @@ impl Component for EditorTab {
         let project = use_radio_station::<ProjectState, ProjChan>();
         let mut catalog = use_state(sql::Catalog::default);
         {
-            let engine = engine.clone();
             use_side_effect(move || {
                 let p = project.read();
                 let dialect =
@@ -190,11 +189,10 @@ impl Component for EditorTab {
                             let editor_owned = chord_from_event(&e)
                                 .and_then(|chord| resolve(&config.peek().settings, &chord))
                                 .is_some_and(Command::is_edit)
-                                || match &e.key {
-                                    Key::Character(_) => false,
-                                    Key::Named(NamedKey::Enter) => false,
-                                    _ => true,
-                                };
+                                || !matches!(
+                                    &e.key,
+                                    Key::Character(_) | Key::Named(NamedKey::Enter)
+                                );
                             !(primary && !editor_owned)
                         }),
                 ),

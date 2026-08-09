@@ -254,10 +254,10 @@ impl Component for CloseConfirm {
         Dialog::new()
             // Esc and the backdrop are dismissals, so they go through `keep_open` — clearing
             // the quit flag, not just the dialog.
-            .on_dismiss(move |_| keep_open())
+            .on_dismiss(move |()| keep_open())
             // Enter takes the second clone: `close_anyway` captures the `AppCtx` the launcher
             // hand-off needs, so it isn't `Copy` and can't be moved into two handlers.
-            .on_confirm(move |_| close_anyway_key())
+            .on_confirm(move |()| close_anyway_key())
             .header(header)
             .body(
                 rect()

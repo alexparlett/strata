@@ -23,7 +23,9 @@ use std::sync::Arc;
 use freya::prelude::*;
 use strata_code_editor::editor_theme::EditorSyntaxThemePreference;
 use strata_code_editor::prelude::SYNTAX_SCOPES;
-use strata_core::theme::{generate_schema as core_schema, ThemeRegistry};
+#[cfg(test)]
+use strata_core::theme::generate_schema as core_schema;
+use strata_core::theme::ThemeRegistry;
 
 use crate::state::{use_config_channel, ConfigChan, ConfigStation, ThemePreview, ThemeSel};
 
@@ -286,6 +288,11 @@ pub const TYPOGRAPHY_KEY: &str = "strata_typography";
 /// ([`strata_core::theme::generate_schema`], imported as `core_schema` — a genuine collision
 /// with this wrapper's own name) over the editor's [`SYNTAX_SCOPES`]. The `schema_in_sync`
 /// test keeps `themes/theme.schema.json` equal to this.
+///
+/// Test-only because that test is its only caller and its whole purpose: the committed schema is
+/// regenerated with `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`, which is where
+/// this codegen lives rather than in a script beside the crate.
+#[cfg(test)]
 pub fn generate_schema() -> serde_json::Value {
     core_schema(SYNTAX_SCOPES)
 }
@@ -486,7 +493,7 @@ mod tests {
             move |r| {
                 let handles: Handles = (
                     ThemesCtx::discover(),
-                    ConfigStation::create_global(cfg.clone()),
+                    ConfigStation::create_global(cfg),
                     create_global_theme_preview(),
                 );
                 let preview = handles.2;

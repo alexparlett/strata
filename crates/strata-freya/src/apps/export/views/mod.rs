@@ -71,7 +71,7 @@ impl Component for Options {
             (draft.format.name(), draft.groups(&ctx.target.read()))
         };
         OptionList::new(scope, groups, move |edit| {
-            ctx.edit(|draft| draft.apply(edit))
+            ctx.edit(|draft| draft.apply(edit));
         })
     }
 }

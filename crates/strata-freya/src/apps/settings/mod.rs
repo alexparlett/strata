@@ -381,7 +381,7 @@ impl App for SettingsApp {
             let themes = self.app.themes.clone();
             move || themes
         });
-        use_strata_theme(themes.clone(), self.app.config, self.app.preview);
+        use_strata_theme(themes, self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();

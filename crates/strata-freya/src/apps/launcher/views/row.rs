@@ -62,13 +62,13 @@ impl Component for ProjectRowView {
         let pin_path = path.clone();
         let on_pin = move || {
             write_config(config, &[ConfigChan::Recents], |cfg| {
-                cfg.set_pinned(&pin_path, !pinned)
+                cfg.set_pinned(&pin_path, !pinned);
             });
         };
         let remove_path = path.clone();
         let on_remove = move || {
             write_config(config, &[ConfigChan::Recents], |cfg| {
-                cfg.remove_recent(&remove_path)
+                cfg.remove_recent(&remove_path);
             });
         };
         let reveal_path = path.clone();

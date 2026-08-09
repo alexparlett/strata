@@ -202,7 +202,7 @@ impl App for ProjectApp {
         // This window's theme: installed + kept derived from the reactive settings
         // selection (+ OS appearance while syncing). Every window computes the same pure
         // derivation of the same globals, so they repaint consistently.
-        use_strata_theme(themes.clone(), self.app.config, self.app.preview);
+        use_strata_theme(themes, self.app.config, self.app.preview);
         // The app-global config into context so deep consumers (shortcut listeners, keymap
         // hints, the confirm dialog's "don't ask again") reach it without prop-threading.
         // `RadioStation` is `Copy` — this shares the one global, it doesn't fork it.
@@ -308,7 +308,6 @@ impl App for ProjectApp {
             move || close_this_window(platform.clone(), app.clone())
         };
         use_hook({
-            let close_window = close_window.clone();
             move || {
                 if let Some(mut rx) = rx {
                     spawn(async move {
@@ -371,7 +370,6 @@ impl App for ProjectApp {
             // would fire FIRST.)
             .child(rect().on_global_key_down(on_commands(config, {
                 let app = self.app.clone();
-                let platform = platform.clone();
                 move |cmd| match cmd {
                     // ⌘O / File ▸ Open… — pick a folder, then the open path decides which
                     // window it lands in (this one / a new one / ask).

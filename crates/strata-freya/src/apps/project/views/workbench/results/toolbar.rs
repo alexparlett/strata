@@ -21,7 +21,7 @@ use super::selection::Selection;
 /// **Table/Chart segmented toggle** sits at the left (P2-07): it reads the tab's per-tab view
 /// mode off `Chan::View(id)` and a press flips it, swapping the body under this bar. The right
 /// cluster are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke
-/// IconButton); **Find is grid-only** (CHART_SPEC §2), Reload and Download show in both modes.
+/// `IconButton`); **Find is grid-only** (`CHART_SPEC` §2), Reload and Download show in both modes.
 ///
 /// **Search** (P2-09) toggles the find popover — an [`Attached`] panel on the [`Menu`] base for
 /// its backdrop dismissal (outside-click / its own Esc). Every close path goes through
@@ -156,7 +156,7 @@ impl Component for ResultsToolbar {
             // anchors flush).
             rect()
                 .padding(Gaps::new(4., 0., 0., 0.))
-                .child(Menu::new().on_close(move |_| find.dismiss()).child(panel))
+                .child(Menu::new().on_close(move |()| find.dismiss()).child(panel))
         };
         // **The popover's anchor is not the button.** It sits in the row's pinned slot at zero
         // width, so it exists at every width the pane can take — which is what lets the Find

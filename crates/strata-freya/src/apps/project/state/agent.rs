@@ -66,7 +66,6 @@ pub fn use_agent_bridge(agent: AgentCtx, root: PathBuf, name: String) {
 
     let registration = use_hook({
         let directory = Arc::clone(&agent.directory);
-        let engine = engine.clone();
         move || {
             // The engine goes to the directory as a bare `Arc` — the **data plane**, called
             // from the server's own runtime, so `fetch_page` / `validate` / `functions` and

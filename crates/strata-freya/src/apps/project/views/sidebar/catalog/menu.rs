@@ -270,7 +270,7 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
             let name = name.clone();
             actions
                 .item(IconName::Gear, "Configure", move |a| {
-                    a.configure(ConfigureTarget::Edit(name.clone()))
+                    a.configure(ConfigureTarget::Edit(name.clone()));
                 })
                 .into_element()
         }))

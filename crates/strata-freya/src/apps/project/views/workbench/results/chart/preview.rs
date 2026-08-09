@@ -174,7 +174,7 @@ fn shoot_at(
     };
     // The strip's controls write the tab's encoding, so they need the session store the
     // window provides — nothing presses here, but the handles have to resolve.
-    let (mut runner, _) = TestingRunner::new(
+    let (mut runner, ()) = TestingRunner::new(
         app,
         (1000., 620.).into(),
         |r| {
@@ -283,7 +283,7 @@ fn narrow_notice_preview() {
                     theme.note_color,
                 )))
         };
-        let (mut runner, _) = TestingRunner::new(
+        let (mut runner, ()) = TestingRunner::new(
             app,
             (width, 420.).into(),
             |r| {

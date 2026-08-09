@@ -493,7 +493,7 @@ fn action_button(
                 .border_fill(accent.with_a(140))
                 .color(accent)
         })
-        .map(action.on_press.clone(), |b, f| b.on_press(f))
+        .map(action.on_press.clone(), Button::on_press)
         .child(Icon::new(action.icon).size(15.));
 
     // `title`, not `label`: it carries the action's live chord (see `Toolbar::render`), which is
@@ -541,7 +541,7 @@ impl Component for OverflowMenu {
 
         let menu = Menu::new()
             .min_width(Size::px(MENU_WIDTH))
-            .on_close(move |_| open.set(false))
+            .on_close(move |()| open.set(false))
             .children(rows.collect::<Vec<_>>());
 
         Attached::new(
@@ -558,7 +558,7 @@ impl Component for OverflowMenu {
         )
         .bottom()
         .align_end()
-        .maybe_child(open().then(|| menu))
+        .maybe_child(open().then_some(menu))
     }
 }
 

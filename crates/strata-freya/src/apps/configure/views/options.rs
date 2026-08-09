@@ -53,7 +53,7 @@ impl Component for ImportOptions {
             .maybe_child(has_options.then(|| Eyebrow::new(label).color(form.label_color)))
             .maybe_child(has_options.then(|| {
                 OptionList::new(scope, options, move |edit| {
-                    ctx.edit(|draft| draft.apply(edit))
+                    ctx.edit(|draft| draft.apply(edit));
                 })
             }))
     }

@@ -341,7 +341,7 @@ mod tests {
     use super::*;
 
     fn args(argv: &[&str]) -> Vec<String> {
-        argv.iter().map(|a| a.to_string()).collect()
+        argv.iter().map(ToString::to_string).collect()
     }
 
     /// The two GUI forms, unchanged: no arguments is the startup routing's decision, and a

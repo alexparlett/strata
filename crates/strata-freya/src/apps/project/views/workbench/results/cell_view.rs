@@ -154,7 +154,7 @@ impl Component for ValueTreeBody {
                                 value.tree.reveal_more(&owner);
                             }
                         })
-                        .child(Meta::new(label.clone()).color(theme.name_color))
+                        .child(Meta::new(label).color(theme.name_color))
                         .into()
                 }
             }

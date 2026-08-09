@@ -661,7 +661,7 @@ mod tests {
     }
 
     /// A missing value ends the run it was in, so a line is cut rather than interpolated
-    /// across it (CHART_SPEC §4).
+    /// across it (`CHART_SPEC` §4).
     /// A measurement axis is arithmetic on values that are only *individually* finite, and a
     /// non-finite bound hangs the render thread inside plotters' key-point loop.
     #[test]

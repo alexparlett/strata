@@ -88,7 +88,7 @@ pub fn plan_row(
             max_ms,
             key: DiffKey::None,
         }
-        .key(&index),
+        .key(index),
     )
     .into()
 }
@@ -111,6 +111,10 @@ impl KeyExt for PlanNodeCard {
 }
 
 impl Component for PlanNodeCard {
+    // One card carrying three independent disclosures (detail, metrics, zero-valued metrics)
+    // over a metrics table. The three `use_state`s are the component's identity; the rest is
+    // one tree whose branches are those flags.
+    #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let mut detail_open = use_state(|| false);
         let mut metrics_open = use_state(|| false);

@@ -344,7 +344,7 @@ mod tests {
     /// (as `strata_core::util`'s own `write_atomic` tests do). Unix-only, because that is where
     /// the mode bits mean this.
     #[cfg(unix)]
-    fn while_read_only<T>(root: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    fn while_read_only<T>(root: &Path, f: impl FnOnce() -> T) -> T {
         use std::os::unix::fs::PermissionsExt;
         let strata = project_io::strata_dir(root);
         std::fs::create_dir_all(&strata).unwrap();

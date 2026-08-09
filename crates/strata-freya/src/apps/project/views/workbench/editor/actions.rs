@@ -4,7 +4,7 @@
 //!
 //! Save writes the *project*, not the tab (state-arch §4): it dispatches on the tab's
 //! [`Origin`] — a view-bound tab re-issues `CREATE OR REPLACE VIEW` on *its* view (the
-//! DEV_TASKS "⌘S on a view saves a saved-query" bug), a saved-query-bound tab
+//! `DEV_TASKS` "⌘S on a view saves a saved-query" bug), a saved-query-bound tab
 //! overwrites its query by id, and a scratch tab Save-As-es into a new saved query
 //! under the tab's name. Save-as-view (the Eye button) is the explicit view path,
 //! minting the first free `saved_view_N` name. The buffer is never classified *here* —
@@ -20,7 +20,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
 use crate::apps::project::state::{
     catalog_settled, log_event, persisted_defs, Catalog, Chan, LogCtx, LogLevel, ProjChan,
-    ProjectState, ReportCtx, SessionState,
+    ProjectState, QueryTab, ReportCtx, SessionState,
 };
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
@@ -36,7 +36,7 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
         .read()
         .tabs
         .get(&id)
-        .map(|t| t.text())
+        .map(QueryTab::text)
         .unwrap_or_default();
     if sql.trim().is_empty() {
         return;
@@ -154,7 +154,7 @@ pub fn cancel_run(
 /// Pretty-print the tab's SQL in place. History-tracked — undo restores the
 /// unformatted text.
 pub fn format(mut session: Radio<SessionState, Chan>, id: TabId) {
-    let Some(sql) = session.read().tabs.get(&id).map(|t| t.text()) else {
+    let Some(sql) = session.read().tabs.get(&id).map(QueryTab::text) else {
         return;
     };
     // Uppercased keywords; indent matched to the editor's own Tab width (4), so a
@@ -252,6 +252,10 @@ fn read_tab(session: Radio<SessionState, Chan>, id: TabId) -> Option<(String, St
 /// mutation point), bind the tab, then `CREATE OR REPLACE VIEW` on the engine with
 /// the answer landing on the row exactly like load-time registration (Ready with
 /// columns/deps, or Failed with the planner's error).
+// Five of the nine are the window's handles (`session`, `project`, `engine`, `catalog`, `report`)
+// — this funnel writes through every one of them, and bundling them into a struct here would put
+// a second name on a set every other entry point already threads individually.
+#[allow(clippy::too_many_arguments)]
 fn save_view(
     mut session: Radio<SessionState, Chan>,
     mut project: RadioStation<ProjectState, ProjChan>,
@@ -289,7 +293,7 @@ fn save_view(
                 }
                 project
                     .write_channel(ProjChan::Views)
-                    .view_registered(&name, meta)
+                    .view_registered(&name, meta);
             }
             Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");

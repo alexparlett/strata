@@ -88,10 +88,10 @@ impl Component for AgentAccessPane {
                     .row()
                     .trailing()
                     .on_press(move |_: Event<PressEventData>| {
-                        ctx.edit(|s| s.agent_access.enabled = !s.agent_access.enabled)
+                        ctx.edit(|s| s.agent_access.enabled = !s.agent_access.enabled);
                     })
-                    .child(Switch::new().toggled(enabled).on_toggle(move |_| {
-                        ctx.edit(|s| s.agent_access.enabled = !s.agent_access.enabled)
+                    .child(Switch::new().toggled(enabled).on_toggle(move |()| {
+                        ctx.edit(|s| s.agent_access.enabled = !s.agent_access.enabled);
                     })),
             )
             .child(
@@ -101,7 +101,7 @@ impl Component for AgentAccessPane {
                         // In range by construction: the field clamps before it reports, and the
                         // range is the port number's own.
                         .on_change(move |port: u32| {
-                            ctx.edit(|s| s.agent_access.port = port as u16)
+                            ctx.edit(|s| s.agent_access.port = port as u16);
                         }),
                 ),
             )
@@ -158,7 +158,7 @@ impl Component for AgentAccessPane {
                                 .outline()
                                 .height(Size::px(FIELD_HEIGHT))
                                 .on_press(move |_: Event<PressEventData>| {
-                                    ctx.edit(|s| s.agent_access.token = mint_token())
+                                    ctx.edit(|s| s.agent_access.token = mint_token());
                                 })
                                 .child(
                                     rect()

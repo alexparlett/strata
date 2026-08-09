@@ -101,7 +101,7 @@ fn app() -> impl IntoElement {
 #[test]
 #[ignore = "writes target/plan-preview.png for eyeballing; run explicitly"]
 fn plan_preview() {
-    let (mut runner, _) = TestingRunner::new(app, (960., 900.).into(), |_| {}, 1.);
+    let (mut runner, ()) = TestingRunner::new(app, (960., 900.).into(), |_| {}, 1.);
     runner.sync_and_update();
     runner.render_to_file(concat!(
         env!("CARGO_MANIFEST_DIR"),

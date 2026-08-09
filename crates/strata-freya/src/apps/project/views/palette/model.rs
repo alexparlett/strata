@@ -430,7 +430,7 @@ mod tests {
             .rows
             .iter()
             .filter(|entry| entry.group() == group)
-            .map(|entry| entry.label())
+            .map(Entry::label)
             .collect()
     }
 
@@ -565,7 +565,7 @@ mod tests {
     /// drawer's collapse rule, applied to a list that is rebuilt on every keystroke.
     #[test]
     fn every_entry_has_its_own_id() {
-        let mut ids: Vec<String> = entries(&store()).iter().map(|e| e.id()).collect();
+        let mut ids: Vec<String> = entries(&store()).iter().map(Entry::id).collect();
         let count = ids.len();
         ids.sort();
         ids.dedup();
@@ -586,8 +586,7 @@ mod tests {
             let heading = groups
                 .groups
                 .iter()
-                .filter(|(_, start)| *start <= index)
-                .last()
+                .rfind(|(_, start)| *start <= index)
                 .expect("every row sits under a heading");
             assert_eq!(heading.0, entry.group());
         }
@@ -603,7 +602,7 @@ mod tests {
                 .rows
                 .iter()
                 .find(|entry| entry.group() == Group::Views)
-                .map(|entry| entry.sub()),
+                .map(Entry::sub),
             Some("1 cols · view".to_string())
         );
     }

@@ -720,7 +720,7 @@ pub fn classify_one(ctx: &SessionContext, sql: &str) -> Result<(DFStatement, Ver
 fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<DFStatement>, String> {
     let state = ctx.state();
     let options = state.config_options();
-    let dialect = dialect_from_str(&options.sql_parser.dialect)
+    let dialect = dialect_from_str(options.sql_parser.dialect)
         .ok_or_else(|| format!("Unsupported SQL dialect: {}", options.sql_parser.dialect))?;
     DFParserBuilder::new(sql)
         .with_dialect(dialect.as_ref())
@@ -948,15 +948,13 @@ fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
     for t in toks {
         if t.kind == TokKind::Punct && t.text == "(" {
             stack.push(t.span.clone());
-        } else if t.kind == TokKind::Punct && t.text == ")" {
-            if stack.pop().is_none() {
-                out.push(diag(
-                    Severity::Error,
-                    "Unmatched closing parenthesis".into(),
-                    t.span.clone(),
-                    sql,
-                ));
-            }
+        } else if t.kind == TokKind::Punct && t.text == ")" && stack.pop().is_none() {
+            out.push(diag(
+                Severity::Error,
+                "Unmatched closing parenthesis".into(),
+                t.span.clone(),
+                sql,
+            ));
         }
     }
     for open in stack {
@@ -1939,7 +1937,7 @@ mod tests {
         let sql = "SELECT nme, product_idd FROM t";
         let out = run(sql);
         assert_eq!(out.len(), 2, "{:?}", messages(&out));
-        assert!(out.iter().all(|d| d.is_error()));
+        assert!(out.iter().all(Diagnostic::is_error));
         assert_eq!(spanned(sql, &out[0]), "nme");
         assert_eq!(spanned(sql, &out[1]), "product_idd");
     }

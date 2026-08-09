@@ -568,11 +568,9 @@ fn ctes_of(stmt: &[Tok]) -> Vec<CteSym> {
     if stmt.get(i).map(|t| t.eq_ci("RECURSIVE")).unwrap_or(false) {
         i += 1;
     }
-    loop {
-        // name
-        let Some(name_tok) = stmt.get(i).filter(|t| is_name_like(t)) else {
-            break;
-        };
+    // The header is the list's own condition — "is there another CTE name here?". Every `break`
+    // inside the body is the other thing: a malformed or unterminated clause, mid-edit.
+    while let Some(name_tok) = stmt.get(i).filter(|t| is_name_like(t)) {
         let name = name_tok.text.clone();
         i += 1;
         // optional explicit column list `(a, b)`

@@ -132,7 +132,7 @@ fn num_after(lower: &str, key: &str) -> Option<usize> {
     let digits: String = lower[i..]
         .chars()
         .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect();
     digits.parse().ok()
 }

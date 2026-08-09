@@ -5,7 +5,7 @@
 //! ## It names the work, not a number
 //!
 //! The canvas quotes cost figures off a `>50 files` gate ("248 files · ~186 MB"). Deliberately
-//! not built (DEV_TASKS D4/U15): file count is a backwards proxy for cost — one 10GB Parquet
+//! not built (`DEV_TASKS` D4/U15): file count is a backwards proxy for cost — one 10GB Parquet
 //! file trips nothing while sixty small ones trip it — and we measure no bytes at all, so any
 //! figure here would be a guess wearing a decimal point. What the copy states is the *shape* of
 //! the work, which is true at every size: it reads everything once, distinct counts cannot be
@@ -250,7 +250,7 @@ impl Component for ProfileConfirm {
             );
 
         Dialog::new()
-            .on_dismiss(move |_| slot.set(None))
+            .on_dismiss(move |()| slot.set(None))
             .on_confirm(confirm)
             // Warning-toned, like the canvas: this is a question about work the user is about to
             // pay for, not a destructive one.
@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// The headline: the confirm describes the **work**, and quotes no arithmetic. The three
-    /// claims it does make are the ones true at any size (DEV_TASKS U15).
+    /// claims it does make are the ones true at any size (`DEV_TASKS` U15).
     #[test]
     fn the_confirm_describes_the_work_and_quotes_no_figures() {
         let (mut runner, (mut slot, ..)) = runner();

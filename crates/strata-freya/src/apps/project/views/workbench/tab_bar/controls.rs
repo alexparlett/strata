@@ -181,7 +181,7 @@ impl Component for NavMenu {
         ))
         .bottom()
         .align_end()
-        .maybe_child(open().then(|| Menu::new().on_close(move |_| open.set(false)).child(panel)))
+        .maybe_child(open().then(|| Menu::new().on_close(move |()| open.set(false)).child(panel)))
     }
 }
 
@@ -207,6 +207,10 @@ fn nav_search(query: State<String>, faint: Color) -> impl IntoElement {
 
 /// One switcher row: status dot + name (flex) + close ×. The row press switches to the tab and
 /// closes the menu; the × closes the tab (and stops the press so it doesn't also switch).
+// Four of the nine describe the tab (`id`, `name`, `active`, `dirty`) and the rest are the
+// handles its two presses need. A builder function rather than a `Component` on purpose: it is
+// private to the switcher menu, so it needs neither a diff key nor a theme of its own.
+#[allow(clippy::too_many_arguments)]
 fn tab_row(
     id: TabId,
     name: String,
@@ -295,7 +299,7 @@ impl Component for OverflowMenu {
             // overlay's available width is the trigger's, so without a floor the row
             // squeezes and the chord clips.
             .min_width(Size::px(super::menu::HINT_MENU_WIDTH))
-            .on_close(move |_| open.set(false))
+            .on_close(move |()| open.set(false))
             .child(
                 MenuButton::new()
                     .on_press(move |_| {
@@ -333,6 +337,6 @@ impl Component for OverflowMenu {
         ))
         .bottom()
         .align_end()
-        .maybe_child(open().then(|| menu))
+        .maybe_child(open().then_some(menu))
     }
 }

@@ -1,0 +1,62 @@
+# Knobs for the curated lint set in `[workspace.lints]` (root `Cargo.toml`).
+#
+# A threshold belongs here only when clippy's default measures a Rust idiom this codebase does not
+# follow — it describes the shape of the code, and every number in it re-licenses every *future*
+# function up to that number. Making a named file pass is not a reason to move one: that is what a
+# site-local `#[allow]`, carrying the reason it is true there, is for.
+
+# This is a private app and `pub` is used freely (AGENTS.md §1: "No over-engineering"), so
+# clippy's default assumption — that a `pub` signature is someone else's API and must not be
+# suggested away — would silence `unnecessary_wraps` and its neighbours on nearly every
+# function in the workspace. Load-bearing, not cosmetic.
+avoid-breaking-exported-api = false
+
+# `cognitive-complexity-threshold`, `too-many-arguments-threshold` and `type-complexity-threshold`
+# are deliberately **absent**: measured at clippy's own defaults (25 / 7 / 250) the whole workspace
+# produces four findings, so there is no house idiom here for a threshold to describe. Raising one
+# would only re-license every future function up to the new number. The four are allowed at their
+# own sites, each with the reason it is true there.
+
+# Default 100. A component `render` is a fixed hook prelude followed by one declarative element
+# tree, so 100 measures the idiom rather than the problem; 200 is the point past which a body is
+# worth a second look. Deliberately **not** raised to clear the handful of functions currently
+# over it — a threshold states the shape of the codebase, and moving it to make named files pass
+# would silently re-license every future body up to the new number. Those functions carry a
+# reasoned `#[allow]` each instead, which is a fact about that site and does not travel.
+too-many-lines-threshold = 200
+
+# `doc_markdown` wants a backtick around anything that looks like an identifier, and these are
+# **prose**: the query engine and the object store this app is written *about* (230 mentions
+# between them), other IDEs cited as design precedent, a protocol and its method, a naming
+# convention, a key, a framework, a fake-GCS server. Backticking them would claim they are code,
+# and `DataFusion` the product is not `datafusion` the crate. `".."` keeps clippy's own default
+# list (GitHub, OAuth, …) rather than replacing it.
+#
+# Note when editing this: cargo does not always re-lint on a `clippy.toml` change alone. Touch a
+# source file (or `cargo clean -p <crate>`) before concluding an entry here is unnecessary.
+doc-valid-idents = [
+    "..",
+    "AppKit",
+    "DataFusion",
+    "DataGrip",
+    "IntelliJ",
+    "JetBrains",
+    "MinIO",
+    "MiniSky",
+    "PROPFIND",
+    "PageUp",
+    "PascalCase",
+    "RustRover",
+    "WebDAV",
+]
+
+# Tests live inline as `#[cfg(test)]` modules in the same files as the code they cover, so they
+# are linted with it. A test that unwraps a fixture is being direct, not sloppy — these keys are
+# the sanctioned way to say so once here instead of at every call.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-useless-vec-in-tests = true

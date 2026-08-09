@@ -478,6 +478,13 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   `git submodule status`).
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
+- **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the
+  workspace rather than at every site it fires.** `cargo clippy --workspace --all-targets --locked
+  -- -D warnings`; the curated set is `[workspace.lints]` in the root `Cargo.toml` (the base plus a
+  hand-picked readability/complexity list, deliberately not the whole pedantic group), thresholds
+  and knobs are `clippy.toml`. Every member inherits it — the vendored editor too. Reach for a
+  threshold before an allow and an allow before an `#[allow]`: an inline suppression is for a fact
+  about **one** site, and it carries the reason it is true there.
 - **`cargo test` needs a container runtime**, because the connections integration test drives a
   real MinIO and is deliberately not `#[ignore]`d — an ignored test is one nobody runs. Point
   `DOCKER_HOST` at it if it is not on the default socket; CI gets one from
@@ -528,8 +535,10 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   returned ready to pass, sorted most-severe first; each row carries `CONFIRMED` (unanimous panel)
   or `PLAUSIBLE` (one voter refused). The severity tally and the `BLOCK`/`CONCERNS`/`CLEAN` gate
   go in prose beneath the card, which has no field for either. Never print the list twice.
-- **CI runs that same check on every PR** — `cargo test --workspace --locked` on **macOS**, with
-  `submodules: true`, asserting the gitlink **before** compiling.
+- **CI runs that same check on every PR** — `cargo clippy --workspace --all-targets --locked --
+  -D warnings` then `cargo test --workspace --locked`, on **macOS**, with `submodules: true`,
+  asserting the gitlink **before** compiling. `-D warnings` is scoped to the clippy invocation;
+  the toolchain step's `rustflags: ''` stays, so a dependency's warning cannot fail the build.
 - **Only the tests that need the container runtime queue for it, and the split is a test target.**
   Two jobs: `minio` runs `--test object_store_minio` entire (so a test added to that file needs no
   workflow edit) and carries the queue, the cloud agent and the release step; `test` is the same

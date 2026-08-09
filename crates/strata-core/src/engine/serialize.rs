@@ -6,7 +6,7 @@
 //! - **CSV/TSV** → `arrow-csv`'s writer.
 //! - **JSON** → [`PrettyJsonWriter`]: arrow-json's `ArrayWriter` encodes (nested
 //!   `struct`/`list`/`map` stay real JSON), then the whole document is pretty-printed at once by
-//!   serde_json — fully indented, structurally valid by construction.
+//!   `serde_json` — fully indented, structurally valid by construction.
 //! - **Markdown** → [`MarkdownWriter`] here (buffers rows, pads + right-aligns numerics on
 //!   `close`), same trait as the others.
 //!
@@ -50,7 +50,7 @@ pub enum TextFormat {
 
 /// A pretty-printing JSON [`RecordBatchWriter`]. It reuses arrow-json's `ArrayWriter` for **all**
 /// encoding — types, nesting, decimals — into an in-memory buffer, then on [`close`](Self::close)
-/// formats the *entire* buffered document in one pass with serde_json's pretty printer, writing to
+/// formats the *entire* buffered document in one pass with `serde_json`'s pretty printer, writing to
 /// the sink `W`. Because a complete, valid document is parsed and re-serialized as a whole (rather
 /// than rewritten byte-by-byte), the output is always structurally valid and fully indented,
 /// nested interiors included. Slots into [`drive`] like the CSV / Markdown writers.
@@ -233,7 +233,7 @@ fn preview_json(field: &FieldRef, array: &dyn Array, idx: usize, budget: usize) 
         match p.value(field, array, idx, 0) {
             Ok(()) => return Some(p.out),
             // Too wide at this depth; try one level shallower.
-            Err(Halt::Budget) => continue,
+            Err(Halt::Budget) => {}
             // A type arrow-json refuses; the unbounded path fails on it too.
             Err(Halt::Unsupported) => return None,
         }
@@ -270,7 +270,7 @@ impl Preview {
         self.fits()
     }
 
-    /// A newline plus `depth` levels of the two-space indent serde_json's pretty printer uses,
+    /// A newline plus `depth` levels of the two-space indent `serde_json`'s pretty printer uses,
     /// so a fully expanded preview is byte-identical to [`row_pretty_json`]'s formatting.
     fn indent(&mut self, depth: usize) -> Result<(), Halt> {
         self.out.push('\n');
@@ -605,8 +605,8 @@ impl<W: Write> RecordBatchWriter for MarkdownWriter<W> {
         };
         let mut out = String::new();
         out.push('|');
-        for i in 0..ncol {
-            out.push_str(&format!(" {} |", pad(&header[i], i)));
+        for (i, cell) in header.iter().enumerate().take(ncol) {
+            out.push_str(&format!(" {} |", pad(cell, i)));
         }
         out.push('\n');
         out.push('|');
@@ -616,13 +616,13 @@ impl<W: Write> RecordBatchWriter for MarkdownWriter<W> {
             } else {
                 "-".repeat(width[i])
             };
-            out.push_str(&format!(" {} |", rule));
+            out.push_str(&format!(" {rule} |"));
         }
         out.push('\n');
         for row in &rows {
             out.push('|');
             for i in 0..ncol {
-                let c = row.get(i).map(|s| s.as_str()).unwrap_or("");
+                let c = row.get(i).map(String::as_str).unwrap_or("");
                 out.push_str(&format!(" {} |", pad(c, i)));
             }
             out.push('\n');

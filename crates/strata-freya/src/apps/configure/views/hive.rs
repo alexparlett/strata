@@ -67,11 +67,11 @@ impl Component for Hive {
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(CONTROL_GAP)
-            .child(Switch::new().toggled(on).on_toggle({
-                let root = root.clone();
-                let engine = engine.clone();
-                move |_| toggle(ctx, engine.clone(), &root)
-            }))
+            .child(
+                Switch::new()
+                    .toggled(on)
+                    .on_toggle(move |()| toggle(ctx, engine.clone(), &root)),
+            )
             .child(Prose::new(match on {
                 true => "Reading the folder tree as partition columns",
                 false => "Ignoring the folder tree, reading the files as one flat table",
@@ -103,7 +103,7 @@ impl Component for Hive {
                                 .key(name.clone())
                                 .into_element()
                             }))
-                            .maybe_child(warn.then(|| Warning))
+                            .maybe_child(warn.then_some(Warning))
                     }))
             }))
     }
@@ -175,7 +175,7 @@ impl Component for PartitionRow {
                             if let Some((_, slot)) = draft.partitions.get_mut(index) {
                                 *slot = dtype.to_string();
                             }
-                        })
+                        });
                     })
                     .child(MonoValue::new(dtype))
                     .into()

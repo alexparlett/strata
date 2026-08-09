@@ -359,7 +359,7 @@ mod tests {
                 "{:?} is on a page the nav tree doesn't name",
                 hit.route()
             );
-            assert!(!hit.location().is_empty(), "{:?} has no location", hit);
+            assert!(!hit.location().is_empty(), "{hit:?} has no location");
         }
     }
 

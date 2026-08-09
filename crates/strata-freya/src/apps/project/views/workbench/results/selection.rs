@@ -138,6 +138,11 @@ pub enum CellRole {
     /// The `#` corner — select-all.
     Corner,
     /// No selection interaction (e.g. the trailing filler).
+    ///
+    /// Nothing constructs this today: every cell the grid builds has a role. It stays because
+    /// `Cell` takes a role rather than an `Option<CellRole>` — "this cell is inert" is a
+    /// position the type has to be able to hold, and a filler cell is the one that will.
+    #[allow(dead_code)]
     None,
 }
 
@@ -220,11 +225,11 @@ impl SelCtl {
                 }
                 None => rows.push(i),
             }
-            self.sel.set(
-                (!rows.is_empty())
-                    .then_some(Selection::Rows(rows))
-                    .unwrap_or(Selection::None),
-            );
+            self.sel.set(if !rows.is_empty() {
+                Selection::Rows(rows)
+            } else {
+                Selection::None
+            });
         } else {
             self.sel.set(Selection::Rows(vec![i]));
         }
@@ -255,11 +260,11 @@ impl SelCtl {
                 }
                 None => cols.push(ci),
             }
-            self.sel.set(
-                (!cols.is_empty())
-                    .then_some(Selection::Cols(cols))
-                    .unwrap_or(Selection::None),
-            );
+            self.sel.set(if !cols.is_empty() {
+                Selection::Cols(cols)
+            } else {
+                Selection::None
+            });
         } else {
             self.sel.set(Selection::Cols(vec![ci]));
         }

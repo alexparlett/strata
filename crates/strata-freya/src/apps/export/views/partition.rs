@@ -65,7 +65,7 @@ impl Component for Partition {
             .child(
                 Switch::new()
                     .toggled(enabled)
-                    .on_toggle(move |_| ctx.edit(|d| d.partition.enabled = !enabled)),
+                    .on_toggle(move |()| ctx.edit(|d| d.partition.enabled = !enabled)),
             )
             .child(Prose::new(state_label));
 
@@ -268,7 +268,7 @@ impl Component for Available {
                                     d.partition.columns.push(pressed.clone());
                                     d.partition.filter.clear();
                                 }
-                            })
+                            });
                         })
                         .child(Icon::new(IconName::Plus).size(12.).color(accent))
                         .child(MonoValue::new(name.clone()).width(Size::flex(1.)))
@@ -379,7 +379,7 @@ impl Component for SelectedRow {
             .on_press(move |_| {
                 ctx.edit(|d| {
                     d.partition.columns.remove(index);
-                })
+                });
             })
             .child(Icon::new(IconName::Close).size(12.));
 
@@ -446,7 +446,7 @@ impl Component for KeepColumns {
             .child(
                 Switch::new()
                     .toggled(keep)
-                    .on_toggle(move |_| ctx.edit(|d| d.partition.keep_columns = !keep)),
+                    .on_toggle(move |()| ctx.edit(|d| d.partition.keep_columns = !keep)),
             )
             .child(Prose::new("Keep partition columns inside files"));
 

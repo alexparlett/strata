@@ -163,6 +163,11 @@ impl CodeEditor {
 }
 
 impl Component for CodeEditor {
+    // The editor's whole surface: the resolved type metrics, the completion popup's state and
+    // measurement plumbing, the pointer/key handling, and the gutter + lines tree. Vendored from
+    // upstream and kept close to it on purpose, so carving it up here would be divergence for a
+    // line count rather than for a reader.
+    #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let CodeEditor {
             editor,
@@ -226,17 +231,14 @@ impl Component for CodeEditor {
         // Keyboard navigation reveals the selected row: keyed on the *index* memo —
         // never the row areas themselves (scroll re-emits them; peeking avoids the
         // loop, exactly the tab-strip idiom).
-        let selected_index = use_memo({
-            let completion = completion;
-            move || completion.read().open.as_ref().map(|o| o.selected)
-        });
+        let selected_index = use_memo(move || completion.read().open.as_ref().map(|o| o.selected));
         use_side_effect({
             let mut popup_scroll = popup_scroll;
             move || {
-                if let Some(sel) = *selected_index.read() {
-                    if let Some(Some(area)) = row_areas.peek().get(sel) {
-                        popup_scroll.scroll_to_item(*area);
-                    }
+                if let Some(sel) = *selected_index.read()
+                    && let Some(Some(area)) = row_areas.peek().get(sel)
+                {
+                    popup_scroll.scroll_to_item(*area);
                 }
             }
         });
@@ -273,7 +275,7 @@ impl Component for CodeEditor {
                 })),
                 State::create(Callback::new({
                     let editor = editor.clone();
-                    move |_| {
+                    move |()| {
                         let editor = editor.read();
                         editor.scrolls
                     }
@@ -558,7 +560,6 @@ impl Component for CodeEditor {
             let font_family = font_family.clone();
             let mut completion = completion;
             let mut row_areas = row_areas;
-            let on_completions = on_completions.clone();
             move |e: Event<KeyboardEventData>| {
                 const LINES_JUMP_ALT: usize = 5;
                 const LINES_JUMP_CONTROL: usize = 3;
@@ -592,7 +593,7 @@ impl Component for CodeEditor {
                             }
                             // Accept only unmodified — a chorded Enter (⌘↵ Run)
                             // belongs to the app's keymap, popup or no popup.
-                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) if plain => {
+                            Key::Named(NamedKey::Enter | NamedKey::Tab) if plain => {
                                 e.prevent_default();
                                 e.stop_propagation();
                                 accept_completion(
@@ -668,7 +669,7 @@ impl Component for CodeEditor {
                                 })
                                 .collect::<Vec<EditableEvent>>()
                         }
-                        Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp)
+                        Key::Named(NamedKey::ArrowDown | NamedKey::ArrowUp)
                             if modifiers.contains(Modifiers::CONTROL) =>
                         {
                             (0..LINES_JUMP_CONTROL)
@@ -800,7 +801,7 @@ impl Component for CodeEditor {
                 }
             })
             .child(
-                VirtualScrollView::new(move |item, _| {
+                VirtualScrollView::new(move |item, ()| {
                     EditorLineUI {
                         editor: editor.clone(),
                         font_size,

@@ -229,7 +229,7 @@ mod tests {
     }
 
     /// The laid-out area of the run whose text is `text`.
-    fn area_of(runner: &TestingRunner, text: &str) -> freya::prelude::Area {
+    fn area_of(runner: &TestingRunner, text: &str) -> Area {
         runner
             .find_many(|node, element| {
                 Label::try_downcast(element)

@@ -12,7 +12,7 @@
 //!
 //! **The Edit menu is custom items too**, not muda's predefined set: the predefined
 //! items send Cocoa first-responder selectors (`undo:` / `copy:` / …) that a Skia view
-//! never receives — the exact swallowing tangle the Dioxus app fought (DEV_TASKS F8).
+//! never receives — the exact swallowing tangle the Dioxus app fought (`DEV_TASKS` F8).
 //! Instead each item's event **synthesizes the command's effective chord into the
 //! focused window's keyboard pipeline** ([`NativeEventExt::send_key_press`]), so menu
 //! clicks and accelerator presses flow through the exact same path as typed keys — the
@@ -53,7 +53,7 @@
 //! **Deliberately not ported from the Dioxus app**: its `global-hotkey` OS-hotkey layer
 //! (`strata-dioxus` `use_shortcuts`) and its `PredefinedMenuItem` Edit set. Both were
 //! webview workarounds — OS hotkeys fired before wry swallowed the keys, and predefined
-//! items worked only because WKWebView answers Cocoa's first-responder selectors. With
+//! items worked only because `WKWebView` answers Cocoa's first-responder selectors. With
 //! native winit delivery every key reaches the keymap's listeners directly (resolved
 //! live, per focused window), so the hotkey manager, its focus-gated registration, and
 //! its chord→`Code` table have no job here.
@@ -196,7 +196,7 @@ fn accelerator(chord: &KeyChord) -> Option<Accelerator> {
 fn synthetic_key(chord: &KeyChord) -> Option<(Key, Modifiers)> {
     let mut chars = chord.key.chars();
     let key = match (chars.next(), chars.next()) {
-        (Some(_), None) => Key::Character(chord.key.clone().into()),
+        (Some(_), None) => Key::Character(chord.key.clone()),
         _ => Key::Named(chord.key.parse::<NamedKey>().ok()?),
     };
     let mut modifiers = Modifiers::empty();
@@ -508,6 +508,11 @@ pub fn create_global_menu() -> MenuState {
 /// [`WindowKind`](crate::platform::WindowKind), which carries the same three-way split, because
 /// only the root has the [`OpenCtx`] and this way a root cannot claim to be a project window
 /// without producing one.
+// `Project` is much the widest variant, and boxing it — clippy's fix — would cost this enum its
+// `Copy`, which is the one property every holder depends on. `OpenCtx` is itself a bag of `State`
+// handles *in order to stay `Copy`* (see its own note), so the size is handles, not data, and a
+// menu scope is passed around by copy at every window root.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy, PartialEq)]
 pub enum MenuScope {
     /// A project window: its recents, its open path, and something to close, save into and

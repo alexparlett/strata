@@ -143,7 +143,7 @@ pub fn trigger_after_edit(key: &Key, modifiers: Modifiers, was_open: bool) -> Tr
                 _ => close_if_open,
             }
         }
-        Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Delete) => {
+        Key::Named(NamedKey::Backspace | NamedKey::Delete) => {
             if was_open {
                 TriggerDecision::Recompute
             } else {

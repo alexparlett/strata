@@ -177,6 +177,10 @@ impl DataGrid {
 }
 
 impl Component for DataGrid {
+    // The grid reads three settings, owns the selection controller and its key handlers, and
+    // builds header, gutter and virtualized rows in one tree. The handlers close over the
+    // controller built above them, so splitting the body would mean threading it back in.
+    #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         // The grid's three user settings, from the app-global config. This **subscribes**
         // (`ConfigChan::Settings` + `.read()`) rather than peeking the station like the key
@@ -475,8 +479,8 @@ impl Component for DataGrid {
                 move |e: Event<KeyboardEventData>| {
                     match &e.key {
                         Key::Named(NamedKey::Shift) => shift.set(true),
-                        Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => {
-                            meta.set(true)
+                        Key::Named(NamedKey::Meta | NamedKey::Control) => {
+                            meta.set(true);
                         }
                         _ => {}
                     }
@@ -485,7 +489,7 @@ impl Component for DataGrid {
             })
             .on_global_key_up(move |e: Event<KeyboardEventData>| match &e.key {
                 Key::Named(NamedKey::Shift) => shift.set(false),
-                Key::Named(NamedKey::Meta) | Key::Named(NamedKey::Control) => meta.set(false),
+                Key::Named(NamedKey::Meta | NamedKey::Control) => meta.set(false),
                 _ => {}
             })
             .child(ResultsToolbar::new(

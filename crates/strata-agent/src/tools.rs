@@ -315,6 +315,11 @@ impl<H: Host> Drop for Connection<H> {
     }
 }
 
+/// What a remembered run is filed under: the agent that ran it, the project it ran in, and the
+/// query session it belongs to. Named because it is stated twice — here and by `remember`'s
+/// return — and the three parts only mean anything together.
+type RunKey = (AgentId, PathBuf, QuerySessionId);
+
 /// The tool vocabulary over one [`Host`], **as one agent**.
 pub struct StrataTools<H: Host> {
     host: Arc<H>,
@@ -322,7 +327,7 @@ pub struct StrataTools<H: Host> {
     /// checked against it: a cache shared by every connection would otherwise let a handle
     /// that leaked between two agents read the other's rows, and a key is a check that
     /// cannot be forgotten.
-    runs: Arc<Mutex<HashMap<(AgentId, PathBuf, QuerySessionId), LastRun>>>,
+    runs: Arc<Mutex<HashMap<RunKey, LastRun>>>,
     /// Stamps each remembered run so the oldest can be found. Shared with every clone of the
     /// service, like the map it orders.
     seq: Arc<AtomicU64>,
@@ -564,12 +569,7 @@ impl<H: Host> StrataTools<H> {
         Ok((project, engine))
     }
 
-    fn key(
-        &self,
-        agent: AgentId,
-        root: &Path,
-        session: QuerySessionId,
-    ) -> (AgentId, PathBuf, QuerySessionId) {
+    fn key(&self, agent: AgentId, root: &Path, session: QuerySessionId) -> RunKey {
         (agent, root.to_path_buf(), session)
     }
 
@@ -760,7 +760,7 @@ impl<H: Host> StrataTools<H> {
     /// Run read-only SQL in one of your query sessions and wait for it to settle. It runs on
     /// the project's real engine, so it costs and behaves exactly like a query the user
     /// presses Run on, and it replaces whatever that session last produced. Returns page 1
-    /// plus the exact total; use read_page for the rest. Set mode to 'explain' for the query
+    /// plus the exact total; use `read_page` for the rest. Set mode to 'explain' for the query
     /// plan without executing.
     #[tool]
     async fn run(
@@ -1669,8 +1669,6 @@ mod tests {
     /// result, in practice whatever the user has run since.
     #[tokio::test]
     async fn a_remembered_page_does_not_survive_the_engine_that_made_it() {
-        let root = scratch("engine_swap");
-        fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
         async fn register(engine: &Engine, root: &Path) {
             engine
                 .register(TableSpec {
@@ -1683,6 +1681,9 @@ mod tests {
                 .await
                 .unwrap();
         }
+
+        let root = scratch("engine_swap");
+        fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
         let project = MockProject::new("sales", &root);
         register(&project.engine, &root).await;
         let tools = StrataTools::new(MockHost::new(vec![project]));
@@ -1977,7 +1978,7 @@ mod tests {
     /// the one shape a well-meaning "unknown" arm could be added to.
     #[test]
     fn a_session_state_crosses_the_wire_unchanged() {
-        let wire = crate::wire::QuerySessionWire::from(crate::host::QuerySessionInfo {
+        let wire = crate::wire::QuerySessionWire::from(host::QuerySessionInfo {
             session: QuerySessionId::new(),
             state: QuerySessionState::Running,
         });

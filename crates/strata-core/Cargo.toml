@@ -82,3 +82,8 @@ uuid = { version = "1", features = ["v4"] }
 # The read-options round-trips write their own fixtures, and a compression option can only be
 # proved by handing the reader a genuinely compressed file. Already in the tree via DataFusion.
 flate2 = "1"
+
+# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
+# `clippy.toml`). Every member inherits the same set — CI denies it.
+[lints]
+workspace = true

@@ -76,8 +76,8 @@ impl Component for ToolButton {
     fn render(&self) -> impl IntoElement {
         let on_press = self.on_press.clone();
         let button = Button::new()
-            .maybe(self.outlined, |el| el.outline())
-            .maybe(!self.outlined, |el| el.flat())
+            .maybe(self.outlined, Button::outline)
+            .maybe(!self.outlined, Button::flat)
             .enabled(self.enabled)
             .width(Size::px(TOOL_SIZE))
             .height(Size::px(TOOL_SIZE))
@@ -87,7 +87,7 @@ impl Component for ToolButton {
             .child(
                 Icon::new(self.icon)
                     .size(TOOL_ICON)
-                    .map(self.color, |el, color| el.color(color)),
+                    .map(self.color, Icon::color),
             );
 
         // The label reaches the user on hover, but **not yet the accessibility tree**: `Button`

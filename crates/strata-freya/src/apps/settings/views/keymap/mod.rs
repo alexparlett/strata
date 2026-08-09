@@ -1,4 +1,4 @@
-//! **Settings ▸ Keymap** (P4-08, DEV_TASKS W4, design `Settings.dc.html`) — every command the
+//! **Settings ▸ Keymap** (P4-08, `DEV_TASKS` W4, design `Settings.dc.html`) — every command the
 //! app dispatches, and the chord it answers to.
 //!
 //! **The mechanism was already here; this is the control.** P2-20 shipped the whole

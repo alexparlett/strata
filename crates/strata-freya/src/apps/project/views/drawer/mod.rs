@@ -13,7 +13,7 @@
 //!   list, and a second derivation of the same facts is how two numbers start disagreeing.
 //! - **The Clear rule**: shown on Events / History, **never** on Problems, whose rows self-clear
 //!   when the SQL is fixed or the query re-runs — a Clear there would either lie or imply the
-//!   problems aren't real (DEV_TASKS U10). The rule is this shell's; the *action* belongs to the
+//!   problems aren't real (`DEV_TASKS` U10). The rule is this shell's; the *action* belongs to the
 //!   tabs that keep a log — the ephemeral event log (P3-13) and the persisted history satellite
 //!   (P3-14), which is why the two arms are different functions and not one.
 //!

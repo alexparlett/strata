@@ -337,7 +337,7 @@ impl Component for PropTableRow {
                                 .align_start()
                                 .maybe_child((!suggestions.is_empty()).then_some(menu)),
                             )
-                            .maybe_child(restart.then(|| RestartMarker {
+                            .maybe_child(restart.then_some(RestartMarker {
                                 color: tones.warning,
                             }))
                             .child(Divider::vertical().color(roles.get(Role::Border))),

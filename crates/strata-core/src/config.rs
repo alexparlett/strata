@@ -49,6 +49,10 @@ pub enum OpenPref {
 /// acts on it) is distributed: each feature listens for its own command through
 /// `crate::keymap::resolve`; this is just the stable, serializable id a binding points at.
 /// Serialized by variant name.
+// `CommandPalette` repeats the enum's name, and stays that way: the variant name *is* the wire
+// format for a saved binding (the line above), so renaming it silently drops every user's
+// override of that chord — and "command palette" is the surface's own name, not a stutter.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum Command {
     /// Find — context-dependent (results find today).
@@ -387,7 +391,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub open_projects: Vec<String>,
     /// A plain nested field — **not** `#[serde(flatten)]`: flatten is incompatible with
-    /// serde_json's `arbitrary_precision` (which we enable for exact decimals in JSON copies),
+    /// `serde_json`'s `arbitrary_precision` (which we enable for exact decimals in JSON copies),
     /// and a broken flatten deserialize silently reset recents + settings to defaults on load.
     #[serde(default)]
     pub settings: Settings,

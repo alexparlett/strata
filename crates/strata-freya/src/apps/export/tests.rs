@@ -63,7 +63,7 @@ fn open_on_a_result(engine: &Engine, sort: Option<(String, bool)>) -> ExportTarg
         page: 1,
         page_size: 100,
         label: "cross-file join".into(),
-        sample: output.rows.clone(),
+        sample: output.rows,
     }
 }
 
@@ -345,7 +345,7 @@ fn the_partition_toggle_is_what_decides_between_a_file_and_a_tree() {
     assert!(tree.is_dir(), "toggle on → a directory");
     let mut levels: Vec<String> = fs::read_dir(&tree)
         .expect("tree")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     levels.sort();
@@ -375,7 +375,7 @@ fn the_selected_order_is_the_directory_nesting_order() {
     // The outer level is tier and the inner one is id — the order the SELECTED pane showed.
     let mut inner: Vec<String> = fs::read_dir(tree.join("tier=gold"))
         .expect("outer level is tier")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     inner.sort();
@@ -397,7 +397,7 @@ fn keeping_partition_columns_is_visible_in_the_written_rows() {
     let read_header = |tree: &Path| -> String {
         let leaf = fs::read_dir(tree.join("tier=gold"))
             .expect("leaf")
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .next()
             .expect("a part file");
         fs::read_to_string(leaf.path())

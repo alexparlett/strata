@@ -151,7 +151,7 @@ fn read_rgba(surface: &mut Surface) -> Option<ClipboardImage> {
     let mut rgba = vec![0u8; row_bytes * EXPORT_HEIGHT as usize];
     surface
         .read_pixels(&info, &mut rgba, row_bytes, (0, 0))
-        .then(|| ClipboardImage {
+        .then_some(ClipboardImage {
             width: EXPORT_WIDTH as usize,
             height: EXPORT_HEIGHT as usize,
             rgba,

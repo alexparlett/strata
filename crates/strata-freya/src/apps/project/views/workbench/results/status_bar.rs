@@ -708,7 +708,7 @@ mod tests {
                 vec![cell("1,000"), cell("a")],
                 vec![
                     Cell {
-                        text: "".into(),
+                        text: String::new(),
                         null: true,
                     },
                     cell("b"),

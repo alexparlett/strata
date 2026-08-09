@@ -228,7 +228,7 @@ impl Component for ChartView {
                             let frame = Rc::new(Frame {
                                 data,
                                 mark: mark_now,
-                                dress: dress.clone(),
+                                dress,
                             });
                             snap = Some(ChartCapture::new(Rc::clone(&frame), log));
                             let plot = ChartCanvas::new(frame);
@@ -662,7 +662,7 @@ mod tests {
         });
         assert!(!widths.is_empty(), "the notice rendered no text at all");
         assert!(
-            widths.iter().any(|w| *w == COPY_WIDTH),
+            widths.contains(&COPY_WIDTH),
             "no text run kept the copy width — the pane reflowed the notice instead of \
              clipping it: {widths:?}"
         );

@@ -17,7 +17,7 @@
 //! (`--release` matters — LZ4 throughput in a debug build is not the number you want.)
 
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let schema = df.schema().inner().clone();
         let t = Instant::now();
         let batches = df.collect().await?;
-        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
         let _ = n;
         println!(
             "\n=== {name}: {rows} rows x {} cols (materialized in {:?})",
@@ -196,7 +196,7 @@ fn write_ipc(
 /// skipping is the whole difference), and a sorted page (a full scan plus sort — the worst case,
 /// and the one the status bar's pager hits whenever a column header is clicked).
 async fn time_reads(
-    path: &PathBuf,
+    path: &Path,
     ext: &str,
     rows: usize,
     sort_col: &str,

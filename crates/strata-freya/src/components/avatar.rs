@@ -78,9 +78,7 @@ impl Component for Avatar {
 /// Two-letter initials for a name, splitting on `_ - space` (the Dioxus `initials_of`): a project
 /// called `sales_daily` reads `SD`, a one-word one its first letter, and an empty one `?`.
 fn initials_of(name: &str) -> String {
-    let mut parts = name
-        .split(|c: char| c == '_' || c == '-' || c == ' ')
-        .filter(|s| !s.is_empty());
+    let mut parts = name.split(['_', '-', ' ']).filter(|s| !s.is_empty());
     let a = parts.next().and_then(|s| s.chars().next());
     let b = parts.next().and_then(|s| s.chars().next());
     match (a, b) {

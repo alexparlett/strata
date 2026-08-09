@@ -400,7 +400,7 @@ fn quote_literal(raw: &str) -> String {
 /// footer route did have.
 fn partition_columns_have_no_nulls(
     columns: &[String],
-    schema: &datafusion::arrow::datatypes::Schema,
+    schema: &Schema,
     stats: &crate::engine::query::SnapshotStats,
 ) -> Result<(), String> {
     for name in columns {
