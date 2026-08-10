@@ -339,7 +339,12 @@ const TOO_LARGE: &str = "This turn's tool results were too large to continue. As
 const MAX_ERROR: usize = 2_000;
 
 /// Bound a provider error before it reaches the transcript.
-fn bounded_error(why: &str) -> String {
+///
+/// Shared with [`provider::list_models`](super::provider::list_models), because Settings ▸ AI's
+/// Test action puts a provider's error in front of the user on exactly the same terms a failed
+/// turn does — and a gateway's HTML page is no more readable in a settings pane than in a
+/// transcript.
+pub(super) fn bounded_error(why: &str) -> String {
     if why.len() <= MAX_ERROR {
         return why.to_string();
     }

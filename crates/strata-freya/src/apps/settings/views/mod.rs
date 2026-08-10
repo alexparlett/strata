@@ -11,13 +11,14 @@
 //! builtin `Table`, and what they share beyond it — the note that appears between two rows — is
 //! [`RowNote`].
 //!
-//! AA-04's [`AgentAccessPane`] is the sixth, and back to the ordinary shape: a preferences form
-//! of three rows.
+//! The [`ai`] group (AS-03) is three more: [`McpPane`] is AA-04's, the ordinary shape of a
+//! preferences form; [`ProvidersPane`] and [`ChatPane`] are the assistant's roster and its
+//! new-chat defaults.
 //!
 //! [`Form::preferences`]: crate::components::form::Form::preferences
 //! [`Row`]: crate::components::form::Row
 
-mod agent_access;
+mod ai;
 mod chrome;
 mod data_display;
 mod engine;
@@ -30,7 +31,7 @@ mod system;
 mod theme;
 mod title_bar;
 
-pub use agent_access::AgentAccessPane;
+pub use ai::{commit, ChatPane, McpPane, Probes, ProvidersPane, TypedKeys};
 pub use chrome::SettingsChrome;
 pub use data_display::DataDisplayPane;
 pub use engine::{EnginePane, PropRows};

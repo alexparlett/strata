@@ -152,23 +152,39 @@ settings_index! {
          into memory. Set to 0 for no limit.",
         "cap rows";
 
-    AgentEnabled => Route::AgentAccess,
+    AiProvider => Route::Chat,
+        "New chat provider",
+        "Which provider a new chat starts on. Only enabled providers are offered.",
+        "ai assistant default brain llm";
+
+    AiModel => Route::Chat,
+        "New chat model",
+        "Which model a new chat starts on. Each chat can change its own afterwards.",
+        "ai assistant default llm name";
+
+    AiEffort => Route::Chat,
+        "New chat reasoning effort",
+        "How hard a reasoning model thinks by default. Models that do not reason have no \
+         setting.",
+        "ai assistant default thinking budget low medium high";
+
+    AgentEnabled => Route::Mcp,
         "Enable agent access",
         "Runs a local MCP server on 127.0.0.1 so agents can query the projects you have open. \
          Off by default, and never reachable from outside this machine.",
-        "mcp claude ai assistant server";
+        "mcp agent access claude ai assistant server";
 
-    AgentPort => Route::AgentAccess,
+    AgentPort => Route::Mcp,
         "Port",
         "The loopback port the server listens on. Changing it restarts the server when you \
          apply, and clients pointed at the old port stop resolving.",
-        "mcp agent localhost 127.0.0.1 loopback address";
+        "mcp agent access localhost 127.0.0.1 loopback address";
 
-    AgentToken => Route::AgentAccess,
+    AgentToken => Route::Mcp,
         "Token",
         "The bearer token every client has to present. Regenerating replaces it when you apply, \
          and clients still using the old one stop working.",
-        "mcp agent secret bearer authorization credential regenerate";
+        "mcp agent access secret bearer authorization credential regenerate";
 }
 
 impl Anchor {
@@ -201,11 +217,22 @@ pub struct Page {
 /// It is here rather than left out because the search box **replaces** the category rail while it
 /// has a query: a search for "shortcut" that answered "no settings match" while a Keymap row sat
 /// hidden behind it would be the field lying about the window.
-const PAGES: &[Page] = &[Page {
-    route: Route::Keymap,
-    label: "Keyboard shortcuts",
-    keywords: "keymap keybinding rebind shortcut keys chord",
-}];
+const PAGES: &[Page] = &[
+    Page {
+        route: Route::Keymap,
+        label: "Keyboard shortcuts",
+        keywords: "keymap keybinding rebind shortcut keys chord",
+    },
+    // A page rather than an `Anchor`, because its rows are **providers**, not named settings:
+    // there is nothing on it a `Reveal` could single out, and an anchor no row carries is a hit
+    // that navigates and then silently does nothing — unlike every other setting hit.
+    Page {
+        route: Route::Providers,
+        label: "Providers",
+        keywords: "ai assistant anthropic openai gemini deepseek groq xai ollama api key \
+                   endpoint llm model credential keychain",
+    },
+];
 
 /// One result: what it is called, where it lives, and what picking it does.
 ///
@@ -390,9 +417,13 @@ mod tests {
         assert!(finds("scanning", Hit::Setting(Anchor::Zebra)));
     }
 
-    /// The agent-access rows are found by the vocabulary a reader arrives with, which is the whole
-    /// reason they carry keywords: nothing on the page is *called* "MCP", and two of the three
-    /// rows are named after things every other page also has ("Port", "Token" — well, would).
+    /// The MCP rows are found by the vocabulary a reader arrives with, which is the whole reason
+    /// they carry keywords: two of the three are named after things every other page also has
+    /// ("Port", "Token" — well, would).
+    ///
+    /// **"Agent access" still finds them**, though nothing is called that any more. AS-03 renamed
+    /// the page to MCP when it gained two siblings, and a rename that silently drops the term
+    /// people already know is a search that got worse — so the old name is a keyword now.
     #[test]
     fn the_agent_rows_are_found_by_what_the_feature_is_called() {
         let hits = search("mcp");

@@ -1,0 +1,222 @@
+//! **Keys typed into AI ▸ Providers and not yet applied.**
+//!
+//! The settings draft cannot hold these, and that is the design rather than an inconvenience:
+//! [`Settings`](strata_core::config::Settings) carries a
+//! [`SecretRef`](strata_core::secret::SecretRef) and no secret, so a key reaching `config.json`
+//! is not a mistake to be careful about — it is a program that does not compile. A pasted key
+//! therefore has nowhere in the draft to live, and lives here instead: for the window's
+//! lifetime, in memory, keyed by the brain it belongs to.
+//!
+//! At Apply it goes to the keystore and only the marker merges ([`commit`]).
+//!
+//! **A `String`, not a `Secret`.** The box the user pastes into is a `String` — `ValueField`
+//! binds one — and wrapping it here would guard the second copy while the first sits in the
+//! text field's own buffer, reallocating as it grows. `strata_core::secret`'s own note applies:
+//! exposure is managed by lifetime, not by guarding one link of six. What this *does* do is
+//! hold the value no longer than the window, and hand it to [`Secret`] at the moment it is
+//! written.
+
+use std::collections::BTreeMap;
+
+use strata_core::ai::{Ai, BrainRef};
+use strata_core::secret::{Secret, SecretError, SecretRef};
+
+/// Every key typed in this window and not yet committed.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct TypedKeys(BTreeMap<BrainRef, String>);
+
+impl TypedKeys {
+    /// What the box for `brain` should show — empty when nothing has been typed.
+    pub fn get(&self, brain: &BrainRef) -> &str {
+        self.0.get(brain).map_or("", String::as_str)
+    }
+
+    /// Record what is in the box. An empty string is kept rather than dropped: "the user
+    /// cleared this" is a real edit that has to survive to Apply, where it becomes a delete —
+    /// dropping it would make clearing a key indistinguishable from never touching it.
+    pub fn set(&mut self, brain: BrainRef, typed: String) {
+        self.0.insert(brain, typed);
+    }
+
+    /// Whether anything was typed for `brain` at all. What decides between "write this" and
+    /// "leave the stored key alone".
+    pub fn touched(&self, brain: &BrainRef) -> bool {
+        self.0.contains_key(brain)
+    }
+
+    /// Forget a brain's typed key — a removed endpoint, so there is nothing left to write it to.
+    pub fn forget(&mut self, brain: &BrainRef) {
+        self.0.remove(brain);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&BrainRef, &String)> {
+        self.0.iter()
+    }
+}
+
+/// **Land every typed key in the keystore, and put its marker in `ai`.**
+///
+/// Called from Apply, *before* the draft merges, so what `write_config` commits already carries
+/// the right markers. Three cases per entry, and the third is why the blank string is kept:
+///
+/// - typed something, no marker yet → mint a [`SecretRef`], store, record it
+/// - typed something over an existing marker → overwrite **in place**, so the old keystore entry
+///   is replaced rather than stranded under an id nobody remembers
+/// - cleared the box → delete the entry and drop the marker ([`Secret::new`] answers a blank
+///   string with `None`, so "cleared" and "delete" are the same branch by construction)
+///
+/// Returns the first failure. A keystore that refuses is reported, never answered by writing the
+/// secret somewhere else — the whole point of `strata_core::secret`.
+pub fn commit(keys: &TypedKeys, ai: &mut Ai) -> Result<(), SecretError> {
+    for (brain, typed) in keys.iter() {
+        // **Looking up the existing marker must not create anything.** `entry().or_default()`
+        // reads *and* inserts, so a provider the user typed into and then cleared again would
+        // gain an empty `ProviderSetup` in the committed config purely by being asked about.
+        // The insert belongs below, where a marker is actually being stored.
+        let slot = match brain {
+            BrainRef::Builtin(kind) => ai.providers.get(kind).and_then(|p| p.key.clone()),
+            BrainRef::Custom(id) => match ai.endpoints.get(id) {
+                Some(endpoint) => endpoint.key.clone(),
+                // The endpoint was removed after its key was typed. Nothing to write it to, and
+                // nothing stored to clean up.
+                None => continue,
+            },
+        };
+
+        let had_marker = slot.is_some();
+        let marker = match (Secret::new(typed), slot) {
+            (Some(secret), Some(existing)) => {
+                existing.put(&secret)?;
+                Some(existing)
+            }
+            (Some(secret), None) => {
+                let minted = SecretRef::mint();
+                minted.put(&secret)?;
+                Some(minted)
+            }
+            (None, Some(existing)) => {
+                existing.delete()?;
+                None
+            }
+            (None, None) => None,
+        };
+
+        // Typed into and cleared again, with nothing stored to begin with: no marker to record,
+        // so nothing to make a row for either.
+        if marker.is_none() && !had_marker {
+            continue;
+        }
+
+        match brain {
+            BrainRef::Builtin(kind) => ai.providers.entry(*kind).or_default().key = marker,
+            BrainRef::Custom(id) => {
+                if let Some(endpoint) = ai.endpoints.get_mut(id) {
+                    endpoint.key = marker;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strata_core::ai::{Ai, ProviderKind};
+
+    /// **A cleared box is an edit, not an absence.** Dropping the empty string would make
+    /// "delete my key" indistinguishable from "never touched it", and the stored key would
+    /// survive an Apply the user believed removed it.
+    #[test]
+    fn clearing_a_key_is_remembered_as_an_edit() {
+        let brain = BrainRef::Builtin(ProviderKind::Anthropic);
+        let mut keys = TypedKeys::default();
+        assert!(!keys.touched(&brain));
+
+        keys.set(brain, String::new());
+        assert!(keys.touched(&brain), "an empty box is still an edit");
+        assert_eq!(keys.get(&brain), "");
+    }
+
+    /// A brain nobody typed into reads as empty rather than missing, so no caller branches on
+    /// presence to draw a box.
+    #[test]
+    fn an_untyped_brain_reads_as_empty() {
+        let keys = TypedKeys::default();
+        assert_eq!(keys.get(&BrainRef::Builtin(ProviderKind::Groq)), "");
+    }
+
+    /// A removed endpoint takes its typed key with it — there is nothing left to write it to.
+    #[test]
+    fn forgetting_a_brain_drops_its_typed_key() {
+        let brain = BrainRef::Custom(uuid::Uuid::new_v4());
+        let mut keys = TypedKeys::default();
+        keys.set(brain, "sk-test".into());
+        keys.forget(&brain);
+        assert!(!keys.touched(&brain));
+    }
+
+    /// **A key typed for an endpoint that was then removed is not written anywhere.**
+    ///
+    /// The order the user does it in is the ordinary one — paste, change your mind, remove the
+    /// row — and `commit` runs afterwards over whatever the map still holds. Without the skip it
+    /// would mint a keystore entry for an endpoint that no longer exists, leaving a secret in the
+    /// OS store under an id nothing will ever reference or clean up.
+    ///
+    /// Asserted without touching the keystore: reaching the `put` at all is the bug, and
+    /// `Ai::endpoints` staying empty is what proves it was not reached.
+    #[test]
+    fn a_key_for_a_removed_endpoint_is_written_nowhere() {
+        let gone = BrainRef::Custom(uuid::Uuid::new_v4());
+        let mut keys = TypedKeys::default();
+        keys.set(gone, "sk-orphan".into());
+
+        let mut ai = Ai::default();
+        commit(&keys, &mut ai).expect("a key with no home is skipped, not an error");
+        assert!(ai.endpoints.is_empty(), "nothing was invented to hold it");
+        assert!(ai.providers.is_empty());
+    }
+
+    /// **Asking about a brain's key must not create a row for it.**
+    ///
+    /// Looking the existing marker up used `entry().or_default()`, which reads *and* inserts — so
+    /// a provider the user typed into and then cleared again gained an empty `ProviderSetup` in
+    /// the committed config purely by being asked about, and it would persist to disk as a
+    /// provider they never enabled.
+    #[test]
+    fn a_cleared_key_on_an_untouched_provider_creates_no_entry() {
+        let brain = BrainRef::Builtin(ProviderKind::Groq);
+        let mut keys = TypedKeys::default();
+        keys.set(brain, String::new());
+
+        let mut ai = Ai::default();
+        commit(&keys, &mut ai).expect("clearing a key that was never stored is not an error");
+        assert!(
+            ai.providers.is_empty(),
+            "no key, no marker, and so no row: {ai:?}"
+        );
+    }
+
+    /// **An untouched brain gets no keystore call at all**, which is what lets Apply run on a
+    /// draft that never opened the AI pane without asking the OS for anything — and, on macOS,
+    /// without a Keychain prompt for a key nobody typed.
+    #[test]
+    fn a_draft_that_typed_nothing_commits_nothing() {
+        let mut ai = Ai {
+            providers: [(
+                ProviderKind::Anthropic,
+                strata_core::ai::ProviderSetup {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Ai::default()
+        };
+        let before = ai.clone();
+
+        commit(&TypedKeys::default(), &mut ai).expect("nothing typed is nothing to do");
+        assert_eq!(ai, before, "an empty draft must not rewrite the roster");
+    }
+}

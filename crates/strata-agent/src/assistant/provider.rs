@@ -9,6 +9,15 @@
 //! ([`PROVIDERS`]), and a form that offers a field the table does not declare is a form that
 //! does not compile against it.
 //!
+//! ## The kind is a token below; the knowledge is here
+//!
+//! [`ProviderKind`] and [`Effort`] live in `strata_core::ai`, because they are what
+//! [`Settings`](strata_core::config::Settings) persists and this crate depends *up* onto that
+//! one. Nothing else moved: the table is still one table, [`info`] is still one exhaustive
+//! match, and a kind added without a row is still a build error. What changed is only that the
+//! accessors are free functions ([`info`], [`label`], [`efforts`]) rather than inherent methods
+//! on a type this crate does not define.
+//!
 //! ## The pick is per send, so a window is not a mode
 //!
 //! [`Selection`] is plain data handed in with every send. Nothing here reads Settings, holds
@@ -26,7 +35,7 @@
 //! does and `gpt-4o` does not. So the split is:
 //!
 //! - **Whether the control is offered is a property of the model**, decided by the kind's
-//!   [`Efforts`] rule in the table, asked through [`ProviderKind::efforts`]. A model with no
+//!   [`Efforts`] rule in the table, asked through [`efforts`]. A model with no
 //!   rungs gets no menu, and a [`Selection`] that sets one anyway is refused rather than
 //!   silently ignored. What belongs in a rule is "will the pinned `genai` actually send an
 //!   effort for this model" — for Anthropic that is the modern Claude families, for OpenAI the
@@ -55,85 +64,51 @@ use std::fmt;
 use genai::adapter::AdapterKind;
 use genai::chat::{CacheControl, ChatOptions, ReasoningEffort};
 use genai::resolver::{
-    AuthData, AuthResolver, Endpoint, Error as ResolverError, ServiceTargetResolver,
+    AuthData, AuthResolver, Endpoint, Error as ResolverError, ProviderConfig, ServiceTargetResolver,
 };
 use genai::{Client, ModelIden, ServiceTarget};
-use serde::{Deserialize, Serialize};
+use strata_core::ai::{Effort, ProviderKind};
 use strata_core::secret::Secret;
 use url::Url;
 
+use crate::assistant::turn::bounded_error;
+
 /// **Does this adapter parse a reasoning keyword off the end of a model name?**
 ///
-/// Three of `genai`'s do, and only when no explicit effort is set: they take the trailing
-/// `-<keyword>` as the reasoning setting and send the *prefix* as the model. `Brain::resolve`
-/// refuses that case rather than let the request name a model the user did not pick; this is
-/// the half of the rule that says where to look.
+/// It happens only when no explicit effort is set: the adapter takes a trailing `-<keyword>` as
+/// the reasoning setting and sends the *prefix* as the model. [`Brain::resolve`] refuses that
+/// case rather than let a request name a model the user did not pick; this is the half of the
+/// rule that says where to look.
+///
+/// **The list is longer than the adapters that contain the parse**, because a pass-through
+/// adapter inherits it: `impl_pass_through_adapter!` forwards `to_web_request_data` verbatim to
+/// its delegate, so `DeepSeek`, Groq and xAI all run `OpenAIAdapter::util_to_web_request_data` —
+/// and with it `ReasoningEffort::from_model_name` — under their own [`AdapterKind`]. Reading
+/// only the three adapters that *implement* the parse would leave `grok-4-max` quietly querying
+/// `grok-4`, which is the exact failure this exists to prevent, arrived at through delegation.
 fn strips_effort_suffix(adapter: AdapterKind) -> bool {
     matches!(
         adapter,
-        AdapterKind::Anthropic | AdapterKind::OpenAI | AdapterKind::OpenAIResp
+        AdapterKind::Anthropic
+            | AdapterKind::OpenAI
+            | AdapterKind::OpenAIResp
+            | AdapterKind::DeepSeek
+            | AdapterKind::Groq
+            | AdapterKind::Xai
     )
 }
 
-/// Which kind of brain — the five the roster offers.
+/// The rung, in `genai`'s vocabulary.
 ///
-/// The serde spelling is what AS-03 persists, so it is a stable token rather than the label:
-/// renaming what the pane calls a provider must not orphan everybody's roster.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    Anthropic,
-    OpenAi,
-    Gemini,
-    Ollama,
-    /// Any endpoint speaking OpenAI's chat-completions API: llama.cpp, vLLM, LM Studio, a
-    /// gateway. The base URL is the whole of what makes it addressable, so it is required.
-    OpenAiCompatible,
-}
-
-/// One rung of the reasoning ladder, as a person picks it.
-///
-/// Deliberately the keyword rungs and not `genai`'s full [`ReasoningEffort`], which also
-/// carries `Budget(u32)`, `Minimal` and `None`. A token budget is a provider-shaped number
-/// with no meaning across providers, `Minimal` is one vendor's legacy spelling of `Low`, and
-/// `None` is what an unset [`Selection::effort`] already says — three ways to offer a control
-/// that has one job.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Effort {
-    Low,
-    Medium,
-    High,
-    XHigh,
-    Max,
-}
-
-impl Effort {
-    /// What the picker's row says.
-    pub fn label(self) -> &'static str {
-        match self {
-            Effort::Low => "Low",
-            Effort::Medium => "Medium",
-            Effort::High => "High",
-            Effort::XHigh => "XHigh",
-            Effort::Max => "Max",
-        }
-    }
-
-    fn genai(self) -> ReasoningEffort {
-        match self {
-            Effort::Low => ReasoningEffort::Low,
-            Effort::Medium => ReasoningEffort::Medium,
-            Effort::High => ReasoningEffort::High,
-            Effort::XHigh => ReasoningEffort::XHigh,
-            Effort::Max => ReasoningEffort::Max,
-        }
-    }
-}
-
-impl fmt::Display for Effort {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
+/// A free function rather than a method, because [`Effort`] is `strata-core`'s — it is a
+/// persisted token, and this is the one place the token becomes a request field.
+fn genai_effort(effort: Effort) -> ReasoningEffort {
+    match effort {
+        Effort::Low => ReasoningEffort::Low,
+        Effort::Medium => ReasoningEffort::Medium,
+        Effort::High => ReasoningEffort::High,
+        Effort::XHigh => ReasoningEffort::XHigh,
+        Effort::Max => ReasoningEffort::Max,
     }
 }
 
@@ -251,7 +226,7 @@ pub struct Provider {
     pub key: KeyUse,
     /// Which of this kind's models offer a reasoning control, and therefore whether the
     /// composer footer draws one for the model in hand. Ask it through
-    /// [`ProviderKind::efforts`]; a [`Selection`] carrying a rung the model does not offer is
+    /// [`efforts`]; a [`Selection`] carrying a rung the model does not offer is
     /// refused rather than sent.
     pub efforts: Efforts,
     /// A current model name, for the model field's placeholder. A hint, never a list: model
@@ -265,7 +240,7 @@ pub struct Provider {
 }
 
 /// **The table.** One row per kind, and the only place any of these facts is written.
-pub const PROVIDERS: [Provider; 5] = [
+pub const PROVIDERS: [Provider; 8] = [
     Provider {
         kind: ProviderKind::Anthropic,
         label: "Anthropic",
@@ -357,6 +332,49 @@ pub const PROVIDERS: [Provider; 5] = [
         adapter: AdapterKind::Gemini,
     },
     Provider {
+        kind: ProviderKind::DeepSeek,
+        label: "DeepSeek",
+        base_url: BaseUrl::Provider,
+        key: KeyUse::Env("DEEPSEEK_API_KEY"),
+        // **Sent verbatim, and verified for nothing — so nothing is offered.** This kind is a
+        // `impl_pass_through_adapter!` onto `OpenAIAdapter`, whose
+        // `insert_openai_reasoning_effort` writes whatever rung it is given straight onto the
+        // body with no per-model gate at all. So a rung offered here is a rung the provider
+        // either takes or 400s on, and which of the two is a fact about DeepSeek's API that
+        // genai's source cannot answer.
+        //
+        // An **empty** `Only` rather than `Never`, because the two say different things and the
+        // difference is what a later row is added against: `Never` is Ollama's and Cohere's
+        // claim that the API carries no such field, while this says the field is sent and no
+        // family has been verified to accept it. Default-closed does the rest.
+        efforts: Efforts::Only(&[]),
+        model_example: "deepseek-chat",
+        adapter: AdapterKind::DeepSeek,
+    },
+    Provider {
+        kind: ProviderKind::Groq,
+        label: "Groq",
+        base_url: BaseUrl::Provider,
+        key: KeyUse::Env("GROQ_API_KEY"),
+        // Pass-through onto `OpenAIAdapter`, same as DeepSeek — the rung reaches the wire
+        // unexamined, and Groq's hosted models are a moving set nothing here can verify.
+        efforts: Efforts::Only(&[]),
+        model_example: "llama-3.3-70b-versatile",
+        adapter: AdapterKind::Groq,
+    },
+    Provider {
+        kind: ProviderKind::Xai,
+        label: "xAI",
+        base_url: BaseUrl::Provider,
+        key: KeyUse::Env("XAI_API_KEY"),
+        // Pass-through onto `OpenAIAdapter`, same as DeepSeek. Note the suffix guard covers
+        // this kind (`strips_effort_suffix`) for exactly that reason: `grok-4-max` would
+        // otherwise be sent as `grok-4`.
+        efforts: Efforts::Only(&[]),
+        model_example: "grok-4",
+        adapter: AdapterKind::Xai,
+    },
+    Provider {
         kind: ProviderKind::Ollama,
         label: "Ollama",
         base_url: BaseUrl::Editable("http://localhost:11434/"),
@@ -381,44 +399,44 @@ pub const PROVIDERS: [Provider; 5] = [
     },
 ];
 
-impl ProviderKind {
-    /// Every kind, in the order the roster's picker lists them — **read off the table**, so
-    /// there is no second list of the kinds to fall out of step with it. A fixed-size array
-    /// literal here would keep compiling after a sixth variant was added, and the new
-    /// provider would be silently missing from every surface built from this.
-    pub fn all() -> impl Iterator<Item = ProviderKind> {
-        PROVIDERS.iter().map(|provider| provider.kind)
-    }
+/// Every kind, in the order Settings lists them — **read off the table**, so there is no second
+/// list of the kinds to fall out of step with it. A fixed-size array literal here would keep
+/// compiling after a variant was added, and the new provider would be silently missing from
+/// every surface built from this.
+pub fn all() -> impl Iterator<Item = ProviderKind> {
+    PROVIDERS.iter().map(|provider| provider.kind)
+}
 
-    /// This kind's row of [`PROVIDERS`]. A match rather than an index, so a kind added
-    /// without a row is a build error rather than a panic on the day somebody picks it.
-    pub fn info(self) -> &'static Provider {
-        match self {
-            ProviderKind::Anthropic => &PROVIDERS[0],
-            ProviderKind::OpenAi => &PROVIDERS[1],
-            ProviderKind::Gemini => &PROVIDERS[2],
-            ProviderKind::Ollama => &PROVIDERS[3],
-            ProviderKind::OpenAiCompatible => &PROVIDERS[4],
-        }
-    }
-
-    /// What every surface calls this kind.
-    pub fn label(self) -> &'static str {
-        self.info().label
-    }
-
-    /// The effort rungs `model` offers — empty when it offers none, which is what the
-    /// composer footer draws no control for. Per **model**, because reasoning is a model
-    /// capability: `claude-opus-4-5` takes an effort and `claude-sonnet-4-5` does not.
-    pub fn efforts(self, model: &str) -> &'static [Effort] {
-        self.info().efforts.rungs(model)
+/// This kind's row of [`PROVIDERS`]. A match rather than an index, so a kind added without a
+/// row is a build error rather than a panic on the day somebody picks it.
+///
+/// Free functions rather than inherent methods because [`ProviderKind`] is `strata-core`'s —
+/// it is what [`Settings`](strata_core::config::Settings) persists, and the crate that holds
+/// the config cannot depend on the crate that holds `genai`. The property is unchanged: still
+/// one table, still one exhaustive match, still a build error for a kind without a row.
+pub fn info(kind: ProviderKind) -> &'static Provider {
+    match kind {
+        ProviderKind::Anthropic => &PROVIDERS[0],
+        ProviderKind::OpenAi => &PROVIDERS[1],
+        ProviderKind::Gemini => &PROVIDERS[2],
+        ProviderKind::DeepSeek => &PROVIDERS[3],
+        ProviderKind::Groq => &PROVIDERS[4],
+        ProviderKind::Xai => &PROVIDERS[5],
+        ProviderKind::Ollama => &PROVIDERS[6],
+        ProviderKind::OpenAiCompatible => &PROVIDERS[7],
     }
 }
 
-impl fmt::Display for ProviderKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
-    }
+/// What every surface calls this kind.
+pub fn label(kind: ProviderKind) -> &'static str {
+    info(kind).label
+}
+
+/// The effort rungs `model` offers — empty when it offers none, which is what a picker draws no
+/// control for. Per **model**, because reasoning is a model capability: `claude-opus-4-5` takes
+/// an effort and `claude-sonnet-4-5` does not.
+pub fn efforts(kind: ProviderKind, model: &str) -> &'static [Effort] {
+    info(kind).efforts.rungs(model)
 }
 
 impl Provider {
@@ -528,6 +546,12 @@ impl Selection {
 /// Every one of these is answered before a socket is opened. A half-configured provider that
 /// reported a connection timeout would send the user looking at their network for a box they
 /// never filled in.
+///
+/// **Each one names the surface that fixes it, and there are two.** A provider entry carries
+/// what addresses the provider — its endpoint and its key — and a conversation carries what the
+/// provider is asked. So a base URL or a key sends the user to Settings ▸ AI ▸ Providers, and a
+/// model or an effort sends them to the chat pane's own pickers. Naming one surface for both
+/// was true only while the roster held a default model, which it does not (AS-03).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SelectionError {
     /// No model name.
@@ -569,51 +593,71 @@ impl fmt::Display for SelectionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SelectionError::NoModel { kind } => {
-                write!(f, "Choose a model for {kind} in Settings > Assistant.")
+                let kind = label(*kind);
+                write!(f, "Choose a model for {kind} in the chat pane.")
             }
-            SelectionError::NoBaseUrl { kind } => write!(
-                f,
-                "{kind} needs a base URL. Set one in Settings > Assistant."
-            ),
-            SelectionError::BaseUrlNotUsed { kind } => write!(
-                f,
-                "{kind} has its own endpoint and takes no base URL. Clear it in Settings > \
-                 Assistant."
-            ),
+            SelectionError::NoBaseUrl { kind } => {
+                let kind = label(*kind);
+                write!(
+                    f,
+                    "{kind} needs a base URL. Set one in Settings > AI > Providers."
+                )
+            }
+            SelectionError::BaseUrlNotUsed { kind } => {
+                let kind = label(*kind);
+                write!(
+                    f,
+                    "{kind} has its own endpoint and takes no base URL. Clear it in Settings > \
+                     AI > Providers."
+                )
+            }
             SelectionError::BadBaseUrl { url, why } => write!(f, "{why} Base URL: '{url}'."),
-            SelectionError::NoKey { kind, env } => write!(
-                f,
-                "{kind} needs an API key. Set one in Settings > Assistant, or set '{env}'."
-            ),
-            SelectionError::KeyNotUsed { kind } => write!(
-                f,
-                "{kind} takes no API key. Clear it in Settings > Assistant."
-            ),
+            SelectionError::NoKey { kind, env } => {
+                let kind = label(*kind);
+                write!(
+                    f,
+                    "{kind} needs an API key. Set one in Settings > AI > Providers, or set \
+                     '{env}'."
+                )
+            }
+            SelectionError::KeyNotUsed { kind } => {
+                let kind = label(*kind);
+                write!(
+                    f,
+                    "{kind} takes no API key. Clear it in Settings > AI > Providers."
+                )
+            }
             SelectionError::NoSuchEffort {
                 kind,
                 model,
                 effort,
-            } => match kind.efforts(model) {
-                [] => write!(f, "{kind} '{model}' has no reasoning effort setting."),
-                _ => write!(
-                    f,
-                    "{kind} '{model}' does not offer '{effort}' reasoning effort."
-                ),
-            },
+            } => {
+                let rungs = efforts(*kind, model);
+                let kind = label(*kind);
+                match rungs {
+                    [] => write!(f, "{kind} '{model}' has no reasoning effort setting."),
+                    _ => write!(
+                        f,
+                        "{kind} '{model}' does not offer '{effort}' reasoning effort."
+                    ),
+                }
+            }
             SelectionError::ModelReadsAsEffort {
                 kind,
                 model,
                 sent,
                 read_as,
             } => {
+                let rungs = efforts(*kind, model);
+                let name = label(*kind);
                 write!(
                     f,
-                    "{kind} '{model}' ends with '-{read_as}', which is read as a reasoning \
+                    "{name} '{model}' ends with '-{read_as}', which is read as a reasoning \
                      setting rather than part of the name, so the request would ask for \
                      '{sent}'."
                 )?;
-                match kind.efforts(model).is_empty() {
-                    true => write!(f, " Choose a different model in Settings > Assistant."),
+                match rungs.is_empty() {
+                    true => write!(f, " Choose a different model in the chat pane."),
                     false => write!(f, " Choose a reasoning effort to send the full name."),
                 }
             }
@@ -622,6 +666,143 @@ impl fmt::Display for SelectionError {
 }
 
 impl std::error::Error for SelectionError {}
+
+/// **Where a kind's requests go.** `None` means "genai's default for the adapter", which is the
+/// right answer for exactly the kinds that own their address.
+///
+/// A blank box is **absent**, not present-and-empty: a text input yields `Some("")` for a field
+/// the user has already cleared, and matching on presence alone would answer that with "takes no
+/// base URL. Clear it in Settings" — an instruction they have already followed and cannot follow
+/// again. Same reading the model gets.
+///
+/// Its own function because two callers need the same answer: [`Brain::resolve`], and
+/// [`list_models`] — which runs *before* a model exists and so cannot go through the other one.
+fn address(kind: ProviderKind, base_url: Option<&str>) -> Result<Option<String>, SelectionError> {
+    let typed = base_url.map(str::trim).filter(|url| !url.is_empty());
+    match (info(kind).base_url, typed) {
+        (BaseUrl::Provider, None) => Ok(None),
+        (BaseUrl::Provider, Some(_)) => Err(SelectionError::BaseUrlNotUsed { kind }),
+        (BaseUrl::Editable(default), None) => Ok(Some(default.to_string())),
+        (BaseUrl::Required, None) => Err(SelectionError::NoBaseUrl { kind }),
+        (BaseUrl::Editable(_) | BaseUrl::Required, Some(url)) => {
+            Ok(Some(Provider::check_base_url(url).map_err(|why| {
+                SelectionError::BadBaseUrl {
+                    url: url.to_string(),
+                    why,
+                }
+            })?))
+        }
+    }
+}
+
+/// **What a kind's requests authenticate with.** `None` means "genai's default", which is only
+/// ever taken by a kind whose default is not a key at all (Ollama's constant).
+///
+/// Split out beside [`address`] and for the same reason.
+fn credential(
+    kind: ProviderKind,
+    key: Option<&Secret>,
+) -> Result<Option<AuthData>, SelectionError> {
+    match (info(kind).key, key) {
+        (KeyUse::Unused, Some(_)) => Err(SelectionError::KeyNotUsed { kind }),
+        (KeyUse::Unused, None) => Ok(None),
+        (KeyUse::Env(_) | KeyUse::Anonymous, Some(key)) => {
+            Ok(Some(AuthData::Key(key.expose().to_string())))
+        }
+        // Only the variable's *name* is handed to genai, which reads it per request — so the key
+        // is never cached in a value of ours. Its presence still has to be checked here, because
+        // "the key is missing" must be answerable before a socket opens rather than as a 401
+        // three seconds later.
+        //
+        // A variable holding only whitespace is **absent**, the same reading the model and
+        // base-URL boxes get: `export ANTHROPIC_API_KEY=` in a shell profile, or a value that
+        // came out of a here-doc with its newline, is a box the user has already cleared, and
+        // answering it with a 401 sends them looking at their account. Only the presence test
+        // copies — the key itself is still read by `genai` per request from the variable's name,
+        // never onto our heap.
+        (KeyUse::Env(var), None) => match env::var(var) {
+            Ok(value) if !value.trim().is_empty() => Ok(Some(AuthData::from_env(var))),
+            _ => Err(SelectionError::NoKey { kind, env: var }),
+        },
+        // No key, and no variable to fall back to. An empty bearer is what a local endpoint
+        // expects and what a real one answers 401 to, in its own words.
+        (KeyUse::Anonymous, None) => Ok(Some(AuthData::Key(String::new()))),
+    }
+}
+
+/// **The models this provider reports, asked with the credential it is configured with.**
+///
+/// Settings ▸ AI's Test action *and* its model dropdown, which are one call rather than two:
+/// there is no ping in `genai` and there does not need to be, because listing the models is a
+/// live request against the endpoint with the credential — exactly what a test proves — and its
+/// answer is exactly what the picker needs. A separate reachability probe would be a second
+/// round trip that proves strictly less.
+///
+/// The two refusals come first, so a missing key or a malformed URL is named as itself rather
+/// than arriving as a 401 or a DNS failure. Everything past that is the provider's own words,
+/// **bounded** before it is shown: a gateway 5xx is an HTML page, and `genai` carries it into
+/// its error whole (the same cut the transcript makes on a turn's failure).
+///
+/// Ordered and de-duplicated, because a picker is a list a person reads: `genai` returns the
+/// provider's own order, which for the OpenAI-shaped endpoints is neither stable nor meaningful.
+pub async fn list_models(
+    kind: ProviderKind,
+    base_url: Option<&str>,
+    key: Option<&Secret>,
+    pool: &reqwest::Client,
+) -> Result<Vec<String>, String> {
+    let endpoint = address(kind, base_url).map_err(|e| e.to_string())?;
+    let auth = credential(kind, key).map_err(|e| e.to_string())?;
+
+    // The adapter with no model to ask about: `Provider::adapter` forks the OpenAI kind on the
+    // model name, and there is no model here. Chat completions is the right side of that fork
+    // for listing — both OpenAI adapters `GET {base}models`, and `OpenAIResp` reaches the same
+    // shared implementation.
+    let adapter = info(kind).adapter;
+    let mut config = ProviderConfig::default();
+    if let Some(endpoint) = endpoint {
+        config = config.with_endpoint(Endpoint::from_owned(endpoint));
+    }
+    if let Some(auth) = auth {
+        config = config.with_auth(auth);
+    }
+
+    let client = Client::builder().with_reqwest(pool.clone()).build();
+    let mut models = client
+        .all_model_names(adapter, config)
+        .await
+        .map_err(|e| bounded_error(&e.to_string()))?;
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+/// [`list_models`], for a caller with no runtime and no pool.
+///
+/// **Settings' Test press.** The Settings window has neither an [`Assistant`](super::Assistant)
+/// nor an `Engine`, and standing an app-wide runtime up so a settings page can press a button
+/// once would be a lifetime bought for the wrong reason — so this makes a current-thread runtime
+/// and a client, uses them, and drops both. That is the right trade for a one-off press and the
+/// wrong one for a turn, which is exactly why the pool is a parameter over there and absent
+/// here.
+///
+/// It **blocks**, so the caller runs it off the render thread (`strata_freya::task::offload`).
+/// Living here rather than in the frontend is what keeps `reqwest` and a Tokio runtime out of
+/// `strata-freya` entirely: the crate that owns `genai` owns how `genai` is driven.
+pub fn list_models_blocking(
+    kind: ProviderKind,
+    base_url: Option<&str>,
+    key: Option<&Secret>,
+) -> Result<Vec<String>, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Could not start a worker for the request: {e}."))?;
+    let pool = reqwest::Client::builder()
+        .build()
+        .map_err(|e| format!("Could not build an HTTP client: {e}."))?;
+    runtime.block_on(list_models(kind, base_url, key, &pool))
+}
 
 /// A [`Selection`] that can be talked to: the client, the model it addresses, and the options
 /// the effort rung became.
@@ -651,7 +832,7 @@ impl Brain {
     /// internal `Arc`, so the clone is a refcount bump.
     pub fn resolve(selection: &Selection, pool: &reqwest::Client) -> Result<Brain, SelectionError> {
         let kind = selection.kind;
-        let provider = kind.info();
+        let provider = info(kind);
 
         let model = selection.model.trim();
         if model.is_empty() {
@@ -690,58 +871,8 @@ impl Brain {
             None => {}
         }
 
-        // -- The endpoint. `None` here means "genai's default for the adapter", which is the
-        //    right answer for exactly the kinds that own their address.
-        //
-        //    A blank box is **absent**, not present-and-empty: a text input yields `Some("")`
-        //    for a field the user has already cleared, and matching on presence alone would
-        //    answer that with "takes no base URL. Clear it in Settings" — an instruction they
-        //    have already followed and cannot follow again. Same reading `model` gets.
-        let typed = selection
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|url| !url.is_empty());
-        let endpoint: Option<String> = match (provider.base_url, typed) {
-            (BaseUrl::Provider, None) => None,
-            (BaseUrl::Provider, Some(_)) => return Err(SelectionError::BaseUrlNotUsed { kind }),
-            (BaseUrl::Editable(default), None) => Some(default.to_string()),
-            (BaseUrl::Required, None) => return Err(SelectionError::NoBaseUrl { kind }),
-            (BaseUrl::Editable(_) | BaseUrl::Required, Some(url)) => Some(
-                Provider::check_base_url(url).map_err(|why| SelectionError::BadBaseUrl {
-                    url: url.to_string(),
-                    why,
-                })?,
-            ),
-        };
-
-        // -- The key. `None` here also means "genai's default", which is only ever taken by a
-        //    kind whose default is not a key at all (Ollama's constant).
-        let auth: Option<AuthData> = match (provider.key, selection.api_key.as_ref()) {
-            (KeyUse::Unused, Some(_)) => return Err(SelectionError::KeyNotUsed { kind }),
-            (KeyUse::Unused, None) => None,
-            (KeyUse::Env(_) | KeyUse::Anonymous, Some(key)) => {
-                Some(AuthData::Key(key.expose().to_string()))
-            }
-            // Only the variable's *name* is handed to genai, which reads it per request — so
-            // the key is never cached in a value of ours. Its presence still has to be checked
-            // here, because "the key is missing" must be answerable before a socket opens
-            // rather than as a 401 three seconds later.
-            //
-            // A variable holding only whitespace is **absent**, the same reading the model and
-            // base-URL boxes get: `export ANTHROPIC_API_KEY=` in a shell profile, or a value
-            // that came out of a here-doc with its newline, is a box the user has already
-            // cleared, and answering it with a 401 sends them looking at their account. Only
-            // the presence test copies — the key itself is still read by `genai` per request
-            // from the variable's name, never onto our heap.
-            (KeyUse::Env(var), None) => match env::var(var) {
-                Ok(value) if !value.trim().is_empty() => Some(AuthData::from_env(var)),
-                _ => return Err(SelectionError::NoKey { kind, env: var }),
-            },
-            // No key, and no variable to fall back to. An empty bearer is what a local
-            // endpoint expects and what a real one answers 401 to, in its own words.
-            (KeyUse::Anonymous, None) => Some(AuthData::Key(String::new())),
-        };
+        let endpoint = address(kind, selection.base_url.as_deref())?;
+        let auth = credential(kind, selection.api_key.as_ref())?;
 
         let mut builder = Client::builder().with_reqwest(pool.clone());
         if let Some(auth) = auth {
@@ -812,7 +943,7 @@ impl Brain {
         }
 
         if let Some(effort) = selection.effort {
-            options = options.with_reasoning_effort(effort.genai());
+            options = options.with_reasoning_effort(genai_effort(effort));
         }
 
         Ok(Brain {
@@ -854,10 +985,78 @@ mod tests {
         // The whole property: a kind's row is *its* row. A mis-indexed arm in `info` would
         // hand out another provider's env var and effort ladder, and this is what catches it.
         // `all()` reads the table, so there is no second list to check it against.
-        for kind in ProviderKind::all() {
-            assert_eq!(kind.info().kind, kind);
+        for kind in all() {
+            assert_eq!(info(kind).kind, kind);
         }
-        assert_eq!(ProviderKind::all().count(), PROVIDERS.len());
+        assert_eq!(all().count(), PROVIDERS.len());
+    }
+
+    /// **The variable a kind falls back to is genai's, not ours.**
+    ///
+    /// The name stays written in the table because the pane's help text needs a `&'static str`
+    /// to put on screen — but a name typed here and a name genai reads are two copies of one
+    /// fact, and the copy on screen is the one the user acts on. So it is asserted against
+    /// `AdapterKind::default_key_env_name()` rather than trusted: a genai bump that renames a
+    /// variable fails here instead of telling the user to export something nothing reads.
+    ///
+    /// The same reasoning `ModelReadsAsEffort` asks `ReasoningEffort::from_model_name` rather
+    /// than copying its keyword list.
+    #[test]
+    fn every_environment_fallback_is_the_one_genai_actually_reads() {
+        for kind in all() {
+            let provider = info(kind);
+            let KeyUse::Env(var) = provider.key else {
+                continue;
+            };
+            assert_eq!(
+                Some(var),
+                provider.adapter.default_key_env_name(),
+                "{} names a variable genai does not read",
+                label(kind)
+            );
+        }
+    }
+
+    /// **A pass-through adapter inherits the parse it delegates to.** `DeepSeek`, Groq and xAI
+    /// forward `to_web_request_data` straight to `OpenAIAdapter`, so a trailing reasoning
+    /// keyword is stripped off their model names too — and a guard that only knew the three
+    /// adapters *containing* the parse would let `grok-4-max` be sent as `grok-4`.
+    #[test]
+    fn a_delegating_kind_inherits_its_delegates_name_parse() {
+        for (kind, model, sent) in [
+            (ProviderKind::Xai, "grok-4-max", "grok-4"),
+            (
+                ProviderKind::DeepSeek,
+                "deepseek-chat-high",
+                "deepseek-chat",
+            ),
+            (ProviderKind::Groq, "llama-3.3-low", "llama-3.3"),
+        ] {
+            let selection = Selection::new(kind, model).with_key(Secret::new("k").unwrap());
+            let Err(SelectionError::ModelReadsAsEffort { sent: asked, .. }) =
+                Brain::resolve(&selection, &pool())
+            else {
+                panic!("{} '{model}' would be sent as '{sent}'", label(kind));
+            };
+            assert_eq!(asked, sent);
+        }
+    }
+
+    /// **The three pass-through kinds offer no rung, and that is the closed default working.**
+    /// `OpenAIAdapter::insert_openai_reasoning_effort` writes whatever it is given onto the body
+    /// with no per-model gate, so a rung offered here is one the provider takes or 400s on —
+    /// and which of the two is a fact genai's source cannot answer.
+    #[test]
+    fn a_kind_whose_models_are_unverified_offers_nothing() {
+        for kind in [
+            ProviderKind::DeepSeek,
+            ProviderKind::Groq,
+            ProviderKind::Xai,
+        ] {
+            for model in ["deepseek-reasoner", "grok-4", "llama-3.3-70b", "anything"] {
+                assert!(efforts(kind, model).is_empty(), "{} '{model}'", label(kind));
+            }
+        }
     }
 
     /// **Reasoning is a model capability, so the menu is per model.** Every kind with a rule
@@ -873,11 +1072,11 @@ mod tests {
             "claude-fable-5",
             "claude-mythos-5",
         ] {
-            assert_eq!(anthropic.efforts(model), LADDER, "{model}");
+            assert_eq!(efforts(anthropic, model), LADDER, "{model}");
         }
         // An effort, and no adaptive thinking for it to enable — but genai clamps the top two
         // rungs to "high" for this adapter, so offering them would name a rung nothing sent.
-        assert_eq!(anthropic.efforts("claude-opus-4-5"), KEYWORDS);
+        assert_eq!(efforts(anthropic, "claude-opus-4-5"), KEYWORDS);
         // **Adaptive thinking, off by default.** Setting an effort turns it on, and genai
         // never returns the thinking block — so the control would work once and then fail
         // every tool round after it.
@@ -887,26 +1086,26 @@ mod tests {
             "claude-opus-4-8",
             "claude-sonnet-4-6",
         ] {
-            assert!(anthropic.efforts(model).is_empty(), "{model}");
+            assert!(efforts(anthropic, model).is_empty(), "{model}");
         }
-        assert!(anthropic.efforts("claude-sonnet-4-5").is_empty());
-        assert!(anthropic.efforts("claude-haiku-4-5").is_empty());
+        assert!(efforts(anthropic, "claude-sonnet-4-5").is_empty());
+        assert!(efforts(anthropic, "claude-haiku-4-5").is_empty());
 
         // Three rungs everywhere else: OpenAI has no `max` at all and genai forwards ours
         // verbatim; Gemini has no thinking level above `high` and folds the top two into it.
         let openai = ProviderKind::OpenAi;
-        assert_eq!(openai.efforts("gpt-5.2"), KEYWORDS);
-        assert_eq!(openai.efforts("o3-mini"), KEYWORDS);
-        assert!(openai.efforts("gpt-4o").is_empty());
+        assert_eq!(efforts(openai, "gpt-5.2"), KEYWORDS);
+        assert_eq!(efforts(openai, "o3-mini"), KEYWORDS);
+        assert!(efforts(openai, "gpt-4o").is_empty());
         // The over-match half: these all contain a name in the list and reject the control.
         for model in ["gpt-5-chat-latest", "o1-mini", "o1-preview"] {
-            assert!(openai.efforts(model).is_empty(), "{model}");
+            assert!(efforts(openai, model).is_empty(), "{model}");
         }
 
         let gemini = ProviderKind::Gemini;
-        assert_eq!(gemini.efforts("gemini-3-pro-preview"), KEYWORDS);
-        assert_eq!(gemini.efforts("gemini-2.5-flash"), KEYWORDS);
-        assert!(gemini.efforts("gemini-2.0-flash").is_empty());
+        assert_eq!(efforts(gemini, "gemini-3-pro-preview"), KEYWORDS);
+        assert_eq!(efforts(gemini, "gemini-2.5-flash"), KEYWORDS);
+        assert!(efforts(gemini, "gemini-2.0-flash").is_empty());
     }
 
     /// **A model whose own name ends in a reasoning keyword is refused, not silently
@@ -989,8 +1188,8 @@ mod tests {
     #[test]
     fn a_kind_may_answer_the_same_for_every_model() {
         for model in ["qwen3:14b", "gpt-5", "anything"] {
-            assert!(ProviderKind::Ollama.efforts(model).is_empty(), "{model}");
-            assert_eq!(ProviderKind::OpenAiCompatible.efforts(model), LADDER);
+            assert!(efforts(ProviderKind::Ollama, model).is_empty(), "{model}");
+            assert_eq!(efforts(ProviderKind::OpenAiCompatible, model), LADDER);
         }
     }
 
@@ -999,14 +1198,13 @@ mod tests {
     /// menu whose settings the provider refuses.
     #[test]
     fn an_unrecognized_model_is_closed_not_open() {
-        for kind in [
-            ProviderKind::Anthropic,
-            ProviderKind::OpenAi,
-            ProviderKind::Gemini,
-        ] {
+        // Every kind with a rule at all, read off the table rather than listed: a kind added
+        // with a rule that turns out to be open is exactly what this is here to catch.
+        for kind in all().filter(|kind| !matches!(info(*kind).efforts, Efforts::Always)) {
             assert!(
-                kind.efforts("some-model-shipped-next-quarter").is_empty(),
-                "{kind}"
+                efforts(kind, "some-model-shipped-next-quarter").is_empty(),
+                "{}",
+                label(kind)
             );
         }
     }
@@ -1057,7 +1255,7 @@ mod tests {
         };
         assert_eq!(
             e.to_string(),
-            "OpenAI-compatible needs a base URL. Set one in Settings > Assistant."
+            "OpenAI-compatible needs a base URL. Set one in Settings > AI > Providers."
         );
     }
 
@@ -1069,7 +1267,7 @@ mod tests {
     /// real key exported is exercising the fallback that ships.
     #[test]
     fn a_keyed_provider_with_no_key_anywhere_names_its_variable() {
-        let KeyUse::Env(var) = ProviderKind::Anthropic.info().key else {
+        let KeyUse::Env(var) = info(ProviderKind::Anthropic).key else {
             panic!("Anthropic is a keyed provider");
         };
         let resolved = Brain::resolve(
@@ -1084,7 +1282,7 @@ mod tests {
             _ => assert_eq!(
                 resolved.err().map(|e| e.to_string()),
                 Some(
-                    "Anthropic needs an API key. Set one in Settings > Assistant, or set \
+                    "Anthropic needs an API key. Set one in Settings > AI > Providers, or set \
                      'ANTHROPIC_API_KEY'."
                         .to_string()
                 )
@@ -1157,7 +1355,7 @@ mod tests {
     /// key to it.
     #[test]
     fn a_compatible_endpoint_has_no_environment_fallback() {
-        assert_eq!(ProviderKind::OpenAiCompatible.info().key, KeyUse::Anonymous);
+        assert_eq!(info(ProviderKind::OpenAiCompatible).key, KeyUse::Anonymous);
         let brain = Brain::resolve(
             &Selection::new(ProviderKind::OpenAiCompatible, "llama-3.3-70b")
                 .with_base_url("http://localhost:8080/v1"),
@@ -1196,7 +1394,7 @@ mod tests {
     /// inside the family: an unrecognized name must not fall through to Ollama.
     #[test]
     fn the_openai_kind_routes_a_responses_model_and_never_leaves_the_family() {
-        let openai = ProviderKind::OpenAi.info();
+        let openai = info(ProviderKind::OpenAi);
         assert_eq!(openai.adapter("gpt-5"), AdapterKind::OpenAIResp);
         assert_eq!(openai.adapter("gpt-4o"), AdapterKind::OpenAI);
         assert_eq!(

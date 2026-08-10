@@ -26,9 +26,13 @@
 //! to take both of [`views::Pane`]'s opt-outs, being a surface that manages its own height — and
 //! P4-08 the last ([`views::KeymapPane`]).
 //!
-//! AA-04 added a sixth, [`views::AgentAccessPane`] — the control for the MCP server AA-03
-//! ships dark, and an ordinary preferences list again: the switch, the port and the token,
-//! committed by the same Apply as everything else.
+//! AA-04 added a sixth — the control for the MCP server AA-03 ships dark, and an ordinary
+//! preferences list again: the switch, the port and the token, committed by the same Apply as
+//! everything else. AS-03 gave it two siblings and a group heading to sit under
+//! ([`views::ProvidersPane`], [`views::ChatPane`]) and renamed it [`views::McpPane`], because
+//! outbound model credentials and inbound MCP hosting are different capabilities that were
+//! sharing a screen — and because a page called "Agent access" beside a Providers page that
+//! also serves agents named the wrong axis.
 
 mod model;
 mod search;
@@ -39,11 +43,12 @@ use std::collections::BTreeMap;
 use freya::prelude::*;
 use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
+use strata_core::ai::BrainRef;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
-    AgentAccessPane, DataDisplayPane, EnginePane, KeymapPane, PropRows, SettingsChrome, SystemPane,
-    ThemePane,
+    ChatPane, DataDisplayPane, EnginePane, KeymapPane, McpPane, Probes, PropRows, ProvidersPane,
+    SettingsChrome, SystemPane, ThemePane, TypedKeys,
 };
 use crate::components::form::Reveal;
 use crate::keymap::on_commands;
@@ -121,6 +126,21 @@ define_theme!(
         /// stand a step out from the grid's own hairlines to read as an invitation at all; a
         /// dashed line pitched for a box outline mostly disappears.
         slot_border_fill: Color,
+        /// The AI ▸ Providers row's **mark tile** — the 34px square carrying a provider's brand
+        /// logo (`IconName::Provider…`).
+        ///
+        /// Its own pair rather than the theme card's, though both resolve to a raised box with a
+        /// hairline today: a card is a *pressable preview* of a whole theme and this is an
+        /// identifying glyph beside a name, and the two have already been pulled apart once
+        /// before in this window (`table_head_background` borrowed the results grid's slot and
+        /// landed too light). Sharing the slot would mean any future tuning of one silently
+        /// retunes the other.
+        mark_background: Color,
+        /// The mark's glyph while the provider is **off** — the tile is present but inert, so it
+        /// sits at the dim end of the text ramp. An enabled row paints the mark in
+        /// [`selected_color`](SettingsTheme::selected_color), which is the same accent the picked
+        /// theme card's tick uses and means the same thing: this one is in play.
+        mark_color: Color,
     }
 );
 
@@ -151,8 +171,14 @@ pub enum Route {
         DataDisplay,
         #[route("/keymap", KeymapPane)]
         Keymap,
-        #[route("/agent-access", AgentAccessPane)]
-        AgentAccess,
+        #[route("/ai/providers", ProvidersPane)]
+        Providers,
+        #[route("/ai/chat", ChatPane)]
+        Chat,
+        // Was `/agent-access` (AA-04). The path moved with the pane into the AI group; nothing
+        // persists a route, so there is no old URL to keep resolving.
+        #[route("/ai/mcp", McpPane)]
+        Mcp,
         #[route("/engine", EnginePane)]
         Engine,
 }
@@ -178,6 +204,21 @@ pub struct SettingsCtx {
     /// half-finished edit — and so the footer can ask what is blocking Apply without the pane
     /// being mounted to answer.
     pub engine: State<PropRows>,
+    /// **Keys typed into AI ▸ Providers and not yet applied.**
+    ///
+    /// Deliberately *not* a field of the draft, and that is the whole design: [`Settings`] holds
+    /// a [`SecretRef`](strata_core::secret::SecretRef) and no secret, which is a property of the
+    /// types rather than a rule to remember — so a pasted key has nowhere in the draft to live.
+    /// It sits here for the window's lifetime, goes to the keystore at Apply, and only the
+    /// marker merges. Emptying an entry is how "clear this key" is spelled, because
+    /// `Secret::new` answers a blank string with `None` and no secret *is* a delete.
+    pub ai_keys: State<TypedKeys>,
+    /// What AI ▸ Providers has actually asked each provider ([`Probe`]).
+    ///
+    /// On the window rather than the pane for `engine`'s reason: Providers runs the test and
+    /// Chat reads the models it returned, and a result thrown away by navigating between the
+    /// two would empty the model picker exactly when the user has just proved it need not be.
+    pub probes: State<Probes>,
     /// The live theme preview the draft's theme half is mirrored into.
     preview: ThemePreview,
     /// The app-global config: Apply's target.
@@ -195,11 +236,29 @@ pub struct SettingsCtx {
     failed: State<Option<String>>,
 }
 
+/// Hand-written for `AppCtx`'s reason: `RadioStation` has no `PartialEq`, and the two station
+/// handles here are process-wide singletons — two `SettingsCtx` values are always the same
+/// config store and the same preview slot, so they contribute nothing to the comparison. What
+/// does is the per-window editing state, which is what a component holding one as a prop is
+/// actually asking about.
+impl PartialEq for SettingsCtx {
+    fn eq(&self, other: &Self) -> bool {
+        self.draft == other.draft
+            && self.seed == other.seed
+            && self.engine == other.engine
+            && self.ai_keys == other.ai_keys
+            && self.probes == other.probes
+            && self.failed == other.failed
+    }
+}
+
 impl SettingsCtx {
     fn new(config: ConfigStation, preview: ThemePreview) -> Self {
         let settings = config.peek().settings.clone();
         Self {
             engine: State::create(PropRows::from_map(&settings.engine)),
+            ai_keys: State::create(TypedKeys::default()),
+            probes: State::create(Probes::default()),
             draft: State::create(settings.clone()),
             seed: State::create(settings),
             preview,
@@ -221,10 +280,119 @@ impl SettingsCtx {
     /// block; a second surface that can would add a branch here rather than a second gate.
     pub fn blocker(&self) -> Option<String> {
         let faults = self.engine.read().errors().len();
-        match faults {
+        let blocked = match faults {
             0 => None,
             1 => Some("1 engine property is invalid".to_string()),
             n => Some(format!("{n} engine properties are invalid")),
+        };
+        // **A second surface that can block adds a branch here rather than a second gate** — the
+        // note this method was written with, taken up by AS-03.
+        //
+        // An enabled custom endpoint with no address is the one thing this pane can get into that
+        // cannot be sent: `BaseUrl::Required` has no default to fall back to, so `Brain::resolve`
+        // refuses it (`NoBaseUrl`) before a socket opens. Committing it would persist a provider
+        // whose every send fails, and the chat pane would offer it in the picker. Named by the
+        // field the way the engine's faults are.
+        blocked.or_else(|| {
+            let draft = self.draft.read();
+            let unaddressed = draft
+                .ai
+                .endpoints
+                .values()
+                .filter(|endpoint| endpoint.enabled && endpoint.base_url.trim().is_empty())
+                .count();
+            match unaddressed {
+                0 => None,
+                1 => Some("1 custom endpoint has no base URL".to_string()),
+                n => Some(format!("{n} custom endpoints have no base URL")),
+            }
+        })
+    }
+
+    /// The base URL configured for `brain`, whichever list holds it.
+    ///
+    /// A pair with [`set_base_url`](Self::set_base_url) rather than the panes reaching into
+    /// `draft.ai` themselves: a brain is a built-in *or* an endpoint, and spelling that fork out
+    /// at each call site is how the two lists end up disagreeing about one of them.
+    /// **`peek`, not `read`.** These answer a *guard* — "is what the box holds already what the
+    /// draft holds?" — run from a row's `use_side_effect`, and a `read` there subscribes the
+    /// effect to the whole draft: every keystroke in any box on any row would re-run the URL and
+    /// name effects of every mounted row. The engine grid's `PropRow` peeks in its guard for
+    /// exactly this reason.
+    ///
+    /// **Absent reads as empty**, which is the other half of the guard being right. A built-in
+    /// with no entry yet has no base URL *and* a box holding `""`, and those are the same state;
+    /// returning `None` made the guard fire on mount and write an entry for every provider the
+    /// user had never touched — which dirtied the draft with no edit and persisted seven empty
+    /// rows.
+    pub fn base_url_of(&self, brain: &BrainRef) -> String {
+        let draft = self.draft.peek();
+        match brain {
+            BrainRef::Builtin(kind) => draft
+                .ai
+                .providers
+                .get(kind)
+                .map(|p| p.base_url.clone())
+                .unwrap_or_default(),
+            BrainRef::Custom(id) => draft
+                .ai
+                .endpoints
+                .get(id)
+                .map(|e| e.base_url.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Write `brain`'s base URL into the draft, creating the built-in's entry if this is the
+    /// first thing ever set on it.
+    ///
+    /// Only ever reached with a value that differs from [`base_url_of`](Self::base_url_of), so
+    /// the `or_default()` here creates an entry for a provider the user has actually typed into.
+    pub fn set_base_url(self, brain: &BrainRef, url: String) {
+        let mut draft = self.draft;
+        let mut draft = draft.write();
+        match brain {
+            BrainRef::Builtin(kind) => {
+                draft.ai.providers.entry(*kind).or_default().base_url = url;
+            }
+            BrainRef::Custom(id) => {
+                if let Some(endpoint) = draft.ai.endpoints.get_mut(id) {
+                    endpoint.base_url = url;
+                }
+            }
+        }
+    }
+
+    /// What a **custom endpoint** is called. `None` for a built-in, whose name is its table
+    /// row's — there is nothing in the draft to read, which is the same answer as "not
+    /// renameable" and is why the row needs no second flag to decide.
+    /// `peek` for [`base_url_of`](Self::base_url_of)'s reason — this answers a guard inside an
+    /// effect, and reading would subscribe it to the whole draft.
+    pub fn name_of(&self, brain: &BrainRef) -> Option<String> {
+        match brain {
+            BrainRef::Builtin(_) => None,
+            BrainRef::Custom(id) => self
+                .draft
+                .peek()
+                .ai
+                .endpoints
+                .get(id)
+                .map(|e| e.name.clone()),
+        }
+    }
+
+    /// Rename a custom endpoint. A no-op for a built-in, by construction.
+    ///
+    /// **The name is display only** — [`Ai::endpoints`](strata_core::ai::Ai::endpoints) is keyed
+    /// by a minted id, so renaming moves nothing: the chat default still resolves, and a probe
+    /// already taken still describes the same endpoint.
+    pub fn set_name(self, brain: &BrainRef, name: String) {
+        let BrainRef::Custom(id) = brain else {
+            return;
+        };
+        let mut draft = self.draft;
+        if let Some(endpoint) = draft.write().ai.endpoints.get_mut(id) {
+            endpoint.name = name;
         }
     }
 
@@ -300,8 +468,33 @@ impl SettingsCtx {
     /// session. Holding the seed keeps the same diff pending, and re-applying it is harmless —
     /// `merge_onto` writes the identical fields over values that already hold them.
     pub fn apply(&self) -> bool {
-        let draft = self.draft.peek().clone();
+        let mut draft = self.draft.peek().clone();
         let seed = self.seed.peek().clone();
+
+        // **The keys go to the keystore before the config is written, not after.**
+        //
+        // `commit` mints, overwrites and deletes keystore entries and puts the resulting
+        // *markers* into this draft — so what `write_config` then merges already carries them.
+        // Doing it the other way round would persist a marker for a secret that had not landed
+        // yet, and a keystore refusal would leave config pointing at nothing.
+        //
+        // A refusal stops the whole Apply. It is reported in the keystore's own words and never
+        // answered by writing the secret somewhere else, which is the failure
+        // `strata_core::secret` exists to make impossible.
+        // **The markers are kept whether or not every key landed.** `commit` writes each marker
+        // into `draft.ai` as it stores that key, so a failure partway leaves earlier secrets
+        // already in the keystore — and discarding the draft with them would strand those under
+        // ids nothing references, with a retry minting fresh ones and orphaning another each
+        // time. Publishing first means a retry sees the markers, takes the overwrite-in-place
+        // branch, and reuses the entries rather than growing new ones.
+        let landed_keys = views::commit(&self.ai_keys.peek(), &mut draft.ai);
+        let mut live = self.draft;
+        live.set(draft.clone());
+        if let Err(e) = landed_keys {
+            let mut failed = self.failed;
+            failed.set(Some(e.to_string()));
+            return false;
+        }
         let landed = write_config(self.config, &[ConfigChan::Settings], {
             let draft = draft.clone();
             move |cfg| draft.merge_onto(&seed, &mut cfg.settings)
