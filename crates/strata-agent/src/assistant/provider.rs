@@ -17,29 +17,30 @@
 //! disagreeing is two [`Selection`] values, not a mode somewhere. The def/runtime split, one
 //! layer down from where the app applies it.
 //!
-//! ## Effort is offered per kind, and mapped per model by `genai`
+//! ## Effort is offered per **model**, and mapped per model by `genai`
 //!
 //! Reasoning effort is not a portable knob: OpenAI spells it `reasoning_effort`, Anthropic as
 //! an `output_config.effort` or a thinking budget depending on the model, Gemini as a
-//! `thinkingLevel` or a `thinkingBudget`, and Ollama not at all. The split this module keeps
-//! is therefore:
+//! `thinkingLevel` or a `thinkingBudget`, and Ollama not at all. Nor is it a property of the
+//! *provider*: `claude-opus-4-5` takes an effort and `claude-sonnet-4-5` does not, `gpt-5`
+//! does and `gpt-4o` does not. So the split is:
 //!
-//! - **Whether the control is offered at all is a property of the kind**, declared here
-//!   ([`Provider::efforts`]), and an empty ladder means no surface offers it and a
-//!   [`Selection`] that sets one anyway is refused rather than silently ignored. Two kinds are
-//!   empty for different reasons, and the difference matters: Ollama's API carries no such
-//!   field at all, while **Anthropic has one this stack cannot round-trip** — setting a rung
-//!   turns on extended thinking, and genai 0.6.5 cannot return the thinking block that a
-//!   following tool round then requires, so every tool-using turn would be refused. The test
-//!   for what belongs here is therefore not "does the provider have a knob" but "does the
-//!   whole path work end to end"; each row says which.
-//! - **What a rung means for a given model is `genai`'s**, verified at the pinned version
-//!   (0.6.5): its Anthropic adapter already knows that `xhigh` needs Opus 4.7 or newer and
+//! - **Whether the control is offered is a property of the model**, decided by the kind's
+//!   [`Efforts`] rule in the table, asked through [`ProviderKind::efforts`]. A model with no
+//!   rungs gets no menu, and a [`Selection`] that sets one anyway is refused rather than
+//!   silently ignored. What belongs in a rule is not "does the vendor have a knob" but "does
+//!   the whole path work end to end" — Anthropic's thinking models are excluded not because
+//!   they cannot reason but because genai 0.6.5 cannot return their thinking block to them on
+//!   the next tool round, so the turn after the first would be refused. Each row says which.
+//! - **What a rung means for a model that has one is `genai`'s**, verified at the pinned
+//!   version: its Anthropic adapter already knows `xhigh` needs Opus 4.7 or newer and
 //!   downgrades to `high` otherwise, and its Gemini adapter already knows `gemini-3` takes a
-//!   thinking *level* where 2.5 takes a *budget*. A per-model capability table here would be
-//!   a second copy of that, stale within a release — the same argument that makes the model
-//!   name a free-form field (AS-03) rather than a list we keep. What a model will not accept
-//!   is the provider's own error, current and honest.
+//!   thinking *level* where 2.5 takes a *budget*. Restating that here would be a second copy
+//!   of a mapping that already exists.
+//!
+//! The rules are name fragments, so they fall behind what the providers ship — which is why
+//! [`Efforts::Only`] is **default-closed**: falling behind costs a knob the user cannot reach
+//! yet, never a menu whose settings the provider refuses.
 //!
 //! ## One construction site
 //!
@@ -123,8 +124,9 @@ impl fmt::Display for Effort {
     }
 }
 
-/// The ladder every reasoning-capable kind offers. One slice, because the rungs are our
-/// vocabulary and the per-model collapse is the provider's — see the module note.
+/// The ladder a model offers when it offers one. Our vocabulary; the per-model collapse of a
+/// rung (`xhigh` down to `high`, a keyword to a token budget) stays `genai`'s — see the module
+/// note.
 const LADDER: &[Effort] = &[
     Effort::Low,
     Effort::Medium,
@@ -132,6 +134,44 @@ const LADDER: &[Effort] = &[
     Effort::XHigh,
     Effort::Max,
 ];
+
+/// **Which models of a kind offer a reasoning control** — the rule, per kind, in the table.
+///
+/// Reasoning is a *model* capability, not a provider one: `claude-opus-4-5` takes an effort and
+/// `claude-sonnet-4-5` does not, `gpt-5` does and `gpt-4o` does not. A per-kind answer is
+/// therefore wrong in both directions — it hides a control that works, or offers one that
+/// breaks the turn.
+///
+/// **[`Only`](Efforts::Only) is default-closed, and that is the whole safety argument.** These
+/// name fragments are a list somebody has to maintain against what the providers ship, so it
+/// *will* fall behind. Defaulting to "no control" makes falling behind cost a knob the user
+/// cannot reach yet — an omission they can report — instead of a menu that produces a request
+/// the provider refuses. Matching is `contains`, which is how `genai` matches model names
+/// internally, so the two agree about what a name means.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Efforts {
+    /// No model of this kind has one. Ollama's API carries no such field at all.
+    Never,
+    /// Every model: the endpoint is the user's own and they know what it accepts. Nothing is
+    /// sent unless a rung is picked, and an endpoint that rejects the field says so itself.
+    Always,
+    /// Only models whose name contains one of these.
+    Only(&'static [&'static str]),
+}
+
+impl Efforts {
+    /// The rungs `model` offers — empty when it offers none.
+    pub fn rungs(self, model: &str) -> &'static [Effort] {
+        match self {
+            Efforts::Never => &[],
+            Efforts::Always => LADDER,
+            Efforts::Only(names) => match names.iter().any(|name| model.contains(name)) {
+                true => LADDER,
+                false => &[],
+            },
+        }
+    }
+}
 
 /// What a kind does with a base URL.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -169,9 +209,11 @@ pub struct Provider {
     pub label: &'static str,
     pub base_url: BaseUrl,
     pub key: KeyUse,
-    /// The effort rungs this kind offers, in ladder order. **Empty means the control does not
-    /// exist for this provider** — no menu, and a [`Selection`] carrying one is refused.
-    pub efforts: &'static [Effort],
+    /// Which of this kind's models offer a reasoning control, and therefore whether the
+    /// composer footer draws one for the model in hand. Ask it through
+    /// [`ProviderKind::efforts`]; a [`Selection`] carrying a rung the model does not offer is
+    /// refused rather than sent.
+    pub efforts: Efforts,
     /// A current model name, for the model field's placeholder. A hint, never a list: model
     /// names churn faster than a release cycle, so the field is free-form text and an unknown
     /// name is answered by the provider itself.
@@ -189,20 +231,17 @@ pub const PROVIDERS: [Provider; 5] = [
         label: "Anthropic",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("ANTHROPIC_API_KEY"),
-        // **Empty, and not because Anthropic has no reasoning control — because this stack
-        // cannot round-trip it.** Setting any rung makes genai enable extended thinking
-        // (`thinking: {type: enabled, budget_tokens}` for every model outside its
-        // `SUPPORT_EFFORT_MODELS`, `claude-sonnet-4-5` included). Anthropic then requires the
-        // thinking block back alongside the tool results, and genai 0.6.5 cannot give it:
-        // its Anthropic streamer hardcodes `captured_thought_signatures: None`, and its
-        // request serializer drops `ThoughtSignature` and `ReasoningContent` from an assistant
-        // message outright. So round two of every tool-using turn is refused — which is every
-        // turn this loop exists for. A menu that breaks the feature is worse than no menu.
-        //
-        // Re-enable by restoring `LADDER` here, the day genai returns Anthropic thinking
-        // blocks (or the day the roster's models are all in `SUPPORT_EFFORT_MODELS`, which
-        // uses `output_config.effort` and needs no round-trip). Nothing else has to change.
-        efforts: &[],
+        // **The models that take an effort *without* switching thinking on.** genai has three
+        // Anthropic paths, by model name: `output_config.effort` alone (its
+        // `SUPPORT_EFFORT_MODELS` minus the adaptive ones); effort plus
+        // `thinking: {type: adaptive}`; and the legacy `thinking: {enabled, budget_tokens}`
+        // for everything else. Only the first is usable here, because the other two turn
+        // extended thinking on and Anthropic then wants the thinking block back alongside the
+        // tool results — which genai 0.6.5 cannot supply (its Anthropic streamer hardcodes
+        // `captured_thought_signatures: None` and its serializer drops the parts), so round
+        // two of every tool-using turn is refused. Add a name here when genai adds one to that
+        // first path, or drop the restriction entirely when it can round-trip thinking.
+        efforts: Efforts::Only(&["claude-opus-4-5"]),
         model_example: "claude-sonnet-4-5",
         adapter: AdapterKind::Anthropic,
     },
@@ -211,7 +250,11 @@ pub const PROVIDERS: [Provider; 5] = [
         label: "OpenAI",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("OPENAI_API_KEY"),
-        efforts: LADDER,
+        // OpenAI's reasoning models. `reasoning_effort` is not a field the others accept, so
+        // offering it for `gpt-4o` would be a menu whose every setting is an error. The
+        // Responses models (`gpt-5`, `codex`) round-trip their reasoning item because
+        // `Brain::resolve` sets `capture_reasoning_content`.
+        efforts: Efforts::Only(&["gpt-5", "codex", "o1", "o3", "o4"]),
         model_example: "gpt-5",
         // Nominal. `gpt-5` and the codex models speak the Responses API and the rest speak
         // chat completions, which is a per-model fork `adapter()` asks genai to make.
@@ -222,7 +265,11 @@ pub const PROVIDERS: [Provider; 5] = [
         label: "Gemini",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("GEMINI_API_KEY"),
-        efforts: LADDER,
+        // The thinking models: genai sends `thinkingLevel` for `gemini-3`/`gemma-4` and a
+        // `thinkingBudget` for the rest, and a model with no thinking config refuses both.
+        // Gemini's streamer captures thought signatures unconditionally and genai puts them
+        // back, so a tool round is safe here.
+        efforts: Efforts::Only(&["gemini-2.5", "gemini-3", "gemma-4"]),
         model_example: "gemini-3-pro-preview",
         adapter: AdapterKind::Gemini,
     },
@@ -231,9 +278,9 @@ pub const PROVIDERS: [Provider; 5] = [
         label: "Ollama",
         base_url: BaseUrl::Editable("http://localhost:11434/"),
         key: KeyUse::Unused,
-        // **Empty on purpose.** Ollama's API carries no reasoning-effort field and genai's
-        // adapter sends none, so offering the control would be a menu that changes nothing.
-        efforts: &[],
+        // Ollama's API carries no reasoning-effort field and genai's adapter sends none, so
+        // the control would be a menu that changes nothing whatever model is named.
+        efforts: Efforts::Never,
         model_example: "qwen3:14b",
         adapter: AdapterKind::Ollama,
     },
@@ -242,10 +289,10 @@ pub const PROVIDERS: [Provider; 5] = [
         label: "OpenAI-compatible",
         base_url: BaseUrl::Required,
         key: KeyUse::Anonymous,
-        // Offered, because the endpoint is the user's own and they know whether it reasons.
-        // Nothing is sent unless a rung is picked, and an endpoint that rejects the field
-        // says so in its own words.
-        efforts: LADDER,
+        // The one kind whose models we cannot know: the endpoint is the user's own, so they
+        // are the authority on whether it reasons. Nothing is sent unless a rung is picked,
+        // and an endpoint that rejects the field says so in its own words.
+        efforts: Efforts::Always,
         model_example: "llama-3.3-70b",
         adapter: AdapterKind::OpenAI,
     },
@@ -277,9 +324,11 @@ impl ProviderKind {
         self.info().label
     }
 
-    /// The effort rungs this kind offers — empty when it has no such control.
-    pub fn efforts(self) -> &'static [Effort] {
-        self.info().efforts
+    /// The effort rungs `model` offers — empty when it offers none, which is what the
+    /// composer footer draws no control for. Per **model**, because reasoning is a model
+    /// capability: `claude-opus-4-5` takes an effort and `claude-sonnet-4-5` does not.
+    pub fn efforts(self, model: &str) -> &'static [Effort] {
+        self.info().efforts.rungs(model)
     }
 }
 
@@ -414,9 +463,13 @@ pub enum SelectionError {
     },
     /// A key was set for a provider that takes none.
     KeyNotUsed { kind: ProviderKind },
-    /// An effort rung this kind does not offer — including any rung at all for a kind whose
-    /// ladder is empty.
-    NoSuchEffort { kind: ProviderKind, effort: Effort },
+    /// An effort rung this **model** does not offer — including any rung at all for a model
+    /// with no reasoning control.
+    NoSuchEffort {
+        kind: ProviderKind,
+        model: String,
+        effort: Effort,
+    },
 }
 
 impl fmt::Display for SelectionError {
@@ -443,9 +496,16 @@ impl fmt::Display for SelectionError {
                 f,
                 "{kind} takes no API key. Clear it in Settings > Assistant."
             ),
-            SelectionError::NoSuchEffort { kind, effort } => match kind.efforts() {
-                [] => write!(f, "{kind} has no reasoning effort setting."),
-                _ => write!(f, "{kind} does not offer '{effort}' reasoning effort."),
+            SelectionError::NoSuchEffort {
+                kind,
+                model,
+                effort,
+            } => match kind.efforts(model) {
+                [] => write!(f, "{kind} '{model}' has no reasoning effort setting."),
+                _ => write!(
+                    f,
+                    "{kind} '{model}' does not offer '{effort}' reasoning effort."
+                ),
             },
         }
     }
@@ -489,8 +549,12 @@ impl Brain {
         }
 
         if let Some(effort) = selection.effort {
-            if !provider.efforts.contains(&effort) {
-                return Err(SelectionError::NoSuchEffort { kind, effort });
+            if !provider.efforts.rungs(model).contains(&effort) {
+                return Err(SelectionError::NoSuchEffort {
+                    kind,
+                    model: model.to_string(),
+                    effort,
+                });
             }
         }
 
@@ -625,20 +689,53 @@ mod tests {
         assert_eq!(ProviderKind::all().count(), PROVIDERS.len());
     }
 
-    /// The effort menu is built from the table, so the table has to be the whole answer — and
-    /// a kind's ladder is empty for a *reason*, which the two empty ones do not share. Ollama
-    /// has no such control at all; Anthropic has one this stack cannot round-trip through a
-    /// tool round, so offering it would break every turn the loop exists for.
+    /// **Reasoning is a model capability, so the menu is per model.** One kind answers both
+    /// ways: `claude-opus-4-5` takes an effort without switching thinking on, and
+    /// `claude-sonnet-4-5` cannot be offered one because genai would enable thinking it then
+    /// cannot return on the next tool round.
     #[test]
-    fn a_kinds_ladder_is_what_the_stack_can_actually_deliver() {
-        assert!(ProviderKind::Ollama.efforts().is_empty());
-        assert!(ProviderKind::Anthropic.efforts().is_empty());
+    fn the_ladder_is_offered_per_model_not_per_provider() {
+        let anthropic = ProviderKind::Anthropic;
+        assert_eq!(anthropic.efforts("claude-opus-4-5"), LADDER);
+        assert!(anthropic.efforts("claude-sonnet-4-5").is_empty());
+        assert!(anthropic.efforts("claude-opus-4-6").is_empty());
+
+        let openai = ProviderKind::OpenAi;
+        assert_eq!(openai.efforts("gpt-5.2"), LADDER);
+        assert_eq!(openai.efforts("o3-mini"), LADDER);
+        assert!(openai.efforts("gpt-4o").is_empty());
+
+        let gemini = ProviderKind::Gemini;
+        assert_eq!(gemini.efforts("gemini-3-pro-preview"), LADDER);
+        assert_eq!(gemini.efforts("gemini-2.5-flash"), LADDER);
+        assert!(gemini.efforts("gemini-2.0-flash").is_empty());
+    }
+
+    /// The two kinds whose answer does not depend on the model, and why they differ: Ollama's
+    /// API has no such field for any model, and a compatible endpoint is the user's own, so
+    /// they are the authority on what it accepts.
+    #[test]
+    fn a_kind_may_answer_the_same_for_every_model() {
+        for model in ["qwen3:14b", "gpt-5", "anything"] {
+            assert!(ProviderKind::Ollama.efforts(model).is_empty(), "{model}");
+            assert_eq!(ProviderKind::OpenAiCompatible.efforts(model), LADDER);
+        }
+    }
+
+    /// An unknown name gets no control rather than a broken one. The rules are name fragments
+    /// and will fall behind what the providers ship; falling behind must cost a knob, never a
+    /// menu whose settings the provider refuses.
+    #[test]
+    fn an_unrecognized_model_is_closed_not_open() {
         for kind in [
+            ProviderKind::Anthropic,
             ProviderKind::OpenAi,
             ProviderKind::Gemini,
-            ProviderKind::OpenAiCompatible,
         ] {
-            assert_eq!(kind.efforts(), LADDER, "{kind}");
+            assert!(
+                kind.efforts("some-model-shipped-next-quarter").is_empty(),
+                "{kind}"
+            );
         }
     }
 
@@ -652,10 +749,32 @@ mod tests {
             e,
             SelectionError::NoSuchEffort {
                 kind: ProviderKind::Ollama,
+                model: "qwen3:14b".into(),
                 effort: Effort::High,
             }
         );
-        assert_eq!(e.to_string(), "Ollama has no reasoning effort setting.");
+        assert_eq!(
+            e.to_string(),
+            "Ollama 'qwen3:14b' has no reasoning effort setting."
+        );
+
+        // And the message names the *model*, because that is what the user would change.
+        let sonnet = Selection::new(ProviderKind::Anthropic, "claude-sonnet-4-5")
+            .with_key(Secret::new("sk-test").unwrap())
+            .with_effort(Effort::High);
+        assert_eq!(
+            Brain::resolve(&sonnet, &pool())
+                .err()
+                .map(|e| e.to_string()),
+            Some("Anthropic 'claude-sonnet-4-5' has no reasoning effort setting.".to_string())
+        );
+
+        // The model of the same kind that does support one resolves with the rung set.
+        let opus = Selection::new(ProviderKind::Anthropic, "claude-opus-4-5")
+            .with_key(Secret::new("sk-test").unwrap())
+            .with_effort(Effort::High);
+        let brain = Brain::resolve(&opus, &pool()).unwrap();
+        assert!(brain.options().reasoning_effort.is_some());
     }
 
     #[test]

@@ -304,10 +304,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   is the transport's.
 - **The assistant's brain is one table and a per-send value; whether a knob exists is ours,
   what a rung means is the provider's.** `PROVIDERS` is the only place a kind's label, URL/key
-  policy, effort ladder and adapter are written; `Selection` is handed in with every send, so
-  several panes on several providers is several values and not a mode. Ollama's empty ladder
-  means no control and a **refusal**, never a silent drop — and a per-model capability table
-  would be a stale copy of what `genai` already knows.
+  policy, effort rule and adapter are written; `Selection` is handed in with every send, so
+  several panes on several providers is several values and not a mode. **Effort is offered per
+  *model*** (`Efforts::{Never, Always, Only}`), because reasoning is a model capability and a
+  per-kind answer both hides working controls and offers broken ones; `Only` is **default-closed**,
+  so falling behind what a provider ships costs a knob rather than a refused request. A rung the
+  model does not offer is a **refusal**, never a silent drop.
 - **A cancelled turn is a drop, and the conversation it leaves must still be sendable.**
   Dropping the tool future *is* the engine's abort; the outstanding tool calls are answered
   before the turn settles, or the next send is a request every provider rejects. Cancelled is

@@ -26,8 +26,9 @@ UI + wiring, on the state rules the app already lives by.
 - **The selector.** The composer's footer holds the conversation's pick: **entry · model ·
   effort** (the IntelliJ AI-chat footer shape — "Junie · GPT-5.5 · High effort"). Entries
   come from the AS-03 roster in config; model defaults to the entry's own and is overridable
-  free-form; effort renders **only** for kinds the provider table says have one (absent, not
-  disabled). The pick is per-conversation runtime state on the transcript satellite — never
+  free-form; effort renders **only** when `ProviderKind::efforts(model)` is non-empty — a
+  question about the **model**, not the provider, so switching model inside one entry can add
+  or remove the control (absent, not disabled). The pick is per-conversation runtime state on the transcript satellite — never
   config, never `SessionState` — seeded from the roster's default entry, read at send time
   into AS-02's per-send selection. Changing it mid-conversation affects the next send and
   nothing already settled. A pick whose entry has since been deleted degrades honestly:

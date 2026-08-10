@@ -589,14 +589,19 @@ Things that must not regress. Each was fought for once already.
   restates it, and `Brain::resolve` is the single site a client is built. `Selection` is plain
   data handed in with **every send**, so several chat panes on different providers is several
   values rather than a mode anywhere: the def/runtime split, one layer down. Effort splits in
-  two on purpose — *whether the control exists* is the kind's (Ollama's ladder is empty, so no
-  surface offers it and a selection carrying one is **refused**, not ignored), while *what a
-  rung means for a given model* is `genai`'s, which already downgrades `xhigh` below Opus 4.7
-  and already knows `gemini-3` takes a thinking level where 2.5 takes a budget. A per-model
-  capability table here would be a second copy of that, stale within a release — the same
-  argument that keeps the model name free-form. Three fields are refused rather than dropped (a
-  base URL on a kind that owns its endpoint, a key on a kind that sends none, an effort on a
-  kind with no ladder), because a field silently ignored is a lie on screen; the compatible kind
+  two on purpose. *Whether the control is offered* is decided **per model** by the kind's
+  `Efforts` rule (`Never` / `Always` / `Only`), because reasoning is a model capability and not
+  a provider one: `claude-opus-4-5` takes an effort and `claude-sonnet-4-5` cannot be offered
+  one, because genai would enable thinking it then cannot return on the next tool round — so a
+  per-kind answer is wrong in both directions, hiding controls that work and offering ones that
+  break the turn. The rules are name fragments and will fall behind what the providers ship,
+  which is why `Only` is **default-closed**: falling behind costs a knob the user cannot reach
+  yet, never a menu whose settings the provider refuses. *What a rung means* for a model that
+  has one stays `genai`'s, which already downgrades `xhigh` below Opus 4.7 and knows `gemini-3`
+  takes a thinking level where 2.5 takes a budget; restating that would be a second copy of a
+  mapping that exists. Three fields are refused rather than dropped (a base URL on a kind that
+  owns its endpoint, a key on a kind that sends none, an effort the *model* does not offer),
+  because a field silently ignored is a lie on screen; the compatible kind
   has **no env fallback**, because `genai`'s default would post the user's `OPENAI_API_KEY` to
   whatever host they typed; and `check_base_url` normalizes the **trailing slash**, without
   which every adapter's path join reaches a URL the user never wrote.

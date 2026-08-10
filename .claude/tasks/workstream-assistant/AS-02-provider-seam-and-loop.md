@@ -26,25 +26,34 @@ production signature is shaped for it.
 
 **`PROVIDERS` is the one table.** Per kind: display label, `BaseUrl` policy
 (`Provider` · `Editable(default)` · `Required`), `KeyUse` policy (`Env(var)` · `Anonymous` ·
-`Unused`), the **effort rungs offered**, an example model for the placeholder, and the private
+`Unused`), the **effort rule** (`Efforts`), an example model for the placeholder, and the private
 `genai` adapter. Settings' form and the composer footer both read it; neither restates it. A
 kind added without a row fails to compile (`ProviderKind::info` is a match).
 
-**Effort splits in two, and the split is the whole design.** *Whether the control exists* is a
-property of the kind and is declared here — Ollama's list is empty, so no surface offers it and
-a `Selection` carrying one is refused rather than ignored. *What a rung means for a given model*
-is `genai`'s, verified at the pin: its Anthropic adapter already knows `xhigh` needs Opus 4.7+
-and downgrades otherwise, its Gemini adapter already knows `gemini-3` takes a thinking *level*
-where 2.5 takes a *budget*. A per-model capability table here would be a second copy of that,
-stale within a release — the same argument that makes the model name free-form text. The rungs
-are `Low · Medium · High · XHigh · Max`, matching `genai`'s keyword variants; `Budget(u32)`,
-`Minimal` and `None` are deliberately not offered (a token budget means nothing across
-providers, `Minimal` is one vendor's spelling of `Low`, and `None` is what an unset effort
-already says).
+**Effort is offered per model, and the split is the whole design.** *Whether the control is
+offered* is decided by the kind's `Efforts` rule against the model in hand (`Never` for Ollama,
+`Always` for the compatible endpoint, `Only(&[..])` elsewhere) — because reasoning is a model
+capability, not a provider one, and a per-kind answer is wrong in both directions: it hides
+`claude-opus-4-5`'s working control and offers `claude-sonnet-4-5` one that breaks the turn. A
+`Selection` carrying a rung the model does not offer is refused, naming the model. *What a rung
+means* for a model that has one stays `genai`'s, verified at the pin: its Anthropic adapter
+already knows `xhigh` needs Opus 4.7+ and downgrades otherwise, its Gemini adapter already knows
+`gemini-3` takes a thinking *level* where 2.5 takes a *budget*.
+
+`Only` is **default-closed**, and that is the safety argument for keeping name fragments at all:
+they will fall behind what the providers ship, and falling behind has to cost a knob the user
+cannot reach yet — an omission they can report — rather than a menu whose every setting the
+provider refuses. Matching is `contains`, the same way genai matches model names, so the two
+agree about what a name means.
+
+The rungs are `Low · Medium · High · XHigh · Max`, matching `genai`'s keyword variants;
+`Budget(u32)`, `Minimal` and `None` are deliberately not offered (a token budget means nothing
+across providers, `Minimal` is one vendor's spelling of `Low`, and `None` is what an unset
+effort already says).
 
 **Three refusals that are `Selection`'s alone**, all answered before a socket opens: a base URL
-on a kind that owns its endpoint, a key on a kind that sends none, and an effort on a kind with
-no ladder. Each is a field silently ignored otherwise, which is a lie on screen.
+on a kind that owns its endpoint, a key on a kind that sends none, and an effort the **model**
+does not offer. Each is a field silently ignored otherwise, which is a lie on screen.
 
 **`Provider::check_base_url` is the one copy of the URL rule** (`Provider::check_address`'s
 precedent), called by client construction *and* available to AS-03's form. Its load-bearing
