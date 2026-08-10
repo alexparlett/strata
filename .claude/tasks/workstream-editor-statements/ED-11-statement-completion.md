@@ -97,7 +97,8 @@ it), `Prepare`, `Restart`.
   | `DropTable` / `DropView` / `DropFunction` | the object keyword, `EXISTS`, or `,` | — | Continuation |
   | `Insert` | `INTO` | `(` or `,` (column list / VALUES tuple) | Continuation |
   | `Copy` | `COPY` | — | Continuation |
-  | `CreateTable` / `CreateView` / `CreateFunction` | — | the object keyword (a name being invented), `(` or `,` | Continuation |
+  | `CreateTable` / `CreateView` | — | the object keyword (a name being invented), `(` or `,` | Continuation |
+  | `CreateFunction` | once a `RETURN` token lies between the statement head and the caret, the body is an expression: alternate on `item_complete` like the default arm (`RETURN |` and `RETURN price * |` are Operand, `RETURN price |` is Continuation) — this is what reaches §4's `At(CreateFunction, Operand)` pool | before `RETURN`: `FUNCTION` (a name being invented), `(` or `,` | Continuation |
   | `CreateExternal` | — (the `STORED AS |` operand comes from the AS carve-out) | `TABLE`, `(` or `,` | Continuation |
   | `Prepare` | — | `PREPARE` | Continuation |
   | `Create` / `Drop` (unrefined) | — | — | Continuation always |
