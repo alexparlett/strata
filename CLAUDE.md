@@ -8,8 +8,9 @@ name **Strata** (uneven sedimentary layers = data strata).
 
 The app is built on **Freya 0.4 (Skia/native)**. It began as a Dioxus (wry/webview) app and was
 rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The open work is the
-remaining workstreams (`.claude/tasks/`): the statement lift (ED-10..11), the agent chat pane
-(AA-06), chart follow-ons, and design polish.
+remaining workstreams (`.claude/tasks/`): the statement lift (ED-10..11), the assistant's
+Settings roster and chat pane (AS-03/AS-04 — the loop under them is built), chart follow-ons,
+and design polish.
 
 This file is the **map** — build, layout, and where everything is. @AGENTS.md is the **bar** — the
 rules, one line each, imported into every session alongside this file; hold all work to it. Both
@@ -107,11 +108,14 @@ Members:
 - **`strata-code-editor`** — vendored Skia code editor (Rope buffer + tree-sitter highlighting) used
   by the Freya SQL editor.
 - **`strata-agent`** — agent access (AA-02): the read-only tool vocabulary, the `Host` seam that
-  answers it, the error taxonomy, the MCP server, and the **headless host** (AA-05 —
+  answers it, the error taxonomy, the MCP server, the **headless host** (AA-05 —
   `strata mcp <project>`: a `Host` over a plain `Engine` with AA-01's registration pass replayed
-  on it, served over stdio). A member but **not** a default one, and deliberately **Freya-free**
-  — that is what lets one `StrataTools` serve HTTP (AA-03), stdio headless (AA-05) and the
-  in-process chat pane (AA-06). Spec: `docs/AGENT_ACCESS_SPEC.md`.
+  on it, served over stdio), and the **assistant** (AS-02, `assistant/`): the agentic chat loop
+  over a pluggable provider seam (`genai`), its one provider table, and `offer_sql`. A member
+  but **not** a default one, and deliberately **Freya-free** — that is what lets one
+  `StrataTools` serve HTTP (AA-03), stdio headless (AA-05) and the in-process chat pane
+  (AS-04), and lets the loop be tested with no window, no renderer and no vendor account.
+  Spec: `docs/AGENT_ACCESS_SPEC.md`.
 - **`strata-command-macro`** — the workspace's one proc macro: `#[command_router]` / `#[command]`,
   the command palette's registration mechanism (P6-01). rmcp's `#[tool_router]` declaration shape,
   but it generates an **enum**, so dispatch is total by construction. It knows nothing about
@@ -216,8 +220,9 @@ pick up a single task (e.g. in a worktree) without loading the rest. Read the to
 first (status legend, what remains, known bugs).
 
 The numbered phases are done (their folders removed); what remains is design polish (phase 5) and
-the open workstream tasks — the statement lift (ED-10..11), the agent chat pane (AA-06) and the
-chart follow-ons. **What each finished task settled — including several corrections that must not
+the open workstream tasks — the statement lift (ED-10..11), the assistant's Settings roster and
+chat pane (AS-03/AS-04) and the chart follow-ons. **What each finished task settled — including
+several corrections that must not
 be re-litigated** (the catalog is a store and not a query; diagnostics are a reconciliation; a
 log is recorded by its observer; only real facts) — is
 [docs/reference/SETTLED_TASKS.md](docs/reference/SETTLED_TASKS.md), with the rule form of each in

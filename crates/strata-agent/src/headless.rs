@@ -568,6 +568,7 @@ mod tests {
                 name: "claude-code".into(),
                 version: "2.1.4".into(),
             },
+            in_app: false,
         }
     }
 

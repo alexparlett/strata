@@ -82,6 +82,11 @@ pub struct MockHost {
     projects: Mutex<Vec<MockProject>>,
     page_size: AtomicUsize,
     runs: AtomicU64,
+    /// Every [`Agent`] this host was introduced to, in order — the record a test asserts the
+    /// seam's own contract against. `open_query_session` is where a host first learns an agent
+    /// exists, so it is also the only place it learns whether the agent is the app's own
+    /// (`Agent::in_app`), and a host that dropped that would make the rule untestable.
+    opened: Mutex<Vec<Agent>>,
 }
 
 impl MockHost {
@@ -90,6 +95,7 @@ impl MockHost {
             projects: Mutex::new(projects),
             page_size: AtomicUsize::new(100),
             runs: AtomicU64::new(0),
+            opened: Mutex::new(Vec::new()),
         })
     }
 
@@ -106,6 +112,11 @@ impl MockHost {
         {
             project.engine = engine;
         }
+    }
+
+    /// The agents this host has been introduced to, oldest first.
+    pub fn opened(&self) -> Vec<Agent> {
+        self.opened.lock().unwrap().clone()
     }
 
     /// What [`Host::default_page_size`] answers. Settable because the real one tracks a live
@@ -186,6 +197,7 @@ impl Host for MockHost {
         project: &Path,
         agent: &Agent,
     ) -> Result<QuerySessionId, AgentError> {
+        self.opened.lock().unwrap().push(agent.clone());
         self.with(project, |p| {
             let session = QuerySessionId::new();
             p.sessions.push(MockSession {

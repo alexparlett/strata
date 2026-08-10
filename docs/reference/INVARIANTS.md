@@ -582,6 +582,69 @@ Things that must not regress. Each was fought for once already.
   and the fonts, none of which exist for it — and **stdout belongs to the transport**, so
   logging is a parameter (`init_logging(Log::Stderr)`) rather than a constant: one stray log
   line on stdout is a parse error at the client.
+- **The assistant's brain is one table and a per-send value; whether a knob exists is ours,
+  what a rung means is the provider's.** `strata_agent::assistant::provider::PROVIDERS` is the
+  one place a kind's label, base-URL policy, key policy, **effort ladder** and `genai` adapter
+  are written — Settings' roster (AS-03) and the composer footer (AS-04) read it and neither
+  restates it, and `Brain::resolve` is the single site a client is built. `Selection` is plain
+  data handed in with **every send**, so several chat panes on different providers is several
+  values rather than a mode anywhere: the def/runtime split, one layer down. Effort splits in
+  two on purpose. *Whether the control is offered* is decided **per model** by the kind's
+  `Efforts` rule (`Never` / `Always` / `Only`), because reasoning is a model capability and not
+  a provider one: `claude-opus-4-5` takes an effort and `claude-sonnet-4-5` cannot be offered
+  one, because genai would enable thinking it then cannot return on the next tool round — so a
+  per-kind answer is wrong in both directions, hiding controls that work and offering ones that
+  break the turn. The rules are name fragments and will fall behind what the providers ship,
+  which is why `Only` is **default-closed**: falling behind costs a knob the user cannot reach
+  yet, never a menu whose settings the provider refuses. *What a rung means* for a model that
+  has one stays `genai`'s, which already downgrades `xhigh` below Opus 4.7 and knows `gemini-3`
+  takes a thinking level where 2.5 takes a budget; restating that would be a second copy of a
+  mapping that exists. Three fields are refused rather than dropped (a base URL on a kind that
+  owns its endpoint, a key on a kind that sends none, an effort the *model* does not offer),
+  because a field silently ignored is a lie on screen; the compatible kind
+  has **no env fallback**, because `genai`'s default would post the user's `OPENAI_API_KEY` to
+  whatever host they typed; and `check_base_url` normalizes the **trailing slash**, without
+  which every adapter's path join reaches a URL the user never wrote.
+- **A cancelled turn is a drop, and the conversation it leaves behind must still be sendable.**
+  Dropping the tool future *is* the engine's abort (`DispatchGuard`) — never a second abort
+  path. But an assistant message carrying tool calls with no results is a request every provider
+  rejects, so a cancel answers the outstanding calls with "the user stopped this turn" before it
+  settles. A cancelled turn settles as `Cancelled`, never `Failed`.
+- **A statement the user can run is a tool call, not a formatting convention — and the check in
+  front of it is the *editor's* policy.** `offer_sql` is the assistant's own tool, dispatched by
+  the loop and **never registered on the router**, so `tools/list` stays the ten and no MCP
+  client is offered a tool it has no transcript to use. A tagged markdown fence was built first
+  and withdrawn: a fence is taught only by prose in the system prompt, which small local models
+  follow unevenly, and it cannot check anything before the text is on screen. The tool validates
+  first, so a card cannot offer SQL that will not parse — against the **editor's** capability,
+  because the card runs in the user's editor, which is what lets the assistant hand over a write
+  it is itself refused. SQL it is merely explaining stays an ordinary code block; telling the two
+  apart is the whole point.
+- **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
+  listed — and the mark is minted, never claimed.** That pane answers "what is working on my
+  project right now" about *external* clients; the assistant is part of the app and its runs
+  render as step cards in its own transcript. It stays one more agent to everything below — its
+  own `AgentId`, its own query sessions, the same gate — and the satellite **holds** it like any
+  other, because the ownership check, the per-agent session cap and the teardown all have to work
+  for it and `list_query_sessions` has to answer for it. It is only **listed** that it is not.
+
+  The mark is `Agent::in_app`, minted by `StrataTools::in_app` and delivered on the call that
+  first tells a host an agent exists, so no surface holds an id to compare and nothing has to
+  remember the rule. Keying on `AgentIdentity::assistant()`'s name instead would let any MCP
+  client hide from the pane by claiming that name at `initialize`, which is the worst possible
+  version of this rule.
+
+  The satellite draws the line in three places and nowhere else. `Agents::agents` is the pane's
+  listing (and `len`, behind the rail badge) — the exclusion itself. `Agents::held` is the
+  unfiltered iterator, which `list_query_sessions` answers from (an agent must see its own
+  sessions) and which the event log attributes from (the assistant is out of the *listing* only,
+  never out of the record). `Agents::sessions_of` is the same line drawn for the close confirm,
+  which asks whose work it is about to destroy and must say "the assistant" rather than "an
+  agent" — pointing at a pane that says nobody is connected is the failure that arm exists to
+  fix. The ownership check and the session cap are inside the satellite and read the field
+  directly, so they never had a filtered view to avoid. And for the same reason the pane omits
+  it, the log says the assistant **stopped** rather than disconnected: it never dialled in, so
+  its "connection" is the pane's own mount.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

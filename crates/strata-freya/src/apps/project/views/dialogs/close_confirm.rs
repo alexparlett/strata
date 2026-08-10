@@ -152,6 +152,7 @@ impl Component for CloseConfirm {
                 "Confirm exit",
                 match whose {
                     Whose::Agent => "An agent is running a query. Stop it and exit?",
+                    Whose::Assistant => "The assistant is running a query. Stop it and exit?",
                     Whose::Background => {
                         "Work is still finishing. Are you sure you want to stop it and exit?"
                     }
@@ -175,6 +176,9 @@ impl Component for CloseConfirm {
                 match whose {
                     Whose::Agent => {
                         "An agent is running a query. Stop it and open another project?"
+                    }
+                    Whose::Assistant => {
+                        "The assistant is running a query. Stop it and open another project?"
                     }
                     Whose::Background => {
                         "Work is still finishing. Are you sure you want to stop it and open \
@@ -308,8 +312,13 @@ enum Whose {
     /// A run is in flight and it is the user's — a tab of their own, or one nobody is left to
     /// claim, which reads the same to them and is still a query.
     Queries,
-    /// The only run is a query session's — no tab of the user's is running.
+    /// The only run is a query session's, and the session belongs to a client that dialled in.
     Agent,
+    /// The only run is the app's **own** assistant's. A separate arm rather than one more
+    /// caller of [`Whose::Agent`]: the assistant is not in the Agents pane, on purpose, so
+    /// "an agent is running a query" would send the user to a pane that says nobody is
+    /// connected — the same failure the agent arm itself exists to fix, one layer in.
+    Assistant,
     /// No run at all, and the engine says something else is going: a profile scan, an export, or
     /// a table's data being deleted (ED-05). "Queries are running" shown to somebody who started
     /// no query sends them looking for one that does not exist, which is the same failure the
@@ -339,11 +348,18 @@ fn whose_work(engine: &EngineCtx, session: &SessionState, agents: &Agents) -> Wh
         return Whose::Queries;
     }
     if agents
-        .sessions()
+        .sessions_of(false)
         .into_iter()
         .any(|s| engine.is_running(s.into()))
     {
         return Whose::Agent;
+    }
+    if agents
+        .sessions_of(true)
+        .into_iter()
+        .any(|s| engine.is_running(s.into()))
+    {
+        return Whose::Assistant;
     }
     match engine.has_background_work() {
         true => Whose::Background,

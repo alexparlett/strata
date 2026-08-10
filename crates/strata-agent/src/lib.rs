@@ -22,6 +22,9 @@
 //!                             functions), so bulk reads never queue behind UI work
 //! ```
 //!
+//! The chat loop is [`assistant`] (AS-02): a provider-agnostic agentic turn over the same
+//! vocabulary, with its own provider table, its own runtime and no Freya either.
+//!
 //! An agent's work lives in **query sessions** of its own (AA-03b) — not in the user's
 //! editor tabs, which AA-03 tried and which put an agent's twenty-step investigation in the
 //! window somebody was working in. A query session maps onto the engine's `WsId`, so the
@@ -34,6 +37,7 @@
 //! predicate, two surfaces, zero copies. Curated writes, if they ever arrive, arrive as new
 //! tools; `run` never loosens.
 
+pub mod assistant;
 pub mod error;
 pub mod headless;
 pub mod host;
@@ -42,6 +46,7 @@ pub mod server;
 pub mod tools;
 pub mod wire;
 
+pub use assistant::{Ask, Assistant, Conversation, Running, Selection, Settle, TurnEvent};
 pub use error::AgentError;
 pub use headless::{serve_stdio, HeadlessHost};
 pub use host::{
