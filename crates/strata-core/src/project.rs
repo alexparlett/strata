@@ -490,6 +490,35 @@ pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String 
     )
 }
 
+/// Split a location that names an object store into `(connection URL, bucket-relative source)` —
+/// [`resolve_source`]'s remote arm read backwards, for the one caller that arrives with the
+/// composed string rather than with the two halves: a typed
+/// `CREATE EXTERNAL TABLE … LOCATION 's3://acme-lake/events/2024/'` (ED-10).
+///
+/// `None` for a location with no scheme, which is the local rule's — a path, relative to the
+/// project folder or absolute. **Not a guess about intent**: the Configure window's LOCATION
+/// toggle is an explicit choice precisely because a *typed path* must never be re-read as remote,
+/// and this is the other case, where the scheme is the only thing the statement says about where
+/// the files are. A caller still has to check the URL against the project's own connections; this
+/// answers what the location was written as, not whether it can be read.
+///
+/// Kept beside [`resolve_source`] so the composition rule has one home in both directions — a
+/// round-trip is asserted in this module's tests. The split is at the first `/` after the scheme,
+/// which is exactly where [`ConnectionDef::url`](strata_model::ConnectionDef::url) stops.
+pub fn split_remote(location: &str) -> Option<(String, String)> {
+    let (scheme, rest) = location.split_once("://")?;
+    if scheme.is_empty() {
+        return None;
+    }
+    let (authority, path) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, path),
+        // A bucket with nothing under it. Answered rather than refused, because "the location
+        // names no path inside the bucket" is the caller's sentence to write, not a parse failure.
+        None => (rest, ""),
+    };
+    Some((format!("{scheme}://{authority}"), path.to_string()))
+}
+
 /// If `abs` sits inside `root`, return it relative to `root` (portable, stored in
 /// `project.json`); otherwise keep it absolute.
 pub fn relativize(root: &Path, abs: &str) -> String {
@@ -1065,5 +1094,38 @@ mod tests {
             resolve_source(root, Some("http://aserver:8484"), "data/a.csv"),
             "http://aserver:8484/data/a.csv"
         );
+    }
+
+    /// The split is the composition read backwards, and the round trip is the claim: whatever
+    /// [`split_remote`] takes apart, [`resolve_source`] puts back byte for byte. A typed
+    /// `LOCATION` arrives composed (ED-10), and it has to reach the def as the pair every other
+    /// path already holds.
+    #[test]
+    fn splitting_a_remote_location_is_the_composition_read_backwards() {
+        let root = Path::new("/proj");
+        for location in [
+            "s3://acme-lake/events/2024/**/*.parquet",
+            "gs://lake/daily/",
+            "http://aserver:8484/data/a.csv",
+            // A bucket with nothing under it: answered as an empty source, so the caller can say
+            // what is missing rather than a parse saying nothing at all.
+            "s3://acme-lake",
+        ] {
+            let (url, source) = split_remote(location).expect("a scheme");
+            assert_eq!(
+                resolve_source(root, Some(&url), &source).trim_end_matches('/'),
+                location.trim_end_matches('/'),
+                "{location}"
+            );
+        }
+        assert_eq!(
+            split_remote("s3://acme-lake/events/"),
+            Some(("s3://acme-lake".into(), "events/".into()))
+        );
+        // A path is not a URL, and neither is a Windows drive letter — the separator is `://`,
+        // never a bare colon.
+        assert_eq!(split_remote("/proj/events/"), None);
+        assert_eq!(split_remote("events/2024"), None);
+        assert_eq!(split_remote("C:\\data\\events"), None);
     }
 }

@@ -92,17 +92,20 @@ parsed statement, and `Engine::run` spends the answer.
 flowchart LR
     RUN["Engine::run<br/>(one statement per press)"] --> C{classify}
     C -->|Query| Q["query()<br/>SELECT · EXPLAIN · SHOW · DESCRIBE<br/>→ snapshot pipeline"]
-    C -->|Intercept| I["ddl::execute<br/>CREATE TABLE / CTAS · INSERT · DROP TABLE ·<br/>CREATE / DROP VIEW · COPY · SET / RESET ·<br/>PREPARE / DEALLOCATE · CREATE / DROP FUNCTION;<br/>CREATE EXTERNAL TABLE still to lift"]
+    C -->|Intercept| I["ddl::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
     C -->|Refuse| R["the editor's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]
 ```
 
 - The classification carries a **capability axis**: the editor runs queries and intercepts
   statements; the agent surface is read-only and refuses every non-query. Both answers come from
   the same match arm, so the two surfaces cannot drift.
-- An implemented interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS
-  spools into `.strata/tables/<slug>/` as Arrow IPC and registers through the ordinary external-
-  table path — the def it produces is a plain `TableDef` flagged `origin: Internal`, so persist,
-  replay and the headless host need no new code.
+- An interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS spools into
+  `.strata/tables/<slug>/` as Arrow IPC and registers through the ordinary external-table path —
+  the def it produces is a plain `TableDef` flagged `origin: Internal`, so persist, replay and the
+  headless host need no new code. A typed `CREATE EXTERNAL TABLE` is that same funnel with the def
+  read off the statement instead, which is what makes it and Table Config two gestures at one
+  registration — and is why its `LOCATION` names a **connection** the project already has rather
+  than describing a bucket of its own.
 - A statement's outcome is a value the app folds — a `StatementReport` carrying a `StoreEffect` —
   never something read back out of DataFusion. Strata owns the catalog and schema providers for
   identity and visibility only; lifecycle is intercepted in front of `ctx.sql`, because a sync

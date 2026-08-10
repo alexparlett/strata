@@ -770,6 +770,46 @@ Things that must not regress. Each was fought for once already.
   because the re-read runs **outside the scan driver's claim**, it lands through
   `table_reread`, which stands down for a row a pass has put back to `Loading`: otherwise a ↻
   pressed while the read was in flight would be silently undone by the state from before it.
+- **A typed `CREATE EXTERNAL TABLE` is Table Config's registration written down, and its `OPTIONS`
+  are the table's reader — never the store's.** `ddl::external::create` (ED-10) reads the parsed
+  statement into a `TableDef { origin: External }` and hands it to `register_external`, so the
+  store fold, the persist funnel, replay and the headless host need no code of their own and the
+  settle is CTAS's. DataFusion's own `ListingTableFactory` stays unused for §3's reason once more:
+  it registers a provider behind the store's back, and the **def** is the durable artifact — a
+  table that existed only in a `SessionContext` would appear in no catalog row, no `project.json`
+  and no clone. The statement is *read*, exhaustively and with no `..`, so every clause a `TableDef`
+  cannot carry (`TEMPORARY`, `UNBOUNDED`, `WITH ORDER`, constraints, a **data** column list) is
+  refused by name; `STORED AS` is exhaustive by name too, so a format with no reader fails rather
+  than falling through or minting the `Unknown` variant a *legacy def* needs; and a partition name
+  repeated in `PARTITIONED BY` is refused, because Arrow's `Schema` permits duplicate fields and
+  would have carried the column twice. The def reaches the funnel through **`register::table_spec`**,
+  the mapping the registration pass already owns, so what the statement writes composes exactly as
+  the next open will replay it. An **internal** table's name is fenced off from a *replacement* —
+  pointing it at the user's own directory would strand `.strata/tables/<slug>/` with no def naming
+  it and nothing left that could delete it — and from a replacement only, since `IF NOT EXISTS` and
+  a plain create perform none and would otherwise be answered with advice to drop a table the
+  statement asked not to touch.
+  **`OPTIONS` is two vocabularies wearing one syntax, and that is where this statement collides
+  with connections**: `datafusion-cli` writes the reader's settings and the object store's into one
+  list, where Strata keeps them in two files on purpose. So a `format.` key the def has a field for
+  is read onto it (the key set **is** the def — every `CsvRead`/`JsonRead` field has a DataFusion
+  name and nothing else does), a store namespace or a client option (`CLIENT_KEYS`, shared) is
+  refused toward Connections **on the key alone** — the value is never read and never echoed,
+  because it may be a secret — and everything else is refused by name, which is what keeps the
+  mechanism total rather than a list of the keys we thought of. A `LOCATION` with a scheme is
+  `resolve_source` read backwards (`project::split_remote`, round-trip asserted) onto a connection
+  **this project has**, refused by name otherwise: a statement cannot mint one (it says no
+  provider, no region and no credential, and must never carry the last), and refusing here is what
+  keeps DataFusion's "No suitable object store found" off a table row. Membership is
+  `Engine::connections`, noted by `connect` **whatever the outcome** and removed by `disconnect` —
+  the internal-name set's shape, names and nothing else — because whether a connection resolved a
+  credential today is not whether the project has it. It **resolves** rather than tests: the match
+  falls back to case-insensitive, since `Url::parse` lower-cases a scheme and a host on the way
+  into the registry, and it answers with the *connection's* spelling, which is the string the def
+  stores and the string every other surface addresses it by. None of this contradicts Configure's LOCATION
+  toggle being an explicit choice: that rule exists so a typed **path** is never re-read as remote,
+  and here the scheme is the only thing the statement says about where the files are (a `file://`
+  URL is refused naming the plain-path form rather than decoded).
 - **A view is Save's artifact, and typed view DDL is a second gesture into that funnel — one
   body, views indistinguishable by origin.** `ddl::views::create` is what
   `Engine::create_view` spawns for ⌘S *and* what a typed `CREATE VIEW` reaches through the router

@@ -235,6 +235,47 @@ naming a connection the project no longer has keeps naming it, and Save is block
 Rewriting it to local disk would silently re-point the table at a relative path on the user's own
 machine.
 
+### The typed form (ED-10)
+
+A `CREATE EXTERNAL TABLE` typed into the editor reaches the same def, and its `LOCATION` is where
+the two halves meet from the other direction:
+
+```sql
+CREATE EXTERNAL TABLE events STORED AS PARQUET
+  LOCATION 's3://acme-lake/events/2024/'
+```
+
+lands `connection: Some("s3://acme-lake")` and the bucket-relative source `events/2024/` —
+`project::split_remote`, which is `resolve_source` read backwards and asserted to round-trip. The
+URL has to be a connection **this project has**, and is refused by name otherwise, on the terms the
+Configure footer is blocked on:
+
+> 's3://acme-lake' is not a connection in this project. Add it in Connections
+
+A statement cannot mint one. A connection carries a provider, a region and where its credentials
+come from — none of which the statement says, and one of which it must never carry — and it also
+carries a *status*, which comes from a probe rather than from a sentence. Refusing here is also
+what keeps DataFusion's "No suitable object store found" off a table row, which is the whole point
+of registering connections first.
+
+Membership is `Engine::connections`: the URLs `connect` was handed, noted **whatever the outcome**
+and removed by `disconnect`. A connection whose region is blank or whose SSO session expired is
+still one the user may point a table at — the fix comes afterwards — so asking DataFusion's
+object-store registry instead would have answered *no* for exactly the rows the user is on their
+way to repair.
+
+The lookup **resolves** rather than merely tests: it falls back to a case-insensitive match,
+because `Url::parse` lower-cases a scheme and a host on the way into the registry (so
+`S3://acme-lake/events/` names a store that is registered), and it answers with the *connection's*
+spelling, which is the string the def then stores — the same string the Configure picker,
+`resolve_source` and the Forget confirm all address it by.
+
+This is not the LOCATION toggle read differently. That toggle is an explicit choice precisely so a
+typed **path** is never re-read as remote; in a statement the scheme is the only thing said about
+where the files are. And the statement's `OPTIONS` cannot carry any of the connection's settings:
+`aws.*`, `gcp.*`, client timeouts and the rest are refused toward this pane, on the key alone,
+without the value ever being read (`STATEMENTS_SPEC.md` §6.7).
+
 ## Hive-partitioned lakes over a bucket
 
 Partition detection is format-agnostic and works over any registered store:

@@ -145,6 +145,41 @@ pub fn fmt_int(n: u64) -> String {
     out
 }
 
+/// Resolve a **single-character field**: the two escapes the canvases document (`\t`, `\n`), a
+/// literal backslash, or one plain character. Empty is `None` (such a field is optional);
+/// anything longer is an error the surface shows rather than a silent truncation.
+///
+/// Shared, because a delimiter, a quote and a comment marker are the same field wherever they
+/// appear — and there are now three surfaces: the export window, the Configure window, and a
+/// typed `CREATE EXTERNAL TABLE`'s `OPTIONS` (ED-10). A `\t` that resolved in one and not the
+/// others would be the same field meaning two things, and the typed statement is the one that
+/// has to land on the def Configure would have written.
+///
+/// **Not DataFusion's `u8` config parse**, which the same key goes through in `datafusion-cli`:
+/// that reads a numeric string as the byte *value*, so `'format.delimiter' '9'` silently means
+/// tab, and it has no escape for one — a `'\t'` reaches it as two characters and is refused as
+/// "Non-ASCII". This is the rule the two windows already publish, and `what` names the field so
+/// the message reads the same wherever it is raised.
+pub fn one_char(what: &str, raw: &str) -> Result<Option<char>, String> {
+    let resolved = match raw {
+        "" => return Ok(None),
+        "\\t" => '\t',
+        "\\n" => '\n',
+        "\\\\" => '\\',
+        other => {
+            let mut chars = other.chars();
+            let first = chars.next().expect("non-empty");
+            if chars.next().is_some() {
+                return Err(format!(
+                    "The CSV {what} has to be a single character (or \\t for tab), not {other:?}"
+                ));
+            }
+            first
+        }
+    };
+    Ok(Some(resolved))
+}
+
 /// A counted noun — `12 columns`, `1 problem` — with the count grouped by [`fmt_int`].
 ///
 /// **Regular nouns only** (`+s`), which is every noun the UI counts: columns, rows, problems,

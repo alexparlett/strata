@@ -97,6 +97,22 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   DataFusion's own INSERT path — one appended IPC file per statement, no compaction, and the
   schema check is DataFusion's. The plan that was judged is the plan that runs; `Blocked` carries
   every refusal's wording, including the two only a plan can name.
+- **A typed `CREATE EXTERNAL TABLE` is Table Config's registration written down, and its `OPTIONS`
+  are the table's reader — never the store's.** `ddl::external` reads the parsed statement into a
+  `TableDef` and hands it to `register_external`; DataFusion's `ListingTableFactory` stays unused
+  because the **def** is the durable artifact. Read exhaustively with no `..`, so every clause a
+  def cannot carry is refused **by name**, `STORED AS` included (no fallthrough, no minted
+  `Unknown`); an internal table's name is fenced off. `OPTIONS` is **two vocabularies wearing one
+  syntax** — a `format.` key the def has a field for is read onto it (the key set *is* the def), a
+  store namespace or a client option is refused toward Connections **on the key alone**, because
+  the value may be a secret, and everything else is refused by name so the mechanism stays total.
+  A `LOCATION` with a scheme is `project::split_remote` — `resolve_source` read backwards — onto a
+  connection the project **has** (`Engine::connections`, membership not liveness), refused by name
+  otherwise so DataFusion's "no suitable object store" never lands on a table row; the lookup
+  **resolves** case-insensitively and answers with the connection's own spelling, because the
+  registry does the first and every other surface addresses it by the second. The def reaches the
+  funnel through `register::table_spec`, not a second copy of it. Configure's LOCATION toggle is
+  unaffected: it exists so a typed *path* is never re-read as remote.
 - **A view is Save's artifact, and typed view DDL is a second gesture into that funnel — one
   body, views indistinguishable by origin.** `ddl::views::create` serves ⌘S and the typed
   statement, so either gesture edits the row the other made; the statement never runs natively
