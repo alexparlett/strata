@@ -46,11 +46,6 @@ impl Component for ProvidersPane {
         // Which key boxes are unmasked. Pane-local: a reveal is a glance, not a setting — the
         // same call `McpPane` makes about its token.
         let mut revealed = use_state(Vec::<ProviderKind>::new);
-        // Which stored keys the user has asked to replace. Pane-local for `revealed`'s reason: a
-        // decision to retype something is a gesture in this sitting, not a setting — and it must
-        // not survive the window, or reopening Settings would present an empty box again for a
-        // key that is perfectly well stored.
-        let mut replacing = use_state(Vec::<ProviderKind>::new);
 
         // **Read guards, not clones.** These are held across the `map` below and dropped before
         // anything takes a `write` — deep-copying instead meant every keystroke (each of which
@@ -85,7 +80,14 @@ impl Component for ProvidersPane {
                     // Settled means: something is stored, and nothing has been typed or asked
                     // for. A typed key already un-settles it — the box has to stay open while
                     // its own content is in it.
-                    key_settled: stored && !replacing.read().contains(&kind) && !keys.touched(kind),
+                    // **Derived, not remembered.** Settled is "a key is stored and nothing is
+                    // pending for it" — and Replace makes something pending, so it needs no set
+                    // of its own. A separate `replacing` list was tried and was wrong twice over:
+                    // nothing cleared it once the replacement committed, so a successful replace
+                    // followed by a failed config write left the box open as though the key had
+                    // never landed; and it made Replace a purely visual act, which is how "leave
+                    // empty to remove" came to do nothing at all.
+                    key_settled: stored && !keys.touched(kind),
                     key_placeholder: match stored {
                         true => "paste a new key, or leave empty to remove",
                         false => "paste API key",
@@ -103,11 +105,7 @@ impl Component for ProvidersPane {
                         }
                     }),
                     on_test: EventHandler::new(move |()| test(ctx, kind)),
-                    on_replace: EventHandler::new(move |()| {
-                        if !replacing.peek().contains(&kind) {
-                            replacing.write().push(kind);
-                        }
-                    }),
+                    on_replace: EventHandler::new(move |()| replace(ctx, kind)),
                 })
             })
             .collect::<Vec<Element>>();
@@ -285,6 +283,22 @@ fn repoint(ai: &mut Ai) {
         let next = ai.enabled().next();
         ai.default_provider = next;
     }
+}
+
+/// **Replace a stored key: mark the intent, then let the box do the rest.**
+///
+/// The empty entry is the whole mechanism. It opens the input (`key_settled` is derived from
+/// exactly this), it makes the window dirty so Apply is reachable, and if the user types nothing
+/// it is what `commit` turns into a delete — which is what the box's own placeholder promises.
+/// A flag that only opened the input would leave every one of those three undone.
+///
+/// The probe goes with it, for the reason any credential edit retracts one: what was verified
+/// was verified with a key that is on its way out.
+fn replace(ctx: SettingsCtx, kind: ProviderKind) {
+    let mut keys = ctx.ai_keys;
+    keys.write().set(kind, String::new());
+    let mut probes = ctx.probes;
+    probes.write().forget(kind);
 }
 
 /// Ask the provider what it serves. The keystore read and the request both happen on the probe's

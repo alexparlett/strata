@@ -44,6 +44,16 @@ impl TypedKeys {
         self.0.contains_key(&kind)
     }
 
+    /// Whether anything at all is typed — a pending key, or a pending *removal*.
+    ///
+    /// What makes a credential edit count as a change. These live outside the settings draft (a
+    /// secret has nowhere in it to live), so a window whose only edit is a pasted key is not
+    /// "dirty" by the draft's own reckoning, and Apply would stay disabled with the key
+    /// unsaveable. See `SettingsCtx::dirty`.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Forget the keys `committed` holds — and only while they are still what was committed.
     ///
     /// Called once [`commit`] has returned `Ok`: the keystore holds those secrets and the draft
@@ -143,6 +153,50 @@ mod tests {
     #[test]
     fn an_untyped_provider_reads_as_empty() {
         assert_eq!(TypedKeys::default().get(ProviderKind::Groq), "");
+    }
+
+    /// **Replace records an empty entry, and that is the whole mechanism.**
+    ///
+    /// It opens the input, it makes the window dirty so Apply is reachable, and it is what
+    /// `commit` turns into a delete — the three things a flag that merely changed what was drawn
+    /// would each have left undone, which is how "leave empty to remove" came to do nothing.
+    ///
+    /// The delete itself is `SecretRef::delete`'s and needs a keystore, so it is asserted where
+    /// one can be installed (`strata_core::secret`'s own tests, over `keyring_core::mock`). What
+    /// is pinned here is the decision that reaches it.
+    #[test]
+    fn replacing_records_a_pending_removal() {
+        let kind = ProviderKind::Anthropic;
+        let mut keys = TypedKeys::default();
+        keys.set(kind, String::new());
+
+        assert!(
+            keys.touched(kind),
+            "commit acts on touched, not on non-empty"
+        );
+        assert_eq!(keys.get(kind), "", "and an empty value is the delete");
+        assert!(!keys.is_empty(), "so Apply is reachable to carry it out");
+    }
+
+    /// **A credential edit is a change, though it is not in the draft.**
+    ///
+    /// These live outside `Settings` because a secret has nowhere in it to live, so the draft
+    /// compares equal to its seed when a pasted key is the only edit — and the footer, which
+    /// gates Apply on that comparison, left the key unsaveable. It saved at all only when some
+    /// other setting happened to change in the same sitting.
+    #[test]
+    fn a_pending_key_or_removal_counts_as_an_edit() {
+        let mut keys = TypedKeys::default();
+        assert!(keys.is_empty(), "nothing typed is nothing to apply");
+
+        keys.set(ProviderKind::Anthropic, "sk-pasted".into());
+        assert!(!keys.is_empty(), "a pasted key is an edit");
+
+        // Pressing Replace and leaving the box alone: a pending *removal*, and every bit as much
+        // an edit as a pending key — `commit` turns it into a delete.
+        let mut removal = TypedKeys::default();
+        removal.set(ProviderKind::Anthropic, String::new());
+        assert!(!removal.is_empty(), "a pending removal is an edit too");
     }
 
     /// **A committed key is no longer typed, so a retry writes no keys.**

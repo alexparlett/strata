@@ -370,8 +370,16 @@ impl SettingsCtx {
     /// enable Apply for a change the user never made — an Apply that, since it is a per-field
     /// merge, would commit nothing at all. The seed never changes, so this reads no config
     /// state and the footer isn't woken by config writes it has no interest in.
+    /// **A typed key counts, though it is not in the draft.** `Settings` holds a `SecretRef` and
+    /// no secret, so a pasted key lives beside the draft rather than in it — which meant a window
+    /// whose only edit was a credential compared equal to its seed, left Apply disabled, and made
+    /// the key unsaveable. It saved at all only when some *other* setting had been changed in the
+    /// same sitting, which is a coincidence rather than a design.
+    ///
+    /// An empty entry counts too: that is a pending *removal*, which is every bit as much an edit
+    /// as a pending key.
     pub fn dirty(&self) -> bool {
-        *self.draft.read() != *self.seed.peek()
+        *self.draft.read() != *self.seed.peek() || !self.ai_keys.read().is_empty()
     }
 
     /// Publish the draft's theme selection as the live preview. Driven by a side effect at
