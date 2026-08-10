@@ -17,12 +17,12 @@ from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle 
 (an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Statement
 policy is one router in front of dispatch: `sql::validate::classify(stmt, Capability)` answers
 `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)`. `Capability::Editor` runs queries and
-introspection and **intercepts** the rest — 14 recognised kinds, of which `CREATE TABLE` / CTAS,
-`INSERT`, `DROP TABLE`, `CREATE` / `DROP VIEW`, `COPY` and the session statements
-(`SET` / `RESET`, `PREPARE` / `DEALLOCATE`) are implemented today (each remaining kind's
-destination is an app funnel that already exists: `CREATE EXTERNAL TABLE` onto Table Config's
-registration path, and so on; until its ED task lands, an intercepted kind answers
-`ddl::execute`'s "not implemented yet"). The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
+introspection and **intercepts** the rest — 14 recognised kinds, of which all but
+`CREATE EXTERNAL TABLE` are implemented today: `CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`,
+`CREATE` / `DROP VIEW`, `COPY`, the session statements (`SET` / `RESET`,
+`PREPARE` / `DEALLOCATE`) and `CREATE` / `DROP FUNCTION`. The one that remains has a destination
+that is an app funnel already: Table Config's registration path; until ED-10 lands it answers
+`ddl::execute`'s "not implemented yet". The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
 `INSERT OVERWRITE`, `PREPARE` of a non-query, `SET`/`RESET` of an owned, `runtime.*`, `format.*` or
 dialect key, `DROP` of a non-table/view object, reserved `__snap_` names, multi-statement buffers,
 and unknown kinds.
@@ -122,7 +122,12 @@ spelling that works) over Utf8
 columns holding JSON text, and that call is the whole integration: `engine::functions::snapshot`
 walks `ctx.udfs()`, so anything registered reaches autocomplete and the completion detail with no
 per-function table and no way for the completion pool and the engine to disagree. Adding a UDF
-family means one `register_*` call in `build_context` and nothing else. The union-tolerant JSON
+family means one `register_*` call in `build_context` and nothing else.
+The walk runs at `Engine::new` and again after a `CREATE` / `DROP FUNCTION` (ED-09) and **nowhere
+else**: `engine::functions::Functions` holds the result as a swappable `Arc<FunctionCatalog>`
+beside the folded names this session created, which is what fences a built-in off from both
+statements. `Engine::functions()` hands out the handle, so the language service's per-epoch
+snapshot carries the set rather than copying it (`docs/STATEMENTS_SPEC.md` §6.6). The union-tolerant JSON
 reader (`engine::json_poly`) is what makes the accessors pay off over mixed-shape files.
 
 > The Dioxus-era `Command`/`Event` channel protocol + worker loop was deleted along with the

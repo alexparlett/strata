@@ -22,6 +22,7 @@
 //! by the task that owns its capability, and until then answers with its stub refusal.
 
 mod copy;
+mod functions;
 mod session;
 mod tables;
 mod views;
@@ -38,11 +39,15 @@ use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::TableReference;
 
 use crate::engine::catalog::{TableMeta, ViewMeta};
+use crate::engine::functions::Functions;
 use crate::engine::sql::StmtKind;
 use crate::engine::{fold_ident, InternalTables, CATALOG, SCHEMA};
 use crate::util::plural;
 use strata_model::{TableDef, ViewDef};
 
+/// DataFusion's own seam for `CREATE FUNCTION` (ED-09) — installed on every engine by
+/// `build_context`, which is what makes the statement dispatchable at all.
+pub(super) use functions::StrataFunctionFactory;
 /// The session state a statement can move (ED-08) — held by the engine, reached by the arms.
 pub use session::SessionScope;
 /// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
@@ -134,24 +139,48 @@ pub enum StoreEffect {
 /// write refuse politely.
 pub type DataRoot = Option<PathBuf>;
 
+/// What an intercepted statement can reach **of the engine**, gathered once in
+/// [`Engine::run`](crate::engine::Engine::run).
+///
+/// Every member is a copy — a handle where the state is shared, a clone where it is a value — for
+/// one reason: the arms run inside the task `Engine::bookkeep` spawned, and that task must not
+/// hold the engine, because the engine's `Drop` is what aborts it. `internal`, `scope` and
+/// `functions` hold values only, so they outlive an engine harmlessly; `root` and `baseline` are
+/// snapshots taken at dispatch, which is the moment they are true for.
+///
+/// One value rather than a parameter list because it is one thing — the engine, minus everything
+/// an arm may not touch — and it gains a member for each capability this workstream lifts.
+pub struct Dispatch {
+    /// Where an internal table's data may be written (ED-04).
+    pub root: DataRoot,
+    /// Which registered tables Strata owns the data of (ED-04/05).
+    pub internal: InternalTables,
+    /// The `SET` overlay and the prepared-statement mirror (ED-08).
+    pub scope: SessionScope,
+    /// The function catalog and the names this session created (ED-09).
+    pub functions: Functions,
+    /// The engine's `datafusion.*` overrides — what a `RESET` puts a key back to
+    /// (`session::reset`), which is the Settings baseline rather than DataFusion's default.
+    pub baseline: BTreeMap<String, String>,
+}
+
 /// Execute one intercepted statement and report what it did.
 ///
 /// The timer and the kind are stamped here rather than in the arms, so a report can never
 /// disagree with the statement that produced it.
-///
-/// `baseline` is the engine's `datafusion.*` overrides cloned at dispatch — what a `RESET` puts a
-/// key back to (`session::reset`). A clone rather than a handle, because nothing reached from here
-/// may hold the engine: the arms run in the task `Engine::bookkeep` spawned, and the engine's
-/// `Drop` is what aborts it.
 pub async fn execute(
     ctx: &SessionContext,
     kind: StmtKind,
     stmt: DFStatement,
-    root: DataRoot,
-    internal: InternalTables,
-    scope: SessionScope,
-    baseline: BTreeMap<String, String>,
+    engine: Dispatch,
 ) -> Result<StatementReport, String> {
+    let Dispatch {
+        root,
+        internal,
+        scope,
+        functions: registry,
+        baseline,
+    } = engine;
     let start = Instant::now();
     // Exhaustive on `StmtKind` with no wildcard, so a kind the router learns to intercept is a
     // compile error here rather than a statement that classifies and then falls through.
@@ -174,8 +203,9 @@ pub async fn execute(
         StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,
         StmtKind::Prepare => session::prepare(ctx, stmt, &scope).await,
         StmtKind::Deallocate => session::deallocate(ctx, stmt, &scope).await,
-        // ED-09 — the function factory and the swappable function catalog.
-        StmtKind::CreateFunction | StmtKind::DropFunction => Err(unimplemented(kind)),
+        // ED-09 — SQL-bodied scalar functions, over the factory `build_context` installed.
+        StmtKind::CreateFunction => functions::create(ctx, stmt, &registry).await,
+        StmtKind::DropFunction => functions::drop(ctx, stmt, &registry).await,
         // ED-10 — the typed form of Table Config's registration.
         StmtKind::CreateExternalTable => Err(unimplemented(kind)),
     }?;

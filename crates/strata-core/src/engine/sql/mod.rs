@@ -163,11 +163,12 @@ impl From<&str> for FunctionSym {
 }
 
 /// The engine's registered functions (built-ins + any UDFs), by category —
-/// enriched to [`FunctionSym`]s (name + overload signatures + return type). Built
-/// once from the engine's registry at startup (`Engine::new`, F5) and held on the
-/// per-window [`Engine`](crate::engine::Engine); folded into a [`Catalog`] for
-/// completion + validation + signature help.
-#[derive(Clone, Default, PartialEq)]
+/// enriched to [`FunctionSym`]s (name + overload signatures + return type). Walked from the
+/// engine's registry at startup (`Engine::new`, F5) and again by any statement that moves that
+/// registry (`CREATE FUNCTION` / `DROP FUNCTION`, ED-09), held on the per-window
+/// [`Engine`](crate::engine::Engine); folded into a [`Catalog`] for completion + validation +
+/// signature help.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionCatalog {
     pub scalar: Vec<FunctionSym>,
     pub aggregate: Vec<FunctionSym>,

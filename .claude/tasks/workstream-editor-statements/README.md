@@ -34,7 +34,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 06 | Typed CREATE/DROP VIEW onto the save-view funnel | ✅ | — | 02 |
 | 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ✅ | — | 02 |
 | 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ✅ | — | 02 |
-| 09 | `StrataFunctionFactory` + swappable function catalog | ⬜ | — | 02 |
+| 09 | `StrataFunctionFactory` + swappable function catalog | ✅ | — | 02 |
 | 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ⬜ | — | 02 |
 | 11 | Completion for the statements the editor now runs | ⬜ | — | 08 (ideally 09, 10) |
 
@@ -96,14 +96,16 @@ ED-06's replace-a-table hazard, and ED-07's COPY parser/planner behaviour) are r
 code's own module docs (`engine/ddl/tables.rs`, `engine/ddl/views.rs`, `engine/ddl/copy.rs`,
 `engine/providers.rs`) and in `docs/STATEMENTS_SPEC.md`.
 
-| Fact | Evidence | Task |
-|---|---|---|
-| CREATE FUNCTION requires a `FunctionFactory` (`with_function_factory`); the body arrives as a parsed `Expr`; DROP FUNCTION deregisters across all registries with no factory needed | `context/mod.rs:2204-2227`, `:474-481`, `:1481-1486` | ED-09 |
-
-ED-08's three facts (the `pub(crate)` prepared-plan store, `verify_plan` not seeing through
-`EXECUTE`, and what native SET/RESET do to the runtime and the baseline) are now restated in
-`engine/ddl/session.rs`'s own module doc and in `docs/STATEMENTS_SPEC.md` §6.5, like every other
-landed task's.
+No open task hangs off an unrestated fact any more. ED-08's three (the `pub(crate)` prepared-plan
+store, `verify_plan` not seeing through `EXECUTE`, and what native SET/RESET do to the runtime and
+the baseline) live in `engine/ddl/session.rs`'s module doc and `docs/STATEMENTS_SPEC.md` §6.5;
+ED-09's (the `FunctionFactory` seam, the body arriving as a planned `Expr`, and `DROP FUNCTION`
+deregistering across every registry) live in `engine/ddl/functions.rs`'s module doc and §6.6 — with
+one **correction** found while building it, recorded there because it changes what the statement
+accepts: DataFusion plans a function body against an *empty schema*, so the standard SQL
+`RETURN x + 1` does not plan at all. Only `$1` and `$x` do. ED-09 rewrites the bare form into the
+planner's own placeholder vocabulary on the parsed statement; do not re-derive this as "DataFusion
+supports named arguments".
 
 ## Legend
 ✅ done · 🟢 UI only · 🟡 partial · ⬜ todo · `[core ✓]` logic in `strata-core`.
