@@ -463,7 +463,9 @@ impl SettingsCtx {
         let answer = offload(move || {
             let mut ai = ai;
             let outcome = views::commit(&keys, &mut ai);
-            (outcome, ai)
+            // The snapshot comes back too — see the clear below. Returned rather than kept alive
+            // beside the worker so there is one copy of the typed secrets, not two.
+            (outcome, ai, keys)
         })
         .await;
         applying.set(false);
@@ -471,7 +473,7 @@ impl SettingsCtx {
         // The worker never answered — it could not start, or it panicked. That is not a fact
         // about the keystore, so it must not be reported as one, and the draft's `ai` has to come
         // back from somewhere: the copy that was moved in is gone, so this re-reads the live one.
-        let Some((landed_keys, ai)) = answer else {
+        let Some((landed_keys, ai, committed)) = answer else {
             let mut failed = self.failed;
             failed.set(Some(
                 "The settings could not be saved: a worker did not answer.".into(),
@@ -487,17 +489,22 @@ impl SettingsCtx {
             failed.set(Some(e.to_string()));
             return false;
         }
-        // **A key that has landed is no longer typed.** The keystore now holds it and the marker
-        // is in the draft, so the pasted text has no further job — and leaving it would make the
-        // *next* Apply in this window re-`put` every key it already stored.
+        // **A key that has landed is no longer typed — but only the ones that landed.**
         //
-        // A successful Apply closes the window, so the reachable case is the one where it does
-        // not: `write_config` failing leaves the window open to retry, and that retry must be a
-        // config write rather than a second round of keystore writes (a repeat Keychain prompt
-        // on macOS for a key the user entered once). Clearing here is safe precisely because
-        // `commit` returned `Ok` — the secrets are durable whether or not the file write is.
+        // The keystore holds them and their markers are in the draft, so the pasted text has no
+        // further job, and leaving it would make the *next* Apply in this window re-`put` every
+        // key it already stored (a repeat Keychain prompt for a key entered once). The reachable
+        // second Apply is the retry a failed `write_config` leaves the window open for.
+        //
+        // **Scoped to the snapshot, because this is no longer instantaneous.** `commit` ran on a
+        // worker and the window stayed live throughout — that is the point — so the user can type
+        // a key into another provider while it is in flight, and that keystroke lands in
+        // `ai_keys` immediately. A blanket `clear()` was right only while Apply was synchronous
+        // and nothing could arrive mid-flight; now it would wipe a key that was never in the
+        // snapshot, never stored, and never asked about — silently, with the box emptying itself
+        // as the user watched. So each entry goes only if it is still exactly what was committed.
         let mut typed = self.ai_keys;
-        typed.write().clear();
+        typed.write().forget_committed(&committed);
         let landed = write_config(self.config, &[ConfigChan::Settings], {
             let draft = draft.clone();
             move |cfg| draft.merge_onto(&seed, &mut cfg.settings)

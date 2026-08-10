@@ -44,14 +44,25 @@ impl TypedKeys {
         self.0.contains_key(&kind)
     }
 
-    /// Forget every typed key, because they have all landed.
+    /// Forget the keys `committed` holds — and only while they are still what was committed.
     ///
-    /// Called once [`commit`] has returned `Ok`: the keystore holds the secrets and the draft
-    /// holds their markers, so the pasted text is spent. Keeping it would make a second Apply in
-    /// the same window re-`put` keys it had already stored — reachable when a failed config write
-    /// leaves the window open to retry.
-    pub fn clear(&mut self) {
-        self.0.clear();
+    /// Called once [`commit`] has returned `Ok`: the keystore holds those secrets and the draft
+    /// holds their markers, so their pasted text is spent. Keeping it would make a second Apply
+    /// in the same window re-`put` keys it had already stored — reachable when a failed config
+    /// write leaves the window open to retry.
+    ///
+    /// **The comparison is the whole method.** Apply runs `commit` on a worker and the window
+    /// stays live while it does, so a key typed into another provider mid-flight is in this map
+    /// but was never in the snapshot, never stored, and never asked about. Clearing wholesale
+    /// would drop it silently — and the box would empty itself in front of the user, since it
+    /// mirrors this state. An entry that has changed since the snapshot is a *new* edit and
+    /// stays, so the next Apply commits it.
+    pub fn forget_committed(&mut self, committed: &TypedKeys) {
+        for (kind, landed) in committed.iter() {
+            if self.0.get(kind).is_some_and(|current| current == landed) {
+                self.0.remove(kind);
+            }
+        }
     }
 
     fn iter(&self) -> impl Iterator<Item = (&ProviderKind, &String)> {
@@ -147,13 +158,63 @@ mod tests {
         keys.set(kind, "sk-typed-once".into());
         assert!(keys.touched(kind));
 
-        // What `apply` does once `commit` returns `Ok`.
-        keys.clear();
+        // What `apply` does once `commit` returns `Ok`: the snapshot it handed the worker.
+        let committed = keys.clone();
+        keys.forget_committed(&committed);
 
         assert!(!keys.touched(kind), "the retry has nothing to store");
         let mut ai = Ai::default();
         commit(&keys, &mut ai).expect("nothing left to commit");
         assert!(ai.providers.is_empty(), "and nothing to write it into");
+    }
+
+    /// **A key typed while an Apply was in flight is not swept up by it.**
+    ///
+    /// `apply` snapshots the typed keys, hands them to a worker, and *awaits* — keeping the
+    /// window live on purpose. So the user can type into another provider before it returns, and
+    /// that keystroke is in this map without ever having been in the snapshot, stored, or asked
+    /// about. A blanket clear dropped it silently, emptying the box in front of them.
+    #[test]
+    fn a_key_typed_during_an_apply_survives_it() {
+        let mut keys = TypedKeys::default();
+        keys.set(ProviderKind::Anthropic, "sk-first".into());
+
+        // What the worker was given.
+        let committed = keys.clone();
+
+        // …and what the user typed while it was away.
+        keys.set(ProviderKind::Groq, "sk-typed-mid-flight".into());
+
+        keys.forget_committed(&committed);
+
+        assert!(
+            !keys.touched(ProviderKind::Anthropic),
+            "the committed key is spent"
+        );
+        assert_eq!(
+            keys.get(ProviderKind::Groq),
+            "sk-typed-mid-flight",
+            "the one that arrived mid-flight was never committed, so it stays"
+        );
+    }
+
+    /// The same rule on one provider: retyping a key while its own Apply is in flight is a *new*
+    /// edit, and the next Apply has to commit it rather than find it gone.
+    #[test]
+    fn a_key_retyped_during_its_own_apply_is_kept() {
+        let kind = ProviderKind::Anthropic;
+        let mut keys = TypedKeys::default();
+        keys.set(kind, "sk-old".into());
+        let committed = keys.clone();
+
+        keys.set(kind, "sk-corrected".into());
+        keys.forget_committed(&committed);
+
+        assert_eq!(
+            keys.get(kind),
+            "sk-corrected",
+            "what is in the box now is not what was stored"
+        );
     }
 
     /// **Asking about a provider's key must not create a row for it.**
