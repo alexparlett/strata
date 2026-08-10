@@ -169,7 +169,13 @@ pub struct AgentIdentity {
 }
 
 impl AgentIdentity {
-    /// **The in-process assistant** (AS-01), as the Agents pane attributes it.
+    /// **The in-process assistant** (AS-01), for whatever attributes it.
+    ///
+    /// Not the Agents pane: that pane lists the external clients connected to a project, and
+    /// the assistant is part of the app rather than connected to it — it is left out by
+    /// [`Agent::in_app`], a mark the app itself sets and no client can claim. This identity
+    /// is for everything below that: logs, and any surface that has to name the caller of a
+    /// tool.
     ///
     /// A constant this crate owns rather than something the pane passes in. Every other
     /// identity is a *claim* — what a client said it was at `initialize` — and there is no
@@ -197,6 +203,21 @@ impl AgentIdentity {
 pub struct Agent {
     pub id: AgentId,
     pub identity: AgentIdentity,
+    /// **This agent is part of the app rather than a client that dialled in** — the in-process
+    /// assistant, and nothing else.
+    ///
+    /// Carried here so the distinction reaches every [`Host`] on the call that first tells it
+    /// an agent exists, rather than being an id each surface has to remember and compare. That
+    /// is what makes the Agents pane's rule enforceable: the pane lists the *external* clients
+    /// working in a project, so a host records an in-app agent for ownership and cleanup like
+    /// any other and simply does not list it.
+    ///
+    /// **Minted at construction, never derived from anything a client sends**
+    /// ([`StrataTools::in_app`](crate::StrataTools::in_app)). It is false for every value a
+    /// transport builds, so an MCP client cannot set it — which the alternative,
+    /// name-matching [`AgentIdentity::assistant`], could not promise: an identity is a claim
+    /// made at `initialize`, so any client could have hidden itself by making the same one.
+    pub in_app: bool,
 }
 
 /// One **query session** — an agent's container for a sequence of runs, each replacing the

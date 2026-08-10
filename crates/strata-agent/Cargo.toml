@@ -21,13 +21,19 @@ rmcp = { version = "3.0.1", features = [
 ] }
 # The server's own runtime (the Engine pattern) + its listener. `io-std` is the headless
 # host's stdin/stdout: rmcp's `transport-io` enables it too, and naming it here is the point —
-# a feature we depend on is not one to inherit by luck.
+# a feature we depend on is not one to inherit by luck. **`time` is that rule applied to the
+# assistant's runtime**, which calls `enable_all()`: `enable_time` is `#[cfg(feature = "time")]`,
+# so without this the builder compiles and silently brings up a runtime with no timer, and the
+# first genai request panics with "time driver not enabled". It reaches us today only through
+# reqwest under genai — and the dev-dependency's `full` would hide the gap in tests while
+# release differed.
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "net",
     "sync",
     "macros",
     "io-std",
+    "time",
 ] }
 # `CancellationToken`: what stops the accept loop and every live MCP session on drop.
 # rmcp's own config field takes one, so this names a type already in the graph.
@@ -49,6 +55,26 @@ schemars = "1.0"
 # Saved queries are keyed by `Uuid`, and a tab handle is a `TabId` (a `Uuid`) on the wire.
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
+# The assistant's provider seam (AS-02): multi-provider chat with tools and streaming, and
+# nothing else — the loop, the transcript and the tool vocabulary are ours. Pinned exactly,
+# because an upgrade here changes what reaches somebody's model. `rustls-tls` is the default
+# feature and the one we want (no system OpenSSL, and the bundle stays self-contained);
+# `bedrock-sigv4` is off because the roster does not offer Bedrock — **not** for the cost, which
+# is nil here: `aws-config`, `aws-credential-types` and `aws-sigv4` are all already in this
+# graph at the same major, declared by `strata-core` for the S3 credential bridge.
+genai = "=0.7.0-beta.18"
+# `StreamExt::next` over genai's `ChatStream`, which is a plain `futures::Stream`. Already in
+# the graph via genai; named here because a dependency we call is not one to inherit by luck.
+futures = "0.3"
+# The assistant's one HTTP connection pool, built here and handed to every turn's genai client
+# (`ClientBuilder::with_reqwest`), so a conversation does not pay a TLS handshake per message.
+# `default-features = false` deliberately: the **TLS backend is genai's choice**, not ours — its
+# own `rustls-tls` default feature turns on `reqwest/rustls`, and it carries a `compile_error!`
+# against two backends at once. `http2` is named because the pool knobs we set are gated on it.
+reqwest = { version = "0.13", default-features = false, features = ["http2"] }
+# `Provider::check_base_url` judges an endpoint the same way the adapters will parse it, and
+# they parse with this (through reqwest, which does not re-export it).
+url = "2"
 
 [dev-dependencies]
 # The integration test speaks real MCP over the real transport, so it needs the client half

@@ -141,6 +141,13 @@ impl QuerySession {
 pub struct ConnectedAgent {
     pub id: AgentId,
     pub identity: AgentIdentity,
+    /// The app's own assistant rather than a client that dialled in (`Agent::in_app`, minted
+    /// in `strata-agent` and delivered on the call that opens a session).
+    ///
+    /// It is **held like any other agent** — the ownership check, the per-agent session cap
+    /// and the teardown on retraction all have to work for the assistant exactly as they do
+    /// for an MCP client — and simply not **listed**: see [`Agents::agents`].
+    pub in_app: bool,
     /// **Oldest session first** (canvas): the list reads as the order the agent opened them,
     /// so the ordinals below run 1, 2, 3 down the pane. The *runs* inside a session are the
     /// other way round, newest first, because that is where "what is it doing now" is read.
@@ -203,6 +210,7 @@ impl Agents {
                 self.agents.push_front(ConnectedAgent {
                     id: agent.id,
                     identity: agent.identity.clone(),
+                    in_app: agent.in_app,
                     sessions: VecDeque::new(),
                     next_ordinal: 1,
                 });
@@ -356,26 +364,48 @@ impl Agents {
         self.next_seq + 1
     }
 
-    /// Every connected agent, newest connection first — the projection the pane renders.
+    /// Every **connected** agent, newest connection first — the projection the pane renders,
+    /// and the enforcement point for "the Agents pane lists the clients that dialled in".
+    ///
+    /// The app's own assistant is held in this satellite like any other agent, because the
+    /// ownership check, the session cap and the teardown all have to work for it — but it is
+    /// not something that connected, so it is not listed. The rule is expressed once, here,
+    /// off a flag the core mints (`Agent::in_app`); nothing compares an id or a name, and a
+    /// client cannot claim its way out of the list. [`held`](Agents::held) is the unfiltered
+    /// view for the two callers that need one.
     pub fn agents(&self) -> impl Iterator<Item = &ConnectedAgent> {
+        self.agents.iter().filter(|a| !a.in_app)
+    }
+
+    /// Every agent this satellite holds, the assistant included — for the bookkeeping that
+    /// must not care where an agent came from (attribution in the event log).
+    pub fn held(&self) -> impl Iterator<Item = &ConnectedAgent> {
         self.agents.iter()
     }
 
     /// How many agents are working in this project. The pane's empty state and the rail's
-    /// dress ask this; there is no `is_empty` beside it, for `Log::len`'s reason.
+    /// dress ask this, so it counts what the pane lists; there is no `is_empty` beside it,
+    /// for `Log::len`'s reason.
     pub fn len(&self) -> usize {
-        self.agents.len()
+        self.agents().count()
     }
 
-    /// Every query session in flight across every agent — what the close confirm asks the
-    /// engine about to tell "an agent is running a query" from "you are".
+    /// Every query session in flight for agents on one side of the pane's own line: `false` is
+    /// the MCP clients the Agents pane lists, `true` is the app's own assistant.
+    ///
+    /// What the close confirm asks the engine about to tell "an agent is running a query" from
+    /// "you are" — and it takes a side because it also has to tell both from "the assistant
+    /// is", which is a different sentence: "an agent" would point the user at a pane that says
+    /// nobody is connected. The discriminator is [`ConnectedAgent::in_app`], the same mark
+    /// [`Agents::agents`] filters on, so one rule answers both.
     ///
     /// Tombstones included, deliberately: a session closed while its run was still being
     /// dispatched is one the engine may well still be executing, and the confirm's question
     /// is about work that is about to be destroyed, not about handles that still answer.
-    pub fn sessions(&self) -> Vec<QuerySessionId> {
+    pub fn sessions_of(&self, in_app: bool) -> Vec<QuerySessionId> {
         self.agents
             .iter()
+            .filter(|a| a.in_app == in_app)
             .flat_map(|a| a.sessions.iter().map(|s| s.id))
             .collect()
     }
@@ -423,6 +453,7 @@ mod tests {
                 name: name.into(),
                 version: "1.0".into(),
             },
+            in_app: false,
         }
     }
 
@@ -541,7 +572,10 @@ mod tests {
 
         assert_eq!(agents.closed(who.id, session), Closed::Now);
         assert!(!agents.holds(who.id, session));
-        assert!(agents.sessions().is_empty(), "nothing is left behind");
+        assert!(
+            agents.sessions_of(false).is_empty(),
+            "nothing is left behind"
+        );
     }
 
     /// **A close that races a dispatch does not orphan the workspace.** This is the AA-03c
@@ -566,7 +600,7 @@ mod tests {
         assert!(!agents.holds(who.id, session));
         assert_eq!(agents.closed(who.id, session), Closed::NoSuchSession);
         // But the confirm still counts it, because the engine may still be executing it.
-        assert_eq!(agents.sessions(), vec![session]);
+        assert_eq!(agents.sessions_of(false), vec![session]);
 
         // The settle is what retires it, and it names the session so the caller can.
         let retire = agents.run_settled(
@@ -580,7 +614,7 @@ mod tests {
             },
         );
         assert_eq!(retire, Some(session));
-        assert!(agents.sessions().is_empty());
+        assert!(agents.sessions_of(false).is_empty());
         assert_eq!(agents.len(), 1, "the agent itself stays connected");
     }
 
@@ -608,6 +642,56 @@ mod tests {
             agents.run_settled(who.id, session, slow, RunOutcome::Plan { analyze: false }),
             Some(session)
         );
+    }
+
+    /// **The Agents pane lists the clients that dialled in.** The app's own assistant is held
+    /// like any other agent — its sessions are owned, capped and torn down the same way, and
+    /// `list_query_sessions` must still answer for it — and it is left out of the listing
+    /// alone. The flag comes from the core (`Agent::in_app`), so nothing here compares an id
+    /// or a name and no client can claim its way out of the pane.
+    #[test]
+    fn the_in_app_assistant_is_held_but_never_listed() {
+        let mut agents = Agents::default();
+        let dialled = agent("claude-code");
+        let assistant = Agent {
+            id: AgentId::new(),
+            identity: AgentIdentity {
+                name: "strata-assistant".into(),
+                version: "0.2.0".into(),
+            },
+            in_app: true,
+        };
+        let mine = QuerySessionId::new();
+        agents.opened(&dialled, QuerySessionId::new());
+        agents.opened(&assistant, mine);
+
+        // Listed: the client only. The rail badge and the pane's empty state agree.
+        let listed: Vec<&str> = agents.agents().map(ConnectedAgent::name).collect();
+        assert_eq!(listed, vec!["claude-code"]);
+        assert_eq!(agents.len(), 1);
+
+        // Held: both — so the assistant owns its session and can be retracted.
+        assert_eq!(agents.held().count(), 2);
+        assert!(agents.holds(assistant.id, mine));
+        assert!(agents.knows(assistant.id));
+        assert_eq!(agents.gone(assistant.id), vec![mine]);
+    }
+
+    /// A client that names itself after the assistant is still a client. The pane's rule keys
+    /// on a flag the core mints, never on the identity, which is a claim made at `initialize`.
+    #[test]
+    fn claiming_the_assistants_name_does_not_hide_a_client() {
+        let mut agents = Agents::default();
+        let liar = Agent {
+            id: AgentId::new(),
+            identity: AgentIdentity {
+                name: "strata-assistant".into(),
+                version: "0.2.0".into(),
+            },
+            in_app: false,
+        };
+        agents.opened(&liar, QuerySessionId::new());
+        assert_eq!(agents.len(), 1);
     }
 
     /// An ordinary settle retires nothing — the deferred teardown is the tombstone's alone.
@@ -687,7 +771,7 @@ mod tests {
         assert_eq!(released, expected);
 
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents.sessions(), vec![kept]);
+        assert_eq!(agents.sessions_of(false), vec![kept]);
         // Retracting twice is a no-op, not a panic — a `Drop` can race a close.
         assert!(agents.gone(going.id).is_empty());
     }
@@ -834,6 +918,7 @@ mod tests {
             &Agent {
                 id: AgentId::new(),
                 identity: AgentIdentity::default(),
+                in_app: false,
             },
             QuerySessionId::new(),
         );

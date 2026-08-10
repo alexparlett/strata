@@ -127,9 +127,11 @@ fn answer(
             // The satellite hands back whatever the per-agent cap displaced, so a session it
             // has stopped showing does not go on holding an engine workspace.
             let evicted = agents.write().opened(&agent, session);
+            // `held`, not `agents`: this is attribution for the event log, and the assistant
+            // is left out of the pane's *listing* only, never out of the record.
             let named = agents
                 .read()
-                .agents()
+                .held()
                 .find(|a| a.id == agent.id)
                 .map(|a| a.name().to_string())
                 .unwrap_or_default();
@@ -217,11 +219,31 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
             if !agents.peek().knows(agent) {
                 return;
             }
+            // Read before the write takes the row away — and off `held`, not `agents`, for
+            // the reason the open entry gives: the assistant is left out of the pane's
+            // *listing* only, never out of the record.
+            let gone = agents
+                .peek()
+                .held()
+                .find(|a| a.id == agent)
+                .map(|a| (a.name().to_string(), a.in_app));
             let released = agents.write().gone(agent);
             for session in released {
                 engine.cleanup_ws(session.into());
             }
-            log_event(log, LogLevel::Info, "An agent disconnected");
+            log_event(
+                log,
+                LogLevel::Info,
+                match gone {
+                    // **The assistant never dialled in, so it cannot disconnect.** Its
+                    // "connection" is the pane's own mount inside this window, and reporting
+                    // that as a disconnect describes a client that was never there — the same
+                    // reason it is kept out of the Agents pane.
+                    Some((named, true)) => format!("{named} stopped"),
+                    Some((named, false)) => format!("{named} disconnected"),
+                    None => "An agent disconnected".to_string(),
+                },
+            );
         }
     }
 }
@@ -321,7 +343,10 @@ fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError>
 /// for it deserves the authority rather than the observation.
 fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessionInfo> {
     agents
-        .agents()
+        // `held`, not `agents`: this answers `list_query_sessions` for the agent that asked,
+        // and the assistant must see its own sessions. The pane's listing is the only thing
+        // that leaves it out.
+        .held()
         .find(|a| a.id == agent)
         .into_iter()
         .flat_map(|a| a.sessions.iter())
@@ -528,10 +553,12 @@ mod tests {
                 name: "claude-code".into(),
                 version: "2.1.4".into(),
             },
+            in_app: false,
         };
         let theirs = Agent {
             id: AgentId::new(),
             identity: AgentIdentity::default(),
+            in_app: false,
         };
         let empty = QuerySessionId::new();
         let used = QuerySessionId::new();

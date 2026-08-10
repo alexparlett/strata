@@ -338,6 +338,11 @@ impl Drop for Busy {
 struct Connection<H: Host> {
     host: Arc<H>,
     agent: AgentId,
+    /// This value is the app's own assistant rather than something that dialled in — see
+    /// [`Agent::in_app`]. Set once, by [`StrataTools::in_app`], and inherited by nothing: a
+    /// transport builds its values through [`StrataTools::new`] and [`StrataTools::connection`],
+    /// so every agent on a wire is false here by construction.
+    in_app: bool,
 }
 
 impl<H: Host> Drop for Connection<H> {
@@ -384,13 +389,28 @@ impl<H: Host> Clone for StrataTools<H> {
 }
 
 impl<H: Host> StrataTools<H> {
-    /// The vocabulary over `host`, as one agent — what an in-process caller (the chat pane,
-    /// AA-06) holds directly, and what a transport clones connections from.
+    /// The vocabulary over `host`, as one agent — what a transport clones connections from.
     pub fn new(host: Arc<H>) -> Self {
+        Self::rooted(host, false)
+    }
+
+    /// The vocabulary over `host` **as the app's own assistant** (AS-02) — the same ten tools,
+    /// marked so every [`Host`] can tell it from a client that dialled in.
+    ///
+    /// The mark rides [`Agent::in_app`] to `open_query_session`, which is where a host first
+    /// learns an agent exists, so the Agents pane can leave it out of its listing without
+    /// anybody holding an id to compare. It changes nothing else: the assistant is still one
+    /// more agent to the policy gate, the run cache, the scoping key and the query sessions.
+    pub fn in_app(host: Arc<H>) -> Self {
+        Self::rooted(host, true)
+    }
+
+    fn rooted(host: Arc<H>, in_app: bool) -> Self {
         StrataTools {
             connection: Arc::new(Connection {
                 host: Arc::clone(&host),
                 agent: AgentId::new(),
+                in_app,
             }),
             host,
             runs: Arc::new(Mutex::new(HashMap::new())),
@@ -410,6 +430,8 @@ impl<H: Host> StrataTools<H> {
             connection: Arc::new(Connection {
                 host: Arc::clone(&self.host),
                 agent: AgentId::new(),
+                // A connection is something that dialled in, always.
+                in_app: false,
             }),
         }
     }
@@ -766,6 +788,7 @@ impl<H: Host> StrataTools<H> {
         let agent = Agent {
             id: agent,
             identity,
+            in_app: self.connection.in_app,
         };
         let session = self.host.open_query_session(&project.root, &agent).await?;
         Ok(QuerySessionResult {
@@ -1043,8 +1066,8 @@ impl<H: Host> StrataTools<H> {
 
     /// Open a query session and return its handle: a place your queries run in sequence,
     /// each replacing the last. It is yours, not one of the user's editor tabs — nothing you
-    /// do here disturbs what they are working on. The user watches your sessions in the
-    /// Agents pane and can promote any query you ran into their own editor.
+    /// do here disturbs what they are working on. Where Strata's window is open, the user can
+    /// see what you run and promote any query you ran into their own editor.
     #[tool(name = "open_query_session")]
     async fn open_query_session_tool(
         &self,
@@ -1121,8 +1144,8 @@ impl<H: Host> StrataTools<H> {
 Read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
 Start with list_tables and describe_table to learn the catalog, validate to check SQL \
 cheaply, then open_query_session and run. Your work lives in query sessions of your own, \
-which the user watches in the Agents pane and can promote into their editor — so it never \
-disturbs the tabs they are working in. Open a session per line of investigation; each run \
+which the user can watch and promote into their editor wherever Strata's window is open — so \
+it never disturbs the tabs they are working in. Open a session per line of investigation; each run \
 in a session replaces the last one's result."
 )]
 impl<H: Host> ServerHandler for StrataTools<H> {}
@@ -1228,6 +1251,43 @@ mod tests {
             page_size: None,
             project: None,
         }
+    }
+
+    /// **The in-app mark is minted, never claimed.** It rides `Agent::in_app` to the host on
+    /// the call that opens a session, so a surface can tell the app's own assistant from a
+    /// client without holding an id — and a transport-built value is false by construction, so
+    /// a client calling itself `strata-assistant` cannot set it.
+    #[tokio::test]
+    async fn only_an_in_app_value_opens_in_app_agents() {
+        let root = scratch("inapp");
+        let host = MockHost::new(vec![MockProject::new("sales", &root)]);
+
+        let assistant = StrataTools::in_app(Arc::clone(&host));
+        assistant
+            .open_query_session(AgentIdentity::assistant(), no_project())
+            .await
+            .unwrap();
+
+        let dialled = StrataTools::new(Arc::clone(&host));
+        dialled
+            .open_query_session(claude(), no_project())
+            .await
+            .unwrap();
+
+        // A client that copies the assistant's identity is still not in-app.
+        let liar = dialled.connection();
+        liar.open_query_session(AgentIdentity::assistant(), no_project())
+            .await
+            .unwrap();
+
+        let opened = host.opened();
+        assert_eq!(opened.len(), 3);
+        assert_eq!(
+            opened.iter().filter(|a| a.in_app).count(),
+            1,
+            "only the value built by `in_app` is marked: {opened:?}"
+        );
+        assert!(opened[0].in_app, "the assistant opened first");
     }
 
     // --- projects ---------------------------------------------------------

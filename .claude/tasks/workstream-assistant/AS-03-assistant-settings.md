@@ -84,9 +84,11 @@ carries a plain "local" marker the AS-04 selector can render.
   counter, never the name** (AGENTS.md §2). Persisted identity is the entry `Uuid`.
 - **Built from `components::form`** — `Form` > `Row` > control, never bespoke rows (§3).
 - **A name two surfaces agree on is generated from one table**: the provider-kind enum, its
-  display names, its env-var names, its field requirements and its effort support live in
-  **one** place AS-02, this pane and AS-04 all read (the AS-02 config module is the natural
-  home — `strata-agent` is already a dependency direction the app has).
+  display names, its env-var names, its field requirements and its effort rule live in **one**
+  place AS-02, this pane and AS-04 all read (`strata_agent::assistant::provider::PROVIDERS`;
+  `strata-agent` is already a dependency direction the app has). Note effort is asked per
+  **model** (`ProviderKind::efforts(model)`), so this pane stores no effort at all — the pick
+  is AS-04's, on the conversation.
 - **User-facing text in the IDE register** — terse, single-quoted identifiers, no hedging.
 
 ## What is NOT this task

@@ -91,8 +91,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   in-app MCP server, the Agents pane (an agent's runs are dispatched straight at the engine and
   shown in their own surface, promotable into a **new** tab — never a press on the user's tabs),
   the Settings pane, and the headless `strata mcp <project>` stdio host. **AA-06 (the chat
-  pane) graduated to its own workstream** (below). Docs: `docs/AGENT_ACCESS_SPEC.md` (as-built,
-  dataflow diagram inlined).
+  pane) graduated to its own workstream** (below). **AA-07 ⬜** reopened the folder: four of the
+  ten tools answer with a list bounded only by the user's data, and the assistant's result cap
+  cuts them positionally while naming a recovery three of them do not have. Docs:
+  `docs/AGENT_ACCESS_SPEC.md` (as-built, dataflow diagram inlined).
 - **Assistant** ([`workstream-assistant/`](workstream-assistant/README.md), AS) — the native
   chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
   over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
@@ -102,10 +104,14 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   split settled 2026-08-09), the pane, and the **secret store** (OS keystore; config holds
   references, never keys). **01 ✅** (the ten tools are `StrataTools`' own public methods and
   the `#[tool]` items are wrappers over them; `manifest()` derives the model-facing offer from
-  the router that answers `tools/list`) and **05 ✅** (`strata_core::secret` — a `SecretRef` in
-  config, a `Secret` with no serde path at all); 02–04 open. Decision records in that
-  workstream's README; the doc records the loop and pane as not built
-  (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
+  the router that answers `tools/list`), **02 ✅** (`strata_agent::assistant` — one provider
+  table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
+  the assistant's own eleventh tool for handing the user a statement to execute) and **05 ✅**
+  (`strata_core::secret` — a `SecretRef` in config, a `Secret` with no serde path at all); 03
+  and 04 open. Two corrections settled with 02 and recorded in that workstream's README: the
+  Agents pane is for **headless MCP clients only** (the assistant is kept out of it by its
+  minted `AgentId`), and a runnable statement is a **tool call**, not a markdown convention.
+  The doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
@@ -132,11 +138,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 1. **Editor statements** (ED-11) — the completion offer that catches up with every statement the
    editor now runs.
-2. **Agent access AA-06** — the chat pane (starts with the deferred brain decision; read AA-03c's
-   identity finding first).
-3. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
+2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
+   provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
+   vocabulary, and AA-03c's identity finding before touching query sessions.
+3. **Agent access AA-07** — paging/filtering for the tools whose answers have no bound but the
+   user's data. Independent of the two above; it is a shared-wire change, so it wants doing
+   before more surfaces are built on the vocabulary as it stands.
+4. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
-4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
+5. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
 
 ## Sourcing

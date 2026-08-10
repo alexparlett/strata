@@ -570,6 +570,7 @@ mod tests {
                 name: name.into(),
                 version: "2.1.4".into(),
             },
+            in_app: false,
         }
     }
 
