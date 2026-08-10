@@ -30,7 +30,7 @@
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{from_value, to_string, Error as JsonError, Map, Value};
 
 use crate::error::AgentError;
 use crate::host::{AgentIdentity, Host};
@@ -285,7 +285,12 @@ async fn dispatch<H: Host>(
 /// every tool that takes a `project` and a no-op for the one that does not. Where there is no
 /// scope (a caller that is not a window — the tests), nothing is invented and the vocabulary's
 /// own ambiguity rule answers instead.
-fn scoped(arguments: Value, scope: &Scope) -> Value {
+///
+/// **A fixed point**, deliberately: it overwrites rather than fills in, so applying it twice
+/// says exactly what applying it once says. That is what lets the turn scope the arguments for
+/// the step card *before* the call without the card and the call becoming two normalizations
+/// to keep in step — the card shows what ran because it is the same value.
+pub(super) fn scoped(arguments: Value, scope: &Scope) -> Value {
     let Some(project) = scope.project.as_deref() else {
         return arguments;
     };
@@ -317,14 +322,14 @@ fn only(scope: &Scope, mut listed: ProjectsResult) -> ProjectsResult {
 /// Read a tool's arguments, or say what is wrong with them **to a model**: name the tool, quote
 /// serde's own complaint, and point at the schema it was given rather than at a Rust type.
 fn params<T: DeserializeOwned>(name: &str, arguments: Value) -> Result<T, AgentError> {
-    serde_json::from_value(arguments).map_err(|e| AgentError::Query(bad_arguments(name, &e)))
+    from_value(arguments).map_err(|e| AgentError::Query(bad_arguments(name, &e)))
 }
 
 /// The one wording for arguments that did not fit a tool's schema — shared with
 /// [`offer_sql`](super::offer), which is the eleventh tool and must teach the model the same
 /// recovery as the ten. Here rather than at each site for `AgentError::no_such_query_session`'s
 /// reason: a message written twice is a message that drifts the moment either is tuned.
-pub(super) fn bad_arguments(name: &str, why: &serde_json::Error) -> String {
+pub(super) fn bad_arguments(name: &str, why: &JsonError) -> String {
     format!(
         "The arguments for '{name}' did not fit its schema: {why}. Send the arguments the \
          tool's schema names."
@@ -341,7 +346,7 @@ fn answer<T: Serialize>(name: &str, result: Result<&T, &AgentError>) -> Result<S
 }
 
 fn encode<T: Serialize>(name: &str, value: &T) -> Result<String, AgentError> {
-    serde_json::to_string(value)
+    to_string(value)
         .map_err(|e| AgentError::Query(format!("The '{name}' result could not be encoded: {e}.")))
 }
 
@@ -351,7 +356,8 @@ mod tests {
     use std::{env, fs, process};
 
     use serde_json::json;
-    use strata_core::engine::TableSpec;
+    use strata_core::engine::sql::Blocked;
+    use strata_core::engine::{TableSpec, CANCELLED};
     use strata_model::SourceFormat;
 
     use crate::host::{CatalogEntry, RegState};
@@ -521,17 +527,14 @@ mod tests {
         .await;
         assert!(ran.failed);
         assert_eq!(ran.facts.sql.as_deref(), Some(sql));
-        assert_eq!(
-            ran.answer,
-            strata_core::engine::sql::Blocked::CreateTable.editor_message()
-        );
+        assert_eq!(ran.answer, Blocked::CreateTable.editor_message());
     }
 
     /// A stop is a status, and the card must not dress it as a fault.
     #[tokio::test]
     async fn a_stopped_run_is_not_a_failure() {
         let root = scratch("stopped");
-        let project = MockProject::new("sales", &root).settling(strata_core::engine::CANCELLED);
+        let project = MockProject::new("sales", &root).settling(CANCELLED);
         let tools = StrataTools::new(MockHost::new(vec![project]));
         let scope = Scope {
             project: Some(root.display().to_string()),
@@ -547,9 +550,6 @@ mod tests {
         )
         .await;
         assert!(!ran.failed);
-        assert_eq!(
-            ran.facts.stopped.as_deref(),
-            Some(strata_core::engine::CANCELLED)
-        );
+        assert_eq!(ran.facts.stopped.as_deref(), Some(CANCELLED));
     }
 }

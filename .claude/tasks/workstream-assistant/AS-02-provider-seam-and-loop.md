@@ -34,30 +34,58 @@ production signature is shaped for it.
 `genai` adapter. Settings' form and the composer footer both read it; neither restates it. A
 kind added without a row fails to compile (`ProviderKind::info` is a match).
 
-**Effort is offered per model, and the split is the whole design.** *Whether the control is
-offered* is decided by the kind's `Efforts` rule against the model in hand (`Never` for Ollama,
-`Always` for the compatible endpoint, `Only(&[..])` elsewhere) — because reasoning is a model
-capability, not a provider one, and a per-kind answer is wrong in both directions: it hides
+**Effort is offered per model *and* per rung, and the split is the whole design.** The kind's
+`Efforts` rule answers against the model in hand (`Never` for Ollama, `Always` for the
+compatible endpoint, `Only(&[Rungs])` elsewhere) — because reasoning is a model capability, not
+a provider one, and a per-kind answer is wrong in both directions: it hides
 `claude-opus-4-5`'s working control and offers `claude-sonnet-4-5` one that breaks the turn. A
-`Selection` carrying a rung the model does not offer is refused, naming the model. *What a rung
-means* for a model that has one stays `genai`'s, verified at the pin: its Anthropic adapter
-already knows `xhigh` needs Opus 4.7+ and downgrades otherwise, its Gemini adapter already knows
-`gemini-3` takes a thinking *level* where 2.5 takes a *budget*.
+`Selection` carrying a rung the model does not offer is refused, naming the model.
 
-`Only` is **default-closed**, and that is the safety argument for keeping name fragments at all:
-they will fall behind what the providers ship, and falling behind has to cost a knob the user
-cannot reach yet — an omission they can report — rather than a menu whose every setting the
-provider refuses. Matching is `contains`, the same way genai matches model names, so the two
-agree about what a name means.
+The answer is a **set of rungs** rather than a yes/no, because `genai` resolves the vendors'
+disagreement about the top of the ladder silently: it clamps `Max` to `"high"` for Anthropic and
+Gemini, and passes it through verbatim for OpenAI, which has no `max` at all. Offering the two
+top rungs where they do not land would put a label on the footer that was not what got sent —
+the same "a field silently ignored is a lie on screen" the base URL and the key are refused for.
+So Anthropic's newest models get all five, and everything else gets `Low · Medium · High`.
+
+**Anthropic's list is narrowed by a second rule: a rung must not turn thinking *on*.** genai
+maps an effort to `output_config.effort`, which for a model supporting *adaptive* thinking with
+it off by default is what enables thinking — after which the model answers with a thinking block
+genai's Anthropic streamer captures but never puts back, and Anthropic rejects the next tool
+round. So `claude-opus-4-6`, `-4-7`, `-4-8` and `claude-sonnet-4-6` are excluded: the control
+would work once and then fail every turn that calls a tool. What is left is safe for opposite
+reasons — `claude-opus-4-5` takes an effort and has no adaptive thinking to enable; Sonnet 5,
+Opus 5, Fable and Mythos think already, so a rung changes depth and not kind.
+
+`Only` is **default-closed**, which is the safety argument for keeping name lists at all: they
+will fall behind what the providers ship, and falling behind has to cost a knob the user cannot
+reach yet — an omission they can report — rather than a menu whose settings the provider
+refuses. It is not the *complete* argument, because `contains` also over-matches, which is what
+`Rungs::except` is for: `gpt-5-chat-latest` contains `gpt-5` and is the non-reasoning chat
+model, and `o1-mini`/`o1-preview` predate `reasoning_effort` entirely.
 
 The rungs are `Low · Medium · High · XHigh · Max`, matching `genai`'s keyword variants;
 `Budget(u32)`, `Minimal` and `None` are deliberately not offered (a token budget means nothing
 across providers, `Minimal` is one vendor's spelling of `Low`, and `None` is what an unset
 effort already says).
 
-**Three refusals that are `Selection`'s alone**, all answered before a socket opens: a base URL
-on a kind that owns its endpoint, a key on a kind that sends none, and an effort the **model**
-does not offer. Each is a field silently ignored otherwise, which is a lie on screen.
+**Four refusals that are `Selection`'s alone**, all answered before a socket opens: a base URL
+on a kind that owns its endpoint, a key on a kind that sends none, an effort the **model** does
+not offer, and a model whose own name ends in a reasoning keyword. That last one is
+`ModelReadsAsEffort`: with no explicit effort set, the Anthropic and OpenAI adapters parse a
+trailing `-<keyword>` off the name and send the *prefix* as the model, so `qwen3-max` on a
+compatible endpoint quietly queries `qwen3`. The keyword list is `genai`'s own
+(`ReasoningEffort::from_model_name`, asked rather than copied) so the guard cannot fall out of
+step with the parse it guards. Each of the four is a field silently ignored otherwise, which is
+a lie on screen.
+
+**The request-level cache breakpoint is Anthropic's alone.** genai reads the same
+`with_cache_control` for the OpenAI family as `prompt_cache_retention: "in_memory"` on the
+request body — a field an arbitrary compatible endpoint may well 400 on, for a caching mode
+nobody asked for — and drops it on Gemini and Ollama. `with_capture_reasoning_content` is
+likewise conditional, on the model having rungs at all: on Gemini it also turns on
+`includeThoughts`, which a model with no thinking config refuses. "Does this model reason" is a
+question the table already answers, so both read it rather than growing a second list.
 
 **`Provider::check_base_url` is the one copy of the URL rule** (`Provider::check_address`'s
 precedent), called by client construction *and* available to AS-03's form. Its load-bearing
@@ -85,9 +113,25 @@ cannot print it.
 
 ### The loop
 
-`turn::run` → `Settle` (`Answered` · `Failed(String)` · `Cancelled` · `StoppedAtCap`). The
-outcome is delivered twice and identically — as the last `TurnEvent` and as the return value —
-never one derived from the other. `MAX_TOOL_ROUNDS` is 32.
+`turn::run` → `Settle` (`Answered` · `Truncated` · `Failed(String)` · `Cancelled` ·
+`StoppedAtCap` · `Oversized`). The outcome is delivered twice and identically — as the last
+`TurnEvent` and as the return value — never one derived from the other.
+
+**Two runaway backstops, because a loop runs away two ways.** `MAX_TOOL_ROUNDS` (32) bounds how
+many rounds one send may take; `MAX_TURN_RESULTS` (five results at the per-result cap) bounds
+how much those rounds may bring back. The second exists because `MAX_TOOL_RESULT` bounds one
+answer and says nothing about thirty of them — a model walking a wide schema calls
+`describe_table` per table, each answer under the cap and the sum past any context window. And a
+`Conversation` cannot be trimmed, so the turn that overran does not just fail: every later send
+is too large as well. The budget is checked *before* each call, so the answer that would overrun
+is never fetched, and the calls that will not run are still answered to the model — same reason
+a cancel answers them.
+
+**A bounded tool result is still a JSON document.** Slicing an over-cap answer mid-object hands
+the model a half-brace to guess at, and a model that cannot parse the answer re-runs the call,
+which produces the same oversized answer. So the cut result is replaced by an object that *says*
+it was cut and carries the head as a string field, with the recovery named in the vocabulary's
+own terms (`read_page`).
 
 **Two transcripts, and they are not the same list.** `Conversation` is the *model's* memory
 (provider vocabulary, tool calls and results, opaque outside the crate); the pane's transcript
@@ -111,6 +155,15 @@ abandons, and aborts the detached task and retires what it materialized. What a 
 leave is a conversation the next send cannot use — an assistant message with tool calls and no
 results is a request every provider rejects — so a cancel **answers the outstanding calls**
 with "the user stopped this turn" and only then settles.
+
+**A stop keeps the half-answer the user already read.** The captured content a turn normally
+commits from only exists at the stream's `End`, which a cancel never reaches, so the deltas are
+also accumulated as they are forwarded and pushed as the assistant's message when a stop lands
+mid-stream. Without it a stopped turn committed nothing at all — `Staged::commit` drops a turn
+whose only message is the user's question — and the next send carried on from before a question
+whose answer is still on screen. The step card's stop reason is the engine's own `CANCELLED`,
+not a sentence typed at the call site, because every other value in `Facts` came off
+`RunResult::Stopped`.
 
 **Errors pass through.** A tool error goes back to the model as that tool's result, verbatim
 (the design working). Only a provider or transport fault fails the turn, with the provider's own
@@ -146,10 +199,13 @@ client can be looking at any of several windows, and a chat pane belongs to exac
 Settled 2026-08-09, overturning AS-01's note. That pane answers "which external clients are
 connected to my project right now"; the assistant is part of the app, not connected to it, and
 its runs show as step cards in the transcript instead. The discriminator is
-**`StrataTools::agent_id()`** — the id the app itself minted for the pane — not the identity's
-name: an identity is a claim any MCP client makes at `initialize`, so a name-keyed rule would let
-a client make itself invisible by calling itself `strata-assistant`. Excluding it is AS-04's
-wiring; the accessor and the reasoning are here. Two model-facing strings lost their "in the
+**`Agent::in_app`** — a mark `StrataTools::in_app` mints and every `Host` receives on the call
+that opens a session — not the identity's name: an identity is a claim any MCP client makes at
+`initialize`, so a name-keyed rule would let a client make itself invisible by calling itself
+`strata-assistant`. The exclusion is **enforced here, in the core**, not owed to AS-04:
+`Agents::agents` filters, `Agents::held` is the unfiltered view `list_query_sessions` and the
+log's attribution read, and `Agents::sessions_of` is the same line for the close confirm's
+`Whose::Assistant` arm. Two model-facing strings lost their "in the
 Agents pane" clause so they stay true on all three transports (`open_query_session`'s doc, the
 handler `instructions`).
 
@@ -190,15 +246,20 @@ one taught is recorded here because most of them are shapes that read as obvious
   user's question dangling with no reply, and the whole history was deep-cloned under the lock
   every round. `Staged` removes all three, and it is also what makes `shutdown_background`
   safe: a task dropped mid-flight has committed a whole block or nothing.
-- **Anthropic's effort ladder was emptied here, and that was itself wrong** — see the per-model
-  entry below. The claim was that enabling thinking breaks the next tool round because genai
-  never returns the thinking block. The mechanism is real (its streamer hardcodes
+- **Anthropic's effort ladder was emptied, then re-enabled entire, and both were wrong.** The
+  claim was that setting an effort breaks the next tool round because genai never returns the
+  thinking block. The mechanism is real (its streamer hardcodes
   `captured_thought_signatures: None` and its serializer drops the parts, in 0.7 as in 0.6.5),
-  but the consequence was asserted from the API's documented rule rather than verified, and it
-  does not hold: genai's own notes say thinking is on by default for Sonnet 5 and always on for
-  Fable and Mythos, so a fatal round-trip requirement would break Anthropic tool use on those
-  models whether or not an effort is set. Kept as a record of the wrong turn, because the shape
-  of the error — a verified mechanism carrying an unverified consequence — is the reusable part.
+  but the first version applied it to every Claude model and the correction then withdrew it
+  from every Claude model — each time asserting one answer for a question that is per model.
+  The rule that survives verification: it bites exactly where our effort *turns thinking on*,
+  which is a model that supports adaptive thinking and has it off by default —
+  `claude-opus-4-6`, `-4-7`, `-4-8`, `claude-sonnet-4-6`. It does not bite where thinking is
+  already on (Sonnet 5, Opus 5, Fable, Mythos: a fatal round-trip requirement would break their
+  tool use with or without us) nor where there is no thinking to enable (`claude-opus-4-5`).
+  Kept in full because the reusable part is the shape of *both* errors: a verified mechanism
+  carrying an unverified consequence, and then an over-correction that threw out the mechanism
+  along with the consequence.
 - **`capture_reasoning_content` is not a display option.** It is what makes genai's OpenAI
   Responses adapter request and record the encrypted reasoning item, without which a gpt-5
   tool loop re-sends its calls with the reasoning missing in front of them. Gemini captures
@@ -234,12 +295,47 @@ one taught is recorded here because most of them are shapes that read as obvious
   feature is declared rather than inherited, `Running` uses `tokio_util`'s `DropGuard`, a
   cancelled `JoinError` settles as `Cancelled`, pinned context is fenced as attached data rather
   than run together with the question, an empty ask is refused before a socket opens,
-  `ProviderKind::all()` reads the table instead of being a second list, and the env check uses
-  `var_os` so the key is not copied onto our heap to be looked at.
+  `ProviderKind::all()` reads the table instead of being a second list, and the env key check
+  happens before a socket opens rather than arriving as a 401.
 
 The test suite grew with each: the stub now records the path and the `Authorization` header,
 fails an unscripted request instead of answering an empty reply, and can serve a 4xx, and the
 cancel test waits on `Engine::is_running` rather than a fixed sleep.
+
+## Corrected by a second review (2026-08-10) — do not re-introduce
+
+A second max-effort pass, mostly over what the two commits above had just changed:
+
+- **An effort rule is a set of rungs, not a boolean** — the per-rung half of "offered per model"
+  was never built, so every model with a control was offered all five and `genai` quietly
+  clamped or forwarded whatever did not fit. See the selection section.
+- **A model name that reads as an effort is refused, not silently rewritten** — the
+  `ModelReadsAsEffort` arm, above.
+- **An option is scoped to the adapter its reasoning is about.** `with_cache_control` was set
+  for all five kinds under a comment that was true of one; `with_capture_reasoning_content` was
+  set flat, which sends Gemini `includeThoughts` for models that refuse it.
+- **`contains` over-matches, and default-closed does nothing about that.** `Rungs::except`.
+- **A stop keeps the prose the user already read**, and the step card's stop reason is the
+  engine's word rather than one typed at the call site.
+- **A step card shows the arguments that will run**, not the ones the model sent: the scope
+  overwrites `project`, so a card quoting the request could name a project the run never
+  touched. `dispatch::scoped` is a fixed point, which is what lets the card and the call share
+  one value.
+- **A tool result is bounded *per turn* as well as per result**, and a bounded result is still
+  parseable JSON — both above.
+- **A provider's error is bounded before it reaches the transcript.** A gateway 5xx is an HTML
+  page, and genai carries it into its error whole.
+- **The close confirm and the event log name the assistant as itself.** "An agent is running a
+  query" points at a pane that says nobody is connected, and the assistant never dialled in so
+  it cannot disconnect. `Whose::Assistant` and `Agents::sessions_of`.
+- **A fixture that cannot produce the state under test is not a test.** Both calls in the
+  parallel-tool-call fixture carried `tool_calls` index 0, which is one call streamed in two
+  parts — so the test asserted a property of a single call. The index is a parameter now and
+  the test checks two calls arrived before checking how they were answered.
+- Smaller, all fixed: the pool restates *all five* of genai's client knobs rather than three,
+  `StrataTools::agent_id` is gone (dead since the mark replaced it) along with the three docs
+  that still named it as the pane's discriminator, an env key of whitespace reads as absent,
+  and `serde_json`'s items are imported rather than qualified inline (AGENTS.md §1).
 
 ## Known, and owed elsewhere
 

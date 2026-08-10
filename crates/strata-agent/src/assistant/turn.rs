@@ -41,15 +41,18 @@
 //! exactly as an MCP client would. Only a transport or provider fault (bad key, dead endpoint,
 //! over quota) fails the turn, and it surfaces with the provider's own message.
 
+use std::mem;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use genai::chat::{
     ChatMessage, ChatRequest, ChatStreamEvent, StopReason, Tool, ToolCall, ToolResponse,
 };
-use serde_json::Value;
+use serde_json::{json, to_string, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
+
+use strata_core::engine::CANCELLED;
 
 use crate::host::Host;
 use crate::tools::StrataTools;
@@ -86,10 +89,10 @@ pub const MAX_TOOL_ROUNDS: usize = 32;
 /// a cancelled turn's cleanup could land after a *newer* turn had already written (leaving tool
 /// calls with a user message between them and their results, which every provider rejects); a
 /// turn that failed before the model said anything left the user's question dangling with no
-/// reply; and the whole history was deep-cloned out from under the lock on every round, which
-/// is quadratic in a turn's rounds and blocks any reader. Staging the turn's own messages in a
-/// local buffer and committing them in one lock removes all three, and it is why nothing here
-/// is `pub` beyond construction.
+/// reply; and the whole history was deep-cloned **under the lock** on every round, blocking
+/// every reader for the length of the copy. Staging the turn's own messages in a local buffer
+/// and committing them in one lock removes all three — the request still takes its messages by
+/// value, but off the lock — and it is why nothing here is `pub` beyond construction.
 #[derive(Default)]
 pub struct Conversation {
     messages: Vec<ChatMessage>,
@@ -236,6 +239,9 @@ pub enum Settle {
     Cancelled,
     /// The model was still calling tools after [`MAX_TOOL_ROUNDS`] rounds.
     StoppedAtCap { rounds: usize },
+    /// The turn's tool results reached [`MAX_TURN_RESULTS`]. The other way a loop runs away:
+    /// not too many rounds, but too much brought back from them.
+    Oversized,
 }
 
 impl Settle {
@@ -247,6 +253,7 @@ impl Settle {
             Settle::Failed(why) => Some(why.clone()),
             Settle::Cancelled => Some("Stopped.".into()),
             Settle::StoppedAtCap { rounds } => Some(format!("Stopped after {rounds} tool rounds.")),
+            Settle::Oversized => Some("Stopped: this turn's tool results grew too large.".into()),
         }
     }
 }
@@ -263,7 +270,26 @@ impl Settle {
 /// recovery is the vocabulary's own rather than a new one.
 const MAX_TOOL_RESULT: usize = 24_000;
 
+/// **What one turn may add to the conversation in tool results, in total.**
+///
+/// [`MAX_TOOL_RESULT`] bounds one answer, which does nothing about thirty of them: a model
+/// working through a wide schema can call `describe_table` on table after table, each answer
+/// under the per-result cap and the sum past any context window. And because a `Conversation`
+/// cannot be trimmed, the turn that overran does not just fail — it leaves a conversation whose
+/// every later send is too large as well.
+///
+/// Five results at the per-result cap. Past it the tools stop running and the turn settles,
+/// which is the same shape [`MAX_TOOL_ROUNDS`] already has for the other way a loop runs away.
+const MAX_TURN_RESULTS: usize = 5 * MAX_TOOL_RESULT;
+
 /// Bound one tool result, saying so where it is cut.
+///
+/// **The cut result is still a JSON document.** A tool answer is JSON, and slicing it mid-object
+/// hands the model a half-brace it has to guess the shape of — the failure being that a model
+/// which cannot parse the answer re-runs the call, which produces the same oversized answer.
+/// So an over-cap result is replaced by an object that *says* it was cut and carries the head
+/// as a string field: parseable whole, with the recovery named in the vocabulary's own terms
+/// (`read_page` is the tool that exists for exactly this).
 fn bounded(answer: String) -> String {
     if answer.len() <= MAX_TOOL_RESULT {
         return answer;
@@ -273,11 +299,15 @@ fn bounded(answer: String) -> String {
     while at > 0 && !answer.is_char_boundary(at) {
         at -= 1;
     }
-    format!(
-        "{}\n\n[This result was too large to keep in full and was cut here. Read the rest with \
-         read_page, or run a narrower query.]",
-        &answer[..at]
-    )
+    let cut = json!({
+        "truncated": true,
+        "note": "This result was too large to keep in full. 'partial' is its first part as \
+                 text, not a document. Read the rest with read_page, or run a narrower query.",
+        "partial": &answer[..at],
+    });
+    // The object is built from owned strings, so it serializes; the fallback is the honest one
+    // rather than the raw answer, which is the thing being refused.
+    to_string(&cut).unwrap_or_else(|_| String::from(TOO_LARGE))
 }
 
 /// What an outstanding tool call is told when the user stops the turn under it.
@@ -286,6 +316,41 @@ fn bounded(answer: String) -> String {
 /// already in the conversation, and a provider rejects a request whose tool calls have no
 /// results. So a cancelled turn answers them rather than leaving the conversation unusable.
 const STOPPED: &str = "The user stopped this turn before the tool finished.";
+
+/// The same channel as [`STOPPED`], for a call not run because the turn had spent its result
+/// budget ([`MAX_TURN_RESULTS`]).
+const TOO_LARGE: &str = "This turn's tool results were too large to continue. Ask again for the \
+                         one result you need, or narrow the query.";
+
+/// How much of a provider's own error prose is kept.
+///
+/// It is put in front of the user verbatim, and a vendor 5xx is not always a sentence: a proxy
+/// or a gateway answers with an HTML page, which genai carries into its error whole. Enough to
+/// hold any real message, short enough that the transcript stays readable when it is not one.
+const MAX_ERROR: usize = 2_000;
+
+/// Bound a provider error before it reaches the transcript.
+fn bounded_error(why: &str) -> String {
+    if why.len() <= MAX_ERROR {
+        return why.to_string();
+    }
+    let mut at = MAX_ERROR;
+    while at > 0 && !why.is_char_boundary(at) {
+        at -= 1;
+    }
+    format!("{}...", &why[..at])
+}
+
+/// Settle a stopped turn, keeping the half-answer the user already read.
+///
+/// Always [`Settle::Cancelled`] — the value exists so the two cancel points in the stream
+/// cannot disagree about what a stop leaves behind.
+fn stop(turn: &mut Staged<'_>, spoken: String) -> Settle {
+    if !spoken.trim().is_empty() {
+        turn.push(ChatMessage::assistant(spoken));
+    }
+    Settle::Cancelled
+}
 
 /// Run one turn to its settle.
 ///
@@ -343,8 +408,11 @@ impl<'a> Staged<'a> {
         self.sent.push(message);
     }
 
-    /// Everything the next request carries. No clone of the history per round: the buffer *is*
-    /// the request's message list, and only the request's own copy is made.
+    /// Everything the next request carries.
+    ///
+    /// Still a clone per round — `ChatRequest` takes its messages by value, so one copy is
+    /// unavoidable. What staging removed is the clone **under the conversation's lock**: this
+    /// one is off it, so a reader is never blocked behind a turn assembling its request.
     fn messages(&self) -> Vec<ChatMessage> {
         self.sent.clone()
     }
@@ -392,14 +460,24 @@ async fn drive<H: Host>(
     let _ = events.send(TurnEvent::Started);
     turn.push(ChatMessage::user(ask.message()));
 
+    // What this turn has already added in tool results, against `MAX_TURN_RESULTS`.
+    let mut spent = 0usize;
+
     for round in 0..=MAX_TOOL_ROUNDS {
         let request = ChatRequest::new(turn.messages())
             .with_system(SYSTEM)
             .with_tools(offered.clone());
 
+        // **What the pane has shown, in case the user stops before the stream ends.** The
+        // captured content this turn otherwise runs on only exists at `End`, which a cancel
+        // never reaches — so without this the model's memory of a stopped turn would be
+        // missing the half-answer still on screen, and the conversation would carry on from a
+        // point the user cannot see. Deltas are forwarded either way; this is the copy kept.
+        let mut spoken = String::new();
+
         let opened = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Settle::Cancelled,
+            () = cancel.cancelled() => return stop(turn, spoken),
             opened = brain.client().exec_chat_stream(
                 brain.model().clone(),
                 request,
@@ -408,20 +486,21 @@ async fn drive<H: Host>(
         };
         let mut stream = match opened {
             Ok(response) => response.stream,
-            Err(e) => return Settle::Failed(e.to_string()),
+            Err(e) => return Settle::Failed(bounded_error(&e.to_string())),
         };
 
         let mut end = None;
         loop {
             let next = tokio::select! {
                 biased;
-                () = cancel.cancelled() => return Settle::Cancelled,
+                () = cancel.cancelled() => return stop(turn, mem::take(&mut spoken)),
                 next = stream.next() => next,
             };
             match next {
                 None => break,
-                Some(Err(e)) => return Settle::Failed(e.to_string()),
+                Some(Err(e)) => return Settle::Failed(bounded_error(&e.to_string())),
                 Some(Ok(ChatStreamEvent::Chunk(chunk))) => {
+                    spoken.push_str(&chunk.content);
                     let _ = events.send(TurnEvent::Delta(chunk.content));
                 }
                 Some(Ok(ChatStreamEvent::End(settled))) => {
@@ -496,14 +575,34 @@ async fn drive<H: Host>(
         // which Anthropic refuses. `From<Vec<ToolResponse>>` is genai's own shape for this.
         let mut answers: Vec<ToolResponse> = Vec::with_capacity(calls.len());
         for (at, call) in calls.iter().enumerate() {
+            // **The turn's own result budget, spent.** Checked before the call rather than
+            // after it, so the answer that would overrun is never fetched — and before the
+            // step card is opened, so there is no card to retire. The calls that will not run
+            // are still answered to the model, for the same reason a cancel answers them:
+            // a conversation whose tool calls have no results is one no provider will take.
+            if spent >= MAX_TURN_RESULTS {
+                answers.extend(
+                    calls[at..]
+                        .iter()
+                        .map(|c| ToolResponse::from_tool_call(c, TOO_LARGE)),
+                );
+                turn.push(ChatMessage::from(answers));
+                return Settle::Oversized;
+            }
             // An offer is not a step, so it gets no step card — the executable card below is
             // the whole of what the transcript shows for it.
             let step = !offer::is_offer(&call.fn_name);
+            // **The card shows the arguments that will run, not the ones the model sent.** The
+            // scope overwrites `project`, so a model naming another window's project produces
+            // a call against *this* one — and a card quoting its request would name a project
+            // the run never touched. Scoping is a fixed point, so this is the same value
+            // `dispatch::call` arrives at rather than a second normalization beside it.
+            let arguments = dispatch::scoped(call.fn_arguments.clone(), scope);
             if step {
                 let _ = events.send(TurnEvent::ToolCall {
                     call: call.call_id.clone(),
                     tool: call.fn_name.clone(),
-                    arguments: call.fn_arguments.clone(),
+                    arguments: arguments.clone(),
                 });
             }
             let called = tokio::select! {
@@ -521,13 +620,17 @@ async fn drive<H: Host>(
                             call: call.call_id.clone(),
                             tool: call.fn_name.clone(),
                             failed: false,
-                            facts: Facts { stopped: Some("Stopped.".into()), ..Facts::default() },
+                            // The engine's own word for a user cancel, not a sentence typed
+                            // here: `Facts::stopped` is what the card renders, and every
+                            // other value in it came off `RunResult::Stopped`. Two
+                            // vocabularies for one stop is what `stopped_on_purpose` exists
+                            // to prevent.
+                            facts: Facts { stopped: Some(CANCELLED.into()), ..Facts::default() },
                         });
                     }
                     return Settle::Cancelled;
                 }
-                called = dispatch::call(tools, scope, &call.fn_name, call.fn_arguments.clone())
-                    => called,
+                called = dispatch::call(tools, scope, &call.fn_name, arguments) => called,
             };
             match (step, called.offered) {
                 (true, _) => {
@@ -546,7 +649,9 @@ async fn drive<H: Host>(
                 // statement that was withdrawn a moment later is worse than no card.
                 (false, None) => {}
             }
-            answers.push(ToolResponse::from_tool_call(call, bounded(called.answer)));
+            let answer = bounded(called.answer);
+            spent += answer.len();
+            answers.push(ToolResponse::from_tool_call(call, answer));
         }
         turn.push(ChatMessage::from(answers));
     }

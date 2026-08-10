@@ -37,9 +37,11 @@
 //! `AgentId`, its own query sessions, the same gate. What it is **not** is a row in the Agents
 //! pane — that pane answers "which external clients are connected to my project right now",
 //! and the assistant is not connected to anything, it is part of the app. The discriminator is
-//! [`StrataTools::agent_id`](crate::StrataTools::agent_id), the id the app itself minted for
-//! the pane, rather than the identity's name: a name is a claim any MCP client can make, and a
-//! client that could make itself invisible by claiming it is the worst version of this rule.
+//! [`Agent::in_app`](crate::host::Agent::in_app) — minted by
+//! [`StrataTools::in_app`](crate::StrataTools::in_app) and carried to the host on the call
+//! that opens a session — rather than the identity's name: a name is a claim any MCP client
+//! can make, and a client that could make itself invisible by claiming it is the worst
+//! version of this rule.
 
 pub mod dispatch;
 pub mod offer;
@@ -92,12 +94,17 @@ impl Assistant {
             .thread_name("strata-assistant")
             .build()
             .map_err(|e| format!("assistant runtime: {e}"))?;
-        // genai's own defaults for a long-lived client, restated because this one now outlives
-        // the `genai::Client`s that borrow it and would otherwise get reqwest's bare defaults.
+        // genai's own defaults for a long-lived client (`webc::web_client`), restated in full
+        // because this one now outlives the `genai::Client`s that borrow it and would
+        // otherwise get reqwest's bare defaults. **In full** is the point: three of the five
+        // were copied once and two were not, which is not "genai's defaults" — it is a
+        // different client that looks like them.
         let pool = reqwest::Client::builder()
             .pool_max_idle_per_host(4)
             .http2_keep_alive_interval(Some(Duration::from_secs(20)))
+            .http2_keep_alive_timeout(Duration::from_secs(10))
             .http2_keep_alive_while_idle(true)
+            .http2_adaptive_window(true)
             .build()
             .map_err(|e| format!("assistant http client: {e}"))?;
         Ok(Assistant { rt: Some(rt), pool })

@@ -219,11 +219,31 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
             if !agents.peek().knows(agent) {
                 return;
             }
+            // Read before the write takes the row away — and off `held`, not `agents`, for
+            // the reason the open entry gives: the assistant is left out of the pane's
+            // *listing* only, never out of the record.
+            let gone = agents
+                .peek()
+                .held()
+                .find(|a| a.id == agent)
+                .map(|a| (a.name().to_string(), a.in_app));
             let released = agents.write().gone(agent);
             for session in released {
                 engine.cleanup_ws(session.into());
             }
-            log_event(log, LogLevel::Info, "An agent disconnected");
+            log_event(
+                log,
+                LogLevel::Info,
+                match gone {
+                    // **The assistant never dialled in, so it cannot disconnect.** Its
+                    // "connection" is the pane's own mount inside this window, and reporting
+                    // that as a disconnect describes a client that was never there — the same
+                    // reason it is kept out of the Agents pane.
+                    Some((named, true)) => format!("{named} stopped"),
+                    Some((named, false)) => format!("{named} disconnected"),
+                    None => "An agent disconnected".to_string(),
+                },
+            );
         }
     }
 }

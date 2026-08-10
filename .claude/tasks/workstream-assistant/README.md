@@ -85,8 +85,8 @@ answers "which external clients are connected to my project right now"; the assi
 the app, and its runs already have a richer home in the transcript. This overturns AS-01's and
 AS-04's earlier notes that its sessions belonged there. Everything *below* the pane is unchanged
 — it is still one more agent to `Host`, the policy gate and the query sessions. The
-discriminator is `StrataTools::agent_id()`, the id the app itself minted, never the identity's
-name: a name is a claim any MCP client can make, and a name-keyed rule would let one hide itself.
+discriminator is `Agent::in_app`, a mark the app itself mints, never the identity's name: a
+name is a claim any MCP client can make, and a name-keyed rule would let one hide itself.
 
 **A statement the user can run is an `offer_sql` tool call, not a formatting convention.** A
 tagged markdown fence was built first and withdrawn: a fence is taught only by a paragraph of

@@ -172,10 +172,10 @@ impl AgentIdentity {
     /// **The in-process assistant** (AS-01), for whatever attributes it.
     ///
     /// Not the Agents pane: that pane lists the external clients connected to a project, and
-    /// the assistant is part of the app rather than connected to it — it is left out by its
-    /// [`AgentId`](crate::StrataTools::agent_id), which is the app's own and cannot be
-    /// claimed. This identity is for everything below that: logs, and any surface that has to
-    /// name the caller of a tool.
+    /// the assistant is part of the app rather than connected to it — it is left out by
+    /// [`Agent::in_app`], a mark the app itself sets and no client can claim. This identity
+    /// is for everything below that: logs, and any surface that has to name the caller of a
+    /// tool.
     ///
     /// A constant this crate owns rather than something the pane passes in. Every other
     /// identity is a *claim* — what a client said it was at `initialize` — and there is no

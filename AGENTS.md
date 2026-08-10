@@ -321,8 +321,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
   listed — and the mark is minted, never claimed.** `StrataTools::in_app` sets `Agent::in_app`,
   which rides the call that opens a session to every `Host`; `Agents::agents` is the one place the
-  exclusion is expressed and `held` is the unfiltered view ownership, capping and
-  `list_query_sessions` use. Keying on the identity would let any MCP client hide by claiming it.
+  exclusion is expressed, `held` is the unfiltered view `list_query_sessions` and the log's
+  attribution read, and `sessions_of` is the same line drawn for the close confirm, which has to
+  name the assistant as itself. Keying on the identity would let any MCP client hide by claiming it.
 
 **Stores and state**
 

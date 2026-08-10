@@ -76,11 +76,14 @@ UI + wiring, on the state rules the app already lives by.
   **Done, in the core — nothing to wire here.** `StrataTools::in_app` marks the pane's own
   value, the mark rides `Agent::in_app` to every `Host` on the call that opens a session, and
   `Agents::agents` (the pane's listing, and `len` behind the rail badge) filters on it.
-  `Agents::held` is the unfiltered view the ownership check, the session cap and
-  `list_query_sessions` use — the assistant is *held* like any other agent and only *listed*
-  differently. **Not** a name comparison against `AgentIdentity::assistant()`: an identity is a
-  claim a client makes at `initialize`, so any MCP client could have hidden itself with it.
-  Build the pane against `StrataTools::in_app(host)` and the rule holds by construction.
+  `Agents::held` is the unfiltered iterator `list_query_sessions` answers from and the event log
+  attributes from; `Agents::sessions_of` is the same line drawn for the close confirm, which
+  says "the assistant is running a query" rather than "an agent" (`Whose::Assistant`). The
+  ownership check and the session cap live inside the satellite and read the field directly.
+  The assistant is *held* like any other agent and only *listed* differently. **Not** a name
+  comparison against `AgentIdentity::assistant()`: an identity is a claim a client makes at
+  `initialize`, so any MCP client could have hidden itself with it. Build the pane against
+  `StrataTools::in_app(host)` and the rule holds by construction.
 
   Everything *below* the pane is unchanged: the assistant is one more agent to `Host`, the
   policy gate and the query-session machinery, with its own `AgentId` and its own sessions.

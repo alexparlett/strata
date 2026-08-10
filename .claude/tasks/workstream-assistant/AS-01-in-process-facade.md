@@ -39,7 +39,7 @@ query you ran into their own editor".
 > true on all three transports — the promotion is scoped to "wherever Strata's window is open",
 > because the headless host (AA-05) has no window, no editor and nobody watching. The
 > assistant is still one more agent to everything *below*; it is only the pane it is kept out
-> of, by `StrataTools::agent_id()` rather than by its identity's name. See
+> of, by `Agent::in_app` rather than by its identity's name. See
 > `AS-02-provider-seam-and-loop.md` and `AS-04-chat-pane.md`.
 
 Tests: `crates/strata-agent/tests/facade.rs` (the vocabulary end to end with no rmcp import in

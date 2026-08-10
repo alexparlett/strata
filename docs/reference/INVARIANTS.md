@@ -620,19 +620,31 @@ Things that must not regress. Each was fought for once already.
   because the card runs in the user's editor, which is what lets the assistant hand over a write
   it is itself refused. SQL it is merely explaining stays an ordinary code block; telling the two
   apart is the whole point.
-- **The Agents pane lists the clients that dialled in, so the in-app assistant is not in it —
-  and the discriminator is the minted id, never the name.** That pane answers "what is working
-  on my project right now" about *external* clients; the assistant is part of the app and its
-  runs render as step cards in its own transcript. It stays one more agent to everything below —
-  its own `AgentId`, its own query sessions, the same gate — and the satellite **holds** it like
-  any other, because the ownership check, the per-agent session cap and the teardown all have to
-  work for it and `list_query_sessions` has to answer for it. It is only **listed** that it is
-  not. The mark is `Agent::in_app`, minted by `StrataTools::in_app` and delivered on the call
-  that first tells a host an agent exists, so no surface holds an id to compare and nothing has
-  to remember the rule; `Agents::agents` filters and `Agents::held` is the unfiltered view for
-  the two callers that need one. Keying on `AgentIdentity::assistant()`'s name instead would let
-  any MCP client hide from the pane by claiming that name at `initialize`, which is the worst
-  possible version of this rule.
+- **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
+  listed — and the mark is minted, never claimed.** That pane answers "what is working on my
+  project right now" about *external* clients; the assistant is part of the app and its runs
+  render as step cards in its own transcript. It stays one more agent to everything below — its
+  own `AgentId`, its own query sessions, the same gate — and the satellite **holds** it like any
+  other, because the ownership check, the per-agent session cap and the teardown all have to work
+  for it and `list_query_sessions` has to answer for it. It is only **listed** that it is not.
+
+  The mark is `Agent::in_app`, minted by `StrataTools::in_app` and delivered on the call that
+  first tells a host an agent exists, so no surface holds an id to compare and nothing has to
+  remember the rule. Keying on `AgentIdentity::assistant()`'s name instead would let any MCP
+  client hide from the pane by claiming that name at `initialize`, which is the worst possible
+  version of this rule.
+
+  The satellite draws the line in three places and nowhere else. `Agents::agents` is the pane's
+  listing (and `len`, behind the rail badge) — the exclusion itself. `Agents::held` is the
+  unfiltered iterator, which `list_query_sessions` answers from (an agent must see its own
+  sessions) and which the event log attributes from (the assistant is out of the *listing* only,
+  never out of the record). `Agents::sessions_of` is the same line drawn for the close confirm,
+  which asks whose work it is about to destroy and must say "the assistant" rather than "an
+  agent" — pointing at a pane that says nobody is connected is the failure that arm exists to
+  fix. The ownership check and the session cap are inside the satellite and read the field
+  directly, so they never had a filtered view to avoid. And for the same reason the pane omits
+  it, the log says the assistant **stopped** rather than disconnected: it never dialled in, so
+  its "connection" is the pane's own mount.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

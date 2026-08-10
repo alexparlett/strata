@@ -419,22 +419,6 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
-    /// Which agent this value **is** — the id its [`Connection`] minted.
-    ///
-    /// Which agent this value **is** — for a caller that needs to name its own work (a log
-    /// line, a test) rather than to tell itself apart from others.
-    ///
-    /// **Not how the Agents pane excludes the assistant.** That rule rides
-    /// [`Agent::in_app`], minted by [`in_app`](Self::in_app) and delivered to the host on the
-    /// call that opens a session, so no surface has to hold an id and compare it. And neither
-    /// is a name comparison against [`AgentIdentity::assistant`]: an identity is a claim a
-    /// client makes at `initialize`, so keying the rule on one would let any MCP client make
-    /// itself invisible by calling itself `strata-assistant`. The identity stays what it is
-    /// for: attribution.
-    pub fn agent_id(&self) -> AgentId {
-        self.connection.agent
-    }
-
     /// The same vocabulary for a **new** client: a fresh [`AgentId`], the shared host and
     /// the shared run cache. This is what a transport's per-session service factory calls.
     pub fn connection(&self) -> Self {

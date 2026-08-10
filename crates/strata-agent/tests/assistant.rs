@@ -194,9 +194,15 @@ fn says(text: &str) -> String {
     json!({"choices": [{"index": 0, "delta": {"content": text}}]}).to_string()
 }
 
-fn asks(id: &str, tool: &str, arguments: Value) -> String {
+/// One tool call in the stream, at its **own** `tool_calls` index.
+///
+/// The index is the accumulator's identity for a call, not decoration: two chunks sharing one
+/// index are one call being streamed in parts, which is exactly what a parallel-call fixture
+/// must not say. Held at 0 once, which quietly merged every "two calls" fixture into one and
+/// left the test that checks parallel answering asserting a property of a single call.
+fn asks(at: usize, id: &str, tool: &str, arguments: Value) -> String {
     json!({"choices": [{"index": 0, "delta": {"tool_calls": [{
-        "index": 0,
+        "index": at,
         "id": id,
         "type": "function",
         "function": {"name": tool, "arguments": arguments.to_string()}
@@ -281,6 +287,7 @@ async fn a_turn_runs_a_tool_and_answers_from_its_result() {
         vec![
             says("Let me count them."),
             asks(
+                0,
                 "call_1",
                 "run",
                 json!({"query_session": session, "sql": "select count(*) as n from people"}),
@@ -421,6 +428,7 @@ async fn an_offered_statement_arrives_as_a_runnable() {
         vec![
             says("Here is the query."),
             asks(
+                0,
                 "call_1",
                 "offer_sql",
                 json!({"sql": "select name from people order by name"}),
@@ -467,6 +475,7 @@ async fn an_offer_that_does_not_check_out_shows_nothing() {
     let stub = stub(vec![
         vec![
             asks(
+                0,
                 "call_1",
                 "offer_sql",
                 json!({"sql": "select nope from people"}),
@@ -511,6 +520,7 @@ async fn a_policy_refusal_reaches_the_model_and_the_turn_still_answers() {
     let stub = stub(vec![
         vec![
             asks(
+                0,
                 "call_1",
                 "run",
                 json!({"query_session": session, "sql": "create table t as select 1"}),
@@ -569,11 +579,12 @@ async fn a_cancel_mid_stream_settles_as_cancelled() {
     .await;
 
     let assistant = Assistant::new().unwrap();
+    let conversation = Arc::new(Mutex::new(Conversation::new()));
     let mut running = assistant.send(
         tools.clone(),
         pointed_at(&stub),
         Scope::default(),
-        Arc::new(Mutex::new(Conversation::new())),
+        Arc::clone(&conversation),
         Ask::new("Take your time."),
     );
     // Stop as soon as the reply has started arriving.
@@ -586,6 +597,33 @@ async fn a_cancel_mid_stream_settles_as_cancelled() {
     let rest = drain(&mut running).await;
     assert_eq!(rest.last(), Some(&TurnEvent::Settled(Settle::Cancelled)));
     assert_eq!(running.settle().await, Settle::Cancelled);
+
+    // **The half-answer the user read is what the model remembers.** A stop never reaches the
+    // stream's `End`, so the captured content the turn normally commits from does not exist —
+    // and without the deltas being kept, a stopped turn committed nothing and the next send
+    // carried on from before a question the user can still see the answer to.
+    let mut second = assistant.send(
+        tools.clone(),
+        pointed_at(&stub),
+        Scope::default(),
+        conversation,
+        Ask::new("Carry on."),
+    );
+    drain(&mut second).await;
+    let carried = stub.request(1);
+    let listed = carried["messages"].as_array().expect("messages");
+    let spoken: Vec<&str> = listed
+        .iter()
+        .filter(|m| m["role"] != "system")
+        .map(|m| m["content"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(spoken.first(), Some(&"Take your time."));
+    assert!(
+        spoken
+            .get(1)
+            .is_some_and(|said| said.starts_with("Working")),
+        "the stopped turn's prose must be in the model's memory: {spoken:?}"
+    );
 }
 
 /// **Cancel mid-run** settles as cancelled and leaves the engine clean: dropping the tool
@@ -608,6 +646,7 @@ async fn a_cancel_mid_run_leaves_no_run_in_flight() {
     let stub = stub(vec![
         vec![
             asks(
+                0,
                 "call_1",
                 "run",
                 json!({"query_session": session, "sql": slow}),
@@ -699,16 +738,22 @@ fn conversation_of(stub: &Stub, at: usize) -> usize {
         .unwrap_or_default()
 }
 
-/// **Parallel tool calls answer in one message, not one each.** genai's Anthropic adapter emits
-/// a `user` entry per Tool-role message with no merging, so N results in N messages leave the
-/// message after the assistant turn answering only the first — which Anthropic refuses.
+/// **Every call in a round is answered, once, in order.** The loop stages one `ChatMessage`
+/// for the whole round rather than one per call, because genai's Anthropic adapter emits a
+/// `user` entry per Tool-role message with no merging — so N results in N messages leave the
+/// entry after the assistant turn answering only the first, which Anthropic refuses.
+///
+/// The *framing* is invisible from here: this stub speaks OpenAI's wire, where one Tool-role
+/// message is correctly flattened into one `tool` entry per call either way. What this proves
+/// is the half that survives the flattening and that the bug actually cost — each call
+/// answered exactly once, matched by id, with nothing between the calls and their answers.
 #[tokio::test]
 async fn a_round_of_parallel_calls_answers_in_one_message() {
     let (_engine, tools) = project("parallel").await;
     let stub = stub(vec![
         vec![
-            asks("call_1", "list_tables", json!({})),
-            asks("call_2", "list_functions", json!({})),
+            asks(0, "call_1", "list_tables", json!({})),
+            asks(1, "call_2", "list_functions", json!({})),
             ends("tool_calls"),
         ],
         vec![says("Both read."), ends("stop")],
@@ -728,8 +773,43 @@ async fn a_round_of_parallel_calls_answers_in_one_message() {
 
     let second = stub.request(1);
     let listed = second["messages"].as_array().expect("messages");
-    let answers = listed.iter().filter(|m| m["role"] == "tool").count();
-    assert_eq!(answers, 1, "two calls must answer in one message: {second}");
+    // **Both calls really arrived**, checked before the property under test: every assertion
+    // below is satisfied trivially by one call, so a fixture that merged the two into one
+    // would report this test passing while proving nothing. It did, once — both chunks shared
+    // a `tool_calls` index, which is the accumulator's identity for a call.
+    let called: Vec<String> = listed
+        .iter()
+        .filter_map(|m| m["tool_calls"].as_array())
+        .flatten()
+        .map(|c| c["id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        called,
+        ["call_1", "call_2"],
+        "the round must carry two calls"
+    );
+
+    let answered: Vec<String> = listed
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| m["tool_call_id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        answered, called,
+        "each call is answered once, in order: {second}"
+    );
+    // Nothing between the assistant turn and its answers. A round whose results are separated
+    // from their calls is the shape every provider rejects, whatever the framing.
+    let calling = listed
+        .iter()
+        .position(|m| m["tool_calls"].is_array())
+        .expect("the assistant's tool call");
+    assert!(
+        listed[calling + 1..calling + 1 + answered.len()]
+            .iter()
+            .all(|m| m["role"] == "tool"),
+        "the answers must follow the calls with nothing between them: {second}"
+    );
 }
 
 /// **The prose the model wrote alongside its tool call stays in its own memory.** genai's
@@ -741,7 +821,7 @@ async fn the_models_own_words_survive_a_tool_round() {
     let stub = stub(vec![
         vec![
             says("Checking the catalog first."),
-            asks("call_1", "list_tables", json!({})),
+            asks(0, "call_1", "list_tables", json!({})),
             ends("tool_calls"),
         ],
         vec![says("One table."), ends("stop")],
@@ -896,6 +976,7 @@ async fn a_cancel_retires_the_card_it_opened() {
     let slow = "select count(*) as n from generate_series(1, 400000000)";
     let stub = stub(vec![vec![
         asks(
+            0,
             "call_1",
             "run",
             json!({"query_session": session, "sql": slow}),
@@ -939,6 +1020,8 @@ async fn a_cancel_retires_the_card_it_opened() {
         panic!("the card opened for the cancelled call was never retired: {seen:?}");
     };
     assert!(!failed, "a stop is not a fault");
-    assert_eq!(facts.stopped.as_deref(), Some("Stopped."));
+    // The engine's own word for a user cancel — the same vocabulary a stopped `run` reports
+    // through, rather than a sentence typed at this one call site.
+    assert_eq!(facts.stopped.as_deref(), Some("cancelled"));
     assert_eq!(running.settle().await, Settle::Cancelled);
 }

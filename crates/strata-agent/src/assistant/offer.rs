@@ -41,7 +41,7 @@ use rmcp::handler::server::common::schema_for_input;
 use rmcp::model::JsonObject;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{from_value, Value};
 
 use crate::host::Host;
 use crate::tools::{StrataTools, ToolSpec};
@@ -125,7 +125,7 @@ pub struct Offered {
 /// **Errors only**: a warning is something the user can read on the card and decide about, and
 /// refusing on one would make the assistant unable to offer a statement it is right about.
 pub async fn offer<H: Host>(tools: &StrataTools<H>, scope: &Scope, arguments: Value) -> Offered {
-    let params: OfferParams = match serde_json::from_value(arguments) {
+    let params: OfferParams = match from_value(arguments) {
         Ok(params) => params,
         // The same sentence the other ten get, from the same place: a model that misuses one
         // tool's schema must not be taught a different recovery by the eleventh.

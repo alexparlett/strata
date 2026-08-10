@@ -390,15 +390,22 @@ impl Agents {
         self.agents().count()
     }
 
-    /// Every query session in flight across every agent — what the close confirm asks the
-    /// engine about to tell "an agent is running a query" from "you are".
+    /// Every query session in flight for agents on one side of the pane's own line: `false` is
+    /// the MCP clients the Agents pane lists, `true` is the app's own assistant.
+    ///
+    /// What the close confirm asks the engine about to tell "an agent is running a query" from
+    /// "you are" — and it takes a side because it also has to tell both from "the assistant
+    /// is", which is a different sentence: "an agent" would point the user at a pane that says
+    /// nobody is connected. The discriminator is [`ConnectedAgent::in_app`], the same mark
+    /// [`Agents::agents`] filters on, so one rule answers both.
     ///
     /// Tombstones included, deliberately: a session closed while its run was still being
     /// dispatched is one the engine may well still be executing, and the confirm's question
     /// is about work that is about to be destroyed, not about handles that still answer.
-    pub fn sessions(&self) -> Vec<QuerySessionId> {
+    pub fn sessions_of(&self, in_app: bool) -> Vec<QuerySessionId> {
         self.agents
             .iter()
+            .filter(|a| a.in_app == in_app)
             .flat_map(|a| a.sessions.iter().map(|s| s.id))
             .collect()
     }
@@ -565,7 +572,10 @@ mod tests {
 
         assert_eq!(agents.closed(who.id, session), Closed::Now);
         assert!(!agents.holds(who.id, session));
-        assert!(agents.sessions().is_empty(), "nothing is left behind");
+        assert!(
+            agents.sessions_of(false).is_empty(),
+            "nothing is left behind"
+        );
     }
 
     /// **A close that races a dispatch does not orphan the workspace.** This is the AA-03c
@@ -590,7 +600,7 @@ mod tests {
         assert!(!agents.holds(who.id, session));
         assert_eq!(agents.closed(who.id, session), Closed::NoSuchSession);
         // But the confirm still counts it, because the engine may still be executing it.
-        assert_eq!(agents.sessions(), vec![session]);
+        assert_eq!(agents.sessions_of(false), vec![session]);
 
         // The settle is what retires it, and it names the session so the caller can.
         let retire = agents.run_settled(
@@ -604,7 +614,7 @@ mod tests {
             },
         );
         assert_eq!(retire, Some(session));
-        assert!(agents.sessions().is_empty());
+        assert!(agents.sessions_of(false).is_empty());
         assert_eq!(agents.len(), 1, "the agent itself stays connected");
     }
 
@@ -761,7 +771,7 @@ mod tests {
         assert_eq!(released, expected);
 
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents.sessions(), vec![kept]);
+        assert_eq!(agents.sessions_of(false), vec![kept]);
         // Retracting twice is a no-op, not a panic — a `Drop` can race a close.
         assert!(agents.gone(going.id).is_empty());
     }
