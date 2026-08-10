@@ -28,19 +28,19 @@
 //! - **Whether the control is offered is a property of the model**, decided by the kind's
 //!   [`Efforts`] rule in the table, asked through [`ProviderKind::efforts`]. A model with no
 //!   rungs gets no menu, and a [`Selection`] that sets one anyway is refused rather than
-//!   silently ignored. What belongs in a rule is not "does the vendor have a knob" but "does
-//!   the whole path work end to end" — Anthropic's thinking models are excluded not because
-//!   they cannot reason but because genai 0.6.5 cannot return their thinking block to them on
-//!   the next tool round, so the turn after the first would be refused. Each row says which.
+//!   silently ignored. What belongs in a rule is "will the pinned `genai` actually send an
+//!   effort for this model" — for Anthropic that is the modern Claude families, for OpenAI the
+//!   reasoning models (`reasoning_effort` is not a field `gpt-4o` accepts), for Gemini the
+//!   thinking ones. Each row says which and why.
 //! - **What a rung means for a model that has one is `genai`'s**, verified at the pinned
-//!   version: its Anthropic adapter already knows `xhigh` needs Opus 4.7 or newer and
-//!   downgrades to `high` otherwise, and its Gemini adapter already knows `gemini-3` takes a
-//!   thinking *level* where 2.5 takes a *budget*. Restating that here would be a second copy
-//!   of a mapping that already exists.
+//!   version: its Anthropic adapter already gates `xhigh` and `max` per model, and its Gemini
+//!   adapter already knows `gemini-3` takes a thinking *level* where 2.5 takes a *budget*.
+//!   Restating that here would be a second copy of a mapping that already exists.
 //!
-//! The rules are name fragments, so they fall behind what the providers ship — which is why
-//! [`Efforts::Only`] is **default-closed**: falling behind costs a knob the user cannot reach
-//! yet, never a menu whose settings the provider refuses.
+//! The rules are name fragments mirroring what the pinned `genai` recognizes, so they fall
+//! behind what the providers ship — which is why [`Efforts::Only`] is **default-closed**:
+//! falling behind costs a knob the user cannot reach yet, never a menu whose settings the
+//! provider refuses. A `genai` bump is the moment to revisit them.
 //!
 //! ## One construction site
 //!
@@ -53,7 +53,7 @@ use std::env;
 use std::fmt;
 
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatOptions, ReasoningEffort};
+use genai::chat::{CacheControl, ChatOptions, ReasoningEffort};
 use genai::resolver::{
     AuthData, AuthResolver, Endpoint, Error as ResolverError, ServiceTargetResolver,
 };
@@ -231,17 +231,22 @@ pub const PROVIDERS: [Provider; 5] = [
         label: "Anthropic",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("ANTHROPIC_API_KEY"),
-        // **The models that take an effort *without* switching thinking on.** genai has three
-        // Anthropic paths, by model name: `output_config.effort` alone (its
-        // `SUPPORT_EFFORT_MODELS` minus the adaptive ones); effort plus
-        // `thinking: {type: adaptive}`; and the legacy `thinking: {enabled, budget_tokens}`
-        // for everything else. Only the first is usable here, because the other two turn
-        // extended thinking on and Anthropic then wants the thinking block back alongside the
-        // tool results — which genai 0.6.5 cannot supply (its Anthropic streamer hardcodes
-        // `captured_thought_signatures: None` and its serializer drops the parts), so round
-        // two of every tool-using turn is refused. Add a name here when genai adds one to that
-        // first path, or drop the restriction entirely when it can round-trip thinking.
-        efforts: Efforts::Only(&["claude-opus-4-5"]),
+        // The models genai 0.7 will send an `output_config.effort` for. Narrower than this
+        // once, on the theory that enabling thinking broke the next tool round because genai
+        // never returns the thinking block — withdrawn: genai's own notes say thinking is *on
+        // by default* for Sonnet 5 and always on for Fable, so if that were fatal Anthropic
+        // tool use would be broken there with or without an effort set.
+        efforts: Efforts::Only(&[
+            "claude-opus-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+            "fable",
+            "mythos",
+        ]),
         model_example: "claude-sonnet-4-5",
         adapter: AdapterKind::Anthropic,
     },
@@ -254,7 +259,7 @@ pub const PROVIDERS: [Provider; 5] = [
         // offering it for `gpt-4o` would be a menu whose every setting is an error. The
         // Responses models (`gpt-5`, `codex`) round-trip their reasoning item because
         // `Brain::resolve` sets `capture_reasoning_content`.
-        efforts: Efforts::Only(&["gpt-5", "codex", "o1", "o3", "o4"]),
+        efforts: Efforts::Only(&["gpt-5", "gpt-6", "codex", "o1", "o3", "o4"]),
         model_example: "gpt-5",
         // Nominal. `gpt-5` and the codex models speak the Responses API and the rest speak
         // chat completions, which is a per-model fork `adapter()` asks genai to make.
@@ -639,7 +644,20 @@ impl Brain {
             // either refuses or answers having discarded the model's chain of thought every
             // round. Gemini's streamer captures signatures unconditionally, which is why the
             // gap was invisible from that side.
-            .with_capture_reasoning_content(true);
+            .with_capture_reasoning_content(true)
+            // **The cache the rest of the design is arranged around.** Two decisions exist to
+            // keep a request's prefix byte-identical across a conversation — the manifest is
+            // sorted (`StrataTools::manifest`) and pinned context rides the user's message
+            // rather than the system prompt (`Ask::message`) — and both bought nothing until
+            // a breakpoint was actually asked for. Request-level is the right level: genai
+            // places it on the **static prefix**, the tools plus system block, which is
+            // exactly the part those two decisions hold still. Message-level breakpoints stay
+            // unused; a rolling one over the transcript is a separate question with its own
+            // cost, and this is the one that pays on every turn of every conversation.
+            //
+            // Needs genai 0.7 — 0.6.5 ignored request-level cache control for Anthropic
+            // outright, which is why the pin moved.
+            .with_cache_control(CacheControl::Ephemeral);
         if let Some(effort) = selection.effort {
             options = options.with_reasoning_effort(effort.genai());
         }
@@ -689,16 +707,25 @@ mod tests {
         assert_eq!(ProviderKind::all().count(), PROVIDERS.len());
     }
 
-    /// **Reasoning is a model capability, so the menu is per model.** One kind answers both
-    /// ways: `claude-opus-4-5` takes an effort without switching thinking on, and
-    /// `claude-sonnet-4-5` cannot be offered one because genai would enable thinking it then
-    /// cannot return on the next tool round.
+    /// **Reasoning is a model capability, so the menu is per model.** Every kind with a rule
+    /// answers both ways for models of its own: the modern Claude models take an effort and
+    /// `claude-sonnet-4-5` does not, `gpt-5` does and `gpt-4o` does not.
     #[test]
     fn the_ladder_is_offered_per_model_not_per_provider() {
         let anthropic = ProviderKind::Anthropic;
-        assert_eq!(anthropic.efforts("claude-opus-4-5"), LADDER);
+        for model in [
+            "claude-opus-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-8",
+            "claude-opus-5-0",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+            "claude-fable-5",
+        ] {
+            assert_eq!(anthropic.efforts(model), LADDER, "{model}");
+        }
         assert!(anthropic.efforts("claude-sonnet-4-5").is_empty());
-        assert!(anthropic.efforts("claude-opus-4-6").is_empty());
+        assert!(anthropic.efforts("claude-haiku-4-5").is_empty());
 
         let openai = ProviderKind::OpenAi;
         assert_eq!(openai.efforts("gpt-5.2"), LADDER);

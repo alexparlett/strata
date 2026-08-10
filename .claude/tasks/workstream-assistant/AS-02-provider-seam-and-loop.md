@@ -16,8 +16,12 @@ a prompt:
 | `system.md` | The system prompt, `include_str!`'d |
 | `mod.rs` | `Assistant` (the runtime) and `Running` (a turn in flight) |
 
-`genai` is pinned `=0.6.5` and every shape below was read off that source before it was built
-on. Tests: 20 unit tests in the module plus `tests/assistant.rs`, which drives whole turns
+`genai` is pinned `=0.7.0-beta.18` and every shape below was read off that source before it was
+built on. The pin moved from `0.6.5` deliberately: 0.6.5 does not know the Claude 5 family
+(`claude-sonnet-5`, Fable, Mythos and opus 4.7+ all fall to its legacy thinking-budget path) and
+it **ignores request-level cache control for Anthropic outright**, so the prompt cache the rest
+of this design is arranged around could not be turned on at all. A beta is a deliberate pin, not
+a drift — the exact `=` version is the whole point. Tests: 20 unit tests in the module plus `tests/assistant.rs`, which drives whole turns
 against `MockHost` and a **local stub endpoint** reached through the roster's own
 OpenAI-compatible kind — so the path the test exercises is one a user can configure, and no
 production signature is shaped for it.
@@ -186,12 +190,15 @@ one taught is recorded here because most of them are shapes that read as obvious
   user's question dangling with no reply, and the whole history was deep-cloned under the lock
   every round. `Staged` removes all three, and it is also what makes `shutdown_background`
   safe: a task dropped mid-flight has committed a whole block or nothing.
-- **Anthropic's effort ladder is empty, and the reason is not "Anthropic has no such control".**
-  Setting a rung makes genai enable extended thinking; Anthropic then requires the thinking
-  block back alongside the tool results, and genai 0.6.5 cannot supply it (its streamer
-  hardcodes `captured_thought_signatures: None` and its serializer drops the parts). So every
-  tool-using turn would fail at round two. The table's test is "does the whole path work",
-  not "does the vendor have a knob" — restore `LADDER` when genai can round-trip it.
+- **Anthropic's effort ladder was emptied here, and that was itself wrong** — see the per-model
+  entry below. The claim was that enabling thinking breaks the next tool round because genai
+  never returns the thinking block. The mechanism is real (its streamer hardcodes
+  `captured_thought_signatures: None` and its serializer drops the parts, in 0.7 as in 0.6.5),
+  but the consequence was asserted from the API's documented rule rather than verified, and it
+  does not hold: genai's own notes say thinking is on by default for Sonnet 5 and always on for
+  Fable and Mythos, so a fatal round-trip requirement would break Anthropic tool use on those
+  models whether or not an effort is set. Kept as a record of the wrong turn, because the shape
+  of the error — a verified mechanism carrying an unverified consequence — is the reusable part.
 - **`capture_reasoning_content` is not a display option.** It is what makes genai's OpenAI
   Responses adapter request and record the encrypted reasoning item, without which a gpt-5
   tool loop re-sends its calls with the reasoning missing in front of them. Gemini captures
@@ -244,9 +251,6 @@ is incomplete, and a `;`-separated batch (which Run then refuses whole). The sou
 Adding a non-tool method to `StrataTools` for it would blunt AS-01's "the public methods *are*
 the ten tools", so it is recorded rather than done. The user-visible cost today is a card whose
 Run press fails in the editor's own words.
-
-**Anthropic effort is off until genai can round-trip a thinking block** — one line in
-`PROVIDERS` (`efforts: LADDER`) when it can, and nothing else changes.
 
 **A cancelled run leaves a stale `Running` row in the app's own agents satellite.**
 `strata_freya::agent::directory::run` sends its `AgentNotice::RunSettled` *after* awaiting the

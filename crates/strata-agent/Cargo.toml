@@ -62,7 +62,7 @@ tracing = "0.1"
 # `bedrock-sigv4` is off because the roster does not offer Bedrock — **not** for the cost, which
 # is nil here: `aws-config`, `aws-credential-types` and `aws-sigv4` are all already in this
 # graph at the same major, declared by `strata-core` for the S3 credential bridge.
-genai = "=0.6.5"
+genai = "=0.7.0-beta.18"
 # `StreamExt::next` over genai's `ChatStream`, which is a plain `futures::Stream`. Already in
 # the graph via genai; named here because a dependency we call is not one to inherit by luck.
 futures = "0.3"
