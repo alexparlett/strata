@@ -59,6 +59,19 @@ pattern** — named defs, per-provider field sets, the naming rules in one place
 No enable/disable toggle: an empty roster *is* the unconfigured state, and the pane (AS-04)
 renders it honestly. A toggle would be a second copy of that fact.
 
+## What leaves the machine
+
+The roster is where the trust story gets stated, because the entry's kind is what decides it:
+a cloud entry sends the provider whatever the conversation pins — schema via `@table`
+(`describe_table`), and **row data** wherever a result is pinned or paged (`@result`,
+`read_page` in the loop) — while an Ollama entry sends nothing off the machine. Field
+practice draws the same line (Snowflake's worksheet copilot is schema-only by stated policy;
+DBeaver is metadata-only with row samples opt-in and Ollama for offline). V1 builds no
+machinery — AS-04's chips and step cards already show exactly what the model saw, which is
+most of the honesty — but this pane owes two small things: the kind's help text says which
+side of the line it is on (one sentence, IDE register, no scare copy), and the Ollama kind
+carries a plain "local" marker the AS-04 selector can render.
+
 ## Rules that bind this surface
 
 - **One app-global config store; Settings is a channel; `write_config` is the sole write

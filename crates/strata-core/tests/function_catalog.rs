@@ -4,11 +4,13 @@
 //! detail is rendered from. Structural assertions only — exact type spellings belong
 //! to DataFusion and would be brittle to pin.
 
+use std::sync::Arc;
+
 use strata_core::engine::sql::FunctionCatalog;
 use strata_core::engine::Engine;
 
-fn functions() -> FunctionCatalog {
-    Engine::new(Default::default()).functions().clone()
+fn functions() -> Arc<FunctionCatalog> {
+    Engine::new(Default::default()).functions()
 }
 
 #[test]

@@ -1,13 +1,20 @@
-//! Enriching the SQL function catalog from the live DataFusion registry (F5).
+//! Enriching the SQL function catalog from the live DataFusion registry (F5), and holding it
+//! **swappably** so a session-created function is in it (ED-09).
 //!
 //! This is the **only** place a [`FunctionSym`]'s signature/return strings are
 //! produced — it touches DataFusion's `ScalarUDF`/`AggregateUDF`/`WindowUDF`
 //! (`signature()`, `return_type()`, `documentation()`) and renders everything to
 //! plain display strings at registry-snapshot time, so the language service and UI
-//! never depend on DataFusion's type model. Called once per engine (`Engine::new`).
+//! never depend on DataFusion's type model.
+//!
+//! [`snapshot`] used to run exactly once, at `Engine::new`, into an immutable field — which was
+//! true of the registry until `CREATE FUNCTION` could move it. [`Functions`] is that field made
+//! swappable: the catalog is re-walked by the statement that changed the registry and by nothing
+//! else, so the built-in set costs the same one walk it always did.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::iter;
+use std::sync::{Arc, RwLock};
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::registry::FunctionRegistry;
@@ -16,10 +23,75 @@ use datafusion::prelude::SessionContext;
 
 use crate::engine::sql::{FnKind, FunctionCatalog, FunctionSym, VARIADIC};
 
+/// The engine's function catalog, plus which of its names this session **created**.
+///
+/// **Shared by handle** for the reason `InternalTables` and `SessionScope` are: the arms that move
+/// it run inside the task `Engine::bookkeep` spawned, and that task must not hold the engine — the
+/// engine's `Drop` is what aborts it. It holds values only, so it outlives an engine harmlessly,
+/// and a fresh engine walks a fresh registry, which is what makes "a restart clears the created
+/// functions" true by construction rather than by a teardown step somebody has to remember.
+///
+/// The two halves move together because they answer one question between them. The catalog is
+/// what the completion row resolves against — the name, and the argument list as its dim detail,
+/// which is where this codebase puts signature help; `created` is what
+/// distinguishes a function this session made from a **built-in**, which `ddl::functions` needs
+/// because DataFusion's registry cannot tell them apart and its `DROP FUNCTION` would deregister
+/// either with nothing able to put a built-in back.
+#[derive(Clone, Debug)]
+pub struct Functions(Arc<RwLock<Registry>>);
+
+#[derive(Debug)]
+struct Registry {
+    /// Handed out by the `Arc`, never cloned: the language service rebuilds its `Catalog`
+    /// snapshot on every catalog epoch, and deep-copying ~1000 symbols per rebuild is the one
+    /// thing that would make that pass felt.
+    catalog: Arc<FunctionCatalog>,
+    /// [`fold_ident`](crate::engine::fold_ident)ed names of the functions this session created.
+    created: BTreeSet<String>,
+}
+
+impl Functions {
+    /// Walk `ctx`'s registry into the initial catalog — the built-in set, once per engine.
+    pub(crate) fn new(ctx: &SessionContext) -> Functions {
+        Functions(Arc::new(RwLock::new(Registry {
+            catalog: Arc::new(snapshot(ctx)),
+            created: BTreeSet::new(),
+        })))
+    }
+
+    /// The catalog as it stands. An `Arc`, so a caller holding it across an await sees the set it
+    /// asked for rather than one a concurrent `CREATE FUNCTION` moved underneath it.
+    pub fn catalog(&self) -> Arc<FunctionCatalog> {
+        Arc::clone(&self.0.read().unwrap().catalog)
+    }
+
+    /// Whether `name` (already folded) is a function **this session created** — `false` for a
+    /// built-in and for a name nothing registered.
+    pub fn created(&self, name: &str) -> bool {
+        self.0.read().unwrap().created.contains(name)
+    }
+
+    /// Record what a `CREATE FUNCTION` / `DROP FUNCTION` settled, and re-walk the registry.
+    ///
+    /// Called **after** the dispatch that moved the registry, so the catalog is read from what
+    /// DataFusion now holds rather than from what the statement claimed. The walk happens before
+    /// the lock is taken: it resolves every overload's return type, which is not work to do with
+    /// the completion pool's reader shut out.
+    pub(crate) fn settle(&self, ctx: &SessionContext, name: &str, created: bool) {
+        let catalog = Arc::new(snapshot(ctx));
+        let mut registry = self.0.write().unwrap();
+        registry.catalog = catalog;
+        match created {
+            true => registry.created.insert(name.to_string()),
+            false => registry.created.remove(name),
+        };
+    }
+}
+
 /// Snapshot every registered function (built-ins + UDFs) into a [`FunctionCatalog`],
 /// enriched with overload signatures + return type. Names are sorted so the
 /// completion pool is stable.
-pub(crate) fn snapshot(ctx: &SessionContext) -> FunctionCatalog {
+fn snapshot(ctx: &SessionContext) -> FunctionCatalog {
     let mut scalar: Vec<FunctionSym> = sorted(ctx.udfs())
         .iter()
         .filter_map(|n| ctx.udf(n).ok())

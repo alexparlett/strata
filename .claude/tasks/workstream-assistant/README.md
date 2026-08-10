@@ -97,6 +97,49 @@ own eleventh tool, never registered on the router, so `tools/list` is unchanged 
 client is offered a tool it has no transcript to use. SQL the assistant merely explains stays an
 ordinary code block; the whole point is that the two are told apart.
 
+## Placement and the interaction model (settled 2026-08-09 — survey on record)
+
+Alex debated moving the chat from the right pane to a tab beside the query tabs. A
+nine-surface survey settled it — DataGrip AI Assistant · DBeaver · Snowflake Copilot/Cortex
+Code · Snowflake Intelligence · Databricks Assistant/Genie Code · Databricks Genie ·
+MotherDuck + DuckDB UI · BigQuery Gemini/Data Canvas · Hex Notebook Agent/Threads:
+
+**The pane stays.** No tool in the category puts chat in the tab strip. Every
+SQL-author-facing assistant is a side panel or inline, because the daily loop is *anchored* —
+the conversation refers to the tab, the result, the error beside it, and a tab cannot refer
+to what it displaced. The dedicated-surface chats (Intelligence, Genie, Hex Threads) are
+separate products for non-SQL audiences, and their autonomous execution is licensed by an
+admin-curated semantic layer standing in for user review — a trust model Strata doesn't need,
+because Strata's user reads SQL and the step card shows it.
+
+The survey's residue is folded into the task files: friction-point entries + the `@tab`/
+`@result` anchors + the Open / Open-and-run promote split (AS-04), the no-prose-numbers and
+draft-never-execute prompt rules (AS-02), the what-leaves-the-machine note (AS-03).
+
+**Deliberate divergences from the field** (recorded so they are not re-litigated as gaps):
+
+- **History = adoption.** DataGrip logs AI-run queries into the shared query history for
+  accountability; Strata does not — agent runs never record (`state::agents` refuses to be a
+  second history), a promoted tab's own Run press records like any other. The Agents pane is
+  the accountability surface. This falls out of the architecture; keep it.
+- **Read-only by construction, not consent dialogs.** The field gates agentic writes with
+  consent taxonomies (DataGrip's four-way consent, Databricks Allow/Skip, Junie's allowlist).
+  Strata's assistant cannot write — the router refuses before dispatch, and write intents are
+  drafted for the user to run. Structurally stronger than any dialog; a differentiator, not a
+  gap.
+- **No grids in the transcript.** The copilot cohort is unanimous (DataGrip renders CSV
+  previews, Snowflake routes to the worksheet's pane, Databricks stays code-first); the rich
+  inline grids live only in the business-user surfaces. Mini-table + promote stands.
+
+**Banked for a future delegation surface** (arrives with transcript persistence, not before,
+and is its own task file when it does): an investigation workbench — a tab holding the
+transcript plus a results pane that *subscribes the assistant's run* (a second surface
+subscribes the query again; no second pipeline), for work you delegate rather than steer.
+BigQuery's Data Canvas (evidence as a DAG of materialized results the chat deposits into) is
+the strongest alternative shape to a linear transcript; Hex's "save Thread as a project" is
+the precedent for the graduation gesture. Nothing of it is built early (§5): this paragraph
+is the note.
+
 ## Architecture in one line
 
 **genai is the mouth, `StrataTools` is the hands, the loop is ours** — one turn = stream the

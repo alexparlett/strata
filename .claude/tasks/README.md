@@ -133,8 +133,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Editor statements** (ED-09..11) — the open capability arms over the built router/dispatch
-   spine.
+1. **Editor statements** (ED-10..11) — the last capability arm over the built router/dispatch
+   spine, then the completion offer that catches up with all of them.
 2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
    provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
    vocabulary, and AA-03c's identity finding before touching query sessions.

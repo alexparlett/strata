@@ -14,6 +14,17 @@ UI + wiring, on the state rules the app already lives by.
 - **Placement + layout.** Right-side pane; toggle rides the activity rail alongside Catalog ·
   Agents · Connections. Structure on `Chan::Layout`, sizes on `Chan::LayoutSize`
   (unsubscribed), panels keyed with fixed `.order()` — exactly the drawer/sidebar pattern.
+  Placement was re-examined against a tab-strip alternative and confirmed 2026-08-09 — the
+  README records the survey and the reasoning; the tab shape is banked as a *future* delegation
+  surface, not a relocation of this one.
+- **Entry at the point of friction.** The rail toggle is the general door; the gestures that
+  make the pane feel native open it with context already pinned: a press on a failed run's
+  error (opens with `@tab` pinned — SQL + the error), on the results toolbar ("explain this
+  result" — opens with `@result` pinned), and on a catalog item's context menu ("ask about
+  this table" — opens with `@table` pinned). Error-anchored help is the most convergent
+  gesture in the field (DataGrip, DBeaver, Databricks, Snowflake Cortex Code, MotherDuck and
+  Hex all hang it on the failure site). Each entry is one press into this same pane with a
+  chip pre-filled, never a second surface.
 - **Transcript state.** A per-window satellite in the image of `state::agents` /
   `state::log` — ephemeral, capped, **never** `SessionState` (nothing reaches
   `session.json`), under its own granular channels so a streaming delta wakes the transcript
@@ -39,14 +50,22 @@ UI + wiring, on the state rules the app already lives by.
 - **Step cards.** A tool round renders as a compact card, built from AS-02's
   `TurnEvent::ToolCall` / `ToolSettled` pair and the `Facts` the second carries — **SQL ·
   query session · exact rows · `elapsed_ms` · a `stopped` reason** — none of which the pane
-  re-derives or re-measures (`elapsed_ms` is the engine's own). `run` → SQL collapsed to
-  `util::collapse_sql`'s one-liner, row count, elapsed, and a press that **promotes** through
-  `actions::open_sql` (the same funnel the Agents pane uses — new tab, focused, ordinary
-  editable text). A `stopped` run is dressed as a status, never as a failure (`failed` on the
-  event is the fault flag, and a stop does not set it). Small results may render inline as a
-  mini-table from the run's own page (never a second results pipeline); anything bigger is the
-  promote press. Non-run tools (describe, validate…) get a one-line card, expandable to the
-  JSON.
+  re-derives or re-measures (`elapsed_ms` is the engine's own, and `stopped` is the engine's
+  own word). `run` → SQL collapsed to `util::collapse_sql`'s one-liner, row count, elapsed,
+  and the promote presses. Promotion is **two presses, Snowflake's Run/Add shape**: *Open*
+  (new tab holding the SQL through `actions::open_sql` — the same funnel the Agents pane uses
+  — not run) and *Open and run* (same funnel, Run pressed on arrival) — because in a data tool
+  the check on the assistant's SQL is the grid updating, not a diff read (MotherDuck's Instant
+  SQL lesson), and a promoted-and-run query records into history like any user press, which is
+  exactly the **history = adoption** rule (README). A `stopped` run is dressed as a status,
+  never as a failure (`failed` on the event is the fault flag, and a stop does not set it).
+  Small results may render inline as a mini-table from the run's own page (never a second
+  results pipeline); anything bigger is the promote press. Non-run tools (describe, validate…)
+  get a one-line card, expandable to the JSON. Cards are **citations**: AS-02's prompt says no
+  number in prose without a run behind it, and the card under the paragraph is what makes that
+  auditable. The card shows the arguments the call **ran with**, which AS-02 already scopes —
+  the model's own `project` is overwritten, so quoting its request could name a project the
+  run never touched.
 - **Executable cards are a different thing from step cards.** `TurnEvent::Runnable(String)`
   arrives when the assistant calls **`offer_sql`** — its own eleventh tool (AS-02, `offer.rs`),
   not on the MCP router — to hand the user a statement to execute. It renders as a card with a
@@ -58,11 +77,19 @@ UI + wiring, on the state rules the app already lives by.
   against the catalog and the **editor's** policy before the event is sent, so a card's Run
   press cannot be offering something that will not parse — and note it may legitimately carry a
   write statement the assistant itself is refused, because the user runs it under their own
-  capability.
+  capability. This is the surface the prompt's *drafted, never executed* rule lands on.
 - **@-mentions.** `@` in the composer opens a picker over the catalog **from the store**
   (tables · views · saved queries — the catalog is the `ProjectState` store, never a query).
   A mention pins that object's `describe_table` result into the turn's context via the AS-01
   facade, and renders as a chip in the sent message.
+- **Anchors beyond the catalog — same mechanism, no new tools.** Two more mention targets,
+  both *pinned context per send* exactly like `@table`, never additions to `StrataTools` (the
+  read-only gate and the vocabulary are untouched): **`@tab`** — the active tab's SQL, plus
+  its last error if the run failed — and **`@result`** — the active tab's settled run
+  (schema · row count · first page of rows), read under `Engine::pin_snapshot` exactly as any
+  reader that outlives a run. These are the two anchors a query tool lives on and a code IDE
+  cannot have; result-anchored follow-up ("why the dupes in *this* grid?") is the pane's
+  highest-value interaction.
 - **Honest degradation.** Unconfigured (AS-02's typed error): the pane states exactly what is
   missing and links Settings ▸ Assistant (`form::reveal` addressing if a row anchor exists).
   Never a dead send button.
@@ -103,6 +130,12 @@ UI + wiring, on the state rules the app already lives by.
 - No loop logic, no provider handling, no prompt text — all AS-02.
 - No conversation persistence; closing the window is the end of the transcript (v1).
 - No loosening of read-only; the assistant is the same `Host` path as every agent.
+- **No in-place edits to the user's buffer, ever in v1.** A fix or rewrite arrives as a
+  promoted tab; the buffer is often the user's only record of how a number was reached, and
+  text moving under the cursor destroys provenance. Field practice does allow in-place edits
+  — always behind a diff gate (DataGrip apply-with-diff, Databricks cell diff, Hex pending
+  changes) — so if the gesture ever comes it is diff-gated and a task of its own, never a
+  silent write.
 
 ## Acceptance
 
@@ -112,6 +145,10 @@ UI + wiring, on the state rules the app already lives by.
 - An `offer_sql` card runs its statement in a new tab and never appears as a step card; SQL the
   assistant only explains renders as an ordinary code block with no Run press.
 - The assistant has **no row in the Agents pane**, in a window where an MCP client does.
+- The three friction entries (failed run · results toolbar · catalog context menu) each open
+  the pane with the right anchor pinned, visible as a chip before the user types.
+- *Open* and *Open and run* both land in a focused tab; the run variant's query records into
+  history (adoption), while the assistant's own runs never do.
 - Streaming renders incrementally; stop mid-stream leaves a truthful cancelled turn; stop
   mid-run leaves no run in flight and no session left showing `Running`.
 - Unconfigured state names the missing field and reaches Settings; configuring and returning

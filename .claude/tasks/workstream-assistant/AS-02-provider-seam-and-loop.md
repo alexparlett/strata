@@ -209,6 +209,25 @@ log's attribution read, and `Agents::sessions_of` is the same line for the close
 Agents pane" clause so they stay true on all three transports (`open_query_session`'s doc, the
 handler `instructions`).
 
+### The system prompt
+
+`system.md`, `include_str!`'d — prose that will be edited by people reading it as prose, and
+byte-identical on every send so a provider's prompt cache holds across a conversation (pinned
+context rides the user's message instead). It authors what Strata is, the IDE register for
+user-facing prose (AGENTS.md §3 — the assistant's words render in the transcript), the tool
+guidance, and two rules the placement survey settled:
+
+- **No number in prose without a run behind it.** Every claim about the data comes from a tool
+  result in the conversation, and when a number matters the prompt asks which query produced
+  it — because the pane renders that round as a step card the user can promote, edit and rerun.
+  A wrong answer that shows its SQL is recoverable; a wrong answer in bare prose is not.
+- **A write intent is drafted, never executed.** CTAS, `COPY`, view DDL: the answer is the
+  statement, handed over through `offer_sql` so the user runs it under their own capability.
+  The refusal the tool returns is the design working, not an obstacle to route around.
+
+Both are prompt rules over a structural guarantee rather than instead of one: the router
+refuses a write before dispatch whatever the prompt says.
+
 ### The runtime
 
 `Assistant` owns a private two-worker Tokio runtime — the Engine pattern, for the Engine's

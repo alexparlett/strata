@@ -953,6 +953,53 @@ Things that must not regress. Each was fought for once already.
   epoch has to move with it. **A restart clears all of it by construction**, not by a teardown
   step: the remount builds a new `Engine`, whose `SessionScope` is a fresh `Default`.
   Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.5.
+- **A created function is a SQL macro, its catalog is swappable, and the name it may take is
+  fenced against the built-ins.** `CREATE FUNCTION` runs natively over DataFusion's own seam for
+  it — a `FunctionFactory`, installed at `build_context` on **every** engine, so the headless host
+  runs the statement identically — and the UDF it returns implements nothing but `simplify`, which
+  substitutes the call's arguments into the stored body: the function is inlined once per plan and
+  never invoked per batch. `Definition::read` is the **one** judgement of the statement, called by
+  the arm for the sentence the user reads and by the factory to build from, so a form the arm
+  accepts is a form the factory can build.
+  **The body is an expression over the arguments and nothing else, and the standard spelling of one
+  does not plan.** DataFusion plans the body against an *empty schema* with the argument list
+  supplied as placeholder types, so it accepts `$1` and `$x` and refuses the bare `x` that is
+  standard SQL and is what a user writes; `bind_parameters` says the bare form in the planner's own
+  vocabulary **on the parsed statement, before planning**, so all three land on one planned body and
+  `simplify` has one substitution to make. A bare `Column`, a subquery or a `$n` past the arity is
+  refused — a body reading a table is a hidden dependency that nothing persists and no `DROP TABLE`
+  can name. `AS '<string>'` is refused because in this dialect family `AS` takes a *string literal*,
+  so `AS 'x + 1'` would create a function returning the text; every clause the planner drops
+  silently (`STRICT`, `SECURITY`, `SET`, …) is refused off the parsed statement from a destructure
+  with no `..`, which is `views::definition`'s rule from the same position. The name is folded on
+  both statements, because DataFusion's planner takes the identifier verbatim on each.
+  **A built-in is refused to both statements**, because DataFusion's registry cannot tell one from
+  a session's own function and its `DROP FUNCTION` deregisters across *all five* registries at once
+  — scalar, aggregate, window, table, higher-order: `DROP FUNCTION abs` would take the built-in
+  away for the rest of the session with nothing able to put it back. `Functions::created` — the
+  folded names this session made, held beside the catalog — is what makes the difference nameable;
+  a name it holds is the user's to redefine under `OR REPLACE`, any other registered name is not.
+  Same shape as `CREATE OR REPLACE VIEW` over a table name, read from the other side.
+  **`registered_function` asks all five**, three of which are one method call away and two of which
+  are not: `array_filter`, `array_transform` and `array_any_match` are registered *only* as
+  higher-order, so a three-registry fence read them as free names — takeable, then destroyable by
+  the matching drop. The predicate is "what would the drop clear", never "what happens to be
+  callable"; `range` escaping a narrower fence by having a scalar twin is an accident, not a rule.
+  **And the drop's own statement is read, not trusted to the planner**: DataFusion's `DropFunction`
+  arm takes `func_desc.first()` with no length check, binds `drop_behavior: _` and never reads a
+  `FunctionDesc`'s argument list, while sqlparser parses the comma list in every dialect — so
+  `DROP FUNCTION a, b` planned as a drop of `a` alone and reported success. Refused off the parsed
+  statement from a destructure with no `..`, the same rule the create arm keeps.
+  **The catalog is re-walked by the statement that moved the registry and by nothing else.**
+  `functions::snapshot` used to run exactly once at `Engine::new` into an immutable field, which was
+  true of the registry until this statement existed; `Functions` holds it as an
+  `Arc<FunctionCatalog>` and `Engine::functions()` hands out the handle, so the built-in set still
+  costs one walk and the language service's memoized snapshot stopped deep-copying a thousand
+  symbols per catalog epoch. There is **no revision counter beside it**: `FunctionsChanged` bumps
+  the catalog epoch, which is what every consumer already keys on, and a second signal would have
+  had no readers. A restart clears the created functions by construction — a new `Engine` is a
+  fresh walk of the built-in registry.
+  Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.6.
 - **A re-scan means "list the sources again", so this engine runs no list-files cache.** DataFusion
   54 turns one on by default — 1 MiB, **infinite TTL** — and with it every re-listing answers with
   the file set from last time: the catalog's ↻, the Configure window's re-inference and

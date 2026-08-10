@@ -3,6 +3,7 @@
 
 use super::*;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 
@@ -34,11 +35,11 @@ fn catalog() -> Catalog {
     Catalog::build(
         [("events", &events[..]), ("users", &users[..])],
         [("spenders", &spenders[..])],
-        FunctionCatalog {
+        Arc::new(FunctionCatalog {
             scalar: vec!["round".into(), "lower".into(), "set_bit".into()],
             aggregate: vec!["sum".into(), "count".into()],
             window: vec!["row_number".into()],
-        },
+        }),
         Vec::new(),
         "generic".into(),
     )
@@ -296,7 +297,7 @@ fn a_column_named_execute_does_not_govern_its_clause() {
     let cat = Catalog::build(
         [("jobs", &cols[..])],
         [],
-        FunctionCatalog::default(),
+        Arc::default(),
         Vec::new(),
         "generic".into(),
     );
@@ -496,7 +497,7 @@ fn weird_identifiers_insert_quoted() {
     let cat = Catalog::build(
         [("t", &cols[..])],
         [],
-        FunctionCatalog::default(),
+        Arc::default(),
         Vec::new(),
         "generic".into(),
     );
@@ -649,7 +650,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
     let cat = Catalog::build(
         [("t", &cols[..])],
         [],
-        FunctionCatalog::default(),
+        Arc::default(),
         Vec::new(),
         "generic".into(),
     );

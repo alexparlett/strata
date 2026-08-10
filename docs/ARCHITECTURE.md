@@ -92,7 +92,7 @@ parsed statement, and `Engine::run` spends the answer.
 flowchart LR
     RUN["Engine::run<br/>(one statement per press)"] --> C{classify}
     C -->|Query| Q["query()<br/>SELECT · EXPLAIN · SHOW · DESCRIBE<br/>→ snapshot pipeline"]
-    C -->|Intercept| I["ddl::execute<br/>CREATE TABLE / CTAS · INSERT · DROP TABLE ·<br/>CREATE / DROP VIEW · COPY today;<br/>SET · PREPARE … lifted statement by statement"]
+    C -->|Intercept| I["ddl::execute<br/>CREATE TABLE / CTAS · INSERT · DROP TABLE ·<br/>CREATE / DROP VIEW · COPY · SET / RESET ·<br/>PREPARE / DEALLOCATE · CREATE / DROP FUNCTION;<br/>CREATE EXTERNAL TABLE still to lift"]
     C -->|Refuse| R["the editor's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]
 ```
 
