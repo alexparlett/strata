@@ -6,12 +6,10 @@
 
 use crate::engine::sql::context::Clause;
 
-/// Statement-lead keywords offered **first** at a blank statement: the
-/// query/inspection leads (SELECT/EXPLAIN/SHOW/DESCRIBE + WITH). Not the router's
-/// whole allowance — since ED-01 the editor also intercepts typed DDL, `COPY` and
-/// the session statements — but a lead only earns promotion here once the statement
-/// behind it runs, so each arrives with the ED task that implements it.
-pub(super) const STATEMENT_KEYWORDS: &[&str] = &[
+/// The query/inspection leads (SELECT/EXPLAIN/SHOW/DESCRIBE + WITH) — offered first
+/// at a blank statement **and** at every [`Clause::Restart`] position, because a
+/// restart is a fresh *query* (`EXPLAIN DROP TABLE` is nothing Run accepts).
+pub(super) const QUERY_LEADS: &[&str] = &[
     "SELECT",
     "WITH",
     "EXPLAIN",
@@ -19,6 +17,32 @@ pub(super) const STATEMENT_KEYWORDS: &[&str] = &[
     "SHOW",
     "SHOW TABLES",
     "DESCRIBE",
+];
+
+/// The statement leads — every statement the router intercepts for the editor
+/// (ED-04…ED-10), offered at `Start` only and **after** the query leads: a blank tab
+/// is usually a query. Kept honest against `validate::classify` by
+/// `policy_and_completion_agree_on_statement_leads`, whose lead → canonical-tail
+/// table panics on a lead with no entry — so a lead added here without extending the
+/// test fails the suite. (`CREATE TABLE AS` is not a lead: the name sits between
+/// `TABLE` and `AS`, so CTAS is reached `CREATE TABLE` → name → `AS`.)
+pub(super) const STATEMENT_LEADS: &[&str] = &[
+    "SET",
+    "CREATE TABLE",
+    "CREATE VIEW",
+    "CREATE EXTERNAL TABLE",
+    "CREATE FUNCTION",
+    "CREATE OR REPLACE VIEW",
+    "CREATE OR REPLACE FUNCTION",
+    "INSERT INTO",
+    "COPY",
+    "DROP TABLE",
+    "DROP VIEW",
+    "DROP FUNCTION",
+    "PREPARE",
+    "EXECUTE",
+    "DEALLOCATE",
+    "RESET",
 ];
 
 /// The clause ladder — the canonical clause order of a SELECT statement. A
@@ -131,7 +155,39 @@ pub(super) fn continuation_keywords(clause: Clause) -> Vec<&'static str> {
         // `DESCRIBE t` is complete — nothing follows. `EXECUTE p` / `DEALLOCATE p` likewise:
         // what may follow an `EXECUTE`'s name is its arguments, and no keyword opens those.
         Clause::Describe | Clause::Execute => {}
-        Clause::Start | Clause::Unknown => {
+        // The object word comes next.
+        Clause::Create => {
+            v.extend(["TABLE", "EXTERNAL TABLE", "VIEW", "FUNCTION", "OR REPLACE"]);
+        }
+        Clause::Drop => {
+            v.extend(["TABLE", "VIEW", "FUNCTION"]);
+        }
+        // The named object's body opens with `AS`.
+        Clause::CreateTable | Clause::CreateView | Clause::Prepare => {
+            v.push("AS");
+        }
+        // One list serves both after-name and after-format — a re-offered `STORED AS`
+        // is the same accepted noise as `LEFT |` (COMPLETION_SPEC §10).
+        Clause::CreateExternal => {
+            v.extend(["STORED AS", "LOCATION", "PARTITIONED BY", "OPTIONS"]);
+        }
+        // No `LANGUAGE`: SQL is the only accepted value and the default.
+        Clause::CreateFunction => {
+            v.extend(["RETURNS", "RETURN"]);
+        }
+        // `DROP TABLE t` is complete — nothing follows.
+        Clause::DropTable | Clause::DropView | Clause::DropFunction => {}
+        // After the target; `INSERT |` wanting `INTO` is served by the `INSERT INTO`
+        // lead phrase (COMPLETION_SPEC §10).
+        Clause::Insert => {
+            v.extend(["SELECT", "VALUES"]);
+        }
+        Clause::Copy => {
+            v.extend(["TO", "STORED AS", "PARTITIONED BY", "OPTIONS"]);
+        }
+        // `=` is punctuation and `SET k = v` is complete.
+        Clause::SetOption => {}
+        Clause::Start | Clause::Restart | Clause::Unknown => {
             v.extend(ladder_after(Clause::Select));
             v.extend(EXPR_OPS);
         }

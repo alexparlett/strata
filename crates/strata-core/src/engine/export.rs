@@ -456,11 +456,15 @@ fn partition_columns_have_no_nulls(
 /// `Send` and [`run_export`] is spawned onto the engine runtime — a `Box<dyn Dialect>` held
 /// across one of its awaits would not compile.
 ///
-/// **Shared with the typed `COPY` arm** (`ddl::copy`), which asks it of the very strings
-/// `CopyToStatement::partitioned_by` holds — those are `Ident::to_string()`'s output, so a
-/// quoted `PARTITIONED BY ("order date")` arrives here *with its quotes*, which is exactly the
-/// name that would then match no field. The bad name is rendered inside single quotes rather
-/// than by `Debug` so that case reads as what the user typed instead of as escaped Rust.
+/// **Shared with the two typed statements that carry a `PARTITIONED BY`** — `ddl::copy`, which
+/// asks it of the very strings `CopyToStatement::partitioned_by` holds, and `ddl::external`,
+/// whose `CreateExternalTable::table_partition_cols` are built the same way. Both are
+/// `Ident::to_string()`'s output, so a quoted `PARTITIONED BY ("order date")` arrives here *with
+/// its quotes* — which for a COPY is a name that matches no field, and for a registration is a
+/// partition column whose stored name can never equal a `key=` folder segment. One clause, one
+/// rule, so the wording names **`PARTITIONED BY`** rather than either statement. The bad name is
+/// rendered inside single quotes rather than by `Debug` so that case reads as what the user typed
+/// instead of as escaped Rust.
 pub(super) fn partition_columns_are_bare_words(
     columns: &[String],
     ctx: &SessionContext,
@@ -468,8 +472,8 @@ pub(super) fn partition_columns_are_bare_words(
     let dialect = sql::lex::dialect(ctx.state().config_options().sql_parser.dialect.as_ref());
     match columns.iter().find(|c| !is_bare_word(dialect.as_ref(), c)) {
         Some(bad) => Err(format!(
-            "Can't partition by '{bad}': COPY takes unquoted column names, so a partition \
-             column has to be a single plain word"
+            "Can't partition by '{bad}': PARTITIONED BY takes unquoted column names, so a \
+             partition column has to be a single plain word"
         )),
         None => Ok(()),
     }

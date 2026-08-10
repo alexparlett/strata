@@ -18,12 +18,13 @@
 use std::path::Path;
 
 use strata_core::project::{relativize, resolve_source};
+use strata_core::util::one_char;
 use strata_model::{
     ConnectionDef, CsvRead, FileCompression, JsonRead, JsonShape, ProviderId, SourceFormat,
     TableDef, TableOrigin,
 };
 
-use crate::components::form::{one_char, Choice, Control, Group, Make, TextField};
+use crate::components::form::{Choice, Control, Group, Make, TextField};
 
 /// DataFusion's own `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
 ///

@@ -18,10 +18,12 @@
 //! **Every arm is one call into a funnel that already exists.** Typed `CREATE VIEW` runs
 //! [`views::create`] — the body [`Engine::create_view`](crate::engine::Engine::create_view) runs
 //! for ⌘S; typed `CREATE EXTERNAL TABLE` and a CTAS's spooled output are both
-//! `catalog::register_external`. ED-02 ships the dispatch and the vocabulary; each arm is filled
-//! by the task that owns its capability, and until then answers with its stub refusal.
+//! `catalog::register_external`. ED-02 shipped the dispatch and the vocabulary and each arm was
+//! filled by the task that owned its capability; ED-10 was the last of them, so there is no stub
+//! refusal left and the `match` below is exhaustive on `StmtKind` with every arm real.
 
 mod copy;
+mod external;
 mod functions;
 mod session;
 mod tables;
@@ -41,13 +43,20 @@ use datafusion::sql::TableReference;
 use crate::engine::catalog::{TableMeta, ViewMeta};
 use crate::engine::functions::Functions;
 use crate::engine::sql::StmtKind;
-use crate::engine::{fold_ident, InternalTables, CATALOG, SCHEMA};
+use crate::engine::{fold_ident, Connections, InternalTables, CATALOG, SCHEMA};
 use crate::util::plural;
 use strata_model::{TableDef, ViewDef};
 
+/// The statement family's completion vocabulary (ED-11) — the format words `STORED AS`
+/// takes and the per-format `OPTIONS` key tables, owned by the module whose arms they
+/// mirror and read by `sql::complete` so the offer and the arm set are one table.
+pub(crate) use external::{option_keys_for, OptionKind, STORED_AS_FORMATS};
 /// DataFusion's own seam for `CREATE FUNCTION` (ED-09) — installed on every engine by
 /// `build_context`, which is what makes the statement dispatchable at all.
 pub(super) use functions::StrataFunctionFactory;
+/// The `SET` overlay's key fence (ED-08) — also the `SET` key pool's filter (ED-11), so
+/// what completion offers and what dispatch accepts cannot drift.
+pub(crate) use session::refuse_reserved_key;
 /// The session state a statement can move (ED-08) — held by the engine, reached by the arms.
 pub use session::SessionScope;
 /// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
@@ -155,6 +164,9 @@ pub struct Dispatch {
     pub root: DataRoot,
     /// Which registered tables Strata owns the data of (ED-04/05).
     pub internal: InternalTables,
+    /// Which object stores this project has a connection to (ED-10) — what a typed
+    /// `CREATE EXTERNAL TABLE`'s `LOCATION` may name.
+    pub connections: Connections,
     /// The `SET` overlay and the prepared-statement mirror (ED-08).
     pub scope: SessionScope,
     /// The function catalog and the names this session created (ED-09).
@@ -177,6 +189,7 @@ pub async fn execute(
     let Dispatch {
         root,
         internal,
+        connections,
         scope,
         functions: registry,
         baseline,
@@ -207,7 +220,9 @@ pub async fn execute(
         StmtKind::CreateFunction => functions::create(ctx, stmt, &registry).await,
         StmtKind::DropFunction => functions::drop(ctx, stmt, &registry).await,
         // ED-10 — the typed form of Table Config's registration.
-        StmtKind::CreateExternalTable => Err(unimplemented(kind)),
+        StmtKind::CreateExternalTable => {
+            external::create(ctx, stmt, &root, &internal, &connections).await
+        }
     }?;
     Ok(StatementReport {
         kind,
@@ -216,13 +231,6 @@ pub async fn execute(
         elapsed_ms: start.elapsed().as_millis(),
         effect: outcome.effect,
     })
-}
-
-/// An intercepted kind whose implementation has not landed yet. A refusal, in the same register
-/// as every other one — the statement classified, so the editor drew no squiggle, and the run
-/// has to say plainly why it did nothing.
-fn unimplemented(kind: StmtKind) -> String {
-    format!("{} is not implemented yet", kind.label())
 }
 
 /// What `name` resolves to in the engine's one schema, and what kind it is — `None` when the

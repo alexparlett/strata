@@ -21,9 +21,10 @@ use strata_core::engine::export::{
     Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
     WriterVersion,
 };
+use strata_core::util::one_char;
 use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
 
-use crate::components::form::{self, one_char, Make};
+use crate::components::form::{self, Make};
 
 /// The shared option vocabulary (`components::form::options`), at this window's edit type.
 /// Aliases rather than re-declarations: the export window was the first consumer of these and

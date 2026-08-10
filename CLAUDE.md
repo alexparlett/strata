@@ -8,9 +8,8 @@ name **Strata** (uneven sedimentary layers = data strata).
 
 The app is built on **Freya 0.4 (Skia/native)**. It began as a Dioxus (wry/webview) app and was
 rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The open work is the
-remaining workstreams (`.claude/tasks/`): the statement lift (ED-10..11), the assistant's
-Settings roster and chat pane (AS-03/AS-04 — the loop under them is built), chart follow-ons,
-and design polish.
+remaining workstreams (`.claude/tasks/`): the assistant's Settings roster and chat pane
+(AS-03/AS-04 — the loop under them is built), chart follow-ons, and design polish.
 
 This file is the **map** — build, layout, and where everything is. @AGENTS.md is the **bar** — the
 rules, one line each, imported into every session alongside this file; hold all work to it. Both
@@ -173,9 +172,10 @@ context. Snapshots are **Arrow IPC**; lifecycle is the facade's own bookkeeping
 walked into a swappable catalog, re-walked by the statement that moves it.
 Statement policy is one router in front of dispatch: `Engine::run` classifies, then runs a query,
 intercepts a statement, or refuses it — the editor runs queries, the table statements
-(`CREATE TABLE`/CTAS, `INSERT`, `DROP TABLE`), view DDL, `COPY`, the session statements and
-`CREATE`/`DROP FUNCTION` today, the remaining intercepted statements are being lifted one by one
-(ED-10..11), and the agent stays read-only.
+(`CREATE TABLE`/CTAS, `INSERT`, `DROP TABLE`, typed `CREATE EXTERNAL TABLE`), view DDL, `COPY`, the
+session statements and `CREATE`/`DROP FUNCTION`; every intercepted kind has a real arm, the
+completion offer covers every statement the router intercepts (ED-11), and the agent stays
+read-only.
 
 Full model — the snapshot format argument, the function registry, the statement router and its
 surfaces: [docs/reference/ENGINE.md](docs/reference/ENGINE.md).
@@ -220,8 +220,8 @@ pick up a single task (e.g. in a worktree) without loading the rest. Read the to
 first (status legend, what remains, known bugs).
 
 The numbered phases are done (their folders removed); what remains is design polish (phase 5) and
-the open workstream tasks — the statement lift (ED-10..11), the assistant's Settings roster and
-chat pane (AS-03/AS-04) and the chart follow-ons. **What each finished task settled — including
+the open workstream tasks — the assistant's Settings roster and chat pane (AS-03/AS-04) and the
+chart follow-ons. **What each finished task settled — including
 several corrections that must not
 be re-litigated** (the catalog is a store and not a query; diagnostics are a reconciliation; a
 log is recorded by its observer; only real facts) — is

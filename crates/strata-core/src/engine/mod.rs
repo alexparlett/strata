@@ -335,6 +335,8 @@ pub struct Engine {
     data_root: Mutex<Option<PathBuf>>,
     /// Which registered tables are **internal** — see [`InternalTables`].
     internal: InternalTables,
+    /// Which connections this engine has been told about — see [`Connections`].
+    connections: Connections,
     /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
     /// Default on a fresh engine, which is what makes a restart clear the session.
     session: SessionScope,
@@ -372,6 +374,59 @@ impl InternalTables {
             // name as an external one has to stop being one.
             false => set.remove(&fold_ident(name)),
         };
+    }
+}
+
+/// The connection **URLs** this engine has been told about (ED-10) — the same shape as
+/// [`InternalTables`], for the same reasons and with the same limits.
+///
+/// It holds URLs and nothing else, and answers exactly one engine-side question: **may a typed
+/// `CREATE EXTERNAL TABLE` name this bucket**. Everything else about a connection — its provider,
+/// its region, where its credentials come from, whether its row is green — is the store's, and
+/// this is deliberately not a second copy of any of it.
+///
+/// **Membership, not connectivity.** [`Engine::connect`] notes the URL whether the store went in
+/// or not, because a connection that cannot resolve a credential today is still a connection this
+/// project has: the def a statement writes is durable and the fix (`aws sso login`, a region typed
+/// into the editor, ↻) happens afterwards. Asking DataFusion's object-store registry instead would
+/// have answered *no* for exactly those, in a sentence — "not a connection in this project" — that
+/// would then be false.
+///
+/// Rebuilt by the pass, like the origin set: `register_pass`'s first phase calls `connect` for
+/// every def, and [`Engine::disconnect`] — the Forget gesture and the edit that moves a
+/// connection's URL — is the one removal.
+#[derive(Clone, Debug, Default)]
+pub struct Connections(Arc<Mutex<HashSet<String>>>);
+
+impl Connections {
+    /// The connection `url` names, **in the connection's own spelling** — `None` when this project
+    /// has none.
+    ///
+    /// Answering with the stored string rather than a bool is what keeps a def's `connection`
+    /// field equal to the `ConnectionDef::url` everything else addresses it by: the store's
+    /// picker, `resolve_source` and the Forget confirm all match on that exact string.
+    ///
+    /// The fallback compares **case-insensitively**, because the object-store registry does. A URL
+    /// reaches DataFusion through `Url::parse`, which lower-cases the scheme and the host, so
+    /// `S3://acme-lake/events/` and `http://Aserver:8484/x.csv` resolve to stores that are
+    /// registered — and a byte-for-byte membership test would refuse them, naming a connection the
+    /// project visibly has. The exact hit is tried first so the ordinary case costs one lookup.
+    pub fn resolve(&self, url: &str) -> Option<String> {
+        let set = self.0.lock().unwrap();
+        if set.contains(url) {
+            return Some(url.to_string());
+        }
+        set.iter()
+            .find(|held| held.eq_ignore_ascii_case(url))
+            .cloned()
+    }
+
+    fn note(&self, url: &str) {
+        self.0.lock().unwrap().insert(url.to_string());
+    }
+
+    fn forget(&self, url: &str) {
+        self.0.lock().unwrap().remove(url);
     }
 }
 
@@ -416,6 +471,7 @@ impl Engine {
             functions,
             data_root: Mutex::default(),
             internal: InternalTables::default(),
+            connections: Connections::default(),
             session: SessionScope::default(),
         }
     }
@@ -699,6 +755,7 @@ impl Engine {
                 let engine = ddl::Dispatch {
                     root,
                     internal: self.internal.clone(),
+                    connections: self.connections.clone(),
                     scope: self.session.clone(),
                     functions: self.functions.clone(),
                     baseline: self.overrides(),
@@ -1334,6 +1391,10 @@ impl Engine {
     /// profile the credential chain does not answer for. See [`store::connect`].
     pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
         let ctx = self.ctx.clone();
+        // Noted **whatever the outcome** — see [`Connections`]. A def that could not describe a
+        // store is still a connection this project has, and a typed statement over its bucket is
+        // one this engine should judge on the def rather than on today's credentials.
+        self.connections.note(&conn.url());
         self.rt()
             .spawn(async move { store::connect(&ctx, &conn).await })
             .await
@@ -1349,6 +1410,7 @@ impl Engine {
     /// await. Nothing is reported — see [`store::disconnect`] for why neither of its no-ops is
     /// a fault.
     pub fn disconnect(&self, url: &str) {
+        self.connections.forget(url);
         store::disconnect(&self.ctx, url);
     }
 
@@ -2824,40 +2886,35 @@ mod tests {
         assert_eq!(err, Blocked::CreateDatabase.editor_message());
     }
 
-    /// An intercepted kind whose task has not landed fails with its **stub** refusal, naming
-    /// the statement. The distinction matters: it classified, so the editor drew no squiggle,
-    /// and the run has to say plainly why nothing happened.
-    #[tokio::test]
-    async fn an_unimplemented_interception_names_the_statement() {
-        let eng = Engine::new(Default::default());
-        let err = eng
-            .run(
-                WsId(1),
-                RunTag(1),
-                "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'x.csv'".into(),
-                10,
-            )
-            .await
-            .err()
-            .expect("not implemented yet");
-        assert_eq!(err, "CREATE EXTERNAL TABLE is not implemented yet");
-    }
-
-    /// A statement that **is** implemented still needs somewhere to put what it makes, and an
-    /// engine with no project behind it says so rather than failing in DataFusion's words about
-    /// a path nobody chose (ED-04).
+    /// A statement that creates something still needs somewhere to put it, and an engine with no
+    /// project behind it says so rather than failing in DataFusion's words about a path nobody
+    /// chose (ED-04). Both creating statements, because what is missing differs: a `CREATE TABLE`
+    /// has nowhere to write the **data**, and a typed registration has nowhere to write the
+    /// **def**, which is the durable half of one (ED-10).
+    ///
+    /// (This is where the "not implemented yet" stub refusal used to be checked. There is no
+    /// unimplemented interception left — ED-10 filled the last arm — so the test that asserted
+    /// one is gone rather than pointed at a statement that now runs.)
     #[tokio::test]
     async fn creating_a_table_without_a_project_folder_says_why() {
         let eng = Engine::new(Default::default());
-        let err = eng
-            .run(WsId(1), RunTag(1), "CREATE TABLE t AS SELECT 1".into(), 10)
-            .await
-            .err()
-            .expect("nowhere to store it");
-        assert_eq!(
-            err,
-            "CREATE TABLE AS needs a project folder to store the table's data"
-        );
+        for (sql, expected) in [
+            (
+                "CREATE TABLE t AS SELECT 1",
+                "CREATE TABLE AS needs a project folder to store the table's data",
+            ),
+            (
+                "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'x.csv'",
+                "CREATE EXTERNAL TABLE needs a project folder to store the table",
+            ),
+        ] {
+            let err = eng
+                .run(WsId(1), RunTag(1), sql.into(), 10)
+                .await
+                .err()
+                .expect("nowhere to store it");
+            assert_eq!(err, expected);
+        }
     }
 
     /// **Neither refusal touches the snapshot lifecycle.** DDL does not retire a snapshot

@@ -38,21 +38,56 @@ completion detail is the surviving surface.
 ```
 Context = Dot(resolved_relation)          — after `alias.` / `relation.`
         | At(Clause, Role)
-Clause  = Start | Select | From | On | Where | GroupBy | Having | Qualify
-        | OrderBy | Limit | Offset | Describe | Unknown
+Clause  = Start | Restart
+        | Select | From | On | Where | GroupBy | Having | Qualify
+        | OrderBy | Limit | Offset | Describe | Execute
+        | Create | CreateTable | CreateView | CreateExternal | CreateFunction
+        | Drop | DropTable | DropView | DropFunction
+        | Insert | Copy | SetOption | Prepare | Unknown
 Role    = Operand        — an item is being started
         | Continuation   — the item just written is complete
-        | Binding        — a fresh name is being invented (`AS |`) or an
+        | Binding        — a fresh name is being invented (`AS |`, `CREATE TABLE |`,
+                           `PREPARE |`, a column-def list, a VALUES tuple) or an
                            unmodeled statement noun typed (`SHOW |`): the empty
                            offer is correct by definition, not a suppression
 ```
 
 **Clause** comes from the nearest clause keyword scanning back from the caret
 (`last_clause` — derived from `clause_of`, so the two can't drift), within the
-caret's statement (split on top-level `;`). The *restart* positions override it,
-all the same idea — a fresh statement begins: statement start, a derived-table
-`FROM (`, the position after a set operation (`UNION [ALL] |`, `EXCEPT |`), and
-after an `EXPLAIN [ANALYZE]` prefix.
+caret's statement (split on top-level `;`). The statement leads (`CREATE`, `DROP`,
+`INSERT`, `COPY`, `SET`/`RESET`, `PREPARE`, `EXECUTE`/`DEALLOCATE`) only govern from
+**position 0** (`leads_statement_only`) — sqlparser classes every dictionary word as
+a keyword, so without the guard a column named `set` or `copy` would govern its own
+SELECT list. `Create`/`Drop` are refined by the statement's head keywords
+(`refine_statement_clause`: `CREATE [OR REPLACE] TABLE|VIEW|FUNCTION`,
+`CREATE [OR REPLACE] EXTERNAL TABLE`, `DROP TABLE|VIEW|FUNCTION`); unrefined they
+stay `Create`/`Drop`, whose role is always Continuation — the object word comes next.
+
+**Start vs Restart**: a truly blank statement is `Start` and offers query leads
+**and** statement leads. The *restart* positions are `Restart` — a fresh **query**
+begins, so the statement leads would promise something Run refuses: a derived-table
+`FROM (`, the position after a set operation (`UNION [ALL] |`, `EXCEPT |`), an
+`EXPLAIN [ANALYZE]` prefix, `COPY (` (the source paren and only that one — a later
+`PARTITIONED BY (` or `OPTIONS (` group is the statement's own), and the `AS |` of
+CTAS / `CREATE VIEW` / `PREPARE` — a parenthesized body (`CREATE TABLE t AS (|`)
+included, which must not read as a column-definition Binding. Role and continuations
+treat `Restart` exactly as `Start`; only the lead pool differs.
+
+**The `AS` rule is governing-aware**: `… AS |` is a Binding (a name invented)
+*except* when the governing clause is `CreateTable`/`CreateView`/`Prepare` (the query
+body restarts) or `CreateExternal` with `STORED` before the `AS` (the format-word
+operand). Deeper positions inside a statement's query tail (`INSERT INTO t SELECT …
+FROM |`, `CREATE TABLE t AS … WHERE |`, `COPY (SELECT … WHERE |`) resolve to their
+own clauses via the nearest-clause scan — pinned by test, no code.
+
+**The `SET` dotted-key rule** runs before the `Dot` rule whenever the governing
+clause is `SetOption` (a config key is one dotted name — `SET datafusion.|` must not
+read as the columns of a relation named `datafusion`). Key vs value is the presence
+of an `=` between the lead and the caret. In key position the dotted chain is
+absorbed backwards into **one** partial with **one** replace span, so an accept
+replaces the whole chain; in value position `CaretAnalysis::set_key` carries the key
+text (the shape `comparand` already has). After a complete value, the ordinary item
+test yields Continuation, whose arm offers nothing.
 
 **Role** is one uniform test (`item_complete`) on the token before the caret:
 identifiers, literals, `)`, `END`, and the projection `*` end an item; everything else
@@ -61,7 +96,15 @@ every name position (sqlparser's reserved tables) *minus* the `OPERAND_EXPECTING
 connectives — so a column named `status` ends an item exactly like a plain identifier,
 while `AND` / `DISTINCT` / `WHEN` never do. The FROM zone alternates on its own tokens
 (targets after `FROM`/`JOIN`/a list comma); `DESCRIBE` expects one relation and then
-nothing.
+nothing. The statement clauses alternate on their own head tokens instead (a
+statement's grammar is positional): `DROP TABLE |` / `IF EXISTS |` / `a, |` are
+operands and the statement is complete after its name; `INSERT INTO |` is the target
+operand and its column list an operand too (the list names *existing* columns of the
+target), while a VALUES tuple is a Binding — the content is the user's own data;
+`COPY |` the source operand, its `PARTITIONED BY (…)` group an operand (columns of
+that source) and any other group (`OPTIONS`) a Binding; a `CREATE FUNCTION` body
+becomes an expression once a `RETURN` lies between the head and the caret
+(`RETURN |` and `RETURN price * |` are operands, `RETURN price |` a continuation).
 
 **Dot resolution** order: FROM/JOIN alias → inline relation (CTE, then a
 **derived-table alias** — `FROM (subquery) t` captures `t` + its scraped projection
@@ -87,12 +130,24 @@ Two kinds, deliberately distinguished:
     vs literal/direction words that end items; shared by the role test and the
     projection scraper.
   - `EXPR_OPS`, `JOIN_CONT`, `ORDER_CONT` — clause-internal continuations.
-  - `STATEMENT_KEYWORDS` — the curated statement leads (SELECT/WITH/EXPLAIN/
-    SHOW/DESCRIBE forms). Not the router's whole allowance (the editor also runs
-    typed DDL, `COPY` and the session statements) — the blank-statement offer is
-    deliberately the query/inspection leads.
+  - `QUERY_LEADS` — the query/inspection leads (SELECT/WITH/EXPLAIN/SHOW/DESCRIBE
+    forms), offered at `Start` **and** `Restart`.
+  - `STATEMENT_LEADS` — every statement the router intercepts (`SET`, the CREATE and
+    DROP families, `INSERT INTO`, `COPY`, `PREPARE`/`EXECUTE`/`DEALLOCATE`,
+    `RESET`), offered at `Start` only, after the query leads. Kept honest by the
+    lead → canonical-tail table in `policy_and_completion_agree_on_statement_leads`:
+    every lead's tail must classify `Intercept`/`Query` for the editor, and a lead
+    with no tail entry panics the test.
   - `MULTI_WORD` — presentation phrases (`GROUP BY`, `LEFT JOIN`, `IS NOT NULL`).
+    Query-only, deliberately: it rides ungated at every expression operand position,
+    so statement phrases must not enter it.
   - `JOIN_LEADINS` — join modifiers after which `JOIN` itself is next.
+  - Statement vocabularies owned by the modules whose dispatch they mirror:
+    `ddl::external`'s `STORED_AS_FORMATS` (each entry must parse through
+    `read_format`, held by its own test) and its `CSV_OPTION_KEYS` /
+    `JSON_OPTION_KEYS` tables (`{key, kind, what, set}` — the table **is**
+    `apply`'s arm set, so the offer and the arm cannot drift); `config::ENGINE_KEYS`
+    filtered through `ddl::session::refuse_reserved_key` for the `SET` key pool.
 
 ## 4. Pools and ranking
 
@@ -102,13 +157,54 @@ the rank pipeline, `tests.rs` = the suite):
 
 | Position | Pool (context tier order) |
 |---|---|
-| `Start` operand | `STATEMENT_KEYWORDS` (curated order) |
-| `From`/`Describe` operand | relations only — CTEs, tables, views (projection-boosted, §5) |
+| `Start` operand | `QUERY_LEADS` then `STATEMENT_LEADS` (curated ord continues across the two), then gated keywords |
+| `Restart` operand | `QUERY_LEADS` only, then gated keywords |
+| `From`/`Describe`/`Copy` operand | relations only — CTEs, tables, views (projection-boosted, §5; for `COPY` the boost is a no-op) |
+| `SetOption` operand, key | `ENGINE_KEYS` filtered by `refuse_reserved_key(k).is_ok()` — verbatim insert, detail = the key's `default`, `ENGINE_KEYS` order, kind `Column` (a glyph, not a taxonomy) |
+| `SetOption` operand, value (`set_key`) | the key's kind vocabulary: `Bool` ⇒ `true`/`false`, `Enum` ⇒ its options, else nothing — verbatim lowercase, no trailing space |
+| `DropTable` operand | tables and **not** views (`DROP VIEW` is the other statement) |
+| `DropView` operand | views only, for the mirror reason |
+| `Insert` operand | at the target: tables with `internal: true` only — the same answer `Engine::is_internal` gives dispatch, read from the store; in the column list: the target's own columns (see the column-list rule below), offered only when the target is one an INSERT may reach |
+| `Copy` operand, in `PARTITIONED BY (…)` | the source's columns — the catalog's for a named table, the scraped projection for a `COPY (SELECT …)` source (the column-list rule below) |
+| `CreateExternal` operand (`STORED AS \|`) | `STORED_AS_FORMATS` as keyword items |
+| `DropFunction` operand | function syms with `created: true` — bare-name insert, detail `session function` |
+| `CreateFunction` operand (the body, after `RETURN`) | the declared argument names (scraped from the token stream, detail `argument`), then functions — **never** catalog columns or relations (the body may reference only its arguments) |
+| `Execute` operand | the session's prepared names |
 | `Limit`/`Offset` operand | **nothing** (numbers) |
 | any `Binding` position | **nothing** (a name is being invented) |
 | any expression operand | in-scope columns (0) → select-aliases (1, **only** in GROUP BY/ORDER BY/HAVING/QUALIFY — where SQL allows them) → functions (2) → relations-as-qualifiers + core keywords (3) |
-| any continuation | `continuation_keywords(clause)` in curated order (0): clause-internal ops + **the ladder strictly after the clause** — never backwards |
+| any continuation | `continuation_keywords(clause)` in curated order (0): clause-internal ops + **the ladder strictly after the clause** — never backwards; the statement clauses carry their own short lists (`CREATE \|` the object words, `CREATE EXTERNAL TABLE t \|` its clauses, `COPY t \|` `TO` first, drop statements nothing) |
 | `Dot(rel)` | that relation's columns only |
+
+**The column-list rule** — one capability, not per-statement code, and **one
+decision**: `analyze_caret` resolves the list once onto `CaretAnalysis::column_list`,
+and both the role (`role_at`) and the pool (`push_list_columns`) read that answer —
+never two token scans that must agree. A statement position whose operand is a
+**column of one known relation** (an INSERT's column list, a COPY's
+`PARTITIONED BY` group) resolves the way a `Dot` position does. That relation's
+columns and nothing else (a dotted relation answers its last segment, the
+single-namespace rule); an unresolvable relation is the empty offer (Dot's own
+"precision over noise"); and the group's already-listed names written-demote through
+the same `column_ord` composition a clause region's refs use — rank only, never
+filter, exactly as a SELECT list demotes what it already projects. (A CET's
+`PARTITIONED BY` deliberately stays a Binding: its schema is inferred from files at
+registration, so there is no relation to resolve while typing — see §10.)
+
+**The `OPTIONS`-key carve-out** — the one exception to the string guard, scoped to
+exactly one position: the caret inside a single-quoted literal in **key position**
+(predecessor `(` or `,`) or **value position** (predecessor another string) inside the
+`OPTIONS (…)` group of a statement whose head refines to `CreateExternal`. Two lexing
+cases, both required: a terminated literal rides the ordinary token stream (replace =
+the content span between the quotes); an unterminated one (`OPTIONS ('format.h|`)
+errors the tokenizer, and the recovery — bounded to this position — lexes the prefix
+before the opening quote, which must be clean; any other lex error stays a guard.
+The offer is format-aware (`STORED AS <word>` scanned from the statement): CSV →
+`CSV_OPTION_KEYS`, JSON → `JSON_OPTION_KEYS`, NDJSON → the JSON set minus
+`format.newline_delimited` (refused there toward `STORED AS JSON`), Parquet / Arrow /
+unwritten → empty. Value offers ride the same carve-out with the preceding key looked
+up in the table (`Bool`/`Enum` only). Store-namespace keys and `CLIENT_KEYS` are
+never offered — the arm refuses them toward Connections, and absence from the offer
+is the same policy stated once.
 
 **Match tiers** (fuzzy.rs, case-insensitive): exact (0) → prefix (1) → word-boundary
 subsequence, `ui`→`user_id` (2) → contiguous substring (3) → gap subsequence,
@@ -275,3 +371,17 @@ JSON-RPC) is categorically out — the provider lives in-process.
   DataFusion registry) — today it renders only the completion detail; narrowing the
   argument offer against it is unbuilt (the docs-panel + signature-help UX that would
   also have consumed it was dropped).
+- Statement completion's deliberate silences (ED-11): `LOCATION '|'` and
+  `COPY … TO '|'` stay quiet — they are paths, and the right answer is the user's
+  filesystem, not a list; `COPY`'s own `OPTIONS` stays quiet — DataFusion's open
+  key namespace, not ours (its `STORED AS |` is likewise a plain Binding — only
+  `CREATE EXTERNAL TABLE` has a format vocabulary behind that position); `RESET`
+  shares `SET`'s key pool — the session overlay is not on the snapshot, so the
+  settable superset is the honest offer; `INSERT |` wanting `INTO` is served by the
+  `INSERT INTO` lead phrase rather than a continuation; VALUES tuples are Bindings
+  (the content is the user's own data — unlike an INSERT **column list** or a COPY
+  **partition list**, which name existing columns and are offered, see §4).
+- `CREATE EXTERNAL TABLE`'s `PARTITIONED BY (…)` stays a Binding even though COPY's
+  is an operand: a CET's schema is inferred from files at registration, so the
+  columns are simply not known while the statement is being typed — there is nothing
+  honest to offer.

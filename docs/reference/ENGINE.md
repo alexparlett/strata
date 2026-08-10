@@ -17,12 +17,14 @@ from the write pass (`query::SnapshotStats`), not a footer. In Freya the handle 
 (an `Arc<Engine>` + Deref) held in context — not stored in any god-object `AppState`. Statement
 policy is one router in front of dispatch: `sql::validate::classify(stmt, Capability)` answers
 `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)`. `Capability::Editor` runs queries and
-introspection and **intercepts** the rest — 14 recognised kinds, of which all but
-`CREATE EXTERNAL TABLE` are implemented today: `CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`,
-`CREATE` / `DROP VIEW`, `COPY`, the session statements (`SET` / `RESET`,
-`PREPARE` / `DEALLOCATE`) and `CREATE` / `DROP FUNCTION`. The one that remains has a destination
-that is an app funnel already: Table Config's registration path; until ED-10 lands it answers
-`ddl::execute`'s "not implemented yet". The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
+introspection and **intercepts** the rest — 14 recognised kinds, **all implemented**:
+`CREATE EXTERNAL TABLE`, `CREATE TABLE` / CTAS, `INSERT`, `DROP TABLE`, `CREATE` / `DROP VIEW`,
+`COPY`, the session statements (`SET` / `RESET`, `PREPARE` / `DEALLOCATE`) and
+`CREATE` / `DROP FUNCTION`. Each lands in an app funnel that already exists; the last of them,
+typed `CREATE EXTERNAL TABLE`, lands in Table Config's registration path, and its `OPTIONS` are
+split by namespace against connections — the reader's keys onto the def, the store's refused
+toward Connections on the key alone (`STATEMENTS_SPEC.md` §6.7).
+The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
 `INSERT OVERWRITE`, `PREPARE` of a non-query, `SET`/`RESET` of an owned, `runtime.*`, `format.*` or
 dialect key, `DROP` of a non-table/view object, reserved `__snap_` names, multi-statement buffers,
 and unknown kinds.

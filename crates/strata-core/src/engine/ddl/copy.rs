@@ -430,8 +430,8 @@ mod tests {
         .expect_err("quoted");
         assert_eq!(
             err,
-            "Can't partition by '\"region\"': COPY takes unquoted column names, so a partition \
-             column has to be a single plain word"
+            "Can't partition by '\"region\"': PARTITIONED BY takes unquoted column names, so a \
+             partition column has to be a single plain word"
         );
         assert!(!out.exists());
         let _ = fs::remove_dir_all(&root);

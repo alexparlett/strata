@@ -4,10 +4,11 @@ The editor is a **full-statement surface**: one classification in front of dispa
 parsed statement, whether Run executes a query, performs the statement as an engine method, or
 refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
 stays read-only. This file documents that surface as built — the router, the dispatch, the
-provider layer, and the statement family implemented so far (internal tables, the two writes over
-them, typed view DDL, typed `COPY`, the session statements and SQL functions). The one statement
-still to lift — typed `CREATE EXTERNAL TABLE` — is tracked in
-`.claude/tasks/workstream-editor-statements/`.
+provider layer, and the whole statement family: internal tables and the two writes over them,
+typed view DDL, typed `COPY`, the session statements, SQL functions, and typed
+`CREATE EXTERNAL TABLE`. Every intercepted kind now has a real arm; what remains of the workstream
+is the completion offer that catches up with them
+(`.claude/tasks/workstream-editor-statements/`).
 
 ```mermaid
 flowchart TD
@@ -171,7 +172,10 @@ older build.
 they need context the parsed statement does not carry, so the editor cannot know them while the
 user is typing and the refusal arrives at Run. They share the `Blocked` vocabulary and nothing
 else. Today they are an `INSERT`'s target origin and write op (§6.2, `Blocked::InsertExternal` /
-`InsertOverwrite`) and a `SET` / `RESET` key's class (§6.5, four of them).
+`InsertOverwrite`) and a `SET` / `RESET` key's class (§6.5, four of them). Every intercepted arm
+also has refusals of its **own** wording — clauses, options, a `LOCATION` naming no connection —
+which are the arm's rather than the `Blocked` vocabulary's for the same reason: the buffer alone
+cannot answer them, and each is a sentence about one statement rather than about a class of them.
 
 Known wording drift: the `Unsupported` message still says "Only SELECT, EXPLAIN, SHOW and DESCRIBE
 can run here", which is stale now that `CREATE TABLE` / CTAS run. The older `Blocked` variants
@@ -267,6 +271,10 @@ Around it, as built:
   `ENGINE_KEYS` zeroes on purpose: that one answers "which files are there", and a re-scan means
   asking again. This one answers "what is in *this* file", invalidated on size and mtime.
 
+Completion (ED-11): `CREATE TABLE` is a statement lead; the name position is a Binding (an
+invented name offers nothing) and the `AS |` of a CTAS restarts the query ladder
+(`Clause::Restart` — query leads only), so the spooled query completes exactly as a typed one.
+
 ### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
 **`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
@@ -316,6 +324,15 @@ runtime away.
 Both wordings are the engine's — `ddl::drop_intent` before the fact, the report's after — so the
 confirm cannot promise what the report then contradicts: an internal drop names the data, an
 external one keeps "the source files on disk are not deleted".
+
+Completion (ED-11): `INSERT INTO |` offers only tables built with `internal: true` on the
+`Catalog` snapshot — the store's `TableOrigin` is the internal-set authority for the offer,
+`Engine::is_internal` stays the dispatch gate, one fact read from the store because the store
+built the snapshot. The **column list** offers the target's own columns, and only for a target
+an INSERT may reach — offering columns of a statement dispatch refuses would be dishonest.
+`DROP TABLE |` offers tables and not views, `DROP VIEW |` the reverse (`ddl::tables` names the
+split in its own refusal). VALUES tuples stay silent (the content is the user's own data); the
+`INSERT`'s query tail keeps full query completion.
 
 ### 6.3 Typed view DDL — `CREATE VIEW` and `DROP VIEW`
 
@@ -382,6 +399,10 @@ lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Engine
 Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
 rounds order a chain from cold exactly as they do a saved one.
 
+Completion (ED-11): `CREATE VIEW` and `CREATE OR REPLACE VIEW` are statement leads; the view's
+name is a Binding and its `AS |` restarts the query ladder, so the definition query completes
+like any other. `DROP VIEW |` offers the views alone.
+
 ### 6.4 Typed `COPY … TO`
 
 **DataFusion's own write, behind the two checks the Export window used to stand in for**
@@ -426,6 +447,13 @@ and `SHOW` are statements a user can type (§6.5) one partitioned export would o
 the answer for every later one, window or typed. It keeps its `execution.` namespace because
 `TableOptions::set` skips that namespace entirely, which is what lets the key reach the planner
 without a format refusing it as unknown.
+
+Completion (ED-11): `COPY |` reads a relation like a FROM target; `COPY (|` — the source paren
+and only that one — restarts the query ladder; after the source, `TO` leads the continuation
+list. `PARTITIONED BY (…)` offers the **source's** columns (the catalog's for a named table,
+the scraped projection for a query source), because a partition column has to be one of them.
+The `TO '…'` path and `COPY`'s own `OPTIONS` are deliberately silent — the path is the user's
+filesystem and the option namespace is DataFusion's open one, not ours (COMPLETION_SPEC §10).
 
 ### 6.5 Session statements — `SET` / `RESET` and `PREPARE` / `EXECUTE` / `DEALLOCATE`
 
@@ -509,7 +537,16 @@ Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand (`Clause
 nowhere else — and only where that word **leads the statement**, because sqlparser classes every
 word in its dictionary as a keyword, so a table with an `execute` column would otherwise have that
 column govern the rest of its SELECT list and empty the offer there
-(`context::leads_statement_only`). The rest of the session statements' completion is ED-11.
+(`context::leads_statement_only` — since ED-11 the guard covers every statement lead, `SET`,
+`PREPARE`, `CREATE`, `DROP`, `INSERT` and `COPY` included). `SET |` / `RESET |` offer
+`config::ENGINE_KEYS` filtered through `refuse_reserved_key` **itself** — the dispatch's own
+fence, `pub(crate)` for exactly this, so the offer and the refusal cannot drift and the dialect
+key (a plain `sql_parser.*` key no predicate names) is excluded with the other three classes.
+The dotted key completes as **one** chain (accepting a key at `SET datafusion.|` replaces the
+whole chain), the detail column is the key's default, and `SET k = |` offers the key's own kind
+vocabulary (`Bool` ⇒ `true`/`false`, `Enum` ⇒ its options, anything else nothing). `RESET`
+shares the key pool — the settable superset is the honest offer. `PREPARE |` invents a name;
+`PREPARE p AS |` restarts the query ladder, so the prepared body completes like any query.
 
 ### 6.6 SQL functions — `CREATE FUNCTION` and `DROP FUNCTION`
 
@@ -596,13 +633,118 @@ neither `Completion` nor the editor's `CompletionItem` carries a docs field. Tha
 (it is F5-era API) and is not something this statement needs; the description the factory sets is
 reached through `SHOW FUNCTIONS` and nowhere else.
 
-### 6.7 Not yet implemented
+Completion (ED-11): `DROP FUNCTION |` offers only syms marked `created` — the flag rides
+`FunctionSym` from the registry snapshot (`functions::snapshot` takes the created-name set), so
+the one authority (`Functions`) answers the offer as it answers the drop's own fence, and a
+built-in is never offered to a statement that would refuse it. A `CREATE FUNCTION` body (after
+`RETURN`) offers the **declared argument names** plus functions, and never catalog columns or
+relations — the body may reference only its arguments, so scope columns would offer exactly
+what `Definition::check` refuses.
 
-`CREATE EXTERNAL TABLE` classifies `Intercept` — the editor draws no squiggle — and answers at Run
-with `ddl::execute`'s stub refusal: "CREATE EXTERNAL TABLE is not implemented yet". Its
-implementation, and the design it follows, lives in its task file under
-`.claude/tasks/workstream-editor-statements/`; the dispatch's `match` is exhaustive on `StmtKind`
-with no wildcard, so a kind the router learns to intercept is a compile error until an arm owns it.
+### 6.7 Typed `CREATE EXTERNAL TABLE`
+
+**A second gesture into the funnel Table Config already uses** (`engine/ddl/external.rs`). The
+parsed statement becomes a `TableDef { origin: External }` and goes through `register_external`, so
+the store fold, the persist funnel, replay and the headless host need no code of their own and the
+settle is CTAS's exactly: `StoreEffect::TableUpserted { def, meta }` → `ProjChan::Tables` →
+`persisted_defs` → `catalog_settled`. Either gesture edits the row the other made, and Configure
+opens on a typed def like any other.
+
+DataFusion *does* implement this statement, through `ListingTableFactory`, and that path stays
+unused for the reason §3 gives once more: it registers a provider behind the store's back, where
+the **def** is the durable artifact. A table that existed only in a `SessionContext` would appear
+in no catalog row, no `project.json` and no clone of the project, and would vanish on restart.
+
+The statement is **read, not planned**, and read exhaustively — the destructure has no `..`, so a
+clause sqlparser learns later is a compile error rather than a promise quietly broken:
+
+| Clause | Answer |
+|---|---|
+| `STORED AS` | `PARQUET` / `CSV` / `JSON` / `NDJSON` / `ARROW`; anything else — `AVRO` included — is refused **by name**, never falling through onto a reader (P4-11) and never minting a `SourceFormat::Unknown`, which exists to keep a legacy *def* loading |
+| `LOCATION` | a path takes the local rule (`project::relativize`, stored portable inside the project folder); a URL is a **connection** (below) |
+| `PARTITIONED BY` | the def's partition columns, typed. Bare names are `Utf8` — what DataFusion infers and what Configure defaults to, with the same cast warning behind it. A name repeated in the list is refused, because Arrow's `Schema` permits duplicate fields: the table would register carrying the column twice and every read would resolve the second onto the first |
+| a column list | refused: "Schemas are inferred. Remove the column list" — unless every entry is a partition column's *definition*, which is how a partition states its type (`VARCHAR`, `INT`, `BIGINT`, `DATE`, the four Configure offers, so a def cannot carry a type its picker can't show) |
+| `TEMPORARY` · `UNBOUNDED` · `WITH ORDER` · constraints | refused by name — a `TableDef` has no field for any of them, and a constraint is refused for `CREATE TABLE`'s reason (DataFusion does not enforce one) |
+| `IF NOT EXISTS` / `OR REPLACE` / plain | resolved against the one namespace tables and views share, before anything registers. An **internal** table's name is fenced off from a *replacement* ("'t' is a table Strata stores in this project. Drop it first"), because pointing it at the user's own directory would strand `.strata/tables/<slug>/` with no def naming it and nothing left that could ever delete it. Only from a replacement: `IF NOT EXISTS` and a plain create never perform one, so they get the answers every other taken name gets rather than advice to drop a table the statement asked not to touch |
+| a `__snap_` name | `Blocked::ReservedName`, at the router (§4), with `register_external` backstopping |
+
+`PARTITIONED BY` shares `export::partition_columns_are_bare_words` with the typed `COPY` (§6.4) —
+one clause, one rule, so the wording names `PARTITIONED BY` rather than either statement. Both
+receive `Ident::to_string()`'s output, so a quoted `("order date")` arrives *with its quotes*,
+which for a COPY matches no field and for a registration is a stored column name that can never
+equal a `key=` folder segment.
+
+**`OPTIONS` is two vocabularies wearing one syntax, and that is where this statement collides with
+connections.** In `datafusion-cli` the same list carries the reader's settings
+(`format.has_header`) *and* the object store's (`aws.access_key_id`, `aws.region`, `aws.endpoint`,
+client timeouts). Strata keeps those in two different files on purpose — the reader's are the table
+def's, and the store's belong to a `ConnectionDef`, which holds a *reference* to credentials and
+never a credential — so the list is split by namespace:
+
+| Key | Answer |
+|---|---|
+| a `format.` key the def has a field for | read onto it. The key set **is** the def: every `CsvRead` / `JsonRead` field has a DataFusion name and nothing else does (`docs/IMPORT_OPTIONS.md` is the same table from the other side) |
+| a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or a client option (`engine::store::CLIENT_KEYS`, shared rather than re-listed) | refused toward Connections, **on the key alone** — the value is never read and never echoed, because it may be a secret and a refusal is a sentence the user then reads and copies. (A refused statement is also never recorded: history keeps successful runs only, so a pasted key does not outlive the buffer) |
+| anything else | refused **by name**, which is what keeps the mechanism total rather than a list of the keys we thought of — a CSV option on a parquet table lands here, naming the format, which is the state `SourceFormat` exists to make unwritable |
+
+The three CSV options DataFusion has and the def deliberately lacks (`format.null_regex`,
+`format.terminator`, `format.double_quote`) reach the by-name refusal like any other key;
+`CsvRead`'s doc comment is why they are absent. `STORED AS NDJSON` **states** a shape, so
+`format.newline_delimited` is refused on it and belongs to `STORED AS JSON` — two statements of one
+fact that could otherwise disagree. A single-character option resolves through
+`util::one_char` — the rule the export and Configure windows already publish, moved into the engine
+for this third surface — rather than through DataFusion's `u8` config parse, which reads a numeric
+string as the byte *value* (so `'format.delimiter' '9'` would silently mean tab) and has no escape
+for one at all.
+
+**A `LOCATION` with a scheme names a connection, and the split is `resolve_source` read backwards**
+(`project::split_remote`, asserted round-trip). `s3://acme-lake/events/2024/` becomes
+`connection: Some("s3://acme-lake")` plus the bucket-relative source `events/2024/`, which is the
+pair every other path already holds. The URL has to be a connection **this project has**, refused
+otherwise on the terms Configure's Save is blocked on:
+
+> 's3://acme-lake' is not a connection in this project. Add it in Connections
+
+A statement cannot mint one: a connection carries a provider, a region and where its credentials
+come from, none of which a `CREATE EXTERNAL TABLE` says and one of which it must never carry. And
+refusing here is what keeps DataFusion's "No suitable object store found" — the message the
+connections-first phase exists to prevent — off a table row. Membership is
+`Engine::connections`, a set of URLs noted by `connect` **whatever the outcome** and removed by
+`disconnect`: the same shape as the internal-name set, and for the same reason it holds names and
+nothing else. Whether a connection resolved a credential today is not whether the project has it,
+and asking DataFusion's object-store registry instead would have answered *no* for exactly the
+connections whose row the user is about to go and fix.
+
+It is a `resolve`, not a `contains`, in both halves of that word. The match falls back to
+**case-insensitive**, because the registry is: a URL reaches DataFusion through `Url::parse`, which
+lower-cases the scheme and the host, so `S3://acme-lake/events/` names a store that is registered
+and a byte-for-byte test would refuse it. And the answer is the **connection's own spelling**,
+which is what the def then stores — that string is what the Configure picker, `resolve_source` and
+the Forget confirm all address the connection by, so the def cannot end up holding the user's
+casing of a URL nothing else matches.
+
+This is *not* the Configure window's LOCATION toggle read differently. That toggle is an explicit
+choice precisely so a typed **path** is never re-read as remote; here the scheme is the only thing
+the statement says about where the files are. A `file://` URL is refused naming the plain-path
+form — decoding one back into a path is percent-encoding and platform traps for nothing, since
+nothing in Strata ever writes one.
+
+The def reaches `register_external` through **`register::table_spec`** — the same def-to-spec
+mapping the registration pass and the app's catalog passes use, not a second copy of it — so the
+def this statement writes composes exactly as it will when the next open replays it.
+
+The report is "Table 't' created, 4 columns" (or `replaced`), and `count` is `None`: a registration
+reads a schema, it does not move rows. The catalog row's count is the free statistic
+`register_external` already answered with.
+
+Completion (ED-11): `STORED AS |` offers exactly `ddl::external::STORED_AS_FORMATS` — the
+module's own arms as data, held against `read_format` by test. The `OPTIONS ('…')` keys complete
+**inside their quotes** (the one exception to the string guard, terminated and unterminated
+literals both), from the same `CSV_OPTION_KEYS` / `JSON_OPTION_KEYS` tables `apply` consumes —
+format-aware, NDJSON minus the shape key, empty for Parquet/Arrow/unwritten — with `Bool` and
+`Enum` value offers. Store-namespace and client keys are never offered: the arm refuses them
+toward Connections, and absence from the offer is the same policy. `LOCATION '…'` stays silent —
+a path, the user's filesystem.
 
 ## 7. A statement, end to end
 
@@ -627,6 +769,7 @@ same files. The headless host replays identically.
 |---|---|---|---|
 | Internal table data | `.strata/tables/<slug>/` | yes | yes (gitignored) |
 | Internal table def | `project.json` + store row | yes | yes (shareable) |
+| External table defs (either gesture) | `project.json` + store row | yes | yes |
 | Views (either gesture) | `project.json` + store row | yes | yes |
 | Snapshots | temp dir, retire-on-dispatch | no (by design) | no |
 | The `SET` overlay | `SessionScope`, engine-wide | no (by design) | no |

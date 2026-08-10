@@ -135,6 +135,69 @@ pub fn caret_in_string_or_comment(sql: &str, caret: usize) -> bool {
     false
 }
 
+/// The single-quoted literal the caret sits inside, as `(open_quote, Option<close_quote>)`
+/// byte indices — `None` when the caret is not inside one (comment regions included). The
+/// companion to [`caret_in_string_or_comment`] for the one position that completes *inside*
+/// a string (ED-11's `OPTIONS` keys): the same scan, answering *which* literal rather than
+/// merely whether. A `None` close is a literal left unterminated to end-of-input.
+pub(crate) fn literal_at(sql: &str, caret: usize) -> Option<(usize, Option<usize>)> {
+    let b = sql.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() && i < caret {
+        match b[i] {
+            b'\'' => {
+                let start = i;
+                i += 1;
+                let mut close = None;
+                while i < b.len() {
+                    if b[i] == b'\'' {
+                        if b.get(i + 1) == Some(&b'\'') {
+                            i += 2; // '' escape
+                        } else {
+                            close = Some(i);
+                            i += 1;
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                match close {
+                    // Inside means strictly after the opening quote and no later than the
+                    // closing one — the caret right before the closing quote included.
+                    Some(c) if caret <= c => return (caret > start).then_some((start, Some(c))),
+                    Some(_) => {}
+                    None => return (caret > start).then_some((start, None)),
+                }
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                let start = i;
+                let end = i + sql[i..].find('\n')? + 1;
+                if caret > start && caret < end {
+                    return None; // a comment, not a literal
+                }
+                i = end;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                match sql[i + 2..].find("*/").map(|n| i + 2 + n + 2) {
+                    Some(e) if caret < e => return None, // a comment, not a literal
+                    Some(e) => i = e,
+                    None => return None,
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// Whether the caret extends a numeric literal mid-shape — `1.|`, the dot absorbed
 /// into the number token — a position where nothing can complete. Token-authoritative
 /// (an ident's dot lexes as a separate `.` and is a qualifier); lives here beside the
@@ -320,7 +383,7 @@ fn offset(starts: &[usize], loc: Location) -> usize {
 #[cfg(test)]
 mod tests {
     use super::caret_in_string_or_comment as guard;
-    use super::lex;
+    use super::{lex, literal_at};
 
     /// **The lexer follows the engine's dialect; it never picks one.** The dialects disagree
     /// at the *token* level, not only about grammar, so a hardcoded dialect here would put
@@ -433,5 +496,44 @@ mod tests {
         assert!(!at("SELECT \"a -- b\", |c FROM t"));
         // And the caret inside a quoted identifier is a legit completion position.
         assert!(!at("SELECT \"my col|umn\" FROM t"));
+    }
+
+    // ---- literal_at: which literal, not merely whether (ED-11) ----
+
+    /// `literal_at` with the caret at the `|` marker.
+    fn lit(sql_with_caret: &str) -> Option<(usize, Option<usize>)> {
+        let caret = sql_with_caret.find('|').expect("caret marker");
+        let sql = sql_with_caret.replace('|', "");
+        literal_at(&sql, caret)
+    }
+
+    #[test]
+    fn literal_at_answers_the_containing_quotes() {
+        // Inside a closed literal: the open quote and the close, caret right before
+        // the closing quote included.
+        assert_eq!(lit("OPTIONS ('for|mat')"), Some((9, Some(16))));
+        assert_eq!(lit("OPTIONS ('format|')"), Some((9, Some(16))));
+        // On or before the opening quote, and after the closing one: not inside.
+        assert_eq!(lit("OPTIONS (|'format')"), None);
+        assert_eq!(lit("OPTIONS ('format')|"), None);
+        // The caret's own literal, not the first one.
+        assert_eq!(lit("OPTIONS ('a' 'b|')"), Some((13, Some(15))));
+        // A doubled-quote escape stays one literal.
+        assert_eq!(lit("SELECT 'ab''c|d'"), Some((7, Some(14))));
+    }
+
+    #[test]
+    fn literal_at_marks_an_unterminated_literal_with_no_close() {
+        assert_eq!(lit("OPTIONS ('format.h|"), Some((9, None)));
+        assert_eq!(lit("OPTIONS ('|"), Some((9, None)));
+    }
+
+    #[test]
+    fn literal_at_is_none_inside_comments_and_quoted_idents() {
+        // A comment is not a literal, quotes in it or not.
+        assert_eq!(lit("SELECT a -- 'no|te'"), None);
+        assert_eq!(lit("SELECT /* 'no|te' */ a"), None);
+        // A quoted identifier is opaque, exactly as the sibling scanner treats it.
+        assert_eq!(lit("SELECT \"my 'col|umn'\" FROM t"), None);
     }
 }

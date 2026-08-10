@@ -7,15 +7,15 @@ editor `COPY … TO`, typed `CREATE EXTERNAL TABLE`, session statements (`SET`/`
 up with all of them — while the agent surface stays read-only and every settled funnel (the catalog
 store, the persist path, the epoch discipline, the snapshot lifecycle) stays exactly where it is.
 
-**Docs: `docs/STATEMENTS_SPEC.md`** — the statement surface **as built** (router, dispatch,
-providers, internal tables, the two writes over them, typed view DDL and typed `COPY`). Read it
-first; do not re-litigate its
-§3 (why lifecycle cannot live in the provider traits). The settled design for each *unbuilt*
-statement — typed view DDL onto the save-view funnel, session-scoped SET/PREPARE/functions, and
-the rest — lives in its own task file
-below, each self-contained, on top of the **verified DataFusion 54 facts** at the bottom of this
-file. Do not re-derive those facts. When a task lands, move its statements out of the doc's
-*Not yet implemented* list and document the built behaviour there, in the same change.
+**Docs: `docs/STATEMENTS_SPEC.md`** — the statement surface **as built**: router, dispatch,
+providers, internal tables, the two writes over them, typed view DDL, typed `COPY`, the session
+statements, SQL functions and typed `CREATE EXTERNAL TABLE`. **Every intercepted kind now has a
+real arm**, so the doc's *Not yet implemented* section is gone and `ddl::execute` has no stub
+refusal left. Read it first; do not re-litigate its §3 (why lifecycle cannot live in the provider
+traits). What each landed task settled beyond its plan is the "What the build settled" section of
+its own file — ED-10's is where the `OPTIONS`-versus-connections split was decided — on top of the
+**verified DataFusion 54 facts** at the bottom of this file. Do not re-derive those facts. When 11
+lands, document the built behaviour in the doc in the same change.
 
 The architecture in one line: **classify in front of dispatch, execute through funnels that
 already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Refuse` (ED-01, done),
@@ -35,8 +35,8 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 07 | Editor COPY TO: pre-flight NULL gate + native dispatch | ✅ | — | 02 |
 | 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ✅ | — | 02 |
 | 09 | `StrataFunctionFactory` + swappable function catalog | ✅ | — | 02 |
-| 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ⬜ | — | 02 |
-| 11 | Completion for the statements the editor now runs | ⬜ | — | 08 (ideally 09, 10) |
+| 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ✅ | — | 02 |
+| 11 | Completion for the statements the editor now runs | ✅ | — | 08–10 |
 
 ## Why the order
 
