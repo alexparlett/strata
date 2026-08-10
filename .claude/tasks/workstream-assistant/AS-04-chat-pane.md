@@ -34,16 +34,22 @@ UI + wiring, on the state rules the app already lives by.
   focused `Input` owns the keyboard: chords in `on_pre_key_down`); send becomes **stop** while
   a turn streams (cancel = AS-02's token; a cancelled turn stays in the transcript marked as
   such — truthful, not erased). Assistant prose streams in as deltas.
-- **The selector.** The composer's footer holds the conversation's pick: **entry · model ·
-  effort** (the IntelliJ AI-chat footer shape — "Junie · GPT-5.5 · High effort"). Entries
-  come from the AS-03 roster in config; model defaults to the entry's own and is overridable
-  free-form; effort renders **only** when `ProviderKind::efforts(model)` is non-empty — a
-  question about the **model**, not the provider, so switching model inside one entry can add
-  or remove the control (absent, not disabled). The pick is per-conversation runtime state on the transcript satellite — never
-  config, never `SessionState` — seeded from the roster's default entry, read at send time
-  into AS-02's per-send selection. Changing it mid-conversation affects the next send and
-  nothing already settled. A pick whose entry has since been deleted degrades honestly:
-  the footer says so and offers the default, never a silent re-point.
+- **The selector.** The composer's footer holds the conversation's pick: **provider · model ·
+  effort** (the IntelliJ AI-chat footer shape — "Junie · GPT-5.5 · High effort"). Providers are
+  the **enabled** ones in `Ai::providers` (`Ai::enabled()`, keyed by `ProviderKind` — AS-03 has
+  no roster of named entries and no per-entry model; that shape was built and withdrawn, see its
+  task file). Model and effort seed from `Ai::default_model` / `Ai::default_effort` and are
+  overridable here; the model stays free-form text with the provider's reported list offered
+  beside it (`provider::list_models`, the same call Settings' Test makes). Effort renders **only**
+  when `efforts(kind, model)` is non-empty — a
+  question about the **model**, not the provider, so changing model within one provider can add
+  or remove the control (absent, not disabled). The pick is per-conversation runtime state on the
+  transcript satellite — never config, never `SessionState` — seeded from `Ai::default_provider`,
+  read at send time into AS-02's per-send selection. Changing it mid-conversation affects the
+  next send and nothing already settled. A pick whose provider has since been **disabled**
+  degrades honestly: the footer says so and offers the default, never a silent re-point. (In
+  Settings a disabled provider also loses its key, so "disabled" and "no longer usable" are one
+  state rather than two the pane has to tell apart.)
 - **Rendering.** Evaluate the fork's `freya-markdown` for the transcript **first**
   (standard-components-first, one level up); build bespoke only for what it will not carry,
   and then prefer extending it in the fork (§6) over app-side workarounds.

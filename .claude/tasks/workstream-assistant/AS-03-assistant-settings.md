@@ -8,14 +8,16 @@
 > `write_config` round trip), and the manual check that the bundled, signed app reads its own
 > item — see `AS-05-secret-store.md` ▸ *What is not proved yet*.
 
-**Workstream:** Assistant · **Status:** 🟡 · **Depends on:** AS-02 (the provider table and
+**Workstream:** Assistant · **Status:** ✅ · **Depends on:** AS-02 (the provider table and
 `Selection`), AS-05 (the key-reference type)
 
-> **Built, and not yet seen working end to end.** Every pane, the config vocabulary, the probe
-> and the keystore commit are in and the suite is green — but two acceptance items are *code*
-> rather than *evidence*, and both need a person at the window: the roster surviving a restart,
-> and the signed bundle reading its own Keychain item (AS-05 owes the same check). Everything
-> below is written as built; this line is what stops it reading as verified.
+> **Done, with one check owed elsewhere.** The three panes, the config vocabulary, the probe and
+> the keystore commit are built, reviewed and green — and the round trip was exercised in the
+> app: a pasted key reached the Keychain, its marker reached `config.json`, and both survived a
+> restart. What has *not* been shown is the same trip from the **signed bundle**. Keychain access
+> is per code signature, so a dev binary proving it does not prove the `.app`; that check is
+> already `AS-05-secret-store.md` ▸ *What is not proved yet* and stays there rather than holding
+> this task open, because it is a fact about the bundle rather than about this pane.
 
 ## Reshaped 2026-08-10 — the design handoff, and the model that is not here
 

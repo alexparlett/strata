@@ -99,10 +99,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
   over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
   OpenAI-compatible), driving the AA tool vocabulary in-process. Five tasks: in-process facade
-  + tool manifest, provider seam + loop, Settings ▸ Assistant (a **roster** of provider
-  entries — the per-conversation pick of entry/model/effort lives on the pane's composer, a
-  split settled 2026-08-09), the pane, and the **secret store** (OS keystore; config holds
-  references, never keys). **01 ✅** (the ten tools are `StrataTools`' own public methods and
+  + tool manifest, provider seam + loop, **Settings ▸ AI** (Providers · Chat · MCP — one row per
+  provider kind saying what *addresses* it; the per-conversation pick of provider/model/effort
+  lives on the pane's composer, a split settled 2026-08-09), the pane, and the **secret store**
+  (OS keystore; config holds references, never keys). **01 ✅** (the ten tools are `StrataTools`' own public methods and
   the `#[tool]` items are wrappers over them; `manifest()` derives the model-facing offer from
   the router that answers `tools/list`), **02 ✅** (`strata_agent::assistant` — one provider
   table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
