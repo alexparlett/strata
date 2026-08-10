@@ -33,7 +33,7 @@ fn catalog() -> Catalog {
         col("total", DataType::Float64),
     ];
     Catalog::build(
-        [("events", &events[..]), ("users", &users[..])],
+        [("events", &events[..], false), ("users", &users[..], false)],
         [("spenders", &spenders[..])],
         Arc::new(FunctionCatalog {
             scalar: vec!["round".into(), "lower".into(), "set_bit".into()],
@@ -295,7 +295,7 @@ fn a_column_named_execute_does_not_govern_its_clause() {
     }
     let cols = [col("execute"), col("deallocate"), col("amount")];
     let cat = Catalog::build(
-        [("jobs", &cols[..])],
+        [("jobs", &cols[..], false)],
         [],
         Arc::default(),
         Vec::new(),
@@ -495,7 +495,7 @@ fn weird_identifiers_insert_quoted() {
     }
     let cols = [col("Amount USD"), col("order"), col("plain")];
     let cat = Catalog::build(
-        [("t", &cols[..])],
+        [("t", &cols[..], false)],
         [],
         Arc::default(),
         Vec::new(),
@@ -648,7 +648,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
     }
     let cols = [col("null"), col("case"), col("asc"), col("plain")];
     let cat = Catalog::build(
-        [("t", &cols[..])],
+        [("t", &cols[..], false)],
         [],
         Arc::default(),
         Vec::new(),
@@ -727,6 +727,9 @@ fn manual_trigger_lifts_the_tail_gate() {
 
 #[test]
 fn policy_and_completion_agree_on_statement_leads() {
+    use crate::engine::sql::{classify, Capability, Verdict};
+    use datafusion::sql::parser::DFParserBuilder;
+    use datafusion::sql::sqlparser::dialect::GenericDialect;
     // Spot contract with `validate::classify(_, Editor)`: a word that appears only in
     // refused forms is never offered; a word that leads something the editor runs — a
     // query, or a statement it intercepts — is never blocked. Words, not statements:
@@ -761,6 +764,478 @@ fn policy_and_completion_agree_on_statement_leads() {
             "{allowed} must stay offered"
         );
     }
+
+    // And every lead completes to a statement the editor runs: each entry of the two
+    // lead tables has a canonical tail here, parsed and put to the router. A lead with
+    // no tail entry panics, so adding a lead without extending this table fails the
+    // suite; a tail the router refuses fails the assert.
+    let tail = |lead: &str| match lead {
+        "SELECT" => "SELECT 1",
+        "WITH" => "WITH x AS (SELECT 1) SELECT * FROM x",
+        "EXPLAIN" => "EXPLAIN SELECT 1",
+        "EXPLAIN ANALYZE" => "EXPLAIN ANALYZE SELECT 1",
+        "SHOW" => "SHOW datafusion.execution.batch_size",
+        "SHOW TABLES" => "SHOW TABLES",
+        "DESCRIBE" => "DESCRIBE t",
+        "SET" => "SET datafusion.execution.batch_size = 1024",
+        "CREATE TABLE" => "CREATE TABLE t AS SELECT 1",
+        "CREATE VIEW" => "CREATE VIEW v AS SELECT 1",
+        "CREATE EXTERNAL TABLE" => "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'f.parquet'",
+        "CREATE FUNCTION" => "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN x + 1",
+        "CREATE OR REPLACE VIEW" => "CREATE OR REPLACE VIEW v AS SELECT 1",
+        "CREATE OR REPLACE FUNCTION" => {
+            "CREATE OR REPLACE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN x + 1"
+        }
+        "INSERT INTO" => "INSERT INTO t VALUES (1)",
+        "COPY" => "COPY t TO 'x.parquet'",
+        "DROP TABLE" => "DROP TABLE t",
+        "DROP VIEW" => "DROP VIEW v",
+        "DROP FUNCTION" => "DROP FUNCTION f",
+        "PREPARE" => "PREPARE p AS SELECT 1",
+        "EXECUTE" => "EXECUTE p",
+        "DEALLOCATE" => "DEALLOCATE p",
+        "RESET" => "RESET datafusion.execution.batch_size",
+        other => panic!("lead '{other}' has no canonical tail — extend this table"),
+    };
+    for lead in QUERY_LEADS.iter().chain(STATEMENT_LEADS) {
+        let sql = tail(lead);
+        let mut stmts = DFParserBuilder::new(sql)
+            .with_dialect(&GenericDialect {})
+            .build()
+            .expect("builds")
+            .parse_statements()
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert_eq!(stmts.len(), 1, "{sql}");
+        let verdict = classify(&stmts.pop_back().unwrap(), Capability::Editor);
+        assert!(
+            matches!(verdict, Verdict::Query | Verdict::Intercept(_)),
+            "{lead} → {sql}: {verdict:?}"
+        );
+    }
+}
+
+// ---- statement completion (ED-11) ----
+
+#[test]
+fn statement_leads_offered_at_start_and_not_at_restarts() {
+    let items = at("|");
+    for lead in STATEMENT_LEADS {
+        pos(&items, lead);
+    }
+    // Query leads first: a blank tab is usually a query.
+    assert!(
+        pos(&items, "SELECT") < pos(&items, "SET"),
+        "{:?}",
+        labels(&items)
+    );
+    // Restart positions are a fresh query — the statement leads would promise
+    // something Run refuses there.
+    for sql in [
+        "EXPLAIN |",
+        "SELECT 1 UNION ALL |",
+        "SELECT * FROM (|",
+        "COPY (|",
+        "CREATE TABLE t AS |",
+        "CREATE OR REPLACE VIEW v AS |",
+        "PREPARE p AS |",
+    ] {
+        let items = at(sql);
+        assert_eq!(pos(&items, "SELECT"), 0, "{sql}: {:?}", labels(&items));
+        for lead in ["SET", "DROP TABLE", "INSERT INTO", "COPY", "PREPARE"] {
+            absent(&items, lead);
+        }
+    }
+}
+
+#[test]
+fn set_key_completes_and_replaces_the_whole_dotted_chain() {
+    let sql = "SET datafusion.exec";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    let p = pos(&items, "datafusion.execution.batch_size");
+    // Verbatim: never quoted, never uppercased — and the accept replaces the whole
+    // chain, never appending a second namespace.
+    assert_eq!(items[p].insert, "datafusion.execution.batch_size");
+    assert_eq!(items[p].replace, 4..19, "{:?}", items[p].replace);
+    // The detail is the key's default — short and non-empty for every offerable key.
+    assert_eq!(items[p].detail.as_deref(), Some("8192"));
+    // A dotted continuation completes too.
+    let sql = "SET datafusion.";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    let p = pos(&items, "datafusion.execution.batch_size");
+    assert_eq!(items[p].replace, 4..15);
+}
+
+#[test]
+fn set_key_pool_agrees_bidirectionally_with_the_dispatch_fence() {
+    use crate::engine::config::{DIALECT_KEY, ENGINE_KEYS};
+    use crate::engine::ddl::refuse_reserved_key;
+    let items = at("SET |");
+    for k in ENGINE_KEYS {
+        assert_eq!(
+            items.iter().any(|c| c.label == k.key),
+            refuse_reserved_key(k.key).is_ok(),
+            "{}",
+            k.key
+        );
+    }
+    // The named absences, the dialect explicitly: it is a plain `sql_parser.*` key
+    // with no predicate of its own, which is why the pool calls the fence itself.
+    absent(&items, DIALECT_KEY);
+    absent(&items, "datafusion.runtime.memory_limit");
+    absent(&items, "datafusion.format.null");
+    for c in &items {
+        assert!(
+            c.detail.as_deref().is_some_and(|d| !d.is_empty()),
+            "{} has no default to show",
+            c.label
+        );
+    }
+    // RESET shares the pool: the settable superset is the honest offer.
+    pos(&at("RESET |"), "datafusion.execution.batch_size");
+}
+
+#[test]
+fn set_value_positions_offer_the_keys_own_vocabulary() {
+    // A Bool key offers its two words, an Enum key its options, an Int key nothing —
+    // inserted verbatim lowercase, no trailing space.
+    let items = at("SET datafusion.execution.coalesce_batches = |");
+    assert_eq!(labels(&items), vec!["true", "false"]);
+    assert_eq!(items[0].insert, "true");
+    let items = at("SET datafusion.explain.format = |");
+    assert_eq!(labels(&items), vec!["indent", "tree"]);
+    assert!(at("SET datafusion.execution.batch_size = |").is_empty());
+    // After a complete value the statement is done.
+    assert!(at("SET datafusion.execution.batch_size = 1024 |").is_empty());
+}
+
+#[test]
+fn drop_and_insert_operands_filter_by_statement() {
+    fn col(name: &str) -> ColumnInfo {
+        column_info(&Field::new(name, DataType::Int64, true))
+    }
+    let cols = [col("id")];
+    let scratch = [col("id"), col("ts")];
+    let cat = Catalog::build(
+        [
+            ("events", &cols[..], false),
+            ("scratch", &scratch[..], true),
+        ],
+        [("spenders", &cols[..])],
+        Arc::default(),
+        Vec::new(),
+        "generic".into(),
+    );
+    // DROP TABLE offers tables and not views; DROP VIEW the reverse.
+    let items = complete("DROP TABLE ", 11, &cat, false);
+    pos(&items, "events");
+    pos(&items, "scratch");
+    absent(&items, "spenders");
+    let items = complete("DROP TABLE IF EXISTS ", 21, &cat, false);
+    pos(&items, "events");
+    let items = complete("DROP VIEW ", 10, &cat, false);
+    assert_eq!(labels(&items), vec!["spenders"]);
+    // INSERT INTO offers only tables built with `internal: true` — the same answer
+    // `Engine::is_internal` gives dispatch, read from the store.
+    let items = complete("INSERT INTO ", 12, &cat, false);
+    assert_eq!(labels(&items), vec!["scratch"]);
+    // Invented names offer nothing.
+    assert!(complete("CREATE TABLE ", 13, &cat, false).is_empty());
+    assert!(complete("PREPARE ", 8, &cat, false).is_empty());
+    // The column list names the target's own columns — for a target an INSERT may
+    // reach; a doomed target's list offers nothing, and a VALUES tuple is the
+    // user's own data.
+    let items = complete("INSERT INTO scratch (", 21, &cat, false);
+    assert_eq!(labels(&items), vec!["id", "ts"]);
+    assert!(complete("INSERT INTO events (", 20, &cat, false).is_empty());
+    assert!(complete("INSERT INTO scratch VALUES (1, ", 31, &cat, false).is_empty());
+    // The query way inside the list too: an already-listed column sinks — the same
+    // written-demotion a SELECT list applies — but is never filtered.
+    let sql = "INSERT INTO scratch (id, ";
+    let items = complete(sql, sql.len(), &cat, false);
+    assert_eq!(labels(&items), vec!["ts", "id"]);
+    // A column literally named `values` is a Keyword to sqlparser — the role reads
+    // the positional resolver, so the list keeps offering.
+    let vals = [col("values"), col("n")];
+    let vcat = Catalog::build(
+        [("v", &vals[..], true)],
+        [],
+        Arc::default(),
+        Vec::new(),
+        "generic".into(),
+    );
+    let sql = "INSERT INTO v (\"values\", ";
+    let items = complete(sql, sql.len(), &vcat, false);
+    assert!(items.iter().any(|c| c.label == "n"), "{:?}", labels(&items));
+}
+
+#[test]
+fn a_parenthesized_body_after_as_restarts_the_ladder() {
+    // The regression: these offered the core vocabulary before ED-11 and must not
+    // land in the column-definition Binding now.
+    for sql in ["CREATE TABLE t AS (|", "CREATE OR REPLACE VIEW v AS (|"] {
+        let items = at(sql);
+        assert_eq!(pos(&items, "SELECT"), 0, "{sql}: {:?}", labels(&items));
+    }
+}
+
+#[test]
+fn copy_partition_list_offers_the_sources_columns() {
+    // A named source answers from the catalog…
+    let sql = "COPY events TO 'x.parquet' PARTITIONED BY (";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    pos(&items, "user_id");
+    pos(&items, "status");
+    absent(&items, "name"); // another table's column
+    absent(&items, "SELECT"); // and never the restart's query leads
+                              // …a query source answers its scraped projection…
+    let sql = "COPY (SELECT user_id, amount FROM events) TO 'x' PARTITIONED BY (us";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    assert_eq!(labels(&items), vec!["user_id"]);
+    // …a qualified source resolves to its last segment, the shared dotted rule…
+    let sql = "COPY s.events TO 'x' PARTITIONED BY (";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    pos(&items, "user_id");
+    // …an already-listed column sinks, the query way, but never disappears…
+    let sql = "COPY events TO 'x' PARTITIONED BY (user_id, ";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    assert!(
+        pos(&items, "amount") < pos(&items, "user_id"),
+        "{:?}",
+        labels(&items)
+    );
+    pos(&items, "user_id");
+    // …and COPY's own OPTIONS stays the user's content.
+    let sql = "COPY events TO 'x' OPTIONS (";
+    assert!(complete(sql, sql.len(), &catalog(), false).is_empty());
+}
+
+#[test]
+fn deallocate_prepare_still_offers_prepared_names() {
+    // The `clause_of` regression: `PREPARE` governs statements now, but inside
+    // `DEALLOCATE PREPARE |` the position-0 guard skips it and `DEALLOCATE` wins.
+    let prepared = vec![PreparedSym {
+        name: "spend".into(),
+        params: Vec::new(),
+    }];
+    let cat = Catalog::build([], [], Arc::default(), prepared, "generic".into());
+    let items = complete("DEALLOCATE PREPARE ", 19, &cat, false);
+    assert_eq!(labels(&items), vec!["spend"]);
+}
+
+#[test]
+fn lead_named_columns_never_govern() {
+    // Mirrors `a_column_named_execute_does_not_govern_its_clause` for every new lead:
+    // the user's column names are not ours to reserve.
+    fn col(name: &str) -> ColumnInfo {
+        column_info(&Field::new(name, DataType::Utf8, true))
+    }
+    let cols = [
+        col("set"),
+        col("copy"),
+        col("drop"),
+        col("insert"),
+        col("create"),
+        col("prepare"),
+        col("amount"),
+    ];
+    let cat = Catalog::build(
+        [("jobs", &cols[..], false)],
+        [],
+        Arc::default(),
+        Vec::new(),
+        "generic".into(),
+    );
+    for lead in ["set", "copy", "drop", "insert", "create", "prepare"] {
+        let sql = format!("SELECT {lead}, ");
+        let items = complete(&format!("{sql} FROM jobs"), sql.len(), &cat, false);
+        assert!(
+            items.iter().any(|c| c.label == "amount"),
+            "{sql}| lost its columns: {:?}",
+            labels(&items)
+        );
+    }
+}
+
+#[test]
+fn stored_as_offers_exactly_the_formats() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS ";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    assert_eq!(
+        labels(&items),
+        vec!["PARQUET", "CSV", "JSON", "NDJSON", "ARROW"]
+    );
+    assert_eq!(items[0].insert, "PARQUET ");
+}
+
+#[test]
+fn options_keys_complete_inside_their_quotes() {
+    let prefix = "CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('";
+    // Terminated literal: the ordinary token stream, replace = the whole content span
+    // between the quotes.
+    let sql = format!("{prefix}format.h')");
+    let caret = prefix.len() + "format.h".len();
+    let items = complete(&sql, caret, &catalog(), false);
+    let p = pos(&items, "format.has_header");
+    assert_eq!(items[p].insert, "format.has_header");
+    assert_eq!(items[p].replace, prefix.len()..caret);
+    assert_eq!(items[p].detail.as_deref(), Some("header row"));
+    // Unterminated literal: the tokenizer error is this literal's own quote — the
+    // recovery treats the text after it as the partial.
+    let sql = format!("{prefix}format.h");
+    let items = complete(&sql, sql.len(), &catalog(), false);
+    let p = pos(&items, "format.has_header");
+    assert_eq!(items[p].replace, prefix.len()..sql.len());
+    // A mid-literal caret still replaces the literal's whole remaining text — an
+    // unterminated literal runs to end-of-input, so a replace that stopped at the
+    // caret would splice the tail onto the accepted key.
+    let sql = format!("{prefix}formatx");
+    let caret = prefix.len() + "form".len();
+    let items = complete(&sql, caret, &catalog(), false);
+    let p = pos(&items, "format.has_header");
+    assert_eq!(items[p].replace, prefix.len()..sql.len());
+    // An empty key position offers the format's whole set.
+    let sql = prefix.to_string();
+    let items = complete(&sql, sql.len(), &catalog(), false);
+    pos(&items, "format.delimiter");
+    pos(&items, "format.compression");
+}
+
+#[test]
+fn options_keys_follow_the_written_format() {
+    let at_open = |sql: &str| complete(sql, sql.len(), &catalog(), false);
+    // JSON's keys are not CSV's.
+    let items = at_open("CREATE EXTERNAL TABLE t STORED AS JSON OPTIONS ('");
+    pos(&items, "format.newline_delimited");
+    absent(&items, "format.has_header");
+    // NDJSON drops the shape key, which `read_format` refuses toward STORED AS JSON.
+    let items = at_open("CREATE EXTERNAL TABLE t STORED AS NDJSON OPTIONS ('");
+    pos(&items, "format.schema_infer_max_rec");
+    absent(&items, "format.newline_delimited");
+    // A format with no options — and a format not yet written — offer nothing.
+    assert!(at_open("CREATE EXTERNAL TABLE t STORED AS PARQUET OPTIONS ('").is_empty());
+    assert!(at_open("CREATE EXTERNAL TABLE t OPTIONS ('").is_empty());
+    // Store-namespace and client keys are never offered: the arm refuses them toward
+    // Connections, and absence from the offer is the same policy.
+    let items = at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('");
+    absent(&items, "aws.region");
+    absent(&items, "timeout");
+}
+
+#[test]
+fn options_values_ride_the_keys_kind() {
+    let at_open = |sql: &str| complete(sql, sql.len(), &catalog(), false);
+    let items = at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('format.has_header' '");
+    assert_eq!(labels(&items), vec!["true", "false"]);
+    let items = at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('format.compression' '");
+    assert_eq!(
+        labels(&items),
+        vec!["uncompressed", "gzip", "bzip2", "xz", "zstd"]
+    );
+    // A Char key's value is the user's own data.
+    assert!(
+        at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('format.delimiter' '").is_empty()
+    );
+    // The carve-out is CREATE EXTERNAL TABLE's alone — every other string stays quiet.
+    assert!(at("COPY (SELECT 1) TO '|'").is_empty());
+    assert!(at("SELECT 'format.h|' FROM events").is_empty());
+}
+
+#[test]
+fn create_function_body_offers_arguments_and_functions_only() {
+    let sql = "CREATE FUNCTION f(price DOUBLE, qty BIGINT) RETURNS DOUBLE RETURN ";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    let p = pos(&items, "price");
+    assert_eq!(items[p].detail.as_deref(), Some("argument"));
+    pos(&items, "qty");
+    pos(&items, "round"); // functions ride behind the arguments
+    assert!(pos(&items, "price") < pos(&items, "round"));
+    // Never catalog columns or relations: the body may reference only its arguments,
+    // so offering scope columns would offer exactly what `Definition::check` refuses.
+    absent(&items, "events");
+    absent(&items, "amount");
+    // Deeper into the expression the alternation holds.
+    let sql = "CREATE FUNCTION f(price DOUBLE, qty BIGINT) RETURNS DOUBLE RETURN price * ";
+    let items = complete(sql, sql.len(), &catalog(), false);
+    pos(&items, "qty");
+}
+
+#[test]
+fn drop_function_offers_only_created_functions() {
+    let mut created: FunctionSym = "my_udf".into();
+    created.created = true;
+    let cat = Catalog::build(
+        [],
+        [],
+        Arc::new(FunctionCatalog {
+            scalar: vec!["round".into(), created],
+            aggregate: vec!["sum".into()],
+            window: Vec::new(),
+        }),
+        Vec::new(),
+        "generic".into(),
+    );
+    let items = complete("DROP FUNCTION ", 14, &cat, false);
+    assert_eq!(labels(&items), vec!["my_udf"]);
+    assert_eq!(
+        items[0].insert, "my_udf",
+        "the bare name — a DROP takes no call"
+    );
+    assert_eq!(items[0].detail.as_deref(), Some("session function"));
+}
+
+#[test]
+fn statement_continuations_offer_the_next_clause() {
+    let items = at("CREATE |");
+    assert_eq!(pos(&items, "TABLE"), 0, "{:?}", labels(&items));
+    pos(&items, "EXTERNAL TABLE");
+    pos(&items, "OR REPLACE");
+    let items = at("DROP |");
+    assert_eq!(pos(&items, "TABLE"), 0, "{:?}", labels(&items));
+    pos(&items, "VIEW");
+    pos(&items, "FUNCTION");
+    let items = at("CREATE TABLE t |");
+    assert_eq!(pos(&items, "AS"), 0, "{:?}", labels(&items));
+    let items = at("CREATE EXTERNAL TABLE t |");
+    assert_eq!(pos(&items, "STORED AS"), 0, "{:?}", labels(&items));
+    pos(&items, "LOCATION");
+    pos(&items, "PARTITIONED BY");
+    pos(&items, "OPTIONS");
+    let items = at("COPY events |");
+    assert_eq!(pos(&items, "TO"), 0, "{:?}", labels(&items));
+    let items = at("INSERT INTO events |");
+    assert_eq!(pos(&items, "SELECT"), 0, "{:?}", labels(&items));
+    pos(&items, "VALUES");
+    let items = at("CREATE FUNCTION f(x BIGINT) |");
+    assert_eq!(pos(&items, "RETURNS"), 0, "{:?}", labels(&items));
+    pos(&items, "RETURN");
+    // `DROP TABLE t` is complete — nothing follows.
+    assert!(at("DROP TABLE events |").is_empty());
+}
+
+#[test]
+fn query_tails_inside_statements_keep_full_query_completion() {
+    let items = at("INSERT INTO events SELECT user_id FROM |");
+    pos(&items, "events");
+    pos(&items, "users");
+    let items = at("CREATE TABLE t AS SELECT amount FROM events WHERE |");
+    assert_eq!(
+        items[0].kind,
+        CompletionKind::Column,
+        "{:?}",
+        labels(&items)
+    );
+    pos(&items, "amount");
+    let items = at("COPY (SELECT amount FROM events WHERE |");
+    pos(&items, "amount");
+}
+
+#[test]
+fn statement_vocabulary_never_leaks_into_query_positions() {
+    let items = at("SELECT * FROM events WHERE |");
+    absent(&items, "datafusion.execution.batch_size");
+    absent(&items, "STORED AS");
+    absent(&items, "LOCATION");
+    absent(&items, "format.has_header");
 }
 
 // ---- function-argument positions ----
@@ -841,6 +1316,16 @@ const TORTURE: &[&str] = &[
     // Multi-statement with a dangling second statement mid-edit.
     "SELECT name FROM users WHERE user_id IN (SELECT user_id FROM spenders); \
      SELECT status, ",
+    // The statement family (ED-11), swept caret-by-caret like everything else.
+    "CREATE EXTERNAL TABLE hits STORED AS CSV LOCATION 'lake/' \
+     OPTIONS ('format.has_header' 'true', 'format.delimiter' ';') PARTITIONED BY (year INT)",
+    "INSERT INTO scratch SELECT user_id, amount FROM events WHERE status = 'ok'",
+    "COPY (SELECT user_id, sum(amount) AS total FROM events GROUP BY user_id) \
+     TO 'out/spend.parquet' STORED AS PARQUET PARTITIONED BY (user_id)",
+    "CREATE FUNCTION usd(price DOUBLE, rate DOUBLE) RETURNS DOUBLE RETURN price * rate",
+    // A session statement beside a query, and a dangling SET mid-edit tail.
+    "SET datafusion.execution.batch_size = 1024; SELECT amount FROM events",
+    "SELECT ts FROM events; SET datafusion.exec",
 ];
 
 #[test]

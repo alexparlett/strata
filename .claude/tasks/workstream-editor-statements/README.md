@@ -36,7 +36,7 @@ already exist** — `classify(stmt, Capability)` answers `Query`/`Intercept`/`Re
 | 08 | Session statements: SET/RESET overlay · PREPARE/EXECUTE/DEALLOCATE | ✅ | — | 02 |
 | 09 | `StrataFunctionFactory` + swappable function catalog | ✅ | — | 02 |
 | 10 | Typed CREATE EXTERNAL TABLE onto the Table Config funnel | ✅ | — | 02 |
-| 11 | Completion for the statements the editor now runs | ⬜ | — | 08–10 (all ✅; the task file is the settled contract) |
+| 11 | Completion for the statements the editor now runs | ✅ | — | 08–10 |
 
 ## Why the order
 
