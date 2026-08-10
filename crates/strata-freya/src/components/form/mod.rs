@@ -98,32 +98,10 @@ define_theme!(
     }
 );
 
-/// Resolve a **single-character field**: the two escapes the canvases document (`\t`, `\n`), a
-/// literal backslash, or one plain character. Empty is `None` (such a field is optional);
-/// anything longer is an error the surface shows rather than a silent truncation.
-///
-/// Shared, because a delimiter, a quote and a comment marker are the same field wherever they
-/// appear: the export window and the Configure window both offer them, and a `\t` that resolved
-/// in one and not the other would be the same control meaning two things.
-pub fn one_char(what: &str, raw: &str) -> Result<Option<char>, String> {
-    let resolved = match raw {
-        "" => return Ok(None),
-        "\\t" => '\t',
-        "\\n" => '\n',
-        "\\\\" => '\\',
-        other => {
-            let mut chars = other.chars();
-            let first = chars.next().expect("non-empty");
-            if chars.next().is_some() {
-                return Err(format!(
-                    "The CSV {what} has to be a single character (or \\t for tab), not {other:?}"
-                ));
-            }
-            first
-        }
-    };
-    Ok(Some(resolved))
-}
+// The single-character field rule (`\t`, `\n`, a literal backslash, or one plain character) used
+// to live here, shared by the export and Configure windows. It is `strata_core::util::one_char`
+// now: a typed `CREATE EXTERNAL TABLE`'s `OPTIONS` resolves a delimiter the same way (ED-10), and
+// the engine cannot import from the forms layer. The two windows import it from there directly.
 
 /// Read the form dress. Every piece in this module resolves its colours through here, so a
 /// form's look is one theme rather than one per window (AGENTS.md §3).

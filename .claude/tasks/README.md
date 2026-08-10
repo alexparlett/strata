@@ -116,11 +116,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
   editor `COPY TO`, session statements + `CREATE FUNCTION`. Providers for identity/visibility,
-  interception for lifecycle; the agent surface stays read-only. **01–04 ✅** (the router,
-  `Engine::run` + statement results, the Strata providers, internal tables); **05–10 open**
-  (INSERT/DROP, typed view DDL, editor COPY, session statements, function factory, typed
-  `CREATE EXTERNAL TABLE`). Docs: `docs/STATEMENTS_SPEC.md` (the surface as built; each open
-  task's design is in its own file).
+  interception for lifecycle; the agent surface stays read-only. **01–10 ✅** — every intercepted
+  statement now has a real arm, ED-10 being the last (typed `CREATE EXTERNAL TABLE` onto Table
+  Config's registration funnel, which settled how a statement's `OPTIONS` split against
+  connections: the reader's keys are the def's, the store's are refused toward Connections on the
+  key alone). **11 open** (the completion offer that catches up with all of them). Docs:
+  `docs/STATEMENTS_SPEC.md` (the surface as built).
 
 ## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 
@@ -135,8 +136,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Editor statements** (ED-10..11) — the last capability arm over the built router/dispatch
-   spine, then the completion offer that catches up with all of them.
+1. **Editor statements** (ED-11) — the completion offer that catches up with every statement the
+   editor now runs.
 2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
    provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
    vocabulary, and AA-03c's identity finding before touching query sessions.

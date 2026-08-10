@@ -54,8 +54,10 @@ use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::path::Path;
 use std::time::{Duration, Instant};
+use std::{env, fs, process};
 
-use strata_core::engine::{Engine, RunTag, TableSpec, WsId};
+use strata_core::engine::{Engine, RunOutcome, RunTag, StoreEffect, TableSpec, WsId};
+use strata_core::project::{save_defs, ProjectDefs};
 use strata_core::register::table_spec;
 use strata_model::{
     ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat, TableDef, TableOrigin,
@@ -210,9 +212,9 @@ async fn seed(endpoint: &str, objects: &[(&str, &str)]) {
 /// `AWS_SESSION_TOKEN` is set blank (which the SDK reads as absent) rather than left alone, so
 /// a stray token in the runner's environment cannot be sent to MinIO and rejected.
 fn ambient() {
-    std::env::set_var("AWS_ACCESS_KEY_ID", KEY_ID);
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", SECRET);
-    std::env::set_var("AWS_SESSION_TOKEN", "");
+    env::set_var("AWS_ACCESS_KEY_ID", KEY_ID);
+    env::set_var("AWS_SECRET_ACCESS_KEY", SECRET);
+    env::set_var("AWS_SESSION_TOKEN", "");
 }
 
 /// The connection under test: S3-compatible, reached over plain HTTP at `endpoint`, signing
@@ -321,6 +323,63 @@ fn http_table(endpoint: &str) -> TableSpec {
         origin: TableOrigin::External,
     };
     table_spec(Path::new("/nowhere"), &def)
+}
+
+/// **A typed `CREATE EXTERNAL TABLE` over the connected bucket** (ED-10) — a *phase* of the test
+/// below, called in sequence, not a test of its own: it reads through the store that test
+/// registered, and the ambient credentials it signs with are process-wide (see that function's
+/// doc comment for why a second `#[tokio::test]` would race them).
+///
+/// What only a live store can show. A typed `LOCATION` arrives as one composed string, so the arm
+/// has to take it apart into the pair every other path holds — the connection's URL and a
+/// bucket-relative source — land it on a connection this project actually has, compose it back
+/// through `resolve_source`, and read the objects. Everything up to that last step is asserted in
+/// `ddl::external`'s own tests; this is the step that needs a bucket.
+///
+/// The project folder is real but empty: it is never consulted for a source over a connection, and
+/// it is here because a def is durable and the arm refuses to write one with nowhere to put it. It
+/// is **not** cleaned up here — the engine goes on pointing at it for the phases that follow, and
+/// removing a live data root would leave a later phase spooling into a directory that is gone.
+/// The caller sweeps it once the test is over.
+async fn typed_registration(engine: &Engine, project: &Path) {
+    fs::create_dir_all(project).expect("a project folder");
+    save_defs(project, &ProjectDefs::default()).expect("scaffold");
+    engine.set_data_dir(project);
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(10),
+            format!(
+                "CREATE EXTERNAL TABLE typed STORED AS CSV LOCATION 's3://{BUCKET}/data/' \
+                 OPTIONS ('format.has_header' 'true')"
+            ),
+            50,
+        )
+        .await
+        .expect("the typed registration runs")
+    else {
+        panic!("a registration is a statement, not rows");
+    };
+    let Some(StoreEffect::TableUpserted { def, meta }) = report.effect else {
+        panic!("{report:?}");
+    };
+    assert_eq!(
+        (def.connection.as_deref(), def.sources.as_slice()),
+        (
+            Some(format!("s3://{BUCKET}").as_str()),
+            &["data/".to_string()][..]
+        ),
+        "the LOCATION split into the connection it names and a source relative to its bucket"
+    );
+    let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(columns, ["id", "region"], "the schema came off the objects");
+
+    let (output, _) = engine
+        .query(WsId(1), RunTag(11), "SELECT * FROM typed".into(), 50)
+        .await
+        .expect("query the typed table");
+    assert_eq!(output.total, 3, "and it reads through the same store");
 }
 
 /// **The whole chain, against a server that verifies signatures.**
@@ -501,6 +560,12 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the store settled that there is nothing there, so the partition columns are not blamed"
     );
 
+    // Swept at the end of the test rather than by the phase, which leaves the engine's data root
+    // live for everything after it.
+    let project = env::temp_dir().join(format!("strata_typed_external_{}", process::id()));
+    let _ = fs::remove_dir_all(&project);
+    typed_registration(&engine, &project).await;
+
     // …and the engine reads through the connection, not around it: a bucket nothing connected
     // has no store, which is the failure a table over an unregistered bucket must give.
     let orphan = TableSpec {
@@ -589,8 +654,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     //
     // Last, and in the same test, for the reason the doc comment gives: this rewrites the
     // environment the phases above depend on.
-    std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAWRONGKEY");
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-secret");
+    env::set_var("AWS_ACCESS_KEY_ID", "AKIAWRONGKEY");
+    env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-secret");
 
     // A fresh engine, so this phase starts from nothing: the one above has had its store
     // disconnected by the block before this, and even before that its registration came from
@@ -608,4 +673,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         !refused.is_empty(),
         "the table's row carries the server's refusal"
     );
+
+    let _ = fs::remove_dir_all(&project);
 }

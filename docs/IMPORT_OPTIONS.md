@@ -1,7 +1,9 @@
 # Import (read) options — what Table Config offers per format
 
 Companion to `EXPORT_OPTIONS.md`. These are the **read** options the Configure (table config)
-window offers when registering an external table, and how they reach DataFusion's readers.
+window offers when registering an external table, and how they reach DataFusion's readers. They
+are also exactly what a typed `CREATE EXTERNAL TABLE`'s `OPTIONS` can set (ED-10) — two gestures at
+one def, so the key set below is the same list read from the other side.
 
 Options are **persisted in the table def**: `SourceFormat` (`strata-model::catalog`) is a tagged
 enum where the format *is* its options — `Csv(CsvRead)`, `Json(JsonRead)` — so a delimiter cannot
@@ -30,17 +32,17 @@ is read.
 The format that genuinely needs options — without them, many real CSVs cannot be registered
 correctly (wrong delimiter → one giant column; headerless file → first row eaten as names).
 
-| Control | Effect | Default |
-|---|---|---|
-| HEADER ROW | Row 1 holds column names (off: columns are `column_1`, `column_2`, …) | on |
-| DELIMITER | Field separator — free text, `\t` accepted for tab | `,` |
-| QUOTE CHARACTER | Wraps fields containing the delimiter | `"` |
-| ESCAPE CHARACTER | Escapes a quote inside a quoted field (blank = none) | blank |
-| COMMENT CHARACTER | Skip lines starting with this character (blank = none) | blank |
-| NEWLINES IN VALUES | Allow quoted fields to contain line breaks | off |
-| RAGGED ROWS | Pad rows — or whole files — short of a column with nulls instead of failing the read | off |
-| SCHEMA-INFER ROWS | Rows scanned to infer column types; 0 reads every column as text | engine default |
-| COMPRESSION | None · gzip · bzip2 · xz · zstd | None |
+| Control | `OPTIONS` key | Effect | Default |
+|---|---|---|---|
+| HEADER ROW | `format.has_header` | Row 1 holds column names (off: columns are `column_1`, `column_2`, …) | on |
+| DELIMITER | `format.delimiter` | Field separator — free text, `\t` accepted for tab | `,` |
+| QUOTE CHARACTER | `format.quote` | Wraps fields containing the delimiter | `"` |
+| ESCAPE CHARACTER | `format.escape` | Escapes a quote inside a quoted field (blank = none) | blank |
+| COMMENT CHARACTER | `format.comment` | Skip lines starting with this character (blank = none) | blank |
+| NEWLINES IN VALUES | `format.newlines_in_values` | Allow quoted fields to contain line breaks | off |
+| RAGGED ROWS | `format.truncated_rows` | Pad rows — or whole files — short of a column with nulls instead of failing the read | off |
+| SCHEMA-INFER ROWS | `format.schema_infer_max_rec` | Rows scanned to infer column types; 0 reads every column as text | engine default |
+| COMPRESSION | `format.compression` | None · gzip · bzip2 · xz · zstd | None |
 
 Notes:
 
@@ -64,15 +66,19 @@ excluded options that look available and are not (`CsvRead`'s doc comment is the
 - `double_quote`, `null_value`, date/time formats and the rest of the writer's options — no read
   path references them (the export window is where they live).
 
+A typed `CREATE EXTERNAL TABLE` refuses each of these **by name** rather than accepting and
+dropping it, which is the same bar stated for a surface that has no controls to leave out: a
+silently dropped option is a def that lies about how the table reads.
+
 ---
 
 ## JSON
 
-| Control | Effect | Default |
-|---|---|---|
-| SHAPE | One record per line (NDJSON) · JSON array | one record per line |
-| SCHEMA-INFER ROWS | Records scanned to infer the schema; 0 scans every record | scan every record |
-| COMPRESSION | None · gzip · bzip2 · xz · zstd | None |
+| Control | `OPTIONS` key | Effect | Default |
+|---|---|---|---|
+| SHAPE | `format.newline_delimited` | One record per line (NDJSON) · JSON array | one record per line |
+| SCHEMA-INFER ROWS | `format.schema_infer_max_rec` | Records scanned to infer the schema; 0 scans every record | scan every record |
+| COMPRESSION | `format.compression` | None · gzip · bzip2 · xz · zstd | None |
 
 - **Both shapes are read** — DataFusion 54's `JsonFormat::with_newline_delimited` covers the
   whole-document array as well as NDJSON, so shape is an option rather than a rule the reader
@@ -83,6 +89,18 @@ excluded options that look available and are not (`CsvRead`'s doc comment is the
   notice a type conflict, and a capped scan that misses one types the column wrong and then fails
   at *query* time on a table the catalog called healthy. The cap is there to opt into speed on
   files known to be uniform.
+
+---
+
+## What `OPTIONS` may **not** carry
+
+The typed form has one refusal the window has no equivalent for, because the window has no box it
+could go in. `datafusion-cli` writes an object store's credentials, region, endpoint and client
+timeouts into this same `OPTIONS` list; in Strata every one of those belongs to a **connection**
+(`CONNECTIONS_SPEC.md`), which holds a reference to credentials and never a credential. So a key in
+a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or one of `engine::store`'s client
+options is refused toward Connections — **on the key alone**, with the value never read and never
+echoed back in the message.
 
 ---
 
