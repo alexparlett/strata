@@ -367,6 +367,19 @@ Adding a non-tool method to `StrataTools` for it would blunt AS-01's "the public
 the ten tools", so it is recorded rather than done. The user-visible cost today is a card whose
 Run press fails in the editor's own words.
 
+**`MAX_TOOL_RESULT` cuts three tools that have no recovery to offer — AA-07 owns it.**
+`turn::bounded` ends a cut result with "Read the rest with read_page, or run a narrower query",
+which is true for `run` and false for `list_functions`, `describe_table` and `list_tables`:
+there is no snapshot behind any of the three, so `read_page` answers not-found. Measured against
+the 24,000-byte cap: `list_functions` is 63,729 B for **every** project (2.66x, and dropping its
+descriptions entirely still lands over), `describe_table` passes the cap at ~90 columns with
+statistics, `list_tables` at ~170 tables, and a model asking for `MAX_PAGE_SIZE` gets 811 KB
+(33.8x). All three list tools cut *positionally*, so a cut answer is a prefix rather than a
+sample. Giving them a narrowing is a **vocabulary** change three deployments share, so it is
+`AA-07-bounded-answers.md`, which also owns making this sentence true. The `run` half is this
+side's: the page ceiling belongs on the assistant's `Scope`, because `MAX_PAGE_SIZE` is right for
+an MCP client and 34x wrong for a conversation that carries the result forever.
+
 **A cancelled run leaves a stale `Running` row in the app's own agents satellite.**
 `strata_freya::agent::directory::run` sends its `AgentNotice::RunSettled` *after* awaiting the
 engine, so a dropped run future sends none and `Agents::run_settled` never fires. Pre-existing —

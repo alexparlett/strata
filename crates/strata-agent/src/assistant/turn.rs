@@ -265,9 +265,18 @@ impl Settle {
 /// the whole `RunResult`, whose page reaches `MAX_PAGE_SIZE` (10,000 rows) both by the model
 /// asking and by a host whose row-limit setting is "no limit"; one such call exhausts the
 /// context window and, since a `Conversation` cannot be trimmed, kills the conversation
-/// outright. The cap is generous enough that ordinary answers pass untouched, and what it cuts
-/// is replaced by a sentence naming `read_page` — the tool that exists for exactly this, so the
-/// recovery is the vocabulary's own rather than a new one.
+/// outright.
+///
+/// **The recovery this names is `read_page`'s, and that is only right for `run` — see AA-07.**
+/// Measured against this cap: `list_functions` is 63,729 bytes for *every* project (2.66x, and
+/// dropping its descriptions entirely still lands over), `describe_table` passes it at ~90
+/// columns with statistics, `list_tables` at ~170 tables, and `MAX_PAGE_SIZE` is 33.8x. Three of
+/// those four have no snapshot behind them, so the sentence below sends the model to a tool that
+/// answers not-found — and all three cut *positionally*, making a cut answer a prefix rather
+/// than a sample. Giving those tools a narrowing is a vocabulary change three deployments share
+/// (`AA-07-bounded-answers.md`), which owns both halves of the fix; the ceiling on what the
+/// *assistant* may ask `run` for belongs on its `Scope`, since 10,000 rows is right for an MCP
+/// client and wrong only here.
 const MAX_TOOL_RESULT: usize = 24_000;
 
 /// **What one turn may add to the conversation in tool results, in total.**

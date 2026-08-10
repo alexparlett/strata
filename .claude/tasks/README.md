@@ -91,8 +91,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   in-app MCP server, the Agents pane (an agent's runs are dispatched straight at the engine and
   shown in their own surface, promotable into a **new** tab — never a press on the user's tabs),
   the Settings pane, and the headless `strata mcp <project>` stdio host. **AA-06 (the chat
-  pane) graduated to its own workstream** (below). Docs: `docs/AGENT_ACCESS_SPEC.md` (as-built,
-  dataflow diagram inlined).
+  pane) graduated to its own workstream** (below). **AA-07 ⬜** reopened the folder: four of the
+  ten tools answer with a list bounded only by the user's data, and the assistant's result cap
+  cuts them positionally while naming a recovery three of them do not have. Docs:
+  `docs/AGENT_ACCESS_SPEC.md` (as-built, dataflow diagram inlined).
 - **Assistant** ([`workstream-assistant/`](workstream-assistant/README.md), AS) — the native
   chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
   over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
@@ -138,9 +140,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
    provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
    vocabulary, and AA-03c's identity finding before touching query sessions.
-3. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
+3. **Agent access AA-07** — paging/filtering for the tools whose answers have no bound but the
+   user's data. Independent of the two above; it is a shared-wire change, so it wants doing
+   before more surfaces are built on the vocabulary as it stands.
+4. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
-4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
+5. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
 
 ## Sourcing
