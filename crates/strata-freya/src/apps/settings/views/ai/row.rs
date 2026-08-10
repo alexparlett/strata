@@ -269,10 +269,10 @@ impl Component for ProviderRow {
             // for one gesture.
             //
             // The preferences form solves this by making the label block a **sibling** of the
-            // switch rather than its parent (`Row::trailing`), and that shape is available — but
-            // it is not what this row wants either: a custom endpoint's name is an editable box
-            // in this header, and a name field inside a press target is a row that toggles every
-            // time you click into the box to rename it.
+            // switch rather than its parent (`Row::trailing`), and that shape is available here.
+            // It is not taken: this header carries a mark, a name, a badge and a subline, and a
+            // strip that size reading as one big press target invites the press it then answers
+            // ambiguously. The switch is small, obvious, and the only thing that acts.
             .child(
                 rect()
                     .width(Size::px(MARK))
