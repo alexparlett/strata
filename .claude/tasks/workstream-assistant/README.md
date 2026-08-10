@@ -140,8 +140,8 @@ draft-never-execute prompt rules (AS-02), the what-leaves-the-machine note (AS-0
   previews, Snowflake routes to the worksheet's pane, Databricks stays code-first); the rich
   inline grids live only in the business-user surfaces. Mini-table + promote stands.
 
-**Banked for a future delegation surface** (arrives with transcript persistence, not before,
-and is its own task file when it does): an investigation workbench — a tab holding the
+**Banked for a future delegation surface** (arrives with transcript persistence — **AS-07** —
+not before, and is its own task file when it does): an investigation workbench — a tab holding the
 transcript plus a results pane that *subscribes the assistant's run* (a second surface
 subscribes the query again; no second pipeline), for work you delegate rather than steer.
 BigQuery's Data Canvas (evidence as a DAG of materialized results the chat deposits into) is
@@ -164,10 +164,15 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 |---|---|---|---|
 | 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ✅ | AA-03c |
 | 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ✅ | 01 |
-| 03 | Settings ▸ AI: Providers · Chat · MCP | ✅ | 05 |
+| 03 | Settings ▸ AI: Providers · Chat · MCP | 🟡 | 05 |
 | 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03, 06 |
 | 05 | Secret store: OS-keystore-backed keys, references in config | ✅ | — |
 | 06 | Model listings: a model is picked from its provider, and the list survives a restart | ⬜ | 03 |
+| 07 | Conversations survive the window: the `.strata/chats/` store, the list, retention | ⬜ | 04 |
+
+**03 is 🟡, not ✅.** Providers and MCP are done; AI ▸ Chat is two controls short — a model
+`Select` (**06**) and the retention pair that only makes sense once conversations persist
+(**07**). Both are additive to a working pane, and 03 closes when they land.
 
 ## Why the order
 

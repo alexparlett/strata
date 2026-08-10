@@ -8,16 +8,29 @@
 > `write_config` round trip), and the manual check that the bundled, signed app reads its own
 > item — see `AS-05-secret-store.md` ▸ *What is not proved yet*.
 
-**Workstream:** Assistant · **Status:** ✅ · **Depends on:** AS-02 (the provider table and
-`Selection`), AS-05 (the key-reference type)
+**Workstream:** Assistant · **Status:** 🟡 · **Depends on:** AS-02 (the provider table and
+`Selection`), AS-05 (the key-reference type) · **Completed by:** AS-06, AS-07
 
-> **Done, with one check owed elsewhere.** The three panes, the config vocabulary, the probe and
-> the keystore commit are built, reviewed and green — and the round trip was exercised in the
+> **Providers and MCP are done; Chat is not.** The three panes, the config vocabulary, the probe
+> and the keystore commit are built, reviewed and green, and the round trip was exercised in the
 > app: a pasted key reached the Keychain, its marker reached `config.json`, and both survived a
-> restart. What has *not* been shown is the same trip from the **signed bundle**. Keychain access
-> is per code signature, so a dev binary proving it does not prove the `.app`; that check is
-> already `AS-05-secret-store.md` ▸ *What is not proved yet* and stays there rather than holding
-> this task open, because it is a fact about the bundle rather than about this pane.
+> restart.
+>
+> It was marked ✅ on that basis and is back to 🟡, because **AI ▸ Chat is two controls short of
+> the pane it describes** — and both belong to it rather than to the tasks that supply them:
+>
+> - **The model field is a typed box** and has to be a `Select` over what the provider serves.
+>   The list already exists; what is missing is a listing that outlives the window (**AS-06**).
+> - **There is no retention control**, because there is nothing yet to retain. When conversations
+>   persist (**AS-07**) this pane owes the pair `history.jsonl` already has — a cap and a Clear.
+>
+> Nothing here needs rebuilding for either; both are additive to a pane that works. This task
+> closes when they land.
+>
+> One check is owed **elsewhere** and does not bear on the status: the keystore round trip has
+> not been shown from the **signed bundle**. Keychain access is per code signature, so a dev
+> binary proving it does not prove the `.app`; that check is `AS-05-secret-store.md` ▸ *What is
+> not proved yet*, because it is a fact about the bundle rather than about this pane.
 
 ## Reshaped 2026-08-10 — the design handoff, and the model that is not here
 

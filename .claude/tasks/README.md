@@ -98,17 +98,20 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Assistant** ([`workstream-assistant/`](workstream-assistant/README.md), AS) — the native
   chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
   over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
-  OpenAI-compatible), driving the AA tool vocabulary in-process. Five tasks: in-process facade
+  OpenAI-compatible), driving the AA tool vocabulary in-process. Seven tasks: in-process facade
   + tool manifest, provider seam + loop, **Settings ▸ AI** (Providers · Chat · MCP — one row per
   provider kind saying what *addresses* it; the per-conversation pick of provider/model/effort
-  lives on the pane's composer, a split settled 2026-08-09), the pane, and the **secret store**
-  (OS keystore; config holds references, never keys). **01 ✅** (the ten tools are `StrataTools`' own public methods and
+  lives on the pane's composer, a split settled 2026-08-09), the pane, the **secret store**
+  (OS keystore; config holds references, never keys), the **model listings** a picker reads, and
+  **chat persistence**. **01 ✅** (the ten tools are `StrataTools`' own public methods and
   the `#[tool]` items are wrappers over them; `manifest()` derives the model-facing offer from
   the router that answers `tools/list`), **02 ✅** (`strata_agent::assistant` — one provider
   table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
   the assistant's own eleventh tool for handing the user a statement to execute) and **05 ✅**
-  (`strata_core::secret` — a `SecretRef` in config, a `Secret` with no serde path at all); 03
-  and 04 open. Two corrections settled with 02 and recorded in that workstream's README: the
+  (`strata_core::secret` — a `SecretRef` in config, a `Secret` with no serde path at all).
+  **03 🟡** — Providers and MCP are done and the keystore round trip works; AI ▸ Chat is two
+  controls short, a model `Select` (06) and the retention pair that only means something once
+  conversations persist (07). **04, 06, 07 ⬜.** Two corrections settled with 02 and recorded in that workstream's README: the
   Agents pane is for **headless MCP clients only** (the assistant is kept out of it by its
   minted `AgentId`), and a runnable statement is a **tool call**, not a markdown convention.
   The doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
@@ -137,9 +140,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 1. **Editor statements** (ED-10..11) — the last capability arm over the built router/dispatch
    spine, then the completion offer that catches up with all of them.
-2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
-   provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
-   vocabulary, and AA-03c's identity finding before touching query sessions.
+2. **Assistant AS-06 → AS-04 → AS-07**, with AS-03 closing behind them. The loop and the
+   provider seam are built (AS-02) and Settings ▸ AI is standing (AS-03); read AS-02's "What
+   AS-04 gets" for the event vocabulary, and AA-03c's identity finding before touching query
+   sessions. 06 first because both pickers read its listing and it is small; then the pane;
+   then persistence, which needs a transcript to persist.
 3. **Agent access AA-07** — paging/filtering for the tools whose answers have no bound but the
    user's data. Independent of the two above; it is a shared-wire change, so it wants doing
    before more surfaces are built on the vocabulary as it stands.
