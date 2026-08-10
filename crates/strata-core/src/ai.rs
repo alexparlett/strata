@@ -15,22 +15,24 @@
 //! assistant — the same line `ConnectionDef` draws when a connection names a bucket and a
 //! *table* names the connection.
 //!
-//! ## Two lists, because they are two different things
+//! ## One list, keyed by kind
 //!
-//! - **A built-in provider's identity is its kind.** Anthropic is Anthropic; there is no second
-//!   one, nothing to name and nothing to rename. So [`Ai::providers`] is keyed by
-//!   [`ProviderKind`], and a kind absent from the map is one the user has never enabled —
-//!   which is the same thing its toggle says, rather than a second copy of it.
-//! - **A custom endpoint's identity is minted.** Any host speaking OpenAI's chat-completions
-//!   API is reachable (llama.cpp, vLLM, LM Studio, a gateway) and there is no reason to have
-//!   only one, so [`Ai::endpoints`] is a list the user maintains — keyed by a [`Uuid`], because
-//!   its display name is the one thing whose whole purpose is to be retyped and
-//!   [`Ai::default_brain`] points at it. The saved-query precedent, not the connection one.
+//! **A provider's identity is its kind.** Anthropic is Anthropic; there is no second one,
+//! nothing to name and nothing to rename. So [`Ai::providers`] is keyed by [`ProviderKind`], and
+//! a kind absent from the map is one the user has never enabled — which is the same thing its
+//! toggle says, rather than a second copy of it.
+//!
+//! That includes [`ProviderKind::OpenAiCompatible`], which was briefly a *list* of named,
+//! id-keyed endpoints so that several could exist at once. Withdrawn: gateways exist to
+//! multiplex (`LiteLLM` and its kind put many backends behind one OpenAI-compatible address), so
+//! a second multiplexer here would sit in front of a solved problem while costing a sum-typed
+//! identity that every surface downstream — the composer's picker, a chat's selection, the
+//! transcript — would have had to carry. One row, addressed by its base URL, and the model list
+//! the gateway reports is what distinguishes what is behind it.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::secret::SecretRef;
 
@@ -39,10 +41,6 @@ use crate::secret::SecretRef;
 /// The serde spelling is a **stable token**, not the label: renaming what the pane calls a
 /// provider must not orphan everybody's configuration. `Ord` because [`Ai::providers`] is keyed
 /// by it; the ordering is the declaration order and carries no meaning beyond a stable map.
-///
-/// [`OpenAiCompatible`](ProviderKind::OpenAiCompatible) has no row of its own in Settings — it
-/// is the kind every [`CustomEndpoint`] is, which is why it is the one variant a
-/// [`BrainRef::Builtin`] never names.
 ///
 /// **Cohere is deliberately absent**, though the pinned `genai` speaks to it and the design
 /// canvas lists it. Its adapter never reads a request's `tools` and answers a `Tool`-role
@@ -60,9 +58,9 @@ pub enum ProviderKind {
     Groq,
     Xai,
     Ollama,
-    /// Any endpoint speaking OpenAI's chat-completions API. Configured as a named
-    /// [`CustomEndpoint`] rather than as a single row: the base URL is the whole of what makes
-    /// one addressable, so two of them are two endpoints and not two spellings of one.
+    /// Any endpoint speaking OpenAI's chat-completions API — llama.cpp, vLLM, LM Studio, or a
+    /// gateway. One row like any other: its base URL is what makes it addressable, and is
+    /// therefore the one thing it cannot do without.
     OpenAiCompatible,
 }
 
@@ -105,30 +103,17 @@ impl std::fmt::Display for Effort {
     }
 }
 
-/// What a conversation points at: one of the built-in providers, or one named endpoint.
-///
-/// The thing a chat's model and effort are picked *against*, and the seed a new chat takes from
-/// [`Ai::default_brain`]. A sum type rather than a `Uuid` for everything, because minting an id
-/// for Anthropic would be inventing an identity for something that already has one — and the
-/// invented one could then disagree with the kind it claims.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BrainRef {
-    Builtin(ProviderKind),
-    Custom(Uuid),
-}
-
-/// A built-in provider's setup: whether it is on, and the one credential it takes.
+/// A provider's setup: whether it is on, and what addresses it.
 ///
 /// **The key is a reference, never the secret** ([`SecretRef`]) — that is a property of the
 /// types rather than a rule to remember, and it is why this struct can derive `Serialize` at
 /// all. `None` is the valid, ordinary state: the provider's own environment variable is the
 /// fallback, and the pane's subtext names which one.
 ///
-/// `base_url` is only meaningful for the kinds whose table row admits one (Ollama). It is a
-/// `String` rather than an `Option<String>` because a cleared box and an absent field are the
-/// same answer — "use the kind's default" — and two spellings of one answer is what the
-/// blank-reads-as-absent rule exists to prevent.
+/// `base_url` is only meaningful for the kinds whose table row admits one (Ollama, and the
+/// compatible endpoint). It is a `String` rather than an `Option<String>` because a cleared box
+/// and an absent field are the same answer — "use the kind's default, if it has one" — and two
+/// spellings of one answer is what the blank-reads-as-absent rule exists to prevent.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct ProviderSetup {
     #[serde(default)]
@@ -139,43 +124,23 @@ pub struct ProviderSetup {
     pub key: Option<SecretRef>,
 }
 
-/// One named OpenAI-compatible endpoint.
-///
-/// The name is the user's and is display only — [`Ai::endpoints`]'s key is what anything points
-/// at. `base_url` is required (an endpoint with no address is not one); the key is optional and
-/// **has no environment fallback**, deliberately: the host is whatever the user typed, and
-/// `genai`'s default for its OpenAI adapter would post their `OPENAI_API_KEY` to it.
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct CustomEndpoint {
-    pub name: String,
-    #[serde(default)]
-    pub base_url: String,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub key: Option<SecretRef>,
-}
-
 /// The assistant's whole configuration: which brains are set up, and what a new chat starts
 /// with.
 ///
-/// One struct rather than five flat fields of [`Settings`](crate::config::Settings), for
+/// One struct rather than four flat fields of [`Settings`](crate::config::Settings), for
 /// `AgentAccess`'s reason: they are read and written as a unit, and the Settings draft's
 /// per-field diff is against exactly this value.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct Ai {
-    /// The built-in providers the user has touched. A kind absent from this map has never been
-    /// enabled and holds no credential.
+    /// The providers the user has touched. A kind absent from this map has never been enabled
+    /// and holds no credential.
     #[serde(default)]
     pub providers: BTreeMap<ProviderKind, ProviderSetup>,
-    /// The named OpenAI-compatible endpoints, in insertion-independent id order.
+    /// Which provider a new chat starts on. `None` is a valid state the chat pane renders
+    /// honestly — nothing is enabled yet, or the default was turned off and no other was on to
+    /// take its place.
     #[serde(default)]
-    pub endpoints: BTreeMap<Uuid, CustomEndpoint>,
-    /// Which brain a new chat starts on. `None` is a valid state the chat pane renders
-    /// honestly — nothing is enabled yet, or the default's provider was turned off and no other
-    /// was on to take its place.
-    #[serde(default)]
-    pub default_brain: Option<BrainRef>,
+    pub default_provider: Option<ProviderKind>,
     /// The model a new chat starts on. Free text, because a model name is the provider's
     /// vocabulary: the pane offers the list the provider reports and still accepts a name no
     /// list mentions (a private deployment, a gateway that serves no `/models`).
@@ -188,168 +153,85 @@ pub struct Ai {
 }
 
 impl Ai {
-    /// This brain's setup, whichever list it lives in: whether it is enabled, its base URL, and
-    /// its key reference.
+    /// This provider's setup, or `None` if the user has never touched it.
     ///
-    /// One lookup, so the surfaces that read a brain cannot disagree about it — the same
-    /// reasoning `KeyStatus::of` is one function rather than one per surface. `None` means the
-    /// reference resolves to nothing: a custom endpoint that was deleted while a chat pointed
-    /// at it, which is a state the pane reports rather than one this silently repairs.
-    pub fn setup(&self, brain: &BrainRef) -> Option<Setup<'_>> {
-        match brain {
-            BrainRef::Builtin(kind) => self.providers.get(kind).map(|p| Setup {
-                kind: *kind,
-                name: None,
-                enabled: p.enabled,
-                base_url: &p.base_url,
-                key: p.key.as_ref(),
-            }),
-            BrainRef::Custom(id) => self.endpoints.get(id).map(|e| Setup {
-                kind: ProviderKind::OpenAiCompatible,
-                name: Some(&e.name),
-                enabled: e.enabled,
-                base_url: &e.base_url,
-                key: e.key.as_ref(),
-            }),
-        }
+    /// Absence is a real answer and the same one everywhere: never enabled, no endpoint typed,
+    /// no key stored. Callers read it as such rather than pre-seeding the map.
+    pub fn setup(&self, kind: ProviderKind) -> Option<&ProviderSetup> {
+        self.providers.get(&kind)
     }
 
-    /// Every brain the user could pick right now — the enabled built-ins in table order, then
-    /// the enabled endpoints.
+    /// Every provider the user could pick right now, in the table's own order.
     ///
     /// What AI ▸ Chat's provider dropdown offers and what the chat pane's picker offers, so the
     /// UI can never name a provider it has no credential for.
-    pub fn enabled(&self) -> impl Iterator<Item = BrainRef> + '_ {
-        let builtins = self
-            .providers
+    pub fn enabled(&self) -> impl Iterator<Item = ProviderKind> + '_ {
+        self.providers
             .iter()
             .filter(|(_, setup)| setup.enabled)
-            .map(|(kind, _)| BrainRef::Builtin(*kind));
-        let custom = self
-            .endpoints
-            .iter()
-            .filter(|(_, endpoint)| endpoint.enabled)
-            .map(|(id, _)| BrainRef::Custom(*id));
-        builtins.chain(custom)
+            .map(|(kind, _)| *kind)
     }
 
-    /// Whether `brain` is enabled *and* still resolves — the question
-    /// [`default_brain`](Ai::default_brain) has to answer before a new chat takes it.
-    pub fn is_enabled(&self, brain: &BrainRef) -> bool {
-        self.setup(brain).is_some_and(|setup| setup.enabled)
+    /// Whether `kind` is enabled — the question
+    /// [`default_provider`](Ai::default_provider) has to answer before a new chat takes it.
+    pub fn is_enabled(&self, kind: ProviderKind) -> bool {
+        self.setup(kind).is_some_and(|setup| setup.enabled)
     }
-}
-
-/// A brain's setup, read through whichever list holds it.
-///
-/// Borrowed rather than owned: the caller has the [`Ai`] in hand and the key is a reference to a
-/// keystore entry either way, so copying the strings would buy nothing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Setup<'a> {
-    /// The provider kind — [`ProviderKind::OpenAiCompatible`] for every custom endpoint.
-    pub kind: ProviderKind,
-    /// The user's name for a custom endpoint. `None` for a built-in, whose name is its kind's
-    /// label and is therefore the table's to give.
-    pub name: Option<&'a str>,
-    pub enabled: bool,
-    pub base_url: &'a str,
-    pub key: Option<&'a SecretRef>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn built(kind: ProviderKind, enabled: bool) -> (ProviderKind, ProviderSetup) {
+    fn on(kind: ProviderKind) -> (ProviderKind, ProviderSetup) {
         (
             kind,
             ProviderSetup {
-                enabled,
+                enabled: true,
                 ..ProviderSetup::default()
             },
         )
     }
 
-    /// The two lists answer one question, and a reference into either resolves the same way.
+    /// A provider nobody has touched reads as absent rather than as a default-shaped row, which
+    /// is what lets "never enabled" and "has an entry that is off" stay one answer.
     #[test]
-    fn a_brain_resolves_through_whichever_list_holds_it() {
-        let id = Uuid::new_v4();
+    fn an_untouched_provider_has_no_setup() {
         let ai = Ai {
-            providers: [built(ProviderKind::Anthropic, true)].into_iter().collect(),
-            endpoints: [(
-                id,
-                CustomEndpoint {
-                    name: "Workstation".into(),
-                    base_url: "http://localhost:8080/v1/".into(),
-                    enabled: true,
-                    key: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
+            providers: [on(ProviderKind::Anthropic)].into_iter().collect(),
             ..Ai::default()
         };
-
-        let anthropic = ai
-            .setup(&BrainRef::Builtin(ProviderKind::Anthropic))
-            .unwrap();
-        assert_eq!(anthropic.kind, ProviderKind::Anthropic);
-        assert_eq!(anthropic.name, None, "a built-in is named by its table row");
-
-        let custom = ai.setup(&BrainRef::Custom(id)).unwrap();
-        assert_eq!(custom.kind, ProviderKind::OpenAiCompatible);
-        assert_eq!(custom.name, Some("Workstation"));
-        assert_eq!(custom.base_url, "http://localhost:8080/v1/");
-    }
-
-    /// **A dangling reference is reported, not repaired.** A chat pointing at an endpoint the
-    /// user deleted must not silently resolve to another one.
-    #[test]
-    fn a_reference_to_something_that_is_gone_resolves_to_nothing() {
-        let ai = Ai {
-            providers: [built(ProviderKind::Anthropic, true)].into_iter().collect(),
-            ..Ai::default()
-        };
-        assert!(ai.setup(&BrainRef::Custom(Uuid::new_v4())).is_none());
-        assert!(ai.setup(&BrainRef::Builtin(ProviderKind::Groq)).is_none());
-        assert!(!ai.is_enabled(&BrainRef::Builtin(ProviderKind::Groq)));
+        assert!(ai.setup(ProviderKind::Anthropic).is_some());
+        assert!(ai.setup(ProviderKind::Groq).is_none());
+        assert!(!ai.is_enabled(ProviderKind::Groq));
     }
 
     /// Only what the user could actually send to: a disabled provider holds a key and is still
     /// not on offer.
     #[test]
-    fn only_enabled_brains_are_offered() {
-        let off = Uuid::new_v4();
+    fn only_enabled_providers_are_offered() {
         let ai = Ai {
             providers: [
-                built(ProviderKind::Anthropic, true),
-                built(ProviderKind::Groq, false),
-                built(ProviderKind::Ollama, true),
+                on(ProviderKind::Anthropic),
+                (
+                    ProviderKind::Groq,
+                    ProviderSetup {
+                        enabled: false,
+                        base_url: String::new(),
+                        key: Some(SecretRef::mint()),
+                    },
+                ),
+                on(ProviderKind::Ollama),
             ]
-            .into_iter()
-            .collect(),
-            endpoints: [(
-                off,
-                CustomEndpoint {
-                    name: "Parked".into(),
-                    base_url: "http://localhost:8080/v1/".into(),
-                    enabled: false,
-                    key: None,
-                },
-            )]
             .into_iter()
             .collect(),
             ..Ai::default()
         };
-        let offered: Vec<BrainRef> = ai.enabled().collect();
         assert_eq!(
-            offered,
-            vec![
-                BrainRef::Builtin(ProviderKind::Anthropic),
-                BrainRef::Builtin(ProviderKind::Ollama),
-            ]
+            ai.enabled().collect::<Vec<_>>(),
+            vec![ProviderKind::Anthropic, ProviderKind::Ollama],
+            "a stored key is not the same as being on"
         );
-        assert!(!ai.is_enabled(&BrainRef::Custom(off)));
     }
 
     /// The serde spelling is the wire format for everybody's configuration, so it is asserted
@@ -357,8 +239,6 @@ mod tests {
     /// orphan every provider the user had set up.
     #[test]
     fn the_persisted_tokens_are_stable() {
-        let json = serde_json::to_string(&BrainRef::Builtin(ProviderKind::OpenAi)).unwrap();
-        assert_eq!(json, r#"{"builtin":"open_ai"}"#);
         assert_eq!(
             serde_json::to_string(&Effort::XHigh).unwrap(),
             r#""x_high""#
@@ -414,18 +294,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
-            endpoints: [(
-                Uuid::new_v4(),
-                CustomEndpoint {
-                    name: "Workstation".into(),
-                    base_url: "http://localhost:8080/v1/".into(),
-                    enabled: true,
-                    key: Some(SecretRef::mint()),
-                },
-            )]
-            .into_iter()
-            .collect(),
-            default_brain: Some(BrainRef::Builtin(ProviderKind::Anthropic)),
+            default_provider: Some(ProviderKind::Anthropic),
             default_model: "claude-sonnet-5".into(),
             default_effort: Some(Effort::High),
         };
@@ -439,6 +308,7 @@ mod tests {
             !written.contains("sk-"),
             "something key-shaped reached the config text: {written}"
         );
+
         // The marker *does* travel — otherwise the key could never be found again. Asked by
         // serializing the reference itself rather than formatting it: `SecretRef` has no
         // `Display`, which is the same austerity `Secret` gets and is worth keeping.

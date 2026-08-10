@@ -1,4 +1,4 @@
-//! **One provider row** — the anatomy the built-in kinds and the custom endpoints share.
+//! **One provider row** — the anatomy every kind in the table shares.
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────────────────┐
@@ -8,20 +8,14 @@
 //! │      KEY  ••••••••••••••••••           [eye]    [Test]   │  only while enabled
 //! │      • connection verified, 12 models                    │
 //! └──────────────────────────────────────────────────────────┘
-//!
-//! ┌──────────────────────────────────────────────────────────┐
-//! │ (☁)  [ Workstation llama.cpp ]              [🗑]  ( o )  │  the name is a box here
-//! │      http://localhost:8080/v1/                           │  …only while it is closed
-//! └──────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! **The switch is the only thing that toggles.** The header was a press target first, which put
 //! the `Switch` inside it — and a built-in control's press reaches its ancestors (AGENTS.md §3),
 //! so pressing the switch fired both and the row looked inert while pressing anywhere else
 //! worked. The preferences form's answer is a label block *beside* the switch rather than around
-//! it (`Row::trailing`), but that is not right here either: a custom endpoint's name is a box in
-//! this header, and a text field inside a press target toggles the row every time you click in
-//! to rename it.
+//! it (`Row::trailing`), and that shape would work — but a row with nothing but a switch to press
+//! reads more honestly than one where the whole strip is a target for it.
 //!
 //! **The disclosure carries information rather than chrome** (the canvas's own words): the
 //! credential appears *because* the provider is on, so there is no accordion and no second
@@ -38,12 +32,13 @@
 //! only what the boxes cannot — see `providers::subline`.
 //!
 //! **A field the kind does not use is absent, not disabled.** What boxes a row draws is read
-//! straight off its `PROVIDERS` entry — one key box, one URL box, or both for a custom
-//! endpoint — so a form that offered a field the table does not declare would not compile.
+//! straight off its `PROVIDERS` entry — one key box, one URL box, or both for the
+//! OpenAI-compatible kind — so a form that offered a field the table does not declare would not
+//! compile.
 
 use freya::prelude::*;
 use strata_agent::assistant::{BaseUrl, KeyUse};
-use strata_core::ai::{BrainRef, ProviderKind};
+use strata_core::ai::ProviderKind;
 
 use crate::apps::settings::views::ai::probe::{Probe, Tone};
 use crate::apps::settings::{settings_theme, SettingsCtx, SettingsTheme};
@@ -62,9 +57,6 @@ const GAP: f32 = 12.;
 const PAD: f32 = 12.;
 /// The brand mark inside the tile, at the canvas's optical size for a 34px square.
 const MARK_GLYPH: f32 = 17.;
-/// A custom endpoint's name box. Wide enough for a descriptive name ("Workstation llama.cpp")
-/// and bounded, so the badge beside it sits still instead of drifting with the text.
-const NAME_WIDTH: f32 = 220.;
 
 /// A 1px top-edge-only rule — the hairline *between* two rows of the list. Painted rather than
 /// laid out, so the row's own padding is what keeps a child's background off it.
@@ -84,8 +76,8 @@ fn row_rule() -> BorderWidth {
 /// design keeps: the *token* is shared, the *artwork* belongs to whoever draws. Exhaustive, so a
 /// kind added to the table without a mark is a build error rather than a blank tile.
 ///
-/// A custom endpoint has no brand to carry, so it takes the app's own connection glyph — which is
-/// what it is: a remote endpoint the user pointed at.
+/// The OpenAI-compatible kind has no brand to carry, so it takes the app's own connection glyph —
+/// which is what it is: a remote endpoint the user pointed at.
 pub fn mark(kind: ProviderKind) -> IconName {
     match kind {
         ProviderKind::Anthropic => IconName::ProviderAnthropic,
@@ -136,14 +128,14 @@ impl Boxes {
 /// **Only the key carries one, and only on the anonymous kind.** The three other answers are all
 /// "the marker would be noise":
 ///
-/// - a `REQUIRED` on a custom endpoint's URL was built and cut. It is the only control on its
+/// - a `REQUIRED` on the OpenAI-compatible URL was built and cut. It is the only control on its
 ///   line, its row cannot work without it, and the subline already says `No address set` — three
 ///   ways of telling the user the same thing, two of which they did not ask for;
 /// - an `Editable` URL has the kind's default behind it, so required is simply false;
 /// - and an `Env` key falls back to the variable the subline names.
 ///
-/// What is left is the one real ambiguity, and the one this started from: a custom endpoint's
-/// key box, where an empty value is not an oversight — an empty bearer is what a local runtime
+/// What is left is the one real ambiguity, and the one this started from: the
+/// OpenAI-compatible key box, where an empty value is not an oversight — an empty bearer is what a local runtime
 /// expects and what a real one answers 401 to.
 ///
 /// The colour is passed in rather than read here: `form_theme()` is a **hook**, and this is
@@ -162,17 +154,14 @@ fn key_marker(key: KeyUse, color: Color) -> Option<Element> {
 /// one for.
 #[derive(PartialEq)]
 pub struct ProviderRow {
-    /// The provider's brand mark ([`mark`]), or the connection glyph for a custom endpoint.
+    /// The provider's brand mark ([`mark`]), or the connection glyph for the compatible kind.
     pub mark: IconName,
-    /// What the provider is called: the kind's label, or the user's name for an endpoint.
+    /// What the provider is called — the kind's label, from the table.
     pub name: String,
-    /// Whether that name is the **user's** to change — true for a custom endpoint, false for a
-    /// built-in, whose name is its table row's and is not a thing to rename.
-    pub renameable: bool,
-    /// The uppercase badge beside the name — `API KEY` or `LOCAL`, naming what credential the
-    /// row takes. `None` where that adds nothing: a custom endpoint sits under a heading that
-    /// already says what it is.
-    pub badge: Option<&'static str>,
+    /// The uppercase badge beside the name — `API KEY`, `LOCAL` or `CUSTOM`, naming what
+    /// credential the row takes. Read off the kind's key policy, so it cannot disagree with the
+    /// boxes the row then draws.
+    pub badge: &'static str,
     /// What this row knows about itself without having asked anything. `None` where an open row
     /// already shows it — the subline summarises a collapsed row, and repeating the address it
     /// draws in a box directly below is the same sentence twice.
@@ -181,8 +170,8 @@ pub struct ProviderRow {
     /// Whether this is the first row, which draws no top rule.
     pub first: bool,
     pub boxes: Boxes,
-    /// Which brain this row edits — what its writes are keyed by, and what a Test probes.
-    pub brain: BrainRef,
+    /// Which provider this row edits — what its writes are keyed by, and what a Test probes.
+    pub kind: ProviderKind,
     /// The window's editing state. Held rather than handed a pile of callbacks, on the engine
     /// row's precedent (`PropRow` takes `rows` + `id`): a text box's write has to be **guarded**
     /// against the value already there, and the guard needs to read what is there *now* — which
@@ -203,10 +192,6 @@ pub struct ProviderRow {
     pub on_toggle: EventHandler<()>,
     pub on_reveal: EventHandler<()>,
     pub on_test: EventHandler<()>,
-    /// Removing a custom endpoint. `None` for a built-in, which is not the user's to delete —
-    /// its absence *is* the difference between the two lists, so it is a missing handler rather
-    /// than a disabled button.
-    pub on_remove: Option<EventHandler<()>>,
 }
 
 impl Component for ProviderRow {
@@ -216,11 +201,11 @@ impl Component for ProviderRow {
         // Read once and unconditionally — see `marker`.
         let required_color = form_theme().required_color;
 
-        // **Three buffers, always three.** `ValueField` binds a `State<String>`, so a text box
+        // **Two buffers, always two.** `ValueField` binds a `State<String>`, so a text box
         // needs one — and a *variable* number of them per render would corrupt hook order, which
         // is why each row is its own `Component` rather than a helper the pane calls in a loop
-        // (`components::form::options` settled this). A row draws at most three boxes and always
-        // takes three buffers, whether or not it draws them.
+        // (`components::form::options` settled this). A row draws at most two boxes and always
+        // takes two buffers, whether or not it draws them.
         let mut key_buf = use_state({
             let seed = self.key_text.clone();
             move || seed
@@ -238,13 +223,8 @@ impl Component for ProviderRow {
             let seed = self.url_text.clone();
             move || seed
         });
-        let name_buf = use_state({
-            let seed = self.name.clone();
-            move || seed
-        });
-
         let ctx = self.ctx;
-        let brain = self.brain;
+        let kind = self.kind;
         // Push each box into the window's state on every keystroke, so what Apply commits is
         // what is on screen. **Guarded** with `peek`, or the write wakes this row, whose effect
         // runs again and costs a second pass per keystroke — the engine grid's own lesson.
@@ -255,33 +235,17 @@ impl Component for ProviderRow {
             let typed = key_buf.read().clone();
             let mut keys = ctx.ai_keys;
             let mut probes = ctx.probes;
-            if keys.peek().get(&brain) != typed.as_str() {
-                keys.write().set(brain, typed);
-                probes.write().forget(&brain);
+            if keys.peek().get(kind) != typed.as_str() {
+                keys.write().set(kind, typed);
+                probes.write().forget(kind);
             }
         });
         use_side_effect(move || {
             let typed = url_buf.read().clone();
             let mut probes = ctx.probes;
-            if ctx.base_url_of(&brain) != typed {
-                ctx.set_base_url(&brain, typed);
-                probes.write().forget(&brain);
-            }
-        });
-        // Renaming is **not** a credential change, so it retracts nothing: what the endpoint is
-        // called has no bearing on whether the last request reached it.
-        //
-        // A built-in has no name in the draft at all (`name_of` is `None`), and no `set_name` to
-        // reach — its name is its table row's. Skipping outright rather than leaning on
-        // `set_name`'s own no-op keeps this guard from being permanently unsatisfied, which is
-        // what it was: `None != Some("Anthropic")` on every run, forever.
-        use_side_effect(move || {
-            let typed = name_buf.read().clone();
-            let Some(named) = ctx.name_of(&brain) else {
-                return;
-            };
-            if named != typed {
-                ctx.set_name(&brain, typed);
+            if ctx.base_url_of(kind) != typed {
+                ctx.set_base_url(kind, typed);
+                probes.write().forget(kind);
             }
         });
 
@@ -329,35 +293,17 @@ impl Component for ProviderRow {
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(8.)
-                            // **A custom endpoint is named by its user; a built-in is named by
-                            // the table.** So one is a box and the other is a label — and the box
-                            // is in the *header*, not in the credential area below, because a
-                            // disabled endpoint has to be renameable too and that area only
-                            // exists while the row is on.
-                            .child(match self.renameable {
-                                // **A box, not a bare run.** `bare()` is the engine grid's dress,
-                                // where the *cell* is what says "you can type here"; there is no
-                                // cell around this one, so bare read as a label and nobody would
-                                // guess it could be renamed.
-                                true => ValueField::new(name_buf)
-                                    .width(Size::px(NAME_WIDTH))
-                                    .height(Size::px(FIELD_HEIGHT))
-                                    .placeholder("Name this endpoint")
-                                    .into(),
-                                false => Element::from(Control::new(self.name.clone())),
-                            })
-                            // The badge names what a row's credential *is* — `API KEY` or
-                            // `LOCAL` — which is a real distinction between the built-ins. A
-                            // custom endpoint carries none: it is under a heading that already
-                            // says so, and a badge repeating its own section is furniture.
-                            .maybe_child(self.badge.map(|badge| {
+                            .child(Control::new(self.name.clone()))
+                            .child(
                                 rect()
                                     .padding(Gaps::new(1., 5., 1., 5.))
                                     .corner_radius(3.)
                                     .background(theme.mark_background)
                                     .border(Border::new().width(1.).fill(theme.card_border_fill))
-                                    .child(Eyebrow::new(badge).color(theme.badge_builtin_color))
-                            })),
+                                    .child(
+                                        Eyebrow::new(self.badge).color(theme.badge_builtin_color),
+                                    ),
+                            ),
                     )
                     .maybe_child(
                         self.subline
@@ -365,24 +311,6 @@ impl Component for ProviderRow {
                             .map(|said| Prose::new(said).color(theme.hint_color)),
                     ),
             )
-            // **Remove belongs to the row, so it sits on the row's own line.**
-            //
-            // It was at the end of the credential strip, after Test — where it read as an action
-            // on the key box it was beside rather than on the endpoint, which is a destructive
-            // gesture mislabelled by its position. Up here it is next to the switch, and what
-            // both act on is unambiguous: the thing this row is.
-            //
-            // To the *left* of the switch, not the right: every row in both lists carries a
-            // switch at the trailing edge, and the eye reads that column. Putting remove last on
-            // the rows that have one would step the switches in and out.
-            .maybe_child(self.on_remove.clone().map(|remove| {
-                ToolButton::new(IconName::Trash, "Remove this endpoint")
-                    .outlined()
-                    .color(tones.error)
-                    .on_press(EventHandler::new(move |_: Event<PressEventData>| {
-                        remove.call(());
-                    }))
-            }))
             .child(Switch::new().toggled(self.enabled).on_toggle({
                 let toggle = self.on_toggle.clone();
                 move |()| toggle.call(())

@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 
 use strata_agent::assistant::list_models_blocking;
-use strata_core::ai::{BrainRef, ProviderKind};
+use strata_core::ai::ProviderKind;
 use strata_core::secret::{Secret, SecretRef};
 
 use crate::task::offload;
@@ -83,7 +83,7 @@ pub enum Tone {
     Bad,
 }
 
-/// Every brain's probe, for as long as the window is open.
+/// Every provider's probe, for as long as the window is open.
 ///
 /// **On the window, not on the pane**, for the reason [`PropRows`](crate::apps::settings::views::PropRows)
 /// is: AI ▸ Providers runs the test and AI ▸ Chat reads the models it returned, and a result
@@ -93,22 +93,22 @@ pub enum Tone {
 /// Not persisted, and deliberately: a verification is a fact about a request made minutes ago,
 /// and a "verified" restored from disk at launch would be a claim nothing had checked.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct Probes(BTreeMap<BrainRef, Probe>);
+pub struct Probes(BTreeMap<ProviderKind, Probe>);
 
 impl Probes {
-    pub fn get(&self, brain: &BrainRef) -> &Probe {
+    pub fn get(&self, kind: ProviderKind) -> &Probe {
         static UNTESTED: Probe = Probe::Untested;
-        self.0.get(brain).unwrap_or(&UNTESTED)
+        self.0.get(&kind).unwrap_or(&UNTESTED)
     }
 
-    pub fn set(&mut self, brain: BrainRef, probe: Probe) {
-        self.0.insert(brain, probe);
+    pub fn set(&mut self, kind: ProviderKind, probe: Probe) {
+        self.0.insert(kind, probe);
     }
 
-    /// Retract what is known about `brain` — its credential or endpoint just changed, so the
+    /// Retract what is known about `kind` — its credential or endpoint just changed, so the
     /// last answer describes a request nobody would make now.
-    pub fn forget(&mut self, brain: &BrainRef) {
-        self.0.remove(brain);
+    pub fn forget(&mut self, kind: ProviderKind) {
+        self.0.remove(&kind);
     }
 }
 
@@ -196,29 +196,25 @@ mod tests {
     /// about a request nobody would make now.
     #[test]
     fn editing_a_credential_forgets_what_was_verified() {
-        let brain = BrainRef::Builtin(ProviderKind::Anthropic);
+        let kind = ProviderKind::Anthropic;
         let mut probes = Probes::default();
         probes.set(
-            brain,
+            kind,
             Probe::Verified {
                 models: vec!["claude-sonnet-5".into()],
             },
         );
-        assert!(!probes.get(&brain).models().is_empty());
+        assert!(!probes.get(kind).models().is_empty());
 
-        probes.forget(&brain);
-        assert_eq!(probes.get(&brain), &Probe::Untested);
-        assert!(probes.get(&brain).status().is_none());
+        probes.forget(kind);
+        assert_eq!(probes.get(kind), &Probe::Untested);
+        assert!(probes.get(kind).status().is_none());
     }
 
-    /// A brain nobody has touched reads as untested rather than as missing, so no caller has to
-    /// branch on presence.
+    /// A provider nobody has touched reads as untested rather than as missing, so no caller has
+    /// to branch on presence.
     #[test]
-    fn an_unknown_brain_reads_as_untested() {
-        let probes = Probes::default();
-        assert_eq!(
-            probes.get(&BrainRef::Builtin(ProviderKind::Groq)),
-            &Probe::Untested
-        );
+    fn an_unknown_provider_reads_as_untested() {
+        assert_eq!(Probes::default().get(ProviderKind::Groq), &Probe::Untested);
     }
 }

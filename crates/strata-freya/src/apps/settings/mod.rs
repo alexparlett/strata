@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use freya::prelude::*;
 use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
-use strata_core::ai::BrainRef;
+use strata_core::ai::ProviderKind;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
@@ -288,32 +288,25 @@ impl SettingsCtx {
         // **A second surface that can block adds a branch here rather than a second gate** — the
         // note this method was written with, taken up by AS-03.
         //
-        // An enabled custom endpoint with no address is the one thing this pane can get into that
-        // cannot be sent: `BaseUrl::Required` has no default to fall back to, so `Brain::resolve`
-        // refuses it (`NoBaseUrl`) before a socket opens. Committing it would persist a provider
-        // whose every send fails, and the chat pane would offer it in the picker. Named by the
-        // field the way the engine's faults are.
+        // An enabled OpenAI-compatible row with no address is the one thing this pane can get
+        // into that cannot be sent: `BaseUrl::Required` has no default to fall back to, so
+        // `Brain::resolve` refuses it (`NoBaseUrl`) before a socket opens. Committing it would
+        // persist a provider whose every send fails, and the chat pane would offer it in the
+        // picker. Named by the field the way the engine's faults are.
         blocked.or_else(|| {
             let draft = self.draft.read();
             let unaddressed = draft
                 .ai
-                .endpoints
-                .values()
-                .filter(|endpoint| endpoint.enabled && endpoint.base_url.trim().is_empty())
-                .count();
-            match unaddressed {
-                0 => None,
-                1 => Some("1 custom endpoint has no base URL".to_string()),
-                n => Some(format!("{n} custom endpoints have no base URL")),
-            }
+                .setup(ProviderKind::OpenAiCompatible)
+                .is_some_and(|setup| setup.enabled && setup.base_url.trim().is_empty());
+            unaddressed.then(|| "OpenAI-compatible has no base URL".to_string())
         })
     }
 
-    /// The base URL configured for `brain`, whichever list holds it.
+    /// The base URL configured for `kind`.
     ///
     /// A pair with [`set_base_url`](Self::set_base_url) rather than the panes reaching into
-    /// `draft.ai` themselves: a brain is a built-in *or* an endpoint, and spelling that fork out
-    /// at each call site is how the two lists end up disagreeing about one of them.
+    /// `draft.ai` themselves, so "absent" and "empty" are decided once — see below.
     /// **`peek`, not `read`.** These answer a *guard* — "is what the box holds already what the
     /// draft holds?" — run from a row's `use_side_effect`, and a `read` there subscribes the
     /// effect to the whole draft: every keystroke in any box on any row would re-run the URL and
@@ -325,75 +318,23 @@ impl SettingsCtx {
     /// returning `None` made the guard fire on mount and write an entry for every provider the
     /// user had never touched — which dirtied the draft with no edit and persisted seven empty
     /// rows.
-    pub fn base_url_of(&self, brain: &BrainRef) -> String {
-        let draft = self.draft.peek();
-        match brain {
-            BrainRef::Builtin(kind) => draft
-                .ai
-                .providers
-                .get(kind)
-                .map(|p| p.base_url.clone())
-                .unwrap_or_default(),
-            BrainRef::Custom(id) => draft
-                .ai
-                .endpoints
-                .get(id)
-                .map(|e| e.base_url.clone())
-                .unwrap_or_default(),
-        }
+    pub fn base_url_of(&self, kind: ProviderKind) -> String {
+        self.draft
+            .peek()
+            .ai
+            .setup(kind)
+            .map(|setup| setup.base_url.clone())
+            .unwrap_or_default()
     }
 
-    /// Write `brain`'s base URL into the draft, creating the built-in's entry if this is the
-    /// first thing ever set on it.
+    /// Write `kind`'s base URL into the draft, creating its entry if this is the first thing
+    /// ever set on it.
     ///
     /// Only ever reached with a value that differs from [`base_url_of`](Self::base_url_of), so
     /// the `or_default()` here creates an entry for a provider the user has actually typed into.
-    pub fn set_base_url(self, brain: &BrainRef, url: String) {
+    pub fn set_base_url(self, kind: ProviderKind, url: String) {
         let mut draft = self.draft;
-        let mut draft = draft.write();
-        match brain {
-            BrainRef::Builtin(kind) => {
-                draft.ai.providers.entry(*kind).or_default().base_url = url;
-            }
-            BrainRef::Custom(id) => {
-                if let Some(endpoint) = draft.ai.endpoints.get_mut(id) {
-                    endpoint.base_url = url;
-                }
-            }
-        }
-    }
-
-    /// What a **custom endpoint** is called. `None` for a built-in, whose name is its table
-    /// row's — there is nothing in the draft to read, which is the same answer as "not
-    /// renameable" and is why the row needs no second flag to decide.
-    /// `peek` for [`base_url_of`](Self::base_url_of)'s reason — this answers a guard inside an
-    /// effect, and reading would subscribe it to the whole draft.
-    pub fn name_of(&self, brain: &BrainRef) -> Option<String> {
-        match brain {
-            BrainRef::Builtin(_) => None,
-            BrainRef::Custom(id) => self
-                .draft
-                .peek()
-                .ai
-                .endpoints
-                .get(id)
-                .map(|e| e.name.clone()),
-        }
-    }
-
-    /// Rename a custom endpoint. A no-op for a built-in, by construction.
-    ///
-    /// **The name is display only** — [`Ai::endpoints`](strata_core::ai::Ai::endpoints) is keyed
-    /// by a minted id, so renaming moves nothing: the chat default still resolves, and a probe
-    /// already taken still describes the same endpoint.
-    pub fn set_name(self, brain: &BrainRef, name: String) {
-        let BrainRef::Custom(id) = brain else {
-            return;
-        };
-        let mut draft = self.draft;
-        if let Some(endpoint) = draft.write().ai.endpoints.get_mut(id) {
-            endpoint.name = name;
-        }
+        draft.write().ai.providers.entry(kind).or_default().base_url = url;
     }
 
     /// Edit one field of the draft — the write path every control on every pane goes through.

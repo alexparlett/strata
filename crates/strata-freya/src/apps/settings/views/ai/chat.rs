@@ -25,7 +25,7 @@
 
 use freya::prelude::*;
 use strata_agent::assistant::{efforts, info, label};
-use strata_core::ai::{BrainRef, Effort};
+use strata_core::ai::{Effort, ProviderKind};
 
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, Anchor, SettingsCtx};
@@ -49,7 +49,7 @@ impl Component for ChatPane {
             (draft.ai.clone(), ctx.probes.read().clone())
         };
 
-        let offered: Vec<BrainRef> = ai.enabled().collect();
+        let offered: Vec<ProviderKind> = ai.enabled().collect();
         if offered.is_empty() {
             return Pane::new(
                 rect().width(Size::fill()).child(
@@ -67,40 +67,29 @@ impl Component for ChatPane {
         // The default may name a brain that was just disabled on the other page; `enabled()` is
         // the authority and the picker shows the head of it rather than a stale name.
         let current = ai
-            .default_brain
-            .filter(|brain| ai.is_enabled(brain))
+            .default_provider
+            .filter(|kind| ai.is_enabled(*kind))
             .or_else(|| offered.first().copied());
 
-        // A built-in is named by its table row; a custom endpoint by its user — and a *new* one
-        // has no name yet, since Add leaves the box empty for the placeholder to invite. It
-        // still has to be pickable, so it says so rather than appearing as a blank line.
-        let name_of = |brain: &BrainRef| match ai.setup(brain) {
-            Some(setup) => match setup.name.map(str::trim) {
-                None => label(setup.kind).to_string(),
-                Some("") => "Unnamed endpoint".to_string(),
-                Some(name) => name.to_string(),
-            },
-            None => String::new(),
-        };
-
-        // Each item carries the `BrainRef` it selects, so nothing is matched back by name — two
-        // custom endpoints may share one, and a picker that resolved by label would then set the
-        // wrong one silently.
+        // Each item carries the `ProviderKind` it selects rather than being matched back by its
+        // label, so the picker cannot set one provider while displaying another.
         let provider = Select::new()
             .selected_item(Control::new(
-                current.map(|brain| name_of(&brain)).unwrap_or_default(),
+                current
+                    .map(|kind| label(kind).to_string())
+                    .unwrap_or_default(),
             ))
             .children(
                 offered
                     .iter()
-                    .map(|brain| {
-                        let brain = *brain;
+                    .map(|kind| {
+                        let kind = *kind;
                         MenuItem::new()
-                            .selected(current == Some(brain))
+                            .selected(current == Some(kind))
                             .on_press(move |_| {
-                                ctx.edit(move |settings| settings.ai.default_brain = Some(brain));
+                                ctx.edit(move |settings| settings.ai.default_provider = Some(kind));
                             })
-                            .child(Control::new(name_of(&brain)))
+                            .child(Control::new(label(kind)))
                             .into()
                     })
                     .collect::<Vec<Element>>(),
@@ -120,12 +109,10 @@ impl Component for ChatPane {
 
         // The kind's current-model hint, from the table — a placeholder, never a default: an
         // empty box means "no model chosen", which is a state the send refuses by name.
-        let example = current
-            .and_then(|brain| ai.setup(&brain))
-            .map_or("", |setup| info(setup.kind).model_example);
+        let example = current.map_or("", |kind| info(kind).model_example);
 
         let listed: Vec<String> = current
-            .map(|brain| probes.get(&brain).models().to_vec())
+            .map(|kind| probes.get(kind).models().to_vec())
             .unwrap_or_default();
 
         let model = rect()
@@ -152,10 +139,7 @@ impl Component for ChatPane {
         // The rungs this model actually offers — empty is a real answer, and the control says
         // which model has no reasoning setting rather than dimming with no explanation.
         let typed_model = model_buf.read().clone();
-        let rungs: &[Effort] = current
-            .and_then(|brain| ai.setup(&brain))
-            .map(|setup| efforts(setup.kind, &typed_model))
-            .unwrap_or(&[]);
+        let rungs: &[Effort] = current.map_or(&[], |kind| efforts(kind, &typed_model));
 
         // **A rung the model no longer offers is dropped, not kept out of sight.**
         //
@@ -175,9 +159,8 @@ impl Component for ChatPane {
             };
             let offered = draft
                 .ai
-                .default_brain
-                .and_then(|brain| draft.ai.setup(&brain))
-                .is_some_and(|setup| efforts(setup.kind, &model).contains(&effort));
+                .default_provider
+                .is_some_and(|kind| efforts(kind, &model).contains(&effort));
             drop(draft);
             if !offered {
                 ctx.edit(|settings| settings.ai.default_effort = None);

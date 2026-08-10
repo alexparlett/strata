@@ -20,7 +20,7 @@
 ## Reshaped 2026-08-10 — the design handoff, and the model that is not here
 
 Written first as one global provider + model + key. Reshaped once (2026-08-09) into a roster of
-named `Uuid` entries each carrying a **default model**. Both are now superseded by the design
+named `Uuid` entries each carrying a **default model**. Both are superseded by the design
 handoff's **AI** group, and by the observation that killed the middle version:
 
 > *"I don't understand why we need a model on the roster entry at all. It's meant to configure
@@ -43,9 +43,8 @@ a screen. Canvas: `Settings.dc.html` (`catProviders` / `catChat` / `catAgent` bl
 
 Three panes under one **AI** nav group.
 
-**AI ▸ Providers** — a fixed list of the provider kinds `genai` speaks to, each a row with a
-toggle. Enabling a row reveals its credential inline and a **Test** action. Below it, a second
-section of **named custom endpoints** the user adds and removes. Nothing here names a model.
+**AI ▸ Providers** — one row per provider kind, each with a toggle. Enabling a row reveals its
+credential inline and a **Test** action. Nothing here names a model.
 
 **AI ▸ Chat** — the new-chat defaults: provider · model · effort, sourced from *enabled*
 providers only, so the pane can never offer a model it has no credential for.
@@ -57,43 +56,41 @@ AA-04 (`views/agent_access.rs`) remains the form-idiom pattern.
 
 ## Shape
 
-### The eight are keyed by kind; the custom ones are keyed by a minted id
+### One list, keyed by kind
 
-Two lists, because they are two different things and the difference is structural:
-
-- **A built-in provider's identity is its kind.** Anthropic is Anthropic; there is no second
-  one, nothing to name, and nothing to rename. So it is keyed by `ProviderKind` and the row is
-  drawn from `PROVIDERS` whether the user has ever touched it or not. Absent from config means
-  "never enabled", which is the same thing the toggle says.
-- **A custom endpoint's identity is minted.** The canvas has no OpenAI-compatible row and AS-02
-  built that kind deliberately — llama.cpp, vLLM, LM Studio, a gateway — and there is no reason
-  to have only one. So it is a user-managed list in the same row anatomy: **name** · base URL ·
-  optional key · toggle · Test. Keyed by `Uuid`, because the display name is the thing whose
-  whole purpose is to be retyped and the chat defaults point at it (the saved-query precedent,
-  not the connection one).
+**A provider's identity is its kind.** Anthropic is Anthropic; there is no second one, nothing
+to name and nothing to rename. So `Ai::providers` is keyed by `ProviderKind`, and a kind absent
+from the map is one the user has never enabled — the same thing its toggle says, rather than a
+second copy of it.
 
 ```rust
 // strata-core
-pub enum BrainRef { Builtin(ProviderKind), Custom(Uuid) }
-
 pub struct Ai {
     pub providers: BTreeMap<ProviderKind, ProviderSetup>,
-    pub endpoints: BTreeMap<Uuid, CustomEndpoint>,
-    pub default_brain: Option<BrainRef>,
+    pub default_provider: Option<ProviderKind>,
     pub default_model: String,
     pub default_effort: Option<Effort>,
 }
 ```
 
-`BrainRef` is what a conversation points at, and it is what makes "several panes on several
-providers" one value rather than a mode — AS-02's `Selection` is still built per send, from a
-`BrainRef` plus the conversation's model and effort.
+**`OpenAiCompatible` is a row like the others, and was briefly a list.** It shipped first as a
+second, user-managed section of *named* endpoints keyed by a minted `Uuid`, so several could
+exist at once. Withdrawn, and this is the reasoning so it is not rebuilt: gateways exist to
+multiplex — LiteLLM and its kind put many backends behind one OpenAI-compatible address — so a
+list here is a second multiplexer in front of a solved problem. What it cost was a **sum-typed
+identity** (`BrainRef`) that every surface downstream would have had to carry: the composer's
+picker, a chat's selection, the transcript. One row addressed by its base URL, and the model
+list the gateway reports is what distinguishes what is behind it.
+
+The residue of the list, all deleted: `CustomEndpoint`, the `Uuid` keying, `name_of`/`set_name`,
+the row's `renameable`/`on_remove`/name buffer, add and remove, the empty state, and the second
+`use_side_effect` per row.
 
 ### A field the kind does not use is absent, not disabled
 
 The credential field is what the kind's `KeyUse`/`BaseUrl` policy says it is, straight off
-`PROVIDERS`: a masked key with a reveal for the seven keyed kinds, a URL for Ollama, and **both**
-for a custom endpoint (URL required, key optional). One expanded area, one to three boxes.
+`PROVIDERS`: a masked key with a reveal for the six keyed kinds, a URL for Ollama, and **both**
+for OpenAI-compatible (URL required, key optional). One expanded area, one or two boxes.
 
 The **empty key is a valid state**: `KeyUse::Env` falls back to the provider's own variable, and
 the row's subtext says which — the name comes from the table, never hand-typed.
@@ -185,14 +182,19 @@ owns. The minimum that moves, and no more:
 
 Recorded here so they are not re-litigated as gaps:
 
-- **A ninth kind, in its own section.** The canvas has eight rows and no OpenAI-compatible;
-  custom endpoints are a second, user-managed list below them.
+- **A ninth row.** The canvas has eight and no OpenAI-compatible; this adds it as an ordinary
+  row, because it is the only way to reach llama.cpp, vLLM, LM Studio or a gateway — and it is
+  the path `tests/assistant.rs` drives its stub through, so a kind no user can configure would
+  quietly make that test premise false.
 - **The effort ladder is per model** (above), not a fixed four.
 - **The subline states what is known** (above), not a model count the app has not fetched.
 - **The model dropdown accepts a typed name** (above).
 - **A disabled provider that was the default.** The canvas re-points the default at another
   enabled provider. Followed, but the re-point is *visible*: it happens on the pane the user is
   looking at, in the draft, before Apply — never silently at read time.
+- **Cohere is dropped** from the canvas's eight. Its genai adapter never reads a request's
+  `tools` and refuses a `Tool`-role message, so it could be enabled, pass a Test, and never call
+  a tool.
 
 ## What is NOT this task
 
@@ -232,11 +234,10 @@ An xhigh adversarial pass over the first cut found twelve defects. The shapes wo
 
 ## Acceptance
 
-- Provider enable/disable, credentials and the custom-endpoint list round-trip through
-  `write_config` and survive restart; a custom endpoint's identity survives a rename (the chat
-  default still resolves).
-- Enabling a kind reveals exactly the fields its `PROVIDERS` row declares; a custom endpoint
-  with no base URL is refused in the form, naming the field.
+- Provider enable/disable and credentials round-trip through `write_config` and survive restart.
+- Enabling a kind reveals exactly the fields its `PROVIDERS` row declares; an enabled
+  OpenAI-compatible row with no base URL is refused in the form (`SettingsCtx::blocker`), naming
+  the field.
 - A pasted key never appears in the written config file (assert on the file's bytes); the marker
   does; clearing the key removes the store entry through AS-05.
 - Test reports the provider's own words on failure and a model count on success, and editing the

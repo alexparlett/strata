@@ -3,7 +3,7 @@
 //!
 //! | Page | What it owns |
 //! |---|---|
-//! | [`ProvidersPane`] | Which brains exist: the built-in kinds, each a toggle and one credential, then the named custom endpoints |
+//! | [`ProvidersPane`] | Which brains exist: one row per kind, each a toggle and its credential |
 //! | [`ChatPane`] | What a new chat starts with: provider · model · effort |
 //! | [`McpPane`] | The inbound MCP server (AA-04, unchanged but for its name) |
 //!
@@ -23,7 +23,7 @@
 //! ## The shared half
 //!
 //! Both editing pages read the same three things, so they are here rather than in either:
-//! [`Row`](row::ProviderRow) (the row anatomy the built-ins and the custom endpoints share),
+//! [`Row`](row::ProviderRow) (the row anatomy every kind shares),
 //! and the [`probe`] module — Test and the model list, which are one call
 //! (`provider::list_models`) because listing a provider's models *is* a live request with the
 //! configured credential, and a separate reachability ping would prove strictly less.
