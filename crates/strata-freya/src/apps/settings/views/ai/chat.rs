@@ -64,12 +64,32 @@ impl Component for ChatPane {
             );
         }
 
-        // The default may name a brain that was just disabled on the other page; `enabled()` is
-        // the authority and the picker shows the head of it rather than a stale name.
+        // The default may name a provider that was just disabled on the other page, or none at
+        // all — `enabled()` is the authority, and the picker shows the head of it rather than a
+        // stale name.
         let current = ai
             .default_provider
             .filter(|kind| ai.is_enabled(*kind))
             .or_else(|| offered.first().copied());
+
+        // **What the pane resolved is what the draft says**, on `repoint`'s terms: in the draft,
+        // on the page the user is looking at, before Apply.
+        //
+        // Displaying a fallback without committing it is a pane that shows "Anthropic" and
+        // commits `None` — and AS-04, reading the committed value, would then report that nothing
+        // is configured. That state is reachable rather than theoretical: this branch renamed the
+        // persisted field, so a config written by an earlier build loads with providers enabled
+        // and no default at all.
+        //
+        // It is also what lets everything below trust `default_provider`, which is what the
+        // effort check reads.
+        let picked = use_reactive(&current);
+        use_side_effect(move || {
+            let resolved = *picked.read();
+            if resolved.is_some() && ctx.draft.peek().ai.default_provider != resolved {
+                ctx.edit(move |settings| settings.ai.default_provider = resolved);
+            }
+        });
 
         // Each item carries the `ProviderKind` it selects rather than being matched back by its
         // label, so the picker cannot set one provider while displaying another.
@@ -151,18 +171,23 @@ impl Component for ChatPane {
         //
         // In the draft, on the pane the user is looking at, for `repoint`'s reason: a default
         // repaired silently at read time is a setting that changed with nobody told.
+        //
+        // **Both axes, and the resolved provider.** A ladder is `(provider, model)`, so this has
+        // to re-run when either moves: reading the draft with `peek` and subscribing to the model
+        // alone left a rung behind when the *provider* changed (Anthropic `claude-opus-5` at
+        // XHigh, switched to OpenAI, whose ladder for that name is empty — control gone, value
+        // kept, every new chat refused). And it reads `picked` rather than `default_provider`
+        // because the controls above resolve through it: validating against a value the user
+        // cannot see is how a press on a live segment gets reverted the instant it lands.
         use_side_effect(move || {
             let model = model_buf.read().clone();
-            let draft = ctx.draft.peek();
-            let Some(effort) = draft.ai.default_effort else {
+            let Some(kind) = *picked.read() else {
                 return;
             };
-            let offered = draft
-                .ai
-                .default_provider
-                .is_some_and(|kind| efforts(kind, &model).contains(&effort));
-            drop(draft);
-            if !offered {
+            let Some(effort) = ctx.draft.peek().ai.default_effort else {
+                return;
+            };
+            if !efforts(kind, &model).contains(&effort) {
                 ctx.edit(|settings| settings.ai.default_effort = None);
             }
         });

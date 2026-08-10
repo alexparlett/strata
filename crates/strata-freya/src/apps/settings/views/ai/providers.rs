@@ -19,7 +19,7 @@
 
 use freya::prelude::*;
 use strata_agent::assistant::{all, info, BaseUrl, KeyUse};
-use strata_core::ai::{Ai, ProviderKind};
+use strata_core::ai::{Ai, ProviderKind, ProviderSetup};
 use strata_core::secret::Secret;
 
 use crate::apps::settings::views::ai::probe::{self, Ask, Probe};
@@ -184,13 +184,25 @@ fn default_url(kind: ProviderKind) -> &'static str {
 /// back with.
 fn subline(
     kind: ProviderKind,
-    setup: Option<&strata_core::ai::ProviderSetup>,
+    setup: Option<&ProviderSetup>,
     stored: bool,
     probe: &Probe,
     open: bool,
 ) -> Option<String> {
     if let Probe::Verified { models } = probe {
         return Some(models_line(models.len()));
+    }
+    // **What is missing outranks what is present.** A kind whose address has no default cannot
+    // work without one, so a closed row says that before it says anything about a key it does
+    // have — reporting "A key is stored" while `blocker` refuses Apply over the empty URL names
+    // the one fact that is fine and hides the one that is not.
+    let unaddressed = matches!(info(kind).base_url, BaseUrl::Required)
+        && setup
+            .map(|s| s.base_url.trim())
+            .unwrap_or_default()
+            .is_empty();
+    if unaddressed {
+        return (!open).then(|| "No address set".to_string());
     }
     if stored {
         return Some("A key is stored".to_string());
