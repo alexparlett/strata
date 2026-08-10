@@ -182,22 +182,32 @@ impl Component for ConfigureDialog {
                                     return;
                                 }
                                 probes.write().set(kind, Probe::Testing);
-                                // The values in these boxes, not the applied ones — a test that
-                                // proved something other than what is on screen would be worse
-                                // than none.
+                                // **What Apply would send, which is not always what is filed.**
+                                // A test that proved something other than what is on screen is
+                                // worse than none — so the boxes win, and the stored key is
+                                // only the answer when nothing is pending against it.
+                                //
+                                // An empty box is not "nothing pending": `ai_keys` can hold a
+                                // queued *removal* this dialog did not make (switching the
+                                // provider off records one, and the gear still opens). Falling
+                                // back to the marker there authenticated with a key on its way
+                                // out and reported "verified" directly beneath a note saying
+                                // there was none.
+                                let typed_now = key_buf.peek().clone();
+                                let pending = ctx.ai_keys.peek().touched(kind);
                                 let ask = Ask {
                                     kind,
                                     base_url: url_buf.peek().clone(),
-                                    typed: Secret::new(&key_buf.peek()),
-                                    stored: match key_buf.peek().trim().is_empty() {
-                                        true => ctx
-                                            .draft
-                                            .peek()
-                                            .ai
-                                            .setup(kind)
-                                            .and_then(|setup| setup.key.clone()),
-                                        false => None,
-                                    },
+                                    typed: Secret::new(&typed_now),
+                                    stored: (!pending && typed_now.trim().is_empty())
+                                        .then(|| {
+                                            ctx.draft
+                                                .peek()
+                                                .ai
+                                                .setup(kind)
+                                                .and_then(|setup| setup.key.clone())
+                                        })
+                                        .flatten(),
                                 };
                                 spawn(async move {
                                     let settled = probe::run(ask).await;
