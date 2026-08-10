@@ -221,10 +221,19 @@ impl Component for ProviderRow {
         // is why each row is its own `Component` rather than a helper the pane calls in a loop
         // (`components::form::options` settled this). A row draws at most three boxes and always
         // takes three buffers, whether or not it draws them.
-        let key_buf = use_state({
+        let mut key_buf = use_state({
             let seed = self.key_text.clone();
             move || seed
         });
+        // **The key box follows its prop, where the other two only seed from theirs.**
+        //
+        // A successful Apply clears the typed keys — they are in the keystore now — and a box
+        // still holding the pasted text would be written straight back by the effect below,
+        // undoing the clear and re-`put`ting the key on the next Apply. `set_if_modified` is what
+        // keeps this from fighting the user: while typing, the prop is derived from the buffer
+        // and already equal, so this is a no-op until something *else* changes the value.
+        let committed = use_reactive(&self.key_text);
+        use_side_effect(move || key_buf.set_if_modified(committed.read().clone()));
         let url_buf = use_state({
             let seed = self.url_text.clone();
             move || seed

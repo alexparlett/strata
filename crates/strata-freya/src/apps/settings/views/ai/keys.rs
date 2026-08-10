@@ -49,6 +49,16 @@ impl TypedKeys {
         self.0.remove(brain);
     }
 
+    /// Forget every typed key, because they have all landed.
+    ///
+    /// Called once [`commit`] has returned `Ok`: the keystore holds the secrets and the draft
+    /// holds their markers, so the pasted text is spent. Keeping it would make a second Apply in
+    /// the same window re-`put` keys it had already stored — reachable when a failed config write
+    /// leaves the window open to retry.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     fn iter(&self) -> impl Iterator<Item = (&BrainRef, &String)> {
         self.0.iter()
     }
@@ -175,6 +185,28 @@ mod tests {
         commit(&keys, &mut ai).expect("a key with no home is skipped, not an error");
         assert!(ai.endpoints.is_empty(), "nothing was invented to hold it");
         assert!(ai.providers.is_empty());
+    }
+
+    /// **A committed key is no longer typed, so a retry writes no keys.**
+    ///
+    /// A successful Apply closes the window, so the way to reach a second Apply is the way the
+    /// window is designed to stay open: `write_config` failed and the user retries. That retry
+    /// has to be a config write, not a second round of keystore writes — on macOS a repeat
+    /// Keychain prompt for a key entered once.
+    #[test]
+    fn a_committed_key_is_not_offered_to_the_next_apply() {
+        let brain = BrainRef::Builtin(ProviderKind::Anthropic);
+        let mut keys = TypedKeys::default();
+        keys.set(brain, "sk-typed-once".into());
+        assert!(keys.touched(&brain));
+
+        // What `apply` does once `commit` returns `Ok`.
+        keys.clear();
+
+        assert!(!keys.touched(&brain), "the retry has nothing to store");
+        let mut ai = Ai::default();
+        commit(&keys, &mut ai).expect("nothing left to commit");
+        assert!(ai.providers.is_empty(), "and nothing to write it into");
     }
 
     /// **Asking about a brain's key must not create a row for it.**

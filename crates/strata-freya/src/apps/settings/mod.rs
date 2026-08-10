@@ -495,6 +495,17 @@ impl SettingsCtx {
             failed.set(Some(e.to_string()));
             return false;
         }
+        // **A key that has landed is no longer typed.** The keystore now holds it and the marker
+        // is in the draft, so the pasted text has no further job — and leaving it would make the
+        // *next* Apply in this window re-`put` every key it already stored.
+        //
+        // A successful Apply closes the window, so the reachable case is the one where it does
+        // not: `write_config` failing leaves the window open to retry, and that retry must be a
+        // config write rather than a second round of keystore writes (a repeat Keychain prompt
+        // on macOS for a key the user entered once). Clearing here is safe precisely because
+        // `commit` returned `Ok` — the secrets are durable whether or not the file write is.
+        let mut typed = self.ai_keys;
+        typed.write().clear();
         let landed = write_config(self.config, &[ConfigChan::Settings], {
             let draft = draft.clone();
             move |cfg| draft.merge_onto(&seed, &mut cfg.settings)
