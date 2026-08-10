@@ -57,6 +57,7 @@ use crate::platform::{self, WindowKind};
 use crate::state::{
     use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview, ThemeSel,
 };
+use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 pub use model::{category, Category, NavGroup, CATEGORIES};
@@ -213,6 +214,17 @@ pub struct SettingsCtx {
     /// marker merges. Emptying an entry is how "clear this key" is spelled, because
     /// `Secret::new` answers a blank string with `None` and no secret *is* a delete.
     pub ai_keys: State<TypedKeys>,
+    /// **Whether an Apply is in flight** — the arm in front of the keystore's blocking half.
+    ///
+    /// [`apply`](Self::apply) runs `commit` on a worker, so the window stays live while the OS
+    /// is being asked (and, on a freshly signed bundle, while it is prompting). Live means
+    /// pressable: without this the user could start a second Apply over the same typed keys, and
+    /// two concurrent `commit`s would both see no marker and each mint one for the same secret,
+    /// stranding whichever lost.
+    ///
+    /// On the window rather than the footer for [`failed`](Self::failed)'s reason — the footer
+    /// reads it, but it is a fact about the window's state, not about the strip that draws it.
+    applying: State<bool>,
     /// What AI ▸ Providers has actually asked each provider ([`Probe`]).
     ///
     /// On the window rather than the pane for `engine`'s reason: Providers runs the test and
@@ -247,6 +259,7 @@ impl PartialEq for SettingsCtx {
             && self.seed == other.seed
             && self.engine == other.engine
             && self.ai_keys == other.ai_keys
+            && self.applying == other.applying
             && self.probes == other.probes
             && self.failed == other.failed
     }
@@ -258,6 +271,7 @@ impl SettingsCtx {
         Self {
             engine: State::create(PropRows::from_map(&settings.engine)),
             ai_keys: State::create(TypedKeys::default()),
+            applying: State::create(false),
             probes: State::create(Probes::default()),
             draft: State::create(settings.clone()),
             seed: State::create(settings),
@@ -408,7 +422,19 @@ impl SettingsCtx {
     /// window would come up equally undirty and the setting could never reach disk again this
     /// session. Holding the seed keeps the same diff pending, and re-applying it is harmless —
     /// `merge_onto` writes the identical fields over values that already hold them.
-    pub fn apply(&self) -> bool {
+    /// **Async because the keystore blocks.** `strata_core::secret` states it plainly — every
+    /// call is a synchronous platform call that can wait on a lock, a daemon, or a *user prompt*,
+    /// and a caller on the render thread goes through [`offload`]. That last case is not
+    /// hypothetical here: Keychain access is per code signature, so the first Apply from a newly
+    /// signed bundle is exactly when macOS raises an authorisation prompt — and on the render
+    /// thread that prompt appears over a frozen window.
+    ///
+    /// So the blocking half runs on a worker and the window stays live while it does, which is
+    /// the other half of the same invariant: a read the user waits for is an **arm**, not a
+    /// freeze. [`applying`](Self::applying) is that arm, and the footer gates Apply on it —
+    /// without it a responsive window lets a second press run a concurrent `commit` over the same
+    /// typed keys, and the two would race to mint a marker for one secret.
+    pub async fn apply(&self) -> bool {
         let mut draft = self.draft.peek().clone();
         let seed = self.seed.peek().clone();
 
@@ -422,13 +448,38 @@ impl SettingsCtx {
         // A refusal stops the whole Apply. It is reported in the keystore's own words and never
         // answered by writing the secret somewhere else, which is the failure
         // `strata_core::secret` exists to make impossible.
+        //
         // **The markers are kept whether or not every key landed.** `commit` writes each marker
-        // into `draft.ai` as it stores that key, so a failure partway leaves earlier secrets
-        // already in the keystore — and discarding the draft with them would strand those under
-        // ids nothing references, with a retry minting fresh ones and orphaning another each
-        // time. Publishing first means a retry sees the markers, takes the overwrite-in-place
-        // branch, and reuses the entries rather than growing new ones.
-        let landed_keys = views::commit(&self.ai_keys.peek(), &mut draft.ai);
+        // into the `Ai` as it stores that key, so a failure partway leaves earlier secrets
+        // already in the keystore — and discarding them would strand those under ids nothing
+        // references, with a retry minting fresh ones and orphaning another each time.
+        // Publishing first means a retry sees the markers, takes the overwrite-in-place branch,
+        // and reuses the entries rather than growing new ones. That is why the worker hands the
+        // `Ai` **back** rather than reporting only success or failure.
+        let mut applying = self.applying;
+        applying.set(true);
+        let keys = self.ai_keys.peek().clone();
+        let ai = std::mem::take(&mut draft.ai);
+        let answer = offload(move || {
+            let mut ai = ai;
+            let outcome = views::commit(&keys, &mut ai);
+            (outcome, ai)
+        })
+        .await;
+        applying.set(false);
+
+        // The worker never answered — it could not start, or it panicked. That is not a fact
+        // about the keystore, so it must not be reported as one, and the draft's `ai` has to come
+        // back from somewhere: the copy that was moved in is gone, so this re-reads the live one.
+        let Some((landed_keys, ai)) = answer else {
+            let mut failed = self.failed;
+            failed.set(Some(
+                "The settings could not be saved: a worker did not answer.".into(),
+            ));
+            return false;
+        };
+        draft.ai = ai;
+
         let mut live = self.draft;
         live.set(draft.clone());
         if let Err(e) = landed_keys {
@@ -464,6 +515,12 @@ impl SettingsCtx {
         reseed.set(draft);
         self.discard();
         true
+    }
+
+    /// Whether an Apply is in flight — what the footer disables its button on. See
+    /// [`applying`](Self::applying).
+    pub fn applying(&self) -> bool {
+        *self.applying.read()
     }
 
     /// Why the last Apply didn't stick, for the footer to state.

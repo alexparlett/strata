@@ -174,8 +174,15 @@ owns. The minimum that moves, and no more:
   produces, so before a Test the row says what it actually knows — the fallback variable for a
   keyed kind, the default endpoint for Ollama — and becomes the model count once a list has
   come back.
-- **Nothing blocking on the render thread**: keystore reads and `list_models` both go through
-  `task::offload`.
+- **Nothing blocking on the render thread**: the Test probe (keystore read + `list_models`) and
+  **Apply's `commit`** (keystore write) both go through `task::offload`. The write was the one
+  that got missed first, and it is the one that matters most — Keychain access is per code
+  signature, so the first Apply from a newly signed bundle is exactly when macOS raises an
+  authorisation prompt, and on the render thread that prompt appears over a frozen window.
+  Offloading it makes the window live while the OS is asked, which is the invariant's other half:
+  a wait is an **arm**, not a freeze. `SettingsCtx::applying` is that arm and the footer gates
+  Apply on it, because a live window is a pressable one and two concurrent `commit`s over the
+  same typed keys would each mint a marker for one secret.
 - **User-facing text in the IDE register.**
 
 ## Named divergences from the canvas
