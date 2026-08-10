@@ -78,6 +78,10 @@ pub struct FunctionSym {
     pub ret: Option<String>,
     /// One-line description from the registry's documentation, when present.
     pub description: Option<String>,
+    /// `true` for a function **this session created** (`CREATE FUNCTION`, ED-09) —
+    /// what `DROP FUNCTION |` filters on, marked at registry-snapshot time from the
+    /// one authority (the `Functions` registry's created-name set).
+    pub created: bool,
 }
 
 /// The variadic-tail marker used inside [`FunctionSym::signatures`] parameter lists.
@@ -209,6 +213,7 @@ mod function_sym_tests {
                 .collect(),
             ret: ret.map(String::from),
             description: None,
+            created: false,
         }
     }
 

@@ -1,7 +1,33 @@
 # ED-11 · Completion for the statements the editor now runs
 
-**Workstream:** Editor statements · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** ED-08,
+**Workstream:** Editor statements · **Status:** ✅ · **DEV_TASKS:** — · **Depends on:** ED-08,
 ED-09, ED-10 (all ✅ — the lead list and the position model land once, over the finished surface)
+
+**Built** as specified below — the caret model in `engine/sql/context.rs`, the pools in
+`engine/sql/complete/`, the statement vocabularies on their owning modules
+(`ddl::external::STORED_AS_FORMATS` + the `OPTIONS` key tables, `config::ENGINE_KEYS` through
+`ddl::session::refuse_reserved_key`). The surface as built is `docs/COMPLETION_SPEC.md`
+(§2–§4, §10) and the per-statement notes in `docs/STATEMENTS_SPEC.md` §6.x. One addition is
+`lex::literal_at` (the string scanner's sibling that answers *which* literal, for the OPTIONS
+carve-out's two lexing cases).
+
+**Superseded in the post-landing review** (the column-list positions, settled with Alex as
+**one capability**, not per-statement code — resolved once onto `CaretAnalysis::column_list`
+so the role and the pool read one answer, then `push_list_columns`; COMPLETION_SPEC §4
+"the column-list rule"):
+- The "INSERT column lists … as `Binding`" silence below was wrong on its own reasoning: a
+  column list names **existing** columns of the target, not invented names. These positions are
+  the `Dot` shape — a column of one known relation — and resolve the same way: that relation's
+  columns only, empty when it cannot be resolved, the group's already-listed names
+  written-demoting through the same `column_ord` composition a SELECT list uses. So
+  `INSERT INTO t (|` offers the target's columns (only for an internal target — offering
+  columns of a statement dispatch refuses would be dishonest) and VALUES tuples keep the
+  Binding (the content really is the user's data).
+- `COPY … PARTITIONED BY (|` offers the **source's** columns (catalog table, or the query
+  source's scraped projection) — and the `COPY (|` restart is scoped to the *source* paren
+  only, which the table below implied but did not say (following it literally offered query
+  leads inside a partition list). CET's `PARTITIONED BY` stays a Binding: its schema is
+  inferred from files, so the columns are unknowable while typing.
 
 ## Goal
 

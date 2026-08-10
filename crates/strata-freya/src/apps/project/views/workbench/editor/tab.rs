@@ -131,6 +131,7 @@ impl Component for EditorTab {
                         (
                             t.def.name.as_str(),
                             t.reg.ready().map(|m| m.columns.as_slice()).unwrap_or(&[]),
+                            t.def.origin.is_internal(),
                         )
                     }),
                     p.views.iter().map(|v| {

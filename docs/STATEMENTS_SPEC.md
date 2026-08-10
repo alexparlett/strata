@@ -271,6 +271,10 @@ Around it, as built:
   `ENGINE_KEYS` zeroes on purpose: that one answers "which files are there", and a re-scan means
   asking again. This one answers "what is in *this* file", invalidated on size and mtime.
 
+Completion (ED-11): `CREATE TABLE` is a statement lead; the name position is a Binding (an
+invented name offers nothing) and the `AS |` of a CTAS restarts the query ladder
+(`Clause::Restart` — query leads only), so the spooled query completes exactly as a typed one.
+
 ### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
 **`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
@@ -320,6 +324,15 @@ runtime away.
 Both wordings are the engine's — `ddl::drop_intent` before the fact, the report's after — so the
 confirm cannot promise what the report then contradicts: an internal drop names the data, an
 external one keeps "the source files on disk are not deleted".
+
+Completion (ED-11): `INSERT INTO |` offers only tables built with `internal: true` on the
+`Catalog` snapshot — the store's `TableOrigin` is the internal-set authority for the offer,
+`Engine::is_internal` stays the dispatch gate, one fact read from the store because the store
+built the snapshot. The **column list** offers the target's own columns, and only for a target
+an INSERT may reach — offering columns of a statement dispatch refuses would be dishonest.
+`DROP TABLE |` offers tables and not views, `DROP VIEW |` the reverse (`ddl::tables` names the
+split in its own refusal). VALUES tuples stay silent (the content is the user's own data); the
+`INSERT`'s query tail keeps full query completion.
 
 ### 6.3 Typed view DDL — `CREATE VIEW` and `DROP VIEW`
 
@@ -386,6 +399,10 @@ lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Engine
 Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
 rounds order a chain from cold exactly as they do a saved one.
 
+Completion (ED-11): `CREATE VIEW` and `CREATE OR REPLACE VIEW` are statement leads; the view's
+name is a Binding and its `AS |` restarts the query ladder, so the definition query completes
+like any other. `DROP VIEW |` offers the views alone.
+
 ### 6.4 Typed `COPY … TO`
 
 **DataFusion's own write, behind the two checks the Export window used to stand in for**
@@ -430,6 +447,13 @@ and `SHOW` are statements a user can type (§6.5) one partitioned export would o
 the answer for every later one, window or typed. It keeps its `execution.` namespace because
 `TableOptions::set` skips that namespace entirely, which is what lets the key reach the planner
 without a format refusing it as unknown.
+
+Completion (ED-11): `COPY |` reads a relation like a FROM target; `COPY (|` — the source paren
+and only that one — restarts the query ladder; after the source, `TO` leads the continuation
+list. `PARTITIONED BY (…)` offers the **source's** columns (the catalog's for a named table,
+the scraped projection for a query source), because a partition column has to be one of them.
+The `TO '…'` path and `COPY`'s own `OPTIONS` are deliberately silent — the path is the user's
+filesystem and the option namespace is DataFusion's open one, not ours (COMPLETION_SPEC §10).
 
 ### 6.5 Session statements — `SET` / `RESET` and `PREPARE` / `EXECUTE` / `DEALLOCATE`
 
@@ -513,7 +537,16 @@ Completion offers prepared names at an `EXECUTE` / `DEALLOCATE` operand (`Clause
 nowhere else — and only where that word **leads the statement**, because sqlparser classes every
 word in its dictionary as a keyword, so a table with an `execute` column would otherwise have that
 column govern the rest of its SELECT list and empty the offer there
-(`context::leads_statement_only`). The rest of the session statements' completion is ED-11.
+(`context::leads_statement_only` — since ED-11 the guard covers every statement lead, `SET`,
+`PREPARE`, `CREATE`, `DROP`, `INSERT` and `COPY` included). `SET |` / `RESET |` offer
+`config::ENGINE_KEYS` filtered through `refuse_reserved_key` **itself** — the dispatch's own
+fence, `pub(crate)` for exactly this, so the offer and the refusal cannot drift and the dialect
+key (a plain `sql_parser.*` key no predicate names) is excluded with the other three classes.
+The dotted key completes as **one** chain (accepting a key at `SET datafusion.|` replaces the
+whole chain), the detail column is the key's default, and `SET k = |` offers the key's own kind
+vocabulary (`Bool` ⇒ `true`/`false`, `Enum` ⇒ its options, anything else nothing). `RESET`
+shares the key pool — the settable superset is the honest offer. `PREPARE |` invents a name;
+`PREPARE p AS |` restarts the query ladder, so the prepared body completes like any query.
 
 ### 6.6 SQL functions — `CREATE FUNCTION` and `DROP FUNCTION`
 
@@ -599,6 +632,14 @@ There is **no docs panel**: `FunctionSym::doc()` has no caller outside its own u
 neither `Completion` nor the editor's `CompletionItem` carries a docs field. That predates ED-09
 (it is F5-era API) and is not something this statement needs; the description the factory sets is
 reached through `SHOW FUNCTIONS` and nowhere else.
+
+Completion (ED-11): `DROP FUNCTION |` offers only syms marked `created` — the flag rides
+`FunctionSym` from the registry snapshot (`functions::snapshot` takes the created-name set), so
+the one authority (`Functions`) answers the offer as it answers the drop's own fence, and a
+built-in is never offered to a statement that would refuse it. A `CREATE FUNCTION` body (after
+`RETURN`) offers the **declared argument names** plus functions, and never catalog columns or
+relations — the body may reference only its arguments, so scope columns would offer exactly
+what `Definition::check` refuses.
 
 ### 6.7 Typed `CREATE EXTERNAL TABLE`
 
@@ -695,6 +736,15 @@ def this statement writes composes exactly as it will when the next open replays
 The report is "Table 't' created, 4 columns" (or `replaced`), and `count` is `None`: a registration
 reads a schema, it does not move rows. The catalog row's count is the free statistic
 `register_external` already answered with.
+
+Completion (ED-11): `STORED AS |` offers exactly `ddl::external::STORED_AS_FORMATS` — the
+module's own arms as data, held against `read_format` by test. The `OPTIONS ('…')` keys complete
+**inside their quotes** (the one exception to the string guard, terminated and unterminated
+literals both), from the same `CSV_OPTION_KEYS` / `JSON_OPTION_KEYS` tables `apply` consumes —
+format-aware, NDJSON minus the shape key, empty for Parquet/Arrow/unwritten — with `Bool` and
+`Enum` value offers. Store-namespace and client keys are never offered: the arm refuses them
+toward Connections, and absence from the offer is the same policy. `LOCATION '…'` stays silent —
+a path, the user's filesystem.
 
 ## 7. A statement, end to end
 

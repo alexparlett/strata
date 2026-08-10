@@ -197,6 +197,190 @@ pub async fn create(
 
 // ---- STORED AS + OPTIONS ----------------------------------------------------
 
+/// The format words `STORED AS` takes — [`read_format`]'s own match arms as data, for
+/// completion's format-word pool (ED-11). One table, owned by the module whose arms it
+/// mirrors, kept honest by `stored_as_formats_parse_through_read_format`: every entry
+/// parses through [`read_format`] and a non-member does not.
+pub(crate) const STORED_AS_FORMATS: &[&str] = &["PARQUET", "CSV", "JSON", "NDJSON", "ARROW"];
+
+/// The value shape of one `OPTIONS` key — what completion may offer at the key's value
+/// position (ED-11), mirroring the `SET` value design: `Bool` offers `true` / `false`,
+/// `Enum` its words, and `Char` / `Int` nothing (the values are the user's own).
+#[derive(Clone, Copy)]
+pub(crate) enum OptionKind {
+    Bool,
+    Char,
+    Int,
+    Enum(&'static [&'static str]),
+}
+
+/// The compression spellings [`compression`] parses — DataFusion's own vocabulary,
+/// stated once for the refusal message, the value offer and the coercion alike.
+const COMPRESSION_WORDS: &[&str] = &["uncompressed", "gzip", "bzip2", "xz", "zstd"];
+
+/// One `OPTIONS` key of a format: the DataFusion spelling, its value shape, the short
+/// detail completion shows, and the coercion-and-def-field its value lands on. The
+/// table **is** [`apply`]'s arm set — one vocabulary, consumed by the arm and by the
+/// offer, never a copy kept honest by test.
+pub(crate) struct OptionKey<T: 'static> {
+    pub(crate) key: &'static str,
+    pub(crate) kind: OptionKind,
+    pub(crate) what: &'static str,
+    pub(crate) set: fn(&mut T, &str, &Value) -> Result<(), String>,
+}
+
+/// The keys completion may offer for the format word `STORED AS` names — the same
+/// tables [`apply`] consumes, projected per format: NDJSON drops
+/// `format.newline_delimited` (which [`read_format`] refuses toward `STORED AS
+/// JSON`), and a format with no options — or no format written yet — answers empty,
+/// matching the arm's refusal by name. Owned here, beside the arms it mirrors, so
+/// the offer cannot drift from dispatch; `option_keys_for_agrees_with_apply` holds
+/// the projection and each key's declared kind against the arms themselves.
+pub(crate) fn option_keys_for(format_word: &str) -> Vec<(&'static str, OptionKind, &'static str)> {
+    fn rows<T>(keys: &'static [OptionKey<T>]) -> Vec<(&'static str, OptionKind, &'static str)> {
+        keys.iter().map(|k| (k.key, k.kind, k.what)).collect()
+    }
+    match format_word {
+        "CSV" => rows(CSV_OPTION_KEYS),
+        "JSON" => rows(JSON_OPTION_KEYS),
+        "NDJSON" => rows(JSON_OPTION_KEYS)
+            .into_iter()
+            .filter(|(k, ..)| *k != "format.newline_delimited")
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The CSV reader's keys — every field of [`CsvRead`] and nothing else, which is what
+/// `docs/IMPORT_OPTIONS.md` documents from the other side. The three CSV options
+/// DataFusion has and this deliberately lacks (`format.null_regex`, `format.terminator`,
+/// `format.double_quote`) reach [`apply`]'s by-name refusal like any other key.
+pub(crate) const CSV_OPTION_KEYS: &[OptionKey<CsvRead>] = &[
+    OptionKey {
+        key: "format.has_header",
+        kind: OptionKind::Bool,
+        what: "header row",
+        set: |o, k, v| {
+            o.header = boolean(k, v)?;
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.delimiter",
+        kind: OptionKind::Char,
+        what: "delimiter character",
+        set: |o, k, v| {
+            o.delimiter = character(k, "delimiter", v)?;
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.quote",
+        kind: OptionKind::Char,
+        what: "quote character",
+        set: |o, k, v| {
+            o.quote = character(k, "quote character", v)?;
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.escape",
+        kind: OptionKind::Char,
+        what: "escape character",
+        set: |o, k, v| {
+            o.escape = Some(character(k, "escape character", v)?);
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.comment",
+        kind: OptionKind::Char,
+        what: "comment character",
+        set: |o, k, v| {
+            o.comment = Some(character(k, "comment character", v)?);
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.newlines_in_values",
+        kind: OptionKind::Bool,
+        what: "newlines in quoted values",
+        set: |o, k, v| {
+            o.newlines_in_values = boolean(k, v)?;
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.truncated_rows",
+        kind: OptionKind::Bool,
+        what: "tolerate short rows",
+        set: |o, k, v| {
+            o.truncated_rows = boolean(k, v)?;
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.schema_infer_max_rec",
+        kind: OptionKind::Int,
+        what: "rows read to infer the schema",
+        // `Some(0)` is DataFusion's own "disable inference" arm — every column as text —
+        // so it is a value, not a sentinel, exactly as the Configure window spends it.
+        set: |o, k, v| {
+            o.infer_rows = Some(count(k, v)?);
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.compression",
+        kind: OptionKind::Enum(COMPRESSION_WORDS),
+        what: "whole-file compression",
+        set: |o, k, v| {
+            o.compression = compression(k, v)?;
+            Ok(())
+        },
+    },
+];
+
+/// The JSON reader's keys — [`JsonRead`]'s fields exactly, as above. Completion drops
+/// `format.newline_delimited` from the NDJSON offer itself, because [`read_format`]
+/// refuses it there toward `STORED AS JSON`.
+pub(crate) const JSON_OPTION_KEYS: &[OptionKey<JsonRead>] = &[
+    OptionKey {
+        key: "format.newline_delimited",
+        kind: OptionKind::Bool,
+        what: "newline-delimited shape",
+        set: |o, k, v| {
+            o.shape = match boolean(k, v)? {
+                true => JsonShape::NewlineDelimited,
+                false => JsonShape::Array,
+            };
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.schema_infer_max_rec",
+        kind: OptionKind::Int,
+        what: "rows read to infer the schema",
+        // **0 means scan every record here**, not "no rows" — the engine refuses `Some(0)`
+        // outright, since it would infer a schema with no columns. The Configure pane spends
+        // 0 the same way, and this has to land on the def that pane would have written.
+        set: |o, k, v| {
+            let rows = count(k, v)?;
+            o.infer_rows = (rows > 0).then_some(rows);
+            Ok(())
+        },
+    },
+    OptionKey {
+        key: "format.compression",
+        kind: OptionKind::Enum(COMPRESSION_WORDS),
+        what: "whole-file compression",
+        set: |o, k, v| {
+            o.compression = compression(k, v)?;
+            Ok(())
+        },
+    },
+];
+
 /// The reader `STORED AS` names, dressed in the options that reader takes.
 ///
 /// **Exhaustive by name, never a fallthrough** (P4-11): a format with no reader in this build has
@@ -267,57 +451,32 @@ fn store_key(key: &str) -> Option<&'static str> {
 
 /// Read one `OPTIONS` entry onto the def's own field, refusing by name where there is none.
 ///
-/// The key set **is** the def: every field of [`CsvRead`] and [`JsonRead`] has a DataFusion key
-/// here and nothing else does, which is what `docs/IMPORT_OPTIONS.md` documents from the other
-/// side. The three CSV options DataFusion has and this deliberately lacks (`format.null_regex`,
-/// `format.terminator`, `format.double_quote`) reach the by-name refusal like any other key —
-/// [`CsvRead`]'s doc comment is why they are absent, and it is the read path's asymmetry rather
-/// than an oversight.
+/// The arm set **is** the table ([`CSV_OPTION_KEYS`] / [`JSON_OPTION_KEYS`]) and the table is
+/// the def: every field of [`CsvRead`] and [`JsonRead`] has a DataFusion key there and nothing
+/// else does, which is what `docs/IMPORT_OPTIONS.md` documents from the other side — and what
+/// lets completion offer the same set with zero drift. The three CSV options DataFusion has and
+/// this deliberately lacks (`format.null_regex`, `format.terminator`, `format.double_quote`)
+/// reach the by-name refusal like any other key — [`CsvRead`]'s doc comment is why they are
+/// absent, and it is the read path's asymmetry rather than an oversight.
 fn apply(format: &mut SourceFormat, name: &str, key: &str, value: &Value) -> Result<(), String> {
     match format {
-        SourceFormat::Csv(o) => match key {
-            "format.has_header" => o.header = boolean(key, value)?,
-            "format.delimiter" => o.delimiter = character(key, "delimiter", value)?,
-            "format.quote" => o.quote = character(key, "quote character", value)?,
-            "format.escape" => o.escape = Some(character(key, "escape character", value)?),
-            "format.comment" => o.comment = Some(character(key, "comment character", value)?),
-            "format.newlines_in_values" => o.newlines_in_values = boolean(key, value)?,
-            "format.truncated_rows" => o.truncated_rows = boolean(key, value)?,
-            // `Some(0)` is DataFusion's own "disable inference" arm — every column as text — so
-            // it is a value, not a sentinel, exactly as the Configure window spends it.
-            "format.schema_infer_max_rec" => o.infer_rows = Some(count(key, value)?),
-            "format.compression" => o.compression = compression(key, value)?,
-            other => return Err(unsupported(other, format, name)),
+        SourceFormat::Csv(o) => match CSV_OPTION_KEYS.iter().find(|k| k.key == key) {
+            Some(k) => (k.set)(o, key, value),
+            None => Err(unsupported(key, format, name)),
         },
-        SourceFormat::Json(o) => match key {
-            "format.newline_delimited" => {
-                o.shape = match boolean(key, value)? {
-                    true => JsonShape::NewlineDelimited,
-                    false => JsonShape::Array,
-                }
-            }
-            // **0 means scan every record here**, not "no rows" — the engine refuses `Some(0)`
-            // outright, since it would infer a schema with no columns. The Configure pane spends
-            // 0 the same way, and this has to land on the def that pane would have written.
-            "format.schema_infer_max_rec" => {
-                let rows = count(key, value)?;
-                o.infer_rows = (rows > 0).then_some(rows);
-            }
-            "format.compression" => o.compression = compression(key, value)?,
-            other => return Err(unsupported(other, format, name)),
+        SourceFormat::Json(o) => match JSON_OPTION_KEYS.iter().find(|k| k.key == key) {
+            Some(k) => (k.set)(o, key, value),
+            None => Err(unsupported(key, format, name)),
         },
         // Both are self-describing (the parquet footer, the Arrow IPC schema), and every
         // `ParquetFormat` knob DataFusion has is an engine-wide setting with a control in
         // Settings ▸ Engine already — so there is nothing per-table to set, rather than a set
-        // that happens to be empty.
-        SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Unknown(_) => {
-            return Err(format!(
-                "Table '{name}' is STORED AS {}, which takes no read options",
-                format.name().to_uppercase()
-            ))
-        }
+        // that happens to be empty. Completion's offer there is empty for the same reason.
+        SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Unknown(_) => Err(format!(
+            "Table '{name}' is STORED AS {}, which takes no read options",
+            format.name().to_uppercase()
+        )),
     }
-    Ok(())
 }
 
 /// A key with no field on the format in play. Names the format, because the commonest way to
@@ -1192,6 +1351,80 @@ mod tests {
         );
         assert_eq!(read(&eng, "SELECT count(*) FROM t").await, [["2"]]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **The per-format key projection and each key's declared kind agree with the arms.**
+    /// For every format word, every key [`option_keys_for`] offers must land through [`apply`]
+    /// with a value of its declared kind — which catches both a projection drift (a key
+    /// offered that the format's arm refuses) and a kind/coercion drift (a `Bool` row whose
+    /// setter actually wants a character). The NDJSON drop is asserted against
+    /// [`read_format`]'s own refusal, and the no-options formats answer empty.
+    #[test]
+    fn option_keys_for_agrees_with_apply() {
+        let plausible = |kind: OptionKind| match kind {
+            OptionKind::Bool => "true",
+            OptionKind::Char => "x",
+            OptionKind::Int => "10",
+            OptionKind::Enum(words) => words[0],
+        };
+        for format_word in STORED_AS_FORMATS {
+            let mut format = read_format(format_word, "t", &[]).expect("a format Strata reads");
+            for (key, kind, _) in option_keys_for(format_word) {
+                let value = Value::SingleQuotedString(plausible(kind).into());
+                apply(&mut format, "t", key, &value).unwrap_or_else(|e| {
+                    panic!("{format_word} offers '{key}' but apply refuses: {e}")
+                });
+            }
+        }
+        assert!(
+            option_keys_for("NDJSON")
+                .iter()
+                .all(|(k, ..)| *k != "format.newline_delimited"),
+            "NDJSON must not offer the shape key read_format refuses there"
+        );
+        assert!(
+            read_format(
+                "NDJSON",
+                "t",
+                &[(
+                    "format.newline_delimited".into(),
+                    Value::SingleQuotedString("true".into())
+                )]
+            )
+            .is_err(),
+            "the premise: read_format refuses the shape key on NDJSON"
+        );
+        assert!(option_keys_for("PARQUET").is_empty());
+        assert!(option_keys_for("ARROW").is_empty());
+        assert!(
+            option_keys_for("AVRO").is_empty(),
+            "an unknown word offers nothing"
+        );
+    }
+
+    /// **The completion vocabulary is this module's own arms.** Every entry of
+    /// [`STORED_AS_FORMATS`] parses through [`read_format`] and a non-member does not, so the
+    /// offer at `STORED AS |` can never name a format the arm then refuses; and every word an
+    /// `Enum` option offers parses through its own coercion.
+    #[test]
+    fn stored_as_formats_parse_through_read_format() {
+        for format in STORED_AS_FORMATS {
+            assert!(read_format(format, "t", &[]).is_ok(), "{format}");
+        }
+        assert!(
+            read_format("AVRO", "t", &[]).is_err(),
+            "a format with no reader is not offered"
+        );
+        for word in COMPRESSION_WORDS {
+            assert!(
+                compression(
+                    "format.compression",
+                    &Value::SingleQuotedString(word.to_string())
+                )
+                .is_ok(),
+                "{word}"
+            );
+        }
     }
 
     // The agent surface is untouched and is not re-asserted here: the parity matrix

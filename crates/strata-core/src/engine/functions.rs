@@ -52,6 +52,7 @@ struct Registry {
 
 impl Functions {
     /// Walk `ctx`'s registry into the initial catalog — the built-in set, once per engine.
+    /// Nothing is created yet, so no sym needs marking.
     pub(crate) fn new(ctx: &SessionContext) -> Functions {
         Functions(Arc::new(RwLock::new(Registry {
             catalog: Arc::new(snapshot(ctx)),
@@ -74,23 +75,39 @@ impl Functions {
     /// Record what a `CREATE FUNCTION` / `DROP FUNCTION` settled, and re-walk the registry.
     ///
     /// Called **after** the dispatch that moved the registry, so the catalog is read from what
-    /// DataFusion now holds rather than from what the statement claimed. The walk happens before
-    /// the lock is taken: it resolves every overload's return type, which is not work to do with
-    /// the completion pool's reader shut out.
+    /// DataFusion now holds rather than from what the statement claimed. The created set is
+    /// mutated **in place, first** — a clone-and-swap would let two concurrent settles erase
+    /// each other's record, and this set is the built-in fence's authority — and the syms are
+    /// marked from the live set at swap time for the same reason. Only the walk itself runs
+    /// with no lock held: it resolves every overload's return type, which is not work to do
+    /// with the completion pool's reader shut out.
     pub(crate) fn settle(&self, ctx: &SessionContext, name: &str, created: bool) {
-        let catalog = Arc::new(snapshot(ctx));
+        {
+            let mut registry = self.0.write().unwrap();
+            match created {
+                true => registry.created.insert(name.to_string()),
+                false => registry.created.remove(name),
+            };
+        }
+        let mut catalog = snapshot(ctx);
         let mut registry = self.0.write().unwrap();
-        registry.catalog = catalog;
-        match created {
-            true => registry.created.insert(name.to_string()),
-            false => registry.created.remove(name),
-        };
+        for sym in catalog
+            .scalar
+            .iter_mut()
+            .chain(catalog.aggregate.iter_mut())
+            .chain(catalog.window.iter_mut())
+        {
+            sym.created = registry.created.contains(&sym.name);
+        }
+        registry.catalog = Arc::new(catalog);
     }
 }
 
 /// Snapshot every registered function (built-ins + UDFs) into a [`FunctionCatalog`],
-/// enriched with overload signatures + return type. Names are sorted so the
-/// completion pool is stable.
+/// enriched with overload signatures + return type. The `created` marks are stamped
+/// by [`Functions::settle`] from the live set **under its lock** — marking here from
+/// a snapshot of the set is what would let two concurrent settles publish stale
+/// marks. Names are sorted so the completion pool is stable.
 fn snapshot(ctx: &SessionContext) -> FunctionCatalog {
     let mut scalar: Vec<FunctionSym> = sorted(ctx.udfs())
         .iter()
@@ -132,6 +149,7 @@ fn scalar_sym(udf: &ScalarUDF) -> FunctionSym {
         signatures: signatures(udf.signature()),
         ret: return_type(udf.signature(), |args| udf.return_type(args)),
         description: udf.documentation().map(|d| d.description.clone()),
+        created: false,
     }
 }
 
@@ -142,6 +160,7 @@ fn aggregate_sym(udaf: &AggregateUDF) -> FunctionSym {
         signatures: signatures(udaf.signature()),
         ret: return_type(udaf.signature(), |args| udaf.return_type(args)),
         description: udaf.documentation().map(|d| d.description.clone()),
+        created: false,
     }
 }
 
@@ -155,6 +174,7 @@ fn window_sym(udwf: &WindowUDF) -> FunctionSym {
         // answer. Left unset rather than guessed.
         ret: None,
         description: udwf.documentation().map(|d| d.description.clone()),
+        created: false,
     }
 }
 

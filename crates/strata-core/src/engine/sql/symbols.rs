@@ -1,6 +1,11 @@
 //! The symbol model the language service resolves against: tables + views (with
 //! their columns) projected from `state.project`, plus the registered functions
 //! (from the engine, F5). Cheap to build on the UI thread each analysis pass.
+//!
+//! The store's `TableOrigin` is the **internal-set authority for the offer**
+//! ([`TableSym::internal`]); `Engine::is_internal` stays the dispatch gate — the
+//! same fact, read from the store because the snapshot is store-built (the store
+//! *is* the catalog), never a second engine enumeration.
 
 use std::sync::Arc;
 
@@ -18,14 +23,18 @@ pub struct TableSym {
     pub name: String,
     /// `true` for a saved view (vs a registered table) — completion detail only.
     pub is_view: bool,
+    /// `true` for a table whose data Strata owns (`TableOrigin::Internal`) — the
+    /// only tables an `INSERT` may target, so the only ones its operand offers.
+    pub internal: bool,
     pub columns: Vec<ColumnSym>,
 }
 
 impl TableSym {
-    fn from_cols(name: &str, is_view: bool, cols: &[ColumnInfo]) -> Self {
+    fn from_cols(name: &str, is_view: bool, internal: bool, cols: &[ColumnInfo]) -> Self {
         TableSym {
             name: name.to_string(),
             is_view,
+            internal,
             columns: cols
                 .iter()
                 .map(|c| ColumnSym {
@@ -94,21 +103,23 @@ pub struct Catalog {
 
 impl Catalog {
     /// Build from the project catalog + the engine's function names and parser dialect. Takes
-    /// `(name, columns)` pairs — the columns are what registration *learned* (they live
-    /// on the UI project store's rows, not on the defs), so the caller projects them.
+    /// `(name, columns, internal)` triples for tables and `(name, columns)` pairs for views
+    /// (a view is never internal) — the columns are what registration *learned* (they live
+    /// on the UI project store's rows, not on the defs), so the caller projects them, and
+    /// `internal` is the def's own `TableOrigin`.
     pub fn build<'a>(
-        tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
+        tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo], bool)>,
         views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         functions: Arc<FunctionCatalog>,
         prepared: Vec<PreparedSym>,
         dialect: String,
     ) -> Self {
         let mut out = Vec::new();
-        for (name, cols) in tables {
-            out.push(TableSym::from_cols(name, false, cols));
+        for (name, cols, internal) in tables {
+            out.push(TableSym::from_cols(name, false, internal, cols));
         }
         for (name, cols) in views {
-            out.push(TableSym::from_cols(name, true, cols));
+            out.push(TableSym::from_cols(name, true, false, cols));
         }
         Catalog {
             tables: out,

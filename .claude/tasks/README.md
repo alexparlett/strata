@@ -116,12 +116,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
   editor `COPY TO`, session statements + `CREATE FUNCTION`. Providers for identity/visibility,
-  interception for lifecycle; the agent surface stays read-only. **01–10 ✅** — every intercepted
-  statement now has a real arm, ED-10 being the last (typed `CREATE EXTERNAL TABLE` onto Table
-  Config's registration funnel, which settled how a statement's `OPTIONS` split against
-  connections: the reader's keys are the def's, the store's are refused toward Connections on the
-  key alone). **11 open** (the completion offer that catches up with all of them). Docs:
-  `docs/STATEMENTS_SPEC.md` (the surface as built).
+  interception for lifecycle; the agent surface stays read-only. **01–11 ✅, workstream done** —
+  every intercepted statement has a real arm (ED-10 settled how a statement's `OPTIONS` split
+  against connections: the reader's keys are the def's, the store's are refused toward
+  Connections on the key alone), and ED-11 landed the completion offer over all of them in one
+  pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 
 ## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 
@@ -136,17 +135,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Editor statements** (ED-11) — the completion offer that catches up with every statement the
-   editor now runs.
-2. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
+1. **Assistant AS-03 then AS-04** — the Settings roster, then the chat pane. The loop and the
    provider seam under them are built (AS-02); read that file's "What AS-04 gets" for the event
    vocabulary, and AA-03c's identity finding before touching query sessions.
-3. **Agent access AA-07** — paging/filtering for the tools whose answers have no bound but the
-   user's data. Independent of the two above; it is a shared-wire change, so it wants doing
+2. **Agent access AA-07** — paging/filtering for the tools whose answers have no bound but the
+   user's data. Independent of the one above; it is a shared-wire change, so it wants doing
    before more surfaces are built on the vocabulary as it stands.
-4. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
+3. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
-5. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
+4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
 
 ## Sourcing

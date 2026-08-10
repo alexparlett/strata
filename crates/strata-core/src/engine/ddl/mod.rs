@@ -47,9 +47,16 @@ use crate::engine::{fold_ident, Connections, InternalTables, CATALOG, SCHEMA};
 use crate::util::plural;
 use strata_model::{TableDef, ViewDef};
 
+/// The statement family's completion vocabulary (ED-11) — the format words `STORED AS`
+/// takes and the per-format `OPTIONS` key tables, owned by the module whose arms they
+/// mirror and read by `sql::complete` so the offer and the arm set are one table.
+pub(crate) use external::{option_keys_for, OptionKind, STORED_AS_FORMATS};
 /// DataFusion's own seam for `CREATE FUNCTION` (ED-09) — installed on every engine by
 /// `build_context`, which is what makes the statement dispatchable at all.
 pub(super) use functions::StrataFunctionFactory;
+/// The `SET` overlay's key fence (ED-08) — also the `SET` key pool's filter (ED-11), so
+/// what completion offers and what dispatch accepts cannot drift.
+pub(crate) use session::refuse_reserved_key;
 /// The session state a statement can move (ED-08) — held by the engine, reached by the arms.
 pub use session::SessionScope;
 /// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the

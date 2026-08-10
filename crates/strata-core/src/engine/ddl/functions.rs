@@ -784,6 +784,24 @@ mod tests {
                 .map(|row| row[0].clone()),
             Some("add_one".to_string())
         );
+
+        // **`DROP FUNCTION |` offers exactly what this session created** (ED-11), through the
+        // real snapshot marking — `functions::snapshot` stamps the sym from the created-name
+        // set, so a spelling or folding mistake there would fail here where a hand-built sym
+        // cannot. Built-ins never appear: the statement would refuse them, and the offer says
+        // so by omission.
+        let dropped = |eng: &Engine| {
+            let catalog = Catalog::build([], [], eng.functions(), eng.prepared(), "generic".into());
+            complete("DROP FUNCTION ", 14, &catalog, false)
+                .into_iter()
+                .map(|c| c.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(dropped(&eng), vec!["add_one"]);
+        statement(&eng, "DROP FUNCTION add_one")
+            .await
+            .expect("dropped");
+        assert!(dropped(&eng).is_empty(), "and the offer follows the drop");
     }
 
     /// **Every spelling of an argument reaches the same body.** DataFusion plans a function body
