@@ -72,13 +72,14 @@ UI + wiring, on the state rules the app already lives by.
   listing it there would put a permanent row in a pane whose whole premise is that a row means
   somebody dialled in.
 
-  **Filter on `StrataTools::agent_id()`**, the id the app minted when it built the pane's own
-  `StrataTools` — the app therefore holds it and can hand it to the window. **Not** a name
-  comparison against `AgentIdentity::assistant()`: an identity is a claim a client makes at
-  `initialize`, so a name-keyed rule would let any MCP client hide itself from the pane by
-  calling itself `strata-assistant`. The exclusion belongs wherever the window records an
-  agent (`state::agents` via `agent::directory`), not in the pane's render — a satellite that
-  holds a row nothing draws is a row the eviction cap still counts.
+  **Done, in the core — nothing to wire here.** `StrataTools::in_app` marks the pane's own
+  value, the mark rides `Agent::in_app` to every `Host` on the call that opens a session, and
+  `Agents::agents` (the pane's listing, and `len` behind the rail badge) filters on it.
+  `Agents::held` is the unfiltered view the ownership check, the session cap and
+  `list_query_sessions` use — the assistant is *held* like any other agent and only *listed*
+  differently. **Not** a name comparison against `AgentIdentity::assistant()`: an identity is a
+  claim a client makes at `initialize`, so any MCP client could have hidden itself with it.
+  Build the pane against `StrataTools::in_app(host)` and the rule holds by construction.
 
   Everything *below* the pane is unchanged: the assistant is one more agent to `Host`, the
   policy gate and the query-session machinery, with its own `AgentId` and its own sessions.

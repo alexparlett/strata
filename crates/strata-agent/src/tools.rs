@@ -338,6 +338,11 @@ impl Drop for Busy {
 struct Connection<H: Host> {
     host: Arc<H>,
     agent: AgentId,
+    /// This value is the app's own assistant rather than something that dialled in — see
+    /// [`Agent::in_app`]. Set once, by [`StrataTools::in_app`], and inherited by nothing: a
+    /// transport builds its values through [`StrataTools::new`] and [`StrataTools::connection`],
+    /// so every agent on a wire is false here by construction.
+    in_app: bool,
 }
 
 impl<H: Host> Drop for Connection<H> {
@@ -384,13 +389,28 @@ impl<H: Host> Clone for StrataTools<H> {
 }
 
 impl<H: Host> StrataTools<H> {
-    /// The vocabulary over `host`, as one agent — what an in-process caller (the chat pane,
-    /// AA-06) holds directly, and what a transport clones connections from.
+    /// The vocabulary over `host`, as one agent — what a transport clones connections from.
     pub fn new(host: Arc<H>) -> Self {
+        Self::rooted(host, false)
+    }
+
+    /// The vocabulary over `host` **as the app's own assistant** (AS-02) — the same ten tools,
+    /// marked so every [`Host`] can tell it from a client that dialled in.
+    ///
+    /// The mark rides [`Agent::in_app`] to `open_query_session`, which is where a host first
+    /// learns an agent exists, so the Agents pane can leave it out of its listing without
+    /// anybody holding an id to compare. It changes nothing else: the assistant is still one
+    /// more agent to the policy gate, the run cache, the scoping key and the query sessions.
+    pub fn in_app(host: Arc<H>) -> Self {
+        Self::rooted(host, true)
+    }
+
+    fn rooted(host: Arc<H>, in_app: bool) -> Self {
         StrataTools {
             connection: Arc::new(Connection {
                 host: Arc::clone(&host),
                 agent: AgentId::new(),
+                in_app,
             }),
             host,
             runs: Arc::new(Mutex::new(HashMap::new())),
@@ -401,19 +421,16 @@ impl<H: Host> StrataTools<H> {
 
     /// Which agent this value **is** — the id its [`Connection`] minted.
     ///
-    /// The app's own answer to "is this the in-app assistant?", and the reason that question
-    /// has an honest answer at all: the chat pane's `StrataTools` is one the app constructed,
-    /// so it holds an id nothing else can claim. **The Agents pane will use it to leave the
-    /// assistant out** — that pane says which external clients are connected to the project
-    /// right now, and the assistant is not connected to anything, it is part of the app (its
-    /// runs show as step cards in the transcript instead). Future tense on purpose: the filter
-    /// is AS-04's, with the pane it belongs to, and this accessor is the seam it will read.
+    /// Which agent this value **is** — for a caller that needs to name its own work (a log
+    /// line, a test) rather than to tell itself apart from others.
     ///
-    /// Deliberately **not** a name comparison against [`AgentIdentity::assistant`]. An
-    /// identity is a claim a client makes at `initialize`, so keying a "hide this from the
-    /// pane" rule on one would let any MCP client make itself invisible by calling itself
-    /// `strata-assistant` — the worst possible version of this rule. The identity stays what
-    /// it is for: attribution.
+    /// **Not how the Agents pane excludes the assistant.** That rule rides
+    /// [`Agent::in_app`], minted by [`in_app`](Self::in_app) and delivered to the host on the
+    /// call that opens a session, so no surface has to hold an id and compare it. And neither
+    /// is a name comparison against [`AgentIdentity::assistant`]: an identity is a claim a
+    /// client makes at `initialize`, so keying the rule on one would let any MCP client make
+    /// itself invisible by calling itself `strata-assistant`. The identity stays what it is
+    /// for: attribution.
     pub fn agent_id(&self) -> AgentId {
         self.connection.agent
     }
@@ -429,6 +446,8 @@ impl<H: Host> StrataTools<H> {
             connection: Arc::new(Connection {
                 host: Arc::clone(&self.host),
                 agent: AgentId::new(),
+                // A connection is something that dialled in, always.
+                in_app: false,
             }),
         }
     }
@@ -785,6 +804,7 @@ impl<H: Host> StrataTools<H> {
         let agent = Agent {
             id: agent,
             identity,
+            in_app: self.connection.in_app,
         };
         let session = self.host.open_query_session(&project.root, &agent).await?;
         Ok(QuerySessionResult {
@@ -1247,6 +1267,43 @@ mod tests {
             page_size: None,
             project: None,
         }
+    }
+
+    /// **The in-app mark is minted, never claimed.** It rides `Agent::in_app` to the host on
+    /// the call that opens a session, so a surface can tell the app's own assistant from a
+    /// client without holding an id — and a transport-built value is false by construction, so
+    /// a client calling itself `strata-assistant` cannot set it.
+    #[tokio::test]
+    async fn only_an_in_app_value_opens_in_app_agents() {
+        let root = scratch("inapp");
+        let host = MockHost::new(vec![MockProject::new("sales", &root)]);
+
+        let assistant = StrataTools::in_app(Arc::clone(&host));
+        assistant
+            .open_query_session(AgentIdentity::assistant(), no_project())
+            .await
+            .unwrap();
+
+        let dialled = StrataTools::new(Arc::clone(&host));
+        dialled
+            .open_query_session(claude(), no_project())
+            .await
+            .unwrap();
+
+        // A client that copies the assistant's identity is still not in-app.
+        let liar = dialled.connection();
+        liar.open_query_session(AgentIdentity::assistant(), no_project())
+            .await
+            .unwrap();
+
+        let opened = host.opened();
+        assert_eq!(opened.len(), 3);
+        assert_eq!(
+            opened.iter().filter(|a| a.in_app).count(),
+            1,
+            "only the value built by `in_app` is marked: {opened:?}"
+        );
+        assert!(opened[0].in_app, "the assistant opened first");
     }
 
     // --- projects ---------------------------------------------------------

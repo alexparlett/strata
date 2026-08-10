@@ -203,6 +203,21 @@ impl AgentIdentity {
 pub struct Agent {
     pub id: AgentId,
     pub identity: AgentIdentity,
+    /// **This agent is part of the app rather than a client that dialled in** — the in-process
+    /// assistant, and nothing else.
+    ///
+    /// Carried here so the distinction reaches every [`Host`] on the call that first tells it
+    /// an agent exists, rather than being an id each surface has to remember and compare. That
+    /// is what makes the Agents pane's rule enforceable: the pane lists the *external* clients
+    /// working in a project, so a host records an in-app agent for ownership and cleanup like
+    /// any other and simply does not list it.
+    ///
+    /// **Minted at construction, never derived from anything a client sends**
+    /// ([`StrataTools::in_app`](crate::StrataTools::in_app)). It is false for every value a
+    /// transport builds, so an MCP client cannot set it — which the alternative,
+    /// name-matching [`AgentIdentity::assistant`], could not promise: an identity is a claim
+    /// made at `initialize`, so any client could have hidden itself by making the same one.
+    pub in_app: bool,
 }
 
 /// One **query session** — an agent's container for a sequence of runs, each replacing the

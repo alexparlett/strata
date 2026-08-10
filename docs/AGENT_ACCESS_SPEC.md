@@ -386,12 +386,13 @@ Stated so the reader does not go looking:
   `strata_agent::assistant` (AS-02 — `genai`, one provider table, streaming, tool dispatch by
   name, cancel). What is missing is the Freya surface itself and the Settings roster that feeds
   it (AS-03/AS-04). Two things about that loop bear on this document:
-  - **The assistant does not belong in the Agents pane.** That pane lists the *external* clients
-    connected to a project; the assistant is part of the app, and its runs render as step cards
-    in its own transcript. It is one more agent to everything described here — its own
-    `AgentId`, its own query sessions, the same gate — and is to be excluded from the pane alone,
-    by the `AgentId` the app minted for it rather than by the name it goes under. The accessor
-    (`StrataTools::agent_id`) exists; the filter lands with the pane (AS-04).
+  - **The assistant is held but not listed in the Agents pane.** That pane lists the *external*
+    clients connected to a project; the assistant is part of the app, and its runs render as step
+    cards in its own transcript. It is one more agent to everything described here — its own
+    `AgentId`, its own query sessions, the same gate, and its own rows in the satellite so the
+    ownership check and the caps work — and it is left out of the *listing* alone. The mark is
+    `Agent::in_app`, set by `StrataTools::in_app` and carried to the host on
+    `open_query_session`, never read off the name the agent goes under.
   - **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
     hands the user a statement to execute. It is never registered on the router, so `tools/list`
     is exactly the ten below and no MCP client is offered it.

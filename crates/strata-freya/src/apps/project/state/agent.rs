@@ -127,9 +127,11 @@ fn answer(
             // The satellite hands back whatever the per-agent cap displaced, so a session it
             // has stopped showing does not go on holding an engine workspace.
             let evicted = agents.write().opened(&agent, session);
+            // `held`, not `agents`: this is attribution for the event log, and the assistant
+            // is left out of the pane's *listing* only, never out of the record.
             let named = agents
                 .read()
-                .agents()
+                .held()
                 .find(|a| a.id == agent.id)
                 .map(|a| a.name().to_string())
                 .unwrap_or_default();
@@ -321,7 +323,10 @@ fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError>
 /// for it deserves the authority rather than the observation.
 fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessionInfo> {
     agents
-        .agents()
+        // `held`, not `agents`: this answers `list_query_sessions` for the agent that asked,
+        // and the assistant must see its own sessions. The pane's listing is the only thing
+        // that leaves it out.
+        .held()
         .find(|a| a.id == agent)
         .into_iter()
         .flat_map(|a| a.sessions.iter())
@@ -528,10 +533,12 @@ mod tests {
                 name: "claude-code".into(),
                 version: "2.1.4".into(),
             },
+            in_app: false,
         };
         let theirs = Agent {
             id: AgentId::new(),
             identity: AgentIdentity::default(),
+            in_app: false,
         };
         let empty = QuerySessionId::new();
         let used = QuerySessionId::new();

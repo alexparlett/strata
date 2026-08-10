@@ -387,6 +387,7 @@ mod tests {
                 name: name.into(),
                 version: "1.0".into(),
             },
+            in_app: false,
         }
     }
 
