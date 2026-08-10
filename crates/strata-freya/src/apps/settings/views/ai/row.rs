@@ -178,14 +178,25 @@ pub struct ProviderRow {
     /// a captured `EventHandler` cannot, since its closure is built once.
     pub ctx: SettingsCtx,
     /// What the key box shows — the typed-but-uncommitted key. **Never a stored one**: a secret
-    /// in the keystore is not something a form reads back to redisplay, so an already-configured
-    /// provider opens with an empty box and a subline that says a key is stored.
+    /// in the keystore is not something a form reads back to redisplay.
     pub key_text: String,
     /// The kind's key policy — what decides whether a key box is drawn at all, and whether it is
     /// marked `OPTIONAL`. Handed over as the **policy** rather than as the presentation it
     /// implies, so the two answers cannot drift apart at the call site.
     pub key_use: KeyUse,
+    /// **A key is stored and the user has not asked to change it** — so the row states that and
+    /// offers Replace rather than drawing a box it can never fill.
+    ///
+    /// False the moment Replace is pressed, and false when nothing is stored: both mean "there is
+    /// a key to *set* here", which is the only state an input belongs in.
+    pub key_settled: bool,
+    /// What the empty box invites, once there is a box. Two answers, because setting a first key
+    /// and replacing one are different acts — and only the second can also delete.
+    pub key_placeholder: &'static str,
     pub key_shown: bool,
+    /// Press Replace: stop treating the stored key as settled and open an empty box for a new
+    /// one. Leaving that box empty is how the stored key is removed.
+    pub on_replace: EventHandler<()>,
     pub url_text: String,
     pub url_placeholder: &'static str,
     pub probe: Probe,
@@ -393,18 +404,57 @@ impl ProviderRow {
                     .cross_align(Alignment::Center)
                     .spacing(8.)
                     .content(Content::Flex)
-                    .maybe_child(self.boxes.key.then(|| {
+                    // **A stored key is stated, not offered as an empty box.**
+                    //
+                    // The value is never read back (`strata_core::secret`: a form does not
+                    // redisplay a secret, and reading one per row on open would be a blocking
+                    // Keychain call — an authorisation prompt just to *look* at Settings). An
+                    // always-present input promises the opposite: that it shows the current value
+                    // and you may edit it. It cannot, so it read as a key that failed to save,
+                    // beside an eye that revealed nothing.
+                    //
+                    // So the input appears only when there is a key to *set*. With one stored the
+                    // row says so and offers Replace, which is also how a key is removed — the
+                    // box it opens is empty, and an empty box committed is a delete
+                    // (`Secret::new` answers blank with `None`). One gesture, and the placeholder
+                    // says both halves out loud.
+                    .maybe_child((self.boxes.key && self.key_settled).then(|| {
+                        rect()
+                            .width(Size::flex(1.))
+                            .horizontal()
+                            .cross_align(Alignment::Center)
+                            .spacing(8.)
+                            .child(Eyebrow::new("KEY").color(theme.hint_color))
+                            .child(Body::new("Stored").color(theme.hint_color))
+                    }))
+                    .maybe_child((self.boxes.key && self.key_settled).then(|| {
+                        Button::new()
+                            .outline()
+                            .height(Size::px(FIELD_HEIGHT))
+                            .on_press({
+                                let replace = self.on_replace.clone();
+                                move |_: Event<PressEventData>| replace.call(())
+                            })
+                            .child(Control::new("Replace"))
+                    }))
+                    .maybe_child((self.boxes.key && !self.key_settled).then(|| {
                         ValueField::new(key_buf)
                             .width(Size::flex(1.))
                             .masked(!self.key_shown)
-                            .placeholder("paste API key")
+                            .placeholder(self.key_placeholder)
                             .leading(Eyebrow::new("KEY").color(theme.hint_color))
                     }))
-                    .maybe_child(key_marker(self.key_use, required_color))
+                    .maybe_child(
+                        (!self.key_settled)
+                            .then(|| key_marker(self.key_use, required_color))
+                            .flatten(),
+                    )
                     // A row with no key box still needs its Test to sit at the trailing
                     // edge, so the spacer is the flexing child instead.
                     .maybe_child((!self.boxes.key).then(|| rect().width(Size::flex(1.))))
-                    .maybe_child(self.boxes.key.then(|| {
+                    // The eye only exists where there is something to reveal — a stored key is
+                    // not shown at all, so a button offering to unmask it would do nothing.
+                    .maybe_child((self.boxes.key && !self.key_settled).then(|| {
                         ToolButton::new(IconName::Eye, reveal_label)
                             .outlined()
                             .on_press({

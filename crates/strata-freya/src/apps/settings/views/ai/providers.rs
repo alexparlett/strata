@@ -46,6 +46,11 @@ impl Component for ProvidersPane {
         // Which key boxes are unmasked. Pane-local: a reveal is a glance, not a setting — the
         // same call `McpPane` makes about its token.
         let mut revealed = use_state(Vec::<ProviderKind>::new);
+        // Which stored keys the user has asked to replace. Pane-local for `revealed`'s reason: a
+        // decision to retype something is a gesture in this sitting, not a setting — and it must
+        // not survive the window, or reopening Settings would present an empty box again for a
+        // key that is perfectly well stored.
+        let mut replacing = use_state(Vec::<ProviderKind>::new);
 
         // **Read guards, not clones.** These are held across the `map` below and dropped before
         // anything takes a `write` — deep-copying instead meant every keystroke (each of which
@@ -77,6 +82,14 @@ impl Component for ProvidersPane {
                     ctx,
                     key_text: keys.get(kind).to_string(),
                     key_use: provider.key,
+                    // Settled means: something is stored, and nothing has been typed or asked
+                    // for. A typed key already un-settles it — the box has to stay open while
+                    // its own content is in it.
+                    key_settled: stored && !replacing.read().contains(&kind) && !keys.touched(kind),
+                    key_placeholder: match stored {
+                        true => "paste a new key, or leave empty to remove",
+                        false => "paste API key",
+                    },
                     key_shown: revealed.read().contains(&kind),
                     url_text: setup.map(|s| s.base_url.clone()).unwrap_or_default(),
                     url_placeholder: default_url(kind),
@@ -90,6 +103,11 @@ impl Component for ProvidersPane {
                         }
                     }),
                     on_test: EventHandler::new(move |()| test(ctx, kind)),
+                    on_replace: EventHandler::new(move |()| {
+                        if !replacing.peek().contains(&kind) {
+                            replacing.write().push(kind);
+                        }
+                    }),
                 })
             })
             .collect::<Vec<Element>>();
