@@ -1,4 +1,4 @@
-# AS-03 · Settings ▸ AI: the provider roster
+# AS-03 · Settings ▸ AI: Providers · Chat · MCP
 
 > **AS-05 landed.** The surface to call is `strata_core::secret`: `SecretRef::mint()` for a new
 > entry, `r.put(&secret)` / `r.get()` / `r.delete()`, `Secret::new(&draft_text)` (which returns
@@ -50,6 +50,11 @@ credential inline and a **Test** action. Nothing here names a model.
 
 **AI ▸ Chat** — the new-chat defaults: provider · model · effort, sourced from *enabled*
 providers only, so the pane can never offer a model it has no credential for.
+
+> **The model field is superseded by AS-06.** It shipped here as a typed box with the tested
+> provider's reported names offered beneath it, because the reported list lived on `Probes` and
+> died with the window. AS-06 makes the listing a satellite that outlives the window and turns
+> this field into a `Select`; that edit is AS-06's, not a reopening of this task.
 
 **AI ▸ MCP** — today's Agent access pane, renamed and moved under the group. No behaviour
 change; it keeps its rows, its anchors and its search keywords.
@@ -165,8 +170,10 @@ owns. The minimum that moves, and no more:
 - **The draft commits a per-field diff against its seed.** The **secret is not part of the
   diff**: it lives in the draft's memory only, goes through AS-05 at Apply, and only its marker
   merges.
-- **A free-form list setting is edited as rows and committed as a map; UI row ids from a
-  counter, never the name.** Applies to the custom endpoints; persisted identity is the `Uuid`.
+- ~~**A free-form list setting is edited as rows and committed as a map; UI row ids from a
+  counter, never the name.**~~ Inherited for the custom-endpoint list, which was **withdrawn**
+  (above): there is no list on this surface, so the rule binds nothing here. Left struck rather
+  than deleted because it is a real workspace rule and the next list-shaped setting wants it.
 - **Built from `components::form`** — `Form` > `Row` > control. Where the canvas's provider row
   genuinely diverges from a form row, name it in `form/mod.rs`'s "known divergences".
 - **A name two surfaces agree on is generated from one table**: the kind, its label, its key

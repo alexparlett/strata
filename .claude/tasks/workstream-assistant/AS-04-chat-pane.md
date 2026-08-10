@@ -1,6 +1,7 @@
 # AS-04 · The chat pane
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-02, AS-03
+**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-02, AS-03, AS-06 (the model
+listing the footer's picker reads)
 
 ## Goal
 
