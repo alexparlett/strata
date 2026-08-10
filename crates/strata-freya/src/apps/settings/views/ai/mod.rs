@@ -29,6 +29,7 @@
 //! configured credential, and a separate reachability ping would prove strictly less.
 
 mod chat;
+mod configure;
 mod keys;
 mod mcp;
 mod probe;
@@ -39,4 +40,4 @@ pub use chat::ChatPane;
 pub use keys::{commit, TypedKeys};
 pub use mcp::McpPane;
 pub use probe::Probes;
-pub use providers::ProvidersPane;
+pub use providers::{missing, ProvidersPane};

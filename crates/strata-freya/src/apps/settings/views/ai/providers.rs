@@ -20,10 +20,11 @@
 use freya::prelude::*;
 use strata_agent::assistant::{all, info, BaseUrl, KeyUse};
 use strata_core::ai::{Ai, ProviderKind, ProviderSetup};
-use strata_core::secret::Secret;
 
-use crate::apps::settings::views::ai::probe::{self, Ask, Probe};
-use crate::apps::settings::views::ai::row::{mark, Boxes, ProviderRow};
+use crate::apps::settings::views::ai::configure::{ConfigureDialog, Configuring};
+use crate::apps::settings::views::ai::keys::TypedKeys;
+use crate::apps::settings::views::ai::probe::Probe;
+use crate::apps::settings::views::ai::row::{mark, ProviderRow};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, SettingsCtx, SettingsTheme};
 use crate::components::icon::{Icon, IconName};
@@ -43,16 +44,14 @@ impl Component for ProvidersPane {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
         let theme = settings_theme();
-        // Which key boxes are unmasked. Pane-local: a reveal is a glance, not a setting — the
-        // same call `McpPane` makes about its token.
-        let mut revealed = use_state(Vec::<ProviderKind>::new);
+        // Which provider's dialog is open, if any. Pane-local: a dialog is a question being
+        // asked right now, not a setting.
+        let mut configuring = use_state(Configuring::default);
 
-        // **Read guards, not clones.** These are held across the `map` below and dropped before
-        // anything takes a `write` — deep-copying instead meant every keystroke (each of which
-        // writes the draft or `ai_keys`, waking this pane) duplicated the roster, every typed
-        // key, and every model name a Test had returned. An OpenAI list alone is ~80 strings.
-        //
-        // Subscribing is the point: the pane *should* rebuild when any of the three changes.
+        // **Read guards, not clones** — held across the `map` below and dropped before anything
+        // takes a `write`. Cloning instead duplicated the roster and every model name a Test had
+        // returned (an OpenAI list alone is ~80 strings) on every render. Subscribing is the
+        // point: the pane *should* rebuild when either changes.
         let draft = ctx.draft.read();
         let ai = &draft.ai;
         let keys = ctx.ai_keys.read();
@@ -64,58 +63,32 @@ impl Component for ProvidersPane {
                 let provider = info(kind);
                 let setup = ai.setup(kind);
                 let enabled = setup.is_some_and(|s| s.enabled);
-                let stored = setup.is_some_and(|s| s.key.is_some());
+                let stored = will_have_key(ai, &keys, kind);
                 Element::from(ProviderRow {
                     mark: mark(kind),
                     name: provider.label.to_string(),
                     badge: badge(provider.key),
-                    subline: subline(kind, setup, stored, probes.get(kind), enabled),
+                    subline: subline(kind, setup, stored, probes.get(kind)),
                     enabled,
                     first: index == 0,
-                    boxes: Boxes::of(provider.key, provider.base_url),
-                    kind,
-                    ctx,
-                    key_text: keys.get(kind).to_string(),
-                    key_use: provider.key,
-                    // Settled means: something is stored, and nothing has been typed or asked
-                    // for. A typed key already un-settles it — the box has to stay open while
-                    // its own content is in it.
-                    // **Derived, not remembered.** Settled is "a key is stored and nothing is
-                    // pending for it" — and Replace makes something pending, so it needs no set
-                    // of its own. A separate `replacing` list was tried and was wrong twice over:
-                    // nothing cleared it once the replacement committed, so a successful replace
-                    // followed by a failed config write left the box open as though the key had
-                    // never landed; and it made Replace a purely visual act, which is how "leave
-                    // empty to remove" came to do nothing at all.
-                    key_settled: stored && !keys.touched(kind),
-                    key_placeholder: match stored {
-                        true => "paste a new key, or leave empty to remove",
-                        false => "paste API key",
-                    },
-                    key_shown: revealed.read().contains(&kind),
-                    url_text: setup.map(|s| s.base_url.clone()).unwrap_or_default(),
-                    url_placeholder: default_url(kind),
-                    probe: probes.get(kind).clone(),
-                    on_toggle: EventHandler::new(move |()| toggle(ctx, kind, revealed)),
-                    on_reveal: EventHandler::new(move |()| {
-                        let mut shown = revealed.write();
-                        match shown.iter().position(|k| *k == kind) {
-                            Some(at) => drop(shown.remove(at)),
-                            None => shown.push(kind),
-                        }
-                    }),
-                    on_test: EventHandler::new(move |()| test(ctx, kind)),
-                    on_replace: EventHandler::new(move |()| replace(ctx, kind)),
+                    on_toggle: EventHandler::new(move |()| toggle(ctx, kind, configuring)),
+                    on_configure: EventHandler::new(move |()| configuring.set(Some(kind))),
                 })
             })
             .collect::<Vec<Element>>();
 
+        let open = *configuring.read();
         Pane::new(
             rect()
                 .width(Size::fill())
                 .spacing(SECTION_GAP)
                 .child(note(&theme))
-                .child(list_box(&theme, rows)),
+                .child(list_box(&theme, rows))
+                .maybe_child(open.map(|kind| ConfigureDialog {
+                    kind,
+                    slot: configuring,
+                    ctx,
+                })),
         )
     }
 }
@@ -166,6 +139,51 @@ fn note(theme: &SettingsTheme) -> Element {
         .into()
 }
 
+/// **Will this provider have a key once Apply lands?**
+///
+/// The marker in the draft is not the answer on its own: it only moves when Apply reaches the
+/// keystore, so a pending edit is invisible to it. Reading it alone is what made Remove look
+/// dead — the deletion was recorded, and every surface kept saying "A key is stored" because
+/// none of them were looking at the thing that had changed.
+///
+/// A pending edit wins, and an empty one is a pending *removal*.
+pub fn will_have_key(ai: &Ai, keys: &TypedKeys, kind: ProviderKind) -> bool {
+    match keys.touched(kind) {
+        true => !keys.get(kind).trim().is_empty(),
+        false => ai.setup(kind).is_some_and(|setup| setup.key.is_some()),
+    }
+}
+
+/// **What stops this provider working, if anything** — the reason Apply refuses while it is on.
+///
+/// A provider that is enabled and cannot answer is the one state this pane can reach that is
+/// simply broken: the chat pane will offer it, and every send will fail. `Brain::resolve` refuses
+/// exactly these before a socket opens, so this is the same judgement made early enough to act
+/// on.
+///
+/// **Only where a credential is genuinely needed.** Ollama sends no key and a compatible endpoint
+/// may legitimately send an empty bearer, so neither is ever short of one — and a keyed provider
+/// with its environment variable set is not either, which is the fallback AS-02 built and this
+/// must not contradict.
+pub fn missing(ai: &Ai, keys: &TypedKeys, kind: ProviderKind) -> Option<&'static str> {
+    if matches!(info(kind).base_url, BaseUrl::Required)
+        && ai
+            .setup(kind)
+            .map(|s| s.base_url.trim())
+            .unwrap_or_default()
+            .is_empty()
+    {
+        return Some("no base URL");
+    }
+    match info(kind).key {
+        KeyUse::Env(var) => {
+            let from_env = std::env::var(var).is_ok_and(|value| !value.trim().is_empty());
+            (!will_have_key(ai, keys, kind) && !from_env).then_some("no API key")
+        }
+        KeyUse::Unused | KeyUse::Anonymous => None,
+    }
+}
+
 /// The uppercase badge beside a name — read off the kind's key policy, so it cannot disagree
 /// with the boxes the row then draws.
 fn badge(key: KeyUse) -> &'static str {
@@ -185,25 +203,19 @@ fn default_url(kind: ProviderKind) -> &'static str {
     }
 }
 
-/// **What a row knows without having asked anything — and never what it is already showing.**
+/// **What a row knows without having asked anything.**
 ///
 /// The canvas puts "N models · M reasoning" here, which is knowledge a request produces, so
 /// before a Test the row states a fact it actually has and the count replaces it once a probe
 /// comes back. Only real facts.
 ///
-/// The second half of the rule arrived from the screen: an **open** row draws its address in a
-/// box directly underneath, so a subline naming the address too printed
-/// `Runs locally at http://localhost:11434/` immediately above a box reading
-/// `URL http://localhost:11434/`. The subline summarises a **closed** row — where no box is
-/// drawn and this is the only place the address can appear — so when the row is open it says
-/// only what the boxes cannot: the variable an empty key box falls back to, or what a probe came
-/// back with.
+/// It is the row's whole second line now that the credential lives in a dialog, so it says the
+/// most useful true thing rather than the one the boxes did not cover.
 fn subline(
     kind: ProviderKind,
     setup: Option<&ProviderSetup>,
     stored: bool,
     probe: &Probe,
-    open: bool,
 ) -> Option<String> {
     if let Probe::Verified { models } = probe {
         return Some(models_line(models.len()));
@@ -218,28 +230,19 @@ fn subline(
             .unwrap_or_default()
             .is_empty();
     if unaddressed {
-        return (!open).then(|| "No address set".to_string());
+        return Some("No address set".to_string());
     }
     if stored {
         return Some("A key is stored".to_string());
     }
     match info(kind).key {
-        // The box below is empty and stays empty — the fallback is the whole answer to "so what
-        // will it use?", open or not.
+        // Nothing is stored, so what it *will* use is the whole answer.
         KeyUse::Env(var) => Some(format!("Falls back to {var}")),
-        // Open, the URL box says where it runs and the `LOCAL` badge says what it is; there is
-        // nothing left for this line to add.
-        KeyUse::Unused => (!open).then(|| format!("Runs locally at {}", default_url(kind))),
-        // The compatible kind has no default address, so a closed row is the only place the one
-        // it was given can be read — and its absence is the thing that stops it working.
-        KeyUse::Anonymous => {
-            (!open).then(
-                || match setup.map(|s| s.base_url.trim()).unwrap_or_default() {
-                    "" => "No address set".to_string(),
-                    url => url.to_string(),
-                },
-            )
-        }
+        KeyUse::Unused => Some(format!("Runs locally at {}", default_url(kind))),
+        // The compatible kind has no default address, so the one it was given is the only thing
+        // worth saying about it — and the empty case was answered above, since it is what stops
+        // the row working at all.
+        KeyUse::Anonymous => setup.map(|s| s.base_url.trim().to_string()),
     }
 }
 
@@ -253,13 +256,7 @@ fn models_line(count: usize) -> String {
 
 /// Turn a provider on or off. Creating the entry on first touch is what makes "absent from the
 /// map" mean "never enabled" rather than a state the pane has to pre-seed.
-///
-/// **A revealed key re-masks on the way out**, which is the rule the canvas already states for
-/// the MCP token. Reveal is a glance at a value you are checking *now*, and disabling a row takes
-/// the box off screen — so a `revealed` set that survived would bring the key back in plaintext
-/// the next time the row opened, long after the glance it was granted for. Masking is the resting
-/// state, and anything that closes the box returns to it.
-fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut revealed: State<Vec<ProviderKind>>) {
+fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuring>) {
     // One edit, not two: the flip and the re-point are adjacent writes to the same `settings.ai`,
     // and two would wake the pane twice — which is two full rebuilds of the row list per press.
     ctx.edit(|settings| {
@@ -267,8 +264,45 @@ fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut revealed: State<Vec<Provider
         setup.enabled = !setup.enabled;
         repoint(&mut settings.ai);
     });
+
+    let mut keys = ctx.ai_keys;
+    let mut probes = ctx.probes;
+
+    // **Switching a provider off takes its key with it — at Apply, not here.**
+    //
+    // Enabled and configured are one state: a provider you have turned off is one you are not
+    // using, and leaving its credential in the OS keystore keeps a secret alive for something
+    // nothing will ask again. What happens now is only that the intent is *recorded* — Apply is
+    // still the one commit point, and Cancel still discards it with the rest of the window's
+    // editing state.
     if !ctx.draft.peek().ai.is_enabled(kind) {
-        revealed.write().retain(|shown| *shown != kind);
+        keys.write().set(kind, String::new());
+        probes.write().forget(kind);
+        return;
+    }
+
+    // **And switching back on takes it back.** The removal is pending, not done, so changing your
+    // mind before Apply has to be able to change it back — otherwise a stray toggle silently
+    // queues the deletion of a key that is still perfectly good, leaves the provider enabled and
+    // credential-less, and blocks Apply on a state the user never asked for.
+    //
+    // Only an *empty* pending entry is dropped: one carrying a key is a paste, and a paste
+    // survives being toggled around.
+    if keys.peek().touched(kind) && keys.peek().get(kind).trim().is_empty() {
+        keys.write().forget(kind);
+    }
+
+    // **Switching on something that cannot answer asks for what it needs.** A provider that is
+    // enabled and useless is otherwise announced only by a subline the user has no reason to read,
+    // so the question comes to them rather than waiting to be found.
+    //
+    // `missing` is the same judgement the footer blocks Apply on, asked one gesture earlier —
+    // which is what stops the dialog appearing for a provider Apply is perfectly happy with, or
+    // failing to appear for one it is not.
+    let draft = ctx.draft.peek();
+    if missing(&draft.ai, &keys.peek(), kind).is_some() {
+        drop(draft);
+        configuring.set(Some(kind));
     }
 }
 
@@ -282,57 +316,5 @@ fn repoint(ai: &mut Ai) {
     if !still_good {
         let next = ai.enabled().next();
         ai.default_provider = next;
-    }
-}
-
-/// **Replace a stored key: mark the intent, then let the box do the rest.**
-///
-/// The empty entry is the whole mechanism. It opens the input (`key_settled` is derived from
-/// exactly this), it makes the window dirty so Apply is reachable, and if the user types nothing
-/// it is what `commit` turns into a delete — which is what the box's own placeholder promises.
-/// A flag that only opened the input would leave every one of those three undone.
-///
-/// The probe goes with it, for the reason any credential edit retracts one: what was verified
-/// was verified with a key that is on its way out.
-fn replace(ctx: SettingsCtx, kind: ProviderKind) {
-    let mut keys = ctx.ai_keys;
-    keys.write().set(kind, String::new());
-    let mut probes = ctx.probes;
-    probes.write().forget(kind);
-}
-
-/// Ask the provider what it serves. The keystore read and the request both happen on the probe's
-/// own thread — this only marks the row busy and stores whatever comes back.
-fn test(ctx: SettingsCtx, kind: ProviderKind) {
-    let ask = build_ask(ctx, kind);
-    let mut probes = ctx.probes;
-    probes.write().set(kind, Probe::Testing);
-    spawn(async move {
-        let settled = probe::run(ask).await;
-        let mut probes = ctx.probes;
-        probes.write().set(kind, settled);
-    });
-}
-
-/// Everything the probe needs, copied out of the draft before the thread starts.
-///
-/// **A box the user has touched is the whole answer, including when they emptied it.** The typed
-/// value wins because it is what Apply would write — and that has to hold for a *cleared* box
-/// too, or clearing a key and pressing Test reports "verified" using the stored credential Apply
-/// is about to delete. So `stored` is offered only when the box was never touched; once it has
-/// been, an empty box means "no key", and the kind's own environment fallback (or an empty
-/// bearer) is what answers, which `list_models` decides rather than this.
-fn build_ask(ctx: SettingsCtx, kind: ProviderKind) -> Ask {
-    let draft = ctx.draft.peek();
-    let setup = draft.ai.setup(kind);
-    let keys = ctx.ai_keys.peek();
-    let touched = keys.touched(kind);
-    Ask {
-        kind,
-        base_url: setup.map(|s| s.base_url.clone()).unwrap_or_default(),
-        typed: touched.then(|| Secret::new(keys.get(kind))).flatten(),
-        stored: (!touched)
-            .then(|| setup.and_then(|s| s.key.clone()))
-            .flatten(),
     }
 }

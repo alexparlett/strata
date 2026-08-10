@@ -43,6 +43,7 @@ use std::collections::BTreeMap;
 use freya::prelude::*;
 use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
+use strata_agent::assistant::label;
 use strata_core::ai::ProviderKind;
 use strata_core::config::{Command, Settings};
 
@@ -302,18 +303,23 @@ impl SettingsCtx {
         // **A second surface that can block adds a branch here rather than a second gate** — the
         // note this method was written with, taken up by AS-03.
         //
-        // An enabled OpenAI-compatible row with no address is the one thing this pane can get
-        // into that cannot be sent: `BaseUrl::Required` has no default to fall back to, so
-        // `Brain::resolve` refuses it (`NoBaseUrl`) before a socket opens. Committing it would
-        // persist a provider whose every send fails, and the chat pane would offer it in the
-        // picker. Named by the field the way the engine's faults are.
+        // **A provider that is on and cannot answer is the one broken state this pane can reach.**
+        // The chat pane would offer it, and every send would fail — `Brain::resolve` refuses
+        // exactly these before a socket opens (`NoKey`, `NoBaseUrl`), so this is the same
+        // judgement made early enough to act on, and named the way the engine's faults are.
+        //
+        // `views::ai::missing` is the one copy of what "cannot answer" means, so this cannot
+        // disagree with the row that draws the same provider — and it is precise about which
+        // kinds need what: Ollama sends no key, a compatible endpoint may send an empty bearer,
+        // and a keyed provider with its environment variable set is not short of one either.
         blocked.or_else(|| {
             let draft = self.draft.read();
-            let unaddressed = draft
-                .ai
-                .setup(ProviderKind::OpenAiCompatible)
-                .is_some_and(|setup| setup.enabled && setup.base_url.trim().is_empty());
-            unaddressed.then(|| "OpenAI-compatible has no base URL".to_string())
+            let keys = self.ai_keys.read();
+            let on: Vec<ProviderKind> = draft.ai.enabled().collect();
+            on.into_iter().find_map(|kind| {
+                views::missing(&draft.ai, &keys, kind)
+                    .map(|why| format!("{} has {why}", label(kind)))
+            })
         })
     }
 

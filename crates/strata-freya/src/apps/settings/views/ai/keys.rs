@@ -44,6 +44,14 @@ impl TypedKeys {
         self.0.contains_key(&kind)
     }
 
+    /// Drop a pending edit entirely, leaving whatever is stored alone.
+    ///
+    /// Toggling a provider off records a pending removal; toggling it back on before Apply has to
+    /// undo that, or a stray press queues the deletion of a key that is still good.
+    pub fn forget(&mut self, kind: ProviderKind) {
+        self.0.remove(&kind);
+    }
+
     /// Whether anything at all is typed — a pending key, or a pending *removal*.
     ///
     /// What makes a credential edit count as a change. These live outside the settings draft (a
@@ -133,6 +141,7 @@ pub fn commit(keys: &TypedKeys, ai: &mut Ai) -> Result<(), SecretError> {
 mod tests {
     use super::*;
     use strata_core::ai::ProviderSetup;
+    use strata_core::secret::SecretRef;
 
     /// **A cleared box is an edit, not an absence.** Dropping the empty string would make
     /// "delete my key" indistinguishable from "never touched it", and the stored key would
@@ -176,6 +185,55 @@ mod tests {
         );
         assert_eq!(keys.get(kind), "", "and an empty value is the delete");
         assert!(!keys.is_empty(), "so Apply is reachable to carry it out");
+    }
+
+    /// **Toggling a provider off and back on leaves its key alone.**
+    ///
+    /// Off records a pending removal so Apply can carry it out; on has to undo that, or a stray
+    /// press queues the deletion of a key that is still perfectly good — and leaves the provider
+    /// enabled and credential-less, which is the one state Apply refuses.
+    #[test]
+    fn a_pending_removal_is_undone_by_re_enabling() {
+        let kind = ProviderKind::Anthropic;
+        let mut keys = TypedKeys::default();
+
+        keys.set(kind, String::new());
+        assert!(keys.touched(kind), "off queues the removal");
+
+        keys.forget(kind);
+        assert!(!keys.touched(kind), "on takes it back");
+
+        // And `commit` then has nothing to say about this provider at all, so the stored key is
+        // untouched rather than deleted.
+        let mut ai = Ai {
+            providers: [(
+                kind,
+                ProviderSetup {
+                    enabled: true,
+                    base_url: String::new(),
+                    key: Some(SecretRef::mint()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Ai::default()
+        };
+        let before = ai.clone();
+        commit(&keys, &mut ai).expect("nothing pending is nothing to do");
+        assert_eq!(ai, before, "the stored key survives the round trip");
+    }
+
+    /// **A pasted key survives being toggled around**, because only an *empty* pending entry is a
+    /// removal — one carrying a key is an edit the user still wants.
+    #[test]
+    fn a_pending_key_is_not_a_pending_removal() {
+        let kind = ProviderKind::Anthropic;
+        let mut keys = TypedKeys::default();
+        keys.set(kind, "sk-pasted".into());
+
+        // What `toggle` inspects before dropping anything.
+        assert!(!keys.get(kind).trim().is_empty(), "not a removal");
+        assert_eq!(keys.get(kind), "sk-pasted");
     }
 
     /// **A credential edit is a change, though it is not in the draft.**
