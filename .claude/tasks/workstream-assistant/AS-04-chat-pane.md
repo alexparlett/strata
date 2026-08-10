@@ -48,34 +48,18 @@ UI + wiring, on the state rules the app already lives by.
   degrades honestly: the footer says so and offers the default, never a silent re-point. (In
   Settings a disabled provider also loses its key, so "disabled" and "no longer usable" are one
   state rather than two the pane has to tell apart.)
-- **The model is picked from what the provider reports, not typed.** A `Select` over
-  `provider::list_models(kind, base_url, key)` — the same call Settings' Test makes, and the only
-  thing in the system that knows what a provider actually serves. genai prescribes nothing here:
-  a model name is an opaque string in the request payload, and the list is a live `GET` against
-  the provider's own endpoint (`Client::all_model_names`). So the offer is the provider's answer,
-  and typing a name that does not exist stops being a way to spend a turn on a 404.
+- **The model is picked from what the provider reports, not typed** — a `Select`, never a text
+  box. genai prescribes nothing here: a model name is an opaque string in the request payload,
+  and the list is a live `GET` against the provider's own endpoint, so the offer can be the
+  provider's own answer rather than a typed guess that spends a turn on a 404.
 
-  Three things fall out, all of which the build has to carry:
-
-  - **It is network I/O, so it is not on the render thread.** `task::offload`, fetched per
-    `(kind, base_url, key)` when a provider is picked (or the dropdown first opens), with the
-    four states named rather than collapsed: not asked · asking · listed · failed. Cancelling is
-    dropping the answer. Cache it on the transcript satellite for the window's life; a provider
-    the user has already opened must not re-dial every time the footer is touched.
-  - **The configured model is always in the list, even when the fetch is not.** The list endpoint
-    is not the chat endpoint — a proxy or a private deployment can serve `/chat/completions` and
-    no `/models` at all (genai carries hardcoded lists for Cohere and Baidu for exactly this
-    reason), and an offline laptop serves neither. A strict picker over an empty answer would
-    strand a setup that works, so the offered set is *reported ∪ {the current pick}*, and a
-    failed fetch says which provider would not answer while leaving the seeded model selectable.
-    That is the honest-degradation rule, not an escape hatch back to free text.
-  - **The list is unfiltered, and stays that way in v1.** genai returns every `id` the provider
-    names, so OpenAI's carries `text-embedding-3-large`, `whisper-1` and `dall-e-3` beside the
-    chat models. Do **not** invent a static name filter to tidy it — that is precisely the
-    prescribed-model table this design avoids, and it would hide a new chat model the day it
-    ships. Picking a non-chat model fails on the first send in the provider's own words, which
-    is how the rest of this surface already behaves. If it becomes a real irritation the fix is
-    a capability the adapter reports, in the fork of genai or upstream, never a list here.
+  **The listing itself is AS-06's, and this pane consumes it** (§5 — one shared implementation,
+  and Settings ▸ AI ▸ Chat is the other consumer). Do not build a second cache, a second fetch
+  policy or a second staleness rule here; the rules that reach this surface are AS-06's and are
+  written there in full: the offered set is *reported ∪ {the current pick}* so an unreachable
+  `/models` cannot strand a working setup, the list is deliberately **unfiltered**, and the
+  refresh is stale-while-revalidate off the render thread. If AS-06 has not landed when this
+  task starts, it is the prerequisite — not a reason to fold a local one-off.
 - **Rendering.** Evaluate the fork's `freya-markdown` for the transcript **first**
   (standard-components-first, one level up); build bespoke only for what it will not carry,
   and then prefer extending it in the fork (§6) over app-side workarounds.
