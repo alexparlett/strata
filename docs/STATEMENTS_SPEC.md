@@ -5,8 +5,8 @@ parsed statement, whether Run executes a query, performs the statement as an eng
 refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
 stays read-only. This file documents that surface as built — the router, the dispatch, the
 provider layer, and the statement family implemented so far (internal tables, the two writes over
-them, typed view DDL, typed `COPY`, and the session statements). The remaining statement lift
-(functions, typed `CREATE EXTERNAL TABLE`) is tracked in
+them, typed view DDL, typed `COPY`, the session statements and SQL functions). The one statement
+still to lift — typed `CREATE EXTERNAL TABLE` — is tracked in
 `.claude/tasks/workstream-editor-statements/`.
 
 ```mermaid
@@ -511,14 +511,98 @@ word in its dictionary as a keyword, so a table with an `execute` column would o
 column govern the rest of its SELECT list and empty the offer there
 (`context::leads_statement_only`). The rest of the session statements' completion is ED-11.
 
-### 6.6 Not yet implemented
+### 6.6 SQL functions — `CREATE FUNCTION` and `DROP FUNCTION`
 
-`CREATE FUNCTION`, `DROP FUNCTION` and `CREATE EXTERNAL TABLE` classify `Intercept` — the editor
-draws no squiggle — and answer at Run with `ddl::execute`'s stub refusal: "*KIND* is not
-implemented yet". Each kind's implementation, and the design it follows, lives in its task file
-under `.claude/tasks/workstream-editor-statements/`; the dispatch's `match` is exhaustive on
-`StmtKind` with no wildcard, so a kind the router learns to intercept is a compile error until an
-arm owns it.
+`engine/ddl/functions.rs`. Both run **natively**, and DataFusion's seam for `CREATE FUNCTION` is a
+`FunctionFactory` — without one installed the statement fails with "Function factory has not been
+configured", and with one it is `execute_logical_plan` that calls it and registers what it returns.
+So `StrataFunctionFactory` is installed on every engine at `build_context` (the headless host runs
+the statement identically), and it is a pure builder: a `CreateFunction` in, a scalar `ScalarUDF`
+out. What the created function *is* is a **SQL macro** — the body, with the call's arguments
+substituted in by the UDF's `simplify` hook, so it is inlined once per plan and never invoked per
+batch.
+
+**A body is an expression over the arguments and nothing else.** DataFusion plans it against an
+empty schema with the argument list supplied as *placeholder* types, so what its planner accepts is
+`RETURN $1 + 1` or `RETURN $x + 1` — and the standard SQL `RETURN x + 1`, which is what a user
+writes, fails name resolution outright. `bind_parameters` says that bare form in the planner's own
+vocabulary **on the parsed statement, before planning**, so all three spellings land on one planned
+body of positional placeholders and there is one substitution to make. Anything the body reaches
+that is not an argument is refused: a bare `Column`, a subquery, a `$n` past the arity. A body
+reading a table would be a hidden dependency that nothing persists and no `DROP TABLE` could name.
+
+**A built-in is fenced off from both statements.** DataFusion's registry cannot tell a built-in
+from a function a session created, and its `DROP FUNCTION` deregisters across *all five* registries
+at once (scalar, aggregate, window, table, higher-order) — so `DROP FUNCTION abs` would take the
+built-in away for the rest of the session with nothing able to put it back, and
+`CREATE OR REPLACE FUNCTION count(…)` would shadow the aggregate the same way. `Functions`
+(`engine/functions.rs`) holds the names this session created beside the catalog, and that set is
+what makes the difference nameable: a name it holds is the user's to redefine under the same
+`OR REPLACE` rule a view keeps; any other registered name is refused, in one sentence for both
+statements. It is `CREATE OR REPLACE VIEW` over a table name (§6.3) read from the other side.
+`engine::registered_function` asks **all five**, deliberately rather than the three that are one
+method call away: `array_filter`, `array_transform` and `array_any_match` are registered *only* as
+higher-order, so a three-registry fence read them as free names.
+
+The other refusals, each leaving nothing behind:
+
+| Form | Answer |
+|---|---|
+| `LANGUAGE python` (anything but SQL) | "LANGUAGE 'python' is not supported. Functions are SQL expressions" — off the **parsed** statement, because a body in another language is not SQL and would fail planning first, answering about the body instead of the language |
+| no body | "CREATE FUNCTION requires a body. Add RETURN \<expression\>" |
+| no `RETURNS` | "CREATE FUNCTION requires a return type. Add RETURNS \<type\>" |
+| `AS '<string>'` | "A function body given with AS is not supported. Use RETURN \<expression\>" — `AS` takes a *string literal* in this dialect family, so `AS 'x + 1'` would create a function returning the text `x + 1` |
+| a body containing a subquery, an aggregate or a window function | refused by name — the first is a hidden table dependency, the last two plan happily and can then never be called |
+| `IF NOT EXISTS` | points at `CREATE OR REPLACE FUNCTION` |
+| `STRICT`, `PARALLEL`, `SECURITY`, `SET`, `USING`, `OPTIONS`, `REMOTE WITH CONNECTION`, `OR ALTER`, `DETERMINISTIC` | "CREATE FUNCTION does not support *clause*" |
+| `DROP FUNCTION a, b` · `CASCADE`/`RESTRICT` · an argument list | "DROP FUNCTION takes one function name", and the other two by name |
+
+The last two rows are read off the **parsed statement**, because DataFusion's planner drops them
+silently — the same reason `views::definition` is exhaustive over `CreateView` with no `..`, and a
+clause sqlparser learns later is a compile error rather than a promise quietly broken. Most of the
+`CREATE` ones are unreachable under the `generic` dialect, whose parser hard-codes them absent, but
+the dialect is a Settings key and `mssql`/`bigquery` set several. **The `DROP` row is reachable
+everywhere**: sqlparser parses the comma-separated list in every dialect and DataFusion's planner
+takes `func_desc.first()` with no length check, binds `drop_behavior: _` and never reads
+`FunctionDesc::args` — so `DROP FUNCTION a, b` planned as a drop of `a` alone and reported success
+for a statement half of which never happened. `TEMPORARY` is *accepted*,
+because it is accurate: every created function is session-scoped whether or not the word is
+written. `RETURNS SETOF` and a qualified name are DataFusion's own refusals.
+
+The name is folded (`fold_ident`) on both statements, because DataFusion's planner takes the
+identifier verbatim on each: without it `CREATE FUNCTION AddOne` would register under a name
+`SELECT addone(…)` could never resolve. The declared return type is the call's type — the body is
+wrapped in a `Cast`, so `RETURNS INT` over an `Int64` body answers `Int32` rather than failing deep
+in the optimizer.
+
+**The catalog is swappable, and that is the whole app-side change.** `functions::snapshot` used to
+run exactly once at `Engine::new` into an immutable field — true of the registry until this
+statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
+that changed the registry **and by nothing else**, so the built-in set still costs one walk;
+`Engine::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
+whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapshot is memoized on.
+
+**Which surfaces that actually reaches** — three, and it is worth naming them rather than saying
+"the language service", because they read the swap by two different routes:
+
+| Surface | Reads | Shows |
+|---|---|---|
+| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help (AGENTS.md §8) |
+| diagnostics | `Engine::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
+| `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
+
+There is **no docs panel**: `FunctionSym::doc()` has no caller outside its own unit tests, and
+neither `Completion` nor the editor's `CompletionItem` carries a docs field. That predates ED-09
+(it is F5-era API) and is not something this statement needs; the description the factory sets is
+reached through `SHOW FUNCTIONS` and nowhere else.
+
+### 6.7 Not yet implemented
+
+`CREATE EXTERNAL TABLE` classifies `Intercept` — the editor draws no squiggle — and answers at Run
+with `ddl::execute`'s stub refusal: "CREATE EXTERNAL TABLE is not implemented yet". Its
+implementation, and the design it follows, lives in its task file under
+`.claude/tasks/workstream-editor-statements/`; the dispatch's `match` is exhaustive on `StmtKind`
+with no wildcard, so a kind the router learns to intercept is a compile error until an arm owns it.
 
 ## 7. A statement, end to end
 
@@ -547,10 +631,16 @@ same files. The headless host replays identically.
 | Snapshots | temp dir, retire-on-dispatch | no (by design) | no |
 | The `SET` overlay | `SessionScope`, engine-wide | no (by design) | no |
 | Prepared statements | DataFusion's `prepared_plans` + the `SessionScope` mirror | no (by design) | no |
+| Created functions | DataFusion's UDF registry + the `Functions` catalog | no (by design) | no |
 
 Session-scoped outcomes — the SET overlay, prepared statements, created functions — die with the
 engine when their statements land, and the `StatementReport` contract already encodes it: a
 session-scoped outcome's message says "for this session", because the report is the one place the
 user learns the scope. It is true **by construction** rather than by a teardown step: a restart is
-a new `Engine`, whose `SessionScope` is a fresh `Default` and whose `SessionContext` holds no
-prepared plans. Nothing has to remember to clear anything.
+a new `Engine`, whose `SessionScope` is a fresh `Default`, whose `SessionContext` holds no prepared
+plans, and whose `Functions` is a fresh walk of the built-in registry. Nothing has to remember to
+clear anything.
+
+A persisted `FunctionDef` list in `project.json`, replayed by the registration pass exactly as a
+view is, is the noted extension for created functions. It is deliberately not scaffolded — the
+statement is session-scoped today and says so.

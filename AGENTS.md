@@ -130,6 +130,22 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `restart_owed` unchanged. And **writing an option is only half of applying it** — every writer
   also calls `refresh_config_dependent_udfs`, or `SET …time_zone` moves `SHOW` and leaves `now()`
   in the build-time zone.
+- **A created function is a SQL macro, its catalog is swappable, and the name it may take is fenced
+  against the built-ins.** `CREATE FUNCTION` runs over DataFusion's own `FunctionFactory` seam,
+  installed on every engine; the UDF implements only `simplify`, substituting the call's arguments
+  into the stored body. `Definition::read` is the one judgement, called by the arm for its wording
+  and by the factory to build from. The body is an expression over the arguments and nothing else —
+  a bare `Column`, a subquery or a `$n` past the arity is refused — and the **standard spelling does
+  not plan**: DataFusion plans the body against an empty schema, so `bind_parameters` rewrites the
+  bare `x` into its own `$x` placeholder on the parsed statement, before planning. `AS '<string>'`
+  and every clause the planner drops silently are refused off that statement, from a destructure
+  with no `..`. **A built-in is refused to both statements**, because `DROP FUNCTION` deregisters
+  across all five registries and nothing can put one back; `Functions::created` is what names the
+  difference, and `registered_function` asks **all five** — a three-registry fence read the
+  higher-order-only names as free. The drop's own statement is read too, never trusted to the
+  planner, which discards every name past the first. The catalog is re-walked by the statement that moved the registry and by nothing
+  else, and there is **no revision counter beside it** — `FunctionsChanged` bumps the catalog epoch,
+  which every consumer already keys on.
 - **`PREPARE` runs natively because DataFusion owns the plan; the fence and the mirror are ours,
   and the fence can be nowhere else.** `verify_plan` descends into a `Prepare`'s input and an
   `Execute` has none, so a DML/DDL body is refused at `PREPARE` or never. The mirror exists only

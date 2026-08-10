@@ -335,8 +335,9 @@ fn statements_only() -> SQLOptions {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
-    use crate::engine::sql::{complete, Blocked, Catalog, CompletionKind, FunctionCatalog};
+    use crate::engine::sql::{complete, Blocked, Catalog, CompletionKind};
     use crate::engine::{
         Engine, RunOutcome, RunTag, StatementReport, StoreEffect, WsId, CATALOG, SCHEMA,
     };
@@ -727,15 +728,8 @@ mod tests {
         statement(&eng, "PREPARE spend(INT) AS SELECT $1 AS n")
             .await
             .expect("prepared");
-        let catalog = |eng: &Engine| {
-            Catalog::build(
-                [],
-                [],
-                FunctionCatalog::default(),
-                eng.prepared(),
-                "generic".into(),
-            )
-        };
+        let catalog =
+            |eng: &Engine| Catalog::build([], [], Arc::default(), eng.prepared(), "generic".into());
 
         let cat = catalog(&eng);
         for sql in ["EXECUTE ", "DEALLOCATE ", "DEALLOCATE PREPARE "] {

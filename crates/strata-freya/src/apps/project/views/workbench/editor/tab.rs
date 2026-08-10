@@ -139,7 +139,10 @@ impl Component for EditorTab {
                             v.reg.ready().map(|i| i.columns.as_slice()).unwrap_or(&[]),
                         )
                     }),
-                    engine.functions().clone(),
+                    // By handle: the engine's function catalog is swappable (a `CREATE FUNCTION`
+                    // replaces it), and it is the largest part of this snapshot, so the rebuild
+                    // takes the `Arc` rather than copying a thousand symbols per epoch.
+                    engine.functions(),
                     engine.prepared(),
                     dialect,
                 );

@@ -2,6 +2,8 @@
 //! their columns) projected from `state.project`, plus the registered functions
 //! (from the engine, F5). Cheap to build on the UI thread each analysis pass.
 
+use std::sync::Arc;
+
 use crate::engine::sql::FunctionCatalog;
 use strata_model::ColumnInfo;
 
@@ -72,7 +74,10 @@ impl PreparedSym {
 pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
-    pub functions: FunctionCatalog,
+    /// The engine's function catalog, **by handle**: the snapshot is rebuilt on every catalog
+    /// epoch and the function set is by far its largest part, so it rides as the `Arc` the engine
+    /// already holds rather than as a per-rebuild deep copy of every symbol.
+    pub functions: Arc<FunctionCatalog>,
     /// The session's prepared statements — offered at an `EXECUTE` / `DEALLOCATE` operand and
     /// nowhere else. Engine state like [`functions`](Self::functions), and it rides the same
     /// snapshot for the same reason: a completion pass reached from a keystroke has no engine to
@@ -94,7 +99,7 @@ impl Catalog {
     pub fn build<'a>(
         tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
-        functions: FunctionCatalog,
+        functions: Arc<FunctionCatalog>,
         prepared: Vec<PreparedSym>,
         dialect: String,
     ) -> Self {

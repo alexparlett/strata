@@ -727,7 +727,7 @@ impl<H: Host> StrataTools<H> {
         params: ProjectParams,
     ) -> Result<FunctionsResult, AgentError> {
         let (_, engine) = self.engine(params.project.as_deref()).await?;
-        Ok(FunctionsResult::from(engine.functions()))
+        Ok(FunctionsResult::from(engine.functions().as_ref()))
     }
 
     pub async fn validate(&self, params: ValidateParams) -> Result<ValidateResult, AgentError> {

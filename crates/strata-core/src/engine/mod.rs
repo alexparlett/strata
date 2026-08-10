@@ -113,6 +113,8 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
 use crate::engine::plan::QueryPlan;
+use ddl::StrataFunctionFactory;
+use functions::Functions;
 use providers::StrataCatalogProvider;
 use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
@@ -324,9 +326,9 @@ pub struct Engine {
     /// winit close hook (T2), which runs outside the UI and must be `Send`. Installed once
     /// by [`Engine::watch_inflight`]; `None` until then, and for engines nobody watches.
     inflight_flag: OnceLock<Arc<AtomicBool>>,
-    /// The registered SQL functions (built-ins + UDFs), enumerated once at build for
-    /// the language service (S26/S7/S25).
-    functions: FunctionCatalog,
+    /// The registered SQL functions (built-ins + UDFs) for the language service (S26/S7/S25),
+    /// walked at build and re-walked by a statement that moves the registry (ED-09).
+    functions: Functions,
     /// The project folder this engine may write internal tables into (ED-04), set at project
     /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir). `None` until
     /// then, and forever for an engine with no project behind it.
@@ -384,7 +386,7 @@ impl Engine {
             .build()
             .expect("tokio runtime");
         let ctx = build_context(&overrides);
-        let functions = functions::snapshot(&ctx);
+        let functions = Functions::new(&ctx);
         // Claim the snapshot directory before anything can write to it. Failing is
         // survivable (the directory is created on demand anyway) but means another
         // instance's startup purge can't see that we're alive — worth saying out loud,
@@ -521,9 +523,13 @@ impl Engine {
         self.engine_id
     }
 
-    /// The registered SQL functions (the editor's language catalog).
-    pub fn functions(&self) -> &FunctionCatalog {
-        &self.functions
+    /// The registered SQL functions (the editor's language catalog), as they stand.
+    ///
+    /// By handle rather than by reference, because the set is swappable: a `CREATE FUNCTION`
+    /// replaces it wholesale (`ddl::functions`), so a caller that held a borrow would be holding
+    /// the engine's lock for as long as it read.
+    pub fn functions(&self) -> Arc<FunctionCatalog> {
+        self.functions.catalog()
     }
 
     /// Re-point this live engine at `overrides` (Settings ▸ Engine ▸ Properties, W2), and
@@ -607,7 +613,10 @@ impl Engine {
     /// hit. Total by design: faults come back as `Diagnostic`s, not an `Err`.
     pub async fn validate(&self, sql: String) -> Vec<Diagnostic> {
         let ctx = self.ctx.clone();
-        let functions = self.functions.clone();
+        // The catalog as it stands, taken here rather than inside the task: a pass validating a
+        // buffer answers about the function set it started with, and the `Arc` is what makes
+        // holding it across the dry-plan free.
+        let functions = self.functions.catalog();
         self.rt()
             .spawn(async move { sql::validate(&ctx, &functions, &sql).await })
             .await
@@ -682,13 +691,21 @@ impl Engine {
                 .map(|(output, batch)| RunOutcome::Rows(output, batch)),
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
+                // Taken before the struct literal, not inside it: a guard in a field expression
+                // lives until the end of the statement, which would hold the data-root lock across
+                // `overrides()`'s. Nothing takes those two the other way round today, and this is
+                // how it stays that way.
                 let root = self.data_root.lock().unwrap().clone();
-                let internal = self.internal.clone();
-                let scope = self.session.clone();
-                let baseline = self.overrides();
+                let engine = ddl::Dispatch {
+                    root,
+                    internal: self.internal.clone(),
+                    scope: self.session.clone(),
+                    functions: self.functions.clone(),
+                    baseline: self.overrides(),
+                };
                 let report = self
                     .bookkeep(ws, tag, "statement", async move {
-                        ddl::execute(&ctx, kind, stmt, root, internal, scope, baseline).await
+                        ddl::execute(&ctx, kind, stmt, engine).await
                     })
                     .await?;
                 self.settle_effect(report.effect.as_ref());
@@ -735,8 +752,9 @@ impl Engine {
                 self.cancel_profile(name);
             }
             // Nothing for the engine to learn. An `INSERT` moves data under a registration that
-            // is unchanged; the function catalog is not a table; and a prepared statement's
-            // bookkeeping is the session's, already applied by the arm that moved it.
+            // is unchanged; the function catalog and the prepared-statement mirror are both the
+            // session's, already re-walked and recorded by the arm that moved them, because that
+            // arm is the only thing that knows *which* name changed.
             StoreEffect::RescanTable { .. }
             | StoreEffect::FunctionsChanged
             | StoreEffect::PreparedChanged => {}
@@ -1740,7 +1758,32 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
         tracing::warn!("engine: JSON functions unavailable: {e}");
     }
-    ctx
+    // DataFusion's seam for `CREATE FUNCTION` (ED-09): `execute_logical_plan` calls the factory
+    // and registers what it returns, and without one installed the statement fails with
+    // "Function factory has not been configured". Installed on every engine rather than only the
+    // app's, so the headless host runs the statement the same way — the factory is stateless and
+    // costs nothing on an engine that never creates a function.
+    ctx.with_function_factory(Arc::new(StrataFunctionFactory))
+}
+
+/// Whether the engine has a function called `name` (already folded), in any registry.
+///
+/// **All five, because `DROP FUNCTION` clears all five.** DataFusion's `drop_function` deregisters
+/// the scalar, aggregate, window, table and higher-order registries in one go, so "is this name
+/// taken" has to be the same question the drop would answer — otherwise a name this predicate does
+/// not see can be taken by a `CREATE FUNCTION` and then destroyed for the session by the matching
+/// `DROP`, which is exactly the loss the built-in fence exists to prevent. Asking three was wrong
+/// for the higher-order set in particular: `array_filter`, `array_transform` and `array_any_match`
+/// are registered **only** there, so they read as free names.
+///
+/// The table functions are asked through the state's own map rather than a registry method, since
+/// `FunctionRegistry` has none for them; `state_ref` rather than `state()`, which clones.
+fn registered_function(ctx: &SessionContext, name: &str) -> bool {
+    ctx.udf(name).is_ok()
+        || ctx.udaf(name).is_ok()
+        || ctx.udwf(name).is_ok()
+        || ctx.higher_order_function(name).is_ok()
+        || ctx.state_ref().read().table_functions().contains_key(name)
 }
 
 /// The catalog + schema **we own** — see [`build_context`].
@@ -2017,12 +2060,8 @@ mod tests {
     #[test]
     fn json_accessors_reach_the_function_catalogue() {
         let engine = Engine::new(BTreeMap::new());
-        let names: Vec<&str> = engine
-            .functions()
-            .scalar
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect();
+        let functions = engine.functions();
+        let names: Vec<&str> = functions.scalar.iter().map(|f| f.name.as_str()).collect();
         for want in [
             "json_get",
             "json_get_str",
