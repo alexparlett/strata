@@ -580,9 +580,21 @@ run exactly once at `Engine::new` into an immutable field — true of the regist
 statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
 that changed the registry **and by nothing else**, so the built-in set still costs one walk;
 `Engine::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
-whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapshot is memoized on —
-so a created function reaches autocomplete, signature help and the docs panel on the next
-derivation, with its argument names as the signature.
+whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapshot is memoized on.
+
+**Which surfaces that actually reaches** — three, and it is worth naming them rather than saying
+"the language service", because they read the swap by two different routes:
+
+| Surface | Reads | Shows |
+|---|---|---|
+| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help (AGENTS.md §8) |
+| diagnostics | `Engine::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
+| `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
+
+There is **no docs panel**: `FunctionSym::doc()` has no caller outside its own unit tests, and
+neither `Completion` nor the editor's `CompletionItem` carries a docs field. That predates ED-09
+(it is F5-era API) and is not something this statement needs; the description the factory sets is
+reached through `SHOW FUNCTIONS` and nowhere else.
 
 ### 6.7 Not yet implemented
 

@@ -6,8 +6,13 @@
 
 `CREATE FUNCTION` for SQL-bodied scalar macros and the `DROP FUNCTION` that takes one back, both
 session-scoped, with the "function set is the live registry" invariant kept honest: a created
-function reaches autocomplete, signature help, the docs panel and `SHOW FUNCTIONS` on the next
-derivation. Built behaviour: **`docs/STATEMENTS_SPEC.md` §6.6**, and the module doc on
+function reaches the autocomplete row (name + argument list as its dim detail, which is where this
+codebase puts signature help), the diagnostics pass, and `SHOW FUNCTIONS`.
+
+**Not** a docs panel — `FunctionSym::doc()` has no caller outside its own unit tests and neither
+`Completion` nor the editor's `CompletionItem` carries a docs field. That predates this task and
+was asserted loosely in the draft; the three surfaces above are the ones that exist, and each has
+a test. Built behaviour: **`docs/STATEMENTS_SPEC.md` §6.6**, and the module doc on
 `crates/strata-core/src/engine/ddl/functions.rs`, which carries the reasoning.
 
 Shape, in one line each:

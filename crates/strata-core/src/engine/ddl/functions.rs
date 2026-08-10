@@ -1056,6 +1056,43 @@ mod tests {
         );
     }
 
+    /// **A created function is known to the diagnostics pass too, not only to completion.**
+    /// Those are two different readers of the swap: completion resolves against the language
+    /// service's `Catalog` snapshot, while `Engine::validate` dry-plans against the live
+    /// `SessionContext` and takes the catalog by handle for its lexical lints. A squiggle left
+    /// under a call the very same buffer can Run is the disagreement the epoch bump exists to
+    /// prevent, and it is worth pinning from this end because the app-side wiring
+    /// (`FunctionsChanged` -> `catalog_settled`) is ED-08's and is not re-tested here.
+    #[tokio::test]
+    async fn a_created_function_stops_being_a_diagnostic() {
+        let eng = Engine::new(BTreeMap::new());
+        let sql = "SELECT add_one(41)";
+        assert!(
+            !eng.validate(sql.into()).await.is_empty(),
+            "unknown before it is created"
+        );
+
+        statement(
+            &eng,
+            "CREATE FUNCTION add_one(x BIGINT) RETURNS BIGINT RETURN x + 1",
+        )
+        .await
+        .expect("created");
+        assert_eq!(
+            eng.validate(sql.into()).await,
+            vec![],
+            "and clean the moment it is"
+        );
+
+        statement(&eng, "DROP FUNCTION add_one")
+            .await
+            .expect("dropped");
+        assert!(
+            !eng.validate(sql.into()).await.is_empty(),
+            "unknown again once it is gone"
+        );
+    }
+
     /// **The built-in fence covers every registry `DROP FUNCTION` clears, not the three that are
     /// easy to ask.** DataFusion's `drop_function` deregisters scalar, aggregate, window, table
     /// *and* higher-order in one go, and `array_filter` / `array_transform` / `array_any_match` are
