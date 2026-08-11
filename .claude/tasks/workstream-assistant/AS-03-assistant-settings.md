@@ -1,114 +1,279 @@
-# AS-03 · Settings ▸ Assistant: the provider roster
+# AS-03 · Settings ▸ AI: Providers · Chat · MCP
 
 > **AS-05 landed.** The surface to call is `strata_core::secret`: `SecretRef::mint()` for a new
-> roster entry, `r.put(&secret)` / `r.get()` / `r.delete()`, `Secret::new(&draft_text)` (which
-> returns `None` for a blank field — so "cleared" and "delete the store entry" are the same
-> branch), and `SecretError` for what Apply renders. Every call blocks: `task::offload`. Two
-> things this pane owes back to AS-05's acceptance: the marker's first real `Settings` field
-> (and with it the `write_config` round trip), and the manual check that the bundled, signed
-> app reads its own item — see `AS-05-secret-store.md` ▸ *What is not proved yet*.
+> entry, `r.put(&secret)` / `r.get()` / `r.delete()`, `Secret::new(&draft_text)` (which returns
+> `None` for a blank field — so "cleared" and "delete the store entry" are the same branch), and
+> `SecretError` for what Apply renders. Every call blocks: `task::offload`. Two things this pane
+> owes back to AS-05's acceptance: the marker's first real `Settings` field (and with it the
+> `write_config` round trip), and the manual check that the bundled, signed app reads its own
+> item — see `AS-05-secret-store.md` ▸ *What is not proved yet*.
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-05 (the key-reference type;
-the pane can be built against that vocabulary before the store itself lands) — parallel with
-AS-01/02; AS-02's per-send selection struct is the target shape — coordinate the field list
+**Workstream:** Assistant · **Status:** 🟡 · **Depends on:** AS-02 (the provider table and
+`Selection`), AS-05 (the key-reference type) · **Completed by:** AS-06, AS-07
 
-## Reshaped 2026-08-09
+> **Providers and MCP are done; Chat is not.** The three panes, the config vocabulary, the probe
+> and the keystore commit are built, reviewed and green, and the round trip was exercised in the
+> app: a pasted key reached the Keychain, its marker reached `config.json`, and both survived a
+> restart.
+>
+> It was marked ✅ on that basis and is back to 🟡, because **AI ▸ Chat is two controls short of
+> the pane it describes** — and both belong to it rather than to the tasks that supply them:
+>
+> - **The model field is a typed box** and has to be a `Select` over what the provider serves.
+>   The list already exists; what is missing is a listing that outlives the window (**AS-06**).
+> - **There is no retention control**, because there is nothing yet to retain. When conversations
+>   persist (**AS-07**) this pane owes the pair `history.jsonl` already has — a cap and a Clear.
+>
+> Nothing here needs rebuilding for either; both are additive to a pane that works. This task
+> closes when they land.
+>
+> One check is owed **elsewhere** and does not bear on the status: the keystore round trip has
+> not been shown from the **signed bundle**. Keychain access is per code signature, so a dev
+> binary proving it does not prove the `.app`; that check is `AS-05-secret-store.md` ▸ *What is
+> not proved yet*, because it is a fact about the bundle rather than about this pane.
 
-This task was first written as one global provider + model + key, with an explicit "no
-per-conversation model switching" line. Alex overturned that after reviewing IntelliJ's AI
-Assistant: **Settings owns the roster** (which brains exist, their endpoints, their keys —
-slow-changing, secret-bearing) and **the chat surface owns the pick** (which entry, which
-model, what effort — per-conversation intent, AS-04's composer footer). The def/runtime split,
-applied to the assistant. The workstream README records the decision; do not re-merge the two
-surfaces.
+## Reshaped 2026-08-10 — the design handoff, and the model that is not here
+
+Written first as one global provider + model + key. Reshaped once (2026-08-09) into a roster of
+named `Uuid` entries each carrying a **default model**. Both are superseded by the design
+handoff's **AI** group, and by the observation that killed the middle version:
+
+> *"I don't understand why we need a model on the roster entry at all. It's meant to configure
+> and enable a provider, and the model is selected per chat window."*
+
+That is what AS-02's own module doc already said — `provider.rs`: *"Settings maintains the
+roster (AS-03 — which brains exist, their endpoints, their keys), a chat conversation holds the
+pick (AS-04 — which entry, which model, what effort)."* The "default model" line was the
+outlier, not the code. **A provider entry carries what addresses the provider and nothing about
+what it is asked**: the `ConnectionDef` shape exactly, where a connection names a bucket and a
+*table* names the connection.
+
+The handoff then replaced the roster's structure outright. Settings gains an **AI** group with
+three children — **Providers**, **Chat**, and **MCP** (the renamed Agent access pane) — because
+outbound model credentials and inbound MCP hosting are different capabilities that were sharing
+a screen. Canvas: `Settings.dc.html` (`catProviders` / `catChat` / `catAgent` blocks) and
+`strata-windows.js` ▸ `SW.aiState()` / `SW.mcpState()`.
 
 ## Goal
 
-A Settings section where the user maintains a **list of named provider entries** and marks one
-as the default. Each entry: display name · provider kind (Anthropic · OpenAI · Gemini ·
-Ollama · OpenAI-compatible) · default model · base URL (kind-dependent) · API key
-(kind-dependent, held in the AS-05 secret store). AA-04 (Settings ▸ Agent access,
-`views/agent_access.rs`) remains the form-idiom pattern; **connections are the roster
-pattern** — named defs, per-provider field sets, the naming rules in one place
-(`Provider::check_address`'s shape, `strata-model/src/connection.rs`).
+Three panes under one **AI** nav group.
+
+**AI ▸ Providers** — one row per provider kind, each with a toggle. Enabling a row reveals its
+credential inline and a **Test** action. Nothing here names a model.
+
+**AI ▸ Chat** — the new-chat defaults: provider · model · effort, sourced from *enabled*
+providers only, so the pane can never offer a model it has no credential for.
+
+> **The model field is superseded by AS-06.** It shipped here as a typed box with the tested
+> provider's reported names offered beneath it, because the reported list lived on `Probes` and
+> died with the window. AS-06 makes the listing a satellite that outlives the window and turns
+> this field into a `Select`; that edit is AS-06's, not a reopening of this task.
+
+**AI ▸ MCP** — today's Agent access pane, renamed and moved under the group. No behaviour
+change; it keeps its rows, its anchors and its search keywords.
+
+AA-04 (`views/agent_access.rs`) remains the form-idiom pattern.
 
 ## Shape
 
-- **An entry is a def keyed by `Uuid`** — the saved-query precedent, not the connection one:
-  the per-conversation pick (AS-04) references an entry, and renaming an entry must not break
-  that reference, so identity is minted, never the display name. Committed as a map keyed by
-  that id; edited as rows whose UI ids come from the list's own counter (the engine-properties
-  precedent, `views/engine/model.rs`).
-- **Default entry** — one roster-level `Option<Uuid>`, the seed for a new conversation.
-  Deleting the default clears it; the empty default is a valid state AS-04 renders honestly.
-  No silent re-point to "whatever is first".
-- **Provider kind drives the field set.** A field the kind doesn't use is *absent*, not
-  disabled (model impossible states out). Base URL only for Ollama (default
-  `http://localhost:11434`) and OpenAI-compatible (required, no default).
-- **Model** — free-form text `Input` (model names churn faster than any list we could keep;
-  the provider's error for an unknown model is honest and current). Placeholder shows a
-  sensible current example per kind. This is the entry's *default* model — AS-04 may override
-  it per conversation.
-- **API key** — the config field is a **key reference (AS-05), never the secret**. The row
-  shows the state (key stored / not stored), takes a paste into the draft, and Apply routes
-  the secret through the store while `write_config` commits only the marker. The empty state
-  is valid: AS-02 falls back to the provider's own env var, and the help text says so ("Leave
-  empty to use ANTHROPIC_API_KEY" — the var name comes from the provider table, never
-  hand-typed).
+### One list, keyed by kind
 
-No enable/disable toggle: an empty roster *is* the unconfigured state, and the pane (AS-04)
-renders it honestly. A toggle would be a second copy of that fact.
+**A provider's identity is its kind.** Anthropic is Anthropic; there is no second one, nothing
+to name and nothing to rename. So `Ai::providers` is keyed by `ProviderKind`, and a kind absent
+from the map is one the user has never enabled — the same thing its toggle says, rather than a
+second copy of it.
 
-## What leaves the machine
+```rust
+// strata-core
+pub struct Ai {
+    pub providers: BTreeMap<ProviderKind, ProviderSetup>,
+    pub default_provider: Option<ProviderKind>,
+    pub default_model: String,
+    pub default_effort: Option<Effort>,
+}
+```
 
-The roster is where the trust story gets stated, because the entry's kind is what decides it:
-a cloud entry sends the provider whatever the conversation pins — schema via `@table`
-(`describe_table`), and **row data** wherever a result is pinned or paged (`@result`,
-`read_page` in the loop) — while an Ollama entry sends nothing off the machine. Field
-practice draws the same line (Snowflake's worksheet copilot is schema-only by stated policy;
-DBeaver is metadata-only with row samples opt-in and Ollama for offline). V1 builds no
-machinery — AS-04's chips and step cards already show exactly what the model saw, which is
-most of the honesty — but this pane owes two small things: the kind's help text says which
-side of the line it is on (one sentence, IDE register, no scare copy), and the Ollama kind
-carries a plain "local" marker the AS-04 selector can render.
+**`OpenAiCompatible` is a row like the others, and was briefly a list.** It shipped first as a
+second, user-managed section of *named* endpoints keyed by a minted `Uuid`, so several could
+exist at once. Withdrawn, and this is the reasoning so it is not rebuilt: gateways exist to
+multiplex — LiteLLM and its kind put many backends behind one OpenAI-compatible address — so a
+list here is a second multiplexer in front of a solved problem. What it cost was a **sum-typed
+identity** (`BrainRef`) that every surface downstream would have had to carry: the composer's
+picker, a chat's selection, the transcript. One row addressed by its base URL, and the model
+list the gateway reports is what distinguishes what is behind it.
+
+The residue of the list, all deleted: `CustomEndpoint`, the `Uuid` keying, `name_of`/`set_name`,
+the row's `renameable`/`on_remove`/name buffer, add and remove, the empty state, and the second
+`use_side_effect` per row.
+
+### A field the kind does not use is absent, not disabled
+
+The credential field is what the kind's `KeyUse`/`BaseUrl` policy says it is, straight off
+`PROVIDERS`: a masked key with a reveal for the six keyed kinds, a URL for Ollama, and **both**
+for OpenAI-compatible (URL required, key optional). One expanded area, one or two boxes.
+
+The **empty key is a valid state**: `KeyUse::Env` falls back to the provider's own variable, and
+the row's subtext says which — the name comes from the table, never hand-typed.
+
+### Test is `all_model_names`, so the test and the list are one call
+
+There is no ping in `genai` and there does not need to be. `Client::all_model_names(adapter,
+ProviderConfig { endpoint, auth })` is a live `GET` against the endpoint with the credential for
+every kind we offer, and its answer is exactly what AI ▸ Chat's model dropdown needs. So one
+call serves both: Test reports "verified · N models" or the provider's own error, and the list
+it returned is what the model dropdown offers.
+
+Editing a credential clears the verification — a stale "verified" beside a changed key is a lie.
+
+### The model is a *picked* name that can still be typed
+
+AI ▸ Chat's model control is a dropdown over the enabled provider's listed models, each carrying
+a **REASONS** badge when `efforts(kind, model)` is non-empty. It must also accept a typed name:
+a list can 401, a gateway can 404 `/models`, and a private deployment can name a model no list
+reports. A dropdown that could not be typed into would make an unlisted model unreachable.
+
+This is the whole of the model question, and it lives here rather than on a provider row.
+
+### Effort is AS-02's rungs in the canvas's shell
+
+The canvas draws a fixed four-way `Minimal · Low · Medium · High` that dims for a non-reasoning
+model. The interaction is kept and the ladder is not: AS-02 settled that the rungs are a **set
+per model** drawn from `Low · Medium · High · XHigh · Max`, verified against what the pinned
+`genai` actually sends, with `Minimal` excluded as one vendor's spelling of `Low`. So the
+segmented control renders `efforts(kind, model)` — three segments for most models, five for the
+newest Claude family — and when the set is empty the whole control dims with the note naming the
+model, which is the canvas's own behaviour and AS-02's `NoSuchEffort` wording.
+
+Offering a rung the model does not take is the same "a field silently ignored is a lie on
+screen" the base URL and the key are refused for.
+
+## What this task moves in AS-02
+
+`strata-agent` depends on `strata-core`, so `Settings` cannot name a type the assistant crate
+owns. The minimum that moves, and no more:
+
+- **`ProviderKind` and `Effort` move to `strata_core::ai`** — they are persisted tokens, which
+  their own docs already say. `PROVIDERS`, `Efforts`, `Rungs` and everything genai-shaped stay
+  in `strata-agent`, next to the pin their rung lists are tied to. **One table, relocated
+  nothing.** The inherent methods become free functions in the provider module
+  (`provider::info`, `::label`, `::efforts`), because the orphan rule forbids `impl Display for
+  ProviderKind` in a crate that does not define it; `SelectionError`'s messages read
+  `provider::label(*kind)` where they read `{kind}`.
+- **Four kinds join the table**: DeepSeek, Groq, xAI, Cohere — all `AdapterKind` variants with
+  declared env vars in the pinned `genai`. Their `Efforts` rules cover only the families
+  verifiable against its source; everything else on those kinds gets no control, because
+  `Only` is default-closed and falling behind must cost a knob the user can report rather than a
+  menu the provider refuses.
+- **The env-var names get a drift test.** `AdapterKind::default_key_env_name()` is public, so
+  every `KeyUse::Env(var)` is asserted equal to genai's own answer for that adapter. The name
+  stays written in our table (the help text needs a `&'static str`), but it can no longer fall
+  out of step with the auth it describes — the same reason `ModelReadsAsEffort` asks
+  `ReasoningEffort::from_model_name` rather than copying its keyword list.
+- **Three messages point at the wrong surface.** `NoModel` and `ModelReadsAsEffort` say "in
+  Settings > Assistant" for a value Settings will no longer hold. The line is now clean:
+  **an error about the provider names Settings ▸ AI ▸ Providers; an error about the model names
+  the chat pane.**
+- **`provider::list_models`** — the one place `all_model_names` is called, beside the one place
+  a client is built, resolving endpoint and auth through the same match `Brain::resolve` uses.
 
 ## Rules that bind this surface
 
-- **One app-global config store; Settings is a channel; `write_config` is the sole write
-  path.** New fields ride `Settings` via `settings_merge!` — a field that isn't merged is a
-  build error (AGENTS.md §2).
-- **The draft commits a per-field diff against its seed** — for the roster that diff is the
-  committed map. The **secret is not part of the diff**: it lives in the draft's memory only,
-  goes through AS-05 at Apply, and only its marker merges.
-- **A free-form list setting is edited as rows and committed as a map; UI row ids from a
-  counter, never the name** (AGENTS.md §2). Persisted identity is the entry `Uuid`.
-- **Built from `components::form`** — `Form` > `Row` > control, never bespoke rows (§3).
-- **A name two surfaces agree on is generated from one table**: the provider-kind enum, its
-  display names, its env-var names, its field requirements and its effort rule live in **one**
-  place AS-02, this pane and AS-04 all read (`strata_agent::assistant::provider::PROVIDERS`;
-  `strata-agent` is already a dependency direction the app has). Note effort is asked per
-  **model** (`ProviderKind::efforts(model)`), so this pane stores no effort at all — the pick
-  is AS-04's, on the conversation.
-- **User-facing text in the IDE register** — terse, single-quoted identifiers, no hedging.
+- **One app-global config store; Settings is a channel; `write_config` is the sole write path.**
+  New fields ride `Settings` via `settings_merge!` — a field that isn't merged is a build error.
+- **The draft commits a per-field diff against its seed.** The **secret is not part of the
+  diff**: it lives in the draft's memory only, goes through AS-05 at Apply, and only its marker
+  merges.
+- ~~**A free-form list setting is edited as rows and committed as a map; UI row ids from a
+  counter, never the name.**~~ Inherited for the custom-endpoint list, which was **withdrawn**
+  (above): there is no list on this surface, so the rule binds nothing here. Left struck rather
+  than deleted because it is a real workspace rule and the next list-shaped setting wants it.
+- **Built from `components::form`** — `Form` > `Row` > control. Where the canvas's provider row
+  genuinely diverges from a form row, name it in `form/mod.rs`'s "known divergences".
+- **A name two surfaces agree on is generated from one table**: the kind, its label, its key
+  policy, its base-URL policy and its effort rule are `PROVIDERS`, read by this pane and by
+  AS-04, restated by neither.
+- **Only real facts.** The canvas's "N models · M reasoning" subline is knowledge a fetch
+  produces, so before a Test the row says what it actually knows — the fallback variable for a
+  keyed kind, the default endpoint for Ollama — and becomes the model count once a list has
+  come back.
+- **Nothing blocking on the render thread**: the Test probe (keystore read + `list_models`) and
+  **Apply's `commit`** (keystore write) both go through `task::offload`. The write was the one
+  that got missed first, and it is the one that matters most — Keychain access is per code
+  signature, so the first Apply from a newly signed bundle is exactly when macOS raises an
+  authorisation prompt, and on the render thread that prompt appears over a frozen window.
+  Offloading it makes the window live while the OS is asked, which is the invariant's other half:
+  a wait is an **arm**, not a freeze. `SettingsCtx::applying` is that arm and the footer gates
+  Apply on it, because a live window is a pressable one and two concurrent `commit`s over the
+  same typed keys would each mint a marker for one secret.
+- **User-facing text in the IDE register.**
+
+## Named divergences from the canvas
+
+Recorded here so they are not re-litigated as gaps:
+
+- **A ninth row.** The canvas has eight and no OpenAI-compatible; this adds it as an ordinary
+  row, because it is the only way to reach llama.cpp, vLLM, LM Studio or a gateway — and it is
+  the path `tests/assistant.rs` drives its stub through, so a kind no user can configure would
+  quietly make that test premise false.
+- **The effort ladder is per model** (above), not a fixed four.
+- **The subline states what is known** (above), not a model count the app has not fetched.
+- **The model dropdown accepts a typed name** (above).
+- **A disabled provider that was the default.** The canvas re-points the default at another
+  enabled provider. Followed, but the re-point is *visible*: it happens on the pane the user is
+  looking at, in the draft, before Apply — never silently at read time.
+- **Cohere is dropped** from the canvas's eight. Its genai adapter never reads a request's
+  `tools` and refuses a `Tool`-role message, so it could be enabled, pass a Test, and never call
+  a tool.
 
 ## What is NOT this task
 
-- **The secret store mechanism (AS-05).** This pane consumes its reference type and calls it
-  at Apply; it builds no keystore code.
-- **The per-conversation selector (AS-04).** This pane never renders in the chat surface; it
-  is where entries are *made*, not picked.
-- No connectivity "Test" button in v1 — the first send is the test, and the pane reports the
-  provider's error verbatim. (If wanted later it belongs here, wired to AS-02's client
-  construction, and is cheap then.)
+- **The secret store mechanism (AS-05).** This pane consumes its reference type and calls it at
+  Apply; it builds no keystore code.
+- **The chat pane (AS-04)** — the multi-chat switcher, the composer's per-chat model and effort
+  pickers, the transcript. This pane is where brains are *configured*, not picked. AS-04 reads
+  the same `Ai` defaults and the same `provider::list_models`.
+- No agent-access behaviour change: MCP is a rename and a move.
+
+## Corrected by review — do not re-introduce
+
+An xhigh adversarial pass over the first cut found twelve defects. The shapes worth keeping:
+
+- **A guard that reads absence and emptiness as different states writes on mount.** The URL
+  effect compared `Option<String>` against `Some("")`, so every built-in with no config entry
+  failed its own guard and got one created — opening the pane dirtied the draft with no edit and
+  Apply persisted seven empty provider rows. `base_url_of` returns `String` now: absent and empty
+  *are* the same answer.
+- **A guard inside an effect peeks; it does not read.** `base_url_of`/`name_of` used `.read()`,
+  subscribing every row's effects to the whole draft — one keystroke re-ran sixteen effects
+  across eight rows. The engine grid's `PropRow` peeks for exactly this reason, and the comment
+  above these claimed to be following it.
+- **A cleared box is the answer, including for a test.** `build_ask` flattened an empty typed key
+  to `None` and fell back to the *stored* one, so clearing a key and pressing Test reported
+  "verified" using the credential Apply was about to delete. Touched-ness decides now, not
+  emptiness.
+- **Two ways to strand a secret in the keystore**, both closed: a partial `commit` discarded the
+  markers for keys that had already landed (a retry then minted fresh refs, orphaning another
+  entry each time), and `commit` used `entry().or_default()` merely to *read* a key slot, so
+  asking about a provider created a config row for it.
+- **An effort outlives the model that offered it.** Retyping the model to one with no rungs left
+  `default_effort` set and unreachable — the control was gone, and `Brain::resolve` refuses such
+  a `Selection` before a socket opens, so every new chat would fail its first send.
+- **A page with no named settings is a `Page`, not an `Anchor`.** `AiProviders` was indexed as a
+  setting no row carried, so its hit navigated and then singled nothing out.
 
 ## Acceptance
 
-- Roster CRUD round-trips through `write_config` and survives restart; entry identity
-  survives a rename (a stored default — and AS-04's pick — still resolves).
-- Switching an entry's kind swaps the visible field set; committing an entry whose kind
-  requires a base URL without one is refused in the form, naming the field.
-- A pasted key never appears in the written config file (assert on the file's bytes); the
-  marker does; clearing the key removes the store entry through AS-05.
-- The merge test: `settings_merge!` covers the new fields (exhaustiveness is the build).
+- Provider enable/disable and credentials round-trip through `write_config` and survive restart.
+- Enabling a kind reveals exactly the fields its `PROVIDERS` row declares; an enabled
+  OpenAI-compatible row with no base URL is refused in the form (`SettingsCtx::blocker`), naming
+  the field.
+- A pasted key never appears in the written config file (assert on the file's bytes); the marker
+  does; clearing the key removes the store entry through AS-05.
+- Test reports the provider's own words on failure and a model count on success, and editing the
+  credential clears the result.
+- AI ▸ Chat offers only enabled providers; its effort segments are `efforts(kind, model)` and
+  the control dims with the model named when that set is empty.
+- `settings_merge!` covers the new field (exhaustiveness is the build); every `KeyUse::Env`
+  matches `AdapterKind::default_key_env_name()`.
 - An unconfigured or half-configured state produces AS-02's typed error, and its message names
-  this pane as the fix.
+  the surface that fixes it — Settings for the provider, the chat pane for the model.

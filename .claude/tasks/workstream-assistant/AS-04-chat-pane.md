@@ -1,6 +1,7 @@
 # AS-04 · The chat pane
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-02, AS-03
+**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-02, AS-03, AS-06 (the model
+listing the footer's picker reads)
 
 ## Goal
 
@@ -34,16 +35,32 @@ UI + wiring, on the state rules the app already lives by.
   focused `Input` owns the keyboard: chords in `on_pre_key_down`); send becomes **stop** while
   a turn streams (cancel = AS-02's token; a cancelled turn stays in the transcript marked as
   such — truthful, not erased). Assistant prose streams in as deltas.
-- **The selector.** The composer's footer holds the conversation's pick: **entry · model ·
-  effort** (the IntelliJ AI-chat footer shape — "Junie · GPT-5.5 · High effort"). Entries
-  come from the AS-03 roster in config; model defaults to the entry's own and is overridable
-  free-form; effort renders **only** when `ProviderKind::efforts(model)` is non-empty — a
-  question about the **model**, not the provider, so switching model inside one entry can add
-  or remove the control (absent, not disabled). The pick is per-conversation runtime state on the transcript satellite — never
-  config, never `SessionState` — seeded from the roster's default entry, read at send time
-  into AS-02's per-send selection. Changing it mid-conversation affects the next send and
-  nothing already settled. A pick whose entry has since been deleted degrades honestly:
-  the footer says so and offers the default, never a silent re-point.
+- **The selector.** The composer's footer holds the conversation's pick: **provider · model ·
+  effort** (the IntelliJ AI-chat footer shape — "Junie · GPT-5.5 · High effort"). Providers are
+  the **enabled** ones in `Ai::providers` (`Ai::enabled()`, keyed by `ProviderKind` — AS-03 has
+  no roster of named entries and no per-entry model; that shape was built and withdrawn, see its
+  task file). Model and effort seed from `Ai::default_model` / `Ai::default_effort` and are
+  overridable here. Effort renders **only** when `efforts(kind, model)` is non-empty — a
+  question about the **model**, not the provider, so changing model within one provider can add
+  or remove the control (absent, not disabled). The pick is per-conversation runtime state on the
+  transcript satellite — never config, never `SessionState` — seeded from `Ai::default_provider`,
+  read at send time into AS-02's per-send selection. Changing it mid-conversation affects the
+  next send and nothing already settled. A pick whose provider has since been **disabled**
+  degrades honestly: the footer says so and offers the default, never a silent re-point. (In
+  Settings a disabled provider also loses its key, so "disabled" and "no longer usable" are one
+  state rather than two the pane has to tell apart.)
+- **The model is picked from what the provider reports, not typed** — a `Select`, never a text
+  box. genai prescribes nothing here: a model name is an opaque string in the request payload,
+  and the list is a live `GET` against the provider's own endpoint, so the offer can be the
+  provider's own answer rather than a typed guess that spends a turn on a 404.
+
+  **The listing itself is AS-06's, and this pane consumes it** (§5 — one shared implementation,
+  and Settings ▸ AI ▸ Chat is the other consumer). Do not build a second cache, a second fetch
+  policy or a second staleness rule here; the rules that reach this surface are AS-06's and are
+  written there in full: the offered set is *reported ∪ {the current pick}* so an unreachable
+  `/models` cannot strand a working setup, the list is deliberately **unfiltered**, and the
+  refresh is stale-while-revalidate off the render thread. If AS-06 has not landed when this
+  task starts, it is the prerequisite — not a reason to fold a local one-off.
 - **Rendering.** Evaluate the fork's `freya-markdown` for the transcript **first**
   (standard-components-first, one level up); build bespoke only for what it will not carry,
   and then prefer extending it in the fork (§6) over app-side workarounds.
@@ -128,7 +145,9 @@ UI + wiring, on the state rules the app already lives by.
 ## What is NOT this task
 
 - No loop logic, no provider handling, no prompt text — all AS-02.
-- No conversation persistence; closing the window is the end of the transcript (v1).
+- No conversation persistence; closing the window is the end of the transcript. That is this
+  task's boundary, not the product's: **AS-07** removes it, and the transcript satellite should
+  be shaped so a turn's settle is a place a writer can hook rather than something to retrofit.
 - No loosening of read-only; the assistant is the same `Host` path as every agent.
 - **No in-place edits to the user's buffer, ever in v1.** A fix or rewrite arrives as a
   promoted tab; the buffer is often the user's only record of how a number was reached, and
@@ -153,8 +172,11 @@ UI + wiring, on the state rules the app already lives by.
   mid-run leaves no run in flight and no session left showing `Running`.
 - Unconfigured state names the missing field and reaches Settings; configuring and returning
   makes the same composer live without a restart.
-- The selector round-trips: switching entry or model mid-conversation changes the next send
-  (observable in AS-02's selection); effort appears only for kinds that have one; deleting
-  the picked entry in Settings leaves the footer in its honest degraded state, not a crash
+- The selector round-trips: switching provider or model mid-conversation changes the next send
+  (observable in AS-02's selection); effort appears only for models that have rungs; disabling
+  the picked provider in Settings leaves the footer in its honest degraded state, not a crash
   and not a silent fallback.
+- The model list is the provider's own: picking a provider offers what it reports, the pane
+  does not freeze while it is asked, and a provider whose `/models` cannot be reached still
+  leaves the configured model selectable and says why the rest is missing.
 - Pane open/collapse and width survive restart via the layout channels like every panel.

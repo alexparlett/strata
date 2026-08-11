@@ -2,6 +2,7 @@
 //! persisted as JSON in the OS user-config dir via the `preferences` crate.
 //! Distinct from a `Project` — this is per-machine, never inside a `.psproj`.
 
+use crate::ai::Ai;
 use crate::project;
 use crate::theme::DEFAULT_THEME;
 use crate::util;
@@ -201,6 +202,11 @@ pub struct Settings {
     /// default — the capability ships dark until the user turns it on.
     #[serde(default)]
     pub agent_access: AgentAccess,
+    /// The assistant (AS-03): which brains are set up, and what a new chat starts with. Empty
+    /// by default — an empty roster *is* the unconfigured state, which the chat pane renders
+    /// honestly rather than being told a second time by a flag.
+    #[serde(default)]
+    pub ai: Ai,
 }
 
 /// The agent-access server's settings (`docs/AGENT_ACCESS_SPEC.md`, "The in-app server"): one app-wide
@@ -310,6 +316,7 @@ settings_merge!(
     keybinds,
     engine,
     agent_access,
+    ai,
 );
 
 /// The legal range for [`Settings::default_col_width`], in px — the bounds the results grid
@@ -367,6 +374,7 @@ impl Default for Settings {
             keybinds: Vec::new(),
             engine: BTreeMap::new(),
             agent_access: AgentAccess::default(),
+            ai: Ai::default(),
         }
     }
 }

@@ -15,9 +15,13 @@
 //! - [`register`] — the project registration pass: make the engine match a set of defs,
 //!   reporting per-def outcomes (shared by the app's catalog passes and headless hosts).
 //! - [`secret`] — the OS-keystore secret store: config holds a reference, never the secret.
+//! - [`ai`] — the assistant's configuration vocabulary (AS-03): which brains are set up, and
+//!   what a new chat starts with. The persisted tokens only — the provider *table* is
+//!   `strata-agent`'s, next to the `genai` pin it is verified against.
 
 use engine::profile;
 
+pub mod ai;
 pub mod config;
 pub mod engine;
 pub mod keymap;
