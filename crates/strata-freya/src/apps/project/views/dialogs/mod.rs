@@ -5,12 +5,14 @@
 //! deliberately non-modal because there is nothing behind it to protect — see its module
 //! doc before copying either shape for a new dialog.
 
+mod chat_confirm;
 mod close_confirm;
 mod drop_confirm;
 mod load_failed;
 mod open_prompt;
 mod profile_confirm;
 
+pub use chat_confirm::{ChatConfirm, ChatDrop};
 pub use close_confirm::CloseConfirm;
 pub use drop_confirm::{DropConfirm, DropTarget};
 pub use load_failed::ProjectLoadFailed;

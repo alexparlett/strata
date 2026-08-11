@@ -360,10 +360,22 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   router; it validates before the card exists, which is what lets it hand over a write the
   assistant is itself refused. Explanatory SQL stays an ordinary code block.
 - **A window holds conversations, the pick is per conversation, and a step card is a citation.**
-  `state::chat`'s `Chats` is ephemeral and capped, seeded through `seed_pick` (a provider that is
-  no longer enabled is not a pick); a turn's blocks stay in **arrival order**, every figure on a
-  step card is the engine's own, and an `offer_sql` card is executable *instead of* a step card,
-  never beside one. Promotion is `actions::open_sql` — never a write to the user's buffer.
+  `state::chat`'s `Chats` is capped, seeded through `seed_pick` (a provider that is no longer
+  enabled is not a pick); a turn's blocks stay in **arrival order**, every figure on a step card is
+  the engine's own, and an `offer_sql` card is executable *instead of* a step card, never beside
+  one. Promotion is `actions::open_sql` — never a write to the user's buffer.
+- **A conversation survives its window, and what has to survive is both lists — the turns the pane
+  paints *and* the `Conversation` the model reads back.** `.strata/chats/<uuid>.json`, one document
+  per conversation, gitignored; the seam is `Conversation::{to_json, from_json}`, JSON-valued so
+  `genai` stops at `strata-agent`'s edge. Written after the turn's settle, at the stop press, and
+  at teardown (synchronously, `use_autosave`'s shape), dirty ones only — and a **pick** is dirtying,
+  through the one `Chats::repick` funnel. A task writing this subtree's state after an await must
+  be cancellable by it: the presses use scope-bound `spawn`, and the turn task holds `Chat::running`
+  until its record is on disk (`Chats::finish`). Reopening is a **read** — no run, no scan, no
+  network, one `validate` per offer card — and a stale card degrades **silently** to a code block,
+  a mark that is never stored. Eviction demotes to the shelf and *answers* what it shed; retention
+  is `Ai::max_chats`, rotated on load; Clear and the per-row delete ask through one confirm at the
+  **window root**.
 - **A turn is cancelled by dropping its task, and a dropped run still settles.** The task owns
   AS-02's `Running`, whose drop guard is the cancel and the engine's abort; the reply keeps what
   streamed, marked stopped. One layer down, `SettleOnDrop` sends the stop settle in the engine's

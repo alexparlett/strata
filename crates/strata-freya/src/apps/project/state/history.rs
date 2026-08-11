@@ -31,14 +31,13 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use freya::prelude::{spawn, use_consume, use_side_effect, use_state, State, WritableUtils};
 use freya::query::{QueryStateData, UseQuery};
 use freya::radio::{use_radio_station, RadioStation};
 use strata_core::config::HISTORY_MIN;
 use strata_core::project as project_io;
-use strata_core::util::collapse_sql;
+use strata_core::util::{collapse_sql, now_ms};
 use strata_model::HistoryEntry;
 
 use crate::apps::project::query::{QueryOutcome, RunId, RunQuery};
@@ -253,14 +252,6 @@ pub fn clear_history(
             );
         }
     });
-}
-
-/// Epoch millis now — stamps a [`HistoryEntry`] as a run completes.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

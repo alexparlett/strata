@@ -46,6 +46,7 @@
 
 mod card;
 mod composer;
+mod export;
 mod header;
 mod mention;
 mod transcript;
@@ -298,8 +299,9 @@ mod tests {
     use crate::agent::{create_global_agent, AgentDirectory};
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{
-        seed_pick, AssistantCtx, Chats, ProjChan, ProjectState, SessionState,
+        seed_pick, AssistantCtx, Chats, Log, PersistFaults, ProjChan, ProjectState, SessionState,
     };
+    use crate::apps::project::views::ChatDrop;
     use crate::components::tool_button::TOOL_SIZE;
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
@@ -328,6 +330,7 @@ mod tests {
             default_provider: Some(ProviderKind::Anthropic),
             default_model: "claude-sonnet-4-5".into(),
             default_effort: None,
+            ..Ai::default()
         }
     }
 
@@ -362,6 +365,13 @@ mod tests {
                     ))
                 });
                 r.provide_root_context(EngineCtx::default);
+                // The header reports through both halves of the write funnel — an export says
+                // so in the log, a conversation the store could not write raises a condition.
+                r.provide_root_context(|| State::create(Log::default()));
+                r.provide_root_context(|| State::create(PersistFaults::default()));
+                // The pane's destructive presses set this slot; the dialog that reads it is
+                // mounted at the window root, which this harness does not stand up.
+                r.provide_root_context(|| State::create(None::<ChatDrop>));
                 let listings: ModelListings =
                     r.provide_root_context(|| State::create_global(Listings::default()));
                 let probes = r.provide_root_context(|| State::create_global(Probes::default()));

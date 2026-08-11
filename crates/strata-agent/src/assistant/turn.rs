@@ -48,7 +48,7 @@ use futures::StreamExt;
 use genai::chat::{
     ChatMessage, ChatRequest, ChatRole, ChatStreamEvent, StopReason, Tool, ToolCall, ToolResponse,
 };
-use serde_json::{json, to_string, Value};
+use serde_json::{from_value, json, to_string, to_value, Error as JsonError, Value};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
@@ -92,7 +92,22 @@ pub const MAX_TOOL_ROUNDS: usize = 32;
 /// reply; and the whole history was deep-cloned **under the lock** on every round, blocking
 /// every reader for the length of the copy. Staging the turn's own messages in a local buffer
 /// and committing them in one lock removes all three — the request still takes its messages by
-/// value, but off the lock — and it is why nothing here is `pub` beyond construction.
+/// value, but off the lock — and it is why nothing here is `pub` beyond construction and the
+/// storage pair below.
+///
+/// **[`to_json`](Conversation::to_json) / [`from_json`](Conversation::from_json) are AS-07's
+/// seam, and they are the whole of it.** A conversation that survives a restart has to be
+/// *continuable*, and the transcript the pane paints cannot stand in for this list: the resolved
+/// `@`-mention bodies, the tool results, the captured reasoning parts and the `offer_sql`
+/// call/response pairs exist only here. The pair is JSON-valued rather than
+/// `Vec<ChatMessage>`-valued so `genai` still stops at this crate's edge — the frontend stores
+/// an opaque document and never names a provider type.
+///
+/// What rides on disk is therefore **`genai`'s own serde shape at the pinned version**, not a
+/// mirror vocabulary of ours. The consequence is the pin's second reason to be deliberate: an
+/// upgrade that moves that shape either bumps the storing document's version, or leans on
+/// `from_json` failing and the conversation reloading with fresh memory. Neither is a parse
+/// error a caller may treat as fatal.
 #[derive(Default)]
 pub struct Conversation {
     messages: Vec<ChatMessage>,
@@ -101,6 +116,26 @@ pub struct Conversation {
 impl Conversation {
     pub fn new() -> Conversation {
         Conversation::default()
+    }
+
+    /// The memory as a storable document. A [`Value`], not a string, so a caller embeds it in
+    /// its own document rather than escaping a blob into a field.
+    pub fn to_json(&self) -> Result<Value, JsonError> {
+        to_value(&self.messages)
+    }
+
+    /// Rebuild what [`to_json`](Conversation::to_json) wrote. An error is the caller's cue to
+    /// carry on with a fresh memory — the user's transcript is not lost by it — never a panic.
+    pub fn from_json(value: Value) -> Result<Conversation, JsonError> {
+        Ok(Conversation {
+            messages: from_value(value)?,
+        })
+    }
+
+    /// Has any turn ever committed? What tells a never-asked conversation, which is worth no
+    /// file at all, from one whose memory is genuinely empty.
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
     }
 
     /// The messages a turn starts from — cloned once per turn, not once per round.
@@ -780,6 +815,7 @@ fn offered<H: Host>(tools: &StrataTools<H>) -> Vec<Tool> {
 mod tests {
     use std::{env, fs, process};
 
+    use genai::chat::ContentPart;
     use serde_json::from_str;
 
     use crate::mock::MockProject;
@@ -815,6 +851,58 @@ mod tests {
         assert!(message.contains("<'/attached-context>"), "{message}");
         // A quote in the label cannot end the label either.
         assert!(message.starts_with("<attached-context label=\"Table 'weird'\">"));
+    }
+
+    /// **The whole of AS-07's promise, in one assertion.** A conversation read back from disk
+    /// has to be *continuable*, which means the round trip keeps exactly the things the pane's
+    /// transcript never held: the fenced user message with its resolved `@`-mention body, the
+    /// captured thought signature, the tool call as the model spelled it, and the matching tool
+    /// response. Compared as JSON because genai's types carry no `PartialEq`.
+    #[test]
+    fn a_conversation_round_trips_with_its_tool_calls_and_reasoning() {
+        let call = ToolCall {
+            call_id: "call_1".into(),
+            fn_name: "describe_table".into(),
+            fn_arguments: json!({ "name": "orders" }),
+            thought_signatures: None,
+        };
+        let mut conversation = Conversation::new();
+        conversation.commit(vec![
+            ChatMessage::user(
+                Ask::new("How many orders?")
+                    .with("Table 'orders'", "{\"rows\":12}")
+                    .message(),
+            ),
+            ChatMessage::assistant(vec![
+                ContentPart::ThoughtSignature("sig-abc".into()),
+                ContentPart::Text("Let me look.".into()),
+                ContentPart::ToolCall(call.clone()),
+            ]),
+            ChatMessage::from(vec![ToolResponse::from_tool_call(
+                &call,
+                "{\"rows\":12}".to_string(),
+            )]),
+            ChatMessage::assistant("Twelve."),
+        ]);
+
+        let stored = conversation.to_json().expect("a conversation serializes");
+        let read = Conversation::from_json(stored.clone()).expect("and reads back");
+        assert_eq!(read.to_json().expect("re-serializes"), stored);
+
+        // Not merely equal to itself: the parts that only live here are in the document.
+        let document = to_string(&stored).expect("renders");
+        assert!(document.contains("sig-abc"), "{document}");
+        assert!(document.contains("describe_table"), "{document}");
+        assert!(document.contains("attached-context"), "{document}");
+        assert!(!read.is_empty());
+    }
+
+    /// A memory this build cannot read is the caller's cue to carry on with a fresh one, never
+    /// a panic — the user's transcript is not lost by it.
+    #[test]
+    fn an_unreadable_memory_is_an_error_and_not_a_panic() {
+        assert!(Conversation::from_json(json!({ "not": "a message list" })).is_err());
+        assert!(Conversation::new().is_empty());
     }
 
     /// Nothing to send is refused here, not by the provider three seconds later.

@@ -417,6 +417,18 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Epoch millis now — what a satellite stamps a record with so it can be ordered later.
+///
+/// Beside [`now_secs`] rather than copied into each satellite that wants one: the history log
+/// and the chat store both order by it, and two private copies of the same four lines is two
+/// places for the fallback to disagree.
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Distinguishes concurrent temp files written by *this* process (see [`write_atomic`]).
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 

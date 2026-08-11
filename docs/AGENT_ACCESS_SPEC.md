@@ -400,23 +400,26 @@ the disconnection.
 
 Stated so the reader does not go looking:
 
-- **Conversation persistence** for the in-app assistant (AS-07). The pane itself is **built**
-  (AS-04): a right-pane chat, several conversations per window, the model's reply streaming in
-  as markdown, a citation card under every tool round and an executable card for every
-  `offer_sql`. Closing the window is still the end of its transcripts.
+Two things about the assistant bear on this document, and both are unchanged by the pane and its
+store existing:
 
-  Two things about the assistant bear on this document, and both are unchanged by the pane
-  existing:
-  - **The assistant is held but not listed in the Agents pane.** That pane lists the *external*
-    clients connected to a project; the assistant is part of the app, and its runs render as step
-    cards in its own transcript. It is one more agent to everything described here — its own
-    `AgentId`, its own query sessions, the same gate, and its own rows in the satellite so the
-    ownership check and the caps work — and it is left out of the *listing* alone. The mark is
-    `Agent::in_app`, set by `StrataTools::in_app` and carried to the host on
-    `open_query_session`, never read off the name the agent goes under.
-  - **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
-    hands the user a statement to execute. It is never registered on the router, so `tools/list`
-    is exactly the ten below and no MCP client is offered it.
+- **The assistant is held but not listed in the Agents pane.** That pane lists the *external*
+  clients connected to a project; the assistant is part of the app, and its runs render as step
+  cards in its own transcript. It is one more agent to everything described here — its own
+  `AgentId`, its own query sessions, the same gate, and its own rows in the satellite so the
+  ownership check and the caps work — and it is left out of the *listing* alone. The mark is
+  `Agent::in_app`, set by `StrataTools::in_app` and carried to the host on
+  `open_query_session`, never read off the name the agent goes under.
+- **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
+  hands the user a statement to execute. It is never registered on the router, so `tools/list`
+  is exactly the ten below and no MCP client is offered it.
+
+  A conversation now outlives its window (AS-07, `.strata/chats/`), and nothing in this document
+  changes for it: a restored transcript is a **read of a file**, so reopening one opens no query
+  session and dispatches no run — its step cards are recorded values. The one thing it does ask
+  the host is `validate`, once per restored `offer_sql` card, to find out whether that statement
+  still plans against the catalog as it stands. That is a dry plan on the read-only path like any
+  other: no scan, no snapshot, no data.
 
   One thing the pane *did* change here: a run whose future is **dropped** now settles as a stop
   rather than leaving a `Running` row behind (`agent::directory`'s `SettleOnDrop`). That is how

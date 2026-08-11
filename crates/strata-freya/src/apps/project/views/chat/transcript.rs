@@ -230,7 +230,7 @@ fn plain(turn: &Turn) -> String {
                     Block::Prose(text) => said.push(text),
                     // An offer is a statement the user asked for, so it copies with the answer
                     // it came in.
-                    Block::Offer(sql) => said.push(sql),
+                    Block::Offer { sql, .. } => said.push(sql),
                     Block::Step(_) => {}
                 }
             }
@@ -392,14 +392,23 @@ fn reply(
                         theme: theme.clone(),
                     })
                     .into_element(),
-                Block::Offer(sql) => rect()
+                // **A restored offer the catalog has moved out from under loses its press and
+                // says nothing** (AS-07): it renders as the ordinary code block the assistant's
+                // explanatory SQL already renders as. An error against a statement the user
+                // never ran would be a complaint that the catalog changed, which is not a fault
+                // and not news.
+                Block::Offer { sql, stale } => rect()
                     .key(at)
                     .width(Size::fill())
-                    .child(OfferCard {
-                        sql,
+                    .maybe_child((!stale).then(|| OfferCard {
+                        sql: sql.clone(),
                         session,
                         theme: theme.clone(),
-                    })
+                    }))
+                    .maybe_child(stale.then(|| CodeCard {
+                        code: sql,
+                        theme: theme.clone(),
+                    }))
                     .into_element(),
             })
         },

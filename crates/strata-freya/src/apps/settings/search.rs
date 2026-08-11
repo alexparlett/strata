@@ -169,6 +169,12 @@ settings_index! {
          setting.",
         "ai assistant default thinking budget low medium high";
 
+    AiChatLimit => Route::Chat,
+        "Conversation limit",
+        "How many conversations a project keeps, newest first. Lowering it deletes the older \
+         conversations from that project's saved chats.",
+        "ai assistant chat history cap retention transcript";
+
     AgentEnabled => Route::Mcp,
         "Enable agent access",
         "Runs a local MCP server on 127.0.0.1 so agents can query the projects you have open. \

@@ -673,10 +673,8 @@ Things that must not regress. Each was fought for once already.
 - **A window holds conversations, the pick is per conversation, and a step card is a citation.**
   `state::chat`'s `Chats` is the transcript satellite — several conversations, both the list and
   each conversation's turns capped, in the image of `state::agents` and `state::log`. Nothing here
-  reaches `session.json` (AS-07 is what makes a transcript survive a restart, and the value that
-  has to survive is the `Conversation` the model reads back, not the blocks the pane paints —
-  `Chats::settle` is where that writer hooks) and nothing reaches `history.jsonl` (the **adoption**
-  rule: a promoted tab's own Run press is what records).
+  reaches `session.json` and nothing reaches `history.jsonl` (the **adoption** rule: a promoted
+  tab's own Run press is what records).
 
   Each conversation carries its own `Pick`, seeded from Settings through `seed_pick`, which drops
   a provider that is no longer enabled — in Settings a disabled provider also loses its key, so
@@ -686,6 +684,52 @@ Things that must not regress. Each was fought for once already.
   be sent; effort renders only when `efforts(kind, model)` is non-empty, and a rung the newly
   picked model does not offer is dropped rather than kept out of sight (`Brain::resolve` refuses
   one before a socket opens, and the control that set it is gone by then).
+
+- **A conversation survives its window, and what has to survive is both lists — the turns the pane
+  paints *and* the `Conversation` the model reads back.** AS-07's store is `.strata/chats/<uuid>.json`,
+  a satellite on `history.jsonl`'s terms (one document per conversation, because a single file
+  would make every turn in every chat rewrite every other one), gitignored through
+  `ensure_gitignore` because a transcript quotes the user's own data and `.strata/` sits in
+  people's repos. Storing only the transcript restores a conversation you can read and cannot
+  continue — the *appearance* of one — because the resolved `@`-mention bodies, the tool results,
+  the captured reasoning parts and the `offer_sql` call/response pairs exist **only** in the
+  model's list, and a failed turn plus the differing caps make the two genuinely diverge. The seam
+  is `Conversation::{to_json, from_json}`, **JSON-valued** so `genai` still stops at
+  `strata-agent`'s edge; what rides on disk is therefore genai's own serde shape at the pin, and an
+  upgrade that moves it bumps `CHAT_VERSION` or degrades to `Read::Memoryless`. Three tiers, one
+  rule: the worst outcome is losing what the model remembered, never what the user wrote.
+
+  The writes hang off the three points a conversation is known to have stopped changing — the turn
+  task after its settle (race-free: AS-02 commits to the memory *before* it emits `Settled`), the
+  stop press, and the subtree teardown, which writes **synchronously on the render thread** like
+  `use_autosave`'s own `use_drop`, because a task spawned there dies with the scope and "it is
+  there after a quit" is the feature. Only `dirty` conversations write, and `dirty` is set by
+  everything that changes what would be stored — including a **pick**, through `Chats::repick`,
+  which is the one funnel all three composer controls edit through.
+
+  **A task that writes this subtree's state after an await must be cancellable by this subtree.**
+  The standalone presses (open a stored conversation, delete, clear) use scope-bound `spawn`, like
+  `clear_history`'s own writer: root-scoped, they would still be holding `Chats` and the report
+  satellites if a re-root dropped the subtree mid-write. The turn task is the one that genuinely
+  must outlive the pane, and the only thing that can reach it is `Chat::running` — so it holds
+  that handle until its record is written and releases it with `Chats::finish`, not at the settle.
+  A turn is not over until it is on disk. On the cancel paths the cancelled turn's commit may still
+  land after the write; both interleavings are valid provider tails, so the bounded cost is a
+  stopped turn the model does not remember — recorded, not fixed, because awaiting the settle would
+  contradict "a cancel is a drop".
+
+  Over-cap eviction **demotes to the shelf** rather than dropping, since the document is already
+  stored — and `evict` *answers* what it shed, because `Chats` does no IO and a conversation still
+  dirty when it left would leave its row pointing at a file older than the row claims. Reopening is
+  a **read**: no run, no scan, no snapshot, no network. A restored `offer_sql` card is re-checked
+  once with `tools.validate` (a dry plan, the one host call a reopen makes) and a stale one
+  **degrades silently** to an ordinary code block — the user never ran it, and a complaint that the
+  catalog moved is not news. That mark is **never stored**: it is an answer about the catalog as it
+  stands, and persisting it would leave a card retired after the table it named came back.
+  Retention is `Ai::max_chats`, rotated down on load like history's; **Clear is per project**,
+  because the files are a project's and a Settings button is app-global. Both it and the per-row
+  delete ask through one confirm mounted at the **window root** — a dialog mounted inside the pane
+  it belongs to is a key barrier over nothing, since listeners fire in document order.
 
   A turn's blocks stay in **arrival order** — the model speaks, calls a tool, speaks again, and a
   transcript that hoisted every card to the bottom would separate its reasoning from its evidence.

@@ -10,6 +10,7 @@ mod catalog;
 mod channel;
 mod chat;
 mod chat_send;
+mod chat_store;
 mod diagnostics;
 mod engine_config;
 mod history;
@@ -38,8 +39,14 @@ pub use channel::Chan;
 /// up by hand, where the window goes through `use_init_chats`.
 #[cfg(test)]
 pub use chat::Chats;
-pub use chat::{use_init_chats, Anchor, Block, ChatId, ChatsCtx, Pick, Reply, Step, Turn};
-pub use chat_send::{blocked, seed_pick, send, AssistantCtx, Stores};
+pub use chat::{
+    chats_cap, use_init_chats, Anchor, Block, Chat, ChatId, ChatsCtx, Pick, Reply, RowKey, Step,
+    Turn,
+};
+pub use chat_send::{
+    blocked, clear_all, discard, open_stored, seed_pick, send, store, store_shed, AssistantCtx,
+    Stores,
+};
 pub use diagnostics::use_diagnostics;
 pub use engine_config::{use_engine_config, use_engine_restart, EngineRestart};
 /// Only tests name the satellite itself: they stand its context signal up by hand, where the

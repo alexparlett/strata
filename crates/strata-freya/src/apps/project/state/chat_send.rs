@@ -34,18 +34,24 @@
 //! running task would silently cancel a turn the user never stopped, and queueing would send a
 //! question against a conversation the model has not finished writing.
 
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use freya::prelude::{spawn_forever, TaskHandle};
+use freya::prelude::{spawn, spawn_forever, TaskHandle};
 use freya::radio::Radio;
 use strata_agent::assistant::{Ask, Assistant, ContextBlock, Scope, Selection, TurnEvent};
-use strata_agent::wire::DescribeTableParams;
+use strata_agent::wire::{DescribeTableParams, SeverityWire, ValidateParams};
 use strata_agent::StrataTools;
 use strata_core::ai::Ai;
+use strata_core::project::clear_chats;
 use strata_core::secret::SecretRef;
 use strata_model::CatalogKind;
+use uuid::Uuid;
 
-use super::chat::{Anchor, ChatId, ChatsCtx, Pick};
+use super::chat::{Anchor, Block, ChatId, ChatsCtx, Pick, RowKey, Turn};
+use super::chat_store;
+use super::log::{log_event, LogLevel};
+use super::persist::{persisted, ProjectFile, ReportCtx};
 use super::project::ProjectState;
 use super::session::{QueryTab, SessionState};
 use super::{Chan, ProjChan};
@@ -166,6 +172,7 @@ pub fn send(
     ctx: &AssistantCtx,
     mut chats: ChatsCtx,
     stores: Stores,
+    report: ReportCtx,
     ai: &Ai,
     id: ChatId,
     question: String,
@@ -209,6 +216,7 @@ pub fn send(
 
     let tools = ctx.tools.clone();
     let scope = ctx.scope.clone();
+    let root = stores.project.read().root.clone();
     let task: TaskHandle = spawn_forever(async move {
         // The anchors that need a tool round. Asked through the assistant's own vocabulary, so
         // a pinned table is described by exactly the tool the model would have called — and the
@@ -276,9 +284,243 @@ pub fn send(
             let outcome = running.settle().await;
             chats.write().settle(id, outcome);
         }
+        // **The conversation is stored at the turn boundary** (AS-07), and this is the boundary:
+        // AS-02 commits the turn's messages to the model's memory *before* it emits `Settled`,
+        // so by the time that fold returned both lists were complete and agreed. A per-delta
+        // write would be a file rewrite several times a second for nothing.
+        //
+        // **Still inside the turn**, which is what makes it safe. This task is root-scoped so a
+        // backgrounded conversation keeps streaming, and the only thing that stops a root task
+        // writing state its subtree has since dropped is `Chats::stop_all` — which reaches it
+        // through `Chat::running`. So the handle is released *after* the write, by `finish`,
+        // rather than by the settle: a turn is not over until its record is on disk.
+        store(&root, chats, report, id).await;
+        chats.write().finish(id);
     });
     chats.write().set_running(id, task);
     true
+}
+
+/// Write one conversation to `.strata/chats/`, off the render thread, and clear its dirty mark.
+///
+/// **Offloaded**, because a transcript with a few tool rounds in it is a JSON document of real
+/// size and this runs on the UI executor. The document is rendered from a peek and the write
+/// happens on a worker, so the only thing on the render thread is the clone.
+pub async fn store(root: &Path, mut chats: ChatsCtx, report: ReportCtx, id: ChatId) {
+    let Some(doc) = chats.peek().get(id).and_then(chat_store::document) else {
+        return;
+    };
+    let root = root.to_path_buf();
+    // **The write is offloaded and the reporting is not.** `ReportCtx` holds this window's
+    // reactive handles, which are not `Send` — so the worker does the file and the outcome is
+    // reported back here, where the log and the fault store live. `offload` answers `None` only
+    // when the work never ran at all: the worker thread could not start, or it panicked.
+    let Some(outcome) = offload(move || chat_store::write(&root, &doc)).await else {
+        return;
+    };
+    // **Cleared only once it has landed.** Clearing before the await loses the conversation
+    // outright when the write is cancelled — the teardown pass writes `dirty` ones, and a chat
+    // marked clean by a write that never finished is one it then skips. Safe on the far side
+    // because the turn holds `Chat::running` until this returns, so `stop_all` can still reach it.
+    if persisted(report, ProjectFile::Chats, || outcome) {
+        if let Some(chat) = chats.write().get_mut(id) {
+            chat.dirty = false;
+        }
+    }
+}
+
+/// Write whatever the last [`Chats::open`] or [`Chats::hydrate`] demoted to the shelf.
+///
+/// Eviction is the one place a conversation leaves the window without the teardown pass seeing
+/// it, so a chat still marked dirty when it is shelved would have its last turn dropped and its
+/// row would then point at a file older than the row claims. `Chats` does no IO, so it hands the
+/// evicted conversations back and this writes them.
+pub fn store_shed(root: &Path, mut chats: ChatsCtx, report: ReportCtx) {
+    for chat in chats.write().shed() {
+        if !chat.dirty {
+            continue;
+        }
+        let Some(doc) = chat_store::document(&chat) else {
+            continue;
+        };
+        let root = root.to_path_buf();
+        spawn(async move {
+            let Some(outcome) = offload(move || chat_store::write(&root, &doc)).await else {
+                return;
+            };
+            persisted(report, ProjectFile::Chats, || outcome);
+        });
+    }
+}
+
+/// Forget a conversation, whichever kind of row it was: the window's copy and the stored one.
+///
+/// One funnel for both, because "delete this conversation" is one gesture and a row that
+/// happened to be on the shelf rather than open is not a different intent. The satellite is
+/// updated first and the file removed on a worker — the row must not sit there while a disk
+/// waits.
+pub fn discard(mut chats: ChatsCtx, root: PathBuf, report: ReportCtx, key: RowKey, fresh: Pick) {
+    let uuid = match key {
+        RowKey::Live(id) => {
+            let uuid = chats.peek().get(id).map(|chat| chat.uuid);
+            chats.write().delete(id, fresh);
+            uuid
+        }
+        RowKey::Shelved(id) => {
+            chats.write().forget(id);
+            Some(id)
+        }
+    };
+    store_shed(&root, chats, report);
+    let Some(uuid) = uuid else {
+        return;
+    };
+    // **Scope-bound**, like `clear_history`'s own writer: this task writes `report`'s satellites
+    // after an await, and a root-scoped one would still be holding them if the subtree went away
+    // in between (a re-root, an engine restart). `spawn` is dropped with the scope instead.
+    spawn(async move {
+        let Some(outcome) = offload(move || chat_store::forget_chat(&root, &uuid)).await else {
+            return;
+        };
+        // **Recorded after it landed**, on the catalog drop's own rule: a line written before the
+        // write says a thing happened that the store may then contradict.
+        if persisted(report, ProjectFile::Chats, || outcome) {
+            log_event(
+                report.log,
+                LogLevel::Info,
+                "Deleted conversation".to_string(),
+            );
+        }
+    });
+}
+
+/// Discard **every** conversation this project has stored — the pane's Clear.
+///
+/// Per project, not app-wide: a conversation belongs to the project it is about, and a control
+/// that reached across every project a machine has ever opened would be promising a sweep it
+/// cannot honestly perform (a project on a disk that is not mounted is unreachable by
+/// construction). Clearing here says exactly what it does.
+///
+/// The window is reset first and the files removed on a worker, so the pane is empty the moment
+/// the user confirms rather than when a disk finishes.
+pub fn clear_all(mut chats: ChatsCtx, root: PathBuf, report: ReportCtx, fresh: Pick) {
+    chats.write().clear(fresh);
+    store_shed(&root, chats, report);
+    spawn(async move {
+        let Some(outcome) = offload(move || clear_chats(&root)).await else {
+            return;
+        };
+        if persisted(report, ProjectFile::Chats, || outcome) {
+            log_event(
+                report.log,
+                LogLevel::Info,
+                "Cleared conversations".to_string(),
+            );
+        }
+    });
+}
+
+/// Open a stored conversation: read it, hydrate it, and re-check whatever it offers.
+///
+/// **Reopening reads a file and runs nothing.** The transcript, the step cards and their facts
+/// are all recorded values, so nothing here touches the engine's data path and nothing dials
+/// out. The one thing it does ask the catalog is whether each offered statement still plans —
+/// see [`recheck_offers`], which is a plan and not a run.
+pub fn open_stored(
+    ctx: &AssistantCtx,
+    mut chats: ChatsCtx,
+    root: PathBuf,
+    report: ReportCtx,
+    id: Uuid,
+) {
+    let tools = ctx.tools.clone();
+    let scope = ctx.scope.clone();
+    let shed_root = root.clone();
+    // Scope-bound for `discard`'s reason: everything after the read writes this subtree's state.
+    spawn(async move {
+        let Some(read) = offload(move || chat_store::load(&root, &id)).await else {
+            return;
+        };
+        let read = match read {
+            Ok(Some(read)) => read,
+            // A row whose file has gone, or that this build cannot use, resolves to nothing —
+            // `load` has already said so in the log, and there is nothing the user can do about
+            // it from here.
+            Ok(None) => return,
+            Err(e) => {
+                tracing::error!("open conversation: {e}");
+                return;
+            }
+        };
+        let (doc, memory) = read.into_parts();
+        let opened = chats.write().hydrate(doc, memory);
+        store_shed(&shed_root, chats, report);
+        recheck_offers(&tools, &scope, chats, opened).await;
+    });
+}
+
+/// Re-check every statement a restored conversation offers, and retire the ones that no longer
+/// hold.
+///
+/// A card was checked when it was made, and the catalog can have moved since — a table dropped,
+/// a view replaced. The check is `validate`: lints and a **dry plan**, the same one `offer_sql`
+/// ran to make the card in the first place, so a restored card promises exactly what a live one
+/// does. No run, no scan, no snapshot.
+///
+/// A statement that fails **loses its press silently**. Nothing is said, because nothing went
+/// wrong: the user never ran it, and a complaint that their catalog changed is not news about
+/// their conversation. The card falls back to the ordinary code block the assistant's
+/// explanatory SQL already renders as.
+async fn recheck_offers(
+    tools: &StrataTools<AgentDirectory>,
+    scope: &Scope,
+    mut chats: ChatsCtx,
+    id: ChatId,
+) {
+    let offers: Vec<(usize, usize, String)> = {
+        let held = chats.peek();
+        let Some(chat) = held.get(id) else {
+            return;
+        };
+        chat.turns
+            .iter()
+            .enumerate()
+            .filter_map(|(t, turn)| match turn {
+                Turn::Reply(reply) => Some((t, reply)),
+                Turn::User { .. } => None,
+            })
+            .flat_map(|(t, reply)| {
+                reply
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(b, block)| match block {
+                        Block::Offer { sql, stale: false } => Some((t, b, sql.clone())),
+                        _ => None,
+                    })
+            })
+            .collect()
+    };
+    for (turn, block, checked_sql) in offers {
+        let checked = tools
+            .validate(ValidateParams {
+                sql: checked_sql.clone(),
+                project: scope.project.clone(),
+            })
+            .await;
+        let holds = match checked {
+            Ok(result) => !result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.severity, SeverityWire::Error)),
+            // The project could not be resolved at all. Not a fault of the statement, so the
+            // card is left as it is rather than retired on a question that was never answered.
+            Err(_) => true,
+        };
+        if !holds {
+            chats.write().stale_offer(id, turn, block, &checked_sql);
+        }
+    }
 }
 
 /// Split the pinned anchors into the blocks a store can answer now, and the table names that
@@ -362,6 +604,7 @@ mod tests {
             default_provider: enabled.first().copied(),
             default_model: "claude-sonnet-4-5".into(),
             default_effort: Some(Effort::Medium),
+            ..Ai::default()
         }
     }
 

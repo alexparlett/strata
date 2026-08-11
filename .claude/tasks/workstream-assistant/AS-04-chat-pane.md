@@ -207,9 +207,10 @@ UI + wiring, on the state rules the app already lives by.
 ## What is NOT this task
 
 - No loop logic, no provider handling, no prompt text — all AS-02.
-- No conversation persistence; closing the window is the end of the transcript. That is this
-  task's boundary, not the product's: **AS-07** removes it, and the transcript satellite should
-  be shaped so a turn's settle is a place a writer can hook rather than something to retrofit.
+- No conversation persistence; closing the window is the end of the transcript. That was this
+  task's boundary, not the product's — and **AS-07 has since removed it** (2026-08-11): the
+  satellite's settle was the hook it was shaped for, and a conversation now outlives its window in
+  `.strata/chats/`, model memory included.
 - No loosening of read-only; the assistant is the same `Host` path as every agent.
 - **No in-place edits to the user's buffer, ever in v1.** A fix or rewrite arrives as a
   promoted tab; the buffer is often the user's only record of how a number was reached, and

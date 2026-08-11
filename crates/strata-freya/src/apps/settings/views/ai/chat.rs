@@ -37,18 +37,22 @@
 
 use freya::prelude::*;
 use strata_agent::assistant::{efforts, label};
-use strata_core::ai::{Effort, ProviderKind};
+use strata_core::ai::{Effort, ProviderKind, CHATS_MIN};
 
 use crate::apps::settings::views::ai::probe::{self, FromDraft};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, Anchor, SettingsCtx};
-use crate::components::form::Form;
+use crate::components::form::{Form, NumberField};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Control, Prose};
 use crate::state::{needs_asking, Ask, Probe, Probes};
 
 /// The canvas's control column (`max-width: 420px`), and its label gutter.
 const CONTROL_WIDTH: f32 = 420.;
+
+/// A numeric field's width — Settings > System's own, so the two retention caps in the app are
+/// set in fields of the same size.
+const FIELD_WIDTH: f32 = 130.;
 
 #[derive(PartialEq)]
 pub struct ChatPane;
@@ -63,18 +67,38 @@ impl Component for ChatPane {
             (draft.ai.clone(), ctx.probes.read().clone())
         };
 
+        // **Retention is not a provider question**, so this row is built before the check below
+        // and rendered on both sides of it: conversations a project has already stored are still
+        // there — and still worth being able to bound — when every provider has been turned off.
+        //
+        // Saturating, not `as`: a hand-edited config holding more than a u32 should show the
+        // biggest number the field can offer rather than wrap round to a small one.
+        let retention = Anchor::AiChatLimit.row().child(
+            NumberField::new(
+                ai.max_chats.try_into().unwrap_or(u32::MAX),
+                CHATS_MIN as u32,
+                u32::MAX,
+            )
+            .width(Size::px(FIELD_WIDTH))
+            .unit("conversations")
+            .on_change(move |chats: u32| ctx.edit(move |s| s.ai.max_chats = chats as usize)),
+        );
+
         let enabled: Vec<ProviderKind> = ai.enabled().collect();
         if enabled.is_empty() {
             return Pane::new(
-                rect().width(Size::fill()).child(
-                    Prose::new(
-                        "No providers are enabled. Turn one on in AI > Providers to set what a \
-                         new chat starts with.",
+                Form::new()
+                    .preferences()
+                    .child(
+                        Prose::new(
+                            "No providers are enabled. Turn one on in AI > Providers to set what \
+                             a new chat starts with.",
+                        )
+                        .width(Size::fill())
+                        .wrap()
+                        .color(theme.hint_color),
                     )
-                    .width(Size::fill())
-                    .wrap()
-                    .color(theme.hint_color),
-                ),
+                    .child(retention),
             );
         }
 
@@ -291,7 +315,8 @@ impl Component for ChatPane {
                 .preferences()
                 .child(Anchor::AiProvider.row().child(provider))
                 .child(Anchor::AiModel.row().child(model))
-                .child(Anchor::AiEffort.row().child(effort)),
+                .child(Anchor::AiEffort.row().child(effort))
+                .child(retention),
         )
     }
 }
