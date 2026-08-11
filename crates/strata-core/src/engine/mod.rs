@@ -3010,14 +3010,18 @@ mod tests {
 mod read_options_tests {
     use std::io::Write;
     use std::path::PathBuf;
+    use std::process;
 
     use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat};
 
     use super::*;
 
-    /// A fresh directory per test, so a stale fixture can never make one pass.
+    /// A fresh directory per test, so a stale fixture can never make one pass — and **per
+    /// process**, so a second test run cannot be the thing that makes it stale. The wipe on
+    /// entry is what makes a shared path dangerous rather than merely untidy: it deletes
+    /// fixtures another run may be asserting over.
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join("strata_read_options").join(name);
+        let d = std::env::temp_dir().join(format!("strata_read_options_{}_{name}", process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).expect("temp dir");
         d
