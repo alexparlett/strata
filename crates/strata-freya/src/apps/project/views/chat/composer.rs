@@ -87,7 +87,7 @@ impl Component for Composer {
         let mut expanded = use_state(|| false);
         // The `@`-completion, driven from this field because this is where the keyboard is.
         let mut selected = use_state(|| 0usize);
-        let dismissed = use_state(|| false);
+        let dismissed = use_state(|| None::<usize>);
         let caret = use_state(|| 0usize);
         // The catalog's other two channels, read for the subscription: an offer list that did not
         // notice a new view is a list that completes names the next send cannot resolve.
@@ -102,7 +102,7 @@ impl Component for Composer {
             let _ = text.read();
             let mut dismissed = dismissed;
             selected.set(0);
-            dismissed.set(false);
+            dismissed.set(None);
         });
 
         let ai: Ai = config.read().settings.ai.clone();

@@ -126,6 +126,15 @@ pub fn complete(text: &str, span: Range<usize>, name: &str) -> (String, usize) {
     (completed, caret)
 }
 
+/// **The mention to complete right now**: the token at the caret, unless that same token is the
+/// one put away.
+///
+/// `dismissed` names a token by the offset of its `@`, so Escape silences the mention it was
+/// pressed on and no other.
+pub fn asking(text: &str, caret: usize, dismissed: Option<usize>) -> Option<Token<'_>> {
+    token(text, caret).filter(|token| dismissed != Some(token.span.start))
+}
+
 /// A byte offset in `text` as a **UTF-16 code-unit** offset, and back.
 ///
 /// The unit `Input` publishes its caret in (`freya_edit`'s offsets are UTF-16 code units,
@@ -236,9 +245,12 @@ pub struct Mentions {
     /// Which row the keyboard is on. Reset whenever the buffer changes, so the first row is
     /// always what Enter takes for a token that has just narrowed.
     pub selected: State<usize>,
-    /// Escape, or a press outside the list. Cleared by the next keystroke, because a mention
-    /// still being typed is a question the user has not finished asking.
-    pub dismissed: State<bool>,
+    /// The mention put away with Escape or a press outside, **named** by the byte offset of its
+    /// `@`. A flag would put away every other mention in the message with it: moving the caret
+    /// into an untouched `@` elsewhere in the same sentence is a different question, and one the
+    /// user never declined. Cleared by the next keystroke too, because a mention still being
+    /// typed is a question they have not finished asking.
+    pub dismissed: State<Option<usize>>,
 }
 
 impl Mentions {
@@ -248,13 +260,12 @@ impl Mentions {
     /// Capped at [`INLINE_ROWS`] — a completion list is not a browser, and one more character is
     /// the faster narrowing. The `+` popup is the surface for not knowing the name.
     pub fn offered(&self, store: &ProjectState, session: &SessionState) -> Vec<Offer> {
-        if *self.dismissed.read() {
-            return Vec::new();
-        }
         let text = self.text.read();
         let caret = byte_of(&text, *self.caret.read());
         // Lowercased once here, because `contains_lowercased` takes an already-folded needle.
-        let Some(typed) = token(&text, caret).map(|token| token.typed.to_lowercase()) else {
+        let Some(typed) =
+            asking(&text, caret, *self.dismissed.read()).map(|token| token.typed.to_lowercase())
+        else {
             return Vec::new();
         };
         offers(store, session, &typed)
@@ -290,6 +301,15 @@ impl Mentions {
         self.field.request_focus();
     }
 
+    /// **Put this mention away**, and only this one: the token at the caret is recorded by name,
+    /// so an untouched `@` elsewhere in the message still asks.
+    pub fn dismiss(&mut self) {
+        let text = self.text.peek();
+        let caret = byte_of(&text, *self.caret.peek());
+        self.dismissed
+            .set(token(&text, caret).map(|token| token.span.start));
+    }
+
     /// **The three keys the list claims while it is up**, and `false` for everything else so the
     /// field goes on behaving like a field.
     ///
@@ -315,7 +335,7 @@ impl Mentions {
                 true
             }
             Key::Named(NamedKey::Escape) => {
-                self.dismissed.set(true);
+                self.dismiss();
                 true
             }
             _ => false,
@@ -383,7 +403,7 @@ impl Component for MentionPicker {
                 // notice: the token is still being typed, so nothing else here would close it.
                 Menu::new()
                     .min_width(Size::px(MENU_W))
-                    .on_close(move |()| mentions.dismissed.set(true)),
+                    .on_close(move |()| mentions.dismiss()),
                 |menu, (row_at, offer)| {
                     let picked = offer.clone();
                     menu.child(
@@ -574,6 +594,26 @@ mod tests {
         assert_eq!(
             complete("@F fake me", 0..2, "facts"),
             ("@facts fake me".to_string(), 6)
+        );
+    }
+
+    /// **Escape puts away the mention it was pressed on, not every mention in the message.** A
+    /// flag would silence a `@` elsewhere in the same sentence that the user never declined, and
+    /// only a text edit would bring it back — so moving the caret into it did nothing at all.
+    #[test]
+    fn dismissing_one_mention_leaves_the_others_asking() {
+        let text = "@events @tabl";
+        let second = text.rfind('@').expect("the second mention");
+
+        assert!(
+            asking(text, text.len(), Some(second)).is_none(),
+            "the one Escape was pressed on stays away"
+        );
+        let first = asking(text, 7, Some(second)).expect("the first mention still asks");
+        assert_eq!(first.typed, "events");
+        assert!(
+            asking(text, text.len(), None).is_some(),
+            "nothing put away, so the caret's own token asks"
         );
     }
 
