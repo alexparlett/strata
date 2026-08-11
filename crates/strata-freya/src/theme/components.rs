@@ -329,6 +329,8 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             table_head_background: role(Role::SurfaceRaised),
             table_selection_background: role(Role::AccentSelection),
             slot_border_fill: role(Role::BorderStrong),
+            mark_background: role(Role::ElevatedSurface),
+            mark_color: role(Role::TextDisabled),
         },
     );
     th.set(

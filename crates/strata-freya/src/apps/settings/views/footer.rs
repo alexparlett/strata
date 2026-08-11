@@ -49,16 +49,27 @@ impl Component for Footer {
                 .on_press(move |_: Event<PressEventData>| platform.close_current_window())
                 .child(Control::new("Cancel"))
         };
+        // **Off while one is already running.** `apply` puts the keystore's blocking half on a
+        // worker so the window stays live — and a live window is a pressable one, so without this
+        // a second press would run a concurrent `commit` over the same typed keys, both seeing no
+        // marker and each minting one for the same secret.
+        //
+        // Not folded into `blocker`: that value is also the strip's message, and "an Apply is
+        // running" is not a reason the press *won't* work, which is what a blocker states.
+        let applying = ctx.applying();
         let apply = Button::new()
             .filled()
             .height(Size::px(BUTTON_HEIGHT))
-            .enabled(dirty && blocker.is_none())
+            .enabled(dirty && blocker.is_none() && !applying)
             .on_press(move |_: Event<PressEventData>| {
-                // Closing on a failed write would look exactly like success — the settings are
-                // live in every window either way; only the durable copy is missing.
-                if ctx.apply() {
-                    platform.close_current_window();
-                }
+                let platform = platform.clone();
+                spawn(async move {
+                    // Closing on a failed write would look exactly like success — the settings
+                    // are live in every window either way; only the durable copy is missing.
+                    if ctx.apply().await {
+                        platform.close_current_window();
+                    }
+                });
             })
             .child(Control::new("Apply"));
 

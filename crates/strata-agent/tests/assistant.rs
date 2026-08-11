@@ -29,12 +29,12 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
-use strata_agent::assistant::provider::ProviderKind;
 use strata_agent::assistant::turn::TurnEvent;
 use strata_agent::assistant::{Ask, Assistant, Conversation, Scope, Selection, Settle};
 use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::wire::ProjectParams;
 use strata_agent::{AgentIdentity, StrataTools};
+use strata_core::ai::ProviderKind;
 use strata_core::engine::sql::Blocked;
 use strata_core::engine::{Engine, TableSpec, WsId};
 use strata_model::SourceFormat;
@@ -716,7 +716,7 @@ async fn an_unconfigured_selection_names_its_field_and_never_dials() {
     };
     assert_eq!(
         why,
-        "OpenAI-compatible needs a base URL. Set one in Settings > Assistant."
+        "OpenAI-compatible needs a base URL. Set one in Settings > AI > Providers."
     );
     // Nothing was sent, and no partial turn was reported either.
     assert_eq!(stub.requests(), 0);

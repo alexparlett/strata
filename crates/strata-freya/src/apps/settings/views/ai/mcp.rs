@@ -1,4 +1,4 @@
-//! **Settings ▸ Agent access** (AA-04, design `Settings.dc.html`) — the control for the in-app
+//! **Settings ▸ AI ▸ MCP** (AA-04, design `Settings.dc.html`) — the control for the in-app
 //! MCP server AA-03 ships dark: the switch, the port, and the token.
 //!
 //! Three rows and no more. A client-setup line and a live server status were both sketched and
@@ -40,9 +40,9 @@ const PORT_WIDTH: f32 = 130.;
 const ACTION_GAP: f32 = 8.;
 
 #[derive(PartialEq)]
-pub struct AgentAccessPane;
+pub struct McpPane;
 
-impl Component for AgentAccessPane {
+impl Component for McpPane {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
         // Whether the secret is on screen. Pane-local: a reveal is a glance, not a setting —

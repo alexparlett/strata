@@ -62,7 +62,8 @@ use crate::tools::StrataTools;
 pub use dispatch::{Facts, Scope};
 pub use offer::OFFER_SQL;
 pub use provider::{
-    BaseUrl, Brain, Effort, KeyUse, Provider, ProviderKind, Selection, SelectionError, PROVIDERS,
+    all, efforts, info, label, list_models, list_models_blocking, BaseUrl, Brain, Efforts, KeyUse,
+    Provider, Rungs, Selection, SelectionError, PROVIDERS,
 };
 pub use turn::{Ask, ContextBlock, Conversation, Settle, TurnEvent, MAX_TOOL_ROUNDS, SYSTEM};
 

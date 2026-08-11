@@ -62,18 +62,27 @@ AS-03 was first written as one global provider + model + key, with an explicit "
 per-conversation model switching" line. Alex overturned that after reviewing IntelliJ's AI
 Assistant: **Settings owns the roster, the chat surface owns the pick.**
 
-- **Roster (AS-03, config):** named provider entries keyed by `Uuid` — kind · default model ·
-  endpoint · key reference — plus one default entry. Slow-changing, secret-bearing,
-  machine-scoped. The connections pattern, minus the secrets: keys live in the **AS-05 secret
-  store** (OS keystore), config holds only a reference. "Stored like the bearer token" was the
-  wrong precedent for third-party billing credentials and is withdrawn.
-- **Pick (AS-04, composer footer):** entry · model · effort, per conversation, on the
-  transcript satellite, seeded from the default. Fast-changing intent — the def/runtime
+- **Setup (AS-03, config):** what *addresses* each provider — enabled · base URL · key
+  reference — one row per `ProviderKind`, plus the defaults a new chat starts with (provider ·
+  model · effort). Slow-changing, secret-bearing, machine-scoped. The connections pattern,
+  minus the secrets: keys live in the **AS-05 secret store** (OS keystore), config holds only a
+  reference. "Stored like the bearer token" was the wrong precedent for third-party billing
+  credentials and is withdrawn.
+- **Pick (AS-04, composer footer):** provider · model · effort, per conversation, on the
+  transcript satellite, seeded from those defaults. Fast-changing intent — the def/runtime
   split applied to the assistant. AS-02 takes the resolved pick **per send** and holds no
   global config, which also made its signature more testable.
 
+**A roster of named entries was built here and withdrawn** (2026-08-10). AS-03 first carried a
+`Uuid`-keyed list of entries, each with its own kind, endpoint, key and *default model*, then a
+second list for custom OpenAI-compatible endpoints. Both collapsed to one row per kind: naming a
+provider twice buys nothing when the thing that varies per conversation is the **model**, and the
+model is not a property of the setup at all — it is picked from what the provider reports
+(**AS-06**). Anything still describing entries, per-entry models or a custom-endpoint list is
+older than this paragraph.
+
 One import caution: in IntelliJ the "agent" slot picks among *external agent processes*
-(Junie, Codex — ACP sidecars). Strata's analogue is the **roster entry** — one loop, ours,
+(Junie, Codex — ACP sidecars). Strata's analogue is the **provider row** — one loop, ours,
 brains pluggable underneath. The screenshots are not an argument for ACP-style pluggable
 agents; that is the sidecar shape rejected above, and per-conversation model choice validates
 the `genai` decision rather than pressuring it.
@@ -131,8 +140,8 @@ draft-never-execute prompt rules (AS-02), the what-leaves-the-machine note (AS-0
   previews, Snowflake routes to the worksheet's pane, Databricks stays code-first); the rich
   inline grids live only in the business-user surfaces. Mini-table + promote stands.
 
-**Banked for a future delegation surface** (arrives with transcript persistence, not before,
-and is its own task file when it does): an investigation workbench — a tab holding the
+**Banked for a future delegation surface** (arrives with transcript persistence — **AS-07** —
+not before, and is its own task file when it does): an investigation workbench — a tab holding the
 transcript plus a results pane that *subscribes the assistant's run* (a second surface
 subscribes the query again; no second pipeline), for work you delegate rather than steer.
 BigQuery's Data Canvas (evidence as a DAG of materialized results the chat deposits into) is
@@ -155,9 +164,15 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 |---|---|---|---|
 | 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ✅ | AA-03c |
 | 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ✅ | 01 |
-| 03 | Settings ▸ Assistant: the provider roster + default entry | ⬜ | 05 |
-| 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03 |
+| 03 | Settings ▸ AI: Providers · Chat · MCP | 🟡 | 05 |
+| 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03, 06 |
 | 05 | Secret store: OS-keystore-backed keys, references in config | ✅ | — |
+| 06 | Model listings: a model is picked from its provider, and the list survives a restart | ⬜ | 03 |
+| 07 | Conversations survive the window: the `.strata/chats/` store, the list, retention | ⬜ | 04 |
+
+**03 is 🟡, not ✅.** Providers and MCP are done; AI ▸ Chat is two controls short — a model
+`Select` (**06**) and the retention pair that only makes sense once conversations persist
+(**07**). Both are additive to a working pane, and 03 closes when they land.
 
 ## Why the order
 

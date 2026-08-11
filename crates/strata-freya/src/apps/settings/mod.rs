@@ -26,9 +26,13 @@
 //! to take both of [`views::Pane`]'s opt-outs, being a surface that manages its own height — and
 //! P4-08 the last ([`views::KeymapPane`]).
 //!
-//! AA-04 added a sixth, [`views::AgentAccessPane`] — the control for the MCP server AA-03
-//! ships dark, and an ordinary preferences list again: the switch, the port and the token,
-//! committed by the same Apply as everything else.
+//! AA-04 added a sixth — the control for the MCP server AA-03 ships dark, and an ordinary
+//! preferences list again: the switch, the port and the token, committed by the same Apply as
+//! everything else. AS-03 gave it two siblings and a group heading to sit under
+//! ([`views::ProvidersPane`], [`views::ChatPane`]) and renamed it [`views::McpPane`], because
+//! outbound model credentials and inbound MCP hosting are different capabilities that were
+//! sharing a screen — and because a page called "Agent access" beside a Providers page that
+//! also serves agents named the wrong axis.
 
 mod model;
 mod search;
@@ -39,11 +43,13 @@ use std::collections::BTreeMap;
 use freya::prelude::*;
 use freya::router::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
+use strata_agent::assistant::label;
+use strata_core::ai::ProviderKind;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
-    AgentAccessPane, DataDisplayPane, EnginePane, KeymapPane, PropRows, SettingsChrome, SystemPane,
-    ThemePane,
+    ChatPane, DataDisplayPane, EnginePane, KeymapPane, McpPane, Probes, PropRows, ProvidersPane,
+    SettingsChrome, SystemPane, ThemePane, TypedKeys,
 };
 use crate::components::form::Reveal;
 use crate::keymap::on_commands;
@@ -52,6 +58,7 @@ use crate::platform::{self, WindowKind};
 use crate::state::{
     use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview, ThemeSel,
 };
+use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 pub use model::{category, Category, NavGroup, CATEGORIES};
@@ -121,6 +128,21 @@ define_theme!(
         /// stand a step out from the grid's own hairlines to read as an invitation at all; a
         /// dashed line pitched for a box outline mostly disappears.
         slot_border_fill: Color,
+        /// The AI ▸ Providers row's **mark tile** — the 34px square carrying a provider's brand
+        /// logo (`IconName::Provider…`).
+        ///
+        /// Its own pair rather than the theme card's, though both resolve to a raised box with a
+        /// hairline today: a card is a *pressable preview* of a whole theme and this is an
+        /// identifying glyph beside a name, and the two have already been pulled apart once
+        /// before in this window (`table_head_background` borrowed the results grid's slot and
+        /// landed too light). Sharing the slot would mean any future tuning of one silently
+        /// retunes the other.
+        mark_background: Color,
+        /// The mark's glyph while the provider is **off** — the tile is present but inert, so it
+        /// sits at the dim end of the text ramp. An enabled row paints the mark in
+        /// [`selected_color`](SettingsTheme::selected_color), which is the same accent the picked
+        /// theme card's tick uses and means the same thing: this one is in play.
+        mark_color: Color,
     }
 );
 
@@ -151,8 +173,14 @@ pub enum Route {
         DataDisplay,
         #[route("/keymap", KeymapPane)]
         Keymap,
-        #[route("/agent-access", AgentAccessPane)]
-        AgentAccess,
+        #[route("/ai/providers", ProvidersPane)]
+        Providers,
+        #[route("/ai/chat", ChatPane)]
+        Chat,
+        // Was `/agent-access` (AA-04). The path moved with the pane into the AI group; nothing
+        // persists a route, so there is no old URL to keep resolving.
+        #[route("/ai/mcp", McpPane)]
+        Mcp,
         #[route("/engine", EnginePane)]
         Engine,
 }
@@ -178,6 +206,32 @@ pub struct SettingsCtx {
     /// half-finished edit — and so the footer can ask what is blocking Apply without the pane
     /// being mounted to answer.
     pub engine: State<PropRows>,
+    /// **Keys typed into AI ▸ Providers and not yet applied.**
+    ///
+    /// Deliberately *not* a field of the draft, and that is the whole design: [`Settings`] holds
+    /// a [`SecretRef`](strata_core::secret::SecretRef) and no secret, which is a property of the
+    /// types rather than a rule to remember — so a pasted key has nowhere in the draft to live.
+    /// It sits here for the window's lifetime, goes to the keystore at Apply, and only the
+    /// marker merges. Emptying an entry is how "clear this key" is spelled, because
+    /// `Secret::new` answers a blank string with `None` and no secret *is* a delete.
+    pub ai_keys: State<TypedKeys>,
+    /// **Whether an Apply is in flight** — the arm in front of the keystore's blocking half.
+    ///
+    /// [`apply`](Self::apply) runs `commit` on a worker, so the window stays live while the OS
+    /// is being asked (and, on a freshly signed bundle, while it is prompting). Live means
+    /// pressable: without this the user could start a second Apply over the same typed keys, and
+    /// two concurrent `commit`s would both see no marker and each mint one for the same secret,
+    /// stranding whichever lost.
+    ///
+    /// On the window rather than the footer for [`failed`](Self::failed)'s reason — the footer
+    /// reads it, but it is a fact about the window's state, not about the strip that draws it.
+    applying: State<bool>,
+    /// What AI ▸ Providers has actually asked each provider ([`Probe`]).
+    ///
+    /// On the window rather than the pane for `engine`'s reason: Providers runs the test and
+    /// Chat reads the models it returned, and a result thrown away by navigating between the
+    /// two would empty the model picker exactly when the user has just proved it need not be.
+    pub probes: State<Probes>,
     /// The live theme preview the draft's theme half is mirrored into.
     preview: ThemePreview,
     /// The app-global config: Apply's target.
@@ -195,11 +249,31 @@ pub struct SettingsCtx {
     failed: State<Option<String>>,
 }
 
+/// Hand-written for `AppCtx`'s reason: `RadioStation` has no `PartialEq`, and the two station
+/// handles here are process-wide singletons — two `SettingsCtx` values are always the same
+/// config store and the same preview slot, so they contribute nothing to the comparison. What
+/// does is the per-window editing state, which is what a component holding one as a prop is
+/// actually asking about.
+impl PartialEq for SettingsCtx {
+    fn eq(&self, other: &Self) -> bool {
+        self.draft == other.draft
+            && self.seed == other.seed
+            && self.engine == other.engine
+            && self.ai_keys == other.ai_keys
+            && self.applying == other.applying
+            && self.probes == other.probes
+            && self.failed == other.failed
+    }
+}
+
 impl SettingsCtx {
     fn new(config: ConfigStation, preview: ThemePreview) -> Self {
         let settings = config.peek().settings.clone();
         Self {
             engine: State::create(PropRows::from_map(&settings.engine)),
+            ai_keys: State::create(TypedKeys::default()),
+            applying: State::create(false),
+            probes: State::create(Probes::default()),
             draft: State::create(settings.clone()),
             seed: State::create(settings),
             preview,
@@ -221,11 +295,66 @@ impl SettingsCtx {
     /// block; a second surface that can would add a branch here rather than a second gate.
     pub fn blocker(&self) -> Option<String> {
         let faults = self.engine.read().errors().len();
-        match faults {
+        let blocked = match faults {
             0 => None,
             1 => Some("1 engine property is invalid".to_string()),
             n => Some(format!("{n} engine properties are invalid")),
-        }
+        };
+        // **A second surface that can block adds a branch here rather than a second gate** — the
+        // note this method was written with, taken up by AS-03.
+        //
+        // **A provider that is on and cannot answer is the one broken state this pane can reach.**
+        // The chat pane would offer it, and every send would fail — `Brain::resolve` refuses
+        // exactly these before a socket opens (`NoKey`, `NoBaseUrl`), so this is the same
+        // judgement made early enough to act on, and named the way the engine's faults are.
+        //
+        // `views::ai::missing` is the one copy of what "cannot answer" means, so this cannot
+        // disagree with the row that draws the same provider — and it is precise about which
+        // kinds need what: Ollama sends no key, a compatible endpoint may send an empty bearer,
+        // and a keyed provider with its environment variable set is not short of one either.
+        blocked.or_else(|| {
+            let draft = self.draft.read();
+            let keys = self.ai_keys.read();
+            let on: Vec<ProviderKind> = draft.ai.enabled().collect();
+            on.into_iter().find_map(|kind| {
+                views::missing(&draft.ai, &keys, kind)
+                    .map(|why| format!("{} has {why}", label(kind)))
+            })
+        })
+    }
+
+    /// The base URL configured for `kind`.
+    ///
+    /// A pair with [`set_base_url`](Self::set_base_url) rather than the panes reaching into
+    /// `draft.ai` themselves, so "absent" and "empty" are decided once — see below.
+    /// **`peek`, not `read`.** These answer a *guard* — "is what the box holds already what the
+    /// draft holds?" — run from a row's `use_side_effect`, and a `read` there subscribes the
+    /// effect to the whole draft: every keystroke in any box on any row would re-run the URL and
+    /// name effects of every mounted row. The engine grid's `PropRow` peeks in its guard for
+    /// exactly this reason.
+    ///
+    /// **Absent reads as empty**, which is the other half of the guard being right. A built-in
+    /// with no entry yet has no base URL *and* a box holding `""`, and those are the same state;
+    /// returning `None` made the guard fire on mount and write an entry for every provider the
+    /// user had never touched — which dirtied the draft with no edit and persisted seven empty
+    /// rows.
+    pub fn base_url_of(&self, kind: ProviderKind) -> String {
+        self.draft
+            .peek()
+            .ai
+            .setup(kind)
+            .map(|setup| setup.base_url.clone())
+            .unwrap_or_default()
+    }
+
+    /// Write `kind`'s base URL into the draft, creating its entry if this is the first thing
+    /// ever set on it.
+    ///
+    /// Only ever reached with a value that differs from [`base_url_of`](Self::base_url_of), so
+    /// the `or_default()` here creates an entry for a provider the user has actually typed into.
+    pub fn set_base_url(self, kind: ProviderKind, url: String) {
+        let mut draft = self.draft;
+        draft.write().ai.providers.entry(kind).or_default().base_url = url;
     }
 
     /// Edit one field of the draft — the write path every control on every pane goes through.
@@ -247,8 +376,16 @@ impl SettingsCtx {
     /// enable Apply for a change the user never made — an Apply that, since it is a per-field
     /// merge, would commit nothing at all. The seed never changes, so this reads no config
     /// state and the footer isn't woken by config writes it has no interest in.
+    /// **A typed key counts, though it is not in the draft.** `Settings` holds a `SecretRef` and
+    /// no secret, so a pasted key lives beside the draft rather than in it — which meant a window
+    /// whose only edit was a credential compared equal to its seed, left Apply disabled, and made
+    /// the key unsaveable. It saved at all only when some *other* setting had been changed in the
+    /// same sitting, which is a coincidence rather than a design.
+    ///
+    /// An empty entry counts too: that is a pending *removal*, which is every bit as much an edit
+    /// as a pending key.
     pub fn dirty(&self) -> bool {
-        *self.draft.read() != *self.seed.peek()
+        *self.draft.read() != *self.seed.peek() || !self.ai_keys.read().is_empty()
     }
 
     /// Publish the draft's theme selection as the live preview. Driven by a side effect at
@@ -299,9 +436,89 @@ impl SettingsCtx {
     /// window would come up equally undirty and the setting could never reach disk again this
     /// session. Holding the seed keeps the same diff pending, and re-applying it is harmless —
     /// `merge_onto` writes the identical fields over values that already hold them.
-    pub fn apply(&self) -> bool {
-        let draft = self.draft.peek().clone();
+    /// **Async because the keystore blocks.** `strata_core::secret` states it plainly — every
+    /// call is a synchronous platform call that can wait on a lock, a daemon, or a *user prompt*,
+    /// and a caller on the render thread goes through [`offload`]. That last case is not
+    /// hypothetical here: Keychain access is per code signature, so the first Apply from a newly
+    /// signed bundle is exactly when macOS raises an authorisation prompt — and on the render
+    /// thread that prompt appears over a frozen window.
+    ///
+    /// So the blocking half runs on a worker and the window stays live while it does, which is
+    /// the other half of the same invariant: a read the user waits for is an **arm**, not a
+    /// freeze. [`applying`](Self::applying) is that arm, and the footer gates Apply on it —
+    /// without it a responsive window lets a second press run a concurrent `commit` over the same
+    /// typed keys, and the two would race to mint a marker for one secret.
+    pub async fn apply(&self) -> bool {
+        let mut draft = self.draft.peek().clone();
         let seed = self.seed.peek().clone();
+
+        // **The keys go to the keystore before the config is written, not after.**
+        //
+        // `commit` mints, overwrites and deletes keystore entries and puts the resulting
+        // *markers* into this draft — so what `write_config` then merges already carries them.
+        // Doing it the other way round would persist a marker for a secret that had not landed
+        // yet, and a keystore refusal would leave config pointing at nothing.
+        //
+        // A refusal stops the whole Apply. It is reported in the keystore's own words and never
+        // answered by writing the secret somewhere else, which is the failure
+        // `strata_core::secret` exists to make impossible.
+        //
+        // **The markers are kept whether or not every key landed.** `commit` writes each marker
+        // into the `Ai` as it stores that key, so a failure partway leaves earlier secrets
+        // already in the keystore — and discarding them would strand those under ids nothing
+        // references, with a retry minting fresh ones and orphaning another each time.
+        // Publishing first means a retry sees the markers, takes the overwrite-in-place branch,
+        // and reuses the entries rather than growing new ones. That is why the worker hands the
+        // `Ai` **back** rather than reporting only success or failure.
+        let mut applying = self.applying;
+        applying.set(true);
+        let keys = self.ai_keys.peek().clone();
+        let ai = std::mem::take(&mut draft.ai);
+        let answer = offload(move || {
+            let mut ai = ai;
+            let outcome = views::commit(&keys, &mut ai);
+            // The snapshot comes back too — see the clear below. Returned rather than kept alive
+            // beside the worker so there is one copy of the typed secrets, not two.
+            (outcome, ai, keys)
+        })
+        .await;
+        applying.set(false);
+
+        // The worker never answered — it could not start, or it panicked. That is not a fact
+        // about the keystore, so it must not be reported as one, and the draft's `ai` has to come
+        // back from somewhere: the copy that was moved in is gone, so this re-reads the live one.
+        let Some((landed_keys, ai, committed)) = answer else {
+            let mut failed = self.failed;
+            failed.set(Some(
+                "The settings could not be saved: a worker did not answer.".into(),
+            ));
+            return false;
+        };
+        draft.ai = ai;
+
+        let mut live = self.draft;
+        live.set(draft.clone());
+        if let Err(e) = landed_keys {
+            let mut failed = self.failed;
+            failed.set(Some(e.to_string()));
+            return false;
+        }
+        // **A key that has landed is no longer typed — but only the ones that landed.**
+        //
+        // The keystore holds them and their markers are in the draft, so the pasted text has no
+        // further job, and leaving it would make the *next* Apply in this window re-`put` every
+        // key it already stored (a repeat Keychain prompt for a key entered once). The reachable
+        // second Apply is the retry a failed `write_config` leaves the window open for.
+        //
+        // **Scoped to the snapshot, because this is no longer instantaneous.** `commit` ran on a
+        // worker and the window stayed live throughout — that is the point — so the user can type
+        // a key into another provider while it is in flight, and that keystroke lands in
+        // `ai_keys` immediately. A blanket `clear()` was right only while Apply was synchronous
+        // and nothing could arrive mid-flight; now it would wipe a key that was never in the
+        // snapshot, never stored, and never asked about — silently, with the box emptying itself
+        // as the user watched. So each entry goes only if it is still exactly what was committed.
+        let mut typed = self.ai_keys;
+        typed.write().forget_committed(&committed);
         let landed = write_config(self.config, &[ConfigChan::Settings], {
             let draft = draft.clone();
             move |cfg| draft.merge_onto(&seed, &mut cfg.settings)
@@ -319,6 +536,12 @@ impl SettingsCtx {
         reseed.set(draft);
         self.discard();
         true
+    }
+
+    /// Whether an Apply is in flight — what the footer disables its button on. See
+    /// [`applying`](Self::applying).
+    pub fn applying(&self) -> bool {
+        *self.applying.read()
     }
 
     /// Why the last Apply didn't stick, for the footer to state.

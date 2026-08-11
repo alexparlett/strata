@@ -14,6 +14,7 @@ use crate::apps::settings::Route;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum NavGroup {
     Appearance,
+    Ai,
     Engine,
 }
 
@@ -21,6 +22,7 @@ impl NavGroup {
     pub fn label(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance & behaviour",
+            Self::Ai => "AI",
             Self::Engine => "Engine",
         }
     }
@@ -67,12 +69,25 @@ pub const CATEGORIES: &[Category] = &[
         label: "Keymap",
         group: None,
     },
-    // Ungrouped like Keymap, and for the same reason: a group of one is a heading that only
-    // ever hides one page. The canvas lists it here, between Keymap and the engine's.
+    // **Outbound credentials and inbound hosting are not one screen.** Agent access was
+    // ungrouped while it was the only AI page — a group of one is a heading that hides one
+    // page. It has two siblings now (AS-03), so the group earns its heading, and the pane it
+    // used to be is *MCP*: what the user configures there is the MCP server, and calling it
+    // "Agent access" beside a Providers page that also serves agents named the wrong axis.
     Category {
-        route: Route::AgentAccess,
-        label: "Agent access",
-        group: None,
+        route: Route::Providers,
+        label: "Providers",
+        group: Some(NavGroup::Ai),
+    },
+    Category {
+        route: Route::Chat,
+        label: "Chat",
+        group: Some(NavGroup::Ai),
+    },
+    Category {
+        route: Route::Mcp,
+        label: "MCP",
+        group: Some(NavGroup::Ai),
     },
     Category {
         route: Route::Engine,
@@ -101,7 +116,9 @@ mod tests {
             Route::System,
             Route::DataDisplay,
             Route::Keymap,
-            Route::AgentAccess,
+            Route::Providers,
+            Route::Chat,
+            Route::Mcp,
             Route::Engine,
         ] {
             let hits = CATEGORIES.iter().filter(|c| c.route == route).count();
