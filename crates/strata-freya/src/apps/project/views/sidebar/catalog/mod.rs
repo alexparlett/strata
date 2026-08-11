@@ -42,6 +42,7 @@ use crate::apps::configure::ConfigureTarget;
 use crate::components::icon::{Icon, IconName};
 use crate::components::PANE_BODY_MIN_W;
 use freya::radio::use_radio;
+use strata_core::util::contains_lowercased;
 use strata_model::CatalogKind;
 
 use self::entry::{EntryRow, SavedQueryRow};
@@ -72,9 +73,10 @@ define_theme!(
 );
 
 /// Does `name` survive the filter? Case-insensitive substring over the **def name** — the filter
-/// spans the three sections, not the column trees inside them.
+/// spans the three sections, not the column trees inside them. The match is the shared
+/// [`contains_lowercased`], so this filter and every other one answer a needle the same way.
 fn matches(name: &str, filter: &str) -> bool {
-    filter.is_empty() || name.to_lowercase().contains(&filter.to_lowercase())
+    filter.is_empty() || contains_lowercased(name, &filter.to_lowercase())
 }
 
 /// The catalog tree — the sidebar body under the filter row. `filter` is owned by the sidebar

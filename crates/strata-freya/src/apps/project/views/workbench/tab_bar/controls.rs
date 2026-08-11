@@ -3,6 +3,7 @@ use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
 use strata_core::config::Command;
+use strata_core::util::contains_lowercased;
 
 use crate::state::{use_config_station, ConfigStation};
 use strata_model::TabId;
@@ -142,9 +143,7 @@ impl Component for NavMenu {
                         .get(id)
                         .map(|t| (*id, t.name.clone(), s.active == Some(*id), t.is_dirty()))
                 })
-                .filter(|(_, name, _, _)| {
-                    needle.is_empty() || name.to_lowercase().contains(&needle)
-                })
+                .filter(|(_, name, _, _)| needle.is_empty() || contains_lowercased(name, &needle))
                 .collect()
         };
         let is_empty = matches.is_empty();

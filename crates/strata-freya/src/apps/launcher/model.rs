@@ -6,6 +6,7 @@
 //! renders, which empty state is the right one).
 
 use strata_core::config::AppConfig;
+use strata_core::util::contains_lowercased;
 
 /// One project row: everything the row paints, resolved from the config once.
 #[derive(Clone, PartialEq)]
@@ -34,8 +35,8 @@ impl ProjectList {
         let needle = query.trim().to_lowercase();
         let rows = config.recent_projects.iter().filter(|r| {
             needle.is_empty()
-                || r.name.to_lowercase().contains(&needle)
-                || r.path.to_lowercase().contains(&needle)
+                || contains_lowercased(&r.name, &needle)
+                || contains_lowercased(&r.path, &needle)
         });
         let mut list = Self::default();
         for r in rows {

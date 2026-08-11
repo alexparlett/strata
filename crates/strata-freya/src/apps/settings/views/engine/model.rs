@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::engine::config::{is_owned_key, key_def, value_error, EngineKey, ENGINE_KEYS};
+use strata_core::util::contains_lowercased;
 
 /// How many catalogue matches the name field offers at once (canvas: 7).
 const MAX_SUGGESTIONS: usize = 7;
@@ -334,7 +335,7 @@ impl PropRows {
         let matches: Vec<&'static EngineKey> = ENGINE_KEYS
             .iter()
             .filter(|entry| !claimed.contains(entry.key))
-            .filter(|entry| typed.is_empty() || entry.key.to_lowercase().contains(&typed))
+            .filter(|entry| typed.is_empty() || contains_lowercased(entry.key, &typed))
             .collect();
         match matches.as_slice() {
             [only] if only.key.to_lowercase() == typed => Vec::new(),
