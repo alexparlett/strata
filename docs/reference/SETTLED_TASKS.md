@@ -316,3 +316,70 @@ blocks Save until one is chosen — the treatment `FormatId::Unknown` already ge
 reason. **New connection… sets the project window's slot** rather than opening an editor of its
 own, so there is still one open path, the editor outlives a Configure window closed under it, and
 what it saves appears in the picker with no reopen.
+
+---
+
+**Assistant 04 (the chat pane, AS-04)** is ✅ — the surface the whole workstream was for: a
+conversation in the project window, over AS-02's loop and AS-01's vocabulary.
+
+**The right edge is a rail, and it holds one pane.** The design canvas grew a second 48px strip
+after the task was written, mirroring the left one, so `Layout::inspector_open` became
+`Layout::right: Option<RightPane>`: the column inspector and the chat are *alternatives*, not
+neighbours. That is what keeps a 1180px window readable with two rails, a sidebar and the drawer
+up, and it is RustRover's own right edge. `views::right_rail` is `views::rail`'s mechanism —
+`ToggleButton`s whose `on` is derived from the layout, a press routing through the store's toggle
+— and the shell keys the right panel **per pane** rather than per side, because the two share a
+position and nothing else.
+
+**A window has conversations, plural, and the pick is per conversation.** `Chats` is the
+satellite: a capped list, a live id, and a `Pick` (provider · model · effort) on each, seeded from
+Settings' defaults through `seed_pick` — which drops a provider that is no longer enabled, since
+in Settings a disabled provider also loses its key. Deleting the last conversation opens a fresh
+one, which is what lets `active` be an id rather than an `Option`. Nothing reaches `session.json`
+and nothing reaches history: the first is AS-07's to change, the second is the **adoption** rule
+and stays.
+
+**Provider is picked by picking a model.** The footer's model list is grouped under the enabled
+providers, so choosing a model chooses both — one control instead of two that can disagree about
+selections which cannot be sent. Effort is its own control and renders **only** when
+`efforts(kind, model)` is non-empty; a rung the newly picked model does not offer is *dropped*,
+because `Brain::resolve` refuses a selection carrying one before a socket opens and the control
+that set it is gone by then.
+
+**A turn's blocks are in arrival order, and its two cards mean different things.** A `Step` is a
+**citation** — every figure on it is the engine's own, which is what makes AS-02's
+no-number-without-a-run prompt rule auditable. An `Offer` is **executable**, and arrives only from
+`offer_sql`, which checked the statement against the catalog and the *editor's* policy before the
+card existed; it deliberately has no step card beside it. SQL the assistant is merely *explaining*
+stays in the prose as an ordinary markdown code block with no Run press — the distinction the tool
+exists to make. Both promote through `actions::open_sql`, never into the user's buffer.
+
+**Cancel is dropping the task, and it settles anyway.** The turn task owns AS-02's `Running`,
+whose drop guard *is* the cancel and the engine's abort, so there is no second stop path — and the
+reply keeps what had streamed, marked stopped. The other half of that landed one layer down:
+`agent::directory`'s `SettleOnDrop` sends the stop settle in the engine's own `CANCELLED` wording
+when a run's future is dropped, disarmed on the normal path. AA-03c reaped such a row only when a
+*connection* ended, which covers an MCP client hanging up and not the assistant at all.
+
+**`probe::refresh` moved rather than being copied.** The in-flight guard, the two keeps (names to
+the satellite, outcome to the probe) and the retraction rule now live in `state::listings` with
+`needs_asking`, the staleness guard both model pickers kick with; Settings keeps only
+`Ask::from_draft`, which is the one part that is about a draft. The composer's is
+`Ask::from_config`.
+
+**Prose is the fork's own `MarkdownViewer`**, on the `markdown` feature and pointedly not
+`markdown-code-editor` — that would pull in freya's code editor, which this app does not use. A
+fenced block renders as a themed mono panel, which is what a transcript wants.
+
+**What the canvas asked for and could not have:** its "Thought for 4s" collapsible. AS-02's stream
+loop folds reasoning chunks into the captured content that rides the next request rather than
+emitting them, so there is no `TurnEvent` to render — building the control would mean inventing
+the fact. It is AS-02's to enable, and the transcript grows the block when the event exists.
+
+**Two layout bugs, one rule, both now pinned.** Adding the right rail after the resizable middle
+put the middle's `expanded()` in a `Content::Normal` row, which claims the whole width and lays
+the rail off screen; the pane's own column did the same to its composer. `Size::flex` is only
+divided by a parent whose `content` is `Flex` (AGENTS.md §3) — the rule was already written, and
+both sites now state it. The composer's is a test that measures the field's rect against the
+pane's height, because "it rendered" and "it is on screen" are different questions and only the
+second is the one a user asks.

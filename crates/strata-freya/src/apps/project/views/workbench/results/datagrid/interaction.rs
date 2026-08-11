@@ -15,7 +15,7 @@ use strata_model::Cell as CellData;
 use super::super::find::FindState;
 use super::super::sort::SortState;
 use super::*;
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::state::{Chan, Chats, Pick, SessionState};
 use crate::state::ConfigStation;
 use crate::theme::strata_theme;
 
@@ -79,6 +79,8 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
         (900., 700.).into(),
         |r| {
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
+            // A failed page read renders the error surface, which offers the assistant.
+            r.provide_root_context(|| State::create(Chats::new(Pick::default())));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,
@@ -136,6 +138,8 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         (900., 700.).into(),
         |r| {
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
+            // A failed page read renders the error surface, which offers the assistant.
+            r.provide_root_context(|| State::create(Chats::new(Pick::default())));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,

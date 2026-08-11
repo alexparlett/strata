@@ -39,11 +39,11 @@ use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{
-    persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Catalog,
-    CatalogRescan, Chan, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
+    persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Anchor, Catalog,
+    CatalogRescan, Chan, ChatsCtx, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{
-    use_profile_actions, ConfigureRequest, DropTarget, ProfileActions, ProfileTarget,
+    ask_about, use_profile_actions, ConfigureRequest, DropTarget, ProfileActions, ProfileTarget,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -94,6 +94,10 @@ pub struct CatalogActions {
     /// slot for a dialog or a window that carries its own; a rename commits inline, so it
     /// reports here.
     pub report: ReportCtx,
+    /// The window's conversations (AS-04) — where **Ask about this** pins its anchor. Held
+    /// rather than reached for, because the menu is built inside an event handler where no hook
+    /// may run.
+    pub chats: ChatsCtx,
 }
 
 /// Gather this row's action handles from the window's stores + context.
@@ -105,6 +109,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         rescan: use_catalog_rescan(),
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
+        chats: use_consume::<ChatsCtx>(),
         profile: use_profile_actions(),
         danger: tones().error,
         configure_target: use_consume::<ConfigureRequest>(),
@@ -137,6 +142,21 @@ impl CatalogActions {
     fn parked(&self, icon: IconName, label: impl Into<String>) -> MenuButton {
         MenuButton::new()
             .enabled(false)
+            .child(menu_row(icon, label))
+    }
+
+    /// **Ask about this row** (AS-04): open the chat pane with the entry pinned, so the schema
+    /// is attached to the next question rather than spent as a tool round.
+    ///
+    /// One press into the pane that already exists, through the shared `ask_about` funnel — the
+    /// same one the failed-run and result entries use, so all three land the same way.
+    fn ask(&self, icon: IconName, label: &'static str, anchor: Anchor) -> MenuButton {
+        let (session, chats) = (self.session, self.chats);
+        MenuButton::new()
+            .on_press(move |_| {
+                ask_about(session, chats, anchor.clone());
+                ContextMenu::close();
+            })
             .child(menu_row(icon, label))
     }
 
@@ -251,6 +271,14 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                 // of sight, since the inspector has no column of a failed row to show it on.
                 .enabled(registered)
         })
+        .child(actions.ask(
+            IconName::Chat,
+            "Ask about this table",
+            Anchor::Entry {
+                name: name.clone(),
+                kind: CatalogKind::Table,
+            },
+        ))
         .child(Divider::menu())
         .child({
             let name = name.clone();
@@ -313,6 +341,14 @@ pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
                 )
                 .enabled(registered)
         })
+        .child(actions.ask(
+            IconName::Chat,
+            "Ask about this view",
+            Anchor::Entry {
+                name: name.clone(),
+                kind: CatalogKind::View,
+            },
+        ))
         .child({
             let name = name.clone();
             actions.item(IconName::Pencil, "Edit query", move |a| {
@@ -342,6 +378,14 @@ pub fn query_menu(
         .child(actions.item(IconName::Play, "Open in new tab", move |a| {
             open_saved_query(a, id);
         }))
+        .child(actions.ask(
+            IconName::Chat,
+            "Ask about this query",
+            Anchor::SavedQuery {
+                id,
+                name: name.clone(),
+            },
+        ))
         // The pencil is Strata's "edit the name or the definition", which is what makes it the
         // right glyph here and on a view's Edit query — the canvas spends it on Open in new tab,
         // which it can afford only because it has no Rename.

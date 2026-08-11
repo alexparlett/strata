@@ -46,6 +46,7 @@ use freya::prelude::*;
 use freya::radio::use_radio_station;
 use strata_core::config::{Command, Settings};
 use strata_core::keymap::{hint, resolve};
+use strata_model::RightPane;
 
 use self::model::{Entry, Index};
 use self::row::{GroupHead, PaletteRow};
@@ -613,7 +614,9 @@ fn perform(ctx: &PaletteCtx, entry: &Entry) {
             // Selecting a column is also how the inspector reopens once collapsed — the same
             // pair the catalog's own column rows write.
             let mut session = ctx.catalog.session;
-            session.write_channel(Chan::Layout).open_inspector();
+            session
+                .write_channel(Chan::Layout)
+                .open_right_pane(RightPane::Inspector);
         }
     }
 }

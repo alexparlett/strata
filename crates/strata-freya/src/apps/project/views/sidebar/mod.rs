@@ -265,7 +265,7 @@ impl Component for RefreshButton {
 /// was never "the button isn't in the tree" — it was there the whole time, just off-screen.
 #[cfg(test)]
 mod tests {
-    use crate::apps::project::state::{CatalogState, Log, PersistFaults};
+    use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
     use std::path::PathBuf;
 
     use freya::radio::RadioStation;
@@ -352,6 +352,9 @@ mod tests {
                 // `project.json` inline (the saved-query rename, P4-15).
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));
+                // The window's conversations (AS-04): the catalog row menus' **Ask about this**
+                // pins into the open one, so the handle is gathered with the rest.
+                r.provide_root_context(|| State::create(Chats::new(Pick::default())));
                 r.provide_root_context(move || {
                     RadioStation::<SessionState, Chan>::create({
                         let mut s = SessionState::default();

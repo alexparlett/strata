@@ -200,7 +200,7 @@ mod interaction {
     use crate::apps::project::{CloseGuard, CloseTarget, EngineRestart};
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
-    use crate::state::{create_global_theme_preview, ConfigStation};
+    use crate::state::{create_global_theme_preview, ConfigStation, Probes};
     use crate::theme::{strata_theme, ThemesCtx};
 
     const HERE: &str = "/data/sales";
@@ -255,6 +255,10 @@ mod interaction {
                     // Empty rather than `create_global_listings`, which reads the machine's
                     // own satellite: same reason the config store above is a fresh default.
                     listings: State::create_global(Listings::default()),
+                    probes: State::create_global(Probes::default()),
+                    // No runtime: this test opens no chat pane, and building one would spawn
+                    // threads for a window that never asks anything.
+                    assistant: None,
                 });
                 open
             },

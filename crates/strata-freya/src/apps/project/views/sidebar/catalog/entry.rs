@@ -14,7 +14,7 @@ use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::use_radio;
-use strata_model::{CatalogKind, ColRef};
+use strata_model::{CatalogKind, ColRef, RightPane};
 use uuid::Uuid;
 
 use super::columns::{flatten_cols, ColRow};
@@ -815,7 +815,9 @@ impl Component for ColumnRow {
             .on_press(move |_| {
                 selection.set(Some(col.clone()));
                 // Selecting a column is also how the inspector is reopened once collapsed.
-                layout.write_channel(Chan::Layout).open_inspector();
+                layout
+                    .write_channel(Chan::Layout)
+                    .open_right_pane(RightPane::Inspector);
             })
             // Indent by depth, then a fixed chevron gutter so names align whether or not the
             // column is expandable.

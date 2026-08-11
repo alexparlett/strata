@@ -41,7 +41,7 @@ use strata_agent::{
     QuerySessionInfo, RunMode, RunSettle, Settled,
 };
 use strata_core::engine::plan::as_explain;
-use strata_core::engine::{Engine, RunTag, WsId};
+use strata_core::engine::{Engine, RunTag, WsId, CANCELLED};
 use tokio::sync::{mpsc, oneshot};
 
 use super::ask::{AgentAsk, AgentNotice, RunOutcome};
@@ -310,6 +310,25 @@ impl Host for AgentDirectory {
 
         let ws = WsId::from(session);
         let tag = RunTag(self.runs.fetch_add(1, Ordering::Relaxed) as u128);
+        // **A dropped run still settles** (AS-04). Dropping this future is how a caller cancels
+        // — the assistant's stop drops the whole turn, and an MCP client hanging up mid-run does
+        // the same — and until this guard existed the settle below simply never ran, leaving the
+        // satellite's row on `Running` for the rest of the window's life. AA-03c reaps such a
+        // row when a *connection* ends, which covers a client that disconnects and nothing else:
+        // the assistant's connection is the pane's whole mount, so its stopped runs would sit
+        // there until the project closed.
+        //
+        // The guard's message is the engine's own `CANCELLED`, not a word invented here, so the
+        // row reads exactly as a cancelled press does (AGENTS.md §2 — a stop is not a failure,
+        // and only `stopped_on_purpose` knows which is which). It is **disarmed** on the normal
+        // path, because a run that finished sends its real outcome one line further down.
+        let mut cancelled = SettleOnDrop {
+            armed: true,
+            notices: notices.clone(),
+            agent,
+            session,
+            seq: started,
+        };
         let settled = match mode {
             RunMode::Run => engine
                 .query(ws, tag, sql, page_size)
@@ -337,6 +356,7 @@ impl Host for AgentDirectory {
         // case where a settle could have landed on a *live* satellite that never heard the
         // start is the same-root remount, and resolving the whole bracket once (above) is
         // what makes that unrepresentable.
+        cancelled.armed = false;
         let _ = notices.send(AgentNotice::RunSettled {
             agent,
             session,
@@ -350,6 +370,34 @@ impl Host for AgentDirectory {
     /// what a `Drop` on the transport's runtime can afford.
     fn agent_gone(&self, agent: AgentId) {
         self.notify_all(|| AgentNotice::AgentGone(agent));
+    }
+}
+
+/// **The settle a cancelled run still owes its window.**
+///
+/// A `Drop` rather than a `select!` arm, because there is nothing to select *on*: a caller
+/// cancels by dropping the future, which never resumes to run a cleanup branch of its own.
+/// Disarmed the moment the real outcome is known, so the two paths are exclusive by
+/// construction rather than by the receiver deduplicating on `seq`.
+struct SettleOnDrop {
+    armed: bool,
+    notices: mpsc::UnboundedSender<AgentNotice>,
+    agent: AgentId,
+    session: QuerySessionId,
+    seq: u64,
+}
+
+impl Drop for SettleOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let _ = self.notices.send(AgentNotice::RunSettled {
+            agent: self.agent,
+            session: self.session,
+            seq: self.seq,
+            outcome: RunOutcome::Stopped(CANCELLED.to_string()),
+        });
     }
 }
 

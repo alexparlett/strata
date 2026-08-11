@@ -269,7 +269,7 @@ impl Component for DataGrid {
         let data: Rc<GridData> = match &self.view {
             PageRead::Ready(data) => data.clone(),
             PageRead::Failed(err) => {
-                return ErrorState::new(err.clone()).into_element();
+                return ErrorState::new(err.clone(), self.tab).into_element();
             }
             // A page read in flight — just the spinner: a snapshot page fetch is not a
             // cancellable run, so it doesn't wear the full running state (timer + Cancel).

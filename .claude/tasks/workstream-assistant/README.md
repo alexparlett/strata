@@ -165,7 +165,7 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 | 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ✅ | AA-03c |
 | 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ✅ | 01 |
 | 03 | Settings ▸ AI: Providers · Chat · MCP | 🟡 | 05 |
-| 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03, 06 |
+| 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ✅ | 02, 03, 06 |
 | 05 | Secret store: OS-keystore-backed keys, references in config | ✅ | — |
 | 06 | Model listings: a model is picked from its provider, and the list survives a restart | ✅ | 03 |
 | 07 | Conversations survive the window: the `.strata/chats/` store, the list, retention | ⬜ | 04 |
@@ -173,6 +173,30 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 **03 is 🟡, not ✅.** Providers and MCP are done; AI ▸ Chat was two controls short. The model
 `Select` landed with **06**; what remains is the retention pair that only makes sense once
 conversations persist (**07**). Additive to a working pane, and 03 closes when it lands.
+
+## What 04 settled (2026-08-11 — three of them are changes to what this README said)
+
+- **The pane is on a *right rail*, and the right side is one slot.** The canvas grew a second
+  48px rail (`Strata.dc.html` `data-rg="rightrail"`) after this task was written, mirroring the
+  left one: it picks the **column inspector or the chat**, never both. `Layout::inspector_open`
+  became `Layout::right: Option<RightPane>` for it. That is what keeps a 1180px window readable
+  with two rails, a sidebar and the drawer up, and it is RustRover's own right edge.
+- **A window has *several* conversations, not one transcript.** The canvas's header is a chat
+  switcher — title as a dropdown, each row with its model and message count, each deletable,
+  deleting the last one opening a fresh one. So the satellite is `Chats`, and the composer's
+  pick is per **conversation**, which is what the selection split above always implied.
+- **Provider is picked by picking a model.** The canvas groups the model list under its enabled
+  providers, and that is one control instead of two — a model belongs to exactly one provider,
+  and two pickers can disagree in a way that offers selections which cannot be sent. The task
+  file's "provider · model · effort" is three *facts* on the footer, and two controls.
+- **The canvas's "Thought for 4s" line is not built, and cannot be from here.** AS-02's stream
+  loop deliberately drops reasoning chunks into the captured content that rides the next request
+  (`capture_reasoning_content`) rather than emitting them, so there is no `TurnEvent` a
+  collapsible could render. Building one would mean inventing the fact. **It is AS-02's to add**
+  — one event variant and one arm — and the pane grows the block when it exists.
+- **The effort ladder is AS-02's five rungs, not the canvas's four.** `Low · Medium · High ·
+  XHigh · Max` per *model*, which AS-03 already settled; the canvas's fixed
+  Minimal/Low/Medium/High predates it.
 
 ## Why the order
 

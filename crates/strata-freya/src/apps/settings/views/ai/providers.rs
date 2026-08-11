@@ -24,12 +24,13 @@ use strata_core::models::Listings;
 
 use crate::apps::settings::views::ai::configure::{ConfigureDialog, Configuring};
 use crate::apps::settings::views::ai::keys::TypedKeys;
-use crate::apps::settings::views::ai::probe::{self, Ask};
+use crate::apps::settings::views::ai::probe::{self, FromDraft};
 use crate::apps::settings::views::ai::row::{mark, ProviderRow};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, SettingsCtx, SettingsTheme};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::Prose;
+use crate::state::Ask;
 
 /// The gap between the explainer and the list.
 const SECTION_GAP: f32 = 24.;

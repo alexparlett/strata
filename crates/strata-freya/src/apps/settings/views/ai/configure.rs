@@ -35,7 +35,7 @@ use strata_agent::assistant::{info, label, BaseUrl, KeyUse};
 use strata_core::ai::ProviderKind;
 use strata_core::secret::Secret;
 
-use crate::apps::settings::views::ai::probe::{self, Ask, Probe, Tone};
+use crate::apps::settings::views::ai::probe;
 use crate::apps::settings::views::ai::providers::will_have_key;
 use crate::apps::settings::views::ai::row::mark;
 use crate::apps::settings::SettingsCtx;
@@ -45,6 +45,7 @@ use crate::components::icon::IconName;
 use crate::components::tones::{tones, Tones};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Body, Control, Eyebrow, Meta, Prose, Title};
+use crate::state::{Ask, Probe, Tone};
 use crate::theme::{use_roles, Role, RoleColors};
 
 /// The dialog's field column.

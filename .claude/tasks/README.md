@@ -115,12 +115,19 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   **06 ✅** (`strata_core::models` — the listings satellite beside the config, refreshed where a
   list is shown rather than at launch; there is no free-text model box left in the app, and the
   offer is *reported ∪ {the current pick}* so an endpoint with no `/models` cannot strand a
-  working setup). **03 🟡** — Providers and MCP are done and the keystore round trip works; AI ▸
-  Chat was two controls short and the model `Select` landed with 06, leaving the retention pair
-  that only means something once conversations persist (07). **04, 07 ⬜.** Two corrections settled with 02 and recorded in that workstream's README: the
-  Agents pane is for **headless MCP clients only** (the assistant is kept out of it by its
-  minted `AgentId`), and a runnable statement is a **tool call**, not a markdown convention.
-  The doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
+  working setup). **04 ✅** (the pane: a **right rail** picking the inspector or the chat, several
+  conversations per window behind a switcher, prose through the fork's `MarkdownViewer`, a
+  citation card per tool round and an executable card per `offer_sql`, `@`-mentions over the
+  catalog store, the three friction entries through one `ask_about` funnel, and the
+  cancelled-run drop guard the task owed `agent::directory`). **03 🟡** — Providers and MCP are
+  done and the keystore round trip works; AI ▸ Chat was two controls short and the model
+  `Select` landed with 06, leaving the retention pair that only means something once
+  conversations persist (07). **07 ⬜.** Two corrections settled with 02 and recorded in that
+  workstream's README: the Agents pane is for **headless MCP clients only** (the assistant is
+  kept out of it by its minted `AgentId`), and a runnable statement is a **tool call**, not a
+  markdown convention. One more settled with 04: the canvas's "Thought for Ns" line is **AS-02's
+  to enable** — its stream loop folds reasoning chunks into the next request rather than emitting
+  them, so there is no event a pane could render.
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
   ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
@@ -144,12 +151,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Assistant AS-04 → AS-07**, with AS-03 closing behind them. The loop and the provider seam
-   are built (AS-02), Settings ▸ AI is standing (AS-03) and the model listings are in (AS-06 —
-   the pane consumes `Listings::offer` and **moves** `probe::refresh` rather than writing a
-   second fetch); read AS-02's "What AS-04 gets" for the event vocabulary, and AA-03c's identity
-   finding before touching query sessions. Then persistence, which needs a transcript to
-   persist.
+1. **Assistant AS-07**, with AS-03 closing behind it. The pane is built (AS-04) over the loop
+   (AS-02), Settings ▸ AI (AS-03) and the model listings (AS-06 — the pane consumes
+   `Listings::offer`, and `probe::refresh` **moved** to `state::listings` rather than being
+   written twice). What remains is persisting a conversation, which now has a transcript to
+   persist: `Chats::settle` is the hook it was shaped for. AS-03's last two controls are the
+   retention pair that only means something once it lands.
 2. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
 3. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave

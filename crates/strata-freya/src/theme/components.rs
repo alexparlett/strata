@@ -20,10 +20,11 @@ use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
-    CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,
-    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CellViewThemePreference, ChartThemePreference, ChatThemePreference,
+    CommandPaletteThemePreference, ConnectionsThemePreference, DataGridThemePreference,
+    DrawerThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
+    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
@@ -582,6 +583,49 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             empty_background: role(Role::SurfaceBackground),
             empty_border_fill: role(Role::BorderControl),
             empty_color: role(Role::TextPlaceholder),
+        },
+    );
+    th.set(
+        "chat",
+        ChatThemePreference {
+            background: role(Role::SurfaceBackground),
+            border_fill: role(Role::Border),
+            title_color: role(Role::Text),
+            role_color: role(Role::TextDim),
+            meta_color: role(Role::TextPlaceholder),
+            figures_color: role(Role::TextDim),
+            card_background: role(Role::SurfaceRaised),
+            card_border_fill: role(Role::BorderVariant),
+            sql_color: role(Role::TextMuted),
+            chip_background: role(Role::AccentBadge),
+            chip_color: role(Role::TextAccent),
+            row_hover_fill: role(Role::GhostElementHover),
+        },
+    );
+    // The fork's own markdown viewer, tuned to the transcript's scale (AGENTS.md §3 — a
+    // built-in is a partial retune, never a lookalike). Its defaults reference the sheet slots
+    // `bridge_sheet` already fills, so what is set here is what the chat needs differently: the
+    // pane's own prose size, and a code block that reads as the app's code rather than as a
+    // generic grey box.
+    th.set(
+        "markdown_viewer",
+        MarkdownViewerThemePreference {
+            color: role(Role::Text),
+            color_link: role(Role::TextAccent),
+            background_code: role(Role::EditorBackground),
+            color_code: role(Role::TextMuted),
+            background_blockquote: role(Role::SurfaceSubtle),
+            border_blockquote: role(Role::BorderVariant),
+            background_divider: role(Role::Border),
+            heading_h1: Preference::Specific(16.0),
+            heading_h2: Preference::Specific(15.0),
+            heading_h3: Preference::Specific(14.0),
+            heading_h4: Preference::Specific(13.0),
+            heading_h5: Preference::Specific(12.5),
+            heading_h6: Preference::Specific(12.5),
+            paragraph_size: Preference::Specific(12.5),
+            code_font_size: Preference::Specific(11.0),
+            table_font_size: Preference::Specific(11.5),
         },
     );
     th.set(

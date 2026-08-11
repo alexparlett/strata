@@ -31,7 +31,7 @@ mod system;
 mod theme;
 mod title_bar;
 
-pub use ai::{commit, missing, ChatPane, McpPane, Probes, ProvidersPane, TypedKeys};
+pub use ai::{commit, missing, ChatPane, McpPane, ProvidersPane, TypedKeys};
 pub use chrome::SettingsChrome;
 pub use data_display::DataDisplayPane;
 pub use engine::{EnginePane, PropRows};

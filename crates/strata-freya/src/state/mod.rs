@@ -28,6 +28,10 @@ pub use config::*;
 pub use listings::*;
 pub use theme_preview::*;
 
+use std::rc::Rc;
+
+use strata_agent::assistant::Assistant;
+
 use crate::agent::AgentCtx;
 use crate::menu::MenuState;
 use crate::platform::{FocusedOpen, WindowRegistry};
@@ -64,6 +68,17 @@ pub struct AppCtx {
     /// more than one window picks a model, and the list is a property of the machine rather
     /// than of whichever window happened to fetch it.
     pub listings: ModelListings,
+    /// What each provider last said when it was asked (AS-06) — app-global beside `listings`,
+    /// because a credential edit has to retract every surface's copy at once and there is only
+    /// one satellite for them to race into. Not persisted; see [`Probes`].
+    pub probes: ProviderProbes,
+    /// The assistant's runtime (AS-02) — one per app, handed to each project window's chat
+    /// pane. `None` when it could not be built, which the composer states rather than crashing
+    /// over: nothing else in the app needs it.
+    ///
+    /// An `Rc` rather than a store: it is a handle on threads, never a value that changes, and
+    /// nothing reacts to it.
+    pub assistant: Option<Rc<Assistant>>,
 }
 
 /// Every field is a handle on a process-wide singleton created before the first window, so

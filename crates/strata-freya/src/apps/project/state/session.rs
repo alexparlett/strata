@@ -16,7 +16,7 @@ use std::mem;
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
 use strata_model::{
     expanded_drawer_h, ChartConfig, Diagnostic, DrawerTab, Layout, Origin, ProblemsTab,
-    ResultsView, SessionSnapshot, SidebarPane, TabId, TabSnapshot,
+    ResultsView, RightPane, SessionSnapshot, SidebarPane, TabId, TabSnapshot,
 };
 use uuid::Uuid;
 
@@ -399,15 +399,24 @@ impl SessionState {
         self.layout.drawer_h
     }
 
-    /// Collapse the inspector (its header ×).
-    pub fn close_inspector(&mut self) {
-        self.layout.inspector_open = false;
+    /// The right rail's toggle (AS-04): open the right side on `pane`, or — if it's already
+    /// showing `pane` — collapse it. [`toggle_pane`](Self::toggle_pane)'s rule on the other
+    /// edge, because it is the same gesture on the same kind of control.
+    pub fn toggle_right_pane(&mut self, pane: RightPane) {
+        self.layout.right = (self.layout.right != Some(pane)).then_some(pane);
     }
 
-    /// Reveal the inspector — selecting a catalog column (P3-02) is the way it reopens once
-    /// collapsed. Idempotent, so every selection can call it without checking first.
-    pub fn open_inspector(&mut self) {
-        self.layout.inspector_open = true;
+    /// Show `pane` on the right — for the surfaces that *name* one rather than offering the
+    /// rail's toggle: selecting a catalog column reveals the inspector, and the three friction
+    /// entries open the chat. [`open_drawer`](Self::open_drawer)'s distinction, for its reason:
+    /// asking for the pane you are already looking at must not put it away.
+    pub fn open_right_pane(&mut self, pane: RightPane) {
+        self.layout.right = Some(pane);
+    }
+
+    /// Collapse the right side (a pane header's ×).
+    pub fn close_right_pane(&mut self) {
+        self.layout.right = None;
     }
 
     /// Remember the sidebar's dragged width (a `ResizableContainer` resize). Write on
@@ -419,6 +428,11 @@ impl SessionState {
     /// Remember the inspector's dragged width. Write on [`Chan::LayoutSize`](super::Chan).
     pub fn set_inspector_w(&mut self, w: f32) {
         self.layout.inspector_w = w;
+    }
+
+    /// Remember the chat pane's dragged width. Write on [`Chan::LayoutSize`](super::Chan).
+    pub fn set_chat_w(&mut self, w: f32) {
+        self.layout.chat_w = w;
     }
 
     /// Remember the drawer's dragged height. Write on [`Chan::LayoutSize`](super::Chan).
@@ -982,13 +996,25 @@ mod tests {
     #[test]
     fn layout_toggles_follow_design_semantics() {
         let mut s = SessionState::default();
-        // Defaults: sidebar open on Catalog, inspector open, drawer collapsed.
+        // Defaults: sidebar open on Catalog, the right side and the drawer collapsed.
         assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
-        assert!(!s.layout.inspector_open);
+        assert_eq!(s.layout.right, None);
         assert_eq!(s.layout.drawer, None);
 
-        s.open_inspector();
-        assert!(s.layout.inspector_open);
+        // The right rail is the sidebar's rule on the other edge: naming a pane opens it,
+        // toggling the open one collapses, toggling the other switches.
+        s.open_right_pane(RightPane::Inspector);
+        assert_eq!(s.layout.right, Some(RightPane::Inspector));
+        s.open_right_pane(RightPane::Inspector);
+        assert_eq!(
+            s.layout.right,
+            Some(RightPane::Inspector),
+            "naming is not a toggle"
+        );
+        s.toggle_right_pane(RightPane::Chat);
+        assert_eq!(s.layout.right, Some(RightPane::Chat));
+        s.toggle_right_pane(RightPane::Chat);
+        assert_eq!(s.layout.right, None);
 
         // Toggling the *active* pane collapses the sidebar; toggling while collapsed reopens
         // it on that pane; toggling a *different* pane switches without collapsing.
@@ -1009,8 +1035,9 @@ mod tests {
         s.toggle_drawer(DrawerTab::History);
         assert_eq!(s.layout.drawer, None);
 
-        s.close_inspector();
-        assert!(!s.layout.inspector_open);
+        s.open_right_pane(RightPane::Inspector);
+        s.close_right_pane();
+        assert_eq!(s.layout.right, None);
     }
 
     /// The drawer header's expand / restore toggle (P3-11): expanding remembers the height it
@@ -1057,7 +1084,7 @@ mod tests {
         let mut s = SessionState::default();
         s.open_named("a", "SELECT 1".into(), Origin::Scratch);
         s.toggle_pane(SidebarPane::Connections);
-        s.close_inspector();
+        s.open_right_pane(RightPane::Chat);
         s.toggle_drawer(DrawerTab::Events);
         s.set_sidebar_w(333.0);
         s.set_drawer_h(199.0);
@@ -1065,7 +1092,7 @@ mod tests {
         let restored =
             SessionState::from_snapshot(s.snapshot()).expect("non-empty snapshot restores");
         assert_eq!(restored.layout.sidebar, Some(SidebarPane::Connections));
-        assert!(!restored.layout.inspector_open);
+        assert_eq!(restored.layout.right, Some(RightPane::Chat));
         assert_eq!(restored.layout.drawer, Some(DrawerTab::Events));
         assert_eq!(restored.layout.sidebar_w, 333.0);
         assert_eq!(restored.layout.drawer_h, 199.0);

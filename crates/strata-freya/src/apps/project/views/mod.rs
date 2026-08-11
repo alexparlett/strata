@@ -1,6 +1,7 @@
 //! The project window's feature views (workbench · sidebar · inspector · drawer). Real, keeper
 //! components built to the `design-handoff/` comps — grown in place, never thrown away.
 
+mod chat;
 mod configure_launch;
 mod connection_launch;
 mod dialogs;
@@ -11,6 +12,7 @@ mod keeper;
 mod loading;
 mod palette;
 mod rail;
+mod right_rail;
 mod shell;
 mod sidebar;
 /// `pub(super)` for the same reason `drawer` is: the sidebar's Agents pane promotes an
@@ -18,6 +20,7 @@ mod sidebar;
 /// text they can then read, edit and re-run.
 pub(super) mod workbench;
 
+pub use chat::{ask_about, result_anchor, ChatThemePreference};
 pub use configure_launch::{ConfigureLauncher, ConfigureRequest};
 pub use connection_launch::{ConnectionLauncher, ConnectionRequest};
 pub use dialogs::{

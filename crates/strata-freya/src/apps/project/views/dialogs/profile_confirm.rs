@@ -22,7 +22,7 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_model::{CatalogKind, ColRef};
+use strata_model::{CatalogKind, ColRef, RightPane};
 
 use crate::apps::project::state::{
     use_catalog_selection, CatalogSelection, Chan, ProjChan, ProjectState, SessionState,
@@ -180,8 +180,10 @@ impl ProfileActions {
         // Guarded: a write notifies whether or not it changed anything, and there is no reason
         // to re-render the shell for a panel that is already open.
         let mut session = self.session;
-        if !session.peek().layout.inspector_open {
-            session.write_channel(Chan::Layout).open_inspector();
+        if session.peek().layout.right != Some(RightPane::Inspector) {
+            session
+                .write_channel(Chan::Layout)
+                .open_right_pane(RightPane::Inspector);
         }
     }
 
@@ -491,7 +493,7 @@ mod tests {
         let (mut runner, (mut slot, project, mut session, selection)) = runner();
         // The layout starts with the inspector open, so close it — a scan asked for from a
         // catalog row has to be able to *reveal* the panel, not merely find it up.
-        session.write_channel(Chan::Layout).close_inspector();
+        session.write_channel(Chan::Layout).close_right_pane();
         open(&mut runner, &mut slot, CatalogKind::Table, "events");
 
         click_action(&mut runner, "Run scan");
@@ -510,7 +512,7 @@ mod tests {
             "…standing on the entry's first column"
         );
         assert!(
-            session.peek().layout.inspector_open,
+            session.peek().layout.right == Some(RightPane::Inspector),
             "…in an open inspector"
         );
     }

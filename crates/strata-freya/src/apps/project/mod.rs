@@ -56,8 +56,9 @@ pub use state::{CatalogState, Log, PersistFaults, ScanRequest};
 pub use views::ConnectionRequest;
 pub use views::{
     AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
-    CellViewThemePreference, ChartThemePreference, CommandPaletteThemePreference,
-    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    CellViewThemePreference, ChartThemePreference, ChatThemePreference,
+    CommandPaletteThemePreference, ConnectionsThemePreference, DataGridThemePreference,
+    DrawerThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
+    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference,
 };

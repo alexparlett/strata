@@ -39,12 +39,13 @@ use freya::prelude::*;
 use strata_agent::assistant::{efforts, label};
 use strata_core::ai::{Effort, ProviderKind};
 
-use crate::apps::settings::views::ai::probe::{self, Ask, Probe, Probes};
+use crate::apps::settings::views::ai::probe::{self, FromDraft};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, Anchor, SettingsCtx};
 use crate::components::form::Form;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Control, Prose};
+use crate::state::{needs_asking, Ask, Probe, Probes};
 
 /// The canvas's control column (`max-width: 420px`), and its label gutter.
 const CONTROL_WIDTH: f32 = 420.;
@@ -145,15 +146,12 @@ impl Component for ChatPane {
             let Some(kind) = *picked.read() else {
                 return;
             };
-            // Subscribed on purpose: the settled write lands here, and the guard below then
-            // stops it going round again.
-            if !ctx.listings.read().needs_refresh(kind) {
-                return;
+            // Subscribed on purpose: the settled write lands here, and `needs_asking` then stops
+            // it going round again.
+            let _ = ctx.listings.read();
+            if needs_asking(ctx.listings, ctx.probes, kind) {
+                probe::refresh(ctx, Ask::from_draft(ctx, kind));
             }
-            if !matches!(ctx.probes.peek().get(kind), Probe::Untested) {
-                return;
-            }
-            probe::refresh(ctx, Ask::from_draft(ctx, kind));
         });
 
         // **The offer is what the provider reported plus the pick in hand** — one rule, in
