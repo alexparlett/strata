@@ -65,15 +65,17 @@ use strata_core::engine::{stopped_on_purpose, Engine};
 use strata_model::SnapshotId;
 use uuid::Uuid;
 
+use crate::describe;
 use crate::error::AgentError;
 use crate::host::{
     self, Agent, AgentId, AgentIdentity, Host, Project, QuerySessionId, RunMode, Settled,
 };
 use crate::wire::{
-    cells, columns, plan_result, rows_result, Columns, DescribeResult, DescribeTableParams,
-    DiagnosticWire, EntryWire, FunctionsResult, PageResult, ProjectParams, ProjectsResult,
-    QuerySessionParams, QuerySessionResult, QuerySessionsResult, ReadPageParams, RunParams,
-    RunResult, TablesResult, ValidateParams, ValidateResult,
+    cells, columns, functions_result, plan_result, rows_result, tables_result, Columns,
+    DescribeResult, DescribeTableParams, DiagnosticWire, FunctionsResult, ListFunctionsParams,
+    ListTablesParams, PageResult, ProjectParams, ProjectsResult, QuerySessionParams,
+    QuerySessionResult, QuerySessionsResult, ReadPageParams, RunParams, RunResult, TablesResult,
+    ValidateParams, ValidateResult,
 };
 
 /// The most rows one call will hand back, however large a `page_size` is asked for. A cap
@@ -727,12 +729,14 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
-    pub async fn list_tables(&self, params: ProjectParams) -> Result<TablesResult, AgentError> {
+    pub async fn list_tables(&self, params: ListTablesParams) -> Result<TablesResult, AgentError> {
         let project = self.project(params.project.as_deref()).await?;
         let entries = self.host.catalog(&project.root).await?;
-        Ok(TablesResult {
-            entries: entries.into_iter().map(EntryWire::from).collect(),
-        })
+        Ok(tables_result(
+            entries,
+            params.matching.as_deref(),
+            params.page,
+        ))
     }
 
     pub async fn describe_table(
@@ -741,15 +745,18 @@ impl<H: Host> StrataTools<H> {
     ) -> Result<DescribeResult, AgentError> {
         let project = self.project(params.project.as_deref()).await?;
         let described = self.host.describe(&project.root, &params.name).await?;
-        Ok(DescribeResult::from(described))
+        describe::describe_result(described, &params)
     }
 
     pub async fn list_functions(
         &self,
-        params: ProjectParams,
+        params: ListFunctionsParams,
     ) -> Result<FunctionsResult, AgentError> {
         let (_, engine) = self.engine(params.project.as_deref()).await?;
-        Ok(FunctionsResult::from(engine.functions().as_ref()))
+        Ok(functions_result(
+            engine.functions().as_ref(),
+            params.matching.as_deref(),
+        ))
     }
 
     pub async fn validate(&self, params: ValidateParams) -> Result<ValidateResult, AgentError> {
@@ -816,6 +823,23 @@ impl<H: Host> StrataTools<H> {
         })
     }
 
+    /// The page size a run will use for what the caller asked — the **one** copy of the
+    /// resolution, called by `run` and by the assistant's dispatch, which lowers its own
+    /// ceiling over this answer rather than restating the rule.
+    ///
+    /// A `0` from the host is the app's "no limit", not a request for empty pages — see
+    /// [`Host::default_page_size`]. A `0` the *caller* asked for is nothing at all, and the
+    /// clamp's floor answers it with one row.
+    pub fn resolved_page_size(&self, asked: Option<usize>) -> usize {
+        match asked {
+            Some(asked) => asked.clamp(1, MAX_PAGE_SIZE),
+            None => match self.host.default_page_size() {
+                0 => MAX_PAGE_SIZE,
+                limit => limit.min(MAX_PAGE_SIZE),
+            },
+        }
+    }
+
     pub async fn run(&self, params: RunParams) -> Result<RunResult, AgentError> {
         self.run_as(self.connection.agent, params).await
     }
@@ -843,16 +867,7 @@ impl<H: Host> StrataTools<H> {
         }
 
         let mode = RunMode::from(params.mode.unwrap_or_default());
-        // A `0` from the host is the app's "no limit", not a request for empty pages — see
-        // `Host::default_page_size`. A `0` the *caller* asked for is nothing at all, and the
-        // clamp's floor answers it with one row.
-        let page_size = match params.page_size {
-            Some(asked) => asked.clamp(1, MAX_PAGE_SIZE),
-            None => match self.host.default_page_size() {
-                0 => MAX_PAGE_SIZE,
-                limit => limit.min(MAX_PAGE_SIZE),
-            },
-        };
+        let page_size = self.resolved_page_size(params.page_size);
 
         let settled = self
             .host
@@ -1017,11 +1032,14 @@ impl<H: Host> StrataTools<H> {
     /// List a project's catalog: registered tables, saved views and saved queries, each with
     /// its source and whether the engine accepted it. This is the catalog as the app shows
     /// it, so a def the engine refused is listed with its error rather than silently missing.
+    /// The answer states its total; a large catalog is paged (50 per page, 'page' reads on)
+    /// and 'matching' narrows by name substring. A view row carries a one-line SQL preview;
+    /// describe_table returns the full text.
     #[tool(name = "list_tables", annotations(read_only_hint = true))]
     async fn list_tables_tool(
         &self,
         caller: Caller,
-        Parameters(params): Parameters<ProjectParams>,
+        Parameters(params): Parameters<ListTablesParams>,
     ) -> Result<Json<TablesResult>, AgentError> {
         let _busy = self.touch(&caller);
         Ok(Json(self.list_tables(params).await?))
@@ -1029,7 +1047,11 @@ impl<H: Host> StrataTools<H> {
 
     /// Describe one table or view: its columns and types, nested fields, Hive partition
     /// columns, source paths and format, plus the row count and column statistics the source
-    /// reports for free. Only facts that were read — nothing is scanned or estimated.
+    /// reports for free. Only facts that were read — nothing is scanned or estimated. A deep
+    /// or wide schema is bounded: elided children appear as counts, 'path' (name segments,
+    /// exactly as an answer printed them) descends to any nested column, 'matching' finds
+    /// fields by name substring anywhere in the tree and answers with their paths, and
+    /// 'page' reads more columns or matches. An answer with no totals in it is complete.
     #[tool(name = "describe_table", annotations(read_only_hint = true))]
     async fn describe_table_tool(
         &self,
@@ -1040,13 +1062,15 @@ impl<H: Host> StrataTools<H> {
         Ok(Json(self.describe_table(params).await?))
     }
 
-    /// List the SQL functions this project's engine has registered: names, overload
-    /// signatures and documentation. What is registered is what exists.
+    /// List the SQL functions this project's engine has registered. What is registered is
+    /// what exists. The answer states its total; a set of 30 or fewer comes back in full
+    /// (overload signatures, return type, documentation), a larger one names only — narrow
+    /// with 'matching', a case-insensitive name substring, to read a function in full.
     #[tool(name = "list_functions", annotations(read_only_hint = true))]
     async fn list_functions_tool(
         &self,
         caller: Caller,
-        Parameters(params): Parameters<ProjectParams>,
+        Parameters(params): Parameters<ListFunctionsParams>,
     ) -> Result<Json<FunctionsResult>, AgentError> {
         let _busy = self.touch(&caller);
         Ok(Json(self.list_functions(params).await?))
@@ -1161,7 +1185,7 @@ mod tests {
 
     use crate::host::{CatalogEntry, Described, QuerySessionState, RegState};
     use crate::mock::{MockHost, MockProject};
-    use crate::wire::{Mode, QuerySessionStateWire, Sort, StateWire};
+    use crate::wire::{EntryWire, Mode, QuerySessionStateWire, Sort, StateWire};
 
     use super::*;
 
@@ -1312,7 +1336,7 @@ mod tests {
             MockProject::new("sales", "/w/sales"),
             MockProject::new("ops", "/w/ops"),
         ]));
-        let Err(e) = tools.list_tables(no_project()).await else {
+        let Err(e) = tools.list_tables(ListTablesParams::default()).await else {
             panic!("expected an ambiguous-project error");
         };
         let text = e.to_string();
@@ -1321,8 +1345,9 @@ mod tests {
 
         // Naming one resolves it.
         let named = tools
-            .list_tables(ProjectParams {
+            .list_tables(ListTablesParams {
                 project: Some("ops".into()),
+                ..ListTablesParams::default()
             })
             .await
             .unwrap();
@@ -1336,7 +1361,11 @@ mod tests {
     #[tokio::test]
     async fn list_tables_reports_a_failed_def_with_its_error() {
         let (_root, tools) = one_project("list_tables").await;
-        let entries = tools.list_tables(no_project()).await.unwrap().entries;
+        let entries = tools
+            .list_tables(ListTablesParams::default())
+            .await
+            .unwrap()
+            .entries;
         match &entries[..] {
             [EntryWire::Table {
                 name: ready,
@@ -1363,7 +1392,7 @@ mod tests {
         let described = tools
             .describe_table(DescribeTableParams {
                 name: "people".into(),
-                project: None,
+                ..DescribeTableParams::default()
             })
             .await
             .unwrap();
@@ -1379,7 +1408,7 @@ mod tests {
         let Err(AgentError::NotFound(message)) = tools
             .describe_table(DescribeTableParams {
                 name: "nope".into(),
-                project: None,
+                ..DescribeTableParams::default()
             })
             .await
         else {
@@ -1393,10 +1422,23 @@ mod tests {
     #[tokio::test]
     async fn list_functions_is_the_live_registry() {
         let (_root, tools) = one_project("functions").await;
-        let functions = tools.list_functions(no_project()).await.unwrap();
+        let functions = tools
+            .list_functions(ListFunctionsParams::default())
+            .await
+            .unwrap();
         assert!(functions.scalar.iter().any(|f| f.name == "json_get"));
         assert!(functions.aggregate.iter().any(|f| f.name == "count"));
         assert!(!functions.window.is_empty());
+        // The live registry is far past the detail rule, so the unfiltered answer is
+        // names-only with its total stated and the recovery named.
+        assert_eq!(
+            functions.total,
+            functions.scalar.len() + functions.aggregate.len() + functions.window.len()
+        );
+        assert!(functions
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("'matching'")));
     }
 
     #[tokio::test]
