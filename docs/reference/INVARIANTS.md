@@ -605,6 +605,56 @@ Things that must not regress. Each was fought for once already.
   has **no env fallback**, because `genai`'s default would post the user's `OPENAI_API_KEY` to
   whatever host they typed; and `check_base_url` normalizes the **trailing slash**, without
   which every adapter's path join reaches a URL the user never wrote.
+- **A model is picked from what its provider serves, and the list it is picked from is a
+  satellite refreshed where it is shown.** There is no free-text model box in the app (AS-06).
+  `genai` prescribes no models — a name is an opaque string that goes into the request payload,
+  and `AdapterKind::from_model` is a routing heuristic Strata bypasses by always naming an
+  adapter — so nothing here is protecting the user from a name a static list would have caught,
+  and the provider can simply be asked. A typed name buys nothing and costs a turn:
+  `gpt-5-turbo-imaginry` is accepted by every layer we own and refused by the vendor, after the
+  send, in a transcript.
+
+  **The offer is `Listings::offer`: reported ∪ {the current pick}**, and it lives beside the
+  data because two surfaces pick a model (Settings ▸ AI ▸ Chat's default, the composer footer's
+  per-conversation pick) and a rule about what may be selected has to be one rule. The union is
+  load-bearing in both directions: the list endpoint is not the chat endpoint — a proxy or a
+  private deployment can serve `/chat/completions` and no `/models` at all (genai carries
+  hardcoded lists for Cohere and Baidu for exactly that reason), and an offline laptop serves
+  neither — so a strict picker would strand a setup that works and silently retarget a
+  conversation the first time a fetch failed. The list stays **unfiltered**: the provider names
+  every id it has, so OpenAI's carries `whisper-1` and `dall-e-3`, and a static tidy-up list
+  here would be the prescribed-model table this design avoids and would hide a new chat model on
+  the day it ships. A non-chat pick fails on the first send in the provider's own words; if that
+  becomes a real irritation the fix is a capability the adapter reports, upstream, never a list
+  here.
+
+  **The cache is `strata_core::models`, a satellite beside the config and never a field of it** —
+  history's precedent. A fetched list is a cache of a remote fact rather than something the user
+  edited, so routing it through `write_config` would persist and broadcast a change nobody made
+  and wake every reader of every setting. Same mechanism (`preferences`, the app's own `AppInfo`,
+  the key `"models"` beside `"config"`), a missing file is an empty `Listings`, and it holds
+  **names and timestamps only** — asserted on the serialized bytes, because the module next door
+  is `secret`.
+
+  **Refreshed at the point of use, not at launch.** A startup dial-out spends a round trip and
+  puts a key on the wire per configured provider on every start, for a session that mostly never
+  opens a model picker — and a read the user waits for has to be an *arm* rather than a freeze,
+  which at startup has no surface to be an arm on. So `main` loads the file and calls nothing.
+  Where a list is *shown* the cached one renders immediately and one background refresh runs per
+  shown provider whose listing is absent or older than `STALE_AFTER` (**24 hours**, stated where
+  the poll is: rosters move on the order of weeks, so a day behind costs one missing name and
+  the recovery — Test — is already built). Enabling a provider is the other point of use, since
+  that is the moment a person is setting one up and expecting it to reach out.
+
+  **One request, two keeps, never two caches.** `probe::refresh` is the whole mechanism and every
+  fetching gesture is a call into it — the Test press, a picker's staleness kick, the enable
+  toggle — with the in-flight guard inside it rather than at each call site. The **names** go to
+  the satellite, because they outlive the window and the run of the app; the **outcome** stays as
+  a window-scoped `Probe`, which is why it carries a count and not a list: a probe restored from
+  disk would be a "verified" nothing had checked, and a probe holding the names again would be
+  the second cache. Retraction is one line for both (`SettingsCtx::forget_provider`), called
+  wherever the address or credential moves, because dropping either alone leaves the other making
+  the claim.
 - **A cancelled turn is a drop, and the conversation it leaves behind must still be sendable.**
   Dropping the tool future *is* the engine's abort (`DispatchGuard`) — never a second abort
   path. But an assistant message carrying tool calls with no results is a request every provider

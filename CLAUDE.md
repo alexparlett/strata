@@ -99,7 +99,8 @@ Members:
 
 - **`strata-freya`** — the Freya (Skia/native) frontend. **The app** and the default build.
 - **`strata-core`** — engine logic: the DataFusion boundary (query/plan/profile/serialize/value_tree),
-  config, theme, the OS-keystore secret store, SQL language service. The only place DataFusion is touched — bar a **dev**-dependency
+  config, theme, the OS-keystore secret store, the assistant's model-listings satellite, SQL
+  language service. The only place DataFusion is touched — bar a **dev**-dependency
   in `strata-freya`, so a test can build an Arrow fixture without bending a signature to be testable.
 - **`strata-model`** — leaf data vocabulary, serde-only (schema, results, catalog, form, history,
   session, query_error). No logic. (The event log is *not* here: it is ephemeral app state —

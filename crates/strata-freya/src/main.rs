@@ -25,7 +25,9 @@ use strata_core::secret::open_keystore;
 
 use crate::agent::create_global_agent;
 use crate::platform::{create_global_open, create_global_windows};
-use crate::state::{create_global_config, create_global_theme_preview, AppCtx};
+use crate::state::{
+    create_global_config, create_global_listings, create_global_theme_preview, AppCtx,
+};
 use crate::theme::ThemesCtx;
 
 mod agent;
@@ -105,6 +107,13 @@ fn main() {
     // Nothing listens yet — a workspace window's `use_agent_server` starts one only if the
     // `agent_access` setting is on, which it is not by default.
     let agent = create_global_agent();
+    // The model listings satellite (AS-06): what each provider last reported serving, read
+    // from its own file beside the config — the same "disk is a startup input" rule, and the
+    // reason a model picker has something in it before any network call is made. **No dial-out
+    // here**: refreshing every configured provider at launch would spend a round trip and put a
+    // key on the wire per provider, on every start, for a session that mostly never opens a
+    // model picker at all. The refresh happens where the list is shown.
+    let listings = create_global_listings();
     // Everything a window — or the menubar handler — is handed, in one value.
     let app = AppCtx {
         themes,
@@ -114,6 +123,7 @@ fn main() {
         menu: menu_state,
         open: focused_open,
         agent,
+        listings,
     };
     let menu_app = app.clone();
     let launch_config = with_embedded_fonts(LaunchConfig::new())

@@ -167,12 +167,12 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 | 03 | Settings ▸ AI: Providers · Chat · MCP | 🟡 | 05 |
 | 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ⬜ | 02, 03, 06 |
 | 05 | Secret store: OS-keystore-backed keys, references in config | ✅ | — |
-| 06 | Model listings: a model is picked from its provider, and the list survives a restart | ⬜ | 03 |
+| 06 | Model listings: a model is picked from its provider, and the list survives a restart | ✅ | 03 |
 | 07 | Conversations survive the window: the `.strata/chats/` store, the list, retention | ⬜ | 04 |
 
-**03 is 🟡, not ✅.** Providers and MCP are done; AI ▸ Chat is two controls short — a model
-`Select` (**06**) and the retention pair that only makes sense once conversations persist
-(**07**). Both are additive to a working pane, and 03 closes when they land.
+**03 is 🟡, not ✅.** Providers and MCP are done; AI ▸ Chat was two controls short. The model
+`Select` landed with **06**; what remains is the retention pair that only makes sense once
+conversations persist (**07**). Additive to a working pane, and 03 closes when it lands.
 
 ## Why the order
 

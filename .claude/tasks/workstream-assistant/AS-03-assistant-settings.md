@@ -19,8 +19,8 @@
 > It was marked ✅ on that basis and is back to 🟡, because **AI ▸ Chat is two controls short of
 > the pane it describes** — and both belong to it rather than to the tasks that supply them:
 >
-> - **The model field is a typed box** and has to be a `Select` over what the provider serves.
->   The list already exists; what is missing is a listing that outlives the window (**AS-06**).
+> - ~~**The model field is a typed box**~~ — **landed with AS-06**: it is a `Select` over
+>   `Listings::offer`, and the listing now outlives the window in its own satellite.
 > - **There is no retention control**, because there is nothing yet to retain. When conversations
 >   persist (**AS-07**) this pane owes the pair `history.jsonl` already has — a cap and a Clear.
 >
@@ -64,10 +64,11 @@ credential inline and a **Test** action. Nothing here names a model.
 **AI ▸ Chat** — the new-chat defaults: provider · model · effort, sourced from *enabled*
 providers only, so the pane can never offer a model it has no credential for.
 
-> **The model field is superseded by AS-06.** It shipped here as a typed box with the tested
-> provider's reported names offered beneath it, because the reported list lived on `Probes` and
-> died with the window. AS-06 makes the listing a satellite that outlives the window and turns
-> this field into a `Select`; that edit is AS-06's, not a reopening of this task.
+> **The model field was superseded by AS-06, which has landed.** It shipped here as a typed box
+> with the tested provider's reported names offered beneath it, because the reported list lived
+> on `Probes` and died with the window. AS-06 made the listing a satellite
+> (`strata_core::models`) and the field a `Select` over `Listings::offer`; that edit was AS-06's,
+> not a reopening of this task.
 
 **AI ▸ MCP** — today's Agent access pane, renamed and moved under the group. No behaviour
 change; it keeps its rows, its anchors and its search keywords.
@@ -123,14 +124,26 @@ every kind we offer, and its answer is exactly what AI ▸ Chat's model dropdown
 call serves both: Test reports "verified · N models" or the provider's own error, and the list
 it returned is what the model dropdown offers.
 
-Editing a credential clears the verification — a stale "verified" beside a changed key is a lie.
+**AS-06 kept that and moved where the answer is kept**: the names go to the listings satellite
+(they outlive the window), the outcome stays as the window's `Probe` (a "verified" restored from
+disk would be a claim nothing had checked), and `probe::refresh` is the one funnel both the Test
+press and a picker's staleness kick call.
 
-### The model is a *picked* name that can still be typed
+Editing a credential clears the verification — a stale "verified" beside a changed key is a lie
+— and it drops the listing on the same line, since the names describe a request against the
+address that just moved.
 
-AI ▸ Chat's model control is a dropdown over the enabled provider's listed models, each carrying
-a **REASONS** badge when `efforts(kind, model)` is non-empty. It must also accept a typed name:
-a list can 401, a gateway can 404 `/models`, and a private deployment can name a model no list
-reports. A dropdown that could not be typed into would make an unlisted model unreachable.
+### The model is a *picked* name — and the unlisted case is the offer, not a text box
+
+AI ▸ Chat's model control is a dropdown over the enabled provider's listed models. It was
+written here as a dropdown that also accepted a **typed** name, because a list can 401, a
+gateway can 404 `/models`, and a private deployment can name a model no list reports.
+
+**AS-06 answered that without a text box**: the offered set is *reported ∪ {the current pick}*
+(`Listings::offer`), so an unlisted model that is already configured stays selectable and an
+unreachable `/models` cannot strand a working setup — and there is no free-text model box left
+in the app. The REASONS badge per row was not built; the ladder is shown by the effort control
+below, for the model actually picked.
 
 This is the whole of the model question, and it lives here rather than on a provider row.
 

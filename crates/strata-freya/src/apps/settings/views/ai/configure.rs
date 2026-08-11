@@ -89,6 +89,10 @@ impl Component for ConfigureDialog {
             move || seed
         });
         let mut revealed = use_state(|| false);
+        // **Whether a Test was run from *these* boxes**, which is what [`discard`] needs to know.
+        // Local, like the boxes: it is a fact about this sitting with the dialog, not about the
+        // provider.
+        let tested = use_state(|| false);
         // **The window's probe, not a local one.** A test here is the only place one is taken,
         // and its answer is read by two surfaces that are not this dialog: the row's subline and
         // AI ▸ Chat's model list. A local copy would leave both of them permanently untested.
@@ -177,11 +181,6 @@ impl Component for ConfigureDialog {
                             .outline()
                             .height(Size::px(FIELD_HEIGHT))
                             .on_press(move |_: Event<PressEventData>| {
-                                let mut probes = ctx.probes;
-                                if matches!(probes.peek().get(kind), Probe::Testing) {
-                                    return;
-                                }
-                                probes.write().set(kind, Probe::Testing);
                                 // **What Apply would send, which is not always what is filed.**
                                 // A test that proved something other than what is on screen is
                                 // worse than none — so the boxes win, and the stored key is
@@ -209,11 +208,15 @@ impl Component for ConfigureDialog {
                                         })
                                         .flatten(),
                                 };
-                                spawn(async move {
-                                    let settled = probe::run(ask).await;
-                                    let mut probes = ctx.probes;
-                                    probes.write().set(kind, settled);
-                                });
+                                // The one funnel — which also holds the in-flight guard, so a
+                                // second press during a request is left alone rather than
+                                // racing it. The names it returns reach the satellite, so a
+                                // Test is what fills the model picker for good rather than
+                                // only for this window — which is exactly why [`discard`] has
+                                // to know a test was taken here.
+                                let mut tested = tested;
+                                tested.set(true);
+                                probe::refresh(ctx, ask);
                             })
                             .child(Control::new("Test")),
                     )
@@ -222,7 +225,7 @@ impl Component for ConfigureDialog {
             );
 
         Dialog::new()
-            .on_dismiss(move |()| slot.set(None))
+            .on_dismiss(move |()| discard(ctx, kind, key_buf, url_buf, tested, slot))
             .header(DialogHeader::new(
                 mark(kind),
                 roles.get(Role::Accent),
@@ -232,7 +235,7 @@ impl Component for ConfigureDialog {
             .action(
                 Button::new()
                     .flat()
-                    .on_press(move |_| slot.set(None))
+                    .on_press(move |_| discard(ctx, kind, key_buf, url_buf, tested, slot))
                     .child(Control::new("Cancel")),
             )
             .action(
@@ -332,13 +335,44 @@ fn default_url(kind: ProviderKind) -> &'static str {
 fn save(ctx: SettingsCtx, kind: ProviderKind, key: &str, url: &str) {
     if ctx.base_url_of(kind) != url {
         ctx.set_base_url(kind, url.to_string());
-        let mut probes = ctx.probes;
-        probes.write().forget(kind);
+        ctx.forget_provider(kind);
     }
     if !key.trim().is_empty() {
         let mut keys = ctx.ai_keys;
         keys.write().set(kind, key.to_string());
-        let mut probes = ctx.probes;
-        probes.write().forget(kind);
+        ctx.forget_provider(kind);
     }
+}
+
+/// **Close without saving — and take back what a Test proved about boxes nobody kept.**
+///
+/// Cancel is a revert, and until AS-06 that cost nothing: the dialog's edits were local, so
+/// throwing them away threw away everything they had produced. A Test is the exception. It is a
+/// live request against *these boxes*, and its answer now outlives the dialog in two places the
+/// draft does not reach — the window's probe, and the app-global listings satellite, which
+/// survives a restart and is what every model picker offers from.
+///
+/// So a test taken against an endpoint or credential the user then discarded would leave the
+/// picker offering a staging gateway's models for a production address, fresh for a day and
+/// across relaunches. That is the same claim [`save`] retracts when an address *changes* —
+/// discarding one is no different, and this is the other half of that rule.
+///
+/// **Only when a test was actually taken here, and only when the boxes diverged.** Retracting
+/// unconditionally would throw away a perfectly good listing every time somebody opened the
+/// dialog to look at it, buying one needless round trip per glance; and boxes equal to what the
+/// draft holds describe the address the app really will call, so their answer is worth keeping.
+fn discard(
+    ctx: SettingsCtx,
+    kind: ProviderKind,
+    key: State<String>,
+    url: State<String>,
+    tested: State<bool>,
+    mut slot: State<Configuring>,
+) {
+    let diverged =
+        ctx.base_url_of(kind) != *url.peek() || ctx.ai_keys.peek().get(kind) != *key.peek();
+    if *tested.peek() && diverged {
+        ctx.forget_provider(kind);
+    }
+    slot.set(None);
 }

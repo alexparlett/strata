@@ -342,6 +342,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   per-kind answer both hides working controls and offers broken ones; `Only` is **default-closed**,
   so falling behind what a provider ships costs a knob rather than a refused request. A rung the
   model does not offer is a **refusal**, never a silent drop.
+- **A model is picked from what its provider serves, and the list it is picked from is a
+  satellite refreshed where it is shown.** No free-text model box anywhere; the offer is
+  `Listings::offer` — reported **∪ {the current pick}**, unfiltered — so an endpoint with no
+  `/models` cannot strand a working setup and no static name list can hide a new model. The
+  cache is `strata_core::models` beside the config, never a config field (a fetched list is not
+  something the user edited), loaded once at startup with **no dial-out there**; a stale list
+  renders immediately and one background refresh per shown provider replaces it. Names to the
+  satellite, outcome to the window's `Probe` — one request, two keeps, never two caches. A
+  changed URL or key drops both on the same line (`SettingsCtx::forget_provider`).
 - **A cancelled turn is a drop, and the conversation it leaves must still be sendable.**
   Dropping the tool future *is* the engine's abort; the outstanding tool calls are answered
   before the turn settles, or the next send is a request every provider rejects. Cancelled is

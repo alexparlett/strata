@@ -18,6 +18,9 @@
 //! - [`ai`] — the assistant's configuration vocabulary (AS-03): which brains are set up, and
 //!   what a new chat starts with. The persisted tokens only — the provider *table* is
 //!   `strata-agent`'s, next to the `genai` pin it is verified against.
+//! - [`models`] — the model-listings satellite (AS-06): what each provider last reported and
+//!   when, beside [`config`] rather than in it, because a fetched list is a cache of a remote
+//!   fact rather than something the user edited.
 
 use engine::profile;
 
@@ -25,6 +28,7 @@ pub mod ai;
 pub mod config;
 pub mod engine;
 pub mod keymap;
+pub mod models;
 pub mod project;
 pub mod register;
 pub mod secret;

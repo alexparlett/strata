@@ -56,7 +56,8 @@ use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
 use crate::state::{
-    use_share_config, write_config, AppCtx, ConfigChan, ConfigStation, ThemePreview, ThemeSel,
+    use_share_config, write_config, write_listings, AppCtx, ConfigChan, ConfigStation,
+    ModelListings, ThemePreview, ThemeSel,
 };
 use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
@@ -229,9 +230,17 @@ pub struct SettingsCtx {
     /// What AI ▸ Providers has actually asked each provider ([`Probe`]).
     ///
     /// On the window rather than the pane for `engine`'s reason: Providers runs the test and
-    /// Chat reads the models it returned, and a result thrown away by navigating between the
-    /// two would empty the model picker exactly when the user has just proved it need not be.
+    /// Chat reports what it said, and a result thrown away by navigating between the two would
+    /// leave the model picker unable to say why it has nothing to offer.
     pub probes: State<Probes>,
+    /// **What each provider last reported serving** (AS-06) — the app-global satellite, not
+    /// this window's.
+    ///
+    /// A fetched list outlives the window that fetched it and the run of the app that fetched
+    /// it, which is the whole point: a `Select` fed only by a live call is empty at every
+    /// launch. So the window holds a *handle*, like `config` and `preview`, and a refresh writes
+    /// through [`write_listings`](crate::state::write_listings).
+    pub listings: ModelListings,
     /// The live theme preview the draft's theme half is mirrored into.
     preview: ThemePreview,
     /// The app-global config: Apply's target.
@@ -267,19 +276,37 @@ impl PartialEq for SettingsCtx {
 }
 
 impl SettingsCtx {
-    fn new(config: ConfigStation, preview: ThemePreview) -> Self {
+    fn new(config: ConfigStation, preview: ThemePreview, listings: ModelListings) -> Self {
         let settings = config.peek().settings.clone();
         Self {
             engine: State::create(PropRows::from_map(&settings.engine)),
             ai_keys: State::create(TypedKeys::default()),
             applying: State::create(false),
             probes: State::create(Probes::default()),
+            listings,
             draft: State::create(settings.clone()),
             seed: State::create(settings),
             preview,
             config,
             failed: State::create(None),
         }
+    }
+
+    /// **Retract everything this window knows about a provider's endpoint** — its base URL or
+    /// its key just moved, so the last answer describes a request nobody would make now.
+    ///
+    /// One call rather than two, because the two halves of that answer are kept in two places
+    /// (the probe here, the names in the satellite) and dropping either alone leaves the other
+    /// making the claim: a picker still offering the old endpoint's models, or a row still
+    /// saying "12 models" for an address that has never been asked.
+    pub fn forget_provider(self, kind: ProviderKind) {
+        let mut probes = self.probes;
+        probes.write().forget(kind);
+        // **The satellite is written even though the draft is not committed.** It is a cache of
+        // a remote fact rather than a setting, so the cost of dropping it for an edit the user
+        // then cancels is one refetch — and the cost of keeping it is a picker offering names
+        // from an endpoint that is gone.
+        write_listings(self.listings, |listings| listings.forget(kind));
     }
 
     /// The engine overrides the window opened on — what Revert restores the grid to.
@@ -630,7 +657,8 @@ impl App for SettingsApp {
         let config = self.app.config;
         let ctx = use_provide_context({
             let preview = self.app.preview;
-            move || SettingsCtx::new(config, preview)
+            let listings = self.app.listings;
+            move || SettingsCtx::new(config, preview, listings)
         });
         // The search's pointer at one row of one pane (P4-09). Provided **above** the router,
         // because the nav writes it before the page holding the row has mounted — see

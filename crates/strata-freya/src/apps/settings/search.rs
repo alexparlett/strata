@@ -159,7 +159,8 @@ settings_index! {
 
     AiModel => Route::Chat,
         "New chat model",
-        "Which model a new chat starts on. Each chat can change its own afterwards.",
+        "Which model a new chat starts on, chosen from the ones the provider reports. Each chat \
+         can change its own afterwards.",
         "ai assistant default llm name";
 
     AiEffort => Route::Chat,
