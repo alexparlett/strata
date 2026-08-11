@@ -1,7 +1,8 @@
 use strata_model::{ResultsView, TabId};
 
 use crate::apps::export::ExportLaunch;
-use crate::apps::project::state::{Chan, SessionState};
+use crate::apps::project::state::{Chan, ChatsCtx, SessionState};
+use crate::apps::project::views::{ask_about, result_anchor};
 use crate::components::icon::{Icon, IconName};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment, TOOLBAR_TWO_ICON_WIDTH};
 use crate::components::tool_button::TOOL_SIZE;
@@ -10,7 +11,7 @@ use crate::components::typography::InputTypography;
 use crate::platform::open_export;
 use crate::theme::{use_roles, Role};
 use freya::prelude::*;
-use freya::radio::use_radio;
+use freya::radio::{use_radio, use_radio_station};
 use strata_core::config::Command;
 
 use super::chart::ChartCapture;
@@ -94,6 +95,10 @@ impl Component for ResultsToolbar {
         let mut sel = use_consume::<State<Selection>>();
         let tab = self.tab;
         let mut session = use_radio::<SessionState, Chan>(Chan::Request(tab));
+        // The chat pane's conversations, for the result-anchored entry below, and the station
+        // its write goes through (this row already subscribes on the tab's request channel).
+        let chats = use_consume::<ChatsCtx>();
+        let station = use_radio_station::<SessionState, Chan>();
         // The Table/Chart view mode — its own channel, so a flip wakes only the results pane.
         let mut view_radio = use_radio::<SessionState, Chan>(Chan::View(tab));
         let view = view_radio.read().view(tab);
@@ -252,6 +257,18 @@ impl Component for ResultsToolbar {
                         sel.set(Selection::None);
                     }),
             )
+            // **Result-anchored help** (AS-04): one press into the chat pane with this run's
+            // schema, its exact total and the page in hand already attached. Absent rather than
+            // disabled when the run settled no rows — there is nothing to ask about, and the
+            // same `export` value is what says so.
+            .map(self.export.clone(), |bar, launch| {
+                bar.item(
+                    ToolbarAction::new(IconName::Chat, "Ask the assistant about this result")
+                        .on_press(move |_| {
+                            ask_about(station, chats, result_anchor(&launch.target));
+                        }),
+                )
+            })
             .item(
                 // Opens a window **on this run**, carrying its snapshot handle: the window
                 // pins that snapshot for its life, so re-running here afterwards doesn't

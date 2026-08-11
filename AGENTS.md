@@ -359,6 +359,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   front of it is the *editor's* policy.** `offer_sql` is the assistant's own tool, never on the
   router; it validates before the card exists, which is what lets it hand over a write the
   assistant is itself refused. Explanatory SQL stays an ordinary code block.
+- **A window holds conversations, the pick is per conversation, and a step card is a citation.**
+  `state::chat`'s `Chats` is ephemeral and capped, seeded through `seed_pick` (a provider that is
+  no longer enabled is not a pick); a turn's blocks stay in **arrival order**, every figure on a
+  step card is the engine's own, and an `offer_sql` card is executable *instead of* a step card,
+  never beside one. Promotion is `actions::open_sql` — never a write to the user's buffer.
+- **A turn is cancelled by dropping its task, and a dropped run still settles.** The task owns
+  AS-02's `Running`, whose drop guard is the cancel and the engine's abort; the reply keeps what
+  streamed, marked stopped. One layer down, `SettleOnDrop` sends the stop settle in the engine's
+  own `CANCELLED` wording, so no satellite is left holding a `Running` row.
 - **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
   listed — and the mark is minted, never claimed.** `StrataTools::in_app` sets `Agent::in_app`,
   which rides the call that opens a session to every `Host`; `Agents::agents` is the one place the
@@ -420,6 +429,10 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   an over-shared role is split, never worked around with a literal.
 - **Panel layout lives on `SessionState`** — `Chan::Layout` (structure) + `Chan::LayoutSize` (sizes,
   unsubscribed). Keep panels keyed with fixed `.order()`.
+- **Each edge of the shell offers one pane at a time, and a rail is what picks it.** The right
+  side is `Layout::right: Option<RightPane>` — inspector *or* chat, never both — exactly as the
+  left is `Option<SidebarPane>`. A rail toggle collapses the lit pane; a surface that *names* one
+  opens it (`open_right_pane`, never `toggle_right_pane`).
 
 **Windows and lifetimes**
 

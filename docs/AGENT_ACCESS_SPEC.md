@@ -36,8 +36,10 @@ engine handles for the data reads. The vocabulary is deployed:
   with no second list. An in-process caller is the *owned* case: it holds the value's own
   connection, so its `AgentId` lives as long as its mount and retracts by RAII, and it
   introduces itself with an identity of its own (`AgentIdentity::assistant()` for the
-  assistant). The seam is built and tested (`crates/strata-agent/tests/facade.rs`); the loop
-  and the pane over it are not (see [What is not built](#what-is-not-built)).
+  assistant). The seam, the loop over it (`strata_agent::assistant`) and the project window's
+  chat pane are all built and tested (`crates/strata-agent/tests/facade.rs`,
+  `tests/assistant.rs`); what remains is persisting a conversation — see
+  [What is not built](#what-is-not-built).
 
 `strata-agent` has **no Freya dependency**, and that is the property doing the work: it is
 what lets one implementation of the vocabulary serve HTTP, serve stdio, be called in-process,
@@ -398,12 +400,13 @@ the disconnection.
 
 Stated so the reader does not go looking:
 
-- **The in-process assistant pane** — a native conversation surface in the project window.
-  Everything underneath it is now built: the vocabulary is driveable with no MCP peer at all
-  (AS-01, above) and the agentic loop over a pluggable provider seam is
-  `strata_agent::assistant` (AS-02 — `genai`, one provider table, streaming, tool dispatch by
-  name, cancel). What is missing is the Freya surface itself and the Settings roster that feeds
-  it (AS-03/AS-04). Two things about that loop bear on this document:
+- **Conversation persistence** for the in-app assistant (AS-07). The pane itself is **built**
+  (AS-04): a right-pane chat, several conversations per window, the model's reply streaming in
+  as markdown, a citation card under every tool round and an executable card for every
+  `offer_sql`. Closing the window is still the end of its transcripts.
+
+  Two things about the assistant bear on this document, and both are unchanged by the pane
+  existing:
   - **The assistant is held but not listed in the Agents pane.** That pane lists the *external*
     clients connected to a project; the assistant is part of the app, and its runs render as step
     cards in its own transcript. It is one more agent to everything described here — its own
@@ -414,6 +417,11 @@ Stated so the reader does not go looking:
   - **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
     hands the user a statement to execute. It is never registered on the router, so `tools/list`
     is exactly the ten below and no MCP client is offered it.
+
+  One thing the pane *did* change here: a run whose future is **dropped** now settles as a stop
+  rather than leaving a `Running` row behind (`agent::directory`'s `SettleOnDrop`). That is how
+  the assistant cancels a turn, and it is also what an MCP client hanging up mid-run does —
+  AA-03c's connection-end reap covered the second case only.
 
   The design and decision record are in `.claude/tasks/workstream-assistant/`.
 - **MCP resources** — the vocabulary is tools only.

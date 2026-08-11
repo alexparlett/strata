@@ -17,13 +17,13 @@ use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{
-    ColRef, ColumnInfo, Origin, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+    ColRef, ColumnInfo, Origin, RightPane, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
 };
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::query::ScanId;
-use crate::apps::project::state::{CatalogState, Log, PersistFaults};
+use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
 use super::entry::{fold_plan, watched_scan, Folds, ACTIONS_SIZE};
 use super::*;
@@ -249,7 +249,7 @@ fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Ha
             let session = r.provide_root_context(|| {
                 RadioStation::<SessionState, Chan>::create({
                     let mut s = SessionState::default();
-                    s.close_inspector();
+                    s.close_right_pane();
                     s
                 })
             });
@@ -273,6 +273,9 @@ fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Ha
             // write-fault satellite that holds the condition after it.
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
+            // The window's conversations (AS-04): the catalog row menus' **Ask about this**
+            // pins into the open one, so the handle is gathered with the rest.
+            r.provide_root_context(|| State::create(Chats::new(Pick::default())));
             (
                 filter,
                 selection,
@@ -602,7 +605,7 @@ fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
 
     assert!(selection.peek().is_none());
     assert!(
-        !session.peek().layout.inspector_open,
+        session.peek().layout.right.is_none(),
         "the inspector starts collapsed"
     );
 
@@ -614,7 +617,7 @@ fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
     assert_eq!(selected.path, vec!["id".to_string()]);
     assert_eq!(selected.kind, CatalogKind::Table);
     assert!(
-        session.peek().layout.inspector_open,
+        session.peek().layout.right == Some(RightPane::Inspector),
         "selecting a column reveals the inspector"
     );
 }
@@ -1197,6 +1200,7 @@ fn each_row_kind_offers_its_own_menu() {
         vec![
             "View table",
             "Profile table",
+            "Ask about this table",
             "Refresh table",
             "Configure",
             "Drop table"
@@ -1207,7 +1211,13 @@ fn each_row_kind_offers_its_own_menu() {
     let (mut runner, ..) = settled();
     assert_eq!(
         open_menu(&mut runner, "orders_daily"),
-        vec!["View view", "Profile view", "Edit query", "Drop view"],
+        vec![
+            "View view",
+            "Profile view",
+            "Ask about this view",
+            "Edit query",
+            "Drop view"
+        ],
         "a view has no files to re-infer, so no Refresh — and it can be edited, which a table \
          cannot"
     );
@@ -1215,8 +1225,14 @@ fn each_row_kind_offers_its_own_menu() {
     let (mut runner, ..) = settled();
     assert_eq!(
         open_menu(&mut runner, "signup funnel"),
-        vec!["Open in new tab", "Rename", "Delete query"],
-        "a saved query is a stored string: nothing to profile, configure or refresh"
+        vec![
+            "Open in new tab",
+            "Ask about this query",
+            "Rename",
+            "Delete query"
+        ],
+        "a saved query is a stored string: nothing to profile, configure or refresh — but its \
+         SQL is something to ask about"
     );
 
     // An **internal** table (ED-04) is a fourth row kind as far as this list is concerned. Its
@@ -1225,7 +1241,13 @@ fn each_row_kind_offers_its_own_menu() {
     let (mut runner, ..) = settled_over(mixed_origins);
     assert_eq!(
         open_menu(&mut runner, "daily_totals"),
-        vec!["View table", "Profile table", "Refresh table", "Drop table"],
+        vec![
+            "View table",
+            "Profile table",
+            "Ask about this table",
+            "Refresh table",
+            "Drop table"
+        ],
         "Configure edits the sources, format and partitions of a def that points at the user's \
          own files, and an internal table has none of those to edit — ever, which is why the \
          item is absent rather than disabled. Refresh stays: re-inference is how its row count \
@@ -1497,6 +1519,7 @@ fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
         vec![
             "View table",
             "Profile table",
+            "Ask about this table",
             "Refresh table",
             "Configure",
             "Drop table"

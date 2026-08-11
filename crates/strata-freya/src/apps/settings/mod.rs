@@ -48,7 +48,7 @@ use strata_core::ai::ProviderKind;
 use strata_core::config::{Command, Settings};
 
 use crate::apps::settings::views::{
-    ChatPane, DataDisplayPane, EnginePane, KeymapPane, McpPane, Probes, PropRows, ProvidersPane,
+    ChatPane, DataDisplayPane, EnginePane, KeymapPane, McpPane, PropRows, ProvidersPane,
     SettingsChrome, SystemPane, ThemePane, TypedKeys,
 };
 use crate::components::form::Reveal;
@@ -57,7 +57,7 @@ use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
 use crate::state::{
     use_share_config, write_config, write_listings, AppCtx, ConfigChan, ConfigStation,
-    ModelListings, ThemePreview, ThemeSel,
+    ModelListings, ProviderProbes, ThemePreview, ThemeSel,
 };
 use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
@@ -232,7 +232,7 @@ pub struct SettingsCtx {
     /// On the window rather than the pane for `engine`'s reason: Providers runs the test and
     /// Chat reports what it said, and a result thrown away by navigating between the two would
     /// leave the model picker unable to say why it has nothing to offer.
-    pub probes: State<Probes>,
+    pub probes: ProviderProbes,
     /// **What each provider last reported serving** (AS-06) — the app-global satellite, not
     /// this window's.
     ///
@@ -276,13 +276,18 @@ impl PartialEq for SettingsCtx {
 }
 
 impl SettingsCtx {
-    fn new(config: ConfigStation, preview: ThemePreview, listings: ModelListings) -> Self {
+    fn new(
+        config: ConfigStation,
+        preview: ThemePreview,
+        listings: ModelListings,
+        probes: ProviderProbes,
+    ) -> Self {
         let settings = config.peek().settings.clone();
         Self {
             engine: State::create(PropRows::from_map(&settings.engine)),
             ai_keys: State::create(TypedKeys::default()),
             applying: State::create(false),
-            probes: State::create(Probes::default()),
+            probes,
             listings,
             draft: State::create(settings.clone()),
             seed: State::create(settings),
@@ -658,7 +663,8 @@ impl App for SettingsApp {
         let ctx = use_provide_context({
             let preview = self.app.preview;
             let listings = self.app.listings;
-            move || SettingsCtx::new(config, preview, listings)
+            let probes = self.app.probes;
+            move || SettingsCtx::new(config, preview, listings, probes)
         });
         // The search's pointer at one row of one pane (P4-09). Provided **above** the router,
         // because the nav writes it before the page holding the row has mounted — see

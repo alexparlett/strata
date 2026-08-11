@@ -13,6 +13,12 @@ license = "MIT"
 # `engine` is a re-export gate, not a dependency: it is what puts `freya::engine::prelude`
 # (Skia's `Canvas`, `FontCollection`, `Surface`) in reach, which the chart's offscreen capture
 # needs to render outside a `CanvasContext`.
+# `markdown` (and **not** `markdown-code-editor`): the assistant's transcript renders the model's
+# prose through the fork's own `MarkdownViewer` (AGENTS.md §3 — standard components first), and the
+# code-editor variant would pull in freya's `code-editor` feature, which is the very thing this
+# crate does not use. Without it a fenced block renders as a themed mono panel, which is what a
+# transcript wants: SQL the assistant is *explaining* is prose, and SQL it is *offering* arrives as
+# its own card through `offer_sql` rather than as markdown at all.
 freya = { workspace = true, features = [
   "radio",
   "query",
@@ -20,6 +26,7 @@ freya = { workspace = true, features = [
   "router",
   "plot",
   "engine",
+  "markdown",
 ] }
 
 # The shared core: engine (Command/Event protocol + worker handle) + the data vocabulary.

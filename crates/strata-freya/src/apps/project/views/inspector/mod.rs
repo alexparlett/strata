@@ -178,7 +178,7 @@ impl Component for Inspector {
                             .height(Size::px(24.))
                             .on_press(move |_| {
                                 let mut layout = layout;
-                                layout.write_channel(Chan::Layout).close_inspector();
+                                layout.write_channel(Chan::Layout).close_right_pane();
                             })
                             .child(Icon::new(IconName::Close).size(13.)),
                     ),

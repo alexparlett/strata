@@ -2,6 +2,21 @@
 
 **Workstream:** Assistant · **Status:** ✅ · **Depends on:** AS-01
 
+## Owed to AS-04 (2026-08-11)
+
+**A reasoning event.** The design canvas draws a collapsible "Thought for 4s" above a reasoning
+model's answer, and the pane cannot build it: the stream loop matches `ChatStreamEvent::Chunk` and
+`End` and lets reasoning + thought-signature chunks ride the captured content into the next
+request (`capture_reasoning_content`), so nothing about the model's thinking reaches
+`TurnEvent`. Building the control from here would mean inventing the fact.
+
+The shape is one variant and one arm — a `TurnEvent::Reasoning(String)` emitted from the arm that
+currently falls through, deltas appended the way `Delta` already is. What it must **not** do is
+change what rides into the next request: the capture is what keeps a thought signature valid, and
+emitting a copy is additive to it. `state::chat` grows a `Block::Thought` beside `Prose` when the
+event exists, and the transcript renders it collapsed.
+
+
 ## As built
 
 `crates/strata-agent/src/assistant/`, Freya-free like the rest of the crate — four modules and

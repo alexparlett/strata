@@ -488,6 +488,23 @@ src/apps/project/                the project window (Valin-shaped)
                                  Here rather than beside a caller because every writer that was
                                  added *away* from the old home grew its own silent
                                  `tracing::error!` instead of finding it
+                                 chat.rs = AS-04's **transcript satellite**: `Chats` (several
+                                 conversations, both lists capped), each with its per-conversation
+                                 `Pick`, its pinned `Anchor`s, its `Turn`s of ordered `Block`s
+                                 (prose · a step card's citation · an `offer_sql` statement), the
+                                 model's own `Conversation`, and the task driving its turn —
+                                 whose *drop* is the cancel. Ephemeral: nothing reaches
+                                 `session.json` (AS-07 is what makes a transcript survive), and
+                                 nothing reaches history, which stays the user's. Unit-tested
+                                 with no renderer
+                                 chat_send.rs = AS-04's **send funnel**: `AssistantCtx` (the
+                                 app's runtime, one `StrataTools::in_app` per mount, and the
+                                 project scope), `seed_pick`, `blocked` (what is missing, named
+                                 before a press rather than reported after one) and `send` — which
+                                 resolves the store-answerable anchors on the render thread,
+                                 records the question, then spawns the one task that describes the
+                                 rest, reads the key **off** the render thread and folds every
+                                 `TurnEvent` into the transcript
                                  statement.rs = ED-02's **statement settle**: one fold applying an
                                  intercepted statement's `StoreEffect` — store channel →
                                  `persisted_defs` → `catalog_settled` → the event log. Driven
@@ -518,6 +535,24 @@ src/apps/project/                the project window (Valin-shaped)
                                  over the drawer), the collapsibles as `ResizableContainer`
                                  panels — present only when the layout has them open, keyed with
                                  fixed `.order()` so the workbench survives a sibling collapse
+    right_rail.rs                AS-04 — the **right** 48px rail: `rail.rs`'s mechanism on the
+                                 other edge, picking which assistive surface the right pane shows
+                                 (inspector · chat). One slot rather than two panels, which is
+                                 what keeps a 1180px window readable with both rails, a sidebar
+                                 and the drawer up. No badge on either button: the inspector has
+                                 nothing to count, and an unread count is a notion for a surface
+                                 somebody else writes into
+    chat/                        AS-04 — the **chat pane**: mod.rs (the frame, the `chat` theme,
+                                 `ask_about` — the one funnel every friction entry opens through
+                                 — and `result_anchor`), header.rs (the chat switcher, over
+                                 `Menu`), transcript.rs (turns in arrival order; prose through
+                                 the fork's `MarkdownViewer`), card.rs (the **step** card, a
+                                 citation whose every figure is the engine's own, and the
+                                 **offer** card, executable because `offer_sql` checked it — both
+                                 promoting through `actions::open_sql`, never into the user's
+                                 buffer), composer.rs (chips · input · the per-conversation
+                                 model + effort pick · send-becomes-stop), mention.rs (the `@`
+                                 picker over the catalog **store**)
     rail.rs                      the 48px activity rail: two `ToggleButton` groups — the top
                                  picks the sidebar pane (Catalog · Agents · Connections), the
                                  bottom the drawer tab (Problems · Events · History). `on` is

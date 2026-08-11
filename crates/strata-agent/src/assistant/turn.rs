@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use genai::chat::{
-    ChatMessage, ChatRequest, ChatStreamEvent, StopReason, Tool, ToolCall, ToolResponse,
+    ChatMessage, ChatRequest, ChatRole, ChatStreamEvent, StopReason, Tool, ToolCall, ToolResponse,
 };
 use serde_json::{json, to_string, Value};
 use tokio::sync::mpsc::UnboundedSender;
@@ -451,20 +451,79 @@ impl<'a> Staged<'a> {
         self.sent.clone()
     }
 
-    /// Hand this turn's contribution to the conversation — unless it has none worth keeping.
+    /// Hand this turn's contribution to the conversation — **only if it ends on an answer**.
     ///
     /// A turn that produced no assistant message at all (a provider fault, a stop before the
     /// first token) commits nothing: the only thing it staged is the user's question, and a
     /// question recorded with no answer after it is a message the *next* send would replay
     /// alongside the retyped one.
+    ///
+    /// **And a turn that ran tools and then failed commits nothing either**, which is the same
+    /// rule read properly. "Did it answer" was once "did it stage more than the question", and a
+    /// tool round stages two messages — so a turn that called `run`, got its rows and then hit a
+    /// rate limit committed a conversation whose last message was *tool results*. Every provider
+    /// reads that as work in progress: the next send arrives after an unanswered round and the
+    /// model carries on with the previous question instead of the new one, which is exactly what
+    /// it looks like from the outside — the assistant answering the message before last.
+    ///
+    /// So the test is the **shape of the tail**, not the count: the conversation may only ever
+    /// end on an assistant message that is prose. Tool calls awaiting results, and results
+    /// awaiting an answer, are both mid-round.
+    ///
+    /// **A block that is mid-round is closed, not thrown away.** Dropping it was the first
+    /// version of this rule and it was too blunt: a turn stopped *during* a tool round — the
+    /// commonest stop there is — had already streamed a paragraph and answered its calls, and
+    /// discarding all of it left the pane showing an exchange the model had no record of, which
+    /// is the very complaint this predicate was written for. `StoppedAtCap` and `Oversized` land
+    /// the same way. So when the tail is a round that will not be continued, the turn's own
+    /// account of why closes it off, and the whole block commits.
     fn commit(&mut self, settle: &Settle) {
-        let mine: Vec<ChatMessage> = self.sent.split_off(self.from);
-        let answered = mine.len() > 1;
-        if !answered && matches!(settle, Settle::Failed(_) | Settle::Cancelled) {
-            return;
+        let mut mine: Vec<ChatMessage> = self.sent.split_off(self.from);
+        if !ends_on_an_answer(&mine) {
+            let Some(note) = unfinished(&mine, settle) else {
+                return;
+            };
+            mine.push(ChatMessage::assistant(note));
         }
         self.conversation.lock().unwrap().commit(mine);
     }
+}
+
+/// How a block that stopped mid-round says so to the model — or `None` when there is nothing
+/// worth keeping.
+///
+/// Nothing worth keeping is a turn that never got past the user's question: a question recorded
+/// with no answer after it is a message the *next* send would replay alongside the retyped one,
+/// which is the case [`Staged::commit`]'s first rule existed for and still handles. Anything
+/// further in — prose, a tool round, both — is history the user can see, so it stays, closed by
+/// a line in the turn's own words rather than this function's.
+fn unfinished(staged: &[ChatMessage], settle: &Settle) -> Option<String> {
+    if staged.len() < 2 {
+        return None;
+    }
+    settle.note()
+}
+
+/// Whether `staged` is a whole round: it ends on an assistant message carrying **prose**.
+///
+/// The one predicate [`Staged::commit`] gates on — see its note for the failure it exists to
+/// prevent. Text *parts* count, because a provider that returns content parts has still answered;
+/// tool calls do not, because a message asking for a tool is the middle of a round.
+fn ends_on_an_answer(staged: &[ChatMessage]) -> bool {
+    let Some(last) = staged.last() else {
+        return false;
+    };
+    if last.role != ChatRole::Assistant {
+        return false;
+    }
+    // Prose **and** no outstanding calls: a message that both said something and asked for a
+    // tool is still the middle of a round, and its results are the part that never arrived.
+    last.content.tool_calls().is_empty()
+        && last
+            .content
+            .texts()
+            .iter()
+            .any(|text| !text.trim().is_empty())
 }
 
 #[allow(clippy::too_many_arguments)] // Each is a distinct handle the turn needs; see `run`.

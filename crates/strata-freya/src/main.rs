@@ -12,11 +12,13 @@
 //! `strata_core::engine` and `docs/SNAPSHOT_SPEC.md` §7.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::{env, fs, io, process};
 
 use apps::launcher::LauncherApp;
 use apps::project::{window_geometry_blocking, ProjectApp};
 use freya::prelude::*;
+use strata_agent::assistant::Assistant;
 use strata_agent::serve_stdio;
 use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
@@ -26,7 +28,8 @@ use strata_core::secret::open_keystore;
 use crate::agent::create_global_agent;
 use crate::platform::{create_global_open, create_global_windows};
 use crate::state::{
-    create_global_config, create_global_listings, create_global_theme_preview, AppCtx,
+    create_global_config, create_global_listings, create_global_probes,
+    create_global_theme_preview, AppCtx,
 };
 use crate::theme::ThemesCtx;
 
@@ -114,6 +117,22 @@ fn main() {
     // key on the wire per provider, on every start, for a session that mostly never opens a
     // model picker at all. The refresh happens where the list is shown.
     let listings = create_global_listings();
+    // The outcome half of the same question — see `state::listings::Probes`.
+    let probes = create_global_probes();
+    // The assistant's runtime (AS-02/AS-04): **one per app**, because a runtime is threads and
+    // several conversations streaming at once are several tasks on the same two. Deliberately
+    // *not* the MCP server's runtime, whose lifetime is a setting — the chat pane must not stop
+    // working because agent access was switched off.
+    //
+    // A runtime that will not build is reported by the chat pane rather than taken as fatal: the
+    // rest of the app has no use for it, so the honest degradation is a composer that says so.
+    let assistant = match Assistant::new() {
+        Ok(assistant) => Some(Rc::new(assistant)),
+        Err(e) => {
+            tracing::error!("{e}");
+            None
+        }
+    };
     // Everything a window — or the menubar handler — is handed, in one value.
     let app = AppCtx {
         themes,
@@ -124,6 +143,8 @@ fn main() {
         open: focused_open,
         agent,
         listings,
+        probes,
+        assistant,
     };
     let menu_app = app.clone();
     let launch_config = with_embedded_fonts(LaunchConfig::new())

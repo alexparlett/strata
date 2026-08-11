@@ -1,7 +1,60 @@
 # AS-04 · The chat pane
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-02, AS-03, AS-06 (the model
-listing the footer's picker reads)
+**Workstream:** Assistant · **Status:** ✅ (built 2026-08-11) · **Depends on:** AS-02, AS-03,
+AS-06 (the model listing the footer's picker reads)
+
+## As built — and where it differs from the plan below
+
+The plan below stands except where this section overrides it; a designer drew the canvas after
+it was written, and four things moved.
+
+**The pane lives on a right rail, and the right side is one slot.** `Strata.dc.html` grew a
+second 48px rail (`data-rg="rightrail"`) mirroring the left one, picking the **column inspector
+or the chat**. So the toggle is *not* on the left rail beside Catalog · Agents · Connections as
+this file says: `Layout::inspector_open` became `Layout::right: Option<RightPane>`, with
+`chat_w` beside `inspector_w`, and `views::right_rail` is `views::rail`'s mechanism on the other
+edge. The two panes share a position and nothing else, so the shell keys the panel per pane
+rather than per side.
+
+**A window holds several conversations.** The canvas's header is a chat switcher, so the
+satellite is `Chats` (a list, a live id, both capped) rather than one transcript, and the pick is
+per conversation exactly as this file describes it — there is simply more than one. Deleting the
+last conversation opens a fresh one, which is what lets `active` be an id rather than an
+`Option`.
+
+**Provider is picked by picking a model.** One control, grouped under the enabled providers, not
+two: a model belongs to exactly one provider, and two pickers can disagree in a way that offers
+selections which cannot be sent. Effort stays its own control and still renders only when
+`efforts(kind, model)` is non-empty.
+
+**The canvas's "Thought for 4s" collapsible is *not* built, and could not be from here.** AS-02
+folds reasoning chunks into the captured content that rides the next request
+(`capture_reasoning_content`) rather than emitting them, so there is no `TurnEvent` to render and
+building the control would mean inventing the fact. **Owed by AS-02** — one event variant and one
+arm in its stream loop; the transcript grows the block when the event exists. Likewise the
+canvas's four-way Minimal/Low/Medium/High effort predates AS-03: the ladder is AS-02's five
+rungs, per model.
+
+**What else this task carried:**
+
+- `probe::refresh` **moved** to `state::listings` as the task required, taking the listings
+  handle and a probes slot; `Ask::from_config` is the committed-config constructor the composer
+  needs and `Ask::from_draft` stays Settings'. The staleness guard both pickers kick with is
+  `needs_asking`, one copy.
+- The cancelled-run fix landed as `SettleOnDrop` in `agent::directory` — a drop guard around the
+  engine await sending the stop settle in the engine's own `CANCELLED` wording, disarmed on the
+  normal path.
+- The three friction entries are one funnel, `views::chat::ask_about`; the catalog's is on all
+  three row kinds (table · view · saved query), and the results toolbar's builds its anchor from
+  the same `ExportTarget` the Download press acts on.
+- Prose renders through the fork's own `MarkdownViewer` (the `markdown` feature, **not**
+  `markdown-code-editor`, which would pull in freya's code editor this app deliberately does not
+  use). Two component themes were added to the shared table: `chat`, and a retune of
+  `markdown_viewer`. No new `Role`, so the theme schema is unchanged.
+
+**Still open, deliberately:** the mini-table for small results (the plan's "may render inline"),
+and expanding a non-`run` tool card to its JSON. Both are additive to the card, and neither was
+worth a second results path before AS-07 gives a transcript something to persist.
 
 ## Goal
 

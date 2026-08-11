@@ -459,7 +459,7 @@ impl Component for ResultsBody {
                 StatusBar::new(ResultsState::Statement).statement(report.kind, report.elapsed_ms),
             ),
             QueryStateData::Settled { res: Err(err), .. } => (
-                ErrorState::new(err.clone()).into(),
+                ErrorState::new(err.clone(), self.spec.tab).into(),
                 StatusBar::new(ResultsState::Error),
             ),
         };

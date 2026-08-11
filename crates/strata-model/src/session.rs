@@ -73,6 +73,23 @@ pub enum SidebarPane {
     Agents,
 }
 
+/// Which assistive surface the **right** rail shows. `None` on [`Layout::right`] means the
+/// right side is collapsed.
+///
+/// A single-selection pane rather than two independent flags, exactly as
+/// [`SidebarPane`] is on the left: the canvas (`Strata.dc.html` `data-rg="rightrail"`) gives
+/// the right edge its own 48px rail and one column beneath it, so the inspector and the chat
+/// are alternatives rather than neighbours. That is what keeps a 1180px window readable with
+/// both rails and the drawer up, and it is the same arrangement RustRover uses on its right
+/// edge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum RightPane {
+    /// The selected column's facts (P3-08).
+    Inspector,
+    /// The assistant's conversation (AS-04).
+    Chat,
+}
+
 /// Which tab the bottom drawer shows. The rail's bottom group selects it; `None` on
 /// [`Layout::drawer`] means the drawer is collapsed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -91,9 +108,9 @@ pub struct Layout {
     /// The open sidebar pane, or `None` when collapsed.
     #[serde(default)]
     pub sidebar: Option<SidebarPane>,
-    /// Whether the right column inspector is open.
+    /// The open right pane, or `None` when the right side is collapsed.
     #[serde(default)]
-    pub inspector_open: bool,
+    pub right: Option<RightPane>,
     /// The open drawer tab, or `None` when collapsed.
     #[serde(default)]
     pub drawer: Option<DrawerTab>,
@@ -101,6 +118,11 @@ pub struct Layout {
     pub sidebar_w: f32,
     #[serde(default = "default_inspector_w")]
     pub inspector_w: f32,
+    /// The chat pane's width. Its own field rather than one shared with the inspector: the two
+    /// share a slot on screen and nothing else — a transcript wants more room than a column's
+    /// facts do, and a user who sizes one has not sized the other.
+    #[serde(default = "default_chat_w")]
+    pub chat_w: f32,
     #[serde(default = "default_drawer_h")]
     pub drawer_h: f32,
     /// The height the drawer's expand toggle will restore it to — and, by being `Some`, the
@@ -137,6 +159,9 @@ fn default_sidebar_w() -> f32 {
 fn default_inspector_w() -> f32 {
     292.0
 }
+fn default_chat_w() -> f32 {
+    340.0
+}
 fn default_drawer_h() -> f32 {
     240.0
 }
@@ -149,10 +174,11 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             sidebar: Some(SidebarPane::Catalog),
-            inspector_open: false,
+            right: None,
             drawer: None,
             sidebar_w: default_sidebar_w(),
             inspector_w: default_inspector_w(),
+            chat_w: default_chat_w(),
             drawer_h: default_drawer_h(),
             drawer_restore_h: None,
             problems_tab: ProblemsTab::Queries,

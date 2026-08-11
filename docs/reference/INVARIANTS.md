@@ -670,6 +670,42 @@ Things that must not regress. Each was fought for once already.
   because the card runs in the user's editor, which is what lets the assistant hand over a write
   it is itself refused. SQL it is merely explaining stays an ordinary code block; telling the two
   apart is the whole point.
+- **A window holds conversations, the pick is per conversation, and a step card is a citation.**
+  `state::chat`'s `Chats` is the transcript satellite — several conversations, both the list and
+  each conversation's turns capped, in the image of `state::agents` and `state::log`. Nothing here
+  reaches `session.json` (AS-07 is what makes a transcript survive a restart, and the value that
+  has to survive is the `Conversation` the model reads back, not the blocks the pane paints —
+  `Chats::settle` is where that writer hooks) and nothing reaches `history.jsonl` (the **adoption**
+  rule: a promoted tab's own Run press is what records).
+
+  Each conversation carries its own `Pick`, seeded from Settings through `seed_pick`, which drops
+  a provider that is no longer enabled — in Settings a disabled provider also loses its key, so
+  "disabled" and "no longer usable" are one state rather than two the pane has to tell apart. The
+  composer picks a **model**, grouped under the enabled providers, because a model belongs to
+  exactly one provider and two pickers can disagree in a way that offers selections which cannot
+  be sent; effort renders only when `efforts(kind, model)` is non-empty, and a rung the newly
+  picked model does not offer is dropped rather than kept out of sight (`Brain::resolve` refuses
+  one before a socket opens, and the control that set it is gone by then).
+
+  A turn's blocks stay in **arrival order** — the model speaks, calls a tool, speaks again, and a
+  transcript that hoisted every card to the bottom would separate its reasoning from its evidence.
+  Every figure on a step card is the engine's own (`elapsed_ms`, the exact total, the stop's own
+  wording), which is what makes AS-02's no-number-without-a-run prompt rule auditable; an
+  `offer_sql` card is executable *instead of* a step card, never beside one. Promotion is
+  `actions::open_sql` — the Agents pane's funnel — and **never** a write to the user's buffer,
+  which is often their only record of how a number was reached.
+- **A turn is cancelled by dropping its task, and a dropped run still settles.** The send funnel's
+  task owns AS-02's `Running`, whose `tokio_util` drop guard *is* the turn's cancel and the
+  in-flight tool's engine abort — so there is no second stop path to keep in step, and the reply
+  keeps everything that had already streamed, marked stopped (a conversation that erased what it
+  was doing when you stopped it is one you cannot audit).
+
+  One layer down, `agent::directory`'s `SettleOnDrop` sends the stop settle when a run's future is
+  dropped, in the engine's own `CANCELLED` wording, disarmed on the normal path. A `Drop` rather
+  than a `select!` arm because there is nothing to select on: a cancelled future never resumes to
+  run a cleanup branch. Without it a stopped run left its satellite row reading `Running` for the
+  window's life — AA-03c reaps such a row when a **connection** ends, which covers an MCP client
+  hanging up and not the assistant, whose connection is the pane's whole mount.
 - **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
   listed — and the mark is minted, never claimed.** That pane answers "what is working on my
   project right now" about *external* clients; the assistant is part of the app and its runs
@@ -1509,6 +1545,18 @@ Things that must not regress. Each was fought for once already.
   `Chan::LayoutSize` = sizes (nobody subscribes; a resize drag persists without re-rendering the
   shell). `ResizableContainer` owns live resizing — we persist only the last size. Keep panels
   **keyed** with fixed `.order()` so the `Workbench` subtree survives a sibling collapsing.
+- **Each edge of the shell offers one pane at a time, and a rail is what picks it.** The left side
+  is `Layout::sidebar: Option<SidebarPane>` (catalog · agents · connections); the right, since
+  AS-04, is `Layout::right: Option<RightPane>` — the column inspector **or** the chat, never both.
+  Two independent flags would let a 1180px window carry two rails, a sidebar, two right panels and
+  the drawer at once, which is the arrangement the canvas declares a minimum width to avoid; one
+  slot is also RustRover's own right edge. Each pane keeps its **own** remembered width
+  (`inspector_w`, `chat_w`) because they share a position and nothing else, and the shell keys the
+  panel per pane so switching remounts rather than inheriting the other's scroll offset.
+
+  The rail's press is `toggle_right_pane` (pressing the lit one collapses); a surface that *names*
+  a pane calls `open_right_pane` — the distinction `open_drawer` already draws, because a catalog
+  row saying "Ask about this table" has to mean it.
 - **A window that belongs *to* another window is a child window, and its lifetime is ours.** The
   Settings window is one app-wide, pinned above whichever window opened it (the fork's
   `set_window_parent`), re-pointed when another window asks — with one entry point

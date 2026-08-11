@@ -1,14 +1,18 @@
-//! The project window **body shell** (P3-01) — the rail · sidebar · workbench · inspector · drawer
-//! frame (design `Strata.dc.html` `data-rg` regions). Mounted between the header and the workbench
-//! in `project.rs`, it composes:
+//! The project window **body shell** (P3-01) — the two rails · sidebar · workbench · right pane ·
+//! drawer frame (design `Strata.dc.html` `data-rg` regions). Mounted between the header and the
+//! workbench in `project.rs`, it composes:
 //!
 //! ```text
-//! [ rail | ── right area (vertical resizable) ─────────────── ]
-//!        |  [ sidebar | workbench | inspector ]  (horizontal resizable, panes-row)
-//!        |  [ ─────────── drawer ─────────── ]   (collapsible bottom panel)
+//! [ rail | ── right area (vertical resizable) ─────────────── | right rail ]
+//!        |  [ sidebar | workbench | right pane ]  (horizontal resizable, panes-row)
+//!        |  [ ──────────── drawer ──────────── ]  (collapsible bottom panel)
 //! ```
 //!
-//! The rail is fixed (48px, always visible); the sidebar / inspector / drawer are collapsible
+//! The **right pane is one slot** (AS-04): the right rail picks the inspector or the chat, the
+//! way the left rail picks a sidebar pane. Both rails are full height, so the drawer sits between
+//! them.
+//!
+//! Both rails are fixed (48px, always visible); the sidebar / right pane / drawer are collapsible
 //! `ResizableContainer` panels — present only when the layout has them open, so collapsing a panel
 //! removes it *and* its handle. `ResizableContainer` owns live resizing; each collapsible region
 //! reports its dragged size back to the layout (`Chan::LayoutSize`) so a reopen or a restart
@@ -55,10 +59,13 @@
 
 use freya::prelude::*;
 use freya::radio::use_radio;
+use strata_model::RightPane;
 
+use super::chat::ChatPane;
 use super::drawer::Drawer;
 use super::inspector::Inspector;
 use super::rail::ActivityRail;
+use super::right_rail::RightRail;
 use super::sidebar::Sidebar;
 use super::workbench::WORKBENCH_STUB_H;
 use super::Workbench;
@@ -84,6 +91,9 @@ const DRAWER_STUB_H: f32 = 72.;
 /// grew `ResizablePanel::max_size` for these; before that they had nowhere to live.
 const SIDEBAR_MAX_W: f32 = 520.;
 const INSPECTOR_MAX_W: f32 = 560.;
+/// The chat's own ceiling (`Strata.dc.html` `onResizeChat`), wider than the inspector's floor
+/// allows for because a transcript is prose and the inspector is a fact list.
+const CHAT_MAX_W: f32 = 620.;
 const DRAWER_MAX_H: f32 = 680.;
 
 #[derive(PartialEq)]
@@ -113,8 +123,8 @@ impl Component for Shell {
             ..ResizableContext::default()
         });
 
-        // Sidebar / inspector panels: present only when open. Each wraps its shell in a sizing
-        // probe (`on_sized`) that remembers the dragged width on `Chan::LayoutSize`.
+        // Sidebar / right panels: present only when open. Each wraps its shell in a sizing
+        // probe (`on_resized`) that remembers the dragged width on `Chan::LayoutSize`.
         let sidebar_panel = layout.sidebar.map(|_| {
             ResizablePanel::new(PanelSize::px(layout.sidebar_w))
                 .min_size(PANEL_STUB_W)
@@ -132,22 +142,42 @@ impl Component for Shell {
                 })
                 .child(rect().expanded().child(Sidebar::new()))
         });
-        let inspector_panel = layout.inspector_open.then(|| {
-            ResizablePanel::new(PanelSize::px(layout.inspector_w))
+        // The right pane: one slot, whichever assistive surface the right rail has chosen. Keyed
+        // per pane rather than "right", so switching between them remounts — the two share a
+        // position and nothing else, and a transcript inheriting the inspector's scroll offset is
+        // the kind of thing a shared key buys.
+        let right_panel = layout.right.map(|pane| {
+            let (width, key, max, body): (f32, &str, f32, Element) = match pane {
+                RightPane::Inspector => (
+                    layout.inspector_w,
+                    "inspector",
+                    INSPECTOR_MAX_W,
+                    Inspector::new().into_element(),
+                ),
+                RightPane::Chat => (layout.chat_w, "chat", CHAT_MAX_W, ChatPane.into_element()),
+            };
+            ResizablePanel::new(PanelSize::px(width))
                 .min_size(PANEL_STUB_W)
-                .max_size(INSPECTOR_MAX_W)
-                .key("inspector")
+                .max_size(max)
+                .key(key)
                 .order(2usize)
                 .on_resized(move |w: f32| {
                     let mut radio = radio;
-                    if radio.read().layout.inspector_w != w {
-                        radio.write_channel(Chan::LayoutSize).set_inspector_w(w);
+                    let layout = radio.read().layout;
+                    match pane {
+                        RightPane::Inspector if layout.inspector_w != w => {
+                            radio.write_channel(Chan::LayoutSize).set_inspector_w(w);
+                        }
+                        RightPane::Chat if layout.chat_w != w => {
+                            radio.write_channel(Chan::LayoutSize).set_chat_w(w);
+                        }
+                        _ => {}
                     }
                 })
-                .child(rect().expanded().child(Inspector::new()))
+                .child(rect().expanded().child(body))
         });
 
-        // panes-row: [ sidebar? | workbench (fills) | inspector? ]. The workbench panel is keyed
+        // panes-row: [ sidebar? | workbench (fills) | right pane? ]. The workbench panel is keyed
         // so it isn't remounted when a sibling collapses.
         let panes_row = ResizableContainer::new()
             .direction(Direction::Horizontal)
@@ -168,7 +198,7 @@ impl Component for Shell {
                     .order(1usize)
                     .child(Workbench),
             )
-            .panel(inspector_panel);
+            .panel(right_panel);
 
         // Drawer panel: present only when open; remembers its dragged height.
         let drawer_panel = layout.drawer.map(|_| {
@@ -204,13 +234,30 @@ impl Component for Shell {
             )
             .panel(drawer_panel);
 
-        // Body row: the fixed rail, a 1px rule, then the resizable right area.
+        // Body row: the two fixed rails with the resizable area between them, each behind its
+        // own 1px rule. Both rails are full height, so the drawer sits *between* them rather
+        // than under either — the canvas's arrangement, and the one that keeps a rail a
+        // permanent edge rather than something the drawer can push around.
+        //
+        // **The middle takes what is left, and says so.** `ResizableContainer` renders itself
+        // `expanded()`, which in a `Content::Normal` row claims the whole width and pushes
+        // whatever follows off screen — which is exactly what happened when the right rail was
+        // added after it. So the row is `Content::Flex` and the middle is a flexing wrapper
+        // (`Size::flex` is only divided by a parent whose content is `Flex` — AGENTS.md §3).
         rect()
             .expanded()
             .horizontal()
+            .content(Content::Flex)
             .child(ActivityRail::new())
             .child(Divider::vertical().color(border))
-            .child(right_area)
+            .child(
+                rect()
+                    .width(Size::flex(1.))
+                    .height(Size::fill())
+                    .child(right_area),
+            )
+            .child(Divider::vertical().color(border))
+            .child(RightRail::new())
     }
 }
 

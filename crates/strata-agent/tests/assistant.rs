@@ -1025,3 +1025,77 @@ async fn a_cancel_retires_the_card_it_opened() {
     assert_eq!(facts.stopped.as_deref(), Some("cancelled"));
     assert_eq!(running.settle().await, Settle::Cancelled);
 }
+
+/// **A turn that stopped mid-round is closed off, never left mid-round.**
+///
+/// The rule used to be "did this turn stage more than the question", and a tool round stages two
+/// messages — so a turn that called a tool, got its answer and *then* hit a provider fault (a
+/// rate limit, most commonly) committed a conversation whose last message was **tool results**.
+/// Every provider reads that as a round still in progress: the next send lands after it and the
+/// model carries on with the previous question instead of the new one, which from the outside
+/// looks exactly like the assistant answering the message before last.
+///
+/// Dropping the block instead was the first fix and it was too blunt — it threw away prose the
+/// user could still see on screen. What the conversation actually needs is a **valid tail**: the
+/// work stays, and the turn's own account of why it ended closes it.
+#[tokio::test]
+async fn a_turn_that_stopped_mid_round_is_closed_off() {
+    let (_engine, tools) = project("half_round").await;
+    let stub = stub(vec![
+        // The first send asks for a tool...
+        vec![
+            asks(0, "call_1", "list_tables", json!({})),
+            ends("tool_calls"),
+        ],
+        // ...and the follow-up, carrying its results, dies before saying anything.
+        vec![],
+        // The second send.
+        vec![says("Fresh."), ends("stop")],
+    ])
+    .await;
+
+    let assistant = Assistant::new().unwrap();
+    let conversation = Arc::new(Mutex::new(Conversation::new()));
+    let mut first = assistant.send(
+        tools.clone(),
+        pointed_at(&stub),
+        Scope::default(),
+        Arc::clone(&conversation),
+        Ask::new("What tables are there?"),
+    );
+    drain(&mut first).await;
+    assert!(
+        matches!(first.settle().await, Settle::Failed(_)),
+        "the follow-up request failed, so the turn did"
+    );
+
+    let mut second = assistant.send(
+        tools,
+        pointed_at(&stub),
+        Scope::default(),
+        conversation,
+        Ask::new("Never mind, hello."),
+    );
+    drain(&mut second).await;
+
+    // The half round is still there — the user can see it, so the model keeps it...
+    let carried = stub.request(2);
+    let listed = carried["messages"].as_array().expect("messages");
+    let roles: Vec<&str> = listed
+        .iter()
+        .map(|m| m["role"].as_str().unwrap_or_default())
+        .filter(|role| *role != "system")
+        .collect();
+    assert!(
+        roles.len() > 1,
+        "the stopped round is kept, not discarded: {roles:?}"
+    );
+
+    // ...and the message immediately before the new question is an **assistant** one, never a
+    // tool result. That is the whole invariant: a conversation never ends mid-round.
+    let before_question = roles[roles.len() - 2];
+    assert_eq!(
+        before_question, "assistant",
+        "the round was closed before the next question: {roles:?}"
+    );
+}

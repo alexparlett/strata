@@ -33,10 +33,10 @@ use crate::apps::project::close::{
 };
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    load_project, use_agent_bridge, use_autosave, use_diagnostics, use_engine_config,
-    use_engine_restart, use_init_agents, use_init_catalog_selection, use_init_faults,
-    use_init_history, use_init_log, use_init_project, use_init_session, Chan, EngineRestart,
-    Loaded, SessionState,
+    load_project, seed_pick, use_agent_bridge, use_autosave, use_diagnostics, use_engine_config,
+    use_engine_restart, use_init_agents, use_init_catalog_selection, use_init_chats,
+    use_init_faults, use_init_history, use_init_log, use_init_project, use_init_session,
+    AssistantCtx, Chan, EngineRestart, Loaded, SessionState,
 };
 use crate::apps::project::views::{
     CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher, DropConfirm, DropTarget,
@@ -61,6 +61,8 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use futures::executor::block_on;
 use futures::future::{select, Either};
 use futures::StreamExt;
+use strata_agent::assistant::Scope;
+use strata_agent::StrataTools;
 use strata_core::config::Command;
 use strata_core::project as project_io;
 use strata_core::theme::os_is_dark;
@@ -648,6 +650,28 @@ impl Component for ProjectLoaded {
             self.root.clone(),
             project.peek().name.clone(),
         );
+        // The assistant's own handles (AS-04). Its `StrataTools` is minted **once per mount**
+        // and `in_app`, so every conversation in this window is the same agent holding the same
+        // query sessions — and the Agents pane leaves it out by construction rather than by
+        // comparing an identity. It reaches this project the way any agent does: through the
+        // directory, scoped by the project **root**, which is the identity a name may collide
+        // with.
+        use_provide_context({
+            let assistant = self.app.assistant.clone();
+            let directory = Arc::clone(&self.app.agent.directory);
+            let root = self.root.to_string_lossy().into_owned();
+            move || AssistantCtx {
+                assistant,
+                tools: StrataTools::in_app(directory),
+                scope: Scope {
+                    project: Some(root),
+                },
+            }
+        });
+        // This window's conversations, seeded from Settings' defaults through the one funnel
+        // that drops a provider which is no longer enabled. Ephemeral: nothing here reaches
+        // `session.json` (AS-07 is what makes a transcript survive a restart).
+        use_init_chats(seed_pick(&config.peek().settings.ai));
         // Debounced autosave of that session back to `.strata/session.json`. Its subscription
         // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
         // is what makes a close — or a re-root — keep the last few hundred milliseconds.

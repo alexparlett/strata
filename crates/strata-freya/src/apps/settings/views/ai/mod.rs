@@ -39,5 +39,4 @@ mod row;
 pub use chat::ChatPane;
 pub use keys::{commit, TypedKeys};
 pub use mcp::McpPane;
-pub use probe::Probes;
 pub use providers::{missing, ProvidersPane};
