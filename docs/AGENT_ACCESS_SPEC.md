@@ -64,9 +64,9 @@ ambiguity rather than guessing.
 | Tool | Answers |
 |---|---|
 | `list_projects` | The open projects: name and root. |
-| `list_tables` | The catalog **as the app shows it**: tables, views and saved queries, each with its source and registration state (`ready` / `failed` with the failure message / `pending`). |
-| `describe_table(name)` | One table or view: columns and types, nested fields, Hive partition columns, sources and format, plus the row count and column statistics the source reports for free. Only facts that were read — nothing is scanned or estimated. |
-| `list_functions` | The engine's live function registry: names, overload signatures, docs. What is registered is what exists — there is no second list to drift. |
+| `list_tables(matching?, page?)` | The catalog **as the app shows it**: tables, views and saved queries, each with its source and registration state (`ready` / `failed` with the failure message / `pending`). The answer states its total; `matching` filters by name substring and `page` windows 50 entries at a time. A view row carries a one-line SQL preview (the full text is `describe_table`'s); a saved query's SQL stays whole, because no other tool returns it. |
+| `describe_table(name, path?, matching?, page?)` | One table or view: columns and types, nested fields, Hive partition columns, sources and format, plus the row count and column statistics the source reports for free. Only facts that were read — nothing is scanned or estimated. The schema is **bounded** (see below): `path` descends to a nested column, `matching` finds fields by name anywhere in the tree and answers with their paths, `page` reads more columns or matches. |
+| `list_functions(matching?)` | The engine's live function registry. What is registered is what exists — there is no second list to drift. The answer states its total; a set of 30 or fewer is full detail (signatures, returns, docs), a larger one is names only, and `matching` narrows by name substring back into detail. |
 | `validate(sql)` | Lints, the read-only policy, and a dry plan against the real catalog, without executing. The cheap way to find a typo before spending a run. |
 | `open_query_session()` | Mints a query session for the calling agent and returns its handle. |
 | `list_query_sessions()` | **The caller's own** sessions: handle, and whether a run is in flight, settled, or has never happened. |
@@ -80,7 +80,25 @@ Rules that hold across the vocabulary:
   user's own press would, and the *response* is bounded by `page_size` plus paging. Totals
   are always exact, because the snapshot knows. `page_size` defaults to the app's row-limit
   setting and is capped at `MAX_PAGE_SIZE` (10,000 rows); the response reports the size
-  actually used, so the clamp is visible rather than a silent truncation.
+  actually used, so the clamp is visible rather than a silent truncation. The in-process
+  assistant asks for less — its dispatch caps a run at 250 rows over the same resolution,
+  because a conversation re-sends every tool result forever — and the wire's cap is
+  unchanged for MCP clients.
+- **A list-shaped answer is bounded with its totals stated** (AA-07). The three list tools
+  never cut positionally: the whole set inside the bound comes back complete and
+  byte-identical to before; past it, names or a window come back with the total they were
+  cut from and the narrowing (`matching` / `path` / `page`) that reaches the rest. The two
+  catalog listings always state their `total`; on a `describe_table` answer the counting
+  fields (`columns_total`, `children_total`, `matched_total`, `sources_total`, `page`)
+  appear exactly where something was elided, so **a describe answer with no counting fields
+  in it is a complete answer** — a requested page of a complete schema answers with no
+  paging fields, never a forged "more exists". `describe_table`'s schema walk renders the
+  complete tree whenever it fits a byte budget, and past that samples it — width decaying
+  with depth, every elided child set replaced by a count on its parent, depth retreating
+  until the answer fits, with the shown level always rendered; its source list is elided
+  past 100 with the total stated. A `path` that resolves nowhere is refused with the path
+  rendered as the JSON array the parameter takes — never dot-joined, because field names
+  come from the user's files and may contain dots.
 - **`list_tables` answers from the app's own catalog, never DataFusion introspection.**
   Introspection would surface the engine's internal `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. A table that is

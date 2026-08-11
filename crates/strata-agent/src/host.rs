@@ -87,6 +87,19 @@ pub enum CatalogEntry {
     /// registration state to report, and `describe_table` does not answer for it.
     Query { id: Uuid, name: String, sql: String },
 }
+
+impl CatalogEntry {
+    /// The entry's name — what `list_tables`' 'matching' filters on, one accessor for all
+    /// three kinds for [`Described::name`]'s reason.
+    pub fn name(&self) -> &str {
+        match self {
+            CatalogEntry::Table { name, .. }
+            | CatalogEntry::View { name, .. }
+            | CatalogEntry::Query { name, .. } => name,
+        }
+    }
+}
+
 /// What the catalog knows about one **table or view**, in the four states it can be in.
 ///
 /// Four variants rather than one struct of `Option`s because the states are genuinely

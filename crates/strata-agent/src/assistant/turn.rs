@@ -261,22 +261,16 @@ impl Settle {
 /// The most of one tool's answer that enters the model's own memory.
 ///
 /// A tool result is pushed verbatim and then re-sent on every later round *and every later
-/// turn*, so an unbounded one is not a big message — it is a permanent one. `run` answers with
-/// the whole `RunResult`, whose page reaches `MAX_PAGE_SIZE` (10,000 rows) both by the model
-/// asking and by a host whose row-limit setting is "no limit"; one such call exhausts the
-/// context window and, since a `Conversation` cannot be trimmed, kills the conversation
-/// outright.
+/// turn*, so an unbounded one is not a big message — it is a permanent one. One over-cap call
+/// exhausts the context window and, since a `Conversation` cannot be trimmed, kills the
+/// conversation outright.
 ///
-/// **The recovery this names is `read_page`'s, and that is only right for `run` — see AA-07.**
-/// Measured against this cap: `list_functions` is 63,729 bytes for *every* project (2.66x, and
-/// dropping its descriptions entirely still lands over), `describe_table` passes it at ~90
-/// columns with statistics, `list_tables` at ~170 tables, and `MAX_PAGE_SIZE` is 33.8x. Three of
-/// those four have no snapshot behind them, so the sentence below sends the model to a tool that
-/// answers not-found — and all three cut *positionally*, making a cut answer a prefix rather
-/// than a sample. Giving those tools a narrowing is a vocabulary change three deployments share
-/// (`AA-07-bounded-answers.md`), which owns both halves of the fix; the ceiling on what the
-/// *assistant* may ask `run` for belongs on its `Scope`, since 10,000 rows is right for an MCP
-/// client and wrong only here.
+/// Since AA-07 this is the **backstop, not the normal path**: the three list-shaped tools
+/// bound their own answers with stated totals (`crate::describe`, `wire::functions_result`,
+/// `wire::tables_result`), and the assistant's dispatch caps what `run` may be asked for
+/// (`dispatch::MAX_RUN_ROWS`). What still lands here is the tail no per-tool bound can
+/// promise away — a page of enormous cells, a saved query carrying its whole SQL — and the
+/// cut names the tool's own recovery ([`recovery`]).
 const MAX_TOOL_RESULT: usize = 24_000;
 
 /// **What one turn may add to the conversation in tool results, in total.**
@@ -297,9 +291,9 @@ const MAX_TURN_RESULTS: usize = 5 * MAX_TOOL_RESULT;
 /// hands the model a half-brace it has to guess the shape of — the failure being that a model
 /// which cannot parse the answer re-runs the call, which produces the same oversized answer.
 /// So an over-cap result is replaced by an object that *says* it was cut and carries the head
-/// as a string field: parseable whole, with the recovery named in the vocabulary's own terms
-/// (`read_page` is the tool that exists for exactly this).
-fn bounded(answer: String) -> String {
+/// as a string field: parseable whole, with the recovery named per tool, because a recovery
+/// the tool does not offer costs the model a round to learn nothing.
+fn bounded(tool: &str, failed: bool, answer: String) -> String {
     if answer.len() <= MAX_TOOL_RESULT {
         return answer;
     }
@@ -310,13 +304,39 @@ fn bounded(answer: String) -> String {
     }
     let cut = json!({
         "truncated": true,
-        "note": "This result was too large to keep in full. 'partial' is its first part as \
-                 text, not a document. Read the rest with read_page, or run a narrower query.",
+        "note": format!(
+            "This result was too large to keep in full. 'partial' is its first part as \
+             text, not a document. {}",
+            if failed { FAILED_CUT } else { recovery(tool) }
+        ),
         "partial": &answer[..at],
     });
     // The object is built from owned strings, so it serializes; the fallback is the honest one
     // rather than the raw answer, which is the thing being refused.
     to_string(&cut).unwrap_or_else(|_| String::from(TOO_LARGE))
+}
+
+/// What a cut **error** is told. An error passes through [`bounded`] like any answer, but a
+/// tool's success-shaped recovery is wrong for it — 'matching' does not narrow an ambiguity
+/// listing — so a cut error gets its own sentence rather than the cut tool's.
+const FAILED_CUT: &str = "The cut text is an error message; act on what it says.";
+
+/// The recovery a cut result names — **each tool's own**, never another's. The old single
+/// sentence sent every cut to `read_page`, which answers not-found for three of the four
+/// tools that can overflow: there is no snapshot behind a function list, a catalog listing
+/// or a table description. And `read_page`'s own pages are one fixed size the caller cannot
+/// shrink, so its arm points at a narrower query rather than back at itself.
+fn recovery(tool: &str) -> &'static str {
+    match tool {
+        "run" => "Read more rows with read_page, or run a narrower query.",
+        "read_page" => "Run a narrower query; pages of this result are one fixed size.",
+        "list_functions" => "Call list_functions again with 'matching' to read a subset in full.",
+        "list_tables" => "Call list_tables again with 'matching' or a later 'page'.",
+        "describe_table" => {
+            "Call describe_table again with 'matching', 'path' or 'page' to narrow it."
+        }
+        _ => "Make a narrower call.",
+    }
 }
 
 /// What an outstanding tool call is told when the user stops the turn under it.
@@ -610,7 +630,10 @@ async fn drive<H: Host>(
             // scope overwrites `project`, so a model naming another window's project produces
             // a call against *this* one — and a card quoting its request would name a project
             // the run never touched. Scoping is a fixed point, so this is the same value
-            // `dispatch::call` arrives at rather than a second normalization beside it.
+            // `dispatch::call` arrives at rather than a second normalization beside it — with
+            // one named exception: the run arm additionally resolves and caps `page_size`
+            // (`dispatch::MAX_RUN_ROWS`), so a card may show a larger ask than ran. The
+            // result echoes the size actually used, which is where that truth lives.
             let arguments = dispatch::scoped(call.fn_arguments.clone(), scope);
             if step {
                 let _ = events.send(TurnEvent::ToolCall {
@@ -663,7 +686,7 @@ async fn drive<H: Host>(
                 // statement that was withdrawn a moment later is worse than no card.
                 (false, None) => {}
             }
-            let answer = bounded(called.answer);
+            let answer = bounded(&call.fn_name, called.failed, called.answer);
             spent += answer.len();
             answers.push(ToolResponse::from_tool_call(call, answer));
         }
@@ -696,6 +719,13 @@ fn offered<H: Host>(tools: &StrataTools<H>) -> Vec<Tool> {
 
 #[cfg(test)]
 mod tests {
+    use std::{env, fs, process};
+
+    use serde_json::from_str;
+
+    use crate::mock::MockProject;
+    use crate::wire::functions_result;
+
     use super::*;
 
     #[test]
@@ -751,6 +781,82 @@ mod tests {
         assert_eq!(
             Settle::StoppedAtCap { rounds: 32 }.note().as_deref(),
             Some("Stopped after 32 tool rounds.")
+        );
+    }
+
+    #[test]
+    fn an_under_cap_answer_passes_through_untouched() {
+        let answer = "{\"total\": 3}".to_string();
+        assert_eq!(bounded("run", false, answer.clone()), answer);
+    }
+
+    /// **A cut result names the cut tool's own recovery.** The old single sentence sent
+    /// every cut to `read_page`, which answers not-found for three of the four tools that
+    /// can overflow — a round spent learning nothing.
+    #[test]
+    fn a_cut_result_names_the_tools_own_recovery() {
+        let oversized = || "x".repeat(MAX_TOOL_RESULT + 1);
+
+        let note = |tool: &str| {
+            let cut: Value = from_str(&bounded(tool, false, oversized()))
+                .expect("a cut result is still a JSON document");
+            assert_eq!(cut["truncated"], true);
+            cut["note"].as_str().unwrap().to_string()
+        };
+
+        assert!(note("run").contains("read_page"));
+
+        // read_page cannot shrink its own pages, so its arm must not point back at itself.
+        let paged = note("read_page");
+        assert!(paged.contains("narrower query"), "{paged}");
+        assert!(!paged.contains("with read_page"), "{paged}");
+
+        let functions = note("list_functions");
+        assert!(functions.contains("'matching'"), "{functions}");
+        assert!(!functions.contains("read_page"), "{functions}");
+
+        let tables = note("list_tables");
+        assert!(tables.contains("'page'"), "{tables}");
+        assert!(!tables.contains("read_page"), "{tables}");
+
+        let describe = note("describe_table");
+        assert!(describe.contains("'path'"), "{describe}");
+        assert!(!describe.contains("read_page"), "{describe}");
+
+        // A future tool gets the fallback: it names no recovery it cannot vouch for.
+        let unknown = note("some_future_tool");
+        assert!(!unknown.contains("read_page"), "{unknown}");
+
+        // A cut error must not get its tool's success-shaped recovery: 'matching' does not
+        // narrow an ambiguity listing.
+        let cut_error: Value = from_str(&bounded("list_tables", true, oversized())).unwrap();
+        let failed_note = cut_error["note"].as_str().unwrap();
+        assert!(failed_note.contains("error message"), "{failed_note}");
+        assert!(!failed_note.contains("'matching'"), "{failed_note}");
+    }
+
+    /// **The first acceptance claim of AA-07, as a test**: the unfiltered function list —
+    /// against the live registry, which is the same for every project — encodes inside the
+    /// per-result cap. It measures what `dispatch::encode` sends, so the claim cannot rot
+    /// quietly as the registry grows.
+    #[tokio::test]
+    async fn the_unfiltered_function_list_fits_the_result_cap() {
+        let root = env::temp_dir().join(format!("strata_turn_functions_{}", process::id()));
+        let _ = fs::create_dir_all(&root);
+        let project = MockProject::new("sales", &root);
+        let listed = functions_result(project.engine.functions().as_ref(), None);
+        let encoded = to_string(&listed).unwrap();
+        assert!(
+            encoded.len() <= MAX_TOOL_RESULT,
+            "{} bytes over the {} cap",
+            encoded.len(),
+            MAX_TOOL_RESULT
+        );
+        // And the bounded answer is not a stub: every registered name is in it.
+        assert!(
+            listed.total > 200,
+            "the live registry lists {}",
+            listed.total
         );
     }
 }

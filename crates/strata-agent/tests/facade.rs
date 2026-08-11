@@ -14,8 +14,8 @@ use std::{env, fs, process};
 
 use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::wire::{
-    DescribeTableParams, EntryWire, ProjectParams, QuerySessionParams, ReadPageParams, RunParams,
-    RunResult, StateWire, ValidateParams,
+    DescribeTableParams, EntryWire, ListFunctionsParams, ListTablesParams, ProjectParams,
+    QuerySessionParams, ReadPageParams, RunParams, RunResult, StateWire, ValidateParams,
 };
 use strata_agent::{AgentError, AgentIdentity, CatalogEntry, Described, RegState, StrataTools};
 use strata_core::engine::sql::Blocked;
@@ -79,7 +79,11 @@ async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].name, "sales");
 
-    let entries = tools.list_tables(here()).await.unwrap().entries;
+    let entries = tools
+        .list_tables(ListTablesParams::default())
+        .await
+        .unwrap()
+        .entries;
     match &entries[..] {
         [EntryWire::Table {
             name,
@@ -92,7 +96,7 @@ async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
     let described = tools
         .describe_table(DescribeTableParams {
             name: "people".into(),
-            project: None,
+            ..DescribeTableParams::default()
         })
         .await
         .unwrap();
@@ -105,7 +109,10 @@ async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
         vec!["id", "name"]
     );
 
-    let functions = tools.list_functions(here()).await.unwrap();
+    let functions = tools
+        .list_functions(ListFunctionsParams::default())
+        .await
+        .unwrap();
     assert!(functions.aggregate.iter().any(|f| f.name == "count"));
 
     let checked = tools
@@ -281,8 +288,15 @@ fn the_manifest_offers_exactly_what_the_wire_advertises() {
         keys
     };
     assert_eq!(properties("list_projects"), Vec::<String>::new());
-    assert_eq!(properties("list_tables"), vec!["project"]);
-    assert_eq!(properties("describe_table"), vec!["name", "project"]);
+    assert_eq!(
+        properties("list_tables"),
+        vec!["matching", "page", "project"]
+    );
+    assert_eq!(
+        properties("describe_table"),
+        vec!["matching", "name", "page", "path", "project"]
+    );
+    assert_eq!(properties("list_functions"), vec!["matching", "project"]);
     assert_eq!(properties("validate"), vec!["project", "sql"]);
     assert_eq!(properties("open_query_session"), vec!["project"]);
     assert_eq!(properties("list_query_sessions"), vec!["project"]);
