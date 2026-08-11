@@ -38,7 +38,7 @@
 
 use std::collections::BTreeMap;
 
-use freya::prelude::spawn_forever;
+use freya::prelude::{spawn_forever, TaskHandle};
 use strata_agent::assistant::list_models_blocking;
 use strata_core::ai::ProviderKind;
 use strata_core::secret::{Secret, SecretRef};
@@ -196,15 +196,21 @@ impl Ask {
 /// outlive the surface that asked and die with the window, which is exactly `spawn_forever`'s
 /// scope. That is also why this is not an `async fn` the caller awaits — the lifetime rule and
 /// the guard belong together in the funnel, where no new call site can forget either.
-pub fn refresh(ctx: SettingsCtx, ask: Ask) {
+///
+/// **Returns the request**, so a caller that later decides the answer is unwanted can stop it
+/// arriving rather than only dropping it once it has landed (`ConfigureDialog`'s retraction —
+/// a settle that outruns a Cancel would write the listing back over the retraction). `None`
+/// means the guard swallowed the call: a request for this kind was already in flight, and the
+/// handle for *that* one belongs to whoever started it.
+pub fn refresh(ctx: SettingsCtx, ask: Ask) -> Option<TaskHandle> {
     let kind = ask.kind;
     let mut probes = ctx.probes;
     if matches!(probes.peek().get(kind), Probe::Testing) {
-        return;
+        return None;
     }
     probes.write().set(kind, Probe::Testing);
 
-    spawn_forever(async move {
+    Some(spawn_forever(async move {
         let settled = match run(ask).await {
             Ok(models) => {
                 let count = models.len();
@@ -219,7 +225,7 @@ pub fn refresh(ctx: SettingsCtx, ask: Ask) {
 
         let mut probes = ctx.probes;
         probes.write().set(kind, settled);
-    });
+    }))
 }
 
 /// Ask the provider what it serves, off the render thread.

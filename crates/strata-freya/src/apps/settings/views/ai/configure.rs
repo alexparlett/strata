@@ -89,10 +89,16 @@ impl Component for ConfigureDialog {
             move || seed
         });
         let mut revealed = use_state(|| false);
-        // **Whether a Test was run from *these* boxes**, which is what [`discard`] needs to know.
-        // Local, like the boxes: it is a fact about this sitting with the dialog, not about the
-        // provider.
-        let tested = use_state(|| false);
+        // **What a Test here was run against** — the boxes as they stood at the press, which is
+        // what decides whether the listing it fetched still describes the provider once this
+        // dialog closes ([`retract_if_stale`]).
+        //
+        // The values and not a flag, because the boxes keep moving after a Test: a flag can only
+        // ask "do the boxes differ *now*", which throws away a good listing when a test against
+        // the draft's own values is followed by an idle edit, and keeps a bad one when an edited
+        // box is tested and then typed back. Local, and exactly as long-lived as the key box it
+        // copies from, so it is no more exposure than the box itself.
+        let tested = use_state(|| None::<Tested>);
         // **The window's probe, not a local one.** A test here is the only place one is taken,
         // and its answer is read by two surfaces that are not this dialog: the row's subline and
         // AI ▸ Chat's model list. A local copy would leave both of them permanently untested.
@@ -212,11 +218,19 @@ impl Component for ConfigureDialog {
                                 // second press during a request is left alone rather than
                                 // racing it. The names it returns reach the satellite, so a
                                 // Test is what fills the model picker for good rather than
-                                // only for this window — which is exactly why [`discard`] has
-                                // to know a test was taken here.
-                                let mut tested = tested;
-                                tested.set(true);
-                                probe::refresh(ctx, ask);
+                                // only for this window — which is exactly why closing has to
+                                // know what this test was run against.
+                                let asked = (url_buf.peek().clone(), typed_now);
+                                // Only when a request actually started: the guard swallows a
+                                // press made during one, and the handle for *that* request is
+                                // the one already held here.
+                                if let Some(task) = probe::refresh(ctx, ask) {
+                                    let mut tested = tested;
+                                    tested.set(Some(Tested {
+                                        asked,
+                                        task: Some(task),
+                                    }));
+                                }
                             })
                             .child(Control::new("Test")),
                     )
@@ -225,7 +239,7 @@ impl Component for ConfigureDialog {
             );
 
         Dialog::new()
-            .on_dismiss(move |()| discard(ctx, kind, key_buf, url_buf, tested, slot))
+            .on_dismiss(move |()| discard(ctx, kind, tested, slot))
             .header(DialogHeader::new(
                 mark(kind),
                 roles.get(Role::Accent),
@@ -235,14 +249,20 @@ impl Component for ConfigureDialog {
             .action(
                 Button::new()
                     .flat()
-                    .on_press(move |_| discard(ctx, kind, key_buf, url_buf, tested, slot))
+                    .on_press(move |_| discard(ctx, kind, tested, slot))
                     .child(Control::new("Cancel")),
             )
             .action(
                 Button::new()
                     .filled()
                     .on_press(move |_| {
-                        save(ctx, kind, &key_buf.peek(), &url_buf.peek());
+                        save(
+                            ctx,
+                            kind,
+                            &key_buf.peek(),
+                            &url_buf.peek(),
+                            tested.peek().clone(),
+                        );
                         slot.set(None);
                     })
                     .child(Control::new("Save")),
@@ -324,6 +344,73 @@ fn default_url(kind: ProviderKind) -> &'static str {
     }
 }
 
+/// **The endpoint and credential a model listing describes** — the pair a retraction compares.
+///
+/// The key travels as the box's own text rather than a [`Secret`], because this is only ever
+/// asked "is it still the same one": it is never sent anywhere, and it lives exactly as long as
+/// the box it was copied from.
+type Asked = (String, String);
+
+/// **What a listing was fetched against, and the request still proving it.**
+///
+/// The pair travels together because a retraction has to act on both: dropping an answer that
+/// has *not landed yet* accomplishes nothing on its own — the settle would write it straight
+/// back over the retraction — so whoever decides an answer is unwanted also stops it arriving.
+///
+/// `task` is `None` for the answer nobody here fetched: a listing from an earlier sitting was
+/// fetched against what this dialog opened on, and there is no request of ours to stop.
+#[derive(Clone, PartialEq)]
+struct Tested {
+    asked: Asked,
+    task: Option<TaskHandle>,
+}
+
+/// What is in effect for `kind` right now: the draft's endpoint, and the key pending against it.
+///
+/// The state any listing this dialog did **not** fetch was fetched against — nothing here writes
+/// the draft until Save, so "what the dialog opened on" and "what is in effect" are the same
+/// value right up to that write.
+fn in_effect(ctx: SettingsCtx, kind: ProviderKind) -> Asked {
+    (
+        ctx.base_url_of(kind),
+        ctx.ai_keys.peek().get(kind).to_string(),
+    )
+}
+
+/// **Drop the provider's listing when it no longer describes the provider.**
+///
+/// The one rule both closing gestures apply, because both leave *something* in effect and the
+/// only question worth asking is whether the last answer was fetched against it. A listing now
+/// outlives the dialog in a store the draft does not reach — the app-global satellite, which
+/// survives a restart and is what every model picker offers from — so a stale one is not a lost
+/// cache but a picker offering a staging gateway's models for a production address.
+///
+/// `fetched_with` is `None` when nothing is known to have been fetched, which is not the same as
+/// "unchanged": there is simply nothing to retract, so nothing is.
+///
+/// **A request still in flight is cancelled, not just out-voted.** `refresh` runs on the window
+/// so it survives this dialog — which is what stops a probe stranding at `Testing` — and that is
+/// exactly why an answer for a state nobody kept would otherwise land *after* the retraction and
+/// undo it. Cancelling strands nothing either, because [`SettingsCtx::forget_provider`] puts the
+/// probe back to `Untested` in the same breath, which is also what lets the next Test start.
+fn retract_if_stale(
+    ctx: SettingsCtx,
+    kind: ProviderKind,
+    fetched_with: Option<Tested>,
+    after: &Asked,
+) {
+    let Some(tested) = fetched_with else {
+        return;
+    };
+    if tested.asked == *after {
+        return;
+    }
+    if let Some(task) = tested.task {
+        task.cancel();
+    }
+    ctx.forget_provider(kind);
+}
+
 /// **Write what the dialog holds into the window's editing state.**
 ///
 /// Not the keystore and not the config file: Settings' Apply is the one commit point, and this
@@ -332,47 +419,59 @@ fn default_url(kind: ProviderKind) -> &'static str {
 /// A key box left **empty is not an edit**, which is the difference between this and the Remove
 /// press: closing a dialog you only looked at must not queue a deletion of the key you came to
 /// check on. Removing is explicit, and says so on its own button.
-fn save(ctx: SettingsCtx, kind: ProviderKind, key: &str, url: &str) {
-    if ctx.base_url_of(kind) != url {
+///
+/// **Saving a key that was just tested keeps the listing that test fetched.** This forgot the
+/// provider whenever the key box was merely non-empty, which is the *ordinary* setup flow —
+/// type a key, Test it, Save — so the common path threw away the list it had just filled and
+/// made the picker blank and re-fetch. What decides it is not "did the box change" either, but
+/// whether the answer in hand was fetched against what is about to be in effect: testing a
+/// changed key and then saving that key is the case the box comparison also gets wrong.
+fn save(ctx: SettingsCtx, kind: ProviderKind, key: &str, url: &str, tested: Option<Tested>) {
+    let before = in_effect(ctx, kind);
+    // What the dialog leaves behind: the URL box, and the key box unless it is empty — an empty
+    // box is not an edit, so what stays in effect is whatever was already pending.
+    let after = (
+        url.to_string(),
+        match key.trim().is_empty() {
+            true => before.1.clone(),
+            false => key.to_string(),
+        },
+    );
+    // A listing this dialog did not fetch was fetched against what it opened on, and there is no
+    // request of ours behind it to stop.
+    let fetched_with = tested.or(Some(Tested {
+        asked: before.clone(),
+        task: None,
+    }));
+
+    if before.0 != *url {
         ctx.set_base_url(kind, url.to_string());
-        ctx.forget_provider(kind);
     }
     if !key.trim().is_empty() {
         let mut keys = ctx.ai_keys;
         keys.write().set(kind, key.to_string());
-        ctx.forget_provider(kind);
     }
+    retract_if_stale(ctx, kind, fetched_with, &after);
 }
 
 /// **Close without saving — and take back what a Test proved about boxes nobody kept.**
 ///
 /// Cancel is a revert, and until AS-06 that cost nothing: the dialog's edits were local, so
-/// throwing them away threw away everything they had produced. A Test is the exception. It is a
-/// live request against *these boxes*, and its answer now outlives the dialog in two places the
-/// draft does not reach — the window's probe, and the app-global listings satellite, which
-/// survives a restart and is what every model picker offers from.
+/// throwing them away threw away everything they had produced. A Test is the exception, because
+/// its answer outlives the dialog. So a test run against an endpoint or credential the user then
+/// discarded has to be retracted, or the picker offers a staging gateway's models for a
+/// production address — fresh for a day, and across relaunches.
 ///
-/// So a test taken against an endpoint or credential the user then discarded would leave the
-/// picker offering a staging gateway's models for a production address, fresh for a day and
-/// across relaunches. That is the same claim [`save`] retracts when an address *changes* —
-/// discarding one is no different, and this is the other half of that rule.
-///
-/// **Only when a test was actually taken here, and only when the boxes diverged.** Retracting
-/// unconditionally would throw away a perfectly good listing every time somebody opened the
-/// dialog to look at it, buying one needless round trip per glance; and boxes equal to what the
-/// draft holds describe the address the app really will call, so their answer is worth keeping.
+/// Nothing is written here, so what is in effect afterwards is what was in effect before; only a
+/// test **this dialog** ran can be stale against it. A listing from anywhere else was fetched
+/// against that same unchanged state and is left alone, which is what stops a glance at the
+/// dialog costing a round trip.
 fn discard(
     ctx: SettingsCtx,
     kind: ProviderKind,
-    key: State<String>,
-    url: State<String>,
-    tested: State<bool>,
+    tested: State<Option<Tested>>,
     mut slot: State<Configuring>,
 ) {
-    let diverged =
-        ctx.base_url_of(kind) != *url.peek() || ctx.ai_keys.peek().get(kind) != *key.peek();
-    if *tested.peek() && diverged {
-        ctx.forget_provider(kind);
-    }
+    retract_if_stale(ctx, kind, tested.peek().clone(), &in_effect(ctx, kind));
     slot.set(None);
 }
