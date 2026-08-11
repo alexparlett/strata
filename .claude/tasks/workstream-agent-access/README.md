@@ -17,14 +17,14 @@ press on the user's tabs), the Settings pane, and the headless `strata mcp <proj
 **AA-06 (the chat pane) graduated to its own workstream** —
 [`workstream-assistant/`](../workstream-assistant/README.md), with its brain decision settled.
 
-**Open:**
+**Open:** nothing.
 
 | Task | What |
 |---|---|
-| [AA-07](AA-07-bounded-answers.md) ⬜ | Tools that page or filter, and truncation that names a real recovery |
+| [AA-07](AA-07-bounded-answers.md) ✅ | Tools that page or filter, and truncation that names a real recovery — built 2026-08-11; the file keeps the design, measurements and as-built corrections |
 
-The folder is back for AA-07 alone. AA-07 is a **vocabulary** change, not an assistant one: it
-moves a wire that three deployments share (in-app HTTP, headless stdio, the in-process
-assistant), which is why it is not folded into AS. Read
+The folder is back for AA-07 alone. AA-07 was a **vocabulary** change, not an assistant one: it
+moved a wire that three deployments share (in-app HTTP, headless stdio, the in-process
+assistant), which is why it was not folded into AS. Read
 [`docs/AGENT_ACCESS_SPEC.md`](../../../docs/AGENT_ACCESS_SPEC.md) before touching the ten, and
 AA-03c's identity finding before touching query sessions.

@@ -41,8 +41,9 @@ pub enum AgentError {
     Query(String),
     /// `read_page` against a snapshot a newer run retired.
     ResultMoved,
-    /// Unknown query-session handle or table name. A plain statement; the listing tool is
-    /// the recovery.
+    /// Unknown query-session handle, table name, or column path. A plain statement naming
+    /// the recovery: the listing tool for a handle or a table; for a column path,
+    /// `describe_table`'s own 'matching' — there is no listing tool behind a schema.
     NotFound(String),
     /// More than one project is open and the call named none (or named a colliding name).
     Ambiguous(Vec<Project>),

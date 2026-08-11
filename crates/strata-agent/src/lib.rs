@@ -38,6 +38,7 @@
 //! tools; `run` never loosens.
 
 pub mod assistant;
+mod describe;
 pub mod error;
 pub mod headless;
 pub mod host;

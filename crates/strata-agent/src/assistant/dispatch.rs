@@ -38,9 +38,23 @@ use crate::tools::StrataTools;
 
 use super::offer;
 use crate::wire::{
-    DescribeTableParams, ProjectParams, ProjectsResult, QuerySessionParams, ReadPageParams,
-    RunParams, RunResult, ValidateParams,
+    DescribeTableParams, ListFunctionsParams, ListTablesParams, ProjectParams, ProjectsResult,
+    QuerySessionParams, ReadPageParams, RunParams, RunResult, ValidateParams,
 };
+
+/// The most rows the assistant asks 'run' for, however many the model requests.
+///
+/// [`crate::tools::MAX_PAGE_SIZE`] (10,000) stays the wire's cap — right for an MCP client,
+/// which decides for itself what to do with an 800 KB answer, and 34x wrong for a
+/// conversation that re-sends every tool result on every later round and every later turn.
+/// 100 rows by 8 columns measures 7,151 bytes and the turn's 24,000-byte result cap crosses
+/// at roughly 330 such rows, so 250 keeps a full page under it with room for wide cells.
+/// Applied over the same resolution `run` itself uses
+/// ([`StrataTools::resolved_page_size`]), so a host whose row-limit setting is 0 ("no
+/// limit") lands here rather than at the wire's cap — the second door, and the one no model
+/// even has to ask for. A const rather than a [`Scope`] field: nothing sets it differently
+/// today, and a field nobody sets is dead configuration. Promote it when a surface needs to.
+const MAX_RUN_ROWS: usize = 250;
 
 /// Which project a call lands in when the model names none.
 ///
@@ -147,7 +161,7 @@ async fn dispatch<H: Host>(
             encode(name, &only(scope, tools.list_projects().await)),
             plain,
         ),
-        "list_tables" => match params::<ProjectParams>(name, arguments) {
+        "list_tables" => match params::<ListTablesParams>(name, arguments) {
             Err(e) => (Err(e), plain),
             Ok(p) => (answer(name, tools.list_tables(p).await.as_ref()), plain),
         },
@@ -155,7 +169,7 @@ async fn dispatch<H: Host>(
             Err(e) => (Err(e), plain),
             Ok(p) => (answer(name, tools.describe_table(p).await.as_ref()), plain),
         },
-        "list_functions" => match params::<ProjectParams>(name, arguments) {
+        "list_functions" => match params::<ListFunctionsParams>(name, arguments) {
             Err(e) => (Err(e), plain),
             Ok(p) => (answer(name, tools.list_functions(p).await.as_ref()), plain),
         },
@@ -196,7 +210,11 @@ async fn dispatch<H: Host>(
         },
         "run" => match params::<RunParams>(name, arguments) {
             Err(e) => (Err(e), plain),
-            Ok(p) => {
+            Ok(mut p) => {
+                // The assistant asks for less than the wire's cap ([`MAX_RUN_ROWS`]) — over
+                // the tool's own resolution, so a host row-limit of 0 lands at the ceiling
+                // too. The response echoes the size actually used, so the clamp is visible.
+                p.page_size = Some(tools.resolved_page_size(p.page_size).min(MAX_RUN_ROWS));
                 // Kept before the call so a refused statement still shows on its card: the
                 // whole point of the card is to say what was attempted.
                 let sql = Some(p.sql.clone());
@@ -504,6 +522,30 @@ mod tests {
         assert_eq!(ran.facts.rows, Some(2));
         assert!(ran.facts.elapsed_ms.is_some());
         assert!(ran.facts.stopped.is_none());
+    }
+
+    /// The assistant asks for less than the wire's cap: a model asking for thousands of
+    /// rows runs at [`MAX_RUN_ROWS`], and the answer echoes the size actually used — the
+    /// clamp is visible, never a silent truncation.
+    #[tokio::test]
+    async fn a_runs_page_is_capped_at_the_assistants_ceiling() {
+        let (root, tools) = one_project("ceiling").await;
+        let scope = Scope {
+            project: Some(root.display().to_string()),
+        };
+        let opened = call(&tools, &scope, "open_query_session", json!({})).await;
+        let session = opened.facts.query_session.clone().unwrap();
+
+        let ran = call(
+            &tools,
+            &scope,
+            "run",
+            json!({"query_session": session, "sql": "select * from people", "page_size": 5000}),
+        )
+        .await;
+        assert!(!ran.failed, "{}", ran.answer);
+        let answer: Value = serde_json::from_str(&ran.answer).unwrap();
+        assert_eq!(answer["page_size"].as_u64(), Some(MAX_RUN_ROWS as u64));
     }
 
     /// A policy refusal reaches the **model**, in the editor's own words, and the card still
