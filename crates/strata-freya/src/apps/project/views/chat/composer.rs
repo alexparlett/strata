@@ -19,10 +19,12 @@
 //!
 //! ## A focused `Input` owns the keyboard
 //!
-//! Which is why the composer does **not** override `on_pre_key_down` (AGENTS.md §3): the field's
-//! own default is what stops a keystroke reaching the window's global listeners, and replacing it
-//! to watch for one character would mean restating that. Enter is `on_submit`, and the `@`
-//! trigger is a watch on the value — the field's own contract, unedited.
+//! So the `@`-completion is driven from **this field** rather than from the popup (AGENTS.md §3):
+//! the arrow keys reach the focused input and nothing else, and moving focus to the list would
+//! stop the very typing that narrows it. `on_pre_key_down` claims the three keys the list is
+//! entitled to and hands everything else back to `Input::key_down_default` — the field's own rule,
+//! called rather than restated, so what stops a keystroke reaching the window's global listeners
+//! stays in one place. Enter is `on_submit` whenever the list is not up.
 //!
 //! ## Send becomes stop while a turn streams
 //!
@@ -35,10 +37,10 @@ use freya::radio::use_radio;
 use strata_agent::assistant::{efforts, label};
 use strata_core::ai::{Ai, Effort, ProviderKind};
 
-use super::mention::{AttachPicker, MentionPicker};
+use super::mention::{AttachPicker, MentionPicker, Mentions};
 use super::ChatTheme;
 use crate::apps::project::state::{
-    blocked, send, Chan, ChatsCtx, Pick, ProjChan, ProjectState, SessionState, Stores,
+    blocked, send, Anchor, Chan, ChatsCtx, Pick, ProjChan, ProjectState, SessionState, Stores,
 };
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
@@ -83,6 +85,25 @@ impl Component for Composer {
         let focus = use_focus(a11y);
         // The expand toggle: half the pane at rest, two thirds expanded — IntelliJ's two stops.
         let mut expanded = use_state(|| false);
+        // The `@`-completion, driven from this field because this is where the keyboard is.
+        let mut selected = use_state(|| 0usize);
+        let dismissed = use_state(|| false);
+        let caret = use_state(|| 0usize);
+        // The catalog's other two channels, read for the subscription: an offer list that did not
+        // notice a new view is a list that completes names the next send cannot resolve.
+        let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
+        let queries = use_radio::<ProjectState, ProjChan>(ProjChan::Queries);
+
+        // **The highlight is a property of the token, so the token changing resets it.** Any
+        // keystroke re-narrows the list, and the row that was second under the old text has
+        // nothing to do with the row that is second under the new. Escape is undone by the same
+        // rule, because a mention still being typed is a question not yet finished.
+        use_side_effect(move || {
+            let _ = text.read();
+            let mut dismissed = dismissed;
+            selected.set(0);
+            dismissed.set(false);
+        });
 
         let ai: Ai = config.read().settings.ai.clone();
         let (id, pick, pinned, running) = {
@@ -96,6 +117,23 @@ impl Component for Composer {
             )
         };
         let refusal = blocked(&assistant, &ai, &pick);
+
+        // What `@` is offering right now. Computed here, once, and handed to both the list that
+        // draws it and the key handler that takes from it.
+        let mut mentions = Mentions {
+            id,
+            chats,
+            text,
+            caret,
+            field: a11y,
+            selected,
+            dismissed,
+        };
+        let offered = {
+            let _ = views.read();
+            let _ = queries.read();
+            mentions.offered(&project.read(), &session.read())
+        };
 
         // The one funnel both the button and the Enter key press.
         let stores = Stores { session, project };
@@ -114,35 +152,10 @@ impl Component for Composer {
         };
 
         // The chips the next send carries, each removable where it is shown.
-        let chips = (!pinned.is_empty()).then(|| {
-            pinned.iter().enumerate().fold(
-                rect()
-                    .width(Size::fill())
-                    .horizontal()
-                    .content(Content::wrap_spacing(4.))
-                    .spacing(4.),
-                |row, (at, anchor)| {
-                    row.child(
-                        rect()
-                            .horizontal()
-                            .cross_align(Alignment::Center)
-                            .spacing(4.)
-                            .corner_radius(4.)
-                            .background(theme.chip_background)
-                            .padding(Gaps::new(2., 4., 2., 6.))
-                            .child(Meta::new(anchor.label()).color(theme.chip_color))
-                            .child(
-                                Button::new()
-                                    .flat()
-                                    .height(Size::px(16.))
-                                    .on_press(move |_| chats.write().unpin(id, at))
-                                    .child(
-                                        Icon::new(IconName::Close).size(9.).color(theme.chip_color),
-                                    ),
-                            ),
-                    )
-                },
-            )
+        let chips = (!pinned.is_empty()).then(|| Chips {
+            id,
+            pinned,
+            theme: theme.clone(),
         });
 
         // **The field grows with what is typed, then scrolls.** `Input::multiline` wraps the text
@@ -176,6 +189,27 @@ impl Component for Composer {
                 })
                 .width(Size::fill())
                 .placeholder("Ask about your data…")
+                // **Bound two-way**, so an `@`-completion is an edit at a position: the token
+                // under the caret is what narrows the list, the token's span is what an accept
+                // replaces, and the caret lands after the name. Without it the completion can
+                // only be the tail of the buffer, which is wrong the moment a mention is typed
+                // mid-sentence.
+                .caret(caret)
+                // **The completion list claims three keys before the field sees them**, because a
+                // focused `Input` owns the keyboard (AGENTS.md §3) and `on_submit` would
+                // otherwise send the message the Enter was meant to complete. Everything the list
+                // does not take goes to the field's own rule rather than a second copy of it.
+                .on_pre_key_down({
+                    let offered = offered.clone();
+                    move |e: Event<KeyboardEventData>| match mentions.claim(&e, &offered) {
+                        true => {
+                            e.stop_propagation();
+                            e.prevent_default();
+                            false
+                        }
+                        false => Input::key_down_default(e),
+                    }
+                })
                 .on_submit({
                     let mut fire = fire.clone();
                     move |_: String| fire()
@@ -252,8 +286,8 @@ impl Component for Composer {
             .align_start()
             .offset(4.)
             .child(MentionPicker {
-                id,
-                text,
+                mentions,
+                offered,
                 theme: theme.clone(),
             });
 
@@ -272,32 +306,99 @@ impl Component for Composer {
             }))
             // Below the bar, not inside it: what the conversation is talking to is a property of
             // the conversation, where everything in the bar is a property of this message.
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .horizontal()
-                    .content(Content::Flex)
-                    .cross_align(Alignment::Center)
-                    .spacing(6.)
-                    .child(ProviderPicker {
-                        id,
-                        pick: pick.clone(),
-                        ai: ai.clone(),
-                        theme: theme.clone(),
-                    })
-                    .child(ModelPicker {
-                        id,
-                        pick: pick.clone(),
-                        ai,
-                        theme: theme.clone(),
-                    })
-                    .maybe_child(rungs(&pick).map(|rungs| EffortPicker {
-                        id,
-                        pick,
-                        rungs,
-                        theme,
-                    })),
-            )
+            .child(Footer {
+                id,
+                pick,
+                ai,
+                theme,
+            })
+    }
+}
+
+/// **What the next send carries**, each attachment removable where it is shown.
+///
+/// Inside the bar rather than under it, because a pinned table is part of *this message* the way
+/// the words are.
+#[derive(PartialEq)]
+struct Chips {
+    id: crate::apps::project::state::ChatId,
+    pinned: Vec<Anchor>,
+    theme: ChatTheme,
+}
+
+impl Component for Chips {
+    fn render(&self) -> impl IntoElement {
+        let mut chats = use_consume::<ChatsCtx>();
+        let (id, theme) = (self.id, self.theme.clone());
+        self.pinned.iter().enumerate().fold(
+            rect()
+                .width(Size::fill())
+                .horizontal()
+                .content(Content::wrap_spacing(4.))
+                .spacing(4.),
+            |row, (at, anchor)| {
+                row.child(
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(4.)
+                        .corner_radius(4.)
+                        .background(theme.chip_background)
+                        .padding(Gaps::new(2., 4., 2., 6.))
+                        .child(Meta::new(anchor.label()).color(theme.chip_color))
+                        .child(
+                            Button::new()
+                                .flat()
+                                .height(Size::px(16.))
+                                .on_press(move |_| chats.write().unpin(id, at))
+                                .child(Icon::new(IconName::Close).size(9.).color(theme.chip_color)),
+                        ),
+                )
+            },
+        )
+    }
+}
+
+/// **What this conversation is talking to**: provider, model, and the rung the model offers.
+///
+/// Its own component rather than a row in [`Composer`], because it answers a different question
+/// from everything above it — the bar is about *this message*, this is about the conversation —
+/// and the three controls read each other's picks.
+#[derive(PartialEq)]
+struct Footer {
+    id: crate::apps::project::state::ChatId,
+    pick: Pick,
+    ai: Ai,
+    theme: ChatTheme,
+}
+
+impl Component for Footer {
+    fn render(&self) -> impl IntoElement {
+        let (id, pick, theme) = (self.id, self.pick.clone(), self.theme.clone());
+        rect()
+            .width(Size::fill())
+            .horizontal()
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(6.)
+            .child(ProviderPicker {
+                id,
+                pick: pick.clone(),
+                ai: self.ai.clone(),
+                theme: theme.clone(),
+            })
+            .child(ModelPicker {
+                id,
+                pick: pick.clone(),
+                ai: self.ai.clone(),
+                theme: theme.clone(),
+            })
+            .maybe_child(rungs(&pick).map(|rungs| EffortPicker {
+                id,
+                pick,
+                rungs,
+                theme,
+            }))
     }
 }
 

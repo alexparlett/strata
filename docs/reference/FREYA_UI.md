@@ -142,6 +142,19 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   does nothing further"; `true` lets the keystroke through as text. Keep the surface's own
   `GlobalKeyDown` barrier as well, for when focus is elsewhere, and put it on a **different node**
   from the one carrying the open chord — an element holds one handler per event name.
+- **A completion is an edit at the caret: replace the token's span, then put the caret after what
+  was inserted.** One rule, and both completing surfaces are held to it — the SQL editor through
+  `CodeEditorData::replace_range` (one undo step, caret at the end of the insert, sealed on both
+  sides), and the chat composer's `@`-mentions through `mention::complete` over the fork's
+  `Input::caret`, a two-way binding in UTF-16 code units. The mention list was built first without
+  one, because `Input` published no caret: the token was defined as the run from the last `@` to
+  the **end of the buffer**, which reads as working until a mention is typed mid-sentence and the
+  sentence carries on past it (`@F fake me` offered nothing, and a whole-buffer rewrite left the
+  caret inside the name it had just spliced in). Do not answer that with a policy about where the
+  caret goes on an external write — a caret policy is not a completion mechanism, and shipping one
+  beside `replace_range` would be two answers to one question. Give the control a caret and edit
+  the span. Convert bytes ↔ UTF-16 **once**, at the `Input` boundary (`mention::byte_of` /
+  `utf16_of`), so nothing above it counts in two units at the same time.
 - **A disabled control gates its handlers; it does not go `interactive(false)`.** Wrap only the
   action handlers in `.maybe(enabled, …)` and leave `on_pointer_enter` / `on_pointer_leave`
   registered unconditionally, then decline to *dress* the hover while disabled — that is what

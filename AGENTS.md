@@ -525,6 +525,10 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
 - **A focused `Input` owns the keyboard, so a surface built around one handles its keys in
   `on_pre_key_down`** — and that is what makes it a real modal barrier. Resolve chords through
   `keymap::resolve`. Keep a `GlobalKeyDown` barrier too, on a **different node**.
+- **A completion is an edit at the caret: replace the token's span, then put the caret after what
+  was inserted.** Both surfaces, one rule — the editor's `replace_range` and the composer's
+  `@`-mentions over `Input::caret`. Never a policy about where the caret goes on an external
+  write; convert bytes ↔ UTF-16 once, at the `Input` boundary.
 - **A disabled control gates its handlers; it does not go `interactive(false)`** (which suppresses
   `pointer_leave` and strands a hover).
 - **A built-in control's press reaches its ancestors, so never wrap one in a pressable parent** —
