@@ -112,9 +112,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
   the assistant's own eleventh tool for handing the user a statement to execute) and **05 ✅**
   (`strata_core::secret` — a `SecretRef` in config, a `Secret` with no serde path at all).
-  **03 🟡** — Providers and MCP are done and the keystore round trip works; AI ▸ Chat is two
-  controls short, a model `Select` (06) and the retention pair that only means something once
-  conversations persist (07). **04, 06, 07 ⬜.** Two corrections settled with 02 and recorded in that workstream's README: the
+  **06 ✅** (`strata_core::models` — the listings satellite beside the config, refreshed where a
+  list is shown rather than at launch; there is no free-text model box left in the app, and the
+  offer is *reported ∪ {the current pick}* so an endpoint with no `/models` cannot strand a
+  working setup). **03 🟡** — Providers and MCP are done and the keystore round trip works; AI ▸
+  Chat was two controls short and the model `Select` landed with 06, leaving the retention pair
+  that only means something once conversations persist (07). **04, 07 ⬜.** Two corrections settled with 02 and recorded in that workstream's README: the
   Agents pane is for **headless MCP clients only** (the assistant is kept out of it by its
   minted `AgentId`), and a runnable statement is a **tool call**, not a markdown convention.
   The doc records the pane as not built (`docs/AGENT_ACCESS_SPEC.md`, "What is not built").
@@ -141,11 +144,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Assistant AS-06 → AS-04 → AS-07**, with AS-03 closing behind them. The loop and the
-   provider seam are built (AS-02) and Settings ▸ AI is standing (AS-03); read AS-02's "What
-   AS-04 gets" for the event vocabulary, and AA-03c's identity finding before touching query
-   sessions. 06 first because both pickers read its listing and it is small; then the pane;
-   then persistence, which needs a transcript to persist.
+1. **Assistant AS-04 → AS-07**, with AS-03 closing behind them. The loop and the provider seam
+   are built (AS-02), Settings ▸ AI is standing (AS-03) and the model listings are in (AS-06 —
+   the pane consumes `Listings::offer` and **moves** `probe::refresh` rather than writing a
+   second fetch); read AS-02's "What AS-04 gets" for the event vocabulary, and AA-03c's identity
+   finding before touching query sessions. Then persistence, which needs a transcript to
+   persist.
 2. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
 3. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave

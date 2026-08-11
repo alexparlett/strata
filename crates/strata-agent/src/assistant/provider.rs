@@ -229,10 +229,6 @@ pub struct Provider {
     /// [`efforts`]; a [`Selection`] carrying a rung the model does not offer is
     /// refused rather than sent.
     pub efforts: Efforts,
-    /// A current model name, for the model field's placeholder. A hint, never a list: model
-    /// names churn faster than a release cycle, so the field is free-form text and an unknown
-    /// name is answered by the provider itself.
-    pub model_example: &'static str,
     /// The `genai` adapter this kind routes through. Private: no surface outside this module
     /// has any business naming one, and [`Provider::adapter`] is what resolves the one kind
     /// that is two adapters.
@@ -279,7 +275,6 @@ pub const PROVIDERS: [Provider; 8] = [
                 rungs: LADDER,
             },
         ]),
-        model_example: "claude-sonnet-4-5",
         adapter: AdapterKind::Anthropic,
     },
     Provider {
@@ -306,7 +301,6 @@ pub const PROVIDERS: [Provider; 8] = [
             except: &["-chat", "o1-mini", "o1-preview"],
             rungs: KEYWORDS,
         }]),
-        model_example: "gpt-5",
         // Nominal. `gpt-5` and the codex models speak the Responses API and the rest speak
         // chat completions, which is a per-model fork `adapter()` asks genai to make.
         adapter: AdapterKind::OpenAI,
@@ -328,7 +322,6 @@ pub const PROVIDERS: [Provider; 8] = [
             except: &[],
             rungs: KEYWORDS,
         }]),
-        model_example: "gemini-3-pro-preview",
         adapter: AdapterKind::Gemini,
     },
     Provider {
@@ -348,7 +341,6 @@ pub const PROVIDERS: [Provider; 8] = [
         // claim that the API carries no such field, while this says the field is sent and no
         // family has been verified to accept it. Default-closed does the rest.
         efforts: Efforts::Only(&[]),
-        model_example: "deepseek-chat",
         adapter: AdapterKind::DeepSeek,
     },
     Provider {
@@ -359,7 +351,6 @@ pub const PROVIDERS: [Provider; 8] = [
         // Pass-through onto `OpenAIAdapter`, same as DeepSeek — the rung reaches the wire
         // unexamined, and Groq's hosted models are a moving set nothing here can verify.
         efforts: Efforts::Only(&[]),
-        model_example: "llama-3.3-70b-versatile",
         adapter: AdapterKind::Groq,
     },
     Provider {
@@ -371,7 +362,6 @@ pub const PROVIDERS: [Provider; 8] = [
         // this kind (`strips_effort_suffix`) for exactly that reason: `grok-4-max` would
         // otherwise be sent as `grok-4`.
         efforts: Efforts::Only(&[]),
-        model_example: "grok-4",
         adapter: AdapterKind::Xai,
     },
     Provider {
@@ -382,7 +372,6 @@ pub const PROVIDERS: [Provider; 8] = [
         // Ollama's API carries no reasoning-effort field and genai's adapter sends none, so
         // the control would be a menu that changes nothing whatever model is named.
         efforts: Efforts::Never,
-        model_example: "qwen3:14b",
         adapter: AdapterKind::Ollama,
     },
     Provider {
@@ -394,7 +383,6 @@ pub const PROVIDERS: [Provider; 8] = [
         // are the authority on whether it reasons. Nothing is sent unless a rung is picked,
         // and an endpoint that rejects the field says so in its own words.
         efforts: Efforts::Always,
-        model_example: "llama-3.3-70b",
         adapter: AdapterKind::OpenAI,
     },
 ];

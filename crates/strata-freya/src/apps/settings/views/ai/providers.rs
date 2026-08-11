@@ -20,10 +20,11 @@
 use freya::prelude::*;
 use strata_agent::assistant::{all, info, BaseUrl, KeyUse};
 use strata_core::ai::{Ai, ProviderKind, ProviderSetup};
+use strata_core::models::Listings;
 
 use crate::apps::settings::views::ai::configure::{ConfigureDialog, Configuring};
 use crate::apps::settings::views::ai::keys::TypedKeys;
-use crate::apps::settings::views::ai::probe::Probe;
+use crate::apps::settings::views::ai::probe::{self, Ask};
 use crate::apps::settings::views::ai::row::{mark, ProviderRow};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, SettingsCtx, SettingsTheme};
@@ -55,7 +56,7 @@ impl Component for ProvidersPane {
         let draft = ctx.draft.read();
         let ai = &draft.ai;
         let keys = ctx.ai_keys.read();
-        let probes = ctx.probes.read();
+        let listings = ctx.listings.read();
 
         let rows = all()
             .enumerate()
@@ -68,7 +69,7 @@ impl Component for ProvidersPane {
                     mark: mark(kind),
                     name: provider.label.to_string(),
                     badge: badge(provider.key),
-                    subline: subline(kind, setup, stored, probes.get(kind)),
+                    subline: subline(kind, setup, stored, &listings),
                     enabled,
                     first: index == 0,
                     on_toggle: EventHandler::new(move |()| toggle(ctx, kind, configuring)),
@@ -206,19 +207,25 @@ fn default_url(kind: ProviderKind) -> &'static str {
 /// **What a row knows without having asked anything.**
 ///
 /// The canvas puts "N models · M reasoning" here, which is knowledge a request produces, so
-/// before a Test the row states a fact it actually has and the count replaces it once a probe
-/// comes back. Only real facts.
+/// before anything has been asked the row states a fact it actually has and the count replaces
+/// it once an answer comes back. Only real facts.
 ///
 /// It is the row's whole second line now that the credential lives in a dialog, so it says the
 /// most useful true thing rather than the one the boxes did not cover.
+///
+/// **The count comes from the satellite, not from this window's probe** (AS-06). What the
+/// provider last reported survives a quit, so a row can say "12 models" at the next launch
+/// without a request having been made in this one — which is true, and is the same list the
+/// model picker is offering two pages over. Reading the probe instead would blank the count on
+/// every restart and make the two pages disagree about the same provider.
 fn subline(
     kind: ProviderKind,
     setup: Option<&ProviderSetup>,
     stored: bool,
-    probe: &Probe,
+    listings: &Listings,
 ) -> Option<String> {
-    if let Probe::Verified { models } = probe {
-        return Some(models_line(models.len()));
+    if let Some(listing) = listings.get(kind) {
+        return Some(models_line(listing.models.len()));
     }
     // **What is missing outranks what is present.** A kind whose address has no default cannot
     // work without one, so a closed row says that before it says anything about a key it does
@@ -266,7 +273,6 @@ fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuri
     });
 
     let mut keys = ctx.ai_keys;
-    let mut probes = ctx.probes;
 
     // **Switching a provider off takes its key with it — at Apply, not here.**
     //
@@ -275,9 +281,12 @@ fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuri
     // nothing will ask again. What happens now is only that the intent is *recorded* — Apply is
     // still the one commit point, and Cancel still discards it with the rest of the window's
     // editing state.
+    //
+    // And the models it reported go with the key, for the same reason they go when a URL
+    // changes: the answer described a request made with a credential that is on its way out.
     if !ctx.draft.peek().ai.is_enabled(kind) {
         keys.write().set(kind, String::new());
-        probes.write().forget(kind);
+        ctx.forget_provider(kind);
         return;
     }
 
@@ -303,6 +312,17 @@ fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuri
     if missing(&draft.ai, &keys.peek(), kind).is_some() {
         drop(draft);
         configuring.set(Some(kind));
+        return;
+    }
+    drop(draft);
+
+    // **Switching on something that *can* answer asks it what it serves.** Enabling a provider
+    // is the moment a person is setting it up and expecting it to reach out, so it is the right
+    // point of use for the fetch — the alternative is a picker that is empty until they happen
+    // to open it. `needs_refresh` is the same staleness question the pickers ask, so a provider
+    // toggled off and on again with a fresh listing costs no round trip.
+    if ctx.listings.peek().needs_refresh(kind) {
+        probe::refresh(ctx, Ask::from_draft(ctx, kind));
     }
 }
 

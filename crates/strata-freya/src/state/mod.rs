@@ -13,15 +13,19 @@
 //!   itself ([`crate::menu`]) — plus the open path it points Open Recent at
 //!   ([`crate::platform::open`]);
 //! - the Settings window's live theme preview ([`theme_preview`]) — the one half of its
-//!   uncommitted draft that every *other* window has to read.
+//!   uncommitted draft that every *other* window has to read;
+//! - the model listings satellite ([`listings`]) — what each provider last reported, which
+//!   both the Settings model picker and the chat composer choose from.
 //!
 //! Plus the theme registry, which is immutable after discovery and so is a plain `Arc`
 //! rather than a store.
 
 mod config;
+mod listings;
 mod theme_preview;
 
 pub use config::*;
+pub use listings::*;
 pub use theme_preview::*;
 
 use crate::agent::AgentCtx;
@@ -55,6 +59,11 @@ pub struct AppCtx {
     /// and the slot holding whatever MCP server is listening. Here rather than in a static of
     /// its own for the reason the rest are — a window is handed one value, not eight.
     pub agent: AgentCtx,
+    /// What each provider last reported serving (AS-06) — read by Settings' model picker and,
+    /// when AS-04 lands, by the composer footer's. On the bundle for the preview's reason:
+    /// more than one window picks a model, and the list is a property of the machine rather
+    /// than of whichever window happened to fetch it.
+    pub listings: ModelListings,
 }
 
 /// Every field is a handle on a process-wide singleton created before the first window, so

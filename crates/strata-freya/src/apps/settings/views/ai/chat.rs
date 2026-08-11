@@ -8,12 +8,24 @@
 //! credential for — and when none are enabled it says so and points at the page that fixes it,
 //! rather than drawing three dead controls.
 //!
-//! ## The model list is what a Test actually returned
+//! ## The model is picked from what the provider serves (AS-06)
 //!
-//! The dropdown offers the models the provider reported, which is the same call the Providers
-//! page's Test makes (`probe`) — one request serving both. It **also takes a typed name**,
-//! because a list can 401, a gateway can serve no `/models`, and a private deployment can carry
-//! a name no list mentions; a picker that could not be typed into would make those unreachable.
+//! A `Select`, not a box: `genai` prescribes no models — a name is an opaque string that goes
+//! into the request payload — so there is no static list a free-text box would be protecting the
+//! user from, and no reason for one, because the provider can be asked. A typed name buys
+//! nothing and costs a turn: `gpt-5-turbo-imaginry` is accepted by every layer we own and
+//! refused by the vendor, after the send, in a transcript.
+//!
+//! What it offers is `Listings::offer` — what the provider last reported, **plus the pick in
+//! hand**, because the list endpoint is not the chat endpoint and a strict picker over an empty
+//! answer would strand a setup that works. The list itself is the app-global satellite, so it
+//! survives the window and the run of the app; opening this page refreshes it in the background
+//! when it is stale, and the stale list stays usable throughout.
+//!
+//! The names are **unfiltered**, deliberately: OpenAI's list carries `whisper-1` and `dall-e-3`
+//! beside the chat models, and tidying that with a static name list here would be the
+//! prescribed-model table this design avoids — it would hide a new chat model on the day it
+//! ships. A non-chat pick fails on the first send in the provider's own words.
 //!
 //! ## Effort is the model's own rungs, in the canvas's shell
 //!
@@ -24,12 +36,13 @@
 //! was not what got sent is the lie this whole table exists to prevent.
 
 use freya::prelude::*;
-use strata_agent::assistant::{efforts, info, label};
+use strata_agent::assistant::{efforts, label};
 use strata_core::ai::{Effort, ProviderKind};
 
+use crate::apps::settings::views::ai::probe::{self, Ask, Probe, Probes};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, Anchor, SettingsCtx};
-use crate::components::form::{Form, ValueField};
+use crate::components::form::Form;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Control, Prose};
 
@@ -49,8 +62,8 @@ impl Component for ChatPane {
             (draft.ai.clone(), ctx.probes.read().clone())
         };
 
-        let offered: Vec<ProviderKind> = ai.enabled().collect();
-        if offered.is_empty() {
+        let enabled: Vec<ProviderKind> = ai.enabled().collect();
+        if enabled.is_empty() {
             return Pane::new(
                 rect().width(Size::fill()).child(
                     Prose::new(
@@ -70,7 +83,7 @@ impl Component for ChatPane {
         let current = ai
             .default_provider
             .filter(|kind| ai.is_enabled(*kind))
-            .or_else(|| offered.first().copied());
+            .or_else(|| enabled.first().copied());
 
         // **What the pane resolved is what the draft says**, on `repoint`'s terms: in the draft,
         // on the page the user is looking at, before Apply.
@@ -100,7 +113,7 @@ impl Component for ChatPane {
                     .unwrap_or_default(),
             ))
             .children(
-                offered
+                enabled
                     .iter()
                     .map(|kind| {
                         let kind = *kind;
@@ -115,51 +128,95 @@ impl Component for ChatPane {
                     .collect::<Vec<Element>>(),
             );
 
-        // The model box: a typed name, with what the provider reported offered beneath it.
-        let model_buf = use_state({
-            let seed = ai.default_model.clone();
-            move || seed
-        });
+        // **Opening this page refreshes a stale list, in the background.**
+        //
+        // Not at launch: dialling every configured provider on every start spends a round trip
+        // and puts a key on the wire for a session that mostly never opens a model picker, and
+        // a read the user waits for has to be an *arm* rather than a freeze — which at startup
+        // has no surface to be an arm on. Here it is neither: the cached list renders
+        // immediately and is usable throughout, and the answer replaces it when it lands.
+        //
+        // **Guarded on the probe, which is what makes it one attempt.** A refresh that failed
+        // leaves the listing absent, so the staleness question alone would ask again on every
+        // repaint; `Probe::Untested` is true exactly once per provider per window, and a
+        // deliberate Test is the way to ask again. `refresh` holds the in-flight guard itself,
+        // so a fetch already running for this kind is left alone.
         use_side_effect(move || {
-            let typed = model_buf.read().clone();
-            if ctx.draft.peek().ai.default_model != typed {
-                ctx.edit(move |settings| settings.ai.default_model = typed);
+            let Some(kind) = *picked.read() else {
+                return;
+            };
+            // Subscribed on purpose: the settled write lands here, and the guard below then
+            // stops it going round again.
+            if !ctx.listings.read().needs_refresh(kind) {
+                return;
             }
+            if !matches!(ctx.probes.peek().get(kind), Probe::Untested) {
+                return;
+            }
+            probe::refresh(ctx, Ask::from_draft(ctx, kind));
         });
 
-        // The kind's current-model hint, from the table — a placeholder, never a default: an
-        // empty box means "no model chosen", which is a state the send refuses by name.
-        let example = current.map_or("", |kind| info(kind).model_example);
-
-        let listed: Vec<String> = current
-            .map(|kind| probes.get(kind).models().to_vec())
-            .unwrap_or_default();
+        // **The offer is what the provider reported plus the pick in hand** — one rule, in
+        // `Listings::offer`, because the composer footer (AS-04) picks from the same list.
+        //
+        // **Trimmed once, here, so every reader agrees about the name.** `offer` inserts the
+        // pick trimmed (an all-whitespace one is "nothing chosen", not a blank row), so a
+        // padded value would match no offered row: the dropdown would open with nothing ticked
+        // and `efforts` would be asked about a name no rule matches, quietly dropping a
+        // reasoning model's ladder. That value is reachable rather than theoretical — the
+        // free-text box this `Select` replaces wrote its raw contents, so an existing config
+        // can hold one. Picking anything rewrites it clean.
+        let chosen = ai.default_model.trim().to_string();
+        let offered = match current {
+            Some(kind) => ctx.listings.read().offer(kind, &chosen),
+            None => Vec::new(),
+        };
 
         let model = rect()
             .width(Size::px(CONTROL_WIDTH))
             .spacing(6.)
             .child(
-                ValueField::new(model_buf)
-                    .width(Size::fill())
-                    .placeholder(example),
+                Select::new()
+                    .selected_item(Control::new(match chosen.is_empty() {
+                        // An invitation, never an example name: a model shown in the closed
+                        // control reads as the value, and this one would be a model nobody
+                        // picked. (The table's `model_example` went with the free-text box it
+                        // was the placeholder for.)
+                        true => "Choose a model".to_string(),
+                        false => chosen.clone(),
+                    }))
+                    .children(
+                        offered
+                            .iter()
+                            .map(|name| {
+                                let name = name.clone();
+                                MenuItem::new()
+                                    .selected(name == chosen)
+                                    .on_press({
+                                        let name = name.clone();
+                                        move |_| {
+                                            let name = name.clone();
+                                            ctx.edit(move |settings| {
+                                                settings.ai.default_model = name;
+                                            });
+                                        }
+                                    })
+                                    .child(Control::new(name))
+                                    .into()
+                            })
+                            .collect::<Vec<Element>>(),
+                    ),
             )
-            .child(match listed.is_empty() {
-                // Said out loud: an empty list is not the same as a provider with no models,
-                // and the way to fill it is a Test on the other page.
-                true => Prose::new("Test the provider in AI > Providers to list its models.")
+            .maybe_child(unlisted(current, &offered, &probes).map(|said| {
+                Prose::new(said)
                     .width(Size::fill())
                     .wrap()
-                    .color(theme.hint_color),
-                false => Prose::new(format!("Offered: {}", listed.join(", ")))
-                    .width(Size::fill())
-                    .wrap()
-                    .color(theme.hint_color),
-            });
+                    .color(theme.hint_color)
+            }));
 
         // The rungs this model actually offers — empty is a real answer, and the control says
         // which model has no reasoning setting rather than dimming with no explanation.
-        let typed_model = model_buf.read().clone();
-        let rungs: &[Effort] = current.map_or(&[], |kind| efforts(kind, &typed_model));
+        let rungs: &[Effort] = current.map_or(&[], |kind| efforts(kind, &chosen));
 
         // **A rung the model no longer offers is dropped, not kept out of sight.**
         //
@@ -179,8 +236,12 @@ impl Component for ChatPane {
         // kept, every new chat refused). And it reads `picked` rather than `default_provider`
         // because the controls above resolve through it: validating against a value the user
         // cannot see is how a press on a live segment gets reverted the instant it lands.
+        //
+        // The model half is a `use_reactive` of the draft's own value now that the picker writes
+        // it directly: reading the draft inside would subscribe this effect to every field of it.
+        let named = use_reactive(&chosen);
         use_side_effect(move || {
-            let model = model_buf.read().clone();
+            let model = named.read().clone();
             let Some(kind) = *picked.read() else {
                 return;
             };
@@ -195,9 +256,9 @@ impl Component for ChatPane {
         let effort: Element = match rungs.is_empty() {
             true => rect()
                 .child(
-                    Prose::new(match typed_model.trim().is_empty() {
+                    Prose::new(match chosen.is_empty() {
                         true => "Choose a model to see its reasoning settings.".to_string(),
-                        false => format!("'{typed_model}' has no reasoning effort setting."),
+                        false => format!("'{chosen}' has no reasoning effort setting."),
                     })
                     .width(Size::fill())
                     .wrap()
@@ -235,4 +296,33 @@ impl Component for ChatPane {
                 .child(Anchor::AiEffort.row().child(effort)),
         )
     }
+}
+
+/// **What to say under a picker with nothing in it — and nothing when it has something.**
+///
+/// A dropdown that opens empty explains itself or it is a dead control, and the four reasons it
+/// can be empty are genuinely different: nobody has asked yet, somebody is asking now, the
+/// provider was asked and would not answer, or it answered and serves nothing. The third is the
+/// one that matters most and it names the provider, because "could not be reached" under a
+/// picker that offers no other clue is a sentence about nothing.
+///
+/// A *populated* picker says nothing at all. Listing the offered names beneath a control that
+/// offers them was the free-text box's caption and has no job now.
+fn unlisted(current: Option<ProviderKind>, offered: &[String], probes: &Probes) -> Option<String> {
+    let kind = current?;
+    if !offered.is_empty() {
+        return None;
+    }
+    let name = label(kind);
+    Some(match probes.get(kind) {
+        Probe::Testing => format!("Asking {name} which models it serves."),
+        // The provider's own words, already bounded — the same sentence the Providers page's
+        // Test shows, because it is the same request.
+        Probe::Failed { why } => format!("{name} could not be reached: {why}"),
+        // Reached, and serving nothing. A real answer, and a different one from a failure.
+        Probe::Verified { .. } => format!("{name} reports no models."),
+        Probe::Untested => {
+            format!("No models listed for {name}. Test it in AI > Providers to ask again.")
+        }
+    })
 }

@@ -1,6 +1,33 @@
 # AS-06 · Model listings: the pick is the provider's own, and it survives a restart
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-03
+**Workstream:** Assistant · **Status:** ✅ · **Depends on:** AS-03
+
+> **Built as specified, with four things worth naming** (the design below is unchanged and is
+> still the reasoning; this is what the code does that the plan did not say):
+>
+> - **The union rule lives beside the data**, as `Listings::offer(kind, chosen)` in
+>   `strata_core::models`, not in either picker — there are two pickers and a rule about what
+>   may be selected has to be one rule. AS-04 calls the same method.
+> - **`Probe::Verified` carries a count, not the names.** The plan left the probe alone, which
+>   would have kept the models in two places; the satellite is the list and the probe is the
+>   outcome of the request. `probe::refresh` is the one funnel that writes both, and it holds the
+>   in-flight guard that used to sit at the Test press. The Providers row's "N models" subline
+>   now reads the **satellite**, so it is still true after a relaunch and cannot disagree with
+>   the picker two pages over.
+> - **Enabling a provider is a third point of use.** Toggling one on with nothing missing kicks
+>   the same refresh, because that is the moment a person is setting it up and expecting it to
+>   reach out — the alternative is a picker that stays empty until they happen to open it. Still
+>   `needs_refresh`-guarded, so no round trip when the list is fresh.
+> - **`Provider::model_example` is gone.** It was the free-text box's placeholder and had no
+>   other reader; leaving eight churning model names in the table unread is exactly the drift the
+>   table's own doc warned about.
+>
+> **One consequence stated rather than hidden:** a provider that serves no `/models` **and** has
+> never had a model set cannot be given one — the offer is empty and there is no box to type in.
+> The union covers every setup that already works and every one a reachable list can describe;
+> what it does not cover is a *first* setup against a gateway with no list endpoint. That is the
+> trade §4 chose deliberately. If it is ever reported, the fix is one gesture ("name a model") on
+> the picker, not a text box beside it.
 
 ## Goal
 

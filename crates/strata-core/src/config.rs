@@ -12,7 +12,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::path::Path;
 
-const APP_INFO: AppInfo = AppInfo {
+/// The app's identity in the OS config dir. `pub(crate)` because the model-listings satellite
+/// ([`crate::models`]) is a second key **under the same app**, and inventing a second `AppInfo`
+/// for it would put it in a directory of its own.
+pub(crate) const APP_INFO: AppInfo = AppInfo {
     name: "Strata",
     author: "Strata",
 };

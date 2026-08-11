@@ -73,10 +73,11 @@ src/menu.rs                      the macOS menubar: App · **File** (Open… · 
                                  is capturing a chord (`suspend_accelerators`) — the OS resolves an
                                  accelerator before the window sees the key, so an armed menubar
                                  would copy on ⌘C instead of letting it be bound
-src/state/mod.rs                 `AppCtx` — the seven app-globals `main` creates once (themes ·
+src/state/mod.rs                 `AppCtx` — the eight app-globals `main` creates once (themes ·
                                  config · window registry · theme preview · menubar handles · the
-                                 focused window's open path · agent access), handed to every
-                                 window root as one value rather than seven parameters
+                                 focused window's open path · agent access · model listings),
+                                 handed to every window root as one value rather than eight
+                                 parameters
 src/agent/                       AA-03 / AA-03b — agent access, the half that outlives any one
                                  window. `AgentCtx` is the pair `main` creates: the **directory**
                                  (lives for the process; windows join and leave it) and the
@@ -107,6 +108,14 @@ src/agent/                       AA-03 / AA-03b — agent access, the half that 
                                  derivation's shape. Mints the token on first use and persists it
   status.rs                      the header's dot — the app's one *polled* fact, and the module
                                  doc says why: the count is rmcp's, created below our own seam
+src/state/listings.rs            AS-06 — the app-global **model listings** slot: what each
+                                 provider last reported serving, loaded from its own file in
+                                 `main` (no dial-out there) and written by `write_listings`, the
+                                 one path that persists. App-global because two surfaces pick a
+                                 model (Settings ▸ AI ▸ Chat, the composer footer) and neither
+                                 owns the list; persisted because a picker fed only by a live
+                                 call is empty at every launch. Distinct from `Probes`, which is
+                                 the *outcome* of a request and must not survive a restart
 src/state/theme_preview.rs       the Settings window's **live theme preview** — the one half of
                                  its uncommitted draft every other window reads, so a pick
                                  repaints them all before it is saved. A second, higher-priority

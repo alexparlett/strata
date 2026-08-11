@@ -129,7 +129,10 @@ tangle:
 Around those, satellites with one job each: the project store (the catalog — a store, **not** a
 query against DataFusion; a def whose registration failed is exactly the row it must keep
 showing), the event log, the agents pane's record, query history (a `.jsonl` file, not a store
-field), and one app-global config store whose single write path also persists.
+field), the assistant's model listings (`strata_core::models` — what each provider last reported
+serving, beside the config file rather than in it, because a fetched list is a cache of a remote
+fact and not something the user edited), and one app-global config store whose single write path
+also persists.
 
 Config never holds a secret. The one class of secret the app must keep — third-party provider keys
 for the assistant — lives in the OS keystore (`strata_core::secret`, opened once in `main`), and

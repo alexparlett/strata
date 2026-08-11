@@ -1075,10 +1075,18 @@ mod tests {
         }
     }
 
+    /// **Namespaced by process, like every other scratch helper in this crate.**
+    ///
+    /// It wipes the directory on entry, so a path shared with another test process is one run
+    /// deleting the fixtures another is mid-assertion over — which failed
+    /// `an_unpartitioned_directory_finds_nothing_rather_than_guessing` once in a full
+    /// `cargo test --workspace` while passing in isolation and in every other run of the same
+    /// tree. A test that fails for reasons that are not about the code is worse than no test.
     fn tmp(sub: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir()
-            .join("strata_register_error_tests")
-            .join(sub);
+        let d = std::env::temp_dir().join(format!(
+            "strata_register_error_tests_{}_{sub}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

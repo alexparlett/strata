@@ -192,6 +192,7 @@ mod interaction {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use strata_core::config::AppConfig;
+    use strata_core::models::Listings;
     use strata_core::theme::load;
 
     use super::*;
@@ -251,6 +252,9 @@ mod interaction {
                     menu: create_global_menu(),
                     open: create_global_open(),
                     agent: create_global_agent(),
+                    // Empty rather than `create_global_listings`, which reads the machine's
+                    // own satellite: same reason the config store above is a fresh default.
+                    listings: State::create_global(Listings::default()),
                 });
                 open
             },

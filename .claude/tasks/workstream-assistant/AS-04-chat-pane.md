@@ -59,8 +59,17 @@ UI + wiring, on the state rules the app already lives by.
   policy or a second staleness rule here; the rules that reach this surface are AS-06's and are
   written there in full: the offered set is *reported ∪ {the current pick}* so an unreachable
   `/models` cannot strand a working setup, the list is deliberately **unfiltered**, and the
-  refresh is stale-while-revalidate off the render thread. If AS-06 has not landed when this
-  task starts, it is the prerequisite — not a reason to fold a local one-off.
+  refresh is stale-while-revalidate off the render thread.
+
+  **AS-06 has landed, so this is a consumption, not a build.** The list is `AppCtx::listings`
+  (app-global, on the bundle every window root is handed); the offer is
+  `Listings::offer(kind, chosen)` — the one copy of the union rule, already used by Settings ▸
+  AI ▸ Chat; the staleness question is `Listings::needs_refresh(kind)`. The fetch itself is
+  `probe::refresh`, which today lives in the Settings window's `views::ai` and takes a
+  `SettingsCtx` — this pane needs the same funnel without that context, so **move it** (to
+  `state::listings`, taking the listings handle and a place to put the outcome) rather than
+  writing a second one. That move is this task's, and it is a move: the in-flight guard, the
+  two keeps and the retraction rule come with it.
 - **Rendering.** Evaluate the fork's `freya-markdown` for the transcript **first**
   (standard-components-first, one level up); build bespoke only for what it will not carry,
   and then prefer extending it in the fork (§6) over app-side workarounds.

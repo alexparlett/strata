@@ -141,9 +141,13 @@ pub struct Ai {
     /// take its place.
     #[serde(default)]
     pub default_provider: Option<ProviderKind>,
-    /// The model a new chat starts on. Free text, because a model name is the provider's
-    /// vocabulary: the pane offers the list the provider reports and still accepts a name no
-    /// list mentions (a private deployment, a gateway that serves no `/models`).
+    /// The model a new chat starts on, as the provider spells it.
+    ///
+    /// A `String` because a model name is the provider's own vocabulary and nothing here has
+    /// an opinion about it — but **picked rather than typed** (AS-06): every surface that
+    /// chooses one chooses from [`Listings::offer`](crate::models::Listings::offer), the list
+    /// the provider last reported plus whatever is already set. Empty is the honest "nothing
+    /// chosen yet", which the send refuses by name.
     #[serde(default)]
     pub default_model: String,
     /// The reasoning rung a new chat starts on. `None` sends no preference and takes the
