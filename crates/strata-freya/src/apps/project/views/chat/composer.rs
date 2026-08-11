@@ -33,7 +33,7 @@ use freya::components::{Menu, MenuButton, Tooltip, TooltipContainer};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_agent::assistant::{efforts, label};
-use strata_core::ai::{Ai, Effort};
+use strata_core::ai::{Ai, Effort, ProviderKind};
 
 use super::mention::{AttachPicker, MentionPicker};
 use super::ChatTheme;
@@ -335,6 +335,18 @@ const COLUMN_CHROME: f32 = 200.;
 /// which is what an unmeasured pane and a very short one both get.
 const MIN_CEILING: f32 = 60.;
 
+/// **A rung belongs to a model, so a pick that moves either half re-asks the ladder.** A ladder
+/// is `(provider, model)` — two providers can serve one name and offer different rungs, or none —
+/// and [`EffortPicker`] is not rendered for a model with no rungs, so a rung left behind has
+/// nothing on screen to clear it and `Brain::resolve` refuses every send with `NoSuchEffort`.
+///
+/// Both pickers ask here rather than each writing the rule out, which is what let them drift into
+/// two spellings of it: one filtered the held rung, the other tested `Effort::Low` in its place
+/// when none was held. Settings' own AI ▸ Chat guards the same thing on both axes.
+fn keep_rung(kind: ProviderKind, model: &str, rung: Option<Effort>) -> Option<Effort> {
+    rung.filter(|rung| efforts(kind, model).contains(rung))
+}
+
 /// The rungs this conversation's **model** offers — `None` when it has none, which is what the
 /// footer draws no control for.
 fn rungs(pick: &Pick) -> Option<&'static [Effort]> {
@@ -391,19 +403,10 @@ impl Component for ProviderPicker {
                                     if !serves {
                                         chat.pick.model = String::new();
                                     }
-                                    // **The rung is checked against the new ladder even when the
-                                    // name survives**, because a ladder is `(provider, model)`:
-                                    // two providers can serve one name and offer different rungs,
-                                    // or none. Left behind, `Brain::resolve` refuses every send
-                                    // with `NoSuchEffort` — and `EffortPicker` is not rendered
-                                    // for a model with no rungs, so nothing is left to clear it.
-                                    // Settings' own AI ▸ Chat guards this on both axes.
-                                    let rung = chat.pick.effort;
-                                    if rung.is_some_and(|rung| {
-                                        !efforts(kind, &chat.pick.model).contains(&rung)
-                                    }) {
-                                        chat.pick.effort = None;
-                                    }
+                                    // The rung is re-asked against the new ladder even when the
+                                    // name survives, because the ladder is the pair.
+                                    chat.pick.effort =
+                                        keep_rung(kind, &chat.pick.model, chat.pick.effort);
                                 }
                             }
                             open.set(false);
@@ -512,15 +515,9 @@ impl Component for ModelPicker {
                             move |_| {
                                 let name = name.clone();
                                 if let Some(chat) = chats.write().get_mut(id) {
-                                    // **A rung the new model does not offer is dropped, not kept
-                                    // out of sight**: `Brain::resolve` refuses a selection
-                                    // carrying one before a socket opens, and the control that
-                                    // set it is gone by then.
-                                    if !efforts(kind, &name)
-                                        .contains(&chat.pick.effort.unwrap_or(Effort::Low))
-                                    {
-                                        chat.pick.effort = None;
-                                    }
+                                    // A rung the new model does not offer is dropped, not kept
+                                    // out of sight.
+                                    chat.pick.effort = keep_rung(kind, &name, chat.pick.effort);
                                     chat.pick.model = name;
                                 }
                                 open.set(false);
@@ -712,6 +709,33 @@ mod tests {
         assert_eq!(ceiling(600., false), 200.);
         assert_eq!(ceiling(900., false), 350.);
         assert_eq!(ceiling(800., true), 400.);
+    }
+
+    /// **A rung survives a pick only if the new pair still offers it**, and the question is asked
+    /// the same way whichever half moved — which is the point of there being one place to ask it.
+    #[test]
+    fn a_rung_the_new_pair_does_not_offer_is_dropped() {
+        let kind = ProviderKind::Anthropic;
+        assert_eq!(
+            keep_rung(kind, "claude-opus-5", Some(Effort::High)),
+            Some(Effort::High),
+            "a rung the model offers is kept"
+        );
+        assert_eq!(
+            keep_rung(kind, "claude-opus-4-5", Some(Effort::Max)),
+            None,
+            "the keyword ladder has no top rung, so this one goes"
+        );
+        assert_eq!(
+            keep_rung(kind, "claude-haiku-4-5", Some(Effort::Low)),
+            None,
+            "a model with no ladder at all offers nothing to keep"
+        );
+        assert_eq!(
+            keep_rung(kind, "claude-haiku-4-5", None),
+            None,
+            "no rung held is no rung to ask about"
+        );
     }
 
     /// Before the first layout the pane measures zero, and a very short pane would otherwise give
