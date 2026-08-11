@@ -11,6 +11,7 @@
 //! short stable scalar, and a timestamp or a struct has no sensible one.
 
 use freya::prelude::*;
+use strata_core::util::contains_lowercased;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
@@ -189,7 +190,7 @@ impl Component for Available {
             .collect();
         let matching: Vec<String> = unchosen
             .iter()
-            .filter(|name| name.to_lowercase().contains(&filter))
+            .filter(|name| contains_lowercased(name, &filter))
             .cloned()
             .collect();
         let query = draft.partition.filter.clone();

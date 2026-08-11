@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use freya::prelude::*;
+use strata_core::util::contains_lowercased;
 
 use super::datagrid::GridData;
 use crate::apps::project::query::PageSpec;
@@ -104,75 +105,6 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
             data.batch.clone(),
         )),
         row_nums: Some(Rc::new(nums)),
-    }
-}
-
-/// `haystack.to_lowercase().contains(needle)` — with `needle` already lowercased once by
-/// [`FindState::needle`] — **without** the per-cell `String` that form allocates. A 1000-row
-/// page (the pager's largest cut) times its column count is tens of thousands of allocations
-/// per keystroke, on the render thread.
-///
-/// Lowercasing is Unicode-aware, so it is *not* a windowed byte compare: one char can lower
-/// to several ('İ' → "i̇") and to a different byte length ('K' U+212A → 'k'). This walks the
-/// haystack's **lowercased char stream** from each starting char instead, so expansions fall
-/// out naturally and nothing is allocated.
-///
-/// The allocating form searches every position of the *lowered* string, and a char that lowers
-/// to several contributes several of them — so the starts tried here are the positions **inside**
-/// each char's expansion, not just its first. Without that inner loop a needle beginning
-/// mid-expansion (a bare combining dot against "İstanbul") would be missed, which is a genuine
-/// difference in result and not just in spelling.
-///
-/// One divergence from `str::to_lowercase` remains, which is the only context-sensitive case in
-/// it: word-final 'Σ' lowers to 'ς' there but to 'σ' char-wise, so the two sigma forms are folded
-/// together here. That makes the match a strict *superset* of the allocating form — a needle
-/// in either sigma form finds both — rather than silently dropping matches at word ends.
-fn contains_lowercased(haystack: &str, needle: &str) -> bool {
-    // An empty needle matches everything, `str::contains`-style — including an empty haystack,
-    // which has no starting char to try. (`FindState::needle` never yields one, but the
-    // equivalence this function claims shouldn't have a hole in it.)
-    needle.is_empty()
-        || haystack.char_indices().any(|(i, c)| {
-            // `count()` is 1 for all but a handful of chars ('İ' is the only one Rust maps to
-            // more than one lowercase char without context), so this is a one-iteration loop
-            // on the hot path.
-            (0..c.to_lowercase().count())
-                .any(|skip| starts_with_lowercased(&haystack[i..], skip, needle))
-        })
-}
-
-/// Does `haystack`, lowercased char by char, *start with* the (already lowercase) `needle` —
-/// beginning `skip` chars into the **first** char's lowercase expansion?
-///
-/// Consumes the needle against each char's expansion, so a match may begin or end part-way
-/// through one: "i" matches "İstanbul" (whose 'İ' lowers to "i" + a combining dot) and so does
-/// the combining dot on its own. `skip` is always less than the first char's expansion length,
-/// so it is spent before the second char is reached.
-fn starts_with_lowercased(haystack: &str, mut skip: usize, needle: &str) -> bool {
-    let mut needle = needle.chars();
-    let mut want = needle.next();
-    for c in haystack.chars() {
-        for lc in c.to_lowercase() {
-            if skip > 0 {
-                skip -= 1;
-                continue;
-            }
-            let Some(w) = want else { return true };
-            if fold_sigma(w) != fold_sigma(lc) {
-                return false;
-            }
-            want = needle.next();
-        }
-    }
-    want.is_none()
-}
-
-/// Greek final sigma folded onto plain sigma — see [`contains_lowercased`].
-fn fold_sigma(c: char) -> char {
-    if c == 'ς' {
-        'σ'
-    } else {
-        c
     }
 }
 
@@ -337,62 +269,11 @@ mod tests {
         assert_eq!(view.row_nums.as_deref(), Some(&vec![]));
     }
 
-    /// The allocation-free match must agree with the `to_lowercase().contains()` form it
-    /// replaced — including where lowering changes a char's byte length or char count, which
-    /// is exactly what a windowed byte compare would get wrong.
+    /// The predicate's Unicode edge cases live with it in `strata_core::util`; what belongs
+    /// here is that the *filter* sees a match through them — a needle beginning inside the
+    /// two-char lowercase expansion of 'İ' still narrows the page.
     #[test]
-    fn matching_agrees_with_the_allocating_form_on_non_ascii() {
-        // (haystack, needle — already lowercased, as `FindState::needle` hands it over).
-        let cases: &[(&str, &str)] = &[
-            ("CAFÉ au lait", "café"),
-            ("Straße", "straße"),
-            ("ÅNGSTRÖM", "ström"),
-            // U+212A KELVIN SIGN lowers to a 1-byte 'k' — three bytes become one.
-            ("\u{212A}ELVIN", "kelvin"),
-            // 'İ' lowers to TWO chars ("i" + U+0307), so a needle can end mid-expansion —
-            // and a needle that skips the combining dot does *not* match, in either form.
-            ("İstanbul", "i"),
-            ("İstanbul", "istanbul"),
-            ("İstanbul", "i\u{307}stanbul"),
-            // …and it can *begin* mid-expansion too: the allocating form searches every
-            // position of the lowered string, including the one the 'İ' expanded into.
-            ("İstanbul", "\u{307}stanbul"),
-            ("İ", "\u{307}"),
-            ("日本語のテキスト", "本語"),
-            // Near-misses: an accent is not its bare letter, and a needle can outrun the text.
-            ("cafe", "café"),
-            ("é", "éé"),
-            ("", "x"),
-            ("", ""),
-        ];
-        for (haystack, needle) in cases {
-            assert_eq!(
-                contains_lowercased(haystack, needle),
-                haystack.to_lowercase().contains(*needle),
-                "{haystack:?} contains {needle:?}"
-            );
-        }
-        // The expansion cases are meant to *match* — pin that down too, so an agreeing pair
-        // of `false`s can't pass for equivalence.
-        assert!(contains_lowercased("İstanbul", "i"));
-        assert!(contains_lowercased("İstanbul", "i\u{307}stanbul"));
-        assert!(contains_lowercased("\u{212A}ELVIN", "kelvin"));
-        assert!(!contains_lowercased("cafe", "café"));
-    }
-
-    /// A needle that begins **inside** a char's lowercase expansion. `str::to_lowercase`
-    /// searches every position of the string it built, and 'İ' contributes two of them; a scan
-    /// that only tried the first char of each expansion would silently miss the second. The
-    /// only char Rust maps to more than one lowercase char without context, so this is the
-    /// whole of the case — but the equivalence the function claims has to hold for it.
-    #[test]
-    fn a_needle_can_begin_mid_expansion() {
-        assert!(contains_lowercased("İ", "\u{307}"));
-        assert!(contains_lowercased("İstanbul", "\u{307}stanbul"));
-        // Not a free-for-all: the dot is the *second* char of that expansion, so a needle
-        // that wants it first still has to match what follows.
-        assert!(!contains_lowercased("İstanbul", "\u{307}i"));
-        // And the filter sees it, not just the predicate.
+    fn the_filter_sees_a_mid_expansion_match() {
         let col = column_info(&Field::new("a", DataType::Utf8, true));
         let data = Rc::new(GridData {
             columns: vec![col],
@@ -410,18 +291,6 @@ mod tests {
         });
         let view = filter_page(Some("\u{307}stanbul"), &data, 0);
         assert_eq!(view.row_nums.as_deref(), Some(&vec![1]));
-    }
-
-    /// The one deliberate divergence (see `contains_lowercased`): `str::to_lowercase` maps a
-    /// word-final 'Σ' to 'ς', so the allocating form missed a "σ" needle there. Folding the
-    /// two sigma forms together finds the row under either spelling.
-    #[test]
-    fn either_sigma_form_finds_the_other() {
-        assert!(contains_lowercased("ΟΔΟΣ", "σ"));
-        assert!(contains_lowercased("ΟΔΟΣ", "ς"));
-        assert!(contains_lowercased("οδος", "ς"));
-        // …which the form this replaced did not do.
-        assert!(!"ΟΔΟΣ".to_lowercase().contains('σ'));
     }
 
     #[test]
