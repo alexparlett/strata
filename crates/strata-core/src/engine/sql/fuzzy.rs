@@ -95,6 +95,91 @@ fn is_subsequence(candidate: &str, partial: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The invariant the subsequence pre-filter rests on: **every tier is a stronger
+    /// condition than "is a subsequence"**, so rejecting a non-subsequence up front
+    /// cannot drop a candidate any tier would have matched.
+    ///
+    /// This is the one claim in `match_tier` that is an argument rather than an
+    /// observation, and it is invisible from the outside — a tier added later that can
+    /// match a non-subsequence (an acronym or initialism matcher is the obvious
+    /// candidate) would not fail a completion test, it would just silently stop being
+    /// offered. So it is pinned here, per predicate, rather than through the ladder.
+    #[test]
+    fn every_tier_implies_a_subsequence_match() {
+        let words = [
+            "user_id",
+            "USER_ID",
+            "userid",
+            "guid",
+            "order_id",
+            "_leading",
+            "trailing_",
+            "__dunder__",
+            "a",
+            "ab",
+            "a_b",
+            "created_at",
+            "CreatedAt",
+            "col_1",
+            "COL_01",
+            "précis",
+            "über_id",
+            "日本語",
+            "sum",
+            "count_star",
+            "s3_bucket_name",
+            "x9y",
+            "_",
+            "1",
+        ];
+        // Candidates crossed with their own fragments — prefixes, interior runs and
+        // every-other-char picks, which is what reaches the looser tiers.
+        let mut partials: Vec<String> = words.iter().copied().map(String::from).collect();
+        for w in words {
+            let n = w.chars().count();
+            for take in 1..=n.min(5) {
+                partials.push(w.chars().take(take).collect());
+                partials.push(w.chars().skip(1).take(take).collect());
+            }
+            partials.push(w.chars().step_by(2).collect());
+            partials.push(w.to_ascii_uppercase());
+        }
+
+        let mut fired = [0usize; 4];
+        for c in words {
+            for p in &partials {
+                if p.is_empty() {
+                    continue;
+                }
+                let sub = is_subsequence(c, p);
+                for (i, (tier, holds)) in [
+                    ("exact", c.eq_ignore_ascii_case(p)),
+                    ("prefix", starts_with_ci(c, p)),
+                    ("word-boundary", word_boundary_match(c, p)),
+                    ("contains", contains_ci(c, p)),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if holds {
+                        fired[i] += 1;
+                    }
+                    assert!(
+                        !holds || sub,
+                        "{tier} matched {c:?} against {p:?} but it is not a subsequence — \
+                         the pre-filter in match_tier would drop it"
+                    );
+                }
+            }
+        }
+        // An implication is vacuously true where its premise never holds, so the corpus
+        // has to actually reach every tier or this guard would rot into nothing.
+        assert!(
+            fired.iter().all(|&n| n > 0),
+            "corpus never exercised some tier: {fired:?} (exact, prefix, word-boundary, contains)"
+        );
+    }
+
     #[test]
     fn empty_partial_is_tier_zero() {
         assert_eq!(match_tier("anything", ""), Some(0));
