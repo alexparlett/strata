@@ -29,11 +29,12 @@ use crate::apps::settings::views::ai::row::{mark, ProviderRow};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, SettingsCtx, SettingsTheme};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_4, SP_6};
 use crate::components::typography::Prose;
 use crate::state::Ask;
 
 /// The gap between the explainer and the list.
-const SECTION_GAP: f32 = 24.;
+const SECTION_GAP: f32 = SP_6;
 
 /// The placeholder the OpenAI-compatible URL box carries. A shape rather than a host: any real
 /// example would read as a default nobody set.
@@ -99,7 +100,7 @@ impl Component for ProvidersPane {
 fn list_box(theme: &SettingsTheme, rows: Vec<Element>) -> Element {
     rect()
         .width(Size::fill())
-        .corner_radius(8.)
+        .corner_radius(R_2)
         .background(theme.card_background)
         .border(Border::new().width(1.).fill(theme.card_border_fill))
         .children(rows)
@@ -113,9 +114,9 @@ fn note(theme: &SettingsTheme) -> Element {
     rect()
         .width(Size::fill())
         .horizontal()
-        .spacing(10.)
-        .padding(12.)
-        .corner_radius(8.)
+        .spacing(SP_4)
+        .padding(SP_4)
+        .corner_radius(R_2)
         .background(theme.item_active_background)
         .border(Border::new().width(1.).fill(theme.card_border_fill))
         // **Both halves are needed for the sentence to wrap**, and each fails silently on its

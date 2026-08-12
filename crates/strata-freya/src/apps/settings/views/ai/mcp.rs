@@ -32,6 +32,7 @@ use crate::apps::settings::views::Pane;
 use crate::apps::settings::{Anchor, SettingsCtx};
 use crate::components::form::{Form, NumberField, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::SP_3;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Control;
 
@@ -40,7 +41,7 @@ use crate::components::typography::Control;
 const PORT_WIDTH: f32 = 130.;
 
 /// The gap between the token box and the actions beside it, and between those actions.
-const ACTION_GAP: f32 = 8.;
+const ACTION_GAP: f32 = SP_3;
 
 #[derive(PartialEq)]
 pub struct McpPane;
@@ -167,7 +168,7 @@ impl Component for McpPane {
                                     rect()
                                         .horizontal()
                                         .cross_align(Alignment::Center)
-                                        .spacing(6.)
+                                        .spacing(SP_3)
                                         .child(Icon::new(IconName::Reload).size(13.))
                                         .child(Control::new("Regenerate")),
                                 ),

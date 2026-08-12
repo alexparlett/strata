@@ -27,10 +27,8 @@ use strata_core::config::{OpenPref, HISTORY_MIN};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{Anchor, SettingsCtx};
 use crate::components::form::{Form, NumberField, PathField};
+use crate::components::metrics::SETTINGS_FIELD_WIDTH;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-
-/// The canvas's numeric field (`width: 130px`) — the same box the data-display pane's are.
-const FIELD_WIDTH: f32 = 130.;
 
 /// The history limit is bounded below and not above: keeping more runs costs a longer
 /// `history.jsonl` and nothing else, and the canvas offers no ceiling either. The field's own
@@ -116,7 +114,7 @@ impl Component for SystemPane {
                         HISTORY_MIN as u32,
                         NO_HISTORY_CAP,
                     )
-                    .width(Size::px(FIELD_WIDTH))
+                    .width(Size::px(SETTINGS_FIELD_WIDTH))
                     .unit("runs")
                     .on_change(move |runs: u32| ctx.edit(|s| s.max_history = runs as usize)),
                 ),

@@ -44,14 +44,15 @@ use crate::apps::project::state::{
     SessionState, Stores,
 };
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, R_XS, SP_1, SP_2, SP_3, SP_4};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{InputTypography, Meta, Prose};
 use crate::state::{needs_asking, refresh, use_config, AppCtx, Ask, ConfigChan};
 use crate::theme::{use_roles, Role};
 
 /// The composer's inset and the gap between its rows (canvas `--sp-4` / `--sp-3`).
-const PAD: Gaps = Gaps::new_all(14.);
-const ROW_GAP: f32 = 8.;
+const PAD: Gaps = Gaps::new_all(SP_4);
+const ROW_GAP: f32 = SP_3;
 /// The model dropdown's width, and the room a name has inside it.
 const MODEL_MENU_W: f32 = 250.;
 const MODEL_ROW_CHROME: f32 = 40.;
@@ -238,21 +239,21 @@ impl Component for Composer {
         let bar = rect()
             .width(Size::fill())
             .vertical()
-            .corner_radius(8.)
+            .corner_radius(R_2)
             .background(theme.card_background)
             .border(Border::new().width(1.).fill(match focus().is_focused() {
                 true => roles.get(Role::BorderFocused),
                 false => theme.card_border_fill,
             }))
             // A painted border is not laid out, so the inset carries it (AGENTS.md §3).
-            .padding(Gaps::new_all(6.))
-            .spacing(6.)
+            .padding(Gaps::new_all(SP_3))
+            .spacing(SP_3)
             .child(
                 rect()
                     .width(Size::fill())
                     .horizontal()
                     .content(Content::Flex)
-                    .spacing(4.)
+                    .spacing(SP_2)
                     .child(rect().width(Size::flex(1.)).child(field))
                     // Top-right of the bar, beside the first line rather than centred on a block
                     // that may be twenty lines tall.
@@ -277,7 +278,7 @@ impl Component for Composer {
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(4.)
+                    .spacing(SP_2)
                     .child(AttachPicker {
                         id,
                         theme: theme.clone(),
@@ -365,16 +366,16 @@ impl Component for Chips {
                 .width(Size::fill())
                 .horizontal()
                 .content(Content::wrap_spacing(4.))
-                .spacing(4.),
+                .spacing(SP_2),
             |row, (at, anchor)| {
                 row.child(
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(4.)
-                        .corner_radius(4.)
+                        .spacing(SP_2)
+                        .corner_radius(R_XS)
                         .background(theme.chip_background)
-                        .padding(Gaps::new(2., 4., 2., 6.))
+                        .padding(Gaps::new(SP_1, SP_2, SP_1, SP_3))
                         .child(Meta::new(anchor.label()).color(theme.chip_color))
                         .child(
                             Button::new()
@@ -410,7 +411,7 @@ impl Component for Footer {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(6.)
+            .spacing(SP_3)
             .child(ProviderPicker {
                 id,
                 pick: pick.clone(),
@@ -656,7 +657,7 @@ impl Component for ModelPicker {
                                 .horizontal()
                                 .content(Content::Flex)
                                 .cross_align(Alignment::Center)
-                                .spacing(6.)
+                                .spacing(SP_3)
                                 .child(
                                     Meta::new(name)
                                         .color(match current {
@@ -706,7 +707,7 @@ fn picker_trigger(
             rect()
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .spacing(4.)
+                .spacing(SP_2)
                 .child(
                     Meta::new(text)
                         .color(theme.meta_color)
@@ -796,7 +797,7 @@ impl Component for EffortPicker {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(4.)
+                    .spacing(SP_2)
                     .child(
                         Meta::new(match current {
                             Some(rung) => format!("{} effort", rung.label().to_lowercase()),

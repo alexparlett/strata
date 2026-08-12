@@ -21,14 +21,15 @@ use crate::apps::project::state::{
 };
 use crate::apps::project::views::ChatDrop;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{COMPACT_BUTTON, RIGHT_PANE_HEADER_HEIGHT, SP_2, SP_3, SP_4};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::Control;
 use crate::components::typography::{Body, Meta};
 use crate::state::{use_config, ConfigChan};
 
-/// The header's height and inset (canvas: 40px, `0 var(--sp-3) 0 var(--sp-4)`).
-const HEADER_H: f32 = 40.;
-const HEADER_PAD: Gaps = Gaps::new(0., 6., 0., 10.);
+/// The header's inset (canvas `0 var(--sp-3) 0 var(--sp-4)`); its height is the right side's own
+/// [`RIGHT_PANE_HEADER_HEIGHT`], shared with the inspector it alternates with.
+const HEADER_PAD: Gaps = Gaps::new(0., SP_3, 0., SP_4);
 /// The switcher card's width, and the room a row's title has inside it once the card's padding
 /// and the delete button are taken out — a `Menu` hugs its children, so a long title would
 /// otherwise stretch the card to the pane's whole width.
@@ -194,7 +195,7 @@ impl Component for ChatHeader {
         // are the same object — the canvas's shape, and the only one that fits a 340px pane.
         let trigger = Button::new()
             .flat()
-            .height(Size::px(26.))
+            .height(Size::px(COMPACT_BUTTON))
             .width(Size::fill())
             .on_press(move |_| open.toggle())
             .child(
@@ -203,7 +204,7 @@ impl Component for ChatHeader {
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(4.)
+                    .spacing(SP_2)
                     .child(
                         Body::new(title)
                             .color(self.theme.title_color)
@@ -220,12 +221,12 @@ impl Component for ChatHeader {
 
         rect()
             .width(Size::fill())
-            .height(Size::px(HEADER_H))
+            .height(Size::px(RIGHT_PANE_HEADER_HEIGHT))
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .padding(HEADER_PAD)
-            .spacing(4.)
+            .spacing(SP_2)
             .child(
                 rect().width(Size::flex(1.)).child(
                     Attached::new(

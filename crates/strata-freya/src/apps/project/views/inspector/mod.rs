@@ -37,8 +37,9 @@ use crate::apps::project::state::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{PANE_BODY_MIN_W, RIGHT_PANE_HEADER_HEIGHT};
+use crate::components::metrics::{SP_3, SP_4, SP_6};
 use crate::components::typography::{Eyebrow, Prose};
-use crate::components::PANE_BODY_MIN_W;
 
 define_theme!(
     %[component]
@@ -89,9 +90,7 @@ define_theme!(
 );
 
 /// The panel's outer padding, and the gap between its stacked sections (canvas `--sp-4`).
-const PANEL_PAD: f32 = 12.;
-/// The header row's height, matching the sidebar's and the workbench toolbar's.
-const HEADER_HEIGHT: f32 = 40.;
+const PANEL_PAD: f32 = SP_4;
 
 #[derive(PartialEq)]
 pub struct Inspector {
@@ -153,7 +152,7 @@ impl Component for Inspector {
             .child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(HEADER_HEIGHT))
+                    .height(Size::px(RIGHT_PANE_HEADER_HEIGHT))
                     .horizontal()
                     // `Content::Flex` with a flexing title, not `SpaceBetween` with two hugging
                     // clusters (P5-06): `Content::Normal` never shrinks anything and `Overflow`
@@ -162,7 +161,7 @@ impl Component for Inspector {
                     // the × is pinned, because it is how the user escapes the squeeze.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .padding((0., PANEL_PAD))
                     .child(
                         rect().width(Size::flex(1.)).child(
@@ -206,7 +205,7 @@ impl Component for Inspector {
 fn note(text: impl Into<String>, color: Color) -> Element {
     rect()
         .width(Size::fill())
-        .padding(Gaps::new(24., PANEL_PAD, 24., PANEL_PAD))
+        .padding(Gaps::new(SP_6, PANEL_PAD, SP_6, PANEL_PAD))
         .child(Prose::new(text).color(color).wrap())
         .into_element()
 }

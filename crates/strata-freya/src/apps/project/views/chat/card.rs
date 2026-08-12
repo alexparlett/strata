@@ -27,14 +27,15 @@ use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, SP_2, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Meta, Path, Readout};
 use crate::theme::{use_roles, Role};
 
-pub(super) const CARD_RADIUS: f32 = 6.;
-pub(super) const CARD_PAD: Gaps = Gaps::new(8., 10., 8., 10.);
+pub(super) const CARD_RADIUS: f32 = R_1;
+pub(super) const CARD_PAD: Gaps = Gaps::new(SP_3, SP_4, SP_3, SP_4);
 /// The action bar under a card's body (canvas `var(--sp-2) var(--sp-3)`).
-pub(super) const ACTIONS_PAD: Gaps = Gaps::new(4., 6., 4., 6.);
+pub(super) const ACTIONS_PAD: Gaps = Gaps::new(SP_2, SP_3, SP_2, SP_3);
 const DOT: f32 = 6.;
 /// How many lines of a step's SQL preview show before it truncates.
 const PREVIEW_LINES: usize = 2;
@@ -76,14 +77,14 @@ impl Component for StepCard {
                     .vertical()
                     // A painted border is not laid out, so the body's own inset carries it.
                     .padding(CARD_PAD)
-                    .spacing(4.)
+                    .spacing(SP_2)
                     .child(
                         rect()
                             .width(Size::fill())
                             .horizontal()
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
-                            .spacing(6.)
+                            .spacing(SP_3)
                             .child(Dot::new(dot).size(DOT))
                             .child(Meta::new(step.tool.clone()).color(theme.role_color))
                             .child(
@@ -206,7 +207,7 @@ impl Component for Actions {
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(6.)
+                        .spacing(SP_3)
                         .child(Icon::new(icon).size(12.).color(color))
                         .child(Meta::new(text).color(color)),
                 )
@@ -217,7 +218,7 @@ impl Component for Actions {
             .horizontal()
             .cross_align(Alignment::Center)
             .padding(ACTIONS_PAD)
-            .spacing(4.)
+            .spacing(SP_2)
             .child(action(
                 IconName::Plus,
                 "Open in tab",

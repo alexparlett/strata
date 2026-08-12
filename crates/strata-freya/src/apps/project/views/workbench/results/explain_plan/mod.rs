@@ -15,10 +15,10 @@ use strata_core::engine::plan::{guide_rails, PlanTab, QueryPlan};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::TOOL_SIZE;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::components::tones::tones;
-use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::type_palette::type_palette;
 use crate::components::typography::Readout;
@@ -29,6 +29,7 @@ mod palette;
 #[cfg(test)]
 mod preview;
 
+use crate::components::metrics::{SP_3, SP_4, SP_5};
 use node::plan_row;
 use palette::PlanPalette;
 
@@ -141,7 +142,7 @@ impl Component for ExplainPlan {
         let badge = (self.plan.analyze && physical).then(|| {
             Badge::tag("ANALYZE", palette.types.map_color)
                 .height(22.)
-                .padding((0., 12.))
+                .padding((0., SP_4))
                 .radius(6.)
         });
         let raw_title = if raw_on {
@@ -166,7 +167,7 @@ impl Component for ExplainPlan {
             .content(Content::Flex)
             .overflow(Overflow::Clip)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .maybe_child(tabs)
             .maybe_child(badge);
         // What that run cannot shrink below: the pill's two text segments when both trees exist,
@@ -187,7 +188,7 @@ impl Component for ExplainPlan {
             .child(
                 Toolbar::new()
                     .height(37.)
-                    .padding(8.)
+                    .padding(SP_3)
                     .leading(leading, leading_min)
                     .item(ToolbarItem::Custom {
                         width: TOOL_SIZE,
@@ -204,7 +205,7 @@ impl Component for ExplainPlan {
             ScrollView::new()
                 .child(
                     rect()
-                        .padding(16.)
+                        .padding(SP_5)
                         .child(Readout::new(raw_text.clone()).color(theme.raw_color).wrap()),
                 )
                 .into()
@@ -219,8 +220,8 @@ impl Component for ExplainPlan {
                         .key(if physical { "physical" } else { "logical" })
                         .width(Size::fill())
                         .vertical()
-                        .padding(16.)
-                        .spacing(8.)
+                        .padding(SP_5)
+                        .spacing(SP_3)
                         .children(rows.collect::<Vec<_>>()),
                 )
                 .into()

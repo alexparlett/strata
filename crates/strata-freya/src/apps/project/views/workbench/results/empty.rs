@@ -1,6 +1,7 @@
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_4};
 use crate::components::typography::{Prose, Title};
 use crate::theme::{use_roles, Role};
 
@@ -26,13 +27,13 @@ impl Component for EmptyState {
             .vertical()
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .spacing(12.)
+            .spacing(SP_4)
             .background(background)
             .child(
                 rect()
                     .width(Size::px(46.))
                     .height(Size::px(46.))
-                    .corner_radius(8.)
+                    .corner_radius(R_2)
                     .background(tile_bg)
                     .border(Border::new().width(1.).fill(tile_border))
                     .center()

@@ -19,6 +19,7 @@
 
 use freya::prelude::*;
 
+use crate::components::metrics::{SP_1, SP_2, SP_3};
 use crate::components::typography::{Eyebrow, Meta};
 
 /// Alpha of a badge's fill when it is derived from the foreground colour (≈16%).
@@ -63,8 +64,8 @@ impl Badge {
             radius: 4.,
             // A tag hugs tighter than a value run — the two paddings the views already used.
             padding: match role {
-                BadgeRole::Tag => Gaps::new(2., 4., 2., 4.),
-                BadgeRole::Value => Gaps::new(2., 8., 2., 8.),
+                BadgeRole::Tag => Gaps::new(SP_1, SP_2, SP_1, SP_2),
+                BadgeRole::Value => Gaps::new(SP_1, SP_3, SP_1, SP_3),
             },
             height: None,
         }

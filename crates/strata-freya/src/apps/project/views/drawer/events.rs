@@ -25,14 +25,16 @@ use crate::apps::project::state::{LogCtx, LogLevel};
 use crate::components::divider::Divider;
 use crate::components::dot::Dot;
 use crate::components::icon::IconName;
+use crate::components::metrics::{SP_3, SP_4};
 use crate::components::tones::{tones, Tones};
 use crate::components::typography::{Body, Meta};
 
 /// A row's vertical padding (canvas `--sp-3`) and the panel's horizontal one (`--sp-4`).
-const ROW_PAD_Y: f32 = 8.;
-const PAD: f32 = 12.;
+const ROW_PAD_Y: f32 = SP_3;
+const PAD: f32 = SP_4;
 /// The severity dot's diameter, and the nudge that sits it on the message's **first** line rather
-/// than centred against a message that may have wrapped to three.
+/// than centred against a message that may have wrapped to three. The two nudges are off the
+/// spacing scale on purpose — an optical alignment is not a gap, and rounding one moves the mark.
 const DOT: f32 = 6.;
 const DOT_OFFSET: f32 = 4.;
 /// The same idea for the timestamp, a smaller face that sits a little higher.
@@ -144,7 +146,7 @@ impl Component for EventRow {
                     .width(Size::fill())
                     .horizontal()
                     .content(Content::Flex)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .padding((ROW_PAD_Y, PAD))
                     .child(
                         rect()

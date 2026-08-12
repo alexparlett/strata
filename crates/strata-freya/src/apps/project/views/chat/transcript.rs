@@ -17,15 +17,16 @@ use super::ChatTheme;
 use crate::apps::project::state::{Block, Chan, ChatsCtx, Reply, SessionState, Turn};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_XS, SP_1, SP_2, SP_3, SP_5, SP_6};
 use crate::components::typography::{Eyebrow, Meta, Prose, Readout};
 
 /// The gap between a turn's eyebrow and its body, and between blocks (canvas `--sp-3`).
-const BLOCK_GAP: f32 = 10.;
+const BLOCK_GAP: f32 = SP_3;
 /// The height a turn's action row occupies whether or not it is showing — reserved, so revealing
 /// it on hover does not shift the message above.
 pub(super) const ACTIONS_H: f32 = 20.;
 /// The empty state's own inset and the width its one sentence wraps in (canvas `max-width: 220px`).
-const EMPTY_PAD: Gaps = Gaps::new_all(24.);
+const EMPTY_PAD: Gaps = Gaps::new_all(SP_6);
 const EMPTY_W: f32 = 220.;
 
 #[derive(PartialEq)]
@@ -61,7 +62,7 @@ impl Component for Transcript {
         }
 
         turns.into_iter().enumerate().fold(
-            rect().width(Size::fill()).vertical().spacing(20.),
+            rect().width(Size::fill()).vertical().spacing(SP_5),
             |body, (at, turn)| {
                 body.child(TurnRow {
                     turn,
@@ -147,7 +148,7 @@ impl Component for TurnRow {
                     .height(Size::px(ACTIONS_H))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(6.)
+                    .spacing(SP_3)
                     .opacity(match hovered() {
                         true => 1.,
                         false => 0.,
@@ -289,13 +290,13 @@ fn user(text: &str, chips: &[String], theme: &ChatTheme) -> Element {
                 .width(Size::fill())
                 .horizontal()
                 .content(Content::wrap_spacing(4.))
-                .spacing(4.),
+                .spacing(SP_2),
             |row, chip| {
                 row.child(
                     rect()
-                        .corner_radius(4.)
+                        .corner_radius(R_XS)
                         .background(theme.chip_background)
-                        .padding(Gaps::new(2., 6., 2., 6.))
+                        .padding(Gaps::new(SP_1, SP_3, SP_1, SP_3))
                         .child(Meta::new(chip.clone()).color(theme.chip_color)),
                 )
             },
@@ -305,7 +306,7 @@ fn user(text: &str, chips: &[String], theme: &ChatTheme) -> Element {
     rect()
         .width(Size::fill())
         .vertical()
-        .spacing(6.)
+        .spacing(SP_3)
         .maybe_child(pinned)
         .child(
             Prose::new(text.to_string())
@@ -336,7 +337,7 @@ impl Component for Thinking {
             .width(Size::fill())
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(6.)
+            .spacing(SP_3)
             .child(CircularLoader::new().size(11.))
             .child(Meta::new("Thinking…").color(self.theme.meta_color))
     }

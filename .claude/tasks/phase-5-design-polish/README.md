@@ -29,7 +29,7 @@ Settings ▸ AI roster of eight named provider rows (the app settled **one OpenA
 
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
-| P5-01 | Spacing & radius token scale across surfaces | ⬜ | F3 | — |
+| P5-01 | Spacing & radius token scale across surfaces | ✅ | F3 | — |
 | P5-02 | Hover / focus / active interaction states | ⬜ | — | — |
 | P5-03 | Animations & transitions | ⬜ | — | P5-01 (shared timing consts) |
 | P5-04 | Theme dial-in (Midnight / Daylight) | ⬜ | W5 | — |
@@ -46,8 +46,9 @@ Settings ▸ AI roster of eight named provider rows (the app settled **one OpenA
    what P5-10 re-homes the connection/configure text reads onto. Doing P5-10 first would re-home
    against a field set about to change.
 2. **P5-07** — mechanical; one component, eight call sites.
-3. **P5-01** — the token/const pass; later tasks snap to it.
-4. **P5-02**, then **P5-03** — both carry a fork half; P5-03 reuses P5-01's shared timing consts.
+3. ~~**P5-01**~~ — done: the scale and the shared sizes are `components::metrics`.
+4. **P5-02**, then **P5-03** — both carry a fork half; P5-03 puts its durations in P5-01's
+   **Timing** section, beside `PROGRESS_HOLD`.
 5. **P5-04**, then **P5-05 last** — the dial-in and the audit judge the app *after* it matches
    the tokens and themes it is judged against.
 

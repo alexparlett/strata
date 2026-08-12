@@ -25,6 +25,7 @@
 use freya::prelude::*;
 
 use crate::components::form::{Form, Note, NumberField, Row, ValueField, FIELD_HEIGHT};
+use crate::components::metrics::{SP_3, SP_4};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{MonoValue, Prose};
 
@@ -310,7 +311,7 @@ impl<E: Clone + PartialEq + 'static> Component for SegControl<E> {
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .child(pill)
             // The box beside a segmented control is built to the **buttons'** height, not the
             // 30px every other field uses: they sit side by side in one row, so a box that is
@@ -351,7 +352,7 @@ impl<E: Clone + PartialEq + 'static> Component for ToggleControl<E> {
             Some(hint) => rect()
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .spacing(12.)
+                .spacing(SP_4)
                 .child(switch)
                 // `Prose` at the ambient colour, which is how the export window sets the
                 // sentence beside its own switch. Not the hint tone: that is the eyebrow's

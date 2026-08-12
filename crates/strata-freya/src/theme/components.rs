@@ -4,8 +4,10 @@
 //! two divergent per-theme copies. Colour fields are `Preference::Reference`s built through
 //! [`role`] — the only constructor, so the table cannot hold a typo'd name — and resolve
 //! against the active palette at read time, which is what makes the registrations
-//! theme-independent. Layout tokens are literal constants; the editor's and tooltip's type
-//! comes off the resolved [`Typography`] so the scale stays the single source (AGENTS.md §3).
+//! theme-independent. Layout tokens come off the spacing and radius scale
+//! ([`crate::components::metrics`]) — deliberately constants rather than theme fields, because a
+//! step does not vary by theme; the editor's and tooltip's type comes off the resolved
+//! [`Typography`] so the scale stays the single source (AGENTS.md §3).
 //!
 //! **Built-ins** are a partial retune over the fork's registered default ([`builtin`]): a
 //! field the app agrees with is stated nowhere, and resolves through
@@ -29,6 +31,7 @@ use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
 use crate::components::form::FormThemePreference;
 use crate::components::keycap::KeyCapColorsThemePreference;
+use crate::components::metrics::{R_1, R_XS, SP_1, SP_2, SP_3, SP_4};
 use crate::components::run_button::RunButtonThemePreference;
 use crate::components::segmented_toggle::SegmentedToggleThemePreference;
 use crate::components::toggle_button::ToggleButtonThemePreference;
@@ -153,7 +156,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.hover_background = role(Role::ElevatedElementHover);
         p.border_fill = role(Role::BorderControl);
         p.arrow_fill = role(Role::TextDim);
-        p.list_margin = Preference::Specific(2.);
+        p.list_margin = Preference::Specific(SP_1);
     });
     builtin::<MenuContainerThemePreference>(th, "menu_container", |p| {
         p.background = role(Role::ElevatedSurface);
@@ -182,8 +185,8 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.hover_background = role(Role::GhostElementHover);
         p.selected_background = role(Role::GhostElementSelected);
         p.color = role(Role::TextMuted);
-        p.padding = Preference::Specific(Gaps::new(3., 8., 3., 8.));
-        p.corner_radius = Preference::Specific(CornerRadius::new_all(4.));
+        p.padding = Preference::Specific(Gaps::new(SP_2, SP_3, SP_2, SP_3));
+        p.corner_radius = Preference::Specific(CornerRadius::new_all(R_XS));
     });
     builtin::<SegmentedButtonThemePreference>(th, "segmented_button", |p| {
         p.border_fill = role(Role::BorderControl);
@@ -363,7 +366,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             color: role(Role::TextOnAccent),
             active_background: role(Role::Accent),
             active_color: role(Role::TextOnAccent),
-            corner_radius: Preference::Specific(CornerRadius::new_all(6.)),
+            corner_radius: Preference::Specific(CornerRadius::new_all(R_1)),
         },
     );
     // The editor's chrome; its type is the scale's `code_block` role, resolved here so the
@@ -737,8 +740,8 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             cell_num_color: role(Role::DataTypeNumber),
             cell_ts_color: role(Role::DataTypeTimestamp),
             color: role(Role::TextMuted),
-            comfortable_cell_padding: Preference::Specific(Gaps::new(8., 14., 8., 14.)),
-            compact_cell_padding: Preference::Specific(Gaps::new(4., 14., 4., 14.)),
+            comfortable_cell_padding: Preference::Specific(Gaps::new(SP_3, SP_4, SP_3, SP_4)),
+            compact_cell_padding: Preference::Specific(Gaps::new(SP_2, SP_4, SP_2, SP_4)),
         },
     );
 }

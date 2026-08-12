@@ -40,6 +40,7 @@ use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, Sessi
 use freya::components::{Activable, FloatingTab};
 
 use crate::components::badge::Badge;
+use crate::components::metrics::{SP_1, SP_3, SP_4, SP_7};
 use crate::components::tones::{tones, Tones};
 use crate::components::typography::Control;
 
@@ -49,9 +50,9 @@ pub use project::project_error_count;
 pub(super) const ROW_HEIGHT: f32 = 26.;
 pub(super) const GROUP_HEIGHT: f32 = 32.;
 /// A row's left indent — the canvas's `--sp-7`, so rows sit under their group's name.
-pub(super) const ROW_INDENT: f32 = 32.;
+pub(super) const ROW_INDENT: f32 = SP_7;
 /// The panel's horizontal padding (canvas `--sp-4`).
-pub(super) const PAD: f32 = 12.;
+pub(super) const PAD: f32 = SP_4;
 
 /// The Problems body: whichever scope the header's strip has selected.
 ///
@@ -119,7 +120,7 @@ impl Component for ScopeStrip {
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(2.)
+            .spacing(SP_1)
             .child(
                 ScopeTab {
                     label: "Queries",
@@ -186,7 +187,7 @@ impl Component for ScopeTab {
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(6.)
+                        .spacing(SP_3)
                         .child(Control::new(self.label))
                         .maybe_child((self.count > 0).then(|| {
                             Badge::value(self.count.to_string(), self.tones.error).outlined()

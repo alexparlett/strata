@@ -10,16 +10,12 @@ use freya::prelude::*;
 use crate::apps::connection::ConnectionCtx;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{
+    COMPACT_BUTTON, R_1, SP_1, SP_4, SP_5, TITLE_BAR_HEIGHT, TRAFFIC_LIGHT_GUTTER,
+};
 use crate::components::typography::{Meta, Title};
 use crate::components::window::window_theme;
 use crate::theme::{use_roles, Role};
-
-/// The strip's height (canvas `padding: var(--sp-4) var(--sp-5)` around a 26px tile).
-pub const TITLE_BAR_HEIGHT: f32 = 50.;
-
-/// The gutter that keeps the bar's content clear of the OS traffic lights — the same reserve
-/// every other window's bar keeps.
-const TRAFFIC_LIGHT_GUTTER: f32 = 82.;
 
 #[derive(PartialEq)]
 pub struct TitleBar;
@@ -37,9 +33,9 @@ impl Component for TitleBar {
         // The window's mark: the same glyph the Connections pane and the activity rail use, in
         // an accent-tinted tile.
         let mark = rect()
-            .width(Size::px(26.))
-            .height(Size::px(26.))
-            .corner_radius(6.)
+            .width(Size::px(COMPACT_BUTTON))
+            .height(Size::px(COMPACT_BUTTON))
+            .corner_radius(R_1)
             .center()
             .background(win.icon_background)
             .child(
@@ -52,7 +48,7 @@ impl Component for TitleBar {
         // new connection, whose URL is still being typed.
         let heading = rect()
             .vertical()
-            .spacing(2.)
+            .spacing(SP_1)
             .width(Size::flex(1.))
             .child(Title::new(target.title()))
             .maybe_child(
@@ -73,8 +69,8 @@ impl Component for TitleBar {
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(12.)
-                    .padding(Gaps::new(0., 16., 0., TRAFFIC_LIGHT_GUTTER))
+                    .spacing(SP_4)
+                    .padding(Gaps::new(0., SP_5, 0., TRAFFIC_LIGHT_GUTTER))
                     .window_drag()
                     .child(mark)
                     .child(heading),

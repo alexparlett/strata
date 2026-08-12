@@ -6,8 +6,8 @@ use crate::apps::project::state::{
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
+use crate::components::metrics::TOOL_SIZE;
 use crate::components::run_button::{RunButton, RunState};
-use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::theme::{use_roles, Role};
 use freya::prelude::*;

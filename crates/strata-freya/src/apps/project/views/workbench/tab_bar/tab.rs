@@ -10,6 +10,7 @@ use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Body, InputTypography};
 use crate::keymap::on_command;
@@ -257,8 +258,8 @@ impl Component for Tab {
                     .height(Size::flex(1.))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .padding(Gaps::new(0., 12., 0., 12.))
-                    .spacing(8.);
+                    .padding(Gaps::new(0., SP_4, 0., SP_4))
+                    .spacing(SP_3);
                 if *renaming.read() {
                     row.child(TabRename {
                         id,
@@ -405,8 +406,8 @@ impl Component for TabChrome {
                     .height(Size::flex(1.))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .padding(Gaps::new(0., 12., 0., 12.))
-                    .spacing(8.)
+                    .padding(Gaps::new(0., SP_4, 0., SP_4))
+                    .spacing(SP_3)
                     .child(Body::new(self.name.clone()).color(fg))
                     .child(close),
             )

@@ -73,10 +73,13 @@ use crate::apps::project::views::{ConnectionRequest, DropTarget};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{
+    CONTEXT_MENU_WIDTH, MENU_ICON, PANE_BODY_MIN_W, PROGRESS_HOLD, ROW_ACTION, STATUS_DOT,
+};
+use crate::components::metrics::{R_3, SP_2, SP_3, SP_4, SP_6, SP_7};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::tones::{tones, Tones};
 use crate::components::typography::{MonoValue, Prose};
-use crate::components::{PANE_BODY_MIN_W, PROGRESS_HOLD};
 
 define_theme!(
     %[component]
@@ -97,24 +100,15 @@ define_theme!(
 );
 
 /// The pane's scroll inset, matching the catalog's.
-const BODY_PAD: Gaps = Gaps::new(8., 8., 12., 8.);
+const BODY_PAD: Gaps = Gaps::new(SP_3, SP_3, SP_4, SP_3);
 /// The empty state's inset (canvas `--sp-7 --sp-6`) — generous at the top, because it sits where
 /// the first row would rather than in the middle of the panel.
-const EMPTY_PAD: Gaps = Gaps::new(32., 24., 32., 24.);
+const EMPTY_PAD: Gaps = Gaps::new(SP_7, SP_6, SP_7, SP_6);
 /// A connection row's height — the catalog entry row's 30, because it is now the same row.
 const ROW_HEIGHT: f32 = 30.;
-/// The trailing ⋮ actions button — the canvas's 22×22, the catalog row's size.
-const ACTIONS_SIZE: f32 = 22.;
-/// The trailing **status glyph** — spinner or warning triangle, one slot, one size. The catalog
-/// entry row's, so the two report a refused def identically.
-const STATUS_SIZE: f32 = 12.;
 /// What the spinner says on hover (and to a screen reader).
 const CONNECTING: &str = "Connecting…";
-/// The menu card's width — the catalog menus' 210, so the two read as one vocabulary.
-const MENU_WIDTH: f32 = 210.;
-/// The glyph beside each menu label, and the gap to it.
-const ITEM_ICON: f32 = 15.;
-const ITEM_GAP: f32 = 12.;
+const ITEM_GAP: f32 = SP_4;
 
 /// What the registration pass answered for one row, in the terms the pane renders.
 ///
@@ -287,14 +281,14 @@ impl Component for ConnectionRow {
             },
         ) {
             (true, _) => Some(
-                tip(CONNECTING).child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(CONNECTING)),
+                tip(CONNECTING).child(CircularLoader::new().size(STATUS_DOT).a11y_alt(CONNECTING)),
             ),
             (false, Some(why)) => Some(
                 tip(why.clone()).child(
                     rect().a11y_alt(why).child(
                         Icon::new(IconName::Warning)
                             .color(tones.warning)
-                            .size(STATUS_SIZE),
+                            .size(STATUS_DOT),
                     ),
                 ),
             ),
@@ -311,7 +305,7 @@ impl Component for ConnectionRow {
 
         SidebarRow::new()
             .height(ROW_HEIGHT)
-            .padding(Gaps::new(0., 4., 0., 8.))
+            .padding(Gaps::new(0., SP_2, 0., SP_3))
             // No `on_press`: the row is not clickable (spec §1 — Edit is menu-only), which is
             // also what leaves the whole row free as the context-menu surface.
             .on_context_menu(move |_: Event<PressEventData>| {
@@ -357,8 +351,8 @@ fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
         .child(
             Button::new()
                 .flat()
-                .width(Size::px(ACTIONS_SIZE))
-                .height(Size::px(ACTIONS_SIZE))
+                .width(Size::px(ROW_ACTION))
+                .height(Size::px(ROW_ACTION))
                 .on_press(move |_: Event<PressEventData>| ContextMenu::open(menu()))
                 .child(Icon::new(IconName::Dots).size(15.)),
         )
@@ -402,7 +396,7 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(ITEM_GAP)
-        .child(Icon::new(icon).size(ITEM_ICON))
+        .child(Icon::new(icon).size(MENU_ICON))
         .child(Prose::new(label))
 }
 
@@ -414,7 +408,7 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
 fn connection_menu(actions: &ConnectionActions, url: String) -> Menu {
     let actions = *actions;
     Menu::new()
-        .min_width(Size::px(MENU_WIDTH))
+        .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child(
             MenuButton::new()
                 .on_press({
@@ -521,12 +515,12 @@ impl Component for Empty {
             .vertical()
             .cross_align(Alignment::Center)
             .padding(EMPTY_PAD)
-            .spacing(12.)
+            .spacing(SP_4)
             .child(
                 rect()
                     .width(Size::px(40.))
                     .height(Size::px(40.))
-                    .corner_radius(10.)
+                    .corner_radius(R_3)
                     .background(self.theme.empty_background)
                     .border(Border::new().width(1.).fill(self.theme.empty_border_fill))
                     .center()
@@ -558,7 +552,7 @@ impl Component for Empty {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(6.)
+                            .spacing(SP_3)
                             .child(Icon::new(IconName::Plus).size(12.))
                             .child(Prose::new("Add connection")),
                     ),

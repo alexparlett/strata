@@ -15,13 +15,17 @@ use crate::apps::project::views::workbench::results::selection::{CellRole, SelCt
 use crate::apps::project::views::workbench::results::sort::SortState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_1, SP_3, SP_4};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue};
 
 // Content auto-fit (double-click a resize grip): a char-count estimate, à la the Dioxus
 // `col_autofit`.
-const AUTOFIT_CHAR_W: f32 = 7.6; // mono char-width estimate
-const AUTOFIT_PAD: f32 = 28.; // cell horizontal padding + affordance
+/// Mono char-width estimate.
+const AUTOFIT_CHAR_W: f32 = 7.6;
+/// A cell's own horizontal inset, both sides — off the same step the grid theme's cell padding
+/// is (`theme::components`), so a fit stays a fit if that step ever moves.
+const AUTOFIT_PAD: f32 = 2. * SP_4;
 
 /// Per-column content auto-fit width — `max(header name + 3, widest cell) × char-width +
 /// padding`, clamped to the resize bounds. Recomputed per page (a grip double-click fits the
@@ -212,8 +216,8 @@ impl Component for HeaderCell {
                     .height(Size::fill())
                     .main_align(Alignment::Center)
                     .cross_align(Alignment::Start)
-                    .padding(Gaps::new(8., 12., 8., 12.))
-                    .spacing(2.)
+                    .padding(Gaps::new(SP_3, SP_4, SP_3, SP_4))
+                    .spacing(SP_1)
                     .overflow(Overflow::Clip)
                     .child(
                         rect()

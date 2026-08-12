@@ -14,6 +14,7 @@ use crate::apps::launcher::views::open::pick_and_open;
 use crate::apps::launcher::views::row::ProjectRowView;
 use crate::apps::launcher::{LauncherThemePartial, LauncherThemePreference};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_3, SP_4, SP_5, SP_6};
 use crate::components::typography::{Control, Eyebrow, InputTypography, Prose};
 use crate::state::{use_config, AppCtx, ConfigChan};
 use crate::theme::{use_roles, Role};
@@ -94,7 +95,7 @@ impl Component for ProjectsPane {
             };
             rect()
                 .width(Size::fill())
-                .padding(Gaps::new(24., 12., 24., 12.))
+                .padding(Gaps::new(SP_6, SP_4, SP_6, SP_4))
                 .child(
                     Prose::new(copy)
                         .color(roles.get(Role::TextPlaceholder))
@@ -108,8 +109,8 @@ impl Component for ProjectsPane {
             .horizontal()
             .cross_align(Alignment::Center)
             .content(Content::Flex)
-            .spacing(16.)
-            .padding(Gaps::new(16., 24., 12., 24.))
+            .spacing(SP_5)
+            .padding(Gaps::new(SP_5, SP_6, SP_4, SP_6))
             .child(
                 rect()
                     .width(Size::flex(1.))
@@ -147,7 +148,7 @@ impl Component for ProjectsPane {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .child(Icon::new(IconName::Folder).size(15.))
                             // The canvas's 12.5px UI text — the Control role. (`Eyebrow` is
                             // the 10px mono group label the PINNED / RECENT headings wear.)
@@ -169,7 +170,7 @@ impl Component for ProjectsPane {
                         rect()
                             .width(Size::fill())
                             .vertical()
-                            .padding(Gaps::new(0., 12., 12., 12.))
+                            .padding(Gaps::new(0., SP_4, SP_4, SP_4))
                             .child(groups)
                             .maybe_child(empty),
                     ),
@@ -181,6 +182,6 @@ impl Component for ProjectsPane {
 /// tracked 10px mono label exactly.
 fn group_label(text: &str, color: Color) -> impl IntoElement {
     rect()
-        .padding(Gaps::new(8., 12., 8., 12.))
+        .padding(Gaps::new(SP_3, SP_4, SP_3, SP_4))
         .child(Eyebrow::new(text).color(color))
 }

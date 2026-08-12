@@ -44,6 +44,7 @@ use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePre
 use crate::components::badge::Badge;
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{HAIRLINE, R_3, SP_2, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Caption, Control, MonoValue, Prose, Title};
 use crate::theme::{use_roles, Role};
@@ -307,23 +308,25 @@ impl Component for DropConfirm {
                 .width(Size::fill())
                 // No margin of its own: the body column already spaces at 12, which is the
                 // comp's `margin-top: var(--sp-4)` above the callout.
-                .corner_radius(10.)
-                .padding(12.)
+                .corner_radius(R_3)
+                .padding(SP_4)
                 .background(tones.warning.with_a(23))
                 .border(Border::new().width(1.).fill(tones.warning.with_a(82)))
                 .horizontal()
                 .content(Content::Flex)
-                .spacing(8.)
+                .spacing(SP_3)
                 .child(
                     rect()
-                        .margin((1., 0., 0., 0.))
+                        // A 1px optical nudge onto the first line of the prose beside it — an alignment
+                        // nudge, which the design keeps literal.
+                        .margin((HAIRLINE, 0., 0., 0.))
                         .child(Icon::new(IconName::Warning).color(tones.warning).size(15.)),
                 )
                 .child(
                     rect()
                         .width(Size::flex(1.))
                         .vertical()
-                        .spacing(8.)
+                        .spacing(SP_3)
                         .child(Caption::new(line).color(tones.warning).wrap())
                         // The names themselves, as chips. A tall list caps and scrolls rather
                         // than growing the card off the screen (the comp's 96px well).
@@ -336,7 +339,7 @@ impl Component for DropConfirm {
                                         .width(Size::fill())
                                         .horizontal()
                                         .content(Content::wrap_spacing(4.))
-                                        .spacing(4.)
+                                        .spacing(SP_2)
                                         // `into_iter`: the names are owned and unused after
                                         // this, so the chips take them rather than cloning
                                         // every one a second time per render.
@@ -355,7 +358,7 @@ impl Component for DropConfirm {
         let body = rect()
             .width(Size::fill())
             .vertical()
-            .spacing(12.)
+            .spacing(SP_4)
             .child(
                 Prose::new(target.body())
                     .color(roles.get(Role::TextMuted))
@@ -391,7 +394,7 @@ impl Component for DropConfirm {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .child(Icon::new(IconName::Trash).size(13.))
                             .child(Control::new(target.verb())),
                     ),

@@ -25,12 +25,13 @@ use crate::apps::project::{
     persisted_defs, refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
 };
 use crate::components::divider::Divider;
+use crate::components::metrics::ACTION_HEIGHT;
+use crate::components::metrics::{SP_4, SP_5};
 use crate::components::typography::{Control, Path};
 use crate::components::window::window_theme;
-use crate::components::ACTION_HEIGHT;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
-const FOOTER_PADDING: Gaps = Gaps::new(12., 16., 12., 16.);
+const FOOTER_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
 
 #[derive(PartialEq)]
 pub struct Footer;
@@ -99,7 +100,7 @@ impl Component for Footer {
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(12.)
+                    .spacing(SP_4)
                     .padding(FOOTER_PADDING)
                     .background(win.background)
                     // Why the button is off, rather than an unexplained dead control. A

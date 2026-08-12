@@ -47,16 +47,12 @@ use crate::apps::project::views::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{CONTEXT_MENU_WIDTH, MENU_ICON, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::Prose;
 use crate::state::{use_config_station, ConfigStation};
 
-/// The menu card's width — the design canvas's `min-width: 210px`, which is what keeps
-/// "Refresh table" and "Open in new tab" on one line.
-const MENU_WIDTH: f32 = 210.;
-/// The glyph beside each label, and the gap to it (canvas: 15px icon, `--sp-4`).
-const ITEM_ICON: f32 = 15.;
-const ITEM_GAP: f32 = 12.;
+const ITEM_GAP: f32 = SP_4;
 
 /// The handles a catalog row's menu acts through, gathered once per row.
 ///
@@ -210,7 +206,7 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(ITEM_GAP)
-        .child(Icon::new(icon).size(ITEM_ICON))
+        .child(Icon::new(icon).size(MENU_ICON))
         .child(Prose::new(label))
 }
 
@@ -251,7 +247,7 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
     let registered = actions.registered(CatalogKind::Table, &name);
 
     Menu::new()
-        .min_width(Size::px(MENU_WIDTH))
+        .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child({
             let name = name.clone();
             actions.item(IconName::Play, "View table", move |a| {
@@ -321,7 +317,7 @@ pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
     let registered = actions.registered(CatalogKind::View, &name);
 
     Menu::new()
-        .min_width(Size::px(MENU_WIDTH))
+        .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child({
             let name = name.clone();
             actions.item(IconName::Play, "View view", move |a| {
@@ -374,7 +370,7 @@ pub fn query_menu(
     mut renaming: State<bool>,
 ) -> Menu {
     Menu::new()
-        .min_width(Size::px(MENU_WIDTH))
+        .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child(actions.item(IconName::Play, "Open in new tab", move |a| {
             open_saved_query(a, id);
         }))

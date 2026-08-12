@@ -30,10 +30,11 @@ use crate::apps::project::state::{
 use crate::components::badge::Badge;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{PROGRESS_HOLD, ROW_ACTION, STATUS_DOT};
+use crate::components::metrics::{SP_1, SP_2, SP_3, SP_4, SP_5};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{scale, Body, InputTypography, Meta, MonoValue};
-use crate::components::PROGRESS_HOLD;
 use crate::keymap::on_command;
 use crate::state::use_config_station;
 use strata_core::config::Command;
@@ -42,27 +43,21 @@ use strata_core::config::Command;
 const ENTRY_HEIGHT: f32 = 30.;
 const COLUMN_HEIGHT: f32 = 25.;
 /// Indent added per nesting level of a struct/list/map column.
-const DEPTH_INDENT: f32 = 12.;
+const DEPTH_INDENT: f32 = SP_4;
 /// The chevron gutter on a column row — reserved whether or not the column has one, so names
 /// line up.
 const CHEVRON_SLOT: f32 = 11.;
-/// The entry row's trailing **status glyph** — spinner or validity triangle, one slot, one size.
-const STATUS_SIZE: f32 = 12.;
 /// What the spinner says on hover (and to a screen reader).
 const LOADING: &str = "Loading…";
 /// How long a row must stay unanswered before it is worth spinning about. Most registrations land
 /// well inside this, so the usual project open is a catalog that simply appears — no flicker of
 /// spinners on the way in.
 ///
-/// The design system's shared hold (`components::PROGRESS_HOLD`), because the inspector's re-scan
+/// The design system's shared hold (`components::metrics::PROGRESS_HOLD`), because the inspector's re-scan
 /// row serves the same one — see there for the half of the rule this row already had: a hold needs
 /// something to hold *onto*, and what this slot holds is the last verdict it showed.
 const SPINNER_DELAY: Duration = PROGRESS_HOLD;
 
-/// The trailing ⋮ actions button — the canvas's 22×22. `pub(super)` because it is also the
-/// column the interaction tests measure the rest of the trailing run against, and a second copy
-/// of the number there is a second thing to keep in step.
-pub(super) const ACTIONS_SIZE: f32 = 22.;
 /// What the **profiling** spinner says — its own words, because the registration spinner beside
 /// it means something else entirely (a scan is minutes of work the user asked for; a
 /// registration is a metadata read they didn't).
@@ -88,8 +83,8 @@ fn actions_button(menu: impl Fn() -> Menu + 'static) -> impl IntoElement {
         .child(
             Button::new()
                 .flat()
-                .width(Size::px(ACTIONS_SIZE))
-                .height(Size::px(ACTIONS_SIZE))
+                .width(Size::px(ROW_ACTION))
+                .height(Size::px(ROW_ACTION))
                 .on_press(move |e: Event<PressEventData>| {
                     e.stop_propagation();
                     ContextMenu::open(menu());
@@ -134,14 +129,14 @@ impl StatusMark {
             // Named, not bare: P3-09 puts a *profiling* spinner in this same slot, and two
             // spinners meaning different things need to be tellable apart.
             StatusMark::Loading => tip(LOADING)
-                .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(LOADING))
+                .child(CircularLoader::new().size(STATUS_DOT).a11y_alt(LOADING))
                 .into_element(),
             StatusMark::Problem(reason) => tip(reason.clone())
                 .child(
                     rect().a11y_alt(reason.clone()).child(
                         Icon::new(IconName::Warning)
                             .color(theme.warn_color)
-                            .size(STATUS_SIZE),
+                            .size(STATUS_DOT),
                     ),
                 )
                 .into_element(),
@@ -153,12 +148,12 @@ impl StatusMark {
 /// (`SidebarRow`'s spacing is 8).
 const BADGE_SLOT: f32 = 63. + 8.;
 const ICON_SLOT: f32 = 14. + 8.;
-const STATUS_SLOT: f32 = STATUS_SIZE + 8.;
+const STATUS_SLOT: f32 = STATUS_DOT + 8.;
 /// What the row can never give up: its padding (8 + 4), the chevron that expands it (11), the ⋮
 /// that opens its menu (22), and the two gaps around the name. The chevron and the ⋮ are the
 /// pinned tail in `components::toolbar`'s sense — they are how the row is *used*, so a row too
 /// narrow to show them is worse than one showing nothing else.
-const ROW_PINNED: f32 = 8. + 4. + 11. + ACTIONS_SIZE + (2. * 8.);
+const ROW_PINNED: f32 = 8. + 4. + 11. + ROW_ACTION + (2. * 8.);
 /// Advance width of the mono face, as a fraction of its point size.
 ///
 /// The name is [`MonoValue`] — a **monospace** role — so its natural width is exactly its
@@ -521,7 +516,7 @@ impl Component for EntryRow {
             // makes the scan run is [`ProfileWatch`], mounted in the vertical wrapper below.
             .maybe_child(folds.status.then(|| {
                 rect()
-                    .width(Size::px(STATUS_SIZE))
+                    .width(Size::px(STATUS_DOT))
                     .cross_align(Alignment::Center)
                     .maybe_child(match scan {
                         // Subscribes *and* draws — see [`ProfileStatus`]. It renders `status`
@@ -573,7 +568,7 @@ impl Component for EntryRow {
                         rect()
                             .width(Size::fill())
                             .horizontal()
-                            .margin(Gaps::new(2., 0., 8., 16.))
+                            .margin(Gaps::new(SP_1, 0., SP_3, SP_5))
                             .child(
                                 rect()
                                     .width(Size::px(1.))
@@ -584,7 +579,7 @@ impl Component for EntryRow {
                                 rect()
                                     .width(Size::flex(1.))
                                     .vertical()
-                                    .padding(Gaps::new(0., 0., 0., 8.))
+                                    .padding(Gaps::new(0., 0., 0., SP_3))
                                     .children(rows.into_iter().map(|r| {
                                         ColumnRow::new(
                                             self.kind,
@@ -606,7 +601,7 @@ impl Component for EntryRow {
         rect()
             .width(Size::fill())
             .vertical()
-            .margin(Gaps::new(0., 0., 2., 0.))
+            .margin(Gaps::new(0., 0., SP_1, 0.))
             // The measurement the fold plan reads. `set_if_modified` dedupes on the raw width, so
             // a drag writes once per distinct width Freya reports — the same trade `Toolbar`
             // makes with its own `measured`, and the price of the verdict being derived rather
@@ -669,7 +664,7 @@ impl Component for ProfileStatus {
             // over, and starting one has to look like it started. It outranks the settled mark
             // while it runs, because "this is being recomputed" is the newer fact about the row.
             true => tip(PROFILING)
-                .child(CircularLoader::new().size(STATUS_SIZE).a11y_alt(PROFILING))
+                .child(CircularLoader::new().size(STATUS_DOT).a11y_alt(PROFILING))
                 .into_element(),
             false => match &self.settled {
                 Some(mark) => mark.glyph(&self.theme),
@@ -810,7 +805,7 @@ impl Component for ColumnRow {
 
         SidebarRow::new()
             .height(COLUMN_HEIGHT)
-            .padding(Gaps::new(0., 8., 0., 8.))
+            .padding(Gaps::new(0., SP_3, 0., SP_3))
             .selected(selected)
             .on_press(move |_| {
                 selection.set(Some(col.clone()));
@@ -951,10 +946,10 @@ impl Component for QueryRename {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             // The row's own geometry (see `SidebarRow`), so committing doesn't shift the list.
-            .padding(Gaps::new(0., 4., 0., 8.))
-            .margin(Gaps::new(0., 0., 2., 0.))
+            .padding(Gaps::new(0., SP_2, 0., SP_3))
+            .margin(Gaps::new(0., 0., SP_1, 0.))
             .on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
             .on_global_key_down(on_command(config, Command::Cancel, move || {
                 renaming.set(false);

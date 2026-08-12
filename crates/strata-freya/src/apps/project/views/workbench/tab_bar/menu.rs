@@ -15,6 +15,7 @@ use strata_model::TabId;
 use crate::apps::project::close::TabCloser;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::divider::Divider;
+use crate::components::metrics::{MENU_ROW_CHROME, SP_5};
 use crate::components::typography::Prose;
 use crate::keymap::KeyHint;
 
@@ -27,12 +28,6 @@ use crate::keymap::KeyHint;
 /// `MenuButton`'s `Overflow::Clip` cuts the hint off).
 pub const HINT_MENU_WIDTH: f32 = 200.;
 
-/// The horizontal chrome around a menu row: the `menu_container` card padding (4 × 2)
-/// plus `MenuButton`'s default padding (12 × 2). Subtracted from [`HINT_MENU_WIDTH`] so
-/// a row-capped menu (the `ContextMenu`, where the row is what sets the width) lands on
-/// the same card width as a `min_width`-floored dropdown.
-const MENU_ROW_CHROME: f32 = 32.;
-
 /// A menu row with a right-aligned, keymap-derived shortcut hint: the row fills the
 /// available width capped so the menu's card lands at [`HINT_MENU_WIDTH`], and
 /// `SpaceBetween` pushes the hint to its right edge, tracking any rebind reactively
@@ -44,7 +39,7 @@ pub fn menu_row(label: &str, hint: Command) -> impl IntoElement {
         .max_width(Size::px(HINT_MENU_WIDTH - MENU_ROW_CHROME))
         .cross_align(Alignment::Center)
         .main_align(Alignment::SpaceBetween)
-        .spacing(16.)
+        .spacing(SP_5)
         .child(Prose::new(label))
         .child(KeyHint(hint))
 }

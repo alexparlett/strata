@@ -41,19 +41,21 @@ use crate::apps::project::views::{use_profile_actions, ProfileActions, ProfileTa
 use crate::components::badge::Badge;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{
+    ACTION_HEIGHT, HAIRLINE, PROGRESS_HOLD, R_2, R_3, R_XS, SP_1, SP_2, SP_3, SP_4, SP_5, SP_6,
+};
 use crate::components::tones::tones;
 use crate::components::type_palette::{kind_color, type_palette, TypePaletteTheme};
 use crate::components::typography::{Body, Control, Eyebrow, Meta, MonoValue, Path, Prose};
-use crate::components::{ACTION_HEIGHT, PROGRESS_HOLD};
 
 /// Corner radius of the facts box and the profile card (canvas `--r-3`); the smaller boxes use
 /// `--r-2`, and the badges `--r-xs`.
-const BOX_RADIUS: f32 = 10.;
-const PANEL_RADIUS: f32 = 8.;
-const BADGE_RADIUS: f32 = 4.;
+const BOX_RADIUS: f32 = R_3;
+const PANEL_RADIUS: f32 = R_2;
+const BADGE_RADIUS: f32 = R_XS;
 /// A nested field row's height, and the indent one nesting level adds.
 const FIELD_HEIGHT: f32 = 27.;
-const FIELD_INDENT: f32 = 13.;
+const FIELD_INDENT: f32 = SP_4;
 /// The completeness track.
 const TRACK_HEIGHT: f32 = 8.;
 /// The profile card's icon tile, and the alpha its accent tint carries (canvas: 13%).
@@ -125,15 +127,15 @@ impl ColumnPanel {
         rect()
             .width(Size::fill())
             .vertical()
-            .padding(Gaps::new(16., PANEL_PAD, 16., PANEL_PAD))
-            .spacing(8.)
+            .padding(Gaps::new(SP_5, PANEL_PAD, SP_5, PANEL_PAD))
+            .spacing(SP_3)
             .child(
                 rect()
                     .width(Size::fill())
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .child(Dot::new(swatch).size(9.).square())
                     .child(
                         MonoValue::new(self.facts.name.clone())
@@ -151,14 +153,14 @@ impl ColumnPanel {
                     // `Decimal`) beside a long owner name would otherwise push "from …" out of
                     // a narrow panel.
                     .content(Content::wrap_spacing(8.))
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .child(Badge::value(self.facts.dtype.clone(), swatch).radius(BADGE_RADIUS))
                     .child(
                         Badge::tag(self.facts.format.label(), self.format_color())
                             .radius(BADGE_RADIUS)
                             // The format badge hugs like a value run, not like a tag: it sits
                             // beside the dtype and the two must read as one pair.
-                            .padding(Gaps::new(2., 8., 2., 8.)),
+                            .padding(Gaps::new(SP_1, SP_3, SP_1, SP_3)),
                     )
                     .child(Path::new(format!("from {}", self.facts.owner)).color(t.meta_color)),
             )
@@ -206,8 +208,8 @@ impl ColumnPanel {
         rect()
             .width(Size::fill())
             .vertical()
-            .padding(Gaps::new(16., PANEL_PAD, 8., PANEL_PAD))
-            .spacing(8.)
+            .padding(Gaps::new(SP_5, PANEL_PAD, SP_3, PANEL_PAD))
+            .spacing(SP_3)
             .child(Eyebrow::new("NESTED FIELDS").color(t.label_color))
             .child(
                 rect()
@@ -224,7 +226,7 @@ impl ColumnPanel {
                             .horizontal()
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .padding((0., PANEL_PAD))
                             .background(t.field_background)
                             .child(rect().width(Size::px(f.depth as f32 * FIELD_INDENT)))
@@ -286,7 +288,7 @@ fn completeness_bar(facts: &ColumnFacts, t: &InspectorTheme) -> Option<Element> 
         rect()
             .width(Size::fill())
             .vertical()
-            .spacing(8.)
+            .spacing(SP_3)
             .child(
                 rect()
                     .width(Size::fill())
@@ -468,7 +470,7 @@ impl Component for ScannedStatistics {
             let footnotes = rect()
                 .width(Size::fill())
                 .vertical()
-                .spacing(8.)
+                .spacing(SP_3)
                 // What a nested field's absent facts mean, since the box above it would
                 // otherwise read as a scan that found nothing.
                 .maybe_child(facts.child.then(|| {
@@ -506,10 +508,12 @@ impl Component for ScannedStatistics {
                     .width(Size::fill())
                     .horizontal()
                     .content(Content::Flex)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .child(
                         rect()
-                            .margin((1., 0., 0., 0.))
+                            // A 1px optical nudge onto the first line of the prose beside it — an alignment
+                            // nudge, which the design keeps literal.
+                            .margin((HAIRLINE, 0., 0., 0.))
                             .child(Icon::new(IconName::Alert).color(danger).size(14.)),
                     )
                     .child(
@@ -532,7 +536,7 @@ impl Component for ScannedStatistics {
                             rect()
                                 .width(Size::fill())
                                 .vertical()
-                                .spacing(12.)
+                                .spacing(SP_4)
                                 .child(reason)
                                 .child(scan_card(&self.facts, t, actions))
                                 .into_element(),
@@ -635,9 +639,9 @@ fn zone(
     rect()
         .width(Size::fill())
         .vertical()
-        .margin(Gaps::new(4., 0., 0., 0.))
-        .padding(Gaps::new(16., PANEL_PAD, 24., PANEL_PAD))
-        .spacing(12.)
+        .margin(Gaps::new(SP_2, 0., 0., 0.))
+        .padding(Gaps::new(SP_5, PANEL_PAD, SP_6, PANEL_PAD))
+        .spacing(SP_4)
         .border(Border::new().width(zone_rule()).fill(t.divider_fill))
         .child(
             rect()
@@ -671,7 +675,7 @@ fn zone(
                         .content(Content::Flex)
                         .cross_align(Alignment::Center)
                         .spacing(PANEL_PAD)
-                        .padding((8., PANEL_PAD))
+                        .padding((SP_3, PANEL_PAD))
                         .background(t.box_background)
                         .child(Eyebrow::new(row.label).color(t.label_color))
                         // The value takes the slack and right-aligns, so a long Min/Max
@@ -714,9 +718,9 @@ fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -
         .width(Size::fill())
         .vertical()
         .cross_align(Alignment::Center)
-        .spacing(12.)
+        .spacing(SP_4)
         .corner_radius(BOX_RADIUS)
-        .padding((24., 16.))
+        .padding((SP_6, SP_5))
         .background(t.box_background)
         .border(Border::new().width(1.).fill(t.border_fill))
         .child(
@@ -753,7 +757,7 @@ fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(8.)
+                        .spacing(SP_3)
                         .child(Icon::new(IconName::Chart).size(14.))
                         .child(Control::new(ProfileTarget::verb(kind))),
                 ),
@@ -779,7 +783,7 @@ fn running_row(
         .cross_align(Alignment::Center)
         .spacing(PANEL_PAD)
         .corner_radius(BOX_RADIUS)
-        .padding((16., PANEL_PAD))
+        .padding((SP_5, PANEL_PAD))
         .background(t.box_background)
         .border(Border::new().width(1.).fill(t.border_fill))
         .child(CircularLoader::new().size(15.).a11y_alt(label))
@@ -824,7 +828,7 @@ fn scan_controls(
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(4.)
+        .spacing(SP_2)
         // The age is coarse on purpose (`scan_age`), so the exact instant is its tooltip — the
         // same trade the completeness bar makes with its own numbers. ISO-8601, UTC, from the one
         // place that prints instants (`util::iso8601`).

@@ -20,6 +20,7 @@ use super::selection::Selection;
 use super::ResultsState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_2, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::toolbar::{Toolbar, ToolbarAction, ToolbarItem};
 use crate::components::typography::{InputTypography, Meta, Path};
@@ -248,7 +249,7 @@ impl Component for StatusBar {
             .direction(Direction::Horizontal)
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(12.)
+            .spacing(SP_4)
             .overflow(Overflow::Clip)
             .child(
                 rect()
@@ -283,8 +284,8 @@ impl Component for StatusBar {
         //   3  Prev / Next — the last thing standing, because a pager that cannot page is furniture
         let bar = Toolbar::new()
             .height(BAR_HEIGHT - 1.)
-            .padding(12.)
-            .spacing(12.)
+            .padding(SP_4)
+            .spacing(SP_4)
             .leading(info_cluster, 0.)
             .map(self.pager, |bar, pager| {
                 let pages = pager.pages();
@@ -390,7 +391,7 @@ impl Component for SnapshotChip {
             rect()
                 .direction(Direction::Horizontal)
                 .cross_align(Alignment::Center)
-                .spacing(4.)
+                .spacing(SP_2)
                 .color(self.color)
                 .child(Icon::new(IconName::Clock).size(12.))
                 .child(Path::new(format!("snapshot {ago}")).color(self.color)),
@@ -586,7 +587,7 @@ impl Component for JumpBox {
         rect()
             .direction(Direction::Horizontal)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .child(InputTypography::mono(
                 Input::new(text)
                     .compact()

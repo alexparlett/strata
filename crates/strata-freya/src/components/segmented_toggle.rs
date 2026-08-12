@@ -22,6 +22,7 @@
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_2, SP_1, SP_4, SP_5};
 use crate::components::typography::Control;
 use crate::theme::{use_roles, Role};
 
@@ -42,10 +43,10 @@ define_theme!(
 );
 
 /// The pill's own corner (canvas `--r-2`), shared by both layouts.
-const PILL_RADIUS: f32 = 8.;
+const PILL_RADIUS: f32 = R_2;
 /// A form pill's container padding *and* the gap between its segments (canvas `--sp-1`) — one
 /// number, because the inset around the segments and the inset between them are the same inset.
-const INSET: f32 = 2.;
+const INSET: f32 = SP_1;
 /// A toolbar segment's fixed box: the icon segment's 32×24, and the height its divider spans.
 const TOOLBAR_SEGMENT_HEIGHT: f32 = 24.;
 const TOOLBAR_ICON_WIDTH: f32 = 32.;
@@ -57,10 +58,10 @@ const TOOLBAR_ICON_WIDTH: f32 = 32.;
 /// declare a width it cannot shrink below, and a call site guessing that number is how it drifts.
 pub const TOOLBAR_TWO_ICON_WIDTH: f32 = TOOLBAR_ICON_WIDTH * 2. + 1.;
 /// A toolbar text segment's side padding.
-const TOOLBAR_TEXT_PADDING: f32 = 12.;
+const TOOLBAR_TEXT_PADDING: f32 = SP_4;
 /// A form segment's corner (canvas `--r-1`) and its side padding (canvas `var(--sp-5)`).
-const FORM_SEGMENT_RADIUS: f32 = 6.;
-const FORM_SEGMENT_SIDE_PADDING: f32 = 16.;
+const FORM_SEGMENT_RADIUS: f32 = R_1;
+const FORM_SEGMENT_SIDE_PADDING: f32 = SP_5;
 /// A form segment's height: the canvas's `var(--sp-3)` above and below a 12.5px label. Stated
 /// rather than left to the text metrics, because a control set beside a form pill is built to
 /// it ([`SegmentedToggle::FORM_SEGMENT_HEIGHT`]).

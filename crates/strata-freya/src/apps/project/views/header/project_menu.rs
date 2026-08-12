@@ -24,6 +24,7 @@ use crate::apps::project::state::{ProjChan, ProjectState};
 use crate::components::avatar::Avatar;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{MENU_ROW_CHROME, SP_1, SP_3, SP_4};
 use crate::components::typography::{Body, Control, Eyebrow, Path, Prose};
 use crate::platform::{self, OpenCtx};
 use crate::state::AppCtx;
@@ -32,13 +33,6 @@ use crate::theme::{use_roles, Role, RoleColors};
 
 /// The dropdown's width — the comp's 328px card, so a long project path has room to read.
 const MENU_WIDTH: f32 = 328.;
-
-/// The horizontal chrome around a project row: the `menu_container` card padding (4 × 2) plus the
-/// row's own (12 × 2). A `Menu` only takes a **min** width and its container hugs its children, so
-/// a full path would otherwise stretch the card to the whole window — capping the row at
-/// `MENU_WIDTH - MENU_ROW_CHROME` is what fixes the card at [`MENU_WIDTH`] *and* gives the name /
-/// path a bounded box to ellipsize in (the same recipe as the tab menus' `HINT_MENU_WIDTH`).
-const MENU_ROW_CHROME: f32 = 32.;
 
 /// One switcher row: a project's display name and the folder it lives in.
 #[derive(Clone, PartialEq)]
@@ -136,7 +130,7 @@ impl Component for ProjectMenu {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .child(Icon::new(IconName::Folder).size(14.))
                             .child(Prose::new("Open…")),
                     ),
@@ -194,7 +188,7 @@ impl Component for ProjectMenu {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .child(
                         Icon::new(IconName::Folder)
                             .color(roles.get(Role::Accent))
@@ -227,7 +221,7 @@ impl Component for ProjectMenu {
 /// the comp's tracked 10px mono label exactly.
 fn section_label(text: &str, color: Color) -> impl IntoElement {
     rect()
-        .padding(Gaps::new(8., 12., 8., 12.))
+        .padding(Gaps::new(SP_3, SP_4, SP_3, SP_4))
         .child(Eyebrow::new(text).color(color))
 }
 
@@ -250,7 +244,7 @@ fn project_row(
     let platform_handle = platform_handle.clone();
     MenuItem::new()
         .selected(current)
-        .padding(Gaps::new(8., 12., 8., 12.))
+        .padding(Gaps::new(SP_3, SP_4, SP_3, SP_4))
         .on_press(move |_| {
             if !current {
                 // Through the shared path: the open preference decides the window, an
@@ -268,7 +262,7 @@ fn project_row(
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .content(Content::Flex)
-                .spacing(12.)
+                .spacing(SP_4)
                 .width(Size::fill())
                 .max_width(Size::px(MENU_WIDTH - MENU_ROW_CHROME))
                 .child(Avatar::new(row.name.as_str()).active(is_open))
@@ -276,7 +270,7 @@ fn project_row(
                     rect()
                         .vertical()
                         .width(Size::flex(1.))
-                        .spacing(2.)
+                        .spacing(SP_1)
                         .child(
                             Body::new(row.name.as_str())
                                 .color(roles.get(Role::Text))

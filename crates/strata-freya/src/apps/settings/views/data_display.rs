@@ -22,10 +22,8 @@ use strata_core::config::{COL_WIDTH_MAX, COL_WIDTH_MIN};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{Anchor, SettingsCtx};
 use crate::components::form::{Form, NumberField};
+use crate::components::metrics::SETTINGS_FIELD_WIDTH;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
-
-/// The canvas's numeric field (`width: 130px`).
-const FIELD_WIDTH: f32 = 130.;
 
 /// The row limit is uncapped by design — `0` already means "no limit", so a huge number is
 /// equivalent to it and harmless. The field's own type is the only bound there is.
@@ -66,7 +64,7 @@ impl Component for DataDisplayPane {
             .child(
                 Anchor::ColumnWidth.row().child(
                     NumberField::new(col_width as u32, COL_WIDTH_MIN as u32, COL_WIDTH_MAX as u32)
-                        .width(Size::px(FIELD_WIDTH))
+                        .width(Size::px(SETTINGS_FIELD_WIDTH))
                         .unit("px")
                         .on_change(move |px: u32| {
                             ctx.edit(|s| s.default_col_width = f64::from(px));
@@ -78,7 +76,7 @@ impl Component for DataDisplayPane {
                 // the biggest number the field can offer, not wrap round to a small one.
                 Anchor::RowLimit.row().child(
                     NumberField::new(row_limit.try_into().unwrap_or(NO_ROW_CAP), 0, NO_ROW_CAP)
-                        .width(Size::px(FIELD_WIDTH))
+                        .width(Size::px(SETTINGS_FIELD_WIDTH))
                         .unit("rows")
                         .on_change(move |rows: u32| ctx.edit(|s| s.row_limit = rows as usize)),
                 ),

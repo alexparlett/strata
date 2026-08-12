@@ -11,6 +11,7 @@ use freya::prelude::*;
 
 use super::{DrawerThemePartial, DrawerThemePreference};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_2, SP_3, SP_4};
 use crate::components::typography::Body;
 
 /// The scrolling body under a drawer tab's header, with the canvas's vertical inset
@@ -40,7 +41,7 @@ impl Component for DrawerBody {
             rect()
                 .width(Size::fill())
                 .vertical()
-                .padding((4., 0.))
+                .padding((SP_2, 0.))
                 .children(self.children.clone()),
         )
     }
@@ -86,8 +87,8 @@ impl Component for DrawerEmpty {
                 .vertical()
                 .main_align(Alignment::Center)
                 .cross_align(Alignment::Center)
-                .spacing(8.)
-                .padding((0., 12.))
+                .spacing(SP_3)
+                .padding((0., SP_4))
                 .child(Icon::new(self.icon).color(icon_color).size(26.))
                 .child(Body::new(self.text.clone()).color(color)),
         )

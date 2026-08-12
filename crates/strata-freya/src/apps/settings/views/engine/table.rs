@@ -27,18 +27,18 @@ use crate::apps::settings::views::RowNote;
 use crate::components::divider::Divider;
 use crate::components::form::ValueField;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{
+    ERROR_STRIPE, SP_3, SP_4, SP_5, TABLE_HEAD_HEIGHT, TABLE_ROW_HEIGHT,
+};
 use crate::components::tones::tones;
 use crate::components::typography::{Caption, Control, MonoValue};
 use crate::theme::{use_roles, Role};
 
 /// The header strip (canvas `height: 32px`) and a property row (`height: 34px`).
-const HEAD_HEIGHT: f32 = 32.;
-const ROW_HEIGHT: f32 = 34.;
 /// The stripe down an invalid row's leading edge (canvas `border-left: 2px`).
-const ERROR_STRIPE: f32 = 2.;
 /// A cell's inset (canvas `padding: 0 var(--sp-3)`), and the header's (`0 var(--sp-4)`).
-const CELL_INSET: f32 = 12.;
-const HEAD_INSET: f32 = 16.;
+const CELL_INSET: f32 = SP_4;
+const HEAD_INSET: f32 = SP_5;
 /// The round marker on a row carrying a runtime property.
 const MARKER_SIZE: f32 = 18.;
 /// The empty grid's own floor, so it still reads as a table (canvas `min-height: 132px`).
@@ -123,7 +123,7 @@ impl Component for HeadRow {
             })
             .child(
                 TableCell::new()
-                    .height(Size::px(HEAD_HEIGHT))
+                    .height(Size::px(TABLE_HEAD_HEIGHT))
                     .padding(Gaps::new_all(0.))
                     .main_align(Alignment::Start)
                     .child(
@@ -143,7 +143,7 @@ impl Component for HeadRow {
             )
             .child(
                 TableCell::new()
-                    .height(Size::px(HEAD_HEIGHT))
+                    .height(Size::px(TABLE_HEAD_HEIGHT))
                     .padding(Gaps::new(0., HEAD_INSET, 0., HEAD_INSET))
                     .main_align(Alignment::Start)
                     .child(Control::new("Value").color(theme.item_active_color)),
@@ -293,7 +293,7 @@ impl Component for PropTableRow {
             .on_press(move |_: Event<PressEventData>| rows.write().selected = Some(id))
             .child(
                 TableCell::new()
-                    .height(Size::px(ROW_HEIGHT))
+                    .height(Size::px(TABLE_ROW_HEIGHT))
                     .padding(Gaps::new(0., CELL_INSET, 0., 0.))
                     .main_align(Alignment::Start)
                     .child(
@@ -328,7 +328,7 @@ impl Component for PropTableRow {
                                         ValueField::new(name)
                                             .bare()
                                             .placeholder("datafusion.")
-                                            .height(Size::px(ROW_HEIGHT))
+                                            .height(Size::px(TABLE_ROW_HEIGHT))
                                             .width(Size::fill())
                                             .a11y_id(a11y_id),
                                     ),
@@ -345,14 +345,14 @@ impl Component for PropTableRow {
             )
             .child(
                 TableCell::new()
-                    .height(Size::px(ROW_HEIGHT))
+                    .height(Size::px(TABLE_ROW_HEIGHT))
                     .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
                     .child(
                         ValueField::new(value)
                             .bare()
                             .placeholder("value")
-                            .height(Size::px(ROW_HEIGHT))
+                            .height(Size::px(TABLE_ROW_HEIGHT))
                             .width(Size::fill()),
                     ),
             )
@@ -375,7 +375,7 @@ impl Component for SuggestionRow {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(16.)
+            .spacing(SP_5)
             .child(
                 MonoValue::new(self.key)
                     .color(theme.item_active_color)
@@ -425,7 +425,7 @@ impl Component for EmptyGrid {
             .height(Size::px(EMPTY_HEIGHT))
             .center()
             .vertical()
-            .spacing(6.)
+            .spacing(SP_3)
             .child(
                 Icon::new(IconName::Lines)
                     .size(22.)

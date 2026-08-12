@@ -13,6 +13,7 @@ use crate::apps::project::state::{Chan, SessionState};
 use crate::components::divider::Divider;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_XS, SP_1, SP_3};
 use crate::components::tones::tones;
 use crate::components::typography::{Caption, InputTypography, Prose};
 use crate::theme::{use_roles, Role};
@@ -62,8 +63,8 @@ impl Component for TabControls {
             .horizontal()
             .cross_align(Alignment::Center)
             .height(Size::fill())
-            .spacing(2.)
-            .padding(Gaps::new(0., 8., 0., 8.))
+            .spacing(SP_1)
+            .padding(Gaps::new(0., SP_3, 0., SP_3))
             .maybe(overflowing, |el| el.child(NavMenu))
             .child(OverflowMenu)
     }
@@ -154,7 +155,7 @@ impl Component for NavMenu {
         let overflow = matches.len().saturating_sub(10);
 
         let rows = matches.into_iter().take(10).fold(
-            rect().vertical().spacing(2.),
+            rect().vertical().spacing(SP_1),
             |col, (id, name, active, dirty)| {
                 col.child(tab_row(
                     id, name, active, dirty, palette, radio, open, closer, config,
@@ -190,7 +191,7 @@ impl Component for NavMenu {
 fn nav_search(query: State<String>, faint: Color) -> impl IntoElement {
     rect()
         .width(Size::fill())
-        .padding(Gaps::new(8., 8., 8., 8.))
+        .padding(Gaps::new(SP_3, SP_3, SP_3, SP_3))
         .child(
             InputTypography::body(
                 Input::new(query)
@@ -227,7 +228,7 @@ fn tab_row(
     // on hover → select_background when `.selected()` (the blue active highlight).
     MenuItem::new()
         .selected(active)
-        .padding((6., 8.))
+        .padding((SP_3, SP_3))
         .on_press(move |_| {
             radio.write().switch(id);
             open.set(false);
@@ -237,7 +238,7 @@ fn tab_row(
                 .horizontal()
                 .content(Content::Flex)
                 .cross_align(Alignment::Center)
-                .spacing(8.)
+                .spacing(SP_3)
                 .width(Size::fill())
                 .child(Dot::new(palette.dot(active, dirty)))
                 .child(
@@ -251,7 +252,7 @@ fn tab_row(
                     rect()
                         .width(Size::px(20.))
                         .height(Size::px(20.))
-                        .corner_radius(4.)
+                        .corner_radius(R_XS)
                         .main_align(Alignment::Center)
                         .cross_align(Alignment::Center)
                         .on_press(move |e: Event<PressEventData>| {
@@ -271,7 +272,7 @@ fn nav_notice(text: impl Into<String>, faint: Color) -> impl IntoElement {
         .width(Size::fill())
         .main_align(Alignment::Center)
         .cross_align(Alignment::Center)
-        .padding(Gaps::new(8., 8., 8., 8.))
+        .padding(Gaps::new(SP_3, SP_3, SP_3, SP_3))
         .child(Caption::new(text.into()).color(faint))
 }
 

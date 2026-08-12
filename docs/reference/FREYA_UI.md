@@ -42,6 +42,27 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   resolves: `Button::new().filled()` *is* accent-over-inverse-text, so a `theme_colors` override
   naming those same two slots is a second copy of them. Override only for a genuinely different
   tone (the destructive action reading `cancel_button`).
+- **Every padding, gap and corner radius comes off the scale in `components::metrics`, and the
+  three exceptions say so at the site.** The design fixes a nine-step spacing scale on a 4px grid
+  and a five-step radius scale (`Design.dc.html` §03); `metrics` is that scale as constants,
+  named for the design's own tokens (`SP_1`…`SP_9`, `R_XS`…`R_4`) so a call site picks a step
+  rather than a number this repo invented. They are **not** theme fields on purpose: a step does
+  not vary by theme, and a theme author who could retune one could reflow every surface from a
+  JSON file — the theme layer is colour and typography, and `theme/components.rs` reads the scale
+  like any other consumer. A surface that wants to name its use of a step does it locally
+  (`const CELL_INSET: f32 = SP_4;`) — that is the application, not a second scale, and it is why
+  three panes each having a `PAD` is fine while three panes each having a `12.` is not. The
+  exceptions are **pills and circles** (the design's `999px` / `50%`, which a px radius states as
+  `metrics::pill(extent)`), **hairlines** (`HAIRLINE` — a 1px rule is a stroke that occupies a row,
+  not the smallest gap; snapping it would double every rule in the app) and **alignment nudges**
+  (a 1px optical lift, a rail's centring arithmetic), plus the one whole surface off the scale,
+  the Settings theme preview's miniature, which is a drawing of a window rather than one. Beneath
+  the scale the same module holds the **fixed sizes more than one surface agrees on** — a toolbar
+  button, a title bar, a panel header — because a constant scoped to one surface is one every
+  other consumer reaches *into* that surface for: this landed with four separate 26px title-bar
+  buttons, two `HEADER_HEIGHT`s with different values, and three docs each claiming to match the
+  other two. Rehoming does **not** renumber: where two copies genuinely disagreed the values stay
+  as distinct named constants and the canvas call is P5-05's.
 - **A surface with its own component theme reads colours from that theme, not also from the
   roles.** Once a component has a `define_theme!`, every colour it paints — surfaces, borders,
   hairlines, tints — is one of its own fields, mapped onto a role in the static table

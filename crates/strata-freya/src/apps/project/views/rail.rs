@@ -17,10 +17,15 @@ use strata_model::{DrawerTab, SidebarPane};
 use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::drawer::project_error_count;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{pill, SP_1, SP_2, SP_3};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::components::tones::tones;
 use crate::components::typography::Meta;
 use crate::theme::{use_roles, Role};
+
+/// The problem-count pill's diameter at its narrowest — it grows with a two- or three-figure
+/// count, and is a circle until it does.
+const BADGE: f32 = 15.;
 
 #[derive(PartialEq)]
 pub struct ActivityRail;
@@ -61,8 +66,8 @@ impl Component for ActivityRail {
             .background(background)
             .cross_align(Alignment::Center)
             .content(Content::Flex)
-            .padding((8., 0.))
-            .spacing(2.)
+            .padding((SP_3, 0.))
+            .spacing(SP_1)
             // Top group — the sidebar's tool panes.
             .child(button(
                 IconName::Database,
@@ -150,9 +155,10 @@ impl Component for ProblemsBadge {
             // Pinned over the button's top-right corner, the way the grid header's resize grip
             // pins to its cell — an explicit offset, not fill-plus-alignment.
             .position(Position::new_absolute().top(1.).right(1.))
-            .min_width(Size::px(15.))
-            .height(Size::px(15.))
-            .corner_radius(7.5)
+            .min_width(Size::px(BADGE))
+            .height(Size::px(BADGE))
+            // A pill, so off the radius scale by design: half the extent (`metrics::pill`).
+            .corner_radius(pill(BADGE))
             .background(background)
             // The canvas's 2px ring, so the pill reads clear of the glyph beneath it.
             .border(
@@ -162,7 +168,7 @@ impl Component for ProblemsBadge {
                     .alignment(BorderAlignment::Outer),
             )
             .center()
-            .padding((0., 3.))
+            .padding((0., SP_2))
             .child(
                 Meta::new(match errors {
                     n if n > 99 => "99+".to_string(),

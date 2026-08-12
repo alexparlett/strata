@@ -1,12 +1,13 @@
 //! A small colour swatch. Round by default (the tab strip's dirty marker); `.square()` gives the
 //! softly-rounded square the catalog uses as a column's type swatch.
 
+use crate::components::metrics::R_XS;
 use freya::prelude::{rect, Color, Component, ContainerSizeExt, IntoElement, Size, StyleExt};
 
 /// The round marker's default diameter — the tab-strip dirty dot.
 const DEFAULT_SIZE: f32 = 7.;
 /// A square swatch's corner rounding (design `--r-xs`).
-const SQUARE_RADIUS: f32 = 4.;
+const SQUARE_RADIUS: f32 = R_XS;
 
 #[derive(PartialEq)]
 pub struct Dot {

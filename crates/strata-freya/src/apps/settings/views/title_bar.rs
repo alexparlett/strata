@@ -13,16 +13,10 @@ use freya::prelude::*;
 use crate::apps::settings::settings_theme;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{
+    COMPACT_BUTTON, R_1, SP_4, SP_5, TITLE_BAR_HEIGHT, TRAFFIC_LIGHT_GUTTER,
+};
 use crate::components::typography::Title;
-
-/// The strip's height (canvas `padding: var(--sp-4) var(--sp-5)` around a 26px tile); the
-/// traffic-light inset is derived from it.
-pub const TITLE_BAR_HEIGHT: f32 = 50.;
-
-/// The gutter that keeps the bar's content clear of the OS traffic lights. The window insets
-/// them to (16, 17), so the three buttons end around x = 68; the canvas's gear tile starts at
-/// 82, which is the same reserve the project header keeps.
-const TRAFFIC_LIGHT_GUTTER: f32 = 82.;
 
 #[derive(PartialEq)]
 pub struct TitleBar;
@@ -34,9 +28,9 @@ impl Component for TitleBar {
         // The window's mark: the gear in an accent-tinted tile, then its name in the scale's
         // Title role (ui 600 14.5, the comp's).
         let mark = rect()
-            .width(Size::px(26.))
-            .height(Size::px(26.))
-            .corner_radius(6.)
+            .width(Size::px(COMPACT_BUTTON))
+            .height(Size::px(COMPACT_BUTTON))
+            .corner_radius(R_1)
             .center()
             .background(theme.icon_background)
             .child(Icon::new(IconName::Gear).size(15.).color(theme.icon_color));
@@ -52,8 +46,8 @@ impl Component for TitleBar {
                     .height(Size::flex(1.))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(12.)
-                    .padding(Gaps::new(0., 16., 0., TRAFFIC_LIGHT_GUTTER))
+                    .spacing(SP_4)
+                    .padding(Gaps::new(0., SP_5, 0., TRAFFIC_LIGHT_GUTTER))
                     .window_drag()
                     .child(mark)
                     .child(Title::new("Settings")),

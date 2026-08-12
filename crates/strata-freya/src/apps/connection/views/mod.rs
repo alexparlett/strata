@@ -21,10 +21,11 @@ use crate::apps::connection::views::status::StatusBlock;
 use crate::apps::connection::{ConnectionCtx, Status};
 use crate::apps::project::{ProjChan, ProjectState, Reg};
 use crate::components::form::Form;
+use crate::components::metrics::SP_5;
 
 /// The window body's inset (canvas `padding: var(--sp-5)`). The gap *between* sections is the
 /// form's own `ROW_GAP` — this body is a [`Form`], so it does not get to invent one.
-const BODY_PADDING: Gaps = Gaps::new(16., 16., 16., 16.);
+const BODY_PADDING: Gaps = Gaps::new(SP_5, SP_5, SP_5, SP_5);
 
 /// Everything between the title bar and the footer, scrolling as one.
 #[derive(PartialEq)]
