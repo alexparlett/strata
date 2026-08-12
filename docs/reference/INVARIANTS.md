@@ -856,8 +856,11 @@ Things that must not regress. Each was fought for once already.
   re-registers the tables that were reading the store it just replaced.
 - **Connecting asks the bucket, because a description can be well-formed and wrong.** `connect` is
   `prepare` — the provider's naming rules, the client options, the registry key, and a store built
-  from all three — followed by `reachable`: one `list_with_delimiter(None)`, delimiter-scoped so it
-  returns that bucket's top-level folders rather than a page of keys, however large the lake.
+  from all three — followed by `reachable`: the **first page** of `list(None)`, taken with `next()`
+  and the rest of the stream dropped unpolled, so it costs one request however large the lake.
+  Deliberately **not** `list_with_delimiter`, which reads like the cheaper call and is the more
+  expensive one — it drains the whole paginated stream to assemble a `ListResult`, a round trip per
+  thousand top-level prefixes, which is the exact cost this probe is shaped to avoid.
 
   This **overturns** the rule that stood here before it, and the reversal is worth stating plainly
   because the original had a real argument. `connect` used to stop at the credential chain, on the

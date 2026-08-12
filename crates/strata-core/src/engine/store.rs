@@ -161,34 +161,41 @@ async fn prepare(conn: &ConnectionDef) -> Result<(ObjectStoreUrl, Arc<dyn Object
 /// An empty bucket ends the stream without yielding, which is a **pass**: nothing was there to
 /// find, and the request that established it succeeded. Only a `Some(Err(..))` is a refusal.
 ///
-/// **It asks whether the connection is *described* right, not whether it may do everything.**
-/// That line is the whole of which failures are fatal, and it is drawn where it is because a
-/// connection cannot know what it will be used for: `connect` is `register_pass`'s **first**
-/// phase, so no table has registered yet and there is no prefix to probe with. A root listing is
-/// therefore the only question available, and "may I list the root" is a much stronger demand
-/// than anything Strata actually makes of the bucket.
+/// **It refuses exactly one thing: a bucket that is not in the region it was given.** Everything
+/// else the listing can answer — including every flavour of "no" — registers, and is left to the
+/// table that actually reads a path.
 ///
-/// So an **authorization** answer registers, and only a **description** answer refuses:
+/// That is narrower than it first looks like it should be, and the narrowness is the point twice
+/// over.
 ///
-/// | `object_store::Error` | what it means | verdict |
-/// |---|---|---|
-/// | `Generic` (bare redirect) | the bucket is not in this region | refuse |
-/// | `NotFound` | there is no such bucket | refuse |
-/// | `PermissionDenied` / `Unauthenticated` | scoped, or read-only-public | **register** |
+/// **It is the fault this exists for.** A wrong region is the case no local check can see: the
+/// bucket name is valid, the credentials resolve, the store builds, and S3 answers a 301 carrying
+/// no `Location` header, which reaches the user as a sentence naming no bucket, no region and no
+/// connection. Nothing else that a root listing can tell us is worth a refusal.
 ///
-/// The two allowed arms are not edge cases. An `s3:ListBucket` conditioned on
-/// `s3:prefix: ["team/*"]` is AWS's own documented way to give somebody a folder, and it answers
-/// **403 at the root** while `s3://lake/team/events/` reads perfectly; a published dataset that
-/// grants `GetObject` and not `ListBucket` does the same, and a single-file source over it never
-/// needs a listing at all. Refusing either would take a working project's every table out with
-/// the connection, which is a worse fault than the one this probe exists to catch.
+/// **And "may I list the root" is a far stronger demand than Strata makes.** `connect` is
+/// `register_pass`'s **first** phase, so no table has registered and there is no prefix to probe
+/// with — a root listing is simply the only question available, not the right one. An
+/// `s3:ListBucket` conditioned on `s3:prefix: ["team/*"]` is AWS's own documented way to hand
+/// somebody a folder and answers **403 at the root** while `s3://lake/team/events/` reads
+/// perfectly; a published dataset granting `GetObject` and not `ListBucket` does the same, and a
+/// single-file source over it never lists at all. Refusing either would take a working project's
+/// every table down with the connection — a worse fault than the one being caught.
 ///
-/// What that gives up is catching **rejected credentials** here — they fail at the first table
-/// instead. That is not a regression: it is exactly where they failed before this probe existed,
-/// and it is worth saying plainly that this function declines a *new* win rather than losing an
-/// old one. One case cannot be helped either way: S3 answers 403 rather than 404 for a bucket
-/// that does not exist when the caller lacks `ListBucket`, so as not to leak its existence — a
-/// mistyped bucket under a scoped policy still registers green.
+/// So rejected credentials still fail at the first table, which is exactly where they failed
+/// before this probe existed: this declines a *new* win rather than losing an old one.
+///
+/// **Matched on the message, because `object_store` gives us nothing else to match on.** This is
+/// the part worth checking before trusting: the crate *does* classify statuses into
+/// `PermissionDenied` / `NotFound` / … (`client/retry.rs`, `RetryError::error`), but the S3 list
+/// path never reaches it — `aws/client.rs`'s `From<Error> for crate::Error` routes only
+/// `CompleteMultipartRequest` and `DeleteObjectsRequest` through that mapping and sends every
+/// other variant, `ListRequest` included, to `_ => Generic`. So a 403, a 404 and a bare redirect
+/// arrive here as the same variant, and `RetryError` is `pub(crate)` so its `status()` cannot be
+/// reached by downcast either. A first version of this function matched on the variants and was
+/// dead code in every arm; MinIO caught it. Matching one distinctive sentence is the honest
+/// remaining option, and it is a sentence `object_store` defines as a literal
+/// (`RequestError::BareRedirect`).
 ///
 /// **HTTP is exempt, and not out of laziness.** `object_store`'s HTTP store lists over WebDAV
 /// `PROPFIND`, which most origins serving files do not implement (MinIO included — see
@@ -204,39 +211,39 @@ async fn reachable(conn: &ConnectionDef, store: &Arc<dyn ObjectStore>) -> Result
     // One page, then dropped: `next()` polls the paginated stream once, and the stream is not
     // polled again. An exhausted stream (`None`) is an empty bucket, which answered fine.
     match store.list(None).next().await {
-        None | Some(Ok(_)) => Ok(()),
-        // **Authorization is not a description fault** — see the table above. Matched on the
-        // variant rather than on the message: `object_store` maps 403 and 401 onto these two in
-        // `client/retry.rs`, so this is the crate's own classification and not our reading of its
-        // prose.
-        Some(Err(Error::PermissionDenied { .. } | Error::Unauthenticated { .. })) => Ok(()),
-        Some(Err(e)) => Err(unreachable_message(conn, &e.to_string())),
+        Some(Err(e)) if is_bare_redirect(&e) => Err(wrong_region(conn)),
+        // Everything else — an object, an empty bucket, a 403, a 404 — registers. See above.
+        _ => Ok(()),
     }
 }
 
-/// How a failed [`reachable`] reads to the user.
+/// The one listing failure that says the *connection* is wrong rather than the caller's rights.
 ///
-/// **Named, because `object_store` cannot name it.** A cross-region request is answered by S3
-/// with a 301 carrying no `Location` header, so the crate says "Received redirect without
-/// LOCATION, this normally indicates an incorrectly configured region" — true, and phrased as a
-/// guess about a field it has never heard of. Here the field is known and the value is in hand,
-/// so the guess becomes a statement about *this* connection. (The same reason the plain-HTTP
-/// endpoint above is refused by name.)
+/// S3 answers a cross-region request with a 301 carrying no `Location` header;
+/// `object_store` has a dedicated error for it whose `Display` is this literal
+/// (`client/retry.rs`, `RequestError::BareRedirect`). Its own text goes on to guess at "an
+/// incorrectly configured region" — a guess, because the crate has never heard of the field. We
+/// have, so [`wrong_region`] says it outright.
 ///
-/// Its own function rather than a block inside the match arm: the region case wants an early
-/// answer, and `return` inside an arm would leave `reachable`, not the message.
-fn unreachable_message(conn: &ConnectionDef, why: &str) -> String {
-    if why.contains("redirect without LOCATION") {
-        if let Provider::S3(s3) = &conn.provider {
-            return format!(
-                "The bucket '{}' does not answer in region '{}'. Check the region, or that the \
-                 bucket exists.",
-                conn.address.trim(),
-                s3.region.trim()
-            );
-        }
+/// Substring rather than equality: the sentence arrives wrapped in the layers that carried it
+/// (`Generic S3 error: Error performing list request: …`).
+fn is_bare_redirect(e: &Error) -> bool {
+    e.to_string().contains("redirect without LOCATION")
+}
+
+/// What a wrong region reads as — naming the bucket and the region, which is the whole of the fix.
+fn wrong_region(conn: &ConnectionDef) -> String {
+    match &conn.provider {
+        Provider::S3(s3) => format!(
+            "The bucket '{}' does not answer in region '{}'. Check the region, or that the bucket \
+             exists.",
+            conn.address.trim(),
+            s3.region.trim()
+        ),
+        // No other provider takes a region, so none can be redirected for naming the wrong one;
+        // the generic wording is here so the function is total rather than because it is reachable.
+        _ => format!("'{}' did not answer.", conn.url()),
     }
-    format!("Cannot read '{}': {why}", conn.url())
 }
 
 /// Forget the object store registered under `url` — the Forget gesture's engine half (W7),

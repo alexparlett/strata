@@ -412,7 +412,8 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   **deregisters the old URL itself**, and the editor's Save asks for a whole-catalog pass.
 - **Connecting asks the bucket, because a description can be well-formed and wrong.** `connect` is
   `prepare` (naming rules, client options, registry key, built store) then `reachable` — one
-  `list_with_delimiter(None)`, delimiter-scoped so it costs one request however large the lake.
+  page off `list(None)`, so it costs one request however large the lake — never
+  `list_with_delimiter`, which drains the whole paginated stream to build its `ListResult`.
   This **overturns** the earlier rule that connecting learns nothing: that traded a round trip per
   connection per project open for a status dot that meant "a struct was built", and a mistyped
   region registered green while every table under it failed on `object_store`'s bare-redirect
