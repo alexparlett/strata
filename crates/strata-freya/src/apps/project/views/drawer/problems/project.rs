@@ -26,17 +26,22 @@
 //! [`persisted`]: crate::apps::project::state::persisted_defs
 //! [`PersistFaults`]: crate::apps::project::state::PersistFaults
 
+use freya::clipboard::Clipboard;
 use freya::prelude::*;
 use freya::radio::use_radio;
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
-use super::{PAD, ROW_HEIGHT};
+use super::{PAD, ROW_HEIGHT, ROW_INSET};
 use crate::apps::project::state::{FaultKind, FaultsCtx, PersistFaults, ProjChan, ProjectState};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::SP_3;
 use crate::components::tones::Tones;
 use crate::components::typography::Body;
+
+/// The copy button's extent, the chat transcript's `ACTIONS_H`: the same 20px glyph button on the
+/// same errand, so the two read as one control rather than two takes on one.
+const COPY_EXTENT: f32 = 20.;
 
 /// One row of this scope, flattened from the two families so the list renders blind.
 #[derive(Clone, PartialEq)]
@@ -134,14 +139,30 @@ impl Component for Project {
     }
 }
 
-/// One project problem: the error glyph, `subject — why`, and the tag that says which kind it is.
+/// One project problem: the error glyph, `subject — why`, a button that copies it, and the tag
+/// that says which kind it is.
+///
+/// **The message wraps**, and this is the surface that gets to. Everywhere else a refusal appears
+/// it is one line in something narrow — a catalog row's triangle, a connection row's tooltip — so
+/// each of those was clipping the engine's sentence at whatever the width allowed. That is not a
+/// smaller version of the message: `object_store` writes "Received redirect without LOCATION,
+/// this normally indicates an incorrectly configured region", and a cut at the comma keeps the
+/// symptom and throws away the diagnosis. One place has to render the whole thing, and a drawer
+/// that is already a list of faults is it. So this row has no fixed height and no ellipsis, and
+/// the two above it now point here rather than paraphrasing.
+///
+/// **Copy, because a message worth reading is a message worth pasting** — into a search, an
+/// issue, a message to whoever administers the bucket. `Body` is not selectable text, so without
+/// a button the words are legible and still unreachable.
 ///
 /// **Not pressable**, unlike a Queries row. That row jumps to the tab that owns it; these have no
 /// single place to go — a registration failure's fix is the Configure window *or* a re-scan
 /// depending on why it failed, and a write fault's fix is outside the app entirely. Offering a
 /// press that lands somewhere unhelpful is worse than not offering one (P4-15 leaves the retry
 /// action to its own pass, since the session writer's retry has to go through the autosave hook
-/// rather than around it, or it writes away the window geometry).
+/// rather than around it, or it writes away the window geometry). It is also what lets the copy
+/// button exist at all: a `Button` inside a pressable parent fires both (AGENTS.md §3), which is
+/// why the Queries row wraps but has no button.
 #[derive(PartialEq)]
 struct ProjectRow {
     row: ProjectProblem,
@@ -151,21 +172,32 @@ struct ProjectRow {
 
 impl Component for ProjectRow {
     fn render(&self) -> impl IntoElement {
+        let text = format!("{} — {}", self.row.subject, self.row.why);
+
         rect()
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
+            // **No fixed height.** `ROW_HEIGHT` is still every other row's, and still this row's
+            // when its message fits on one line — but it is a floor here rather than the answer,
+            // because the message is what decides how tall the row is.
+            .min_height(Size::px(ROW_HEIGHT))
             .horizontal()
             .content(Content::Flex)
-            .cross_align(Alignment::Center)
+            // `Start`, not `Center`: on a wrapped message the glyph, the button and the tag
+            // belong on the message's *first* line, not floated to the middle of a paragraph.
+            .cross_align(Alignment::Start)
             .spacing(SP_3)
-            .padding((0., PAD))
+            .padding((ROW_INSET, PAD))
             .child(Icon::new(IconName::Alert).color(self.tones.error).size(15.))
             .child(
-                Body::new(format!("{} — {}", self.row.subject, self.row.why))
+                Body::new(text.clone())
                     .color(self.theme.message_color)
                     .width(Size::flex(1.))
-                    .text_overflow(TextOverflow::Ellipsis),
+                    .wrap(),
             )
+            .child(CopyProblem {
+                text,
+                color: self.theme.meta_color,
+            })
             // A **badge**, not dim trailing text. The tag classifies the row — it is what tells a
             // def the engine refused apart from a file that will not save — so it is a fact, not
             // the incidental annotation `meta_color` dresses elsewhere in this drawer (an Events
@@ -177,6 +209,48 @@ impl Component for ProjectRow {
             // derives from its foreground is what makes a small marker read — the same reason
             // that pill is legible on a tone this one could not carry as bare text.
             .child(Badge::value(self.row.tag.label(), self.theme.value_color))
+    }
+}
+
+/// The row's **copy** press — `subject — why`, exactly the string the row renders.
+///
+/// Its own component for the transcript's reason: a sibling row settling re-renders the list, and
+/// a button rebuilt mid-hover loses the hover it was in. It also keeps the row's builder reading
+/// as a row.
+///
+/// No tooltip, the same call `CopyMessage` makes and for the same cause — a `TooltipContainer` is
+/// an `Attached` overlay, and one hanging off a control this small in a dense list is a hover
+/// oscillation.
+///
+/// It is therefore **unnamed to a screen reader**, which is the same gap `CopyMessage` carries and
+/// the same reason: `Button` takes no accessible label, so the name belongs on it *in the fork*
+/// (`components::tool_button` notes the same). Wrapping it in an `a11y_alt` rect here would put
+/// the name on a node that is not the control, which is a worse answer than the one this shares
+/// with the transcript's button.
+#[derive(PartialEq)]
+struct CopyProblem {
+    text: String,
+    color: Color,
+}
+
+impl Component for CopyProblem {
+    fn render(&self) -> impl IntoElement {
+        let text = self.text.clone();
+        let color = self.color;
+
+        Button::new()
+            .flat()
+            .width(Size::px(COPY_EXTENT))
+            .height(Size::px(COPY_EXTENT))
+            .on_press(move |_: Event<PressEventData>| {
+                // The app's one clipboard stack. Fire and forget, like every other copy here: a
+                // failed write is a warning, not a dialog about something the user will press
+                // again.
+                if let Err(err) = Clipboard::set(text.clone()) {
+                    tracing::warn!("problem copy failed: {err:?}");
+                }
+            })
+            .child(Icon::new(IconName::Copy).size(12.).color(color))
     }
 }
 

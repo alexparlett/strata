@@ -32,7 +32,7 @@ use strata_core::util::plural;
 use strata_model::{Diagnostic, Severity, TabId};
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
-use super::{GROUP_HEIGHT, PAD, ROW_HEIGHT, ROW_INDENT};
+use super::{GROUP_HEIGHT, PAD, ROW_HEIGHT, ROW_INDENT, ROW_INSET};
 use crate::apps::project::state::{Chan, ProblemGroup, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::SP_3;
@@ -164,12 +164,17 @@ impl Component for ProblemRow {
 
         rect()
             .width(Size::fill())
-            .height(Size::px(ROW_HEIGHT))
+            // A floor rather than the height, like the Project row's: a validator message can be
+            // long, and clipping one mid-clause keeps the symptom while throwing away the part
+            // that says what to do about it.
+            .min_height(Size::px(ROW_HEIGHT))
             .horizontal()
             .content(Content::Flex)
-            .cross_align(Alignment::Center)
+            // `Start`, so the glyph and the `line L:C` sit on the message's first line rather
+            // than the middle of a wrapped paragraph.
+            .cross_align(Alignment::Start)
             .spacing(SP_3)
-            .padding(Gaps::new(0., PAD, 0., ROW_INDENT))
+            .padding(Gaps::new(ROW_INSET, PAD, ROW_INSET, ROW_INDENT))
             // Switching to the tab, not jumping to the span: the span is a byte range into the
             // text the pass validated, and moving the caret is the editor's delicate half
             // (AGENTS.md §8) — its own change.
@@ -178,10 +183,15 @@ impl Component for ProblemRow {
             })
             .child(Icon::new(glyph).color(tone).size(15.))
             .child(
+                // **Wraps, but carries no copy button**, unlike the Project row next door. This
+                // row is pressable — it switches to the tab that owns the diagnostic — and a
+                // `Button` inside a pressable parent fires both (AGENTS.md §3). A diagnostic is
+                // also the one refusal that already has somewhere to go: the press puts you in
+                // front of the SQL that caused it.
                 Body::new(self.diagnostic.message.clone())
                     .color(self.theme.message_color)
                     .width(Size::flex(1.))
-                    .text_overflow(TextOverflow::Ellipsis),
+                    .wrap(),
             )
             .maybe_child(
                 self.diagnostic

@@ -209,23 +209,29 @@ fn status_glyph(runner: &TestingRunner, bucket: &str) -> Option<Area> {
         .next()
 }
 
-/// The headline: a **refused** connection carries the engine's own reason, in full, on the
-/// warning triangle's popover — the catalog entry row's mechanism exactly.
+/// A **refused** connection wears a triangle, and hovering it points at Problems rather than
+/// reciting the engine's reason.
 ///
-/// In full is the point. The reason used to be a line of text under the bucket, where a
-/// sidebar-width row ellipsized "The AWS profile 'analytics' resolved no credentials…" down to
-/// about four words and told the user nothing. Without the whole sentence the diagnosis lands as
-/// a signing error on every table over the bucket instead, which is what the probe behind this
-/// row exists to prevent.
+/// This assertion is the reverse of the one it replaces, and the reversal is the finding. The
+/// reason used to be spelled onto the popover here, on the argument that a sidebar-width row
+/// ellipsized it to four useless words while a tooltip could give the whole sentence. A tooltip
+/// cannot: it is laid out against the same narrow row, and the message that exposed it was
+/// `object_store`'s — "Received redirect without LOCATION, this normally indicates an
+/// incorrectly configured region" — clipped at the comma, keeping the symptom and discarding the
+/// only clause naming the cause. A diagnosis cut mid-sentence is worse than none, because the
+/// half that survives reads like the whole answer.
+///
+/// So this row says *that* the connection failed and where the words are, and the words are in
+/// Problems, which wraps them and has a button that copies them.
 #[test]
-fn a_refused_connection_carries_the_engines_reason_on_its_triangle() {
+fn a_refused_connection_points_at_problems_rather_than_reciting_the_reason() {
     let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
     // Not in the row itself: a settled row is clean, and a refused one says it with a glyph.
     assert!(
         !shows(&runner, "This S3 connection needs a region."),
-        "the reason is on the popover, not spelled into the row: {:?}",
+        "the reason is not spelled into the row: {:?}",
         texts(&runner)
     );
 
@@ -238,8 +244,13 @@ fn a_refused_connection_carries_the_engines_reason_on_its_triangle() {
     settle(&mut runner);
 
     assert!(
-        shows(&runner, "This S3 connection needs a region."),
-        "hovering the triangle gives the whole reason: {:?}",
+        shows(&runner, "Connection failed. See Problems for the reason."),
+        "hovering the triangle points at the surface that can render it: {:?}",
+        texts(&runner)
+    );
+    assert!(
+        !shows(&runner, "This S3 connection needs a region."),
+        "and does not carry the engine's sentence into a box that would clip it: {:?}",
         texts(&runner)
     );
 }
