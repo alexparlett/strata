@@ -1,6 +1,6 @@
 # P5-02 · Hover / focus / active interaction states
 
-**Phase:** 5 · **Status:** ⬜ · **Depends on:** —
+**Phase:** 5 · **Status:** ✅ · **Depends on:** —
 
 ## Goal
 Consistent hover / focus / active / disabled treatments across all interactive elements, with
@@ -56,10 +56,58 @@ so anything built on them inherits it — `tool_button.rs:78` (on `Button`) and
   `FreyaThemeGallery.dc.html`).
 
 ## Acceptance
-- [ ] Hover/focus/active/disabled look consistent and theme-driven; keyboard focus shows a ring
+- [x] Hover/focus/active/disabled look consistent and theme-driven; keyboard focus shows a ring
       pointer focus does not.
-- [ ] `toggle_button` / `segmented_toggle` / `run_button` are keyboard-focusable.
-- [ ] Fork change pushed to the fork remote (gitlink), fork tests green.
+- [x] `toggle_button` / `segmented_toggle` / `run_button` are keyboard-focusable.
+- [ ] Fork change pushed to the fork remote (gitlink), fork tests green. *(fork tests green;
+      the push is Alex's — the fork's own `AGENTS.md` forbids an agent pushing it.)*
+
+## Built (2026-08-12)
+
+**Fork** (`crates/freya`, two files):
+- `InputColors` grew `hover_background`, `hover_border_fill` and `focus_ring_fill`, defaulted in
+  `theming/themes.rs` for all three variants. `hover_background` is not redundant with
+  `hover_border_fill`: `filled_input` and `flat_input` default to a transparent outline, so a
+  fill is the only hover a variant without one can wear.
+- `Input`'s render gained the hover arm on both the fill and the outline, and a
+  `Focus::Keyboard`-gated **outer** ring layered over the existing any-focus outline
+  (`checkbox.rs`'s shape, `.border(Option<Border>)` pushes onto the `borders` vec). The any-focus
+  outline stays: a pointer press focuses the box too, so the ring is the only thing that can say
+  *keyboard*.
+- No new fork example: `examples/component_input.rs` already renders all three variants enabled
+  and disabled, and hovering / tabbing it is the demonstration. No fork test either — the twelve
+  existing `Focus::Keyboard` components have none, and `freya-testing` never enters
+  `NavigationMode::Keyboard` (only `freya-winit`'s Forward/Backward focus does), so the ring is
+  unreachable from a test without first growing the harness a way in.
+
+**App:**
+- `toggle_button`, `ToggleSegment` and `run_button` each take `use_a11y()` + `use_focus`,
+  `a11y_focusable`, `a11y_role(Button)`, an **Inner** `Focus::Keyboard` ring off a new
+  `focus_border_fill` (`item_focus_border_fill` on the segment), and `request_focus()` in their
+  press. Inner rather than Outer because a toolbar segment sits in a pill that clips. They keep
+  their hand-rolled hover state — `on_press` already covers the OS activation keys, so nothing
+  else was needed, and rebuilding on `Button` would have cost each one its bespoke dress.
+- Hand-computed alphas replaced by theme fields, four sites: `toggle_button`
+  (`hover_background`/`hover_color`), `segmented_toggle` (`item_hover_background`), export's
+  format card (`card_hover_border_fill`) and the chart's mark tile (`tile_hover_border_fill`).
+  The two washes map to **`Role::ElevatedElementHover`**, not `GhostElementHover`: these controls
+  sit on the rail, a toolbar, a form pill and a raised strip, and only the elevated role is
+  authored translucent (its value is within a hair of the `Role::Text.with_a(18)` it replaces, in
+  both built-ins). The two card edges map to `Role::BorderStrong`, whose doc names hovered cards
+  and which Settings' theme card already uses — the canvas's own card hover is
+  `brightness(1.12)`, i.e. no accent, so the half-alpha accent edge was the app's invention.
+- `input` / `filled_input` / `flat_input` all gained `focus_border_fill` (`BorderFocused`),
+  `hover_border_fill` and `focus_ring_fill` (`AccentMuted` — the canvas's literal
+  `accent 22%` ring). `hover_background` is mapped **equal to `background`** on all three,
+  because the canvas's field keeps `--c-panel` through every state and answers a hover on the
+  outline alone; the flat field declines the hover outright, since every flat input in Strata
+  (palette search, tab/saved-query rename, the composer) sits inside a box that carries it.
+- The chat composer's per-instance undress had to grow the three new fields too, or the bar's
+  "one outline around everything" would have gained a second one inside it.
+
+**Deliberately left:** the `tab` theme's unpainted `hover_background` (the canvas's `.ps-tab` has
+no `:hover` at all — painting it would diverge, so it stays a documented deferral), and the
+launcher row's `RowAction` role reads, which are **P5-10's** (a role read, not a computed alpha).
 
 ## Freya / references
 - Fork: `freya-components/src/{button,input}.rs`, `theming/themes.rs`. App:

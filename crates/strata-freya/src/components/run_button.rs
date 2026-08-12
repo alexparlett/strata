@@ -25,6 +25,9 @@ define_theme!(
         running_background: Color,
         running_hover_background: Color,
         running_color: Color,
+        /// The keyboard focus ring, shared by all three states: it says where the keyboard is,
+        /// which is not something Run/Stop/disabled answer differently.
+        focus_border_fill: Color,
     }
 );
 
@@ -72,6 +75,7 @@ impl Component for RunButton {
             running_background,
             running_hover_background,
             running_color,
+            focus_border_fill,
         } = get_theme!(&self.theme, RunButtonThemePreference, "run_button");
 
         // (resting, hover, foreground) for the current state.
@@ -102,6 +106,17 @@ impl Component for RunButton {
         let on_press = self.on_press.clone();
         let disabled = self.state == RunState::Disabled;
 
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
+        // Only the keyboard gets a ring: a press focuses the button too, so an any-focus ring
+        // would sit on Run for the rest of the session after the first click.
+        let focus_ring = (focus() == Focus::Keyboard).then(|| {
+            Border::new()
+                .fill(focus_border_fill)
+                .width(2.)
+                .alignment(BorderAlignment::Inner)
+        });
+
         // The comp's state-dependent `runTitle`. Both hints resolve unconditionally (hooks),
         // then the state picks.
         let run_title = use_hint_title("Run", Command::RunQuery);
@@ -112,7 +127,7 @@ impl Component for RunButton {
             RunState::Disabled => "Enter a query to run".to_string(),
         };
 
-        TooltipContainer::new(Tooltip::new_text(title))
+        TooltipContainer::new(Tooltip::new_text(title.clone()))
             .position(AttachedPosition::Bottom)
             .child(
                 rect()
@@ -120,12 +135,25 @@ impl Component for RunButton {
                     .height(Size::px(28.))
                     .corner_radius(R_1)
                     .background(bg)
+                    .border(focus_ring)
                     .center()
+                    .a11y_id(a11y_id)
+                    .a11y_focusable(!disabled)
+                    .a11y_role(AccessibilityRole::Button)
+                    // The tooltip names the button for the pointer; the same string names it
+                    // for the keyboard, which is now a tab stop and would otherwise announce
+                    // as an unlabelled button (the child is a raw-SVG `Icon`). It lands on
+                    // *this* rect because this is the focusable node.
+                    .a11y_alt(title)
                     .on_pointer_enter(move |_| hovered.set(true))
                     .on_pointer_leave(move |_| hovered.set(false))
+                    // `on_press` covers the OS activation keys as well as the pointer, so
+                    // focusing on press is all a keyboard operator needs (Freya's own `Button`
+                    // does the same).
                     .map(on_press, move |el, on_press| {
                         el.on_press(move |e| {
                             if !disabled {
+                                a11y_id.request_focus();
                                 on_press.call(e);
                             }
                         })

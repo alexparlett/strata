@@ -28,10 +28,20 @@ reuses a field the theme already has.
 | `record_view` (`results/record_view.rs:43`) | `record_view.rs:168` |
 | `explain_plan` (`results/explain_plan/mod.rs:35`) | `mod.rs:96` |
 | `running` (`results/running.rs:21`) | `running.rs:61` |
-| `toggle_button` (`components/toggle_button.rs:27`) | `toggle_button.rs:121` |
-| `segmented_toggle` (`components/segmented_toggle.rs:28`) | `segmented_toggle.rs:238` |
+| ~~`toggle_button`~~ | **done in P5-02** — `hover_background` / `hover_color` |
+| ~~`segmented_toggle`~~ | **done in P5-02** — `item_hover_background` |
 
 **Corrections to the task as originally filed:**
+- `toggle_button` and `segmented_toggle` are **already re-homed** (P5-02, which owned their
+  hand-computed hover alphas): both now read `ElevatedElementHover` off their own theme. Two
+  groups and two reads left the table.
+- `export`'s `views/formats.rs:74` read **survives** P5-02: only its `accent.with_a(120)` hover
+  edge became a field (`card_hover_border_fill`), and the `Role::Accent` read is still there for
+  the Parquet glyph. Still this task's.
+- The launcher row's three `RowAction`s (`views/row.rs:137,145`) read `ElementSelected` / `Text`
+  for their hover while the theme already names `remove_hover_background` for the third — that is
+  this task's clause, not P5-02's, and it wants `action_hover_background` / `action_hover_color`
+  on `launcher`.
 - The Agents pane is **dead scope** — removed in `6927f15`; what survives (`state/agents.rs`,
   `agent/`) reads no roles.
 - The confirm dialogs (`views/dialogs/*.rs` — 6 files reading roles) are **not** violations as

@@ -190,11 +190,16 @@ impl Component for ValueField {
                     el.placeholder(self.placeholder.unwrap_or_default())
                 })
                 .map(self.leading.clone(), Input::leading)
+                // Every state colour, not the resting pair: a field that keeps its hover
+                // outline or its keyboard ring is drawing the second box this asked not to.
                 .maybe(self.bare, |el| {
                     el.background(Color::TRANSPARENT)
+                        .hover_background(Color::TRANSPARENT)
                         .focus_background(Color::TRANSPARENT)
                         .border_fill(Color::TRANSPARENT)
+                        .hover_border_fill(Color::TRANSPARENT)
                         .focus_border_fill(Color::TRANSPARENT)
+                        .focus_ring_fill(Color::TRANSPARENT)
                 }),
         )
         .width(self.width.clone())

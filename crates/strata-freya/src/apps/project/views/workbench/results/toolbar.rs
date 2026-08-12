@@ -158,12 +158,16 @@ impl Component for ResultsToolbar {
                 .child(
                     InputTypography::mono(
                         Input::new(find.query)
-                            // Bare, per the comp: the panel wears the border/background,
-                            // so the input's own dress goes fully transparent.
+                            // Bare, per the comp: the panel wears the border/background, so
+                            // the input's own dress goes fully transparent — every state of
+                            // it, or a hover or a Tab draws a second box inside the panel.
                             .background(Color::TRANSPARENT)
+                            .hover_background(Color::TRANSPARENT)
                             .focus_background(Color::TRANSPARENT)
                             .border_fill(Color::TRANSPARENT)
+                            .hover_border_fill(Color::TRANSPARENT)
                             .focus_border_fill(Color::TRANSPARENT)
+                            .focus_ring_fill(Color::TRANSPARENT)
                             .placeholder("Find in results")
                             .compact()
                             .auto_focus(true)

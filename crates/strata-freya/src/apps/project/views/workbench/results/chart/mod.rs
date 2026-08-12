@@ -94,6 +94,9 @@ define_theme!(
         label_color: Color,
         tile_color: Color,
         tile_border_fill: Color,
+        /// A mark tile's edge while hovered: the emphasized outline every hovered card in the
+        /// app wears, rather than an alpha computed off the selected edge.
+        tile_hover_border_fill: Color,
         tile_active_background: Color,
         tile_active_border_fill: Color,
         tile_active_color: Color,
