@@ -15,7 +15,7 @@ use crate::apps::project::views::workbench::results::selection::{CellRole, SelCt
 use crate::apps::project::views::workbench::results::sort::SortState;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::metrics::{SP_1, SP_3, SP_4};
+use crate::components::metrics::{SP_1, SP_2, SP_3, SP_4};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue};
 
@@ -23,9 +23,16 @@ use crate::components::typography::{Meta, MonoValue};
 // `col_autofit`.
 /// Mono char-width estimate.
 const AUTOFIT_CHAR_W: f32 = 7.6;
-/// A cell's own horizontal inset, both sides — off the same step the grid theme's cell padding
-/// is (`theme::components`), so a fit stays a fit if that step ever moves.
-const AUTOFIT_PAD: f32 = 2. * SP_4;
+/// What a fit adds to the measured text: a cell's own horizontal inset, both sides — off the same
+/// step the grid theme's cell padding is (`theme::components`), so a fit stays a fit if that step
+/// ever moves — **plus one step of slack**.
+///
+/// The slack is the affordance the literal 28 used to carry, and it is not optional: the width
+/// above it is [`AUTOFIT_CHAR_W`] times a character *count*, an estimate rather than Skia's
+/// measurement, so a column fitted to exactly its padding clips whatever that estimate rounds
+/// short. It is the one term here that answers to the estimate rather than to the layout, which is
+/// why it is stated separately instead of folded into a single number.
+const AUTOFIT_PAD: f32 = 2. * SP_4 + SP_2;
 
 /// Per-column content auto-fit width — `max(header name + 3, widest cell) × char-width +
 /// padding`, clamped to the resize bounds. Recomputed per page (a grip double-click fits the
