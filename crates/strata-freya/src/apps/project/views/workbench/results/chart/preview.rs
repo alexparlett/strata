@@ -163,6 +163,9 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
                         .height(Size::flex(1.))
                         .child(ChartCanvas::new(Rc::new(Frame {
                             log_y: encoding.log_y && fallback.is_none(),
+                            // The harness has no engine to fit one; the trendline's own look
+                            // is pinned by the paint tests.
+                            trend: None,
                             data,
                             mark,
                             dress,
@@ -357,6 +360,215 @@ fn chart_preview() {
         ChartMark::Histogram,
         Some((495., 450.)),
     );
+
+    // ---- Chart 10 ----
+
+    // The matrix: what to look for is the ramp reading low-to-high, the empty cell staying
+    // the pane's colour, every row named, and the three ramp swatches in the legend.
+    shoot_as(
+        "heatmap",
+        matrix(),
+        marked(ChartMark::Heatmap),
+        matrix_columns(),
+        None,
+        None,
+    );
+    shoot_as(
+        "heatmap-hover",
+        matrix(),
+        marked(ChartMark::Heatmap),
+        matrix_columns(),
+        Some((470., 500.)),
+        None,
+    );
+
+    // The band: the tint between the bounds, the centre line over it, and the run cut where
+    // a bound is missing.
+    shoot_as(
+        "band",
+        banded(),
+        ChartConfig {
+            ys: Some(vec!["avg_ms".into()]),
+            y_lo: Some("p05".into()),
+            y_hi: Some("p95".into()),
+            ..marked(ChartMark::Band)
+        },
+        stats_columns(),
+        None,
+        None,
+    );
+
+    // The box plot: whiskers with caps, the quartile box, the median rule — and the readout
+    // naming all five on hover.
+    shoot_as(
+        "box",
+        boxed(),
+        ChartConfig {
+            ys: Some(vec!["med".into()]),
+            y_lo: Some("lo".into()),
+            y_hi: Some("hi".into()),
+            q1: Some("p25".into()),
+            q3: Some("p75".into()),
+            ..marked(ChartMark::Box)
+        },
+        stats_columns(),
+        Some((400., 350.)),
+        None,
+    );
+}
+
+/// A 6x4 matrix with one empty cell — the heatmap fixture.
+fn matrix() -> ChartData {
+    let rows: [(&str, [Option<f64>; 6]); 4] = [
+        (
+            "north",
+            [
+                Some(12.),
+                Some(48.),
+                Some(31.),
+                Some(90.),
+                Some(22.),
+                Some(65.),
+            ],
+        ),
+        (
+            "south",
+            [Some(80.), Some(14.), None, Some(41.), Some(73.), Some(9.)],
+        ),
+        (
+            "east",
+            [
+                Some(25.),
+                Some(66.),
+                Some(52.),
+                Some(18.),
+                Some(97.),
+                Some(40.),
+            ],
+        ),
+        (
+            "west",
+            [
+                Some(5.),
+                Some(33.),
+                Some(78.),
+                Some(59.),
+                Some(11.),
+                Some(84.),
+            ],
+        ),
+    ];
+    ChartData::Table {
+        axis: Axis {
+            labels: ["jan", "feb", "mar", "apr", "may", "jun"]
+                .map(String::from)
+                .to_vec(),
+            positions: None,
+        },
+        series: rows
+            .into_iter()
+            .map(|(name, values)| ChartSeries {
+                name: name.into(),
+                values: values.to_vec(),
+            })
+            .collect(),
+    }
+}
+
+/// The schema the matrix came from: two categories and a measure.
+fn matrix_columns() -> Vec<ColumnInfo> {
+    [
+        ("month", DataType::Utf8),
+        ("region", DataType::Utf8),
+        ("orders", DataType::Int64),
+    ]
+    .into_iter()
+    .map(|(name, dtype)| column_info(&Field::new(name, dtype, true)))
+    .collect()
+}
+
+/// Centre and bounds over ten categories, with the bounds missing mid-run — the band fixture,
+/// series in `encode`'s order (centre, lower, upper).
+fn banded() -> ChartData {
+    let centre: Vec<Option<f64>> = (0..10)
+        .map(|i| Some(200. + f64::from(i % 5) * 40. + f64::from(i) * 10.))
+        .collect();
+    let lower: Vec<Option<f64>> = centre
+        .iter()
+        .enumerate()
+        .map(|(i, v)| if i == 5 { None } else { v.map(|v| v - 60.) })
+        .collect();
+    let upper: Vec<Option<f64>> = centre
+        .iter()
+        .enumerate()
+        .map(|(i, v)| if i == 5 { None } else { v.map(|v| v + 60.) })
+        .collect();
+    ChartData::Table {
+        axis: Axis {
+            labels: (0..10).map(|i| format!("t{i}")).collect(),
+            positions: None,
+        },
+        series: vec![
+            ChartSeries {
+                name: "avg_ms".into(),
+                values: centre,
+            },
+            ChartSeries {
+                name: "p05".into(),
+                values: lower,
+            },
+            ChartSeries {
+                name: "p95".into(),
+                values: upper,
+            },
+        ],
+    }
+}
+
+/// Five categories of five measures — the box plot fixture, series in `encode`'s order
+/// (median, low whisker, high whisker, q1, q3).
+fn boxed() -> ChartData {
+    let names = ["med", "lo", "hi", "p25", "p75"];
+    let per_category: [[f64; 5]; 5] = [
+        [50., 10., 95., 35., 70.],
+        [42., 18., 66., 30., 55.],
+        [78., 40., 120., 60., 96.],
+        [22., 2., 58., 12., 39.],
+        [64., 30., 88., 51., 75.],
+    ];
+    ChartData::Table {
+        axis: Axis {
+            labels: ["api", "web", "batch", "cron", "etl"]
+                .map(String::from)
+                .to_vec(),
+            positions: None,
+        },
+        series: (0..5)
+            .map(|role| ChartSeries {
+                name: names[role].into(),
+                values: per_category.iter().map(|c| Some(c[role])).collect(),
+            })
+            .collect(),
+    }
+}
+
+/// The schema the band and box fixtures came from: a category, a time-ish label column and
+/// the five computed measures.
+fn stats_columns() -> Vec<ColumnInfo> {
+    [
+        ("t", DataType::Utf8),
+        ("avg_ms", DataType::Float64),
+        ("p05", DataType::Float64),
+        ("p95", DataType::Float64),
+        ("med", DataType::Float64),
+        ("lo", DataType::Float64),
+        ("hi", DataType::Float64),
+        ("p25", DataType::Float64),
+        ("p75", DataType::Float64),
+    ]
+    .into_iter()
+    .map(|(name, dtype)| column_info(&Field::new(name, dtype, true)))
+    .collect()
 }
 
 /// A dozen bins with a readable spread — the plain histogram fixture.
@@ -370,6 +582,52 @@ fn bins() -> ChartData {
             })
             .collect(),
     )
+}
+
+/// The scatter's trendline (Chart 11), posed directly on the canvas — the body only carries a
+/// fit the engine settled, which this harness has no engine to ask. What to look for: the
+/// dashed line through the cloud at the fixture's own slope, and the R² label inside the plot
+/// near the line's end.
+#[test]
+#[ignore = "writes target/chart-*.png for eyeballing; run explicitly"]
+fn trendline_preview() {
+    use strata_model::Trend;
+
+    let app = move || {
+        use_init_theme(|| strata_theme(&load("midnight")));
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let scattered: Vec<ChartPoint> = (0..80)
+            .map(|i| {
+                let x = f64::from(i) * 0.5;
+                ChartPoint {
+                    x,
+                    y: 2.0f64.mul_add(x, 5.) + f64::from((i * 37) % 23) - 11.,
+                }
+            })
+            .collect();
+        rect()
+            .width(Size::fill())
+            .height(Size::fill())
+            .background(theme.background)
+            .child(ChartCanvas::new(Rc::new(Frame {
+                data: ChartData::Points(scattered),
+                mark: ChartMark::Scatter,
+                log_y: false,
+                trend: Some(Trend {
+                    slope: 2.,
+                    intercept: 5.,
+                    r2: 0.87,
+                    n: 80,
+                }),
+                dress: Dress::new(&theme, &scale()),
+            })))
+    };
+    let (mut runner, ()) = TestingRunner::new(app, (1000., 620.).into(), |_| {}, 1.);
+    runner.sync_and_update();
+    runner.render_to_file(format!(
+        "{}/../../target/chart-trendline.png",
+        env!("CARGO_MANIFEST_DIR")
+    ));
 }
 
 /// A guardrail notice in a **collapsed** pane — the state the min-width fix got wrong. What to

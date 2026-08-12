@@ -16,9 +16,9 @@
 //! series row at all, and no menu ever lists a column the read would refuse. The residual
 //! cases — nothing valid left to offer — are the canvas's notice, not an inline error.
 //!
-//! Six mark tiles, three to a row, each a glyph over a name — a tile, not a segment, for the
+//! Nine mark tiles, three to a row, each a glyph over a name — a tile, not a segment, for the
 //! same reason the Export window's format cards aren't segments: a `SegmentedToggle` holding
-//! six labelled options in 232px would give each one 33px.
+//! nine labelled options in 232px would give each one 22px.
 //!
 //! **The legend lives here rather than on the canvas**, and it is also the control that hides
 //! a series — which is a deliberate divergence from
@@ -32,8 +32,8 @@
 //! stands in their place: the chart computes nothing SQL can say (spec §1.2, §1.3), so every
 //! control here changes what is *drawn* and none of them changes the data. Aggregating is the
 //! user's own `GROUP BY`, which the refusal overlays name in prose. A press that wrote that
-//! query into a new tab was built and cut — spec §8 records why, and it is the chart-side
-//! aggregation behind it that is worth revisiting rather than the shortcut.
+//! query into a new tab was built and cut — spec §8 records why — and the surface that
+//! replaced it is the **Shape panel** (Chart 09), off the results toolbar, never this strip.
 
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
@@ -43,8 +43,8 @@ use strata_core::engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    allows_row_index, log_axis, series_options, sortable, takes_many_ys, x_options, y_options,
-    Encoding, Roles,
+    allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options, series_required,
+    sortable, takes_many_ys, trendable, x_options, y_options, Encoding, Roles,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
@@ -94,6 +94,9 @@ fn glyph(mark: ChartMark) -> IconName {
         ChartMark::Scatter => IconName::MarkScatter,
         ChartMark::Histogram => IconName::MarkHistogram,
         ChartMark::Pie => IconName::MarkPie,
+        ChartMark::Heatmap => IconName::MarkHeatmap,
+        ChartMark::Band => IconName::MarkBand,
+        ChartMark::Box => IconName::MarkBox,
     }
 }
 
@@ -298,13 +301,18 @@ impl ControlStrip {
     }
 
     /// The series menu: no split, then every column that can carry one beside the current X.
-    fn series_choices(&self, options: Vec<String>) -> Vec<Choice> {
-        let mut choices = vec![Choice {
-            label: NO_SERIES.to_string(),
-            selected: self.encoding.series.is_none(),
-            next: self.with(|c| c.series = None),
-            keep_open: false,
-        }];
+    /// A mark that **requires** its series (a heatmap's matrix) offers no "None" row — an
+    /// unsplittable heatmap is unreachable rather than reported.
+    fn series_choices(&self, options: Vec<String>, required: bool) -> Vec<Choice> {
+        let mut choices = Vec::new();
+        if !required {
+            choices.push(Choice {
+                label: NO_SERIES.to_string(),
+                selected: self.encoding.series.is_none(),
+                next: self.with(|c| c.series = None),
+                keep_open: false,
+            });
+        }
         for name in options {
             choices.push(Choice {
                 selected: self.encoding.series.as_deref() == Some(name.as_str()),
@@ -314,6 +322,75 @@ impl ControlStrip {
             });
         }
         choices
+    }
+
+    /// The four band-role encoders (Chart 10), in strip order — Q1, Q3, LOWER, UPPER —
+    /// each `None` where the mark does not read the role.
+    fn band_encoders(&self, mark: ChartMark) -> [Option<Encoder>; 4] {
+        let bounds = reads_bounds(mark);
+        let quartiles = reads_quartiles(mark);
+        let Encoding {
+            q1, q3, y_lo, y_hi, ..
+        } = &self.encoding;
+        [
+            quartiles
+                .then(|| self.measure_role("Q1", q1, [q3, y_lo, y_hi], |c, name| c.q1 = name))
+                .map(|encoder| encoder.key("q1")),
+            quartiles
+                .then(|| self.measure_role("Q3", q3, [q1, y_lo, y_hi], |c, name| c.q3 = name))
+                .map(|encoder| encoder.key("q3")),
+            bounds
+                .then(|| self.measure_role("LOWER", y_lo, [y_hi, q1, q3], |c, name| c.y_lo = name))
+                .map(|encoder| encoder.key("lower")),
+            bounds
+                .then(|| self.measure_role("UPPER", y_hi, [y_lo, q1, q3], |c, name| c.y_hi = name))
+                .map(|encoder| encoder.key("upper")),
+        ]
+    }
+
+    /// One measure-role encoder (LOWER / UPPER / Q1 / Q3, Chart 10): a "None" row to clear
+    /// the role, then the measures this result offers, minus the Y and the other band roles
+    /// — a bound that collides with another edge is unreachable, not reported. The None row
+    /// is what keeps the trigger's own "None" reachable: without it a mispick could only be
+    /// undone by switching marks, a state the control shows but cannot return to. It also
+    /// means the row never empties, so the section stays on the strip while its refusal
+    /// names it.
+    fn measure_role(
+        &self,
+        label: &'static str,
+        current: &Option<String>,
+        others: [&Option<String>; 3],
+        set: fn(&mut ChartConfig, Option<String>),
+    ) -> Encoder {
+        let mut options = vec![Choice {
+            label: NO_SERIES.to_string(),
+            selected: current.is_none(),
+            next: self.with(|c| set(c, None)),
+            keep_open: false,
+        }];
+        options.extend(
+            y_options(&self.roles)
+                .into_iter()
+                .filter(|name| self.encoding.ys.first().map(String::as_str) != Some(name.as_str()))
+                .filter(|name| {
+                    !others
+                        .iter()
+                        .any(|other| other.as_deref() == Some(name.as_str()))
+                })
+                .map(|name| Choice {
+                    selected: current.as_deref() == Some(name.as_str()),
+                    next: self.with(|c| set(c, Some(name.clone()))),
+                    label: name,
+                    keep_open: false,
+                }),
+        );
+        Encoder {
+            tab: self.tab,
+            label,
+            current: current.clone().unwrap_or_else(|| NO_SERIES.to_string()),
+            options,
+            key: DiffKey::None,
+        }
     }
 }
 
@@ -371,7 +448,14 @@ impl Component for ControlStrip {
         let y = (!y_choices.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                label: "Y AXIS",
+                // The channel is the same one everywhere; what it *means* is the mark's — a
+                // heatmap's measure is its colour and a box plot's is its median, and an
+                // eyebrow saying "Y AXIS" over either would name the wrong thing.
+                label: match mark {
+                    ChartMark::Heatmap => "VALUE (COLOR)",
+                    ChartMark::Box => "MEDIAN",
+                    _ => "Y AXIS",
+                },
                 // Every plotted column, in the order the legend keys them.
                 current: if self.encoding.ys.is_empty() {
                     NO_SERIES.to_string()
@@ -388,17 +472,35 @@ impl Component for ControlStrip {
         let series = (!series_options.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                label: "SERIES (COLOR)",
+                // A heatmap's series channel is its second category axis, and the strip
+                // says so — "SERIES (COLOR)" would promise the categorical ramp over a
+                // mark whose colour is the value.
+                label: if mark == ChartMark::Heatmap {
+                    "Y AXIS"
+                } else {
+                    "SERIES (COLOR)"
+                },
                 current: self
                     .encoding
                     .series
                     .clone()
                     .unwrap_or_else(|| NO_SERIES.to_string()),
-                options: self.series_choices(series_options),
+                options: self.series_choices(series_options, series_required(mark)),
                 key: DiffKey::None,
             }
             .key("series")
         });
+
+        // A heatmap reads X then its second category then the value, so the sections come
+        // in that order — for every other mark the value axis stays second.
+        let (second, third) = if mark == ChartMark::Heatmap {
+            (series, y)
+        } else {
+            (y, series)
+        };
+
+        // The band roles (Chart 10): a band's bounds, a box plot's quartiles and whiskers.
+        let [q1, q3, lower, upper] = self.band_encoders(mark);
 
         // The engine does the binning, so this one is part of the read — a new count is a new
         // entry rather than a repaint. Only a histogram has bins to count.
@@ -420,6 +522,14 @@ impl Component for ControlStrip {
         let scale = log_axis(mark).then(|| ScaleToggle {
             tab: self.tab,
             log: self.encoding.log_y,
+            config: self.config.clone(),
+        });
+
+        // The trendline is a scatter's own overlay (Chart 11) — its fit is a separate read
+        // keyed by the encoded columns, so this toggle repaints and never re-reads the points.
+        let trend = trendable(mark).then(|| TrendToggle {
+            tab: self.tab,
+            on: self.encoding.trend,
             config: self.config.clone(),
         });
 
@@ -483,11 +593,16 @@ impl Component for ControlStrip {
                         .spacing(SECTION_GAP)
                         .child(tiles)
                         .maybe_child(x)
-                        .maybe_child(y)
-                        .maybe_child(series)
+                        .maybe_child(second)
+                        .maybe_child(third)
+                        .maybe_child(q1)
+                        .maybe_child(q3)
+                        .maybe_child(lower)
+                        .maybe_child(upper)
                         .maybe_child(bins)
                         .maybe_child(sort)
                         .maybe_child(scale)
+                        .maybe_child(trend)
                         .maybe_child(legend),
                 ),
             )
@@ -658,6 +773,54 @@ impl Component for ScaleToggle {
             .vertical()
             .spacing(LABEL_GAP)
             .child(Eyebrow::new("SCALE").color(theme.label_color))
+            .child(pill)
+    }
+}
+
+/// The scatter's **trendline**: off, or a dashed least-squares fit over the points
+/// (Chart 11).
+///
+/// A display-tier control in [`ScaleToggle`]'s shape — the fit is its own engine read keyed by
+/// the encoded columns, so flipping this never re-reads the points — and its own component for
+/// the same reason: it is only shown for a scatter, and a hook taken behind a condition is a
+/// hook count that changes between renders.
+#[derive(PartialEq)]
+struct TrendToggle {
+    tab: TabId,
+    on: bool,
+    config: ChartConfig,
+}
+
+impl Component for TrendToggle {
+    fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
+        let tab = self.tab;
+
+        let mut pill = SegmentedToggle::new();
+        // "On", not "Linear": the scale pill beside this one already has a segment of that
+        // name, and two controls answering to one word is a mispress waiting to happen.
+        for (label, title, on) in [
+            ("Off", "No trendline", false),
+            ("On", "Least-squares trendline", true),
+        ] {
+            let next = ChartConfig {
+                trend: on,
+                ..self.config.clone()
+            };
+            pill = pill.child(
+                ToggleSegment::text(label)
+                    .title(title)
+                    .selected(self.on == on)
+                    .on_press(move |_| commit(session, tab, next.clone())),
+            );
+        }
+
+        rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(LABEL_GAP)
+            .child(Eyebrow::new("TRENDLINE").color(theme.label_color))
             .child(pill)
     }
 }
@@ -1269,6 +1432,101 @@ mod tests {
         assert!(config(&session).log_y, "the config still holds it");
         click_text(&mut runner, "Line");
         assert!(shows(&runner, "SCALE"));
+    }
+
+    /// **A heatmap's strip names its channels for what they mean on a matrix** — the second
+    /// category is its Y axis and the measure is its colour — and the required series offers
+    /// no "None" row, so an unsplittable heatmap is unreachable.
+    #[test]
+    fn a_heatmap_renames_its_channels_and_requires_the_second_category() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+
+        click_text(&mut runner, "Heatmap");
+        assert_eq!(config(&session).mark, Some(ChartMark::Heatmap));
+        let seen = texts(&runner);
+        for expected in ["X AXIS", "Y AXIS", "VALUE (COLOR)"] {
+            assert!(seen.contains(&expected.to_string()), "{seen:?}");
+        }
+        assert!(
+            !seen.contains(&"SERIES (COLOR)".to_string()),
+            "a heatmap's colour is its value, not a series ramp: {seen:?}"
+        );
+        assert!(
+            seen.contains(&"country".to_string()),
+            "the derived second category: {seen:?}"
+        );
+
+        // Open the second-category picker: no "None" row to press.
+        click_text(&mut runner, "country");
+        assert!(
+            !shows(&runner, NO_SERIES),
+            "a required series offers no None: {:?}",
+            texts(&runner)
+        );
+    }
+
+    /// **A box plot's strip offers its five roles by name** — and the band roles never leak
+    /// onto a mark that does not read them.
+    #[test]
+    fn the_band_roles_are_offered_exactly_where_the_mark_reads_them() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        for absent in ["LOWER", "UPPER", "Q1", "Q3"] {
+            assert!(!shows(&runner, absent), "{absent} on a line");
+        }
+
+        click_text(&mut runner, "Box");
+        let seen = texts(&runner);
+        for expected in ["MEDIAN", "Q1", "Q3", "LOWER", "UPPER"] {
+            assert!(seen.contains(&expected.to_string()), "{seen:?}");
+        }
+
+        click_text(&mut runner, "Band");
+        let seen = texts(&runner);
+        for expected in ["Y AXIS", "LOWER", "UPPER"] {
+            assert!(seen.contains(&expected.to_string()), "{seen:?}");
+        }
+        for absent in ["Q1", "Q3"] {
+            assert!(
+                !seen.contains(&absent.to_string()),
+                "a band has no quartiles: {seen:?}"
+            );
+        }
+
+        // A pick writes the config's own field. The first unset trigger reads "None" and is
+        // LOWER's; its menu offers the measures minus the Y, which leaves `cost`.
+        click_text(&mut runner, NO_SERIES);
+        click_text(&mut runner, "cost");
+        assert_eq!(config(&session).y_lo.as_deref(), Some("cost"));
+    }
+
+    /// **The trendline is offered only for a scatter, and it writes a repaint** — the fit is
+    /// its own read keyed by the encoded columns, so the toggle never reaches the points'
+    /// `ChartQuery`. The preference is kept across marks like the scale's is.
+    #[test]
+    fn the_trendline_toggle_follows_the_scatter_and_keeps_the_choice() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        assert!(
+            !shows(&runner, "TRENDLINE"),
+            "a line has no fit to offer: {:?}",
+            texts(&runner)
+        );
+
+        click_text(&mut runner, "Scatter");
+        assert!(shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
+        click_text(&mut runner, "On");
+        assert!(config(&session).trend);
+
+        // Another mark drops the control and keeps the choice, so it comes back.
+        click_text(&mut runner, "Bar");
+        assert!(!shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
+        assert!(config(&session).trend, "the config still holds it");
+        click_text(&mut runner, "Scatter");
+        assert!(shows(&runner, "TRENDLINE"));
+        click_text(&mut runner, "Off");
+        assert!(!config(&session).trend);
     }
 
     /// **A legend row is the control that hides its series**, and ⌥ isolates. The modifier

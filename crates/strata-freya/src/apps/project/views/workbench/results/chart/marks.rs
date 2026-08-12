@@ -12,6 +12,7 @@
 //! surface Copy Image renders into, which scales itself the same way.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
+use std::iter::once;
 use std::mem::take;
 use std::ops::Range;
 
@@ -21,13 +22,15 @@ use freya::plot::plotters::coord::cartesian::Cartesian2d;
 use freya::plot::plotters::coord::ranged1d::ValueFormatter;
 use freya::plot::plotters::coord::Shift;
 use freya::plot::plotters::prelude::{
-    AreaSeries, Circle, Color as PlotColor, DrawingArea, DrawingAreaErrorKind, IntoDrawingArea,
-    IntoFont, LineSeries, Pie, RGBAColor, RGBColor, Ranged, Rectangle, TextStyle,
+    AreaSeries, Circle, Color as PlotColor, DashedLineSeries, DrawingArea, DrawingAreaErrorKind,
+    IntoDrawingArea, IntoFont, LineSeries, PathElement, Pie, Polygon, RGBAColor, RGBColor, Ranged,
+    Rectangle, Text, TextStyle,
 };
+use freya::plot::plotters::style::text_anchor::{HPos, Pos, VPos};
 use freya::plot::PlotSkiaBackend;
 use freya::plot::PlotSkiaBackendError;
 use freya::prelude::{Color, Size2D};
-use strata_model::{Axis, ChartBin, ChartData, ChartMark, ChartPoint, ChartSeries};
+use strata_model::{Axis, ChartBin, ChartData, ChartMark, ChartPoint, ChartSeries, Trend};
 
 use strata_core::util::clip;
 
@@ -133,9 +136,20 @@ pub fn draw(
                 &mut marks,
                 &mut area_out,
             ),
+            ChartMark::Heatmap => heatmap(&area, dress, axis, series, &mut marks, &mut area_out),
+            ChartMark::Band => band(&area, dress, axis, series, &mut marks, &mut area_out),
+            ChartMark::Box => box_plot(&area, dress, axis, series, &mut marks, &mut area_out),
             _ => bars(&area, dress, axis, series, &mut marks, &mut area_out),
         },
-        ChartData::Points(points) => scatter(&area, dress, points, log, &mut marks, &mut area_out),
+        ChartData::Points(points) => scatter(
+            &area,
+            dress,
+            points,
+            log,
+            frame.trend,
+            &mut marks,
+            &mut area_out,
+        ),
         ChartData::Bins(bins) => histogram(&area, dress, bins, log, &mut marks, &mut area_out),
         // A refusal carries nothing to draw at all (spec §1.4) — the body renders the reason
         // in place of the canvas.
@@ -152,11 +166,10 @@ pub fn draw(
 
 /// Where a cartesian mark's plot frame landed, recorded off plotters' own geometry so the
 /// crosshair and the marks cannot disagree about where the plot is.
-fn plot_area_of<X>(
-    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
-) -> PlotArea
+fn plot_area_of<X, Y>(chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, Y>>) -> PlotArea
 where
     X: Ranged<ValueType = f64>,
+    Y: Ranged<ValueType = f64>,
 {
     let (xs, ys) = chart.plotting_area().get_pixel_range();
     PlotArea {
@@ -169,29 +182,51 @@ where
 
 /// A mark's hit box from the two data coordinates that bound it, through plotters' own
 /// mapping — never through a second copy of the layout arithmetic.
-fn hit_box<X>(
-    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
+///
+/// The crosshair rules through the bar's own end: `b` is the value, `a` the baseline — and
+/// it carries `b`'s value rather than letting the readout invert the pixel row back into
+/// one. A mark whose reading sits elsewhere (a heatmap cell's measure at its centre, a box
+/// plot's median) states it through [`hit_box_at`], the same mapping with the cross said
+/// explicitly.
+fn hit_box<X, Y>(
+    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, Y>>,
     a: (f64, f64),
     b: (f64, f64),
     label: String,
 ) -> Hit
 where
     X: Ranged<ValueType = f64>,
+    Y: Ranged<ValueType = f64>,
+{
+    hit_box_at(chart, a, b, ((a.0 + b.0) / 2., b.1), b.1, label)
+}
+
+/// [`hit_box`] with the crosshair's place and value stated in data coordinates — the one
+/// copy of the corner mapping, so every boxed mark's hover geometry moves together.
+fn hit_box_at<X, Y>(
+    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, Y>>,
+    a: (f64, f64),
+    b: (f64, f64),
+    cross_at: (f64, f64),
+    value: f64,
+    label: String,
+) -> Hit
+where
+    X: Ranged<ValueType = f64>,
+    Y: Ranged<ValueType = f64>,
 {
     let area = chart.plotting_area();
     let (ax, ay) = area.map_coordinate(&a);
     let (bx, by) = area.map_coordinate(&b);
+    let (cx, cy) = area.map_coordinate(&cross_at);
     Hit::Box {
         left: ax.min(bx) as f32,
         top: ay.min(by) as f32,
         right: ax.max(bx) as f32,
         bottom: ay.max(by) as f32,
-        // The bar's own end: `b` is the value, `a` the baseline, so this is the edge the
-        // crosshair rules through — and it carries `b`'s value rather than letting the
-        // readout invert the pixel row back into one.
         cross: Cross {
-            at: ((ax + bx) as f32 / 2., by as f32),
-            value: b.1,
+            at: (cx as f32, cy as f32),
+            value,
         },
         label,
     }
@@ -202,13 +237,14 @@ where
 const POINT_REACH: f32 = 7.;
 
 /// A point's hit box: [`POINT_REACH`] in every direction from where it was drawn.
-fn hit_point<X>(
-    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
+fn hit_point<X, Y>(
+    chart: &ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, Y>>,
     at: (f64, f64),
     label: String,
 ) -> Hit
 where
     X: Ranged<ValueType = f64>,
+    Y: Ranged<ValueType = f64>,
 {
     let (x, y) = chart.plotting_area().map_coordinate(&at);
     Hit::Box {
@@ -378,12 +414,16 @@ fn scatter<'a>(
     dress: &Dress,
     points: &[ChartPoint],
     log: bool,
+    trend: Option<Trend>,
     hits: &mut Vec<Hit>,
     area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let xs = data_range(points.iter().map(|p| p.x));
     let ys = data_range(points.iter().map(|p| p.y));
     let coord = value_coord(log, points.iter().map(|p| p.y), &ys);
+    // The axis's own span — the log decades where a log axis was built — so the trendline is
+    // clipped to what this chart is actually drawing, not to the linear range.
+    let y_span = coord.range();
     let y_label = coord.tick_label();
     let mut chart = ChartBuilder::on(area)
         .margin_top(MARGIN_TOP)
@@ -407,6 +447,68 @@ fn scatter<'a>(
             format!("{}, {}", readout(p.x), readout(p.y)),
         ));
     }
+    if let Some(fit) = trend {
+        trendline(&mut chart, dress, &xs, &y_span, fit)?;
+    }
+    Ok(())
+}
+
+/// How many vertices the trendline is sampled at across the plotted x-range.
+const TREND_SAMPLES: usize = 64;
+/// The dash and its gap, in pixels — dashed so the fit reads as an overlay, not as data.
+const TREND_DASH: i32 = 6;
+const TREND_GAP: i32 = 4;
+
+/// The dashed least-squares line over the scatter, with its R² beside the line's end
+/// (Chart 11).
+///
+/// **Sampled, not drawn as two endpoints**: plotters maps each vertex through the Y
+/// coordinate, so on a log value axis a straight line in value space is a curve on the canvas
+/// — sampling draws it as one, and on a linear axis the samples are collinear so nothing
+/// changes. Samples outside the axis's own span are dropped, because plotters does not clip a
+/// path to the plotting area and a steep fit would otherwise draw over the label areas.
+fn trendline<X>(
+    chart: &mut ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
+    dress: &Dress,
+    xs: &Range<f64>,
+    ys: &Range<f64>,
+    fit: Trend,
+) -> Plot
+where
+    X: Ranged<ValueType = f64>,
+{
+    // The points' own hue at full strength — the points are drawn misted, so the fit reads
+    // as the statement about them rather than as a second series.
+    let color = rgba(dress.series(0));
+    let sampled: Vec<(f64, f64)> = (0..=TREND_SAMPLES)
+        .filter_map(|i| {
+            let x = xs.start + (xs.end - xs.start) * i as f64 / TREND_SAMPLES as f64;
+            let y = fit.slope.mul_add(x, fit.intercept);
+            (y.is_finite() && y >= ys.start && y <= ys.end).then_some((x, y))
+        })
+        .collect();
+    // A fit that barely enters the plotted span has nothing honest to draw — a dashed line
+    // needs two vertices, and a lone R² with no line under it would label nothing.
+    let Some((&anchor, _)) = sampled.last().zip(sampled.get(1)) else {
+        return Ok(());
+    };
+    chart.draw_series(DashedLineSeries::new(
+        sampled,
+        TREND_DASH,
+        TREND_GAP,
+        color.stroke_width(2),
+    ))?;
+    // Anchored right of its point, hanging above it — except near the plot's top, where
+    // above would put the text into the margin (the backend does not clip), so it flips
+    // below: the same flip the crosshair's readout makes.
+    let near_top = anchor.1 >= ys.start + (ys.end - ys.start) * 0.9;
+    let v_pos = if near_top { VPos::Top } else { VPos::Bottom };
+    let style = text(dress, &color).pos(Pos::new(HPos::Right, v_pos));
+    chart.draw_series(once(Text::new(
+        format!("R² = {}", readout(fit.r2)),
+        anchor,
+        style,
+    )))?;
     Ok(())
 }
 
@@ -466,6 +568,344 @@ fn histogram<'a>(
         ));
     }
     Ok(())
+}
+
+/// How much of a heatmap cell's slot is left as a gap on each side, so the matrix reads as
+/// cells rather than as one smear of colour.
+const CELL_GAP: f64 = 0.03;
+/// The most Y rows a heatmap labels — one label per row while they fit, thinned by the
+/// axis's own stride past it.
+const HEAT_ROW_LABELS: usize = 20;
+
+/// The matrix (Chart 10): X categories along the bottom, the series values up the side, the
+/// one measure as cell colour through the theme's sequential ramp.
+///
+/// The engine's long→wide pivot **is** the matrix — one [`ChartSeries`] per second-category
+/// value, one cell per `(x, series)` pair, `None` an empty cell that stays the pane's own
+/// colour. Both axes are the equal-slot [`Categories`]: a matrix has no true positions, and
+/// a time-valued X here is a category like any other.
+fn heatmap<'a>(
+    area: &'a Area<'a>,
+    dress: &Dress,
+    axis: &Axis,
+    series: &[ChartSeries],
+    hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
+) -> Plot {
+    let cats = Categories::indexed(axis.labels.len());
+    let rows = Categories::indexed(series.len());
+    // One normalization for the whole surface — the paint here, the strip's ramp legend and
+    // the empty-matrix notice all read the same [`heat_bounds`], so they cannot drift.
+    let bounds = heat_bounds(series);
+    let t_of = |value: f64| match bounds {
+        // `hi - lo` can overflow to infinity on a column spanning more than f64 holds — the
+        // same overflow the histogram refuses by name. A ramp has no refusal to offer, so
+        // the whole matrix sits mid-ramp rather than painting NaN channels as black.
+        Some((lo, hi)) if hi > lo && (hi - lo).is_finite() => {
+            (((value - lo) / (hi - lo)) as f32).clamp(0., 1.)
+        }
+        _ => 0.5,
+    };
+
+    let mut chart = ChartBuilder::on(area)
+        .margin_top(MARGIN_TOP)
+        .margin_right(MARGIN_RIGHT)
+        .x_label_area_size(X_LABEL_AREA)
+        .y_label_area_size(Y_LABEL_AREA)
+        .build_cartesian_2d(cats.clone(), rows.clone())?;
+    *area_out = Some(plot_area_of(&chart));
+    mesh_of(
+        &mut chart,
+        dress,
+        x_labels(area),
+        series.len().clamp(1, HEAT_ROW_LABELS),
+        &category_label(&cats, axis),
+        &series_label(&rows, series),
+    )?;
+
+    let x_slot = cats.slot();
+    let y_slot = rows.slot();
+    // One `draw_series` over every cell, not one per cell: a rectangle carries its own
+    // fill, and this loop runs on the render thread every repaint — per-cell calls are pure
+    // call-and-allocation churn at the read's 1,000-row cap.
+    let mut cells = Vec::new();
+    for (row, one) in series.iter().enumerate() {
+        for (i, value) in one.values.iter().enumerate() {
+            let Some(value) = value.filter(|v| v.is_finite()) else {
+                continue;
+            };
+            let corner_a = (
+                cats.at(i) - x_slot * (0.5 - CELL_GAP),
+                rows.at(row) - y_slot * (0.5 - CELL_GAP),
+            );
+            let corner_b = (
+                cats.at(i) + x_slot * (0.5 - CELL_GAP),
+                rows.at(row) + y_slot * (0.5 - CELL_GAP),
+            );
+            cells.push(Rectangle::new(
+                [corner_a, corner_b],
+                rgba(dress.heat_at(t_of(value))).filled(),
+            ));
+            // The cross sits at the cell's centre and carries the cell's own measure — the
+            // number worth reading out — not a corner's row index.
+            hits.push(hit_box_at(
+                &chart,
+                corner_a,
+                corner_b,
+                (cats.at(i), rows.at(row)),
+                value,
+                format!(
+                    "{} · {}: {}",
+                    axis.labels.get(i).map_or("", String::as_str),
+                    one.name,
+                    readout(value)
+                ),
+            ));
+        }
+    }
+    chart.draw_series(cells)?;
+    Ok(())
+}
+
+/// The finite span the heatmap's ramp is normalized over, or `None` for a matrix with no
+/// finite cell at all.
+///
+/// The one walk, read by the paint, the strip's ramp legend and the empty-matrix notice —
+/// the [`pie_slices`] precedent: a legend must key exactly what the plot drew, and two
+/// copies of this fold is how it comes to label ramp stops no cell wears.
+pub fn heat_bounds(series: &[ChartSeries]) -> Option<(f64, f64)> {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for value in series
+        .iter()
+        .flat_map(|one| one.values.iter().flatten())
+        .filter(|v| v.is_finite())
+    {
+        lo = lo.min(*value);
+        hi = hi.max(*value);
+    }
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
+/// Label a heatmap's Y tick with the series' own name — [`category_label`]'s twin over the
+/// matrix's other axis.
+fn series_label<'a>(
+    rows: &'a Categories,
+    series: &'a [ChartSeries],
+) -> impl Fn(&f64) -> String + 'a {
+    move |value| {
+        rows.index_at(*value)
+            .and_then(|i| series.get(i))
+            .map(|one| clip(&one.name, AXIS_LABEL_CHARS).into_owned())
+            .unwrap_or_default()
+    }
+}
+
+/// The error band (Chart 10): the centre line with the span between the two bound columns
+/// tinted. Series arrive in `encode`'s fixed order — centre, lower, upper — and the three
+/// are read by position.
+///
+/// A category is drawn only where **all three** are present and finite: a band with one
+/// missing edge has no honest span, so the gap cuts the run exactly as a `None` cuts a line.
+fn band<'a>(
+    area: &'a Area<'a>,
+    dress: &Dress,
+    axis: &Axis,
+    series: &[ChartSeries],
+    hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
+) -> Plot {
+    let [centre, lower, upper] = series else {
+        // A frame whose mark and data momentarily disagree — paint nothing true rather
+        // than guess which series is which.
+        return Ok(());
+    };
+    let count = axis.labels.len();
+    let cats = Categories::placed(axis.positions.as_ref(), count)
+        .unwrap_or_else(|| Categories::indexed(count));
+    let values = value_range(series.iter().flat_map(|one| one.values.iter().copied()));
+    let mut chart = frame_on(area, cats.clone(), ValueCoord::linear(values.clone()))?;
+    *area_out = Some(plot_area_of(&chart));
+    mesh(
+        &mut chart,
+        dress,
+        x_labels(area),
+        &category_label(&cats, axis),
+        &ticks(&values),
+    )?;
+
+    let color = rgba(dress.series(0));
+    // **One walk** decides what a category shows: runs of consecutive categories where the
+    // centre and both bounds are all present and finite, with the hover hit pushed beside
+    // the vertex it describes — one predicate, so a hit can never sit on a category the
+    // paint skipped.
+    let mut runs: Vec<Vec<(f64, f64, f64, f64)>> = Vec::new();
+    let mut run: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for i in 0..count {
+        let triple = (
+            centre.values.get(i).copied().flatten(),
+            lower.values.get(i).copied().flatten(),
+            upper.values.get(i).copied().flatten(),
+        );
+        match triple {
+            (Some(y), Some(lo), Some(hi)) if y.is_finite() && lo.is_finite() && hi.is_finite() => {
+                run.push((cats.at(i), y, lo, hi));
+                hits.push(hit_point(
+                    &chart,
+                    (cats.at(i), y),
+                    format!(
+                        "{} · {}: {} ({} to {})",
+                        axis.labels.get(i).map_or("", String::as_str),
+                        centre.name,
+                        readout(y),
+                        readout(lo.min(hi)),
+                        readout(lo.max(hi))
+                    ),
+                ));
+            }
+            _ if !run.is_empty() => runs.push(take(&mut run)),
+            _ => {}
+        }
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
+
+    for run in &runs {
+        // The tinted span: the upper edge left to right, then the lower edge back — one
+        // closed polygon per run.
+        let mut edge: Vec<(f64, f64)> = run.iter().map(|(x, _, _, hi)| (*x, *hi)).collect();
+        edge.extend(run.iter().rev().map(|(x, _, lo, _)| (*x, *lo)));
+        chart.draw_series(once(Polygon::new(edge, color.mix(0.14))))?;
+        chart.draw_series(LineSeries::new(
+            run.iter().map(|(x, y, _, _)| (*x, *y)),
+            color.stroke_width(2),
+        ))?;
+        if count <= POINT_MARKERS_MAX || run.len() == 1 {
+            chart.draw_series(
+                run.iter()
+                    .map(|(x, y, _, _)| Circle::new((*x, *y), 2, color.filled())),
+            )?;
+        }
+    }
+    zero_baseline(&mut chart, dress, &cats, &values)
+}
+
+/// How much of a category's slot a box plot's box takes.
+const BOX_WIDTH: f64 = 0.5;
+/// The whisker caps' share of the box width.
+const WHISKER_CAP: f64 = 0.5;
+
+/// The box plot (Chart 10): per category, a whisker from low to high, the quartile box, and
+/// the median tick. Series arrive in `encode`'s fixed order — median, low whisker, high
+/// whisker, q1, q3 — all five computed by the user's own SQL, never here.
+fn box_plot<'a>(
+    area: &'a Area<'a>,
+    dress: &Dress,
+    axis: &Axis,
+    series: &[ChartSeries],
+    hits: &mut Vec<Hit>,
+    area_out: &mut Option<PlotArea>,
+) -> Plot {
+    let [median, lower, upper, q1, q3] = series else {
+        return Ok(());
+    };
+    let count = axis.labels.len();
+    let cats = Categories::indexed(count);
+    let values = value_range(series.iter().flat_map(|one| one.values.iter().copied()));
+    let mut chart = frame_on(area, cats.clone(), ValueCoord::linear(values.clone()))?;
+    *area_out = Some(plot_area_of(&chart));
+    mesh(
+        &mut chart,
+        dress,
+        x_labels(area),
+        &category_label(&cats, axis),
+        &ticks(&values),
+    )?;
+
+    let color = rgba(dress.series(0));
+    let slot = cats.slot();
+    let half_box = slot * BOX_WIDTH / 2.;
+    let half_cap = half_box * WHISKER_CAP;
+    // Batched per layer — whiskers and caps, box fills, box outlines, median ticks — rather
+    // than ~6 `draw_series` calls per category: this runs on the render thread every
+    // repaint, and per-part calls are pure churn at the read's 1,000-row cap.
+    let mut strokes = Vec::new();
+    let mut fills = Vec::new();
+    let mut outlines = Vec::new();
+    let mut medians = Vec::new();
+    for i in 0..count {
+        let five = (
+            median.values.get(i).copied().flatten(),
+            lower.values.get(i).copied().flatten(),
+            upper.values.get(i).copied().flatten(),
+            q1.values.get(i).copied().flatten(),
+            q3.values.get(i).copied().flatten(),
+        );
+        let (Some(med), Some(lo), Some(hi), Some(q1v), Some(q3v)) = five else {
+            continue;
+        };
+        if ![med, lo, hi, q1v, q3v].iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let x = cats.at(i);
+        // The whisker and its caps, under the box.
+        strokes.push(PathElement::new(
+            vec![(x, lo), (x, hi)],
+            color.stroke_width(1),
+        ));
+        for end in [lo, hi] {
+            strokes.push(PathElement::new(
+                vec![(x - half_cap, end), (x + half_cap, end)],
+                color.stroke_width(1),
+            ));
+        }
+        // The quartile box: a translucent fill under its own outline. `min`/`max` rather
+        // than trusting q1 <= q3 — the columns are the user's, and a swapped pair should
+        // draw a box, not an inside-out rectangle.
+        let (box_lo, box_hi) = (q1v.min(q3v), q1v.max(q3v));
+        fills.push(Rectangle::new(
+            [(x - half_box, box_lo), (x + half_box, box_hi)],
+            color.mix(0.25).filled(),
+        ));
+        outlines.push(Rectangle::new(
+            [(x - half_box, box_lo), (x + half_box, box_hi)],
+            color.stroke_width(1),
+        ));
+        // The median tick, full box width, heaviest stroke — it is the answer the mark
+        // leads with.
+        medians.push(PathElement::new(
+            vec![(x - half_box, med), (x + half_box, med)],
+            color.stroke_width(2),
+        ));
+
+        // One hit per category over everything drawn — whiskers *and* box, whichever
+        // reaches further, since a swapped mapping can put the quartiles outside the
+        // whiskers and the drawn overhang must still answer a hover. Ruled at the median,
+        // and both pairs read min-to-max so a swap never prints backwards.
+        let reach_lo = lo.min(hi).min(box_lo);
+        let reach_hi = lo.max(hi).max(box_hi);
+        hits.push(hit_box_at(
+            &chart,
+            (x - half_box, reach_lo),
+            (x + half_box, reach_hi),
+            (x, med),
+            med,
+            format!(
+                "{} · median {}, {} to {}, whiskers {} to {}",
+                axis.labels.get(i).map_or("", String::as_str),
+                readout(med),
+                readout(box_lo),
+                readout(box_hi),
+                readout(lo.min(hi)),
+                readout(lo.max(hi))
+            ),
+        ));
+    }
+    chart.draw_series(strokes)?;
+    chart.draw_series(fills)?;
+    chart.draw_series(outlines)?;
+    chart.draw_series(medians)?;
+    zero_baseline(&mut chart, dress, &cats, &values)
 }
 
 // ---- the one radial mark ----
@@ -587,8 +1027,8 @@ fn value_coord(log: bool, values: impl Iterator<Item = f64>, linear: &Range<f64>
 
 /// The gridlines, the axes and their labels. `light_line_style` is transparent because the
 /// only horizontal rules we want are the ones a tick sits on.
-fn mesh<'a, X>(
-    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, ValueCoord>>,
+fn mesh<'a, X, Y>(
+    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, Y>>,
     dress: &Dress,
     x_labels: usize,
     x_label: &dyn Fn(&f64) -> String,
@@ -596,12 +1036,30 @@ fn mesh<'a, X>(
 ) -> Plot
 where
     X: Ranged<ValueType = f64> + ValueFormatter<f64>,
+    Y: Ranged<ValueType = f64> + ValueFormatter<f64>,
+{
+    mesh_of(chart, dress, x_labels, Y_LABELS, x_label, y_label)
+}
+
+/// [`mesh`] with the Y tick count stated — the heatmap's rows are categories, so it asks for
+/// one label per row rather than a value axis's five.
+fn mesh_of<'a, X, Y>(
+    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, Y>>,
+    dress: &Dress,
+    x_labels: usize,
+    y_labels: usize,
+    x_label: &dyn Fn(&f64) -> String,
+    y_label: &dyn Fn(&f64) -> String,
+) -> Plot
+where
+    X: Ranged<ValueType = f64> + ValueFormatter<f64>,
+    Y: Ranged<ValueType = f64> + ValueFormatter<f64>,
 {
     chart
         .configure_mesh()
         .disable_x_mesh()
         .x_labels(x_labels)
-        .y_labels(Y_LABELS)
+        .y_labels(y_labels)
         .bold_line_style(rgba(dress.grid))
         .light_line_style(rgba(Color::TRANSPARENT))
         .axis_style(rgba(dress.axis))
@@ -613,14 +1071,15 @@ where
 
 /// The rule at zero, drawn only when the data crosses it — otherwise the axis itself is the
 /// baseline and a second line on top of it is noise.
-fn zero_baseline<'a, X>(
-    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, ValueCoord>>,
+fn zero_baseline<'a, X, Y>(
+    chart: &mut ChartContext<'a, PlotSkiaBackend<'a>, Cartesian2d<X, Y>>,
     dress: &Dress,
     cats: &Categories,
     values: &Range<f64>,
 ) -> Plot
 where
     X: Ranged<ValueType = f64>,
+    Y: Ranged<ValueType = f64>,
 {
     if values.start >= 0. {
         return Ok(());

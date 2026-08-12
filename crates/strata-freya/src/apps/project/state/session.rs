@@ -946,6 +946,11 @@ mod tests {
                 bins: Some(24),
                 hidden: vec!["cost".into()],
                 log_y: true,
+                trend: true,
+                y_lo: Some("floor".into()),
+                y_hi: Some("ceil".into()),
+                q1: Some("p25".into()),
+                q3: Some("p75".into()),
             },
         );
         s.switch(a);

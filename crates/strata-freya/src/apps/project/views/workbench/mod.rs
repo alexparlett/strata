@@ -51,7 +51,7 @@ pub const WORKBENCH_STUB_H: f32 = TAB_BAR_H + EDITOR_STUB_H + 1. + RESULTS_STUB_
 pub use results::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     ChartThemePreference, DataGridThemePreference, ExplainPlanThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference,
+    RecordViewThemePreference, ShapeDialog, ShapeTarget, StatusBarThemePreference,
 };
 pub use tab_bar::bar::TabBarThemePreference;
 pub use tab_bar::tab::TabThemePreference;

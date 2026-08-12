@@ -140,20 +140,25 @@ pub fn x_options(mark: ChartMark, roles: &Roles) -> Vec<String> {
     match mark {
         // Both scatter axes are measures — it plots one against another.
         ChartMark::Scatter => roles.measures(),
-        // A pie slices a category. `categories` rather than the dimensions alone: it is the
-        // app's one answer to what can carry a category axis, and a month is as sliceable as
-        // a country.
-        ChartMark::Pie => roles.categories(),
+        // A pie slices a category, a heatmap crosses two, a box plot groups by one.
+        // `categories` rather than the dimensions alone: it is the app's one answer to what
+        // can carry a category axis, and a month is as sliceable as a country.
+        ChartMark::Pie | ChartMark::Heatmap | ChartMark::Box => roles.categories(),
         ChartMark::Histogram => Vec::new(),
         // Numeric columns are valid on X too (spec §3).
-        ChartMark::Bar | ChartMark::Line | ChartMark::Area => roles.all(),
+        ChartMark::Bar | ChartMark::Line | ChartMark::Area | ChartMark::Band => roles.all(),
     }
 }
 
 /// Whether this mark can chart against the **row index** — the "X: none" of spec §4. A pie of
-/// the row number is a slice per row, and a scatter has no axis without a measure on it.
+/// the row number is a slice per row, and a scatter has no axis without a measure on it. A
+/// band is a line with bounds, so it keeps the line's row-index axis; a heatmap and a box
+/// need real categories.
 pub fn allows_row_index(mark: ChartMark) -> bool {
-    matches!(mark, ChartMark::Bar | ChartMark::Line | ChartMark::Area)
+    matches!(
+        mark,
+        ChartMark::Bar | ChartMark::Line | ChartMark::Area | ChartMark::Band
+    )
 }
 
 /// Which columns this mark's **Y** will take: the measures, always — the same predicate the
@@ -162,19 +167,21 @@ pub fn y_options(roles: &Roles) -> Vec<String> {
     roles.measures()
 }
 
-/// Whether this mark draws **several** Ys as several series. Pie, scatter and histogram each
-/// take exactly one (spec §4), so their Y picker replaces rather than accumulates.
+/// Whether this mark draws **several** Ys as several series. Every other mark takes exactly
+/// one (spec §4) — a heatmap's measure is its colour, and a band's and box's other columns
+/// are *roles*, not extra series — so their Y picker replaces rather than accumulates.
 pub fn takes_many_ys(mark: ChartMark) -> bool {
     matches!(mark, ChartMark::Bar | ChartMark::Line | ChartMark::Area)
 }
 
 /// Which columns this mark's **series** will take, given the X it already has. Empty means no
-/// series row at all: only bar / line / area split, the pivot needs an X to pivot *around*,
+/// series row at all: only bar / line / area split — and a heatmap, whose second category *is*
+/// the series channel (the pivot is the matrix) — the pivot needs an X to pivot *around*,
 /// and one column cannot be both the category and the split (all three are the engine's own
 /// refusals — this is what keeps them unreachable).
 pub fn series_options(mark: ChartMark, roles: &Roles, x: Option<&str>) -> Vec<String> {
     match (mark, x) {
-        (ChartMark::Bar | ChartMark::Line | ChartMark::Area, Some(x)) => roles
+        (ChartMark::Bar | ChartMark::Line | ChartMark::Area | ChartMark::Heatmap, Some(x)) => roles
             .categories()
             .into_iter()
             .filter(|name| name != x)
@@ -183,13 +190,52 @@ pub fn series_options(mark: ChartMark, roles: &Roles, x: Option<&str>) -> Vec<St
     }
 }
 
+/// Whether this mark **requires** its series channel — a heatmap's matrix has no shape
+/// without the second category, so its picker offers no "None" row and an unset choice takes
+/// the first remaining category as its default.
+pub fn series_required(mark: ChartMark) -> bool {
+    mark == ChartMark::Heatmap
+}
+
+/// How many fixed-order ys a band's read carries — centre, lower, upper. The renderer
+/// destructures exactly this many and the notice asks for a complete row of them, so the
+/// arity has one author.
+pub const BAND_YS: usize = 3;
+/// How many fixed-order ys a box plot's read carries — median, low whisker, high whisker,
+/// q1, q3.
+pub const BOX_YS: usize = 5;
+
+/// Whether this mark reads the **bound** roles (`y_lo` / `y_hi`, Chart 10) — a band's edges,
+/// and a box plot's whiskers. Everything else drops them at resolve time the way `bins` is
+/// dropped for a mark with nothing to bin.
+pub fn reads_bounds(mark: ChartMark) -> bool {
+    matches!(mark, ChartMark::Band | ChartMark::Box)
+}
+
+/// Whether this mark reads the **quartile** roles (`q1` / `q3`) — the box plot alone.
+pub fn reads_quartiles(mark: ChartMark) -> bool {
+    mark == ChartMark::Box
+}
+
 /// Whether this mark's data has an order to sort — [`ChartData::Table`]'s categories. A
 /// scatter draws unordered marks and a histogram's bins are ascending by construction, so
 /// neither has anything the sort could mean.
 ///
 /// [`ChartData::Table`]: strata_model::ChartData::Table
 pub fn sortable(mark: ChartMark) -> bool {
-    !matches!(mark, ChartMark::Scatter | ChartMark::Histogram)
+    // A positive list like its peers, so a new mark must answer rather than being enrolled
+    // by default. The heatmap is deliberately in: `ByX` reorders a matrix's columns
+    // meaningfully, and `ByYDesc` reads its first row — coarse, but the user's own toggle.
+    matches!(
+        mark,
+        ChartMark::Bar
+            | ChartMark::Line
+            | ChartMark::Area
+            | ChartMark::Pie
+            | ChartMark::Heatmap
+            | ChartMark::Band
+            | ChartMark::Box
+    )
 }
 
 /// Whether this mark's value axis can be logarithmic.
@@ -204,6 +250,16 @@ pub fn log_axis(mark: ChartMark) -> bool {
         mark,
         ChartMark::Line | ChartMark::Scatter | ChartMark::Histogram
     )
+}
+
+/// Whether this mark can carry the least-squares trendline (Chart 11).
+///
+/// Only a scatter: the fit is a statement about how one measure moves with another, which is
+/// the scatter's whole encoding. A line or bar's X may be categorical — regression over
+/// category indices is a number with no meaning — and a histogram's bars are counts of the
+/// one measure it has.
+pub fn trendable(mark: ChartMark) -> bool {
+    mark == ChartMark::Scatter
 }
 
 /// Whether this mark draws **several** series, so a legend press has anything to hide.
@@ -227,6 +283,14 @@ pub struct Encoding {
     pub x: Option<String>,
     pub ys: Vec<String>,
     pub series: Option<String>,
+    /// The band roles (Chart 10), resolved only for the marks that read them
+    /// ([`reads_bounds`] / [`reads_quartiles`]) and distinct from the Y and from each other
+    /// by construction — a stale or colliding reference falls back to unset, which `encode`
+    /// answers with the message naming the fix.
+    pub y_lo: Option<String>,
+    pub y_hi: Option<String>,
+    pub q1: Option<String>,
+    pub q3: Option<String>,
     /// A histogram's bin count, `None` for the engine's own choice. Empty for every other
     /// mark, which has nothing to bin.
     pub bins: Option<u16>,
@@ -235,6 +299,11 @@ pub struct Encoding {
     /// and dropping it would spend a choice the next result might be able to honour.
     pub hidden: Vec<String>,
     pub log_y: bool,
+    /// Whether the least-squares trendline is drawn — resolved against the mark like
+    /// [`log_y`](Self::log_y), so only a scatter ever carries it. The fit itself is a
+    /// separate read ([`TrendSpec`](crate::apps::project::query::TrendSpec)); this is only
+    /// whether to ask for one.
+    pub trend: bool,
     pub sort: ChartSort,
 }
 
@@ -294,16 +363,49 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         ys.into_iter().take(1).collect()
     };
 
+    let offered_series = series_options(mark, roles, x.as_deref());
     let series = config
         .series
         .clone()
-        .filter(|name| series_options(mark, roles, x.as_deref()).contains(name));
+        .filter(|name| offered_series.contains(name))
+        // A heatmap's second category is required, so an unset (or stale) choice takes the
+        // first remaining category the way an unset X takes its default — the matrix has no
+        // shape without one.
+        .or_else(|| {
+            series_required(mark)
+                .then(|| offered_series.first().cloned())
+                .flatten()
+        });
+
+    // The band roles resolve like every other reference — kept only where this result still
+    // answers them — plus a distinctness rule the option sets already enforce at offer time:
+    // a bound that collides with the Y or an earlier band role is a stale config, and it
+    // falls back to unset rather than plotting one column as two edges.
+    let mut spoken: Vec<String> = ys.clone();
+    let mut band_ref = |choice: &Option<String>, wanted: bool| -> Option<String> {
+        let name = choice
+            .clone()
+            .filter(|_| wanted)
+            .filter(|name| measures.contains(name) && !spoken.contains(name))?;
+        spoken.push(name.clone());
+        Some(name)
+    };
+    let bounds = reads_bounds(mark);
+    let quartiles = reads_quartiles(mark);
+    let y_lo = band_ref(&config.y_lo, bounds);
+    let y_hi = band_ref(&config.y_hi, bounds);
+    let q1 = band_ref(&config.q1, quartiles);
+    let q3 = band_ref(&config.q3, quartiles);
 
     Encoding {
         mark,
         x,
         ys,
         series,
+        y_lo,
+        y_hi,
+        q1,
+        q3,
         // Only a histogram has bins, so the value is dropped for every other mark the way a
         // series column is — the config keeps it, and switching back to a histogram brings it
         // with you.
@@ -323,6 +425,9 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         // because the strip is where a control is *offered* and this is where the read and
         // the paint agree on what is actually being drawn.
         log_y: config.log_y && log_axis(mark),
+        // The same gate as `log_y`, for the same reason: the config keeps the choice for
+        // every mark, and only a mark that can draw the fit resolves it.
+        trend: config.trend && trendable(mark),
         sort: config.sort,
     }
 }
@@ -332,7 +437,13 @@ fn default_x(mark: ChartMark, roles: &Roles) -> Option<String> {
     match mark {
         ChartMark::Histogram => None,
         ChartMark::Scatter => roles.measures().first().cloned(),
-        ChartMark::Bar | ChartMark::Line | ChartMark::Area | ChartMark::Pie => roles.x(),
+        ChartMark::Bar
+        | ChartMark::Line
+        | ChartMark::Area
+        | ChartMark::Pie
+        | ChartMark::Heatmap
+        | ChartMark::Band
+        | ChartMark::Box => roles.x(),
     }
 }
 
@@ -356,10 +467,7 @@ fn default_ys(mark: ChartMark, measures: &[String], x: Option<&str>) -> Vec<Stri
 ///
 /// **The one `ChartQuery` construction site.** It is freya-query cache identity, so a second
 /// place building one would fork the entry into a duplicate read.
-pub fn encode(
-    encoding: &Encoding,
-    roles: &Roles,
-) -> Result<ChartQuery, (&'static str, &'static str)> {
+pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'static str, String)> {
     match encoding.mark {
         ChartMark::Scatter => match (&encoding.x, encoding.ys.first()) {
             (Some(x), Some(y)) => Ok(ChartQuery::Raw {
@@ -369,7 +477,8 @@ pub fn encode(
             }),
             _ if roles.measures().len() < 2 => Err((
                 "Pick two numeric columns",
-                "A scatter plots one measure against another, and the result has fewer than two.",
+                "A scatter plots one measure against another, and the result has fewer than two."
+                    .into(),
             )),
             _ => Err(no_y(roles)),
         },
@@ -393,9 +502,107 @@ pub fn encode(
             }),
             (None, _) => Err((
                 "Pick a category column",
-                "A pie slices one measure by a category, and the result has no column to slice by.",
+                "A pie slices one measure by a category, and the result has no column to slice by."
+                    .into(),
             )),
             (_, None) => Err(no_y(roles)),
+        },
+        // The matrix is the pivot: X and series are the two categories, the one Y is the
+        // cell colour, and a duplicate cell is the engine's own refusal.
+        ChartMark::Heatmap => match (&encoding.x, &encoding.series, encoding.ys.first()) {
+            (Some(x), Some(series), Some(y)) => Ok(ChartQuery::Rows {
+                x: Some(x.clone()),
+                ys: vec![y.clone()],
+                series: Some(series.clone()),
+                cap: ROWS_CAP,
+            }),
+            (Some(_), Some(_), None) => Err(no_y(roles)),
+            _ => Err((
+                "Pick two category columns",
+                "A heatmap crosses two category columns, and the result has fewer than two.".into(),
+            )),
+        },
+        // Fixed order — centre, lower, upper — the renderer reads the answer by position.
+        ChartMark::Band => match (encoding.ys.first(), &encoding.y_lo, &encoding.y_hi) {
+            (Some(y), Some(lo), Some(hi)) => Ok(ChartQuery::Rows {
+                x: encoding.x.clone(),
+                ys: vec![y.clone(), lo.clone(), hi.clone()],
+                series: None,
+                cap: ROWS_CAP,
+            }),
+            // The shortage before the picks: instructing picks that cannot all be made is
+            // a dead end, and the count is the honest fact.
+            _ if roles.measures().len() < BAND_YS => Err((
+                "Not enough numeric columns",
+                format!(
+                    "A band draws its centre between two bound columns and this result has \
+                     {} numeric {}. Compute the bounds in SQL, for example avg(y) - \
+                     stddev(y) and avg(y) + stddev(y).",
+                    roles.measures().len(),
+                    plural(roles.measures().len())
+                ),
+            )),
+            (None, _, _) => Err(no_y(roles)),
+            _ => Err((
+                "Pick the band's bounds",
+                "A band draws its centre between two bound columns your SQL computes, for \
+                 example avg(y) - stddev(y) and avg(y) + stddev(y). Pick them on LOWER and \
+                 UPPER."
+                    .into(),
+            )),
+        },
+        // Fixed order — median, low whisker, high whisker, q1, q3 — and the median first on
+        // purpose: the sort's `ByYDesc` reads the first series, so a box plot sorts by its
+        // median.
+        ChartMark::Box => match (
+            &encoding.x,
+            encoding.ys.first(),
+            &encoding.y_lo,
+            &encoding.y_hi,
+            &encoding.q1,
+            &encoding.q3,
+        ) {
+            (Some(x), Some(median), Some(lo), Some(hi), Some(q1), Some(q3)) => {
+                Ok(ChartQuery::Rows {
+                    x: Some(x.clone()),
+                    ys: vec![
+                        median.clone(),
+                        lo.clone(),
+                        hi.clone(),
+                        q1.clone(),
+                        q3.clone(),
+                    ],
+                    series: None,
+                    cap: ROWS_CAP,
+                })
+            }
+            (None, ..) => Err((
+                "Pick a category column",
+                "A box plot draws one box per category, and the result has no column to \
+                 group by."
+                    .into(),
+            )),
+            // The shortage before the picks — with fewer than five distinct measures the
+            // mark is unreachable, and the strip's role encoders have nothing to offer.
+            _ if roles.measures().len() < BOX_YS => Err((
+                "Not enough numeric columns",
+                format!(
+                    "A box plot draws five measures per category and this result has {} \
+                     numeric {}. Compute median, quartile and whisker columns in SQL, for \
+                     example percentile_cont(0.25) WITHIN GROUP (ORDER BY y), min(y) and \
+                     max(y).",
+                    roles.measures().len(),
+                    plural(roles.measures().len())
+                ),
+            )),
+            (_, None, ..) => Err(no_y(roles)),
+            _ => Err((
+                "Pick the box's measures",
+                "A box plot draws median, quartile and whisker columns your SQL computes, \
+                 for example percentile_cont(0.25) WITHIN GROUP (ORDER BY y), min(y) and \
+                 max(y) per category. Pick them on Q1, Q3, LOWER and UPPER."
+                    .into(),
+            )),
         },
         ChartMark::Bar | ChartMark::Line | ChartMark::Area => {
             if encoding.ys.is_empty() {
@@ -415,17 +622,26 @@ pub fn encode(
 /// having no numeric column at all is a fact about the data; an empty pick is a choice the
 /// user just made, and telling them their result has nothing numeric in it while its measures
 /// sit in the menu they emptied would be a lie.
-fn no_y(roles: &Roles) -> (&'static str, &'static str) {
+fn no_y(roles: &Roles) -> (&'static str, String) {
     if roles.measures().is_empty() {
         (
             "Pick a numeric column",
-            "This mark plots a measure, and the result has no numeric column to plot.",
+            "This mark plots a measure, and the result has no numeric column to plot.".into(),
         )
     } else {
         (
             "Pick a column to plot",
-            "No column is chosen on the Y axis.",
+            "No column is chosen on the Y axis.".into(),
         )
+    }
+}
+
+/// The one plural a count message needs.
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        "column"
+    } else {
+        "columns"
     }
 }
 
@@ -453,10 +669,7 @@ mod tests {
         ])
     }
 
-    fn read(
-        config: &ChartConfig,
-        roles: &Roles,
-    ) -> Result<ChartQuery, (&'static str, &'static str)> {
+    fn read(config: &ChartConfig, roles: &Roles) -> Result<ChartQuery, (&'static str, String)> {
         encode(&resolve(config, roles), roles)
     }
 
@@ -876,6 +1089,192 @@ mod tests {
             };
             assert_eq!(resolve(&config, &roles).log_y, expected, "{mark:?}");
         }
+    }
+
+    /// A result with the columns a band or box plot maps: one category, one time column,
+    /// and five measures the user's SQL computed.
+    fn stats() -> Roles {
+        Roles::of(&[
+            column("day", DataType::Date32),
+            column("region", DataType::Utf8),
+            column("med", DataType::Float64),
+            column("lo", DataType::Float64),
+            column("hi", DataType::Float64),
+            column("p25", DataType::Float64),
+            column("p75", DataType::Float64),
+        ])
+    }
+
+    /// **A heatmap's matrix is the pivot**: two categories and one measure, the series
+    /// channel required — an unset second category takes the first remaining one as its
+    /// default, because the matrix has no shape without it.
+    #[test]
+    fn a_heatmap_requires_two_categories_and_derives_the_second() {
+        let roles = sales();
+        let config = ChartConfig {
+            mark: Some(ChartMark::Heatmap),
+            ..ChartConfig::default()
+        };
+        let resolved = resolve(&config, &roles);
+        assert_eq!(resolved.x.as_deref(), Some("month"), "the default X");
+        assert_eq!(
+            resolved.series.as_deref(),
+            Some("country"),
+            "the required series derives"
+        );
+        assert_eq!(
+            read(&config, &roles),
+            Ok(ChartQuery::Rows {
+                x: Some("month".into()),
+                ys: vec!["revenue".into()],
+                series: Some("country".into()),
+                cap: ROWS_CAP,
+            })
+        );
+        assert!(series_required(ChartMark::Heatmap));
+        assert!(!allows_row_index(ChartMark::Heatmap));
+        assert_eq!(x_options(ChartMark::Heatmap, &roles), ["month", "country"]);
+
+        // One category cannot cross itself — the message names the shape.
+        let narrow = Roles::of(&[
+            column("country", DataType::Utf8),
+            column("revenue", DataType::Int64),
+        ]);
+        assert_eq!(
+            read(&config, &narrow).unwrap_err().0,
+            "Pick two category columns"
+        );
+    }
+
+    /// **The band roles resolve like every reference** — kept where the result answers
+    /// them, distinct from the Y and each other by construction, and dropped entirely for a
+    /// mark that does not read them.
+    #[test]
+    fn band_roles_resolve_distinct_and_only_for_the_marks_that_read_them() {
+        let roles = stats();
+        let config = ChartConfig {
+            mark: Some(ChartMark::Band),
+            ys: Some(vec!["med".into()]),
+            y_lo: Some("lo".into()),
+            y_hi: Some("hi".into()),
+            q1: Some("p25".into()),
+            q3: Some("p75".into()),
+            ..ChartConfig::default()
+        };
+        assert_eq!(
+            read(&config, &roles),
+            Ok(ChartQuery::Rows {
+                x: Some("day".into()),
+                ys: vec!["med".into(), "lo".into(), "hi".into()],
+                series: None,
+                cap: ROWS_CAP,
+            }),
+            "centre, lower, upper — the renderer reads by position"
+        );
+        let resolved = resolve(&config, &roles);
+        assert_eq!(resolved.q1, None, "a band has no quartiles");
+        assert_eq!(resolved.q3, None);
+
+        // A bound that collides with the Y is a stale config, not a band with one column
+        // as two edges — it falls back to unset and the message names the fix.
+        let collided = ChartConfig {
+            y_lo: Some("med".into()),
+            ..config.clone()
+        };
+        assert_eq!(resolve(&collided, &roles).y_lo, None);
+        let (title, body) = read(&collided, &roles).unwrap_err();
+        assert_eq!(title, "Pick the band's bounds");
+        assert!(body.contains("LOWER"), "{body}");
+
+        // A bar drops all four the way it drops a histogram's bins.
+        let bar = ChartConfig {
+            mark: Some(ChartMark::Bar),
+            ..config
+        };
+        let resolved = resolve(&bar, &roles);
+        assert_eq!(
+            (resolved.y_lo, resolved.y_hi, resolved.q1, resolved.q3),
+            (None, None, None, None)
+        );
+        assert_eq!(bar.y_lo.as_deref(), Some("lo"), "the config keeps them");
+    }
+
+    /// **A box plot encodes five fixed-order measures, the median first** — the sort's
+    /// `ByYDesc` reads the first series, so a box plot sorts by its median.
+    #[test]
+    fn a_box_plot_encodes_median_first_and_names_what_is_missing() {
+        let roles = stats();
+        let config = ChartConfig {
+            mark: Some(ChartMark::Box),
+            x: ChartX::Column("region".into()),
+            ys: Some(vec!["med".into()]),
+            y_lo: Some("lo".into()),
+            y_hi: Some("hi".into()),
+            q1: Some("p25".into()),
+            q3: Some("p75".into()),
+            ..ChartConfig::default()
+        };
+        assert_eq!(
+            read(&config, &roles),
+            Ok(ChartQuery::Rows {
+                x: Some("region".into()),
+                ys: vec![
+                    "med".into(),
+                    "lo".into(),
+                    "hi".into(),
+                    "p25".into(),
+                    "p75".into(),
+                ],
+                series: None,
+                cap: ROWS_CAP,
+            })
+        );
+
+        // Missing quartiles name the roles to fill.
+        let partial = ChartConfig {
+            q1: None,
+            ..config.clone()
+        };
+        let (title, body) = read(&partial, &roles).unwrap_err();
+        assert_eq!(title, "Pick the box's measures");
+        assert!(body.contains("percentile_cont"), "{body}");
+
+        // No category at all is the axis's problem, named first.
+        let no_cats = Roles::of(&[
+            column("med", DataType::Float64),
+            column("lo", DataType::Float64),
+        ]);
+        assert_eq!(
+            read(&config, &no_cats).unwrap_err().0,
+            "Pick a category column"
+        );
+    }
+
+    /// **The trendline resolves only for a scatter, and it never reaches the read.** The fit
+    /// is its own entry keyed by the two columns, so the same encoding with the toggle on and
+    /// off is one `ChartQuery` — toggling can never re-read the points.
+    #[test]
+    fn only_a_scatter_resolves_a_trendline_and_the_read_never_carries_it() {
+        let roles = sales();
+        for mark in ChartMark::ALL {
+            let config = ChartConfig {
+                mark: Some(mark),
+                trend: true,
+                ..ChartConfig::default()
+            };
+            assert_eq!(resolve(&config, &roles).trend, trendable(mark), "{mark:?}");
+            assert_eq!(trendable(mark), mark == ChartMark::Scatter, "{mark:?}");
+        }
+
+        let plain = ChartConfig {
+            mark: Some(ChartMark::Scatter),
+            ..ChartConfig::default()
+        };
+        let fitted = ChartConfig {
+            trend: true,
+            ..plain.clone()
+        };
+        assert_eq!(read(&plain, &roles), read(&fitted, &roles));
     }
 
     /// A measure on X is not also a default Y: an untouched config must never plot a column

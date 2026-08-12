@@ -81,6 +81,7 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             // A failed page read renders the error surface, which offers the assistant.
             r.provide_root_context(|| State::create(Chats::new(Pick::default())));
+            r.provide_root_context(|| State::create(None::<ShapeTarget>));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,
@@ -140,6 +141,7 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             // A failed page read renders the error surface, which offers the assistant.
             r.provide_root_context(|| State::create(Chats::new(Pick::default())));
+            r.provide_root_context(|| State::create(None::<ShapeTarget>));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,

@@ -41,7 +41,7 @@ use crate::apps::project::state::{
 use crate::apps::project::views::{
     ChatConfirm, ChatDrop, CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher,
     DropConfirm, DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget,
-    ProjectLoadFailed, ProjectLoading, RequestKeepers, Shell,
+    ProjectLoadFailed, ProjectLoading, RequestKeepers, ShapeDialog, ShapeTarget, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -721,6 +721,9 @@ impl Component for ProjectLoaded {
         // confirmed for. Its triggers are the catalog row menus and the inspector's scan card;
         // a re-scan never fills it (`ProfileActions::ask`).
         let profile_target = use_provide_context(|| State::create(None::<ProfileTarget>));
+        // The Shape panel's slot (Chart 09), on the same terms: the settled run the composer
+        // is open over. Its trigger is the results toolbar's Shape action, on both bodies.
+        let shape_target = use_provide_context(|| State::create(None::<ShapeTarget>));
         // The Configure-window request slot (P4-11) — the same shape as the two above, though
         // what it opens is a window rather than a dialog. Its triggers (a catalog row's
         // Configure, the TABLES section's `+`) set it and stop; `ConfigureLauncher` below holds
@@ -779,6 +782,12 @@ impl Component for ProjectLoaded {
             // question about work the user is about to start.
             .child(ProfileConfirm {
                 target: profile_target,
+            })
+            // The Shape panel (Chart 09) — a working modal, not a confirm, so it sits after
+            // every question that could outrank it and before the palette, whose barrier
+            // must not swallow this panel's keys while it is up.
+            .child(ShapeDialog {
+                target: shape_target,
             })
             // The command palette (P6-01). Under the three confirms, because a question about
             // work in flight outranks a search box, and above every feature, so while it is up

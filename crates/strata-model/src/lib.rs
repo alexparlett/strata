@@ -31,7 +31,7 @@ pub use catalog::{
 };
 pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
-    ChartSeries, ChartSort, ChartX,
+    ChartSeries, ChartSort, ChartX, Trend,
 };
 pub use connection::{ConnectionDef, GcsAuth, GcsStore, Provider, ProviderId, S3Auth, S3Store};
 pub use diagnostics::{Diagnostic, Severity};

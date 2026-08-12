@@ -75,13 +75,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   toggle (`TableDef::connection`, bucket-relative sources composed by `project::resolve_source`).
   W7-01 raised the workspace's effective MSRV to **rustc 1.94.1**. Spec:
   `docs/CONNECTIONS_SPEC.md`; settled record: `docs/reference/SETTLED_TASKS.md`.
-- **Chart view** ([`workstream-chart-view/`](workstream-chart-view/README.md), **Rz2**) — the
-  results Chart surface. **The core is built (00–04 ✅)**: the snapshot ordinal, the
-  renderer-first `Engine::chart` read, the plotters/Skia body, the encoder strip + `ChartConfig`,
-  the guardrails, Copy Image (08 ✅, which grew the fork's clipboard an image side) and the
-  interactivity pass (06 ✅ — bin count, legend hide/isolate, log value axis, crosshair). Open:
-  the remaining follow-ons (05, 07, 09–11 — presets, templates, shape panel, Tier B marks,
-  trendline). Spec: `docs/CHART_SPEC.md`.
+- **Chart view** (**Rz2**) — ✅ **done, folder removed**: the results Chart surface end to end —
+  the snapshot ordinal, the renderer-first `Engine::chart` read, the plotters/Skia body, the
+  encoder strip + `ChartConfig`, the guardrails, the interactivity pass, Copy Image (which grew
+  the fork's clipboard an image side), the Tier B marks (heatmap, error band, box plot), the
+  scatter trendline (`Engine::trend`) and the **Shape panel** (the aggregation composer, on the
+  new shared `Modal` base). Tasks 05/07 — the command-palette chart templates — were **cut**
+  (Alex, 2026-08-12): palette quick-chart entries are not wanted, and the Shape panel is the
+  constructive answer. Spec: `docs/CHART_SPEC.md`; settled record (including the cut):
+  `docs/reference/SETTLED_TASKS.md`.
 - **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
   (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
   `strata-core`; no UI surface of its own.
@@ -154,12 +156,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
-   trendline.
-2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
-   with the above.
+1. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
-(The **Assistant** workstream is closed: AS-07 landed 2026-08-11 and AS-03 closed behind it.)
+(The **Assistant** workstream is closed — AS-07 landed 2026-08-11 with AS-03 behind it — and so
+is the **Chart** workstream: 09/10/11 built and 05/07 cut, 2026-08-12.)
 
 ## Sourcing
 

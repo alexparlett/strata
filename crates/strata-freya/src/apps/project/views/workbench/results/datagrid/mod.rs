@@ -35,6 +35,7 @@ use super::selection::{SelCtl, Selection};
 use super::sort::SortState;
 use super::toolbar::ResultsToolbar;
 use crate::apps::export::ExportLaunch;
+use crate::apps::project::views::workbench::results::shape::ShapeTarget;
 use crate::components::divider::Divider;
 use crate::keymap::on_commands;
 use strata_model::TabId;
@@ -131,6 +132,9 @@ pub struct DataGrid {
     /// sort and page. `None` while the run hasn't settled rows, which is exactly when there is
     /// nothing to export.
     export: Option<ExportLaunch>,
+    /// What the toolbar's Shape press composes over (Chart 09). `None` on the same terms as
+    /// `export`: no settled rows, nothing to group.
+    shape: Option<ShapeTarget>,
     pub(crate) theme: Option<DataGridThemePartial>,
 }
 
@@ -153,6 +157,7 @@ impl DataGrid {
             row_nums: None,
             total: 0,
             export: None,
+            shape: None,
             theme: None,
         }
     }
@@ -172,6 +177,12 @@ impl DataGrid {
     /// What Download would export (see [`Self::export`]).
     pub fn export(mut self, export: Option<ExportLaunch>) -> Self {
         self.export = export;
+        self
+    }
+
+    /// What the Shape press composes over (see [`Self::shape`]).
+    pub fn shape(mut self, shape: Option<ShapeTarget>) -> Self {
+        self.shape = shape;
         self
     }
 }
@@ -492,11 +503,10 @@ impl Component for DataGrid {
                 Key::Named(NamedKey::Meta | NamedKey::Control) => meta.set(false),
                 _ => {}
             })
-            .child(ResultsToolbar::new(
-                self.tab,
-                self.find,
-                self.export.clone(),
-            ))
+            .child(
+                ResultsToolbar::new(self.tab, self.find, self.export.clone())
+                    .shape(self.shape.clone()),
+            )
             .child(scroll)
             // The open nested-cell modal (an overlay layer — it renders above everything).
             .maybe_child(

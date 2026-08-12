@@ -215,7 +215,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   to that fold because only the fold knows whether the def was written.
 - **A chart renders the result in result order; it computes nothing SQL can say.** `Engine::chart`
   is a projected, ordinal-ordered, capped read plus a long→wide pivot — no aggregation, no
-  bucketing, no imposed order (the histogram's binning is the one exception). Over a cap, or two
+  bucketing, no imposed order (the histogram's binning and the scatter trendline's `Engine::trend`
+  fit are the two sanctioned exceptions; the fit is its own read keyed by the two encoded
+  columns, so the toggle never re-reads the points). Over a cap, or two
   rows in one pivot cell, it refuses, naming the user's own `GROUP BY` as the fix. An engine-side aggregation pipeline
   was built and withdrawn; the reasons and the scan-order measurements are the full entry —
   re-litigate neither. A column's **chart role** comes from the Arrow `DataType` in `column_info`
@@ -233,10 +235,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   its existing shape**: the integration still provides a `Box<dyn ClipboardProvider>` into the
   root context. The trait is the fork's own now and covers images; copypasta was **replaced** by
   arboard rather than run beside it, because text and images are one clipboard.
-- **A chart refusal names its fix in prose, and V1 puts no control behind it.** The
+- **A chart refusal names its fix in prose, and the strip has no control behind it.** The
   *Aggregate in SQL* press was built and cut: sound mechanism, wrong surface (no tool puts it
-  among the encoders), and it stood in for the chart-side aggregation actually worth building.
-  Re-litigate the placement only with a surface that isn't the strip.
+  among the encoders). The placement was re-litigated with a surface that isn't the strip —
+  the **Shape panel** (Chart 09): a modal working panel off the results toolbar composing
+  visible SQL into a new unrun tab, its aggregate vocabulary UI-local text
+  (`results/shape/compose.rs`), never an engine type. The strip is still not the place.
 - **A chart config is intent; resolving it against the result is a read-time fallback, never a
   write.** Unset channels take the schema's defaults and a reference this result cannot answer
   falls back at read time (X is a three-state `ChartX`: "not chosen" and "the row index" are

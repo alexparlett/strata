@@ -68,10 +68,11 @@ use self::config::{encode, resolve, Roles};
 use self::paint::{ChartCanvas, Dress, Frame};
 use self::strip::{ControlStrip, LegendEntry};
 use super::find::FindState;
+use super::shape::{ShapeSeed, ShapeTarget};
 use super::toolbar::ResultsToolbar;
 use crate::apps::export::ExportLaunch;
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::ChartSpec;
+use crate::apps::project::query::{ChartSpec, TrendSpec};
 use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{R_1, R_3, SP_3, SP_4, SP_6};
@@ -119,6 +120,11 @@ define_theme!(
         series_8: Color,
         series_9: Color,
         series_10: Color,
+        /// The heatmap's sequential ramp (Chart 10): a cell's value blends the low end
+        /// toward the high. Distinct from the categorical series ramp on purpose — a
+        /// sequential scale reads as one hue getting stronger.
+        heat_low: Color,
+        heat_high: Color,
     }
 );
 
@@ -136,6 +142,9 @@ pub struct ChartView {
     snapshot: Option<SnapshotId>,
     /// The result's schema, which is what the encoding is derived from.
     columns: Vec<ColumnInfo>,
+    /// What the toolbar's Shape press composes over (Chart 09) — arriving unseeded; this
+    /// body seeds it from the resolved encoding, which only it knows.
+    shape: Option<ShapeTarget>,
 }
 
 impl ChartView {
@@ -152,7 +161,14 @@ impl ChartView {
             export,
             snapshot,
             columns,
+            shape: None,
         }
+    }
+
+    /// What the Shape press composes over (see the field).
+    pub fn shape(mut self, shape: Option<ShapeTarget>) -> Self {
+        self.shape = shape;
+        self
     }
 }
 
@@ -192,6 +208,37 @@ impl Component for ChartView {
         let readable = self.snapshot.is_some() && encoded.is_ok();
         let chart = use_query(spec.query(&engine, readable));
 
+        // The trendline is its own read (Chart 11), keyed by the two columns the scatter
+        // plots — deliberately never part of `ChartQuery`, so the toggle cannot re-read the
+        // points. Subscribed unconditionally (a hook behind a condition is a hook count that
+        // changes between renders) and enabled only once the points themselves **settled
+        // drawable**: the fit is uncapped — one aggregation over the whole snapshot — and a
+        // read that refused over the points cap must not still pay for a fit no overlay
+        // will ever paint. `encoding.trend` is already false for every other mark.
+        let points_settled = matches!(
+            &*chart.read().state(),
+            QueryStateData::Settled {
+                res: Ok(ChartData::Points(_)),
+                ..
+            }
+        );
+        let fit_wanted = readable && encoding.trend && points_settled;
+        let trend_spec = TrendSpec {
+            snapshot: self.snapshot.unwrap_or(SnapshotId(0)),
+            x: encoding.x.clone().unwrap_or_default(),
+            y: encoding.ys.first().cloned().unwrap_or_default(),
+        };
+        let trend = use_query(trend_spec.query(&engine, fit_wanted));
+        // `None` while loading as much as for a fit the data cannot support: the scatter
+        // draws without the line and the settle repaints it in — a fit is an overlay, never
+        // something the chart waits for.
+        let fit = fit_wanted
+            .then(|| match &*trend.read().state() {
+                QueryStateData::Settled { res: Ok(fit), .. } => *fit,
+                _ => None,
+            })
+            .flatten();
+
         let typography = scale();
         let dress = Dress::new(&theme, &typography);
         // What the plot's colours mean, resolved beside the body that draws them so the two
@@ -208,9 +255,7 @@ impl Component for ChartView {
                 theme.note_color,
             )
             .into(),
-            (_, Err((title, body))) => {
-                Notice::new(title, (*body).to_string(), theme.note_color).into()
-            }
+            (_, Err((title, body))) => Notice::new(title, body.clone(), theme.note_color).into(),
             (Some(_), Ok(_)) => match &*chart.read().state() {
                 QueryStateData::Pending | QueryStateData::Loading { .. } => rect()
                     .width(Size::fill())
@@ -266,6 +311,7 @@ impl Component for ChartView {
                                 data,
                                 mark: mark_now,
                                 log_y: encoding.log_y && fallback.is_none(),
+                                trend: fit,
                                 dress,
                             });
                             snap = Some(ChartCapture::new(Rc::clone(&frame), log));
@@ -296,7 +342,29 @@ impl Component for ChartView {
             .width(Size::fill())
             .height(Size::fill())
             .content(Content::Flex)
-            .child(ResultsToolbar::new(self.tab, self.find, self.export.clone()).copy_image(snap))
+            .child(
+                ResultsToolbar::new(self.tab, self.find, self.export.clone())
+                    .copy_image(snap)
+                    // The Shape press from the Chart view arrives seeded from the resolved
+                    // encoding — the cut press's "composed from the encoding" value, in the
+                    // panel's placement (Chart 09). Only real category columns seed groups:
+                    // a scatter's X is a measure, and a row-index X is no column at all.
+                    .shape(self.shape.clone().map(|target| {
+                        ShapeTarget {
+                            seed: Some(ShapeSeed {
+                                groups: encoding
+                                    .x
+                                    .iter()
+                                    .filter(|x| roles.categories().contains(x))
+                                    .chain(encoding.series.iter())
+                                    .cloned()
+                                    .collect(),
+                                measures: encoding.ys.clone(),
+                            }),
+                            ..target
+                        }
+                    })),
+            )
             .child(
                 rect()
                     .width(Size::fill())
@@ -393,6 +461,31 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
         ChartData::Table { series, .. } if series.is_empty() => {
             Some((NOTHING, "No column is being plotted.".to_string()))
         }
+        // The Tier B marks' own empty states (Chart 10): each draws nothing at all when the
+        // roles it reads are never complete, and a blank frame is indistinguishable from a
+        // bug. After the empty shapes — "this result has no rows" is still the truer thing
+        // to say about one.
+        ChartData::Table { series, .. }
+            if mark == ChartMark::Heatmap && marks::heat_bounds(series).is_none() =>
+        {
+            Some((NOTHING, "Every cell of this matrix is empty.".to_string()))
+        }
+        ChartData::Table { series, .. }
+            if mark == ChartMark::Band && !complete_rows(series, config::BAND_YS) =>
+        {
+            Some((
+                NOTHING,
+                "No row of this result has the centre and both bounds.".to_string(),
+            ))
+        }
+        ChartData::Table { series, .. }
+            if mark == ChartMark::Box && !complete_rows(series, config::BOX_YS) =>
+        {
+            Some((
+                NOTHING,
+                "No category of this result has all five measures.".to_string(),
+            ))
+        }
         // After the empty shapes, because "this result has no rows" is the truer thing to say
         // about a result with no rows — but before the pie's, since a hidden series is a state
         // the *user* put the chart into and the only one they can undo from the legend.
@@ -403,6 +496,25 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
         ChartData::Table { series, .. } if mark == ChartMark::Pie => pie_notice(series),
         _ => None,
     }
+}
+
+/// Whether any index has a present, finite value in **each** of the first `need` series —
+/// the "is there anything to draw" question for the marks that read several roles by
+/// position (a band's centre and bounds, a box plot's five).
+fn complete_rows(series: &[ChartSeries], need: usize) -> bool {
+    if series.len() < need {
+        return false;
+    }
+    let len = series[0].values.len();
+    (0..len).any(|i| {
+        series[..need].iter().all(|one| {
+            one.values
+                .get(i)
+                .copied()
+                .flatten()
+                .is_some_and(f64::is_finite)
+        })
+    })
 }
 
 /// Why the values this chart is drawing cannot sit on a logarithmic axis, or `None` when they
@@ -520,6 +632,49 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
                 hidden: false,
             })
             .collect();
+    }
+    // The heatmap's legend keys the **ramp**, not the series: the normalized scale's ends
+    // and middle, off [`marks::heat_bounds`] — the same walk the cells blend over, the
+    // `pie_slices` rule — so a swatch cannot name a stop no cell wears. Inert rows — a
+    // matrix row cannot be hidden.
+    if mark == ChartMark::Heatmap {
+        let Some((lo, hi)) = marks::heat_bounds(series) else {
+            return Vec::new();
+        };
+        let stops: Vec<(f32, f64)> = if hi > lo {
+            vec![(0., lo), (0.5, f64::midpoint(lo, hi)), (1., hi)]
+        } else {
+            vec![(0.5, lo)]
+        };
+        return stops
+            .into_iter()
+            .map(|(t, value)| LegendEntry {
+                swatch: dress.heat_at(t),
+                label: axis::readout(value),
+                detail: None,
+                series: None,
+                hidden: false,
+            })
+            .collect();
+    }
+    // A band is one statement in one hue — the centre named once, its bounds the same
+    // colour's tint. A row per bound would key colours nothing separate is wearing.
+    if mark == ChartMark::Band {
+        return series
+            .first()
+            .map(|one| LegendEntry {
+                swatch: dress.series(0),
+                label: one.name.clone(),
+                detail: None,
+                series: None,
+                hidden: false,
+            })
+            .into_iter()
+            .collect();
+    }
+    // A box plot draws in one colour by construction — the scatter and histogram rule.
+    if mark == ChartMark::Box {
+        return Vec::new();
     }
     let toggles = config::hideable(mark);
     series
@@ -703,6 +858,7 @@ mod tests {
                 Color::DARK_GRAY,
                 Color::LIGHT_GRAY,
             ],
+            heat: (Color::BLACK, Color::WHITE),
             label: ("mono".into(), 10.),
         }
     }

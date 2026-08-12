@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use freya::prelude::*;
 use strata_core::theme::Typography;
-use strata_model::{ChartData, ChartMark};
+use strata_model::{ChartData, ChartMark, Trend};
 
 use freya::components::Tooltip;
 
@@ -42,6 +42,11 @@ pub struct Dress {
     pub tick: Color,
     /// The categorical ramp, in order. A series past the tenth wraps around.
     pub series: [Color; 10],
+    /// The heatmap's sequential ramp — its low and high ends, blended through by a cell's
+    /// normalized value ([`Self::heat_at`]). Its own pair rather than two entries of the
+    /// categorical ramp, because a sequential scale has to read as *one hue getting
+    /// stronger* and the series ramp is built to do the opposite.
+    pub heat: (Color, Color),
     /// The type scale's `meta` role — the small mono the canvas labels its axes in.
     pub label: (String, f64),
 }
@@ -65,11 +70,17 @@ impl Dress {
                 theme.series_9,
                 theme.series_10,
             ],
+            heat: (theme.heat_low, theme.heat_high),
             label: (
                 typography.meta.family.clone(),
                 f64::from(typography.meta.size),
             ),
         }
+    }
+
+    /// The heatmap ramp's colour at `t` in `0..=1` — the low end moved toward the high.
+    pub fn heat_at(&self, t: f32) -> Color {
+        blend(self.heat.0, self.heat.1, t.clamp(0., 1.))
     }
 
     /// The ramp colour for series `i`, wrapping past the tenth.
@@ -114,6 +125,12 @@ pub struct Frame {
     /// (`config::log_axis`) and against the data (`mod.rs::log_fallback`), so the painter only
     /// has to obey it.
     pub log_y: bool,
+    /// The settled least-squares fit a scatter draws dashed over its points (Chart 11), or
+    /// `None` — toggle off, still loading, or a fit the data cannot support; the painter
+    /// cannot tell those apart and does not need to. In the frame rather than looked up at
+    /// paint time so Copy Image captures the trendline the screen is showing, by
+    /// construction.
+    pub trend: Option<Trend>,
     pub dress: Dress,
 }
 
@@ -565,6 +582,7 @@ mod tests {
                     ),
                     mark: ChartMark::Histogram,
                     log_y: false,
+                    trend: None,
                     dress: Dress::new(&theme, &scale()),
                 })))
         };
@@ -736,6 +754,7 @@ mod tests {
                     ),
                     mark: ChartMark::Histogram,
                     log_y: false,
+                    trend: None,
                     dress: Dress::new(&theme, &scale()),
                 })))
         };

@@ -32,11 +32,13 @@ use datafusion::arrow::compute::{cast as cast_array, concat_batches};
 use datafusion::arrow::datatypes::{DataType, Float64Type, Int64Type, TimeUnit};
 use datafusion::arrow::util::display::ArrayFormatter;
 use datafusion::common::{Column, ScalarValue};
-use datafusion::functions_aggregate::expr_fn::{count, max, min};
+use datafusion::functions_aggregate::expr_fn::{
+    count, max, min, regr_intercept, regr_r2, regr_slope,
+};
 use datafusion::prelude::{cast, col, floor, ident, lit, DataFrame, Expr, SessionContext};
 
 use strata_model::{
-    Axis, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries, SnapshotId,
+    Axis, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries, SnapshotId, Trend,
 };
 
 use super::query::{snapshot_name, CellFormat};
@@ -310,6 +312,66 @@ async fn raw(df: DataFrame, x: &str, y: &str, cap: usize) -> Result<ChartData, S
             .filter_map(|(x, y)| Some(ChartPoint { x: x?, y: y? }))
             .collect(),
     ))
+}
+
+// ---- the fitted overlay (scatter trendline — the one computed *overlay*, Chart 11) ----
+
+/// The least-squares fit over the finite `(x, y)` pairs of `snapshot` — one aggregation
+/// (`regr_slope` / `regr_intercept` / `regr_r2` plus a count), filtered to finite pairs the
+/// same way the scatter read is, so the fit covers exactly the points the plot draws.
+///
+/// `Ok(None)` is a fit the data cannot support — fewer than two pairs, or no x-variance, both
+/// of which DataFusion answers with NULL — and the overlay simply does not draw. Never an
+/// error the user has to dismiss: a scatter without a meaningful fit is still a scatter.
+pub async fn run_trend(
+    ctx: &SessionContext,
+    snapshot: SnapshotId,
+    x: &str,
+    y: &str,
+) -> Result<Option<Trend>, String> {
+    let df = ctx
+        .table(snapshot_name(snapshot).as_str())
+        .await
+        .map_err(|e| e.to_string())?;
+    plottable(&df, x)?;
+    plottable(&df, y)?;
+    let xv = cast(ident(x), DataType::Float64);
+    let yv = cast(ident(y), DataType::Float64);
+    let plan = df
+        .filter(finite(ident(x)).and(finite(ident(y))))
+        .map_err(|e| e.to_string())?
+        .aggregate(
+            vec![],
+            vec![
+                regr_slope(yv.clone(), xv.clone()),
+                regr_intercept(yv.clone(), xv.clone()),
+                regr_r2(yv, xv),
+                count(lit(1i64)),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    let batch = one_batch(plan).await?;
+    let slope = numbers(batch.column(0))?;
+    let intercept = numbers(batch.column(1))?;
+    let r2 = numbers(batch.column(2))?;
+    let n = integers(batch.column(3))?;
+    let (Some(Some(slope)), Some(Some(intercept)), Some(Some(r2)), Some(Some(n))) =
+        (slope.first(), intercept.first(), r2.first(), n.first())
+    else {
+        return Ok(None);
+    };
+    // A NULL answer is degeneracy DataFusion named; a non-finite one is degeneracy it did the
+    // arithmetic through (a column of near-`f64::MAX` values overflows the fit). Either way
+    // there is no line to draw.
+    if !(slope.is_finite() && intercept.is_finite() && r2.is_finite()) {
+        return Ok(None);
+    }
+    Ok(Some(Trend {
+        slope: *slope,
+        intercept: *intercept,
+        r2: *r2,
+        n: *n,
+    }))
 }
 
 // ---- the binned read (histogram — the one mark that computes) ----
@@ -1044,6 +1106,89 @@ mod tests {
         )
         .expect_err("the width is not a number");
         assert!(err.contains("'v'"), "{err}");
+    }
+
+    /// One fit of one fixture, the way [`read`] drives one chart.
+    fn trend_of(columns: Vec<(&str, ArrayRef)>, x: &str, y: &str) -> Result<Option<Trend>, String> {
+        let batch = RecordBatch::try_from_iter(columns).expect("fixture batch");
+        let ctx = SessionContext::new();
+        ctx.register_batch(snapshot_name(SnapshotId(1)).as_str(), batch)
+            .expect("register fixture");
+        on_runtime(run_trend(&ctx, SnapshotId(1), x, y))
+    }
+
+    /// **The fit covers exactly the points the scatter draws**: finite pairs only, and the
+    /// numbers are the regression's own.
+    #[test]
+    fn a_trend_fits_the_finite_pairs_and_skips_the_rest() {
+        let fit = trend_of(
+            vec![
+                (
+                    "x",
+                    floats(vec![Some(1.), Some(2.), Some(3.), Some(f64::NAN), None]),
+                ),
+                (
+                    "y",
+                    floats(vec![Some(3.), Some(5.), Some(7.), Some(9.), Some(11.)]),
+                ),
+            ],
+            "x",
+            "y",
+        )
+        .expect("trend")
+        .expect("three clean pairs fit a line");
+        assert!((fit.slope - 2.).abs() < 1e-9, "{fit:?}");
+        assert!((fit.intercept - 1.).abs() < 1e-9, "{fit:?}");
+        assert!((fit.r2 - 1.).abs() < 1e-9, "{fit:?}");
+        assert_eq!(fit.n, 3, "the NaN and the NULL are not points");
+    }
+
+    /// **Degenerate data draws no line and raises no error** — fewer than two points, or no
+    /// x-variance, both of which DataFusion answers with NULL.
+    #[test]
+    fn a_fit_the_data_cannot_support_is_absent_rather_than_an_error() {
+        let one = trend_of(
+            vec![("x", floats(vec![Some(1.)])), ("y", floats(vec![Some(2.)]))],
+            "x",
+            "y",
+        )
+        .expect("trend");
+        assert_eq!(one, None, "one point is no line");
+
+        let flat = trend_of(
+            vec![
+                ("x", floats(vec![Some(5.), Some(5.), Some(5.)])),
+                ("y", floats(vec![Some(1.), Some(2.), Some(3.)])),
+            ],
+            "x",
+            "y",
+        )
+        .expect("trend");
+        assert_eq!(flat, None, "zero x-variance is no line");
+
+        let empty = trend_of(
+            vec![("x", floats(vec![None])), ("y", floats(vec![None]))],
+            "x",
+            "y",
+        )
+        .expect("trend");
+        assert_eq!(empty, None);
+    }
+
+    /// A trend over a text column is refused by type, in this module's words — the same
+    /// answer the scatter read gives.
+    #[test]
+    fn a_trend_over_text_is_refused_by_type() {
+        let err = trend_of(
+            vec![
+                ("name", strs(vec![Some("a")])),
+                ("amount", ints(vec![Some(1)])),
+            ],
+            "name",
+            "amount",
+        )
+        .expect_err("text has no fit");
+        assert!(err.contains("measure"), "{err}");
     }
 
     /// Nothing to bin is a histogram of nothing, not a histogram of zeroes.

@@ -157,9 +157,16 @@ src/components/                  shared component library
                                  project the same way
   badge.rs                       tinted label pill (PART · HOTSPOT · ANALYZE · dtype).
                                  NOT Freya's `Chip` — that's a selectable, focusable control
-  dialog.rs                      the modal dialog shell — every centred confirm is header · body ·
-                                 footer on this one card; callers supply only what differs (the
-                                 header's icon, tone and title run, the body, the buttons)
+  dialog.rs                      the confirm dialog shell — every centred confirm is header ·
+                                 body · footer on this one 420px card; callers supply only what
+                                 differs (the header's icon, tone and title run, the body, the
+                                 buttons). Enter-confirm lives on the card, in the slot the
+                                 modal base leaves open
+  modal.rs                       the **modal base** (Chart 09): open/closed and nothing else —
+                                 overlay layer, backdrop, Esc and outside-press as a close
+                                 request, the key barrier (Enter deliberately left to the
+                                 surface's own card). `Dialog` wraps its confirm card in this;
+                                 the Shape panel wraps its own working card in the same base
   keycap.rs                      a **key cap** (`"keycap"` token group): Settings ▸ Keymap's
                                  chords and the palette's shortcut hints have to look like the
                                  same kind of object, and the colours were the `settings` theme's
@@ -718,6 +725,16 @@ src/apps/project/                the project window (Valin-shaped)
                                  that same body onto an offscreen surface, then the clipboard;
                                  preview.rs the headless PNG harness (the plan view's), because
                                  a chart's correctness is *visual*
+        shape/                   the **Shape panel** (Chart 09): compose.rs the pure
+                                 form-to-SQL composer (UI-local `SqlAgg`/`Stride` vocabulary,
+                                 subquery form, ordinal `GROUP BY`, an always-emitted
+                                 `ORDER BY`, idents through the engine's `quote_col`); mod.rs
+                                 the `ShapeTarget` slot vocabulary and the working card on the
+                                 shared `Modal` base — group rows (a stride `Select` per time
+                                 column, sub-day only for a clock), measure rows, the row-count
+                                 toggle and the order pill, confirmed into a **new unrun tab**
+                                 via `open_named`. Triggered from the results toolbar on both
+                                 bodies; the chart body seeds it from the resolved encoding
         explain_plan/            the EXPLAIN plan view (P2-05, EXPLAIN_PLAN_SPEC v3): mod.rs the
                                  `explain_plan` theme + the shell (Physical/Logical segments ·
                                  ANALYZE badge · Raw/Tree toggle over the tree or the raw text —

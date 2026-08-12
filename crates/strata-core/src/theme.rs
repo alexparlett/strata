@@ -297,6 +297,11 @@ roles! {
     Chart9 => "chart.9",
     /// Series 10.
     Chart10 => "chart.10",
+    /// The heatmap ramp's low end (Chart 10) — the sequential scale a matrix cell's value
+    /// blends along, deliberately its own pair rather than two of the categorical ramp.
+    ChartHeatLow => "chart.heat.low",
+    /// The heatmap ramp's high end.
+    ChartHeatHigh => "chart.heat.high",
 
     // ---- Entity kinds: catalog icons + completion kinds, one reconciled set -----------------
     /// A table.
@@ -858,7 +863,7 @@ mod tests {
         }
         assert_eq!(
             Role::COUNT,
-            101,
+            103,
             "the vocabulary is a deliberate, counted set"
         );
     }

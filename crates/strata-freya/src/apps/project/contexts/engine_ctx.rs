@@ -13,7 +13,7 @@ use std::sync::Arc;
 use freya::query::Captured;
 use strata_core::engine::{Engine, SnapshotPin};
 
-use strata_model::{ChartData, ChartQuery, SnapshotId, TabId};
+use strata_model::{ChartData, ChartQuery, SnapshotId, TabId, Trend};
 
 /// A window's engine handle for context — an `Arc` over the shared [`Engine`], cheap to
 /// `Clone`, provided once via `use_provide_context`. Derefs to the engine, so callers
@@ -81,6 +81,18 @@ impl EngineCtx {
     /// pin keeps the engine alive), and deref only ever hands out `&Engine`.
     pub async fn chart(&self, snapshot: SnapshotId, q: ChartQuery) -> Result<ChartData, String> {
         self.eng.chart(snapshot, q).await
+    }
+
+    /// The scatter's least-squares fit (Chart 11), behind `FetchTrend` — not reachable
+    /// through `Deref` for the same reason [`Self::chart`] isn't: [`Engine::trend`] takes
+    /// `&Arc<Engine>`.
+    pub async fn trend(
+        &self,
+        snapshot: SnapshotId,
+        x: String,
+        y: String,
+    ) -> Result<Option<Trend>, String> {
+        self.eng.trend(snapshot, x, y).await
     }
 }
 

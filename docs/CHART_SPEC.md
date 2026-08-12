@@ -298,13 +298,25 @@ surface of its own — none beside the encoders, where it was the one control in
 is the thing actually worth revisiting; a shortcut that makes a gap tolerable is a reason not to
 close it. Do not re-add it to the strip (`chart/strip.rs` records the same rule at the surface).
 
+**The placement was re-litigated with a surface of its own, and that surface is built**
+(Chart 09, settled in planning 2026-08-07 and shipped 2026-08-12): the **Shape panel** — a
+modal working panel off the results toolbar, on both bodies — is the chart-side aggregation
+UX the cut press was standing in for, in the placement the precedents use. It composes
+visible SQL (group columns with `date_bin` strides, per-measure aggregates, an explicit
+`ORDER BY`) and opens it **unrun** in a new tab; from the Chart view it arrives seeded from
+the resolved encoding. The aggregate vocabulary is UI-local text rendering
+(`results/shape/compose.rs`) and enters no engine type; the refusal overlays still keep no
+control behind them, and the strip is still not the place.
+
 What survived that cut on its own merits is the **instant/clock role split** (§3), because
 chart-side bucketing needs exactly that distinction and it belongs where the Arrow `DataType`
-still is.
+still is — and the Shape panel is now what reads it (a clock column is offered only sub-day
+strides).
 
-**No trendlines or regression presets.** A scatter draws raw points only. SQL already computes
-an honest fit (`regr_slope`/`regr_intercept`/`regr_r2` — `docs/CHART_FUNCTIONS.md`); a computed
-overlay would be the one exception beyond the histogram and has not been built.
+**No regression presets in the strip's mark set.** A scatter draws raw points, plus the one
+sanctioned computed overlay: the least-squares trendline of §10, built engine-side as
+Chart 11 records there. Nothing else fits a curve for the user; the SQL `regr_*` family
+(`docs/CHART_FUNCTIONS.md`) is the general mechanism.
 
 ## 9. Rendering
 
@@ -410,3 +422,14 @@ p25/p50/p75 columns the user computes with `percentile_cont(…) WITHIN GROUP`; 
 `y`, `y_lo`, `y_hi`. The chart has no aggregation of its own, so shaping the result is done in
 the query — `docs/CHART_FUNCTIONS.md` is the practical reference for which SQL buys which chart
 shape.
+
+**The scatter trendline is the one sanctioned exception, and it is built** (Chart 11, settled
+in planning 2026-08-07). A dashed least-squares line with an R² label is computed engine-side
+(`Engine::trend`, one `regr_slope`/`regr_intercept`/`regr_r2` aggregation over the snapshot's
+finite pairs) rather than templated into SQL, because the overlay is a function of the
+**encoding** — which two columns the scatter currently plots — not of the query: templating it
+would rewrite the user's SQL on every encoder gesture, which §6's "config is intent" forbids,
+and would smuggle two scalars through a rows read by duplicating them onto every row. The fit
+is its own read (`TrendSpec`, keyed `(snapshot, x, y)` — numbers only, no display config), so
+toggling the overlay never re-reads the points; degenerate data (fewer than two pairs, no
+x-variance) is an absent overlay, never an error. The engine computes nothing else new.

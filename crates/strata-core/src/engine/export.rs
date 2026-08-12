@@ -301,7 +301,10 @@ fn select_sql(snap: &str, spec: &ExportSpec, schema: &Schema, ord: Option<&str>)
 /// lowercase — right for catalog names (that fold is their registered identity), wrong for
 /// a result column, whose name is exactly what the user's query produced. (Replaces the
 /// old local escape that the `ORDER BY` used; same rendering, one name.)
-fn quote_col(name: impl AsRef<str>) -> String {
+///
+/// `pub` for the Shape panel (Chart 09), which composes SQL over result columns on exactly
+/// these terms.
+pub fn quote_col(name: impl AsRef<str>) -> String {
     format!("\"{}\"", name.as_ref().replace('"', "\"\""))
 }
 
