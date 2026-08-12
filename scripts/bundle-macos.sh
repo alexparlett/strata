@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build Strata into a macOS .app and a DMG you can hand to a tester.
+# Build Strata into a macOS .app, a DMG you can hand to a tester, and the zip the in-app updater
+# installs from.
 #
 # This is the whole pipeline. CI calls this script rather than reimplementing it in YAML, so
 # `./scripts/bundle-macos.sh` on a laptop and a tagged release build produce the same artifact by
@@ -8,7 +9,7 @@
 #
 #   ./scripts/bundle-macos.sh                    # universal, for testers
 #   ./scripts/bundle-macos.sh --arch arm64       # this Mac only, for a quick local check
-#   ./scripts/bundle-macos.sh --no-dmg           # stop at the .app
+#   ./scripts/bundle-macos.sh --no-dmg           # stop after the update archive
 #
 # Signing is graduated, and each rung is what the machine can actually honour:
 #
@@ -115,6 +116,13 @@ fail() {
 # is a hard stop rather than a warning.
 BUNDLE_ID="$(sed -n 's/^pub const APP_ID: &str = "\(.*\)";$/\1/p' "$BUNDLE_ID_SRC" | head -1)"
 [[ -n "$BUNDLE_ID" ]] || fail "could not read APP_ID out of $BUNDLE_ID_SRC"
+
+# The Apple team the app expects its own updates to be signed by, out of the constant next to
+# APP_ID. Read here for the same reason and on the same terms: it is the app's identity, the app
+# has to see it at runtime, and an empty result means the constant moved. Empty would also make the
+# cross-check in the Signing section compare against nothing and pass, so it is a hard stop.
+TEAM_ID="$(sed -n 's/^pub const TEAM_ID: &str = "\(.*\)";$/\1/p' "$BUNDLE_ID_SRC" | head -1)"
+[[ -n "$TEAM_ID" ]] || fail "could not read TEAM_ID out of $BUNDLE_ID_SRC"
 
 # The crate version is the single source of truth for what a build calls itself, so a release is a
 # version bump plus a tag and never a number typed into two places. Read it through version.sh
@@ -281,6 +289,21 @@ fi
 
 codesign --verify --deep --strict "$APP" || fail "the signature did not verify"
 
+# The team the bundle is signed by is what the updater checks a downloaded bundle against, so it
+# has to be the team compiled into that bundle. An app signed by a team its own updater refuses is
+# a release that can never update itself, and nothing after this point can notice - the signature
+# is valid, the notarization succeeds, and the failure only appears on a tester's machine one
+# version later.
+#
+# Read back out of the signature rather than parsed out of the identity string: codesign accepts a
+# certificate hash as an identity too, and the signature is what is actually true either way.
+# `codesign -d` prints to stderr, hence the redirect.
+if [[ "$SIGNED_REAL" -eq 1 ]]; then
+  SIGNED_TEAM="$(codesign -dvvv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -1)"
+  [[ "$SIGNED_TEAM" == "$TEAM_ID" ]] || fail "signed by team '$SIGNED_TEAM', but $BUNDLE_ID_SRC compiles in TEAM_ID '$TEAM_ID' - the updater only installs a bundle signed by that team, so this build could never update itself"
+  note "team: $SIGNED_TEAM"
+fi
+
 # ---------------------------------------------------------------------------------------------
 # Notarize
 # ---------------------------------------------------------------------------------------------
@@ -318,7 +341,13 @@ NOTARIZED=0
 # there is a real signature to submit.
 if [[ "$HAVE_NOTARY" -ne 0 && "$SIGNED_REAL" -eq 1 ]]; then
   step "Notarizing"
-  NOTARY_ZIP="$DIST/$APP_NAME-notarize.zip"
+  # Deliberately not in $DIST. The release workflow attaches every zip in that directory, and this
+  # one is a transient the submission needs rather than an artifact. A rejected submission or a
+  # failed staple aborts the build under `set -e` before the cleanup below, and nothing empties
+  # $DIST between runs - so a zip left there would ride the next successful build onto the release
+  # page as a second, stale asset.
+  NOTARY_DIR="$(mktemp -d)"
+  NOTARY_ZIP="$NOTARY_DIR/$APP_NAME-notarize.zip"
   # ditto, not zip: it is the only archiver that preserves the bundle's symlinks and extended
   # attributes, and a bundle that lost them is rejected.
   ditto -c -k --keepParent "$APP" "$NOTARY_ZIP"
@@ -327,13 +356,36 @@ if [[ "$HAVE_NOTARY" -ne 0 && "$SIGNED_REAL" -eq 1 ]]; then
   # Stapling writes the ticket into the bundle so it validates offline - without it a tester with
   # no network, or Apple having a bad day, still gets blocked.
   xcrun stapler staple "$APP"
-  rm -f "$NOTARY_ZIP"
+  rm -rf "$NOTARY_DIR"
   NOTARIZED=1
 elif [[ "$HAVE_NOTARY" -ne 0 ]]; then
   note "notary credentials are set but the build is only ad-hoc signed - skipping notarization"
 else
   note "no notary credentials - skipping notarization"
 fi
+
+# ---------------------------------------------------------------------------------------------
+# Update archive
+# ---------------------------------------------------------------------------------------------
+
+# The DMG is the first-install artifact - it carries the drag-to-Applications gesture, which is a
+# thing a person does. This zip is the programmatic one: it is what the in-app updater downloads,
+# verifies and swaps in (UP-02), and its `.app.zip` suffix is the contract the updater's asset
+# selection keys on.
+#
+# ditto, not zip, for the same reason the notarize submission uses it: it is the only archiver that
+# round-trips a signed bundle's symlinks and extended attributes, and a bundle that lost them fails
+# the strict codesign verify the updater runs before it installs anything.
+#
+# Built *after* stapling, so the archived bundle carries the notarization ticket and validates
+# offline. It is built on an unsigned run all the same - the artifact set is the same shape on
+# every rung, and a build that quietly stopped producing the update artifact would only be noticed
+# by an updater that had nothing to fetch.
+step "Building the update archive"
+ZIP="$DIST/$APP_NAME-$VERSION-$ARCH_MODE.app.zip"
+rm -f "$ZIP"
+ditto -c -k --keepParent "$APP" "$ZIP"
+note "size: $(du -h "$ZIP" | cut -f1)"
 
 # ---------------------------------------------------------------------------------------------
 # DMG
@@ -372,6 +424,7 @@ fi
 
 step "Done"
 note "app: $APP"
+note "update archive: $ZIP"
 [[ -n "$DMG" ]] && note "dmg: $DMG"
 
 if [[ "$NOTARIZED" -eq 1 ]]; then
