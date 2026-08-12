@@ -83,7 +83,7 @@ impl Component for ChatConfirm {
         let target = slot.read().clone();
 
         let chats = use_consume::<ChatsCtx>();
-        let mut pending = use_state(|| false);
+        let mut pending = use_state(|| None::<ChatDrop>);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let root = project.peek().root.clone();
         let report = use_report();
@@ -98,17 +98,17 @@ impl Component for ChatConfirm {
             "cancel_button"
         );
 
-        // The work itself, off the pressed element's scope. It reads the target the press left
-        // rather than taking it as an argument, because by the time this runs the slot is clear.
-        let armed = target.clone();
+        // The work itself, off the pressed element's scope.
+        //
+        // **The target rides in the state, never captured.** `use_side_effect` builds its closure
+        // **once** (`use_hook(|| Effect::create(..))`) and re-runs it when a state it `read()`s
+        // changes — so a target cloned out of this render would be frozen at the first one, which
+        // is `None`, and the effect would return every time without doing anything.
         use_side_effect(move || {
-            if !*pending.read() {
-                return;
-            }
-            pending.set(false);
-            let Some(target) = armed.clone() else {
+            let Some(target) = pending.read().clone() else {
                 return;
             };
+            pending.set(None);
             let fresh = seed_pick(&config.read().settings.ai);
             match &target {
                 ChatDrop::One { key, .. } => discard(chats, root.clone(), report, *key, fresh),
@@ -145,11 +145,12 @@ impl Component for ChatConfirm {
         // Spawned from there the delete was dropped before its first poll, so the row vanished
         // and the file stayed. The effect below runs in this component's scope, which outlives
         // the dialog's contents.
+        let armed = target.clone();
         let mut confirm = move || {
-            pending.set(true);
+            pending.set(Some(armed.clone()));
             slot.set(None);
         };
-        let mut key_confirm = confirm;
+        let mut key_confirm = confirm.clone();
 
         let body = Prose::new(target.body())
             .color(roles.get(Role::TextMuted))

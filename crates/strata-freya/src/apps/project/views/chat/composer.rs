@@ -40,7 +40,7 @@ use strata_core::ai::{Ai, Effort, ProviderKind};
 use super::mention::{AttachPicker, MentionPicker, Mentions};
 use super::ChatTheme;
 use crate::apps::project::state::{
-    blocked, send, store, use_report, Anchor, Chan, ChatsCtx, Pick, ProjChan, ProjectState,
+    blocked, send, store, use_report, Anchor, Chan, ChatId, ChatsCtx, Pick, ProjChan, ProjectState,
     SessionState, Stores,
 };
 use crate::components::icon::{Icon, IconName};
@@ -140,6 +140,19 @@ impl Component for Composer {
         let stores = Stores { session, project };
         let report = use_report();
         let root = project.read().root.clone();
+        // Where a stopped turn's write is performed: this component's scope, which outlives the
+        // Stop button the press itself removes. The conversation rides **in the state** rather
+        // than being captured, because `use_side_effect` builds its closure once and a captured
+        // id would freeze at whichever conversation was open on the first render.
+        let mut stopping = use_state(|| None::<ChatId>);
+        use_side_effect(move || {
+            let Some(target) = *stopping.read() else {
+                return;
+            };
+            stopping.set(None);
+            let root = root.clone();
+            spawn(async move { store(&root, chats, report, target).await });
+        });
         let mut fire = {
             let ai = ai.clone();
             move || {
@@ -277,10 +290,16 @@ impl Component for Composer {
                             // cancelled, and a conversation whose last turn was stopped is
                             // exactly as much the user's record as one that answered —
                             // cancelled is never failed, on disk as much as on screen.
+                            //
+                            // The press only records which conversation to write; the effect
+                            // above performs it. Neither `spawn_forever` nor `spawn` works here:
+                            // the first is root-scoped and would write this subtree's state after
+                            // an await, and the second binds to *this button*, which `stop`
+                            // unmounts by flipping the composer back to Send — cancelling the
+                            // write before its first poll.
                             .on_press(move |_| {
                                 chats.write().stop(id);
-                                let root = root.clone();
-                                spawn_forever(async move { store(&root, chats, report, id).await });
+                                stopping.set(Some(id));
                             }),
                         false => ToolButton::new(IconName::Play, "Send")
                             .color(roles.get(Role::Accent))
@@ -332,7 +351,7 @@ impl Component for Composer {
 /// the words are.
 #[derive(PartialEq)]
 struct Chips {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pinned: Vec<Anchor>,
     theme: ChatTheme,
 }
@@ -377,7 +396,7 @@ impl Component for Chips {
 /// and the three controls read each other's picks.
 #[derive(PartialEq)]
 struct Footer {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     ai: Ai,
     theme: ChatTheme,
@@ -476,7 +495,7 @@ fn rungs(pick: &Pick) -> Option<&'static [Effort]> {
 /// for.
 #[derive(PartialEq)]
 struct ProviderPicker {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     ai: Ai,
     theme: ChatTheme,
@@ -547,7 +566,7 @@ impl Component for ProviderPicker {
 /// **The model**, from what the picked provider reports serving.
 #[derive(PartialEq)]
 struct ModelPicker {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     ai: Ai,
     theme: ChatTheme,
@@ -716,7 +735,7 @@ fn picker_trigger(
 /// The reasoning rung, offered only where the model has one.
 #[derive(PartialEq)]
 struct EffortPicker {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     rungs: &'static [Effort],
     theme: ChatTheme,
