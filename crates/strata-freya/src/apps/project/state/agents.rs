@@ -64,13 +64,18 @@ const RUNS_PER_SESSION: usize = 50;
 /// take a session that is *working* — see [`Agents::opened`].
 const SESSIONS_PER_AGENT: usize = 20;
 
-/// One query an agent ran.
+/// One run an agent dispatched, and what became of it.
+///
+/// **The SQL is not here.** It was, for the pane that rendered it; with no surface left, a
+/// trail of query text is memory the window holds and nothing can ever read. What the two
+/// consumers below need is the sequence number a settle names its run by, and the outcome
+/// [`is_running`](QuerySession::is_running) reads.
 #[derive(Clone, PartialEq, Debug)]
 pub struct AgentRun {
-    /// Append order — the row's list key, so a run arriving above another doesn't shuffle
-    /// the rest through each other's scopes. Per satellite, which is all a key needs to be.
+    /// Append order — and the key a settle matches on, so an agent that presses on before a
+    /// slow query finishes cannot have the older outcome stamped onto the newer run. Per
+    /// satellite, which is all a key needs to be.
     pub seq: u64,
-    pub sql: String,
     pub outcome: RunOutcome,
 }
 
@@ -271,7 +276,7 @@ impl Agents {
 
     /// A run has been dispatched into `session`. Ignored when the agent holds no such
     /// session, which the caller has already refused — so this cannot invent a row.
-    pub fn run_started(&mut self, agent: AgentId, session: QuerySessionId, sql: String) {
+    pub fn run_started(&mut self, agent: AgentId, session: QuerySessionId) {
         self.next_seq += 1;
         let seq = self.next_seq;
         let Some(held) = self.session_mut(agent, session) else {
@@ -279,7 +284,6 @@ impl Agents {
         };
         held.runs.push_front(AgentRun {
             seq,
-            sql,
             outcome: RunOutcome::Running,
         });
         while held.runs.len() > RUNS_PER_SESSION {
@@ -422,7 +426,7 @@ mod tests {
         let session = opened(&mut agents, &who);
 
         let seq = agents.next_run();
-        agents.run_started(who.id, session, "SELECT 1".into());
+        agents.run_started(who.id, session);
         let listed = agents.held().next().unwrap();
         assert_eq!(listed.sessions[0].runs.len(), 1);
         assert_eq!(listed.sessions[0].runs[0].outcome, RunOutcome::Running);
@@ -459,9 +463,9 @@ mod tests {
         let session = opened(&mut agents, &who);
 
         let first = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         let second = agents.next_run();
-        agents.run_started(who.id, session, "SELECT fast".into());
+        agents.run_started(who.id, session);
         assert_ne!(first, second);
 
         agents.run_settled(
@@ -481,8 +485,10 @@ mod tests {
             RunOutcome::Stopped("superseded by a newer run".into()),
         );
 
+        // Newest first, so the second run is the head — and it wears the outcome its own
+        // `seq` was settled with, not the one that landed after it.
         let runs = &agents.held().next().unwrap().sessions[0].runs;
-        assert_eq!(runs[0].sql, "SELECT fast");
+        assert_eq!(runs[0].seq, second);
         assert_eq!(
             runs[0].outcome,
             RunOutcome::Rows {
@@ -491,6 +497,7 @@ mod tests {
                 elapsed_ms: 2
             }
         );
+        assert_eq!(runs[1].seq, first);
         assert!(matches!(runs[1].outcome, RunOutcome::Stopped(_)));
     }
 
@@ -508,7 +515,7 @@ mod tests {
         assert_eq!(agents.closed(mine.id, not_ours), Closed::NoSuchSession);
 
         // And a write against a session the agent does not hold records nothing.
-        agents.run_started(mine.id, not_ours, "SELECT 1".into());
+        agents.run_started(mine.id, not_ours);
         let listed: Vec<usize> = agents.held().map(|a| a.sessions[0].runs.len()).collect();
         assert_eq!(listed, vec![0, 0]);
     }
@@ -542,7 +549,7 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let seq = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
 
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
         // Closed to the agent from this moment: nothing more can be dispatched into it, and
@@ -578,9 +585,9 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let slow = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         let fast = agents.next_run();
-        agents.run_started(who.id, session, "SELECT fast".into());
+        agents.run_started(who.id, session);
 
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
         assert_eq!(
@@ -654,7 +661,7 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let seq = agents.next_run();
-        agents.run_started(who.id, session, "SELECT 1".into());
+        agents.run_started(who.id, session);
 
         assert_eq!(
             agents.run_settled(who.id, session, seq, RunOutcome::Plan { analyze: false }),
@@ -675,7 +682,7 @@ mod tests {
         let mut agents = Agents::default();
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
 
         assert_eq!(agents.gone(who.id), vec![session]);
@@ -691,9 +698,9 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let slow = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         let fast = agents.next_run();
-        agents.run_started(who.id, session, "SELECT fast".into());
+        agents.run_started(who.id, session);
 
         agents.run_settled(who.id, session, fast, RunOutcome::Plan { analyze: false });
         let listed = agents.held().next().unwrap();
@@ -736,12 +743,17 @@ mod tests {
         let mut agents = Agents::default();
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
-        for i in 0..RUNS_PER_SESSION + 3 {
-            agents.run_started(who.id, session, format!("SELECT {i}"));
+        let mut dispatched = Vec::new();
+        for _ in 0..RUNS_PER_SESSION + 3 {
+            dispatched.push(agents.next_run());
+            agents.run_started(who.id, session);
         }
         let runs = &agents.held().next().unwrap().sessions[0].runs;
         assert_eq!(runs.len(), RUNS_PER_SESSION);
-        assert_eq!(runs[0].sql, format!("SELECT {}", RUNS_PER_SESSION + 2));
+        // Oldest first out, and the trail is newest-first: the head is the last run
+        // dispatched, and the three over the cap are the ones missing from the tail.
+        assert_eq!(runs[0].seq, *dispatched.last().unwrap());
+        assert_eq!(runs[RUNS_PER_SESSION - 1].seq, dispatched[3]);
 
         // Settle the **whole** trail first: eviction deliberately skips a session that is
         // still working (see `the_session_cap_skips_a_session_that_is_working`), and this
@@ -774,7 +786,7 @@ mod tests {
         let mut agents = Agents::default();
         let who = agent("claude-code");
         let busy = opened(&mut agents, &who);
-        agents.run_started(who.id, busy, "SELECT slow".into());
+        agents.run_started(who.id, busy);
         let mut idle = Vec::new();
         for _ in 1..SESSIONS_PER_AGENT {
             idle.push(opened(&mut agents, &who));
@@ -799,7 +811,7 @@ mod tests {
         let mut held = Vec::new();
         for _ in 0..SESSIONS_PER_AGENT {
             let session = opened(&mut agents, &who);
-            agents.run_started(who.id, session, "SELECT slow".into());
+            agents.run_started(who.id, session);
             held.push(session);
         }
 

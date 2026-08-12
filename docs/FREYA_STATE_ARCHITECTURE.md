@@ -552,10 +552,11 @@ one reader. (Panel **layout** is not among them — it is a `SessionState` field
 
 - **`AgentsCtx = State<Agents>`** (`state/agents.rs`, AA-03b) — which agents are working in this
   project: per connected agent, its query sessions, and per session a capped newest-first trail
-  of runs. Ephemeral, never persisted, and capped both ways (runs per session, sessions per
-  agent). **Nothing renders it** — the Agents pane that did was removed, so it is the window's
-  bookkeeping alone: the ownership check, the session cap, the teardown a retraction owes, and
-  the close confirm's "whose work is this".
+  of runs — a sequence number and an outcome each, and **not** the SQL, which the removed pane
+  was the only reader of. Ephemeral, never persisted, and capped both ways (runs per session,
+  sessions per agent). **Nothing renders it**: it is the window's bookkeeping alone — the
+  ownership check, the session cap, the teardown a retraction owes, and the close confirm's
+  "whose work is this".
 
   It is a satellite for the same reason the log is, plus one of its own: an agent owns **no
   tabs**, so there is nothing of it in `SessionSnapshot` to exclude and reopening a project

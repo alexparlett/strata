@@ -770,20 +770,22 @@ Things that must not regress. Each was fought for once already.
   **Nothing lists agents at all.** The Agents pane (the sidebar tool pane, its rail toggle and
   its live-agent badge) and the header's agent-access status dot were removed on request: the MCP
   server still runs, and the app shows neither who is connected nor whether it is listening. A
-  server that cannot bind reports through `tracing` and nowhere else, and `state::agents` is now
-  pure bookkeeping with no reader on screen.
+  server that cannot bind reports through `tracing` and nowhere else. `state::agents` is now pure
+  bookkeeping with no reader on screen, so it holds **only what the bookkeeping reads** — a run
+  is a `seq` and an outcome, and the query text does not travel `AgentAsk::RunStarting` at all.
+  A record kept for a surface must go when the surface does, or it is retention nothing can
+  justify: the dispatch still gets the SQL, because that was never this channel's to carry.
 
-  The satellite draws the line in three places and nowhere else. `Agents::agents` is the pane's
-  listing (and `len`, behind the rail badge) — the exclusion itself. `Agents::held` is the
-  unfiltered iterator, which `list_query_sessions` answers from (an agent must see its own
-  sessions) and which the event log attributes from (the assistant is out of the *listing* only,
-  never out of the record). `Agents::sessions_of` is the same line drawn for the close confirm,
-  which asks whose work it is about to destroy and must say "the assistant" rather than "an
-  agent" — pointing at a pane that says nobody is connected is the failure that arm exists to
-  fix. The ownership check and the session cap are inside the satellite and read the field
-  directly, so they never had a filtered view to avoid. And for the same reason the pane omits
-  it, the log says the assistant **stopped** rather than disconnected: it never dialled in, so
-  its "connection" is the pane's own mount.
+  The satellite draws the line in **one** place. `Agents::held` is the unfiltered iterator,
+  which `list_query_sessions` answers from (an agent must see its own sessions) and which the
+  event log attributes from (the assistant is never out of the record). `Agents::sessions_of`
+  is the line itself, for the close confirm, which asks whose work it is about to destroy and
+  must say "the assistant" rather than "an agent" — sending the user looking for a client that
+  is not connected is the failure that arm exists to fix. The pane's own `agents` / `len`
+  projection went with the pane. The ownership check and the session cap are inside the
+  satellite and read the field directly, so they never had a filtered view to avoid. And for
+  the same reason, the log says the assistant **stopped** rather than disconnected: it never
+  dialled in, so its "connection" is its own mount in the window.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

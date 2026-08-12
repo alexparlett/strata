@@ -178,7 +178,6 @@ fn answer(
         AgentAsk::RunStarting {
             agent,
             session,
-            sql,
             reply,
         } => {
             if !agents.read().holds(agent, session) {
@@ -188,7 +187,7 @@ fn answer(
             // Read before the write, because the caller has to be told which run to name
             // when it settles.
             let seq = agents.read().next_run();
-            agents.write().run_started(agent, session, sql);
+            agents.write().run_started(agent, session);
             let _ = reply.send(Ok(seq));
         }
     }

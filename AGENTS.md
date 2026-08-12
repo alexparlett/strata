@@ -387,7 +387,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   one place the line is drawn — for the close confirm, which has to name the assistant as itself.
   Keying on the identity would let any MCP client claim its way across that line. **No surface
   lists agents**: the Agents pane and the header's status dot were removed, so the MCP server is
-  present and unshown, and a server that cannot bind reports only through tracing.
+  present and unshown, and a server that cannot bind reports only through tracing. The satellite
+  therefore holds **only what the bookkeeping reads** — a run is a `seq` and an outcome, and the
+  SQL travels to the engine and not through `AgentAsk::RunStarting`.
 
 **Stores and state**
 
