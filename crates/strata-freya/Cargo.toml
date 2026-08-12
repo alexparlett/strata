@@ -1,6 +1,6 @@
 [package]
 name = "strata-freya"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Strata's Freya (Skia/native) frontend — the Freya-port target. Rides the shared strata-core alongside the transitional strata-dioxus app."
 license = "MIT"

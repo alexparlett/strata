@@ -8557,7 +8557,7 @@ dependencies = [
 
 [[package]]
 name = "strata-freya"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-io",
  "datafusion",
