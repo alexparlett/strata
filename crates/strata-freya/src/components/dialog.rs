@@ -242,18 +242,6 @@ impl Component for Dialog {
             .overflow(Overflow::Clip)
             // Announced as a dialog rather than an anonymous group, like Freya's own `Popup`.
             .a11y_role(AccessibilityRole::Dialog)
-            // Enter is the *dialog's* semantic, not the modal's — the base leaves the key to
-            // fall through to the card exactly so this handler can own it. Consumed either
-            // way: a dialog with no single obvious action still swallows Enter (see
-            // `on_confirm`).
-            .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                if matches!(&e.key, Key::Named(NamedKey::Enter)) {
-                    if let Some(confirm) = &confirm {
-                        confirm.call(());
-                    }
-                    e.prevent_default();
-                }
-            })
             .vertical()
             .child(
                 rect()
@@ -269,7 +257,22 @@ impl Component for Dialog {
                     .color(roles.get(Role::Border))
                     .into_element()
             }))
-            .maybe_child(strip);
+            .maybe_child(strip)
+            // Enter is the *dialog's* semantic, not the modal's — the base leaves the key to
+            // fall through exactly so this handler can own it. On a node **after** the body
+            // in pre-order, so a control inside it that consumed Enter first (a `Select`
+            // toggling its list) wins. Consumed either way: a dialog with no single obvious
+            // action still swallows Enter (see `on_confirm`).
+            .child(
+                rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
+                    if matches!(&e.key, Key::Named(NamedKey::Enter)) {
+                        if let Some(confirm) = &confirm {
+                            confirm.call(());
+                        }
+                        e.prevent_default();
+                    }
+                }),
+            );
 
         // The modal semantics — overlay, key barrier, backdrop, Esc-as-close-request — are
         // the shared base's (`components::modal`), so a confirm and a working panel cannot

@@ -324,7 +324,7 @@ impl ControlStrip {
     }
 
     /// The four band-role encoders (Chart 10), in strip order — Q1, Q3, LOWER, UPPER —
-    /// each `None` where the mark does not read the role or nothing is left to offer.
+    /// each `None` where the mark does not read the role.
     fn band_encoders(&self, mark: ChartMark) -> [Option<Encoder>; 4] {
         let bounds = reads_bounds(mark);
         let quartiles = reads_quartiles(mark);
@@ -333,65 +333,63 @@ impl ControlStrip {
         } = &self.encoding;
         [
             quartiles
-                .then(|| self.measure_role("Q1", q1, [q3, y_lo, y_hi], |c, name| c.q1 = Some(name)))
-                .flatten()
+                .then(|| self.measure_role("Q1", q1, [q3, y_lo, y_hi], |c, name| c.q1 = name))
                 .map(|encoder| encoder.key("q1")),
             quartiles
-                .then(|| self.measure_role("Q3", q3, [q1, y_lo, y_hi], |c, name| c.q3 = Some(name)))
-                .flatten()
+                .then(|| self.measure_role("Q3", q3, [q1, y_lo, y_hi], |c, name| c.q3 = name))
                 .map(|encoder| encoder.key("q3")),
             bounds
-                .then(|| {
-                    self.measure_role("LOWER", y_lo, [y_hi, q1, q3], |c, name| {
-                        c.y_lo = Some(name);
-                    })
-                })
-                .flatten()
+                .then(|| self.measure_role("LOWER", y_lo, [y_hi, q1, q3], |c, name| c.y_lo = name))
                 .map(|encoder| encoder.key("lower")),
             bounds
-                .then(|| {
-                    self.measure_role("UPPER", y_hi, [y_lo, q1, q3], |c, name| {
-                        c.y_hi = Some(name);
-                    })
-                })
-                .flatten()
+                .then(|| self.measure_role("UPPER", y_hi, [y_lo, q1, q3], |c, name| c.y_hi = name))
                 .map(|encoder| encoder.key("upper")),
         ]
     }
 
-    /// One measure-role encoder (LOWER / UPPER / Q1 / Q3, Chart 10): the measures this
-    /// result offers, minus the Y and the other band roles — a bound that collides with
-    /// another edge is unreachable, not reported. `None` when nothing is left to offer,
-    /// which drops the section (the X/series conditional pattern).
+    /// One measure-role encoder (LOWER / UPPER / Q1 / Q3, Chart 10): a "None" row to clear
+    /// the role, then the measures this result offers, minus the Y and the other band roles
+    /// — a bound that collides with another edge is unreachable, not reported. The None row
+    /// is what keeps the trigger's own "None" reachable: without it a mispick could only be
+    /// undone by switching marks, a state the control shows but cannot return to. It also
+    /// means the row never empties, so the section stays on the strip while its refusal
+    /// names it.
     fn measure_role(
         &self,
         label: &'static str,
         current: &Option<String>,
         others: [&Option<String>; 3],
-        set: fn(&mut ChartConfig, String),
-    ) -> Option<Encoder> {
-        let options: Vec<Choice> = y_options(&self.roles)
-            .into_iter()
-            .filter(|name| self.encoding.ys.first().map(String::as_str) != Some(name.as_str()))
-            .filter(|name| {
-                !others
-                    .iter()
-                    .any(|other| other.as_deref() == Some(name.as_str()))
-            })
-            .map(|name| Choice {
-                selected: current.as_deref() == Some(name.as_str()),
-                next: self.with(|c| set(c, name.clone())),
-                label: name,
-                keep_open: false,
-            })
-            .collect();
-        (!options.is_empty()).then(|| Encoder {
+        set: fn(&mut ChartConfig, Option<String>),
+    ) -> Encoder {
+        let mut options = vec![Choice {
+            label: NO_SERIES.to_string(),
+            selected: current.is_none(),
+            next: self.with(|c| set(c, None)),
+            keep_open: false,
+        }];
+        options.extend(
+            y_options(&self.roles)
+                .into_iter()
+                .filter(|name| self.encoding.ys.first().map(String::as_str) != Some(name.as_str()))
+                .filter(|name| {
+                    !others
+                        .iter()
+                        .any(|other| other.as_deref() == Some(name.as_str()))
+                })
+                .map(|name| Choice {
+                    selected: current.as_deref() == Some(name.as_str()),
+                    next: self.with(|c| set(c, Some(name.clone()))),
+                    label: name,
+                    keep_open: false,
+                }),
+        );
+        Encoder {
             tab: self.tab,
             label,
             current: current.clone().unwrap_or_else(|| NO_SERIES.to_string()),
             options,
             key: DiffKey::None,
-        })
+        }
     }
 }
 

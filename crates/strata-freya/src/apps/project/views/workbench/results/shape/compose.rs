@@ -173,10 +173,13 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     if !form.has_output() {
         return None;
     }
-    let inner = sql.trim();
-    let inner = inner.strip_suffix(';').map_or(inner, str::trim_end);
+    let inner = statement_text(sql);
 
     let mut select: Vec<String> = Vec::new();
+    // Every output name emitted so far — what a later alias must stay distinct from.
+    // DataFusion refuses duplicate projection names, and a query this panel hands over has
+    // to run.
+    let mut named: Vec<String> = Vec::new();
     let mut group_count = 0usize;
     for group in &form.groups {
         let col = quote_col(&group.column);
@@ -184,6 +187,7 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
             GroupBy::Off => {}
             GroupBy::Exact => {
                 select.push(col);
+                named.push(group.column.clone());
                 group_count += 1;
             }
             GroupBy::Binned(stride) => {
@@ -201,6 +205,7 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
                     "date_bin(INTERVAL '{}', {value}) AS {col}",
                     stride.interval()
                 ));
+                named.push(group.column.clone());
                 group_count += 1;
             }
         }
@@ -209,29 +214,31 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     let mut measure_count = 0usize;
     for measure in &form.measures {
         if let Some(agg) = measure.agg {
+            let alias = unique(format!("{}_{}", measure.column, agg.func()), &mut named);
             select.push(format!(
                 "{}({}) AS {}",
                 agg.func(),
                 quote_col(&measure.column),
-                quote_col(format!("{}_{}", measure.column, agg.func()))
+                quote_col(alias)
             ));
             measure_count += 1;
         }
     }
     if form.count_rows {
-        select.push(format!("count(*) AS {}", quote_col("rows")));
+        let alias = unique("rows".to_string(), &mut named);
+        select.push(format!("count(*) AS {}", quote_col(alias)));
         measure_count += 1;
     }
 
     let list = select.join(",\n    ");
     let mut out = format!("SELECT\n    {list}\nFROM (\n{inner}\n) AS q");
     if group_count > 0 {
-        out.push_str(&format!("\nGROUP BY {}", ordinals(1, group_count)));
+        out.push_str(&format!("\nGROUP BY {}", ordinals(group_count)));
     }
     // Always emitted: a `GROUP BY` has no output order. Each arm falls back to the columns
     // the form actually produced, so the clause always names a real ordinal.
     let order = match form.order {
-        ShapeOrder::ByGroup if group_count > 0 => ordinals(1, group_count),
+        ShapeOrder::ByGroup if group_count > 0 => ordinals(group_count),
         ShapeOrder::ByMeasureDesc if measure_count > 0 => format!("{} DESC", group_count + 1),
         _ => "1".to_string(),
     };
@@ -239,12 +246,92 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     Some(out)
 }
 
-/// `from..from + n` as the comma list an ordinal clause takes.
-fn ordinals(from: usize, n: usize) -> String {
-    (from..from + n)
+/// `1..=n` as the comma list an ordinal clause takes.
+fn ordinals(n: usize) -> String {
+    (1..=n)
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// `name`, made distinct from every output name already emitted: a collision takes the
+/// first free `_2`, `_3`, … suffix. DataFusion refuses a projection with duplicate names
+/// (`count(*) AS "rows"` beside a group column named `rows`), and a query this panel hands
+/// over has to run.
+fn unique(name: String, named: &mut Vec<String>) -> String {
+    let mut candidate = name.clone();
+    let mut n = 2usize;
+    while named.contains(&candidate) {
+        candidate = format!("{name}_{n}");
+        n += 1;
+    }
+    named.push(candidate.clone());
+    candidate
+}
+
+/// The statement's own text: `sql` up to the last character that is not whitespace, a
+/// comment or a semicolon.
+///
+/// The Run's gate proves the buffer holds **one** statement, but what may legally follow it
+/// — semicolons and comments in any mix (`SELECT 1; -- note`, `SELECT 1;;`) — survives into
+/// the text the panel wraps, and an interior `;` fails the parenthesized subquery. A forward
+/// scan that honours string literals, quoted identifiers and both comment forms finds the
+/// true end; scanning backwards cannot, because a quote can make a tail read as a comment
+/// (`SELECT '-- not a comment'`).
+fn statement_text(sql: &str) -> &str {
+    let bytes = sql.as_bytes();
+    // One past the last byte that belongs to the statement itself.
+    let mut end = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            // A string literal or a quoted identifier, its doubled-quote escape included.
+            // Everything inside belongs to the statement, an unterminated one to the end.
+            quote @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == quote {
+                        if bytes.get(i + 1) == Some(&quote) {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i = (i + 1).min(bytes.len());
+                end = i;
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            // Block comments nest, per sqlparser's own tokenizer.
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                let mut depth = 1usize;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b';' => i += 1,
+            c if c.is_ascii_whitespace() => i += 1,
+            _ => {
+                i += 1;
+                end = i;
+            }
+        }
+    }
+    sql[..end].trim_start()
 }
 
 #[cfg(test)]
@@ -343,21 +430,38 @@ mod tests {
         assert!(sql.ends_with("ORDER BY 1"), "{sql}");
     }
 
-    /// The terminator is shed and the inner SQL keeps its own lines, so a trailing line
-    /// comment cannot swallow the closing paren.
+    /// **The tail after the statement is shed entire** — semicolons and comments in any mix,
+    /// which the Run's own parser accepts around a single statement — because an interior
+    /// `;` fails the parenthesized subquery. The scan honours strings and quoted
+    /// identifiers, so a quote cannot make a tail read as a comment, and everything
+    /// *inside* the statement (its own comments included) keeps its lines.
     #[test]
-    fn the_inner_sql_sheds_its_terminator_and_keeps_its_own_lines() {
-        let form = ShapeForm {
+    fn the_tail_after_the_statement_is_shed_and_strings_are_honoured() {
+        let count_only = ShapeForm {
             groups: vec![],
             measures: vec![],
             count_rows: true,
             order: ShapeOrder::ByGroup,
         };
-        let sql = compose(&form, "SELECT 1 AS n -- trailing note\n;").expect("has output");
-        assert!(
-            sql.contains("FROM (\nSELECT 1 AS n -- trailing note\n) AS q"),
-            "{sql}"
-        );
+        for (sql, inner) in [
+            ("SELECT 1 AS n;", "SELECT 1 AS n"),
+            ("SELECT 1 AS n; -- checked", "SELECT 1 AS n"),
+            ("SELECT 1 AS n;;", "SELECT 1 AS n"),
+            ("SELECT 1 AS n -- note\n;", "SELECT 1 AS n"),
+            ("SELECT 1 AS n; /* tail\n over lines */", "SELECT 1 AS n"),
+            (
+                "SELECT 1 AS n -- inline\n+ 2 AS m",
+                "SELECT 1 AS n -- inline\n+ 2 AS m",
+            ),
+            ("SELECT '--; not a comment'", "SELECT '--; not a comment'"),
+            ("SELECT \"odd;name\" FROM t;", "SELECT \"odd;name\" FROM t"),
+        ] {
+            let out = compose(&count_only, sql).expect("has output");
+            assert!(
+                out.contains(&format!("FROM (\n{inner}\n) AS q")),
+                "{sql:?} composed {out}"
+            );
+        }
 
         // A quoted name with an embedded quote survives the round trip doubled.
         let quoted = ShapeForm {
@@ -368,6 +472,25 @@ mod tests {
         };
         let sql = compose(&quoted, "SELECT 1").expect("has output");
         assert!(sql.contains("\"a\"\"b\""), "{sql}");
+    }
+
+    /// **A colliding output name takes the first free suffix** rather than composing a
+    /// projection DataFusion refuses — a group column named `rows` beside the row count,
+    /// or one named exactly like a measure's alias.
+    #[test]
+    fn a_colliding_alias_is_suffixed_rather_than_refused_downstream() {
+        let form = ShapeForm {
+            groups: vec![
+                group("rows", ChartRole::Dimension, GroupBy::Exact),
+                group("amount_sum", ChartRole::Dimension, GroupBy::Exact),
+            ],
+            measures: vec![measure("amount", Some(SqlAgg::Sum))],
+            count_rows: true,
+            order: ShapeOrder::ByGroup,
+        };
+        let sql = compose(&form, "SELECT 1").expect("has output");
+        assert!(sql.contains("sum(\"amount\") AS \"amount_sum_2\""), "{sql}");
+        assert!(sql.contains("count(*) AS \"rows_2\""), "{sql}");
     }
 
     /// Nothing picked is no query at all — the confirm's enabled state, not a `SELECT FROM`.

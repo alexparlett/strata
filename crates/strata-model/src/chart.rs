@@ -21,7 +21,7 @@
 //! asked for, as opposed to what the engine was asked and what it answered. It holds
 //! intent, never a resolved read — see its own note.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Which mark the chart draws (`docs/CHART_SPEC.md` §4).
 ///
@@ -185,15 +185,15 @@ pub struct ChartConfig {
 /// its default mark, and everything else restores untouched.
 fn mark_compat<'de, D>(de: D) -> Result<Option<ChartMark>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
-    use serde::de::value::StrDeserializer;
+    use serde::de::value::{Error as PlainError, StrDeserializer};
     use serde::de::IntoDeserializer;
 
     let Some(raw) = Option::<String>::deserialize(de)? else {
         return Ok(None);
     };
-    let named: StrDeserializer<serde::de::value::Error> = raw.as_str().into_deserializer();
+    let named: StrDeserializer<PlainError> = raw.as_str().into_deserializer();
     Ok(ChartMark::deserialize(named).ok())
 }
 

@@ -224,8 +224,8 @@ impl Component for ResultsToolbar {
             );
 
         // The row folds tail-first once the pane is too narrow to hold it (P5-06,
-        // `components::toolbar`): Copy Image where there is one, then Export, then Clear, then
-        // Reload.
+        // `components::toolbar`): Copy Image where there is one, then Export, then Ask, then
+        // Clear, then Reload, then Shape — Find last of all.
         //
         // **The Table/Chart toggle is the leading run**, so it never folds — it decides what the
         // whole body below is, and it flexes to push the tool cluster to the far end exactly as

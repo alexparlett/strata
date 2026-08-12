@@ -210,9 +210,18 @@ impl Component for ChartView {
         // The trendline is its own read (Chart 11), keyed by the two columns the scatter
         // plots — deliberately never part of `ChartQuery`, so the toggle cannot re-read the
         // points. Subscribed unconditionally (a hook behind a condition is a hook count that
-        // changes between renders) and enabled only when a scatter with the toggle on has a
-        // settled encoding to fit; `encoding.trend` is already false for every other mark.
-        let fit_wanted = readable && encoding.trend;
+        // changes between renders) and enabled only once the points themselves **settled
+        // drawable**: the fit is uncapped — one aggregation over the whole snapshot — and a
+        // read that refused over the points cap must not still pay for a fit no overlay
+        // will ever paint. `encoding.trend` is already false for every other mark.
+        let points_settled = matches!(
+            &*chart.read().state(),
+            QueryStateData::Settled {
+                res: Ok(ChartData::Points(_)),
+                ..
+            }
+        );
+        let fit_wanted = readable && encoding.trend && points_settled;
         let trend_spec = TrendSpec {
             snapshot: self.snapshot.unwrap_or(SnapshotId(0)),
             x: encoding.x.clone().unwrap_or_default(),
@@ -245,9 +254,7 @@ impl Component for ChartView {
                 theme.note_color,
             )
             .into(),
-            (_, Err((title, body))) => {
-                Notice::new(title, (*body).to_string(), theme.note_color).into()
-            }
+            (_, Err((title, body))) => Notice::new(title, body.clone(), theme.note_color).into(),
             (Some(_), Ok(_)) => match &*chart.read().state() {
                 QueryStateData::Pending | QueryStateData::Loading { .. } => rect()
                     .width(Size::fill())
@@ -458,21 +465,21 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
         // bug. After the empty shapes — "this result has no rows" is still the truer thing
         // to say about one.
         ChartData::Table { series, .. }
-            if mark == ChartMark::Heatmap
-                && series
-                    .iter()
-                    .flat_map(|one| one.values.iter().flatten())
-                    .all(|v| !v.is_finite()) =>
+            if mark == ChartMark::Heatmap && marks::heat_bounds(series).is_none() =>
         {
             Some((NOTHING, "Every cell of this matrix is empty.".to_string()))
         }
-        ChartData::Table { series, .. } if mark == ChartMark::Band && !complete_rows(series, 3) => {
+        ChartData::Table { series, .. }
+            if mark == ChartMark::Band && !complete_rows(series, config::BAND_YS) =>
+        {
             Some((
                 NOTHING,
                 "No row of this result has the centre and both bounds.".to_string(),
             ))
         }
-        ChartData::Table { series, .. } if mark == ChartMark::Box && !complete_rows(series, 5) => {
+        ChartData::Table { series, .. }
+            if mark == ChartMark::Box && !complete_rows(series, config::BOX_YS) =>
+        {
             Some((
                 NOTHING,
                 "No category of this result has all five measures.".to_string(),
@@ -626,21 +633,13 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
             .collect();
     }
     // The heatmap's legend keys the **ramp**, not the series: the normalized scale's ends
-    // and middle, from the same min/max the cells blend over. Inert rows — a matrix row
-    // cannot be hidden.
+    // and middle, off [`marks::heat_bounds`] — the same walk the cells blend over, the
+    // `pie_slices` rule — so a swatch cannot name a stop no cell wears. Inert rows — a
+    // matrix row cannot be hidden.
     if mark == ChartMark::Heatmap {
-        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for value in series
-            .iter()
-            .flat_map(|one| one.values.iter().flatten())
-            .filter(|v| v.is_finite())
-        {
-            lo = lo.min(*value);
-            hi = hi.max(*value);
-        }
-        if !(lo.is_finite() && hi.is_finite()) {
+        let Some((lo, hi)) = marks::heat_bounds(series) else {
             return Vec::new();
-        }
+        };
         let stops: Vec<(f32, f64)> = if hi > lo {
             vec![(0., lo), (0.5, f64::midpoint(lo, hi)), (1., hi)]
         } else {

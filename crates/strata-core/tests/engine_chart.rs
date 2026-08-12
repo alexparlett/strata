@@ -194,8 +194,8 @@ async fn a_histogram_bins_the_snapshot() {
     assert_eq!(bins.iter().map(|b| b.count).sum::<u64>(), 3);
 }
 
-/// A chart of a retired snapshot fails like any other read of one — the caller tells that
-/// from a real fault by asking `Engine::snapshot_live`, never by matching prose.
+/// The trendline is the engine's own fit over the spooled snapshot, and degenerate data is
+/// an absent overlay rather than an error the user must dismiss (Chart 11).
 #[tokio::test]
 async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     let eng = Arc::new(Engine::new(Default::default()));
@@ -224,6 +224,8 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     );
 }
 
+/// A chart of a retired snapshot fails like any other read of one — the caller tells that
+/// from a real fault by asking `Engine::snapshot_live`, never by matching prose.
 #[tokio::test]
 async fn charting_a_retired_snapshot_fails_like_any_other_read() {
     let eng = Arc::new(Engine::new(Default::default()));

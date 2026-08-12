@@ -8,15 +8,18 @@
 //! its own proportions (the Shape panel) wraps its own card in the same base — so "how a
 //! modal behaves" is written once and "what a modal looks like" stays each surface's.
 //!
-//! ## The barrier, and the one key it leaves alone
+//! ## The barrier, and the two keys it leaves alone
 //!
 //! Same-name global listeners fire in **pre-order**, and a prevented key stops the listeners
 //! after it (the fork's guarantee — `keymap`'s module note). This wrapper is the card's
 //! ancestor, so anything it consumes never reaches the card: the barrier therefore consumes
-//! every key **except Enter**, which is deliberately left to fall through to the surface's
-//! own card handler — the Dialog confirms on it; a surface with no confirm should consume it
-//! there instead. Everything below the modal in document order still sees nothing, because
-//! whichever of the two consumed the key did so before the features' listeners run.
+//! every key **except Esc and Enter**. Esc is the modal's own close request, answered by a
+//! listener placed *after* the card subtree, so a control inside the card that consumed it
+//! first — an open `Select` closing its list — wins over the close. Enter is deliberately
+//! left to the surface's own handler, which should also sit after its controls — the Dialog
+//! confirms on it; a surface with no confirm should consume it there instead. Everything
+//! below the modal in document order still sees nothing, because whichever listener consumed
+//! the key did so before the features' listeners run.
 //!
 //! The barrier's one honest limit is unchanged from the dialog it came from: `KeyDown`
 //! outranks `GlobalKeyDown`, so a *focused* element (the SQL editor) still sees keys first.
@@ -72,25 +75,20 @@ impl Component for Modal {
             // content (the same wrapper `Popup` puts around `PopupBackground`).
             .layer(Layer::Overlay)
             .position(Position::new_global())
+            // The barrier only: Esc and Enter pass this ancestor untouched — each is
+            // answered *after* the card in document order (Esc by the trailing listener
+            // below, Enter by the surface's own), so a control inside the card that
+            // consumed the key first wins. An open `Select` closing its list on Esc is the
+            // case this ordering exists for: consumed there, the close request never fires
+            // and the surface keeps its state.
             .on_global_key_down({
                 let barrier = self.barrier;
                 move |e: Event<KeyboardEventData>| {
-                    match &e.key {
-                        Key::Named(NamedKey::Escape) => {
-                            if let Some(close) = &close {
-                                close.call(());
-                            }
-                        }
-                        // Deliberately not consumed here: this node is the card's ancestor
-                        // and fires first, so a consumed Enter would never reach the
-                        // surface's own confirm handler — see the module note.
-                        Key::Named(NamedKey::Enter) => return,
-                        _ if !barrier => return,
-                        _ => {}
+                    if !matches!(&e.key, Key::Named(NamedKey::Escape | NamedKey::Enter)) && barrier
+                    {
+                        // Consumed — that is what makes a modal surface modal.
+                        e.prevent_default();
                     }
-                    // Consumed either way — that is what makes a modal surface modal, and
-                    // Esc its own in both modes.
-                    e.prevent_default();
                 }
             })
             .child(PopupBackground::new(
@@ -102,5 +100,17 @@ impl Component for Modal {
                 },
                 roles.get(Role::Backdrop),
             ))
+            // The close request, after the whole card subtree in pre-order — see the
+            // barrier's note. Consumed in both barrier modes: Esc is the modal's own.
+            .child(
+                rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
+                    if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                        if let Some(close) = &close {
+                            close.call(());
+                        }
+                        e.prevent_default();
+                    }
+                }),
+            )
     }
 }

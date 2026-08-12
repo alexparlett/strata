@@ -19,6 +19,8 @@
 
 mod compose;
 
+use std::collections::HashSet;
+
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -79,67 +81,64 @@ impl Component for ShapeDialog {
         let Some(target) = self.target.read().clone() else {
             return rect().into_element();
         };
-        // Keyed by the run it is about, so reopening over a *new* run starts a fresh form
-        // while reopening over the same one keeps the user's picks.
-        let key = format!("{:?}:{}", target.tab, target.sql);
         ShapeCard {
             target,
             slot: self.target,
-            key: DiffKey::None,
         }
-        .key(key)
         .into_element()
     }
 }
 
-/// The card itself — its own component so the form state reseeds with the key above.
+/// The card itself — its own component so the form state lives exactly as long as the panel
+/// is open: closing clears the slot, which unmounts this card and drops its state, so every
+/// open seeds a fresh form from the target. The target cannot change *under* a mounted card
+/// (its only writer is the toolbar press, unreachable beneath the modal's backdrop), so no
+/// key is needed to tell two targets apart.
 #[derive(PartialEq)]
 struct ShapeCard {
     target: ShapeTarget,
     slot: State<Option<ShapeTarget>>,
-    key: DiffKey,
-}
-
-impl KeyExt for ShapeCard {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
 }
 
 /// The form as the target seeds it: every groupable column (grouped where the seed names
 /// it), every measure (summed where the seed names it), row count off, ordered by group.
+///
+/// Groupable is the **complement** — everything that is not a measure and not unchartable —
+/// the same answer `Roles::categories` gives the chart strip, so a new role groups in both
+/// places or neither. A duplicate result name (a join settling two `id` columns) gets one
+/// row: composed SQL addresses columns by name, and the subquery alias resolves a repeated
+/// name to its *first* column, so a second row would be a pick that silently reads the
+/// wrong data.
 fn seeded(target: &ShapeTarget) -> ShapeForm {
     let seed_groups: &[String] = target.seed.as_ref().map_or(&[], |s| &s.groups);
     let seed_measures: &[String] = target.seed.as_ref().map_or(&[], |s| &s.measures);
-    ShapeForm {
-        groups: target
-            .columns
-            .iter()
-            .filter(|c| {
-                matches!(
-                    c.role,
-                    ChartRole::Dimension | ChartRole::Instant | ChartRole::Clock
-                )
-            })
-            .map(|c| GroupPick {
-                column: c.name.clone(),
-                role: c.role,
-                by: if seed_groups.contains(&c.name) {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut groups = Vec::new();
+    let mut measures = Vec::new();
+    for column in &target.columns {
+        if column.role == ChartRole::Other || !seen.insert(column.name.as_str()) {
+            continue;
+        }
+        if column.role == ChartRole::Measure {
+            measures.push(MeasurePick {
+                column: column.name.clone(),
+                agg: seed_measures.contains(&column.name).then_some(SqlAgg::Sum),
+            });
+        } else {
+            groups.push(GroupPick {
+                column: column.name.clone(),
+                role: column.role,
+                by: if seed_groups.contains(&column.name) {
                     GroupBy::Exact
                 } else {
                     GroupBy::Off
                 },
-            })
-            .collect(),
-        measures: target
-            .columns
-            .iter()
-            .filter(|c| c.role == ChartRole::Measure)
-            .map(|c| MeasurePick {
-                column: c.name.clone(),
-                agg: seed_measures.contains(&c.name).then_some(SqlAgg::Sum),
-            })
-            .collect(),
+            });
+        }
+    }
+    ShapeForm {
+        groups,
+        measures,
         count_rows: false,
         order: ShapeOrder::ByGroup,
     }
@@ -319,15 +318,6 @@ impl Component for ShapeCard {
             )
             .overflow(Overflow::Clip)
             .a11y_role(AccessibilityRole::Dialog)
-            // Enter commits like the confirm button — the slot the modal base leaves open
-            // (`components::modal`); a form with nothing picked composes nothing and the
-            // press is inert, exactly like the disabled button.
-            .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                if matches!(&e.key, Key::Named(NamedKey::Enter)) {
-                    confirm(());
-                    e.prevent_default();
-                }
-            })
             .vertical()
             .content(Content::Flex)
             .child(header)
@@ -338,15 +328,24 @@ impl Component for ShapeCard {
                     .child(body),
             )
             .child(Divider::horizontal().color(roles.get(Role::Border)))
-            .child(strip);
+            .child(strip)
+            // Enter commits like the confirm button — the slot the modal base leaves open
+            // (`components::modal`) — on a node **after** every control in pre-order, so a
+            // focused `Select` toggling its list on Enter wins over the commit. A form with
+            // nothing picked composes nothing and the press is inert, exactly like the
+            // disabled button.
+            .child(
+                rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
+                    if matches!(&e.key, Key::Named(NamedKey::Enter)) {
+                        confirm(());
+                        e.prevent_default();
+                    }
+                }),
+            );
 
         Modal::new(card)
             .on_close_request(move |()| slot.set(None))
             .into_element()
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
     }
 }
 

@@ -197,6 +197,14 @@ pub fn series_required(mark: ChartMark) -> bool {
     mark == ChartMark::Heatmap
 }
 
+/// How many fixed-order ys a band's read carries — centre, lower, upper. The renderer
+/// destructures exactly this many and the notice asks for a complete row of them, so the
+/// arity has one author.
+pub const BAND_YS: usize = 3;
+/// How many fixed-order ys a box plot's read carries — median, low whisker, high whisker,
+/// q1, q3.
+pub const BOX_YS: usize = 5;
+
 /// Whether this mark reads the **bound** roles (`y_lo` / `y_hi`, Chart 10) — a band's edges,
 /// and a box plot's whiskers. Everything else drops them at resolve time the way `bins` is
 /// dropped for a mark with nothing to bin.
@@ -215,7 +223,19 @@ pub fn reads_quartiles(mark: ChartMark) -> bool {
 ///
 /// [`ChartData::Table`]: strata_model::ChartData::Table
 pub fn sortable(mark: ChartMark) -> bool {
-    !matches!(mark, ChartMark::Scatter | ChartMark::Histogram)
+    // A positive list like its peers, so a new mark must answer rather than being enrolled
+    // by default. The heatmap is deliberately in: `ByX` reorders a matrix's columns
+    // meaningfully, and `ByYDesc` reads its first row — coarse, but the user's own toggle.
+    matches!(
+        mark,
+        ChartMark::Bar
+            | ChartMark::Line
+            | ChartMark::Area
+            | ChartMark::Pie
+            | ChartMark::Heatmap
+            | ChartMark::Band
+            | ChartMark::Box
+    )
 }
 
 /// Whether this mark's value axis can be logarithmic.
@@ -447,10 +467,7 @@ fn default_ys(mark: ChartMark, measures: &[String], x: Option<&str>) -> Vec<Stri
 ///
 /// **The one `ChartQuery` construction site.** It is freya-query cache identity, so a second
 /// place building one would fork the entry into a duplicate read.
-pub fn encode(
-    encoding: &Encoding,
-    roles: &Roles,
-) -> Result<ChartQuery, (&'static str, &'static str)> {
+pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'static str, String)> {
     match encoding.mark {
         ChartMark::Scatter => match (&encoding.x, encoding.ys.first()) {
             (Some(x), Some(y)) => Ok(ChartQuery::Raw {
@@ -460,7 +477,8 @@ pub fn encode(
             }),
             _ if roles.measures().len() < 2 => Err((
                 "Pick two numeric columns",
-                "A scatter plots one measure against another, and the result has fewer than two.",
+                "A scatter plots one measure against another, and the result has fewer than two."
+                    .into(),
             )),
             _ => Err(no_y(roles)),
         },
@@ -484,7 +502,8 @@ pub fn encode(
             }),
             (None, _) => Err((
                 "Pick a category column",
-                "A pie slices one measure by a category, and the result has no column to slice by.",
+                "A pie slices one measure by a category, and the result has no column to slice by."
+                    .into(),
             )),
             (_, None) => Err(no_y(roles)),
         },
@@ -500,7 +519,7 @@ pub fn encode(
             (Some(_), Some(_), None) => Err(no_y(roles)),
             _ => Err((
                 "Pick two category columns",
-                "A heatmap crosses two category columns, and the result has fewer than two.",
+                "A heatmap crosses two category columns, and the result has fewer than two.".into(),
             )),
         },
         // Fixed order — centre, lower, upper — the renderer reads the answer by position.
@@ -511,12 +530,25 @@ pub fn encode(
                 series: None,
                 cap: ROWS_CAP,
             }),
+            // The shortage before the picks: instructing picks that cannot all be made is
+            // a dead end, and the count is the honest fact.
+            _ if roles.measures().len() < BAND_YS => Err((
+                "Not enough numeric columns",
+                format!(
+                    "A band draws its centre between two bound columns and this result has \
+                     {} numeric {}. Compute the bounds in SQL, for example avg(y) - \
+                     stddev(y) and avg(y) + stddev(y).",
+                    roles.measures().len(),
+                    plural(roles.measures().len())
+                ),
+            )),
             (None, _, _) => Err(no_y(roles)),
             _ => Err((
                 "Pick the band's bounds",
                 "A band draws its centre between two bound columns your SQL computes, for \
                  example avg(y) - stddev(y) and avg(y) + stddev(y). Pick them on LOWER and \
-                 UPPER.",
+                 UPPER."
+                    .into(),
             )),
         },
         // Fixed order — median, low whisker, high whisker, q1, q3 — and the median first on
@@ -547,14 +579,29 @@ pub fn encode(
             (None, ..) => Err((
                 "Pick a category column",
                 "A box plot draws one box per category, and the result has no column to \
-                 group by.",
+                 group by."
+                    .into(),
+            )),
+            // The shortage before the picks — with fewer than five distinct measures the
+            // mark is unreachable, and the strip's role encoders have nothing to offer.
+            _ if roles.measures().len() < BOX_YS => Err((
+                "Not enough numeric columns",
+                format!(
+                    "A box plot draws five measures per category and this result has {} \
+                     numeric {}. Compute median, quartile and whisker columns in SQL, for \
+                     example percentile_cont(0.25) WITHIN GROUP (ORDER BY y), min(y) and \
+                     max(y).",
+                    roles.measures().len(),
+                    plural(roles.measures().len())
+                ),
             )),
             (_, None, ..) => Err(no_y(roles)),
             _ => Err((
                 "Pick the box's measures",
                 "A box plot draws median, quartile and whisker columns your SQL computes, \
                  for example percentile_cont(0.25) WITHIN GROUP (ORDER BY y), min(y) and \
-                 max(y) per category. Pick them on Q1, Q3, LOWER and UPPER.",
+                 max(y) per category. Pick them on Q1, Q3, LOWER and UPPER."
+                    .into(),
             )),
         },
         ChartMark::Bar | ChartMark::Line | ChartMark::Area => {
@@ -575,17 +622,26 @@ pub fn encode(
 /// having no numeric column at all is a fact about the data; an empty pick is a choice the
 /// user just made, and telling them their result has nothing numeric in it while its measures
 /// sit in the menu they emptied would be a lie.
-fn no_y(roles: &Roles) -> (&'static str, &'static str) {
+fn no_y(roles: &Roles) -> (&'static str, String) {
     if roles.measures().is_empty() {
         (
             "Pick a numeric column",
-            "This mark plots a measure, and the result has no numeric column to plot.",
+            "This mark plots a measure, and the result has no numeric column to plot.".into(),
         )
     } else {
         (
             "Pick a column to plot",
-            "No column is chosen on the Y axis.",
+            "No column is chosen on the Y axis.".into(),
         )
+    }
+}
+
+/// The one plural a count message needs.
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        "column"
+    } else {
+        "columns"
     }
 }
 
@@ -613,10 +669,7 @@ mod tests {
         ])
     }
 
-    fn read(
-        config: &ChartConfig,
-        roles: &Roles,
-    ) -> Result<ChartQuery, (&'static str, &'static str)> {
+    fn read(config: &ChartConfig, roles: &Roles) -> Result<ChartQuery, (&'static str, String)> {
         encode(&resolve(config, roles), roles)
     }
 
