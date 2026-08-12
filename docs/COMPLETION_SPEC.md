@@ -290,12 +290,64 @@ Performance model, sized against a 100-tables × 1000-columns catalog:
 
 - **The Catalog snapshot is memoized** (tab.rs): rebuilt only when the project store
   changes (registration lands, view saved) — never per keystroke. The provider peeks it.
-- **The all-columns fallback filters before allocating** (match first, materialize on
-  hit) and caps at `FALLBACK_COLUMN_CAP` (2048) — the only pool that scales with total
-  catalog size.
+- **A candidate is matched before it is built** (`ranking::Pool`). Every pool used to be
+  materialized whole and filtered afterwards, so a keystroke built 1600-2700 `Completion`s
+  — three or four string allocations each — however few the partial could match, and the
+  demoted `ALL_KEYWORDS` tail (~1200) was built in full at every operand position only to
+  be dropped by the tail gate. `Pool` takes the label first and calls the builder only on a
+  hit, so the rule the all-columns fallback already followed is now structural and no pool
+  can forget it; the tier it computes is the one `rank` sorts on, so nothing matches twice.
+  A `debug_assert` holds the gate label to the completion's own label at every push site —
+  the equivalence with filtering afterwards rests on exactly that.
+- **The match is allocation-free, and it rejects before it ranks** (`fuzzy::match_tier`).
+  The filter itself used to allocate two lowercased copies per candidate, so the fallback's
+  100k-candidate sweep paid 200k allocations to answer *no* — 36ms per keystroke, four
+  dropped frames, for an offer that was usually empty. Being a subsequence is a
+  **necessary** condition for every tier, so testing it first is exact and rejects almost
+  everything in one scan. Ranking is unchanged (verified equal to the original on 6.6M
+  pairs).
+- **A per-candidate membership test is a set, not a scan** — `ranking::folded_set`, for the
+  written-demotion's clause refs and the ON-position join keys alike. Neither list is
+  bounded: a clause region grows with the query and a join's other side with the relation's
+  width, so both scans were quadratic. The written-demotion over a long `WHERE` was the
+  larger of the two (~120 refs × 2000 columns per keystroke) and is why a long query cost
+  more than a short one — **not** the analysis layer, which measures ~340µs of a 7KB
+  buffer's total.
+- **A coverage boost that would walk the catalog is skipped when there is nothing to
+  cover.** The projection→relation ranking counts a table's matching columns per candidate
+  relation; with an empty projection that is a uniform zero bought at the price of the
+  whole catalog's width.
+- **A sort comparator never allocates.** The alphabetical tie-break compares lowercased
+  bytes lazily; building those keys inside the comparator cost two allocations per
+  *comparison*, paid O(n log n) times whenever an empty partial left the pool unfiltered.
 - Everything else is bounded by *scope*: the FROM'd tables' columns, ~400 functions,
-  ~1200 keywords, relation names. Typical keystroke ≪ 1ms release; the 120Hz frame
-  budget (8.3ms) holds with an order of magnitude to spare.
+  ~1200 keywords, relation names.
+
+Measured (release, min of 100 reps, quiet machine); the 120Hz frame budget is 8.3ms:
+
+| Position | before | after |
+|---|---|---|
+| `SELECT <prefix>\|`, no FROM — fallback, 100 × 1000 | 35.97ms | 1.62ms |
+| `JOIN … ON \|`, 2 × 1000 cols | 4.95ms | 1.13ms |
+| `JOIN … ON t.\|`, 2 × 1000 cols | 2.24ms | 0.39ms |
+| `SELECT <prefix>\| FROM t`, 1000 cols | 1.93ms | 0.27ms |
+| `SELECT \| FROM t`, 1000 cols | 0.74ms | 0.55ms |
+| `FROM \|` (relations), 100 tables | 0.04ms | 0.03ms |
+| ~250-line query, typed prefix, 2 × 1000 cols | 2.98ms † | 0.79ms |
+
+† measured after the `match_tier` fix, before the pool and set fixes — the original was
+worse still.
+
+What is left is genuinely proportional to the offer:
+
+- **An empty partial cannot be filtered** — every candidate is offerable, so the in-scope
+  columns really are built (0.55ms at 1000 columns). Bounding it means a 50-element
+  heap instead of a full sort, which trades the simple sort key for a bounded one; not
+  worth it while the numbers look like this.
+- **The all-columns fallback is O(catalog) by construction** — 100k columns must each be
+  tested to know none match (1.6ms). A prefix index is the only thing that changes that
+  shape, and it is the one place where the indexing half of an IntelliJ-style design would
+  genuinely earn its keep.
 
 ## 8. Editor integration (strata-code-editor)
 
@@ -337,6 +389,26 @@ If a future catalog outgrows the sync budget: keep the popup synchronous and mov
 the provider call off-frame (spawned work behind a revision gate — the diagnostics
 driver's pattern) behind the same `on_completions` seam. LSP (process boundary,
 JSON-RPC) is categorically out — the provider lives in-process.
+
+**Async is the structural answer, and it is deliberately *not* the first one.** A sync
+provider makes the frame budget a hard ceiling on work the render thread may do, and
+nothing bounds a catalog's width or a buffer's length — so the tail is real, and one day
+this escalates. But the 36ms above was not the sync design failing to hold a load: it was
+200k needless allocations per keystroke, and a worker thread would have *hidden* it —
+trading a visible 4-frame stall for a 36ms-stale popup, which is the harder bug to see and
+the worse one to type against. The order therefore matters: make the work small, then
+decide whether what remains needs a thread. Going async first buys the revision gate, the
+cancellation of superseded requests, a `Send` catalog snapshot, and the loss of §1's
+"stale results and flicker are *impossible*, not defended against" — to hide a cost that
+should not have existed. The waste is now spent: worst measured position 1.6ms against an
+8.3ms budget, and what remains is proportional to the offer rather than to the catalog.
+
+So the escalation trigger is a **measured** position over budget — and when one arrives, read
+which shape it has first, because they want different answers. Work proportional to *what is
+offered* (an empty partial over wide relations) is what a thread genuinely moves. Work
+proportional to the *catalog* (the all-columns fallback testing 100k names to find none) is
+an index problem, and threading it only relocates it — that half of an IntelliJ-style design
+is the half doing the real work. Neither is reached by rewriting the popup.
 
 ## 10. Known trade-offs (chosen, not hidden)
 

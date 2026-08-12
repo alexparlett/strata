@@ -23,7 +23,6 @@ use crate::engine::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
     Clause, ColumnList, Context, ListSource, Role, LITERAL_WORDS, OPERAND_EXPECTING,
 };
-use crate::engine::sql::fuzzy::match_tier;
 use crate::engine::sql::lex::{
     caret_extends_numeric_literal, caret_in_string_or_comment, is_reserved_in_name_position, lex,
     literal_at, TokKind,
@@ -96,7 +95,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         .next()
         .is_none_or(|c| !c.is_whitespace());
 
-    let mut pool: Vec<Cand> = Vec::new();
+    let mut pool = Pool::new(&partial, manual);
 
     match &ca.context {
         Context::Dot(rel) => push_dot_columns(&mut pool, &ca, catalog, rel, &replace),
@@ -105,7 +104,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // `FROM` above `floor`).
         Context::At(clause, Role::Continuation) => {
             for (i, k) in continuation_keywords(*clause).into_iter().enumerate() {
-                pool.push(Cand::ordered(keyword(k, &replace, kw_space), T_PRIMARY, i));
+                pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
             }
             push_keywords(&mut pool, &replace, true, kw_space);
         }
@@ -113,7 +112,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             // Query leads first — a blank tab is usually a query — then the statement
             // leads, the curated ord continuing across the two tables.
             for (i, &k) in QUERY_LEADS.iter().chain(STATEMENT_LEADS).enumerate() {
-                pool.push(Cand::ordered(keyword(k, &replace, kw_space), T_PRIMARY, i));
+                pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
             }
             push_keywords(&mut pool, &replace, false, kw_space);
         }
@@ -122,7 +121,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // something Run refuses there.
         Context::At(Clause::Restart, Role::Operand) => {
             for (i, &k) in QUERY_LEADS.iter().enumerate() {
-                pool.push(Cand::ordered(keyword(k, &replace, kw_space), T_PRIMARY, i));
+                pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
             }
             push_keywords(&mut pool, &replace, false, kw_space);
         }
@@ -135,12 +134,12 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // statement, and `ddl::tables` says so by name; `DROP VIEW |` the mirror.
         Context::At(Clause::DropTable, Role::Operand) => {
             for t in catalog.tables.iter().filter(|t| !t.is_view) {
-                pool.push(Cand::new(table_item(t, &replace), T_PRIMARY));
+                pool.push(&t.name, T_PRIMARY, || table_item(t, &replace));
             }
         }
         Context::At(Clause::DropView, Role::Operand) => {
             for t in catalog.tables.iter().filter(|t| t.is_view) {
-                pool.push(Cand::new(table_item(t, &replace), T_PRIMARY));
+                pool.push(&t.name, T_PRIMARY, || table_item(t, &replace));
             }
         }
         // `INSERT INTO |` — only tables whose data Strata owns: the same answer
@@ -153,7 +152,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             Some(list) => push_list_columns(&mut pool, catalog, list, &replace, true),
             None => {
                 for t in catalog.tables.iter().filter(|t| t.internal && !t.is_view) {
-                    pool.push(Cand::new(table_item(t, &replace), T_PRIMARY));
+                    pool.push(&t.name, T_PRIMARY, || table_item(t, &replace));
                 }
             }
         },
@@ -161,24 +160,21 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // (uppercase + trailing space is right here).
         Context::At(Clause::CreateExternal, Role::Operand) => {
             for (i, &f) in STORED_AS_FORMATS.iter().enumerate() {
-                pool.push(Cand::ordered(keyword(f, &replace, kw_space), T_PRIMARY, i));
+                pool.ordered(f, T_PRIMARY, i, || keyword(f, &replace, kw_space));
             }
         }
         // `DROP FUNCTION |` — only what this session created: a built-in is refused to
         // the statement, because nothing can put one back.
         Context::At(Clause::DropFunction, Role::Operand) => {
             for f in catalog.functions.all().filter(|f| f.created) {
-                pool.push(Cand::new(
-                    Completion {
-                        label: f.name.clone(),
-                        // The bare name — a DROP takes the name, never a call.
-                        insert: ident_insert(&f.name),
-                        kind: CompletionKind::Function,
-                        detail: Some("session function".into()),
-                        replace: replace.clone(),
-                    },
-                    T_PRIMARY,
-                ));
+                pool.push(&f.name, T_PRIMARY, || Completion {
+                    label: f.name.clone(),
+                    // The bare name — a DROP takes the name, never a call.
+                    insert: ident_insert(&f.name),
+                    kind: CompletionKind::Function,
+                    detail: Some("session function".into()),
+                    replace: replace.clone(),
+                });
             }
         }
         // The body of a `CREATE FUNCTION`, after its `RETURN`: the declared argument
@@ -187,13 +183,12 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // would offer exactly what `Definition::check` refuses.
         Context::At(Clause::CreateFunction, Role::Operand) => {
             for name in function_arguments(&toks, sql.len(), caret) {
-                pool.push(Cand::new(
-                    column_item(&name, Some("argument"), &replace),
-                    T_PRIMARY,
-                ));
+                pool.push(&name, T_PRIMARY, || {
+                    column_item(&name, Some("argument"), &replace)
+                });
             }
             for f in catalog.functions.all() {
-                pool.push(Cand::new(function_item(f, &replace), T_FUNCTION));
+                pool.push(&f.name, T_FUNCTION, || function_item(f, &replace));
             }
         }
         // `COPY |` reads a relation like a FROM target (CTEs vacuously absent, the
@@ -212,7 +207,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // column or keyword can stand in the operand of either statement.
         Context::At(Clause::Execute, Role::Operand) => {
             for p in &catalog.prepared {
-                pool.push(Cand::new(prepared_item(p, &replace), T_PRIMARY));
+                pool.push(&p.name, T_PRIMARY, || prepared_item(p, &replace));
             }
         }
         // LIMIT / OFFSET take numbers — nothing sensible to offer.
@@ -223,7 +218,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         // Every expression clause's operand position: columns first, then
         // aliases / functions / qualifiers / keywords.
         Context::At(clause, Role::Operand) => {
-            push_scope_columns(&mut pool, &ca, catalog, &replace, &partial);
+            push_scope_columns(&mut pool, &ca, catalog, &replace);
             // SELECT-list column aliases (e.g. `SUM(x) AS spend`) — referenceable
             // exactly where SQL allows them: GROUP BY / ORDER BY / HAVING /
             // QUALIFY, never back inside the SELECT list or WHERE (the validator
@@ -233,27 +228,24 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
                 Clause::GroupBy | Clause::OrderBy | Clause::Having | Clause::Qualify
             ) {
                 for a in &ca.select_aliases {
-                    pool.push(Cand::new(
-                        column_item(a, Some("alias"), &replace),
-                        T_SECONDARY,
-                    ));
+                    pool.push(a, T_SECONDARY, || column_item(a, Some("alias"), &replace));
                 }
             }
             for f in catalog.functions.all() {
-                pool.push(Cand::new(function_item(f, &replace), T_FUNCTION));
+                pool.push(&f.name, T_FUNCTION, || function_item(f, &replace));
             }
             // Relation names as qualifiers (`orders.` → columns) — never above columns.
             for cte in &ca.ctes {
-                pool.push(Cand::new(cte_item(&cte.name, &replace), T_KEYWORD));
+                pool.push(&cte.name, T_KEYWORD, || cte_item(&cte.name, &replace));
             }
             for t in &catalog.tables {
-                pool.push(Cand::new(table_item(t, &replace), T_KEYWORD));
+                pool.push(&t.name, T_KEYWORD, || table_item(t, &replace));
             }
             push_keywords(&mut pool, &replace, false, kw_space);
         }
     }
 
-    rank(pool, &partial, manual)
+    rank(pool)
 }
 
 /// The single-relation **column-list** pools — an INSERT's column list, a COPY's
@@ -265,7 +257,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
 /// is the INSERT gate: offering columns of a target dispatch refuses would be
 /// dishonest.
 fn push_list_columns(
-    pool: &mut Vec<Cand>,
+    pool: &mut Pool,
     catalog: &Catalog,
     list: &ColumnList,
     replace: &Range<usize>,
@@ -282,21 +274,23 @@ fn push_list_columns(
                 .filter(|t| !internal_only || (t.internal && !t.is_view));
             if let Some(t) = table {
                 for c in &t.columns {
-                    pool.push(Cand::ordered(
-                        column_item(&c.name, Some(&c.dtype), replace),
+                    pool.ordered(
+                        &c.name,
                         T_PRIMARY,
                         column_ord(None, None, written(&c.name)),
-                    ));
+                        || column_item(&c.name, Some(&c.dtype), replace),
+                    );
                 }
             }
         }
         ListSource::Projection(cols) => {
             for name in cols {
-                pool.push(Cand::ordered(
-                    column_item(name, None, replace),
+                pool.ordered(
+                    name,
                     T_PRIMARY,
                     column_ord(None, None, written(name)),
-                ));
+                    || column_item(name, None, replace),
+                );
             }
         }
     }
@@ -310,7 +304,7 @@ fn push_list_columns(
 /// list. (`DESCRIBE` and `COPY` have no projection before the caret, so the boost is
 /// a no-op there.)
 fn push_relation_targets(
-    pool: &mut Vec<Cand>,
+    pool: &mut Pool,
     ca: &CaretAnalysis,
     catalog: &Catalog,
     replace: &Range<usize>,
@@ -325,19 +319,19 @@ fn push_relation_targets(
             .iter()
             .filter(|r| cte.columns.iter().any(|c| c.eq_ignore_ascii_case(r)))
             .count();
-        pool.push(Cand::ordered(
-            cte_item(&cte.name, replace),
-            T_PRIMARY,
-            coverage(have) * 2 + written_rel(&cte.name),
-        ));
+        let ord = coverage(have) * 2 + written_rel(&cte.name);
+        pool.ordered(&cte.name, T_PRIMARY, ord, || cte_item(&cte.name, replace));
     }
     for t in &catalog.tables {
-        let have = refs.iter().filter(|r| t.column(r).is_some()).count();
-        pool.push(Cand::ordered(
-            table_item(t, replace),
-            T_PRIMARY,
-            coverage(have) * 2 + written_rel(&t.name),
-        ));
+        // The coverage count walks this table's columns, so it is skipped outright when
+        // there is no projection to cover — the common case, and the one that would
+        // otherwise pay the whole catalog's width per keystroke.
+        let have = match refs.is_empty() {
+            true => 0,
+            false => refs.iter().filter(|r| t.column(r).is_some()).count(),
+        };
+        let ord = coverage(have) * 2 + written_rel(&t.name);
+        pool.ordered(&t.name, T_PRIMARY, ord, || table_item(t, replace));
     }
 }
 
@@ -346,7 +340,7 @@ fn push_relation_targets(
 /// column forces: type affinity when completing a comparison side, cross-side key
 /// likelihood at ON positions, written-demotion.
 fn push_dot_columns(
-    pool: &mut Vec<Cand>,
+    pool: &mut Pool,
     ca: &CaretAnalysis,
     catalog: &Catalog,
     rel: &str,
@@ -357,28 +351,27 @@ fn push_dot_columns(
     let cross_miss = |name: &str| {
         cross
             .as_ref()
-            .map(|c| !c.iter().any(|x| x.eq_ignore_ascii_case(name)))
+            .map(|c| !c.contains(&name.to_ascii_lowercase()))
     };
-    let written = |name: &str| ca.clause_refs.iter().any(|w| w.eq_ignore_ascii_case(name));
+    let refs = folded_set(&ca.clause_refs);
+    let written = |name: &str| refs.contains(&name.to_ascii_lowercase());
     if let Some(inline) = ca.inline_relation(rel) {
         for name in &inline.columns {
-            pool.push(Cand::ordered(
-                column_item(name, Some("cte"), replace),
-                T_PRIMARY,
-                column_ord(affinity.map(|_| true), cross_miss(name), written(name)),
-            ));
+            let ord = column_ord(affinity.map(|_| true), cross_miss(name), written(name));
+            pool.ordered(name, T_PRIMARY, ord, || {
+                column_item(name, Some("cte"), replace)
+            });
         }
     } else if let Some(t) = catalog.table(rel) {
         for c in &t.columns {
-            pool.push(Cand::ordered(
-                column_item(&c.name, Some(&c.dtype), replace),
-                T_PRIMARY,
-                column_ord(
-                    affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
-                    cross_miss(&c.name),
-                    written(&c.name),
-                ),
-            ));
+            let ord = column_ord(
+                affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
+                cross_miss(&c.name),
+                written(&c.name),
+            );
+            pool.ordered(&c.name, T_PRIMARY, ord, || {
+                column_item(&c.name, Some(&c.dtype), replace)
+            });
         }
     }
 }
@@ -395,44 +388,45 @@ const FALLBACK_COLUMN_CAP: usize = 2048;
 /// catalog's columns at the secondary tier — `SELECT na|` before FROM still
 /// completes `name`, with the owning table in the detail.
 fn push_scope_columns(
-    pool: &mut Vec<Cand>,
+    pool: &mut Pool,
     ca: &CaretAnalysis,
     catalog: &Catalog,
     replace: &Range<usize>,
-    partial: &str,
 ) {
     let affinity = comparand_kind(ca, catalog);
     let on_clause = ca.governing == Clause::On;
-    let written = |name: &str| ca.clause_refs.iter().any(|w| w.eq_ignore_ascii_case(name));
+    // A set, not a scan: this is asked once per candidate column, and a clause region
+    // grows with the query — a long WHERE over wide relations made the demotion test
+    // quadratic (120 refs x 2000 columns per keystroke).
+    let refs = folded_set(&ca.clause_refs);
+    let written = |name: &str| refs.contains(&name.to_ascii_lowercase());
     let mut any = false;
     for tname in &ca.in_scope {
         let cross = on_clause.then(|| other_side_columns(ca, catalog, tname));
         let cross_miss = |name: &str| {
             cross
                 .as_ref()
-                .map(|c| !c.iter().any(|x| x.eq_ignore_ascii_case(name)))
+                .map(|c| !c.contains(&name.to_ascii_lowercase()))
         };
         if let Some(inline) = ca.inline_relation(tname) {
             for name in &inline.columns {
                 any = true;
-                pool.push(Cand::ordered(
-                    column_item(name, Some(&format!("{} · cte", inline.name)), replace),
-                    T_PRIMARY,
-                    column_ord(affinity.map(|_| true), cross_miss(name), written(name)),
-                ));
+                let ord = column_ord(affinity.map(|_| true), cross_miss(name), written(name));
+                pool.ordered(name, T_PRIMARY, ord, || {
+                    column_item(name, Some(&format!("{} · cte", inline.name)), replace)
+                });
             }
         } else if let Some(t) = catalog.table(tname) {
             for c in &t.columns {
                 any = true;
-                pool.push(Cand::ordered(
-                    column_item(&c.name, Some(&format!("{} · {}", t.name, c.dtype)), replace),
-                    T_PRIMARY,
-                    column_ord(
-                        affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
-                        cross_miss(&c.name),
-                        written(&c.name),
-                    ),
-                ));
+                let ord = column_ord(
+                    affinity.map(|k| Kind::from_arrow(&c.dtype) != k),
+                    cross_miss(&c.name),
+                    written(&c.name),
+                );
+                pool.ordered(&c.name, T_PRIMARY, ord, || {
+                    column_item(&c.name, Some(&format!("{} · {}", t.name, c.dtype)), replace)
+                });
             }
         }
     }
@@ -443,14 +437,19 @@ fn push_scope_columns(
         // `name` too (the candidate FROM set, inferred as you compose). Rank
         // only, never filter; and tables iterate best-covered first so the cap
         // keeps the most consistent columns, not the first-registered ones.
-        let refs = &ca.projection;
+        let projected = &ca.projection;
         let mut order: Vec<(usize, usize)> = catalog
             .tables
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let have = refs.iter().filter(|r| t.column(r).is_some()).count();
-                (i, refs.len().saturating_sub(have).min(60) * 2)
+                // Skipped outright with nothing projected — otherwise this walks every
+                // table's full width on every keystroke to compute a uniform zero.
+                let have = match projected.is_empty() {
+                    true => 0,
+                    false => projected.iter().filter(|r| t.column(r).is_some()).count(),
+                };
+                (i, projected.len().saturating_sub(have).min(60) * 2)
             })
             .collect();
         order.sort_by_key(|(_, ord)| *ord);
@@ -461,15 +460,17 @@ fn push_scope_columns(
                 if pushed >= FALLBACK_COLUMN_CAP {
                     return;
                 }
-                if match_tier(&c.name, partial).is_none() {
+                // The pool's own gate, asked ahead of the push because the cap counts
+                // what is *offered* — one partial, one answer, rather than a second copy
+                // of it threaded in to agree by hand.
+                if !pool.admits(&c.name) {
                     continue;
                 }
                 pushed += 1;
-                pool.push(Cand::ordered(
-                    column_item(&c.name, Some(&format!("{} · {}", t.name, c.dtype)), replace),
-                    T_SECONDARY,
-                    base + written(&c.name) as usize,
-                ));
+                let ord = base + written(&c.name) as usize;
+                pool.ordered(&c.name, T_SECONDARY, ord, || {
+                    column_item(&c.name, Some(&format!("{} · {}", t.name, c.dtype)), replace)
+                });
             }
         }
     }
@@ -482,25 +483,34 @@ fn push_scope_columns(
 /// At a **continuation** position the curated clause set already *is* the
 /// grammar's expected tokens — everything here is the gated tail (a ≥2-char
 /// prefix summons it), so `FROM` can never trail a `WHERE` clause uninvited.
-fn push_keywords(pool: &mut Vec<Cand>, replace: &Range<usize>, gate_all: bool, kw_space: bool) {
+fn push_keywords(pool: &mut Pool, replace: &Range<usize>, gate_all: bool, kw_space: bool) {
     for &k in MULTI_WORD {
-        pool.push(Cand {
-            c: keyword(k, replace, kw_space),
-            ctx: if gate_all { T_TAIL } else { T_KEYWORD },
-            ord: 0,
-            tail: gate_all,
-        });
+        let ctx = if gate_all { T_TAIL } else { T_KEYWORD };
+        pool.keyword(k, ctx, gate_all, || keyword(k, replace, kw_space));
+    }
+    // With the tail gate closed (no ≥2-char prefix, no manual ask) a tail candidate
+    // cannot appear however it ranks — and at a continuation position `gate_all` forces
+    // every entry here to be tail, so the whole vocabulary below is unreachable. Asking
+    // once is what makes that cheap: `ALL_KEYWORDS` is ~1200 entries and the two tables
+    // are 32 and 48, so walking it regardless cost ~96k comparisons per keystroke to
+    // build a set the gate then discarded whole.
+    let tail_possible = pool.tail_possible();
+    if gate_all && !tail_possible {
+        return;
     }
     for &k in ALL_KEYWORDS {
+        let core = !gate_all && CORE_KEYWORDS.iter().any(|c| c.eq_ignore_ascii_case(k));
+        if !core && !tail_possible {
+            continue;
+        }
+        if !pool.admits(k) {
+            continue;
+        }
         if BLOCKED_KEYWORDS.iter().any(|b| b.eq_ignore_ascii_case(k)) {
             continue;
         }
-        let core = !gate_all && CORE_KEYWORDS.iter().any(|c| c.eq_ignore_ascii_case(k));
-        pool.push(Cand {
-            c: keyword(k, replace, kw_space),
-            ctx: if core { T_KEYWORD } else { T_TAIL },
-            ord: 0,
-            tail: !core,
+        pool.keyword(k, if core { T_KEYWORD } else { T_TAIL }, !core, || {
+            keyword(k, replace, kw_space)
         });
     }
 }
@@ -514,7 +524,7 @@ fn push_keywords(pool: &mut Vec<Cand>, replace: &Range<usize>, gate_all: bool, k
 /// from the caret analysis) is the key's own kind vocabulary — `Bool` and `Enum` only,
 /// inserted verbatim lowercase with no trailing space; every other kind takes the user's
 /// own value, the correct empty offer.
-fn push_set_option_items(pool: &mut Vec<Cand>, set_key: Option<&str>, replace: &Range<usize>) {
+fn push_set_option_items(pool: &mut Pool, set_key: Option<&str>, replace: &Range<usize>) {
     match set_key {
         None => {
             for (i, k) in ENGINE_KEYS
@@ -522,18 +532,14 @@ fn push_set_option_items(pool: &mut Vec<Cand>, set_key: Option<&str>, replace: &
                 .filter(|k| refuse_reserved_key(k.key).is_ok())
                 .enumerate()
             {
-                pool.push(Cand::ordered(
-                    Completion {
-                        label: k.key.to_string(),
-                        insert: k.key.to_string(),
-                        // The kind is a glyph, not a taxonomy (`prepared_item`).
-                        kind: CompletionKind::Column,
-                        detail: Some(k.default.to_string()),
-                        replace: replace.clone(),
-                    },
-                    T_PRIMARY,
-                    i,
-                ));
+                pool.ordered(k.key, T_PRIMARY, i, || Completion {
+                    label: k.key.to_string(),
+                    insert: k.key.to_string(),
+                    // The kind is a glyph, not a taxonomy (`prepared_item`).
+                    kind: CompletionKind::Column,
+                    detail: Some(k.default.to_string()),
+                    replace: replace.clone(),
+                });
             }
         }
         Some(key) => {
@@ -552,19 +558,15 @@ fn push_set_option_items(pool: &mut Vec<Cand>, set_key: Option<&str>, replace: &
 /// Push a closed value vocabulary — the shared shape of the `SET` and `OPTIONS`
 /// value pools (external.rs: the option kinds "mirror the SET value design"):
 /// verbatim lowercase, no trailing space, table order.
-fn push_value_words(pool: &mut Vec<Cand>, values: &[&str], replace: &Range<usize>) {
+fn push_value_words(pool: &mut Pool, values: &[&str], replace: &Range<usize>) {
     for (i, v) in values.iter().enumerate() {
-        pool.push(Cand::ordered(
-            Completion {
-                label: v.to_string(),
-                insert: v.to_string(),
-                kind: CompletionKind::Keyword,
-                detail: None,
-                replace: replace.clone(),
-            },
-            T_PRIMARY,
-            i,
-        ));
+        pool.ordered(v, T_PRIMARY, i, || Completion {
+            label: v.to_string(),
+            insert: v.to_string(),
+            kind: CompletionKind::Keyword,
+            detail: None,
+            replace: replace.clone(),
+        });
     }
 }
 
@@ -673,20 +675,16 @@ fn options_literal_completions(
     // one whose predecessor is another string is a value (DataFusion's `'key' 'value'`
     // pairs, comma between pairs). Anything else is not a position this carve-out serves.
     let pred = stmt.iter().rev().find(|t| t.span.end <= open)?;
-    let mut pool: Vec<Cand> = Vec::new();
+    let mut pool = Pool::new(&partial, manual);
     if pred.kind == TokKind::Punct && (pred.text == "(" || pred.text == ",") {
         for (i, (key, _, what)) in keys.iter().enumerate() {
-            pool.push(Cand::ordered(
-                Completion {
-                    label: key.to_string(),
-                    insert: key.to_string(),
-                    kind: CompletionKind::Column,
-                    detail: Some(what.to_string()),
-                    replace: replace.clone(),
-                },
-                T_PRIMARY,
-                i,
-            ));
+            pool.ordered(key, T_PRIMARY, i, || Completion {
+                label: key.to_string(),
+                insert: key.to_string(),
+                kind: CompletionKind::Column,
+                detail: Some(what.to_string()),
+                replace: replace.clone(),
+            });
         }
     } else if pred.kind == TokKind::Str {
         // The value offer is the preceding key's own vocabulary — `Bool` and `Enum`
@@ -705,7 +703,7 @@ fn options_literal_completions(
     } else {
         return None;
     }
-    Some(rank(pool, &partial, manual))
+    Some(rank(pool))
 }
 
 /// Whether an identifier must be double-quoted to survive DataFusion's parser

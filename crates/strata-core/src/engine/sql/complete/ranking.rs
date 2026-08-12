@@ -63,80 +63,165 @@ pub(super) fn comparand_kind(ca: &CaretAnalysis, catalog: &Catalog) -> Option<Ki
 
 /// Column names offered by the in-scope relations **other than** `owner` — the
 /// candidate join keys at an ON position.
+///
+/// A **set**, keyed on the folded name, because the caller asks it one question per
+/// candidate column: over a join of wide relations a linear scan made the ON offer
+/// quadratic in total width (2 x 1000 columns cost ~1M comparisons per keystroke).
 pub(super) fn other_side_columns(
     ca: &CaretAnalysis,
     catalog: &Catalog,
     owner: &str,
-) -> Vec<String> {
-    let mut out = Vec::new();
+) -> HashSet<String> {
+    let mut out = HashSet::new();
     for rel in &ca.in_scope {
         if rel.eq_ignore_ascii_case(owner) {
             continue;
         }
         if let Some(inline) = ca.inline_relation(rel) {
-            out.extend(inline.columns.iter().cloned());
+            out.extend(inline.columns.iter().map(|c| c.to_ascii_lowercase()));
         } else if let Some(t) = catalog.table(rel) {
-            out.extend(t.columns.iter().map(|c| c.name.clone()));
+            out.extend(t.columns.iter().map(|c| c.name.to_ascii_lowercase()));
         }
     }
     out
 }
 
-/// One pooled candidate before rank: the completion, its context tier, a sub-tier
-/// `ord` (curated declaration order within a tier — statement/follow keyword lists
-/// carry a deliberate priority), and whether it belongs to the demoted keyword tail.
+/// The folded form of a name list, for a membership test asked once per candidate.
+///
+/// Every one of these was a linear scan once, which is only free while the list is
+/// short — and none of them are bounded: a clause region grows with the query, a join's
+/// other side with the relation's width.
+pub(super) fn folded_set(names: &[String]) -> HashSet<String> {
+    names.iter().map(|n| n.to_ascii_lowercase()).collect()
+}
+
+/// One pooled candidate: the completion, its **match tier** against the partial, its
+/// context tier, and a sub-tier `ord` (curated declaration order within a tier —
+/// statement/follow keyword lists carry a deliberate priority).
 pub(super) struct Cand {
     pub(super) c: Completion,
+    pub(super) mt: u8,
     pub(super) ctx: u8,
     pub(super) ord: u8,
-    pub(super) tail: bool,
 }
 
-impl Cand {
-    pub(super) fn new(c: Completion, ctx: u8) -> Self {
-        Cand {
-            c,
-            ctx,
-            ord: 0,
-            tail: false,
+/// The candidate pool: **the match happens at the push, not at the rank.**
+///
+/// Every pool used to be materialized whole and filtered afterwards, so a keystroke
+/// built 1600-2700 `Completion`s — three or four string allocations each — no matter
+/// how few the partial could possibly match, and the demoted `ALL_KEYWORDS` tail
+/// (~1200 of them) was built in full at every operand position only to be dropped by
+/// the tail gate. Taking the label first and the `Completion` only on a hit is the rule
+/// the all-columns fallback already followed; this is that rule made structural, so no
+/// pool can forget it. It also removes the second match: the tier computed here is the
+/// one [`rank`] sorts on.
+pub(super) struct Pool<'a> {
+    cands: Vec<Cand>,
+    partial: &'a str,
+    manual: bool,
+}
+
+impl<'a> Pool<'a> {
+    pub(super) fn new(partial: &'a str, manual: bool) -> Self {
+        Pool {
+            cands: Vec::new(),
+            partial,
+            manual,
         }
     }
 
-    pub(super) fn ordered(c: Completion, ctx: u8, ord: usize) -> Self {
-        Cand {
+    /// Push at `ctx`, ordered first within its tier.
+    pub(super) fn push(&mut self, label: &str, ctx: u8, make: impl FnOnce() -> Completion) {
+        self.add(label, ctx, 0, false, make);
+    }
+
+    /// Push at `ctx` with a curated sub-order.
+    pub(super) fn ordered(
+        &mut self,
+        label: &str,
+        ctx: u8,
+        ord: usize,
+        make: impl FnOnce() -> Completion,
+    ) {
+        self.add(label, ctx, ord, false, make);
+    }
+
+    /// Push a candidate that may belong to the demoted keyword tail — which needs a
+    /// ≥2-char prefix match to appear at all, unless the ask was manual (⌃/⌘Space lifts
+    /// the gate: an explicit trigger deserves the full vocabulary).
+    pub(super) fn keyword(
+        &mut self,
+        label: &str,
+        ctx: u8,
+        tail: bool,
+        make: impl FnOnce() -> Completion,
+    ) {
+        self.add(label, ctx, 0, tail, make);
+    }
+
+    /// Whether `label` can match at all — the cheap pre-check for a caller that has
+    /// per-candidate work of its own to do *before* it can name the tier to push at.
+    pub(super) fn admits(&self, label: &str) -> bool {
+        match_tier(label, self.partial).is_some()
+    }
+
+    /// Whether a **tail** candidate could appear at all from here. The tail gate is a
+    /// property of the ask, not of the candidate, so a caller with a whole demoted
+    /// vocabulary to walk can ask once and skip it entirely rather than per entry.
+    pub(super) fn tail_possible(&self) -> bool {
+        self.manual || self.partial.len() >= 2
+    }
+
+    fn add(
+        &mut self,
+        label: &str,
+        ctx: u8,
+        ord: usize,
+        tail: bool,
+        make: impl FnOnce() -> Completion,
+    ) {
+        let Some(mt) = match_tier(label, self.partial) else {
+            return;
+        };
+        if tail && !self.manual && !(mt <= 1 && self.partial.len() >= 2) {
+            return;
+        }
+        let c = make();
+        // The gate label **is** the completion's label — the whole equivalence with
+        // filtering after the fact rests on that, at every push site, and a site that
+        // gated on something else would silently offer a different set.
+        debug_assert_eq!(
+            c.label, label,
+            "a pool gate must match on the label it pushes"
+        );
+        self.cands.push(Cand {
             c,
+            mt,
             ctx,
             ord: ord.min(u8::MAX as usize) as u8,
-            tail: false,
-        }
+        });
     }
 }
 
-/// Filter, rank, dedupe, truncate. Sort key: match tier → context tier → curated
-/// order → label length → alphabetical. Tail keywords need a ≥2-char prefix match
-/// to appear — unless the ask was manual (⌃/⌘Space lifts the gate: an explicit
-/// trigger deserves the full vocabulary).
-pub(super) fn rank(pool: Vec<Cand>, partial: &str, manual: bool) -> Vec<Completion> {
-    let mut ranked: Vec<(u8, u8, u8, Completion)> = Vec::new();
-    for cand in pool {
-        let Some(mt) = match_tier(&cand.c.label, partial) else {
-            continue;
-        };
-        if cand.tail && !manual && !(mt <= 1 && partial.len() >= 2) {
-            continue;
-        }
-        ranked.push((mt, cand.ctx, cand.ord, cand.c));
-    }
+/// Rank, dedupe, truncate. Sort key: match tier → context tier → curated order → label
+/// length → alphabetical. Filtering already happened at the push ([`Pool`]).
+pub(super) fn rank(pool: Pool) -> Vec<Completion> {
+    let mut ranked: Vec<(u8, u8, u8, Completion)> = pool
+        .cands
+        .into_iter()
+        .map(|c| (c.mt, c.ctx, c.ord, c.c))
+        .collect();
+    // The alphabetical tie-break compares ASCII-lowercased bytes **lazily** — the same
+    // order as comparing two `to_ascii_lowercase` copies, without building them. Inside
+    // a comparator those copies were two allocations per *comparison*, so an
+    // empty-partial offer (where nothing filters and the pool sorts entire) paid them
+    // O(n log n) times.
     ranked.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then(a.1.cmp(&b.1))
             .then(a.2.cmp(&b.2))
             .then(a.3.label.len().cmp(&b.3.label.len()))
-            .then_with(|| {
-                a.3.label
-                    .to_ascii_lowercase()
-                    .cmp(&b.3.label.to_ascii_lowercase())
-            })
+            .then_with(|| lower_bytes(&a.3.label).cmp(lower_bytes(&b.3.label)))
     });
     let mut seen: HashSet<(CompletionKind, String)> = HashSet::new();
     ranked
@@ -145,6 +230,12 @@ pub(super) fn rank(pool: Vec<Cand>, partial: &str, manual: bool) -> Vec<Completi
         .filter(|c| seen.insert((c.kind, c.label.to_ascii_lowercase())))
         .take(RESULT_CAP)
         .collect()
+}
+
+/// The label's ASCII-lowercased bytes, as an iterator — the allocation-free form of the
+/// key the alphabetical tie-break sorts on.
+fn lower_bytes(label: &str) -> impl Iterator<Item = u8> + '_ {
+    label.bytes().map(|b| b.to_ascii_lowercase())
 }
 
 /// The offer's visible universe — everything past this many never renders (the
