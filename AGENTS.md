@@ -557,6 +557,13 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   follow-up `on_press` — do double-click detection inside that same handler.
 - **`VirtualScrollView` memoizes its builder closure**, so captured snapshots go stale. Each child
   reads shared state reactively.
+- **A task spawned from a handler belongs to the scope that pressed it, so a press that unmounts
+  its own control cancels its own work** — silently, before the first poll. A menu item that closes
+  its menu, a dialog button that clears its own slot, a Stop that flips back to Send: all three
+  shipped broken. `spawn_forever` is not the escape (root-scoped, it writes subtree `State` after
+  an await and panics on a freed box). The press records the intent in a `State`; a
+  `use_side_effect` in a scope that outlives the control performs it — with the intent **in** that
+  state, never captured, because the effect's closure is built once.
 - **Two siblings on the same layer have no paint order — set a layer.** A layer's nodes are an
   unordered set, so "declared second" is not "painted second"; the covered element reads as
   though it had alpha. `Layer::Relative(1)` for a sibling, `Overlay` only to clear the window.
