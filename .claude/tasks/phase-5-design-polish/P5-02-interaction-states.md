@@ -87,6 +87,16 @@ so anything built on them inherits it — `tool_button.rs:78` (on `Button`) and
   press. Inner rather than Outer because a toolbar segment sits in a pill that clips. They keep
   their hand-rolled hover state — `on_press` already covers the OS activation keys, so nothing
   else was needed, and rebuilding on `Button` would have cost each one its bespoke dress.
+  Each one also publishes `a11y_alt` from the string it already had for its tooltip: these are
+  icon-only controls, so a tab stop without it announces as an unnamed button. (`tool_button`'s
+  note about naming belonging on `Button` in the fork does not apply — there the focusable node
+  is `Button`'s own rect and unreachable; here it is the app's.)
+- **`run_button`'s ring is `Role::AccentRing`, not `Role::BorderFocused`.** Both built-ins author
+  `border.focused` at exactly the same value as `accent`, and the idle Run button is
+  accent-*filled*, so the app's ordinary focus-ring role paints the ring in the button's own fill
+  and shows nothing. `AccentRing`'s own doc is "focus ring on an accent-filled control", and it is
+  what the bridge already hands `filled_button`. The other two controls sit on transparent or
+  low-alpha grounds, so they keep `BorderFocused`.
 - Hand-computed alphas replaced by theme fields, four sites: `toggle_button`
   (`hover_background`/`hover_color`), `segmented_toggle` (`item_hover_background`), export's
   format card (`card_hover_border_fill`) and the chart's mark tile (`tile_hover_border_fill`).

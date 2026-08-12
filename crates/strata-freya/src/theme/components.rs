@@ -433,7 +433,11 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             running_background: role(Role::ErrorBackground),
             running_hover_background: role(Role::ErrorBackgroundHover),
             running_color: role(Role::Error),
-            focus_border_fill: role(Role::BorderFocused),
+            // `AccentRing`, not `BorderFocused`, because this button is accent-*filled*: both
+            // built-ins author `border.focused` at the same value as `accent`, so the ring
+            // would paint in the idle button's own fill and show nothing. Same answer the
+            // bridge already gives `filled_button` (`secondary` -> `AccentRing`).
+            focus_border_fill: role(Role::AccentRing),
         },
     );
     // Tracks `run_button`'s running dress — the same cancel meaning, one set of roles.

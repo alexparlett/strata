@@ -26,7 +26,8 @@ define_theme!(
         running_hover_background: Color,
         running_color: Color,
         /// The keyboard focus ring, shared by all three states: it says where the keyboard is,
-        /// which is not something Run/Stop/disabled answer differently.
+        /// which is not something Run/Stop/disabled answer differently. It has to read against
+        /// an accent fill, which is what rules out the app's ordinary focus-ring role.
         focus_border_fill: Color,
     }
 );
