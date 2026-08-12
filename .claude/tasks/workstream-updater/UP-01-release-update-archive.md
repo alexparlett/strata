@@ -1,6 +1,6 @@
 # UP-01 · Release-side: update archive + team identity
 
-**Workstream:** Updater · **Status:** ✅ (built 2026-08-12; the release cut is still owed) ·
+**Workstream:** Updater · **Status:** ✅ (built 2026-08-12; release v0.3.1 cut and verified) ·
 **Depends on:** —
 
 ## Goal
@@ -85,9 +85,13 @@ no app behaviour changes.
       exercised: a real Developer ID build reports `team: 397J3SJ3D4` and proceeds; the same guard
       against `FX37775A96` exits non-zero naming both values.)*
 - [x] `docs/RELEASING.md` describes the new asset and its naming contract.
-- [ ] **Cut a release after landing this** — UP-02's end-to-end verification needs a published
-      release with the zip attached. Check `xcrun stapler validate` on that zip's bundle at the
-      same time.
+- [x] **Cut a release after landing this.** v0.3.1 is published (2026-08-12) carrying both
+      `Strata-0.3.1-universal.app.zip` and the DMG, and UP-02 drove the real updater against it:
+      the archive downloads, `ditto -x -k` unpacks it, and the extracted bundle passes all three
+      of UP-02's checks. `xcrun stapler validate` on that bundle now **confirmed** ("The validate
+      action worked"), and `spctl -a -t install` accepts it as `source=Notarized Developer ID`,
+      `Developer ID Application: Alexander James Parlett (397J3SJ3D4)` — so the notarized path
+      ran and the ticket survives the zip round trip.
 
 ## Note for whoever runs the next local build
 

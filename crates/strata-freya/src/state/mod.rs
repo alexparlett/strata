@@ -15,7 +15,9 @@
 //! - the Settings window's live theme preview ([`theme_preview`]) — the one half of its
 //!   uncommitted draft that every *other* window has to read;
 //! - the model listings satellite ([`listings`]) — what each provider last reported, which
-//!   both the Settings model picker and the chat composer choose from.
+//!   both the Settings model picker and the chat composer choose from;
+//! - the update status ([`updates`]) — what the updater last learned about the newest release,
+//!   which the launcher rail and a project window's palette command both act on.
 //!
 //! Plus the theme registry, which is immutable after discovery and so is a plain `Arc`
 //! rather than a store.
@@ -23,10 +25,12 @@
 mod config;
 mod listings;
 mod theme_preview;
+mod updates;
 
 pub use config::*;
 pub use listings::*;
 pub use theme_preview::*;
+pub use updates::*;
 
 use std::rc::Rc;
 
@@ -79,6 +83,10 @@ pub struct AppCtx {
     /// An `Rc` rather than a store: it is a handle on threads, never a value that changes, and
     /// nothing reacts to it.
     pub assistant: Option<Rc<Assistant>>,
+    /// What the updater last learned (UP-02) — app-global for the reason the two above are:
+    /// there is one running app to update, so one answer, and the surfaces that show it live in
+    /// different windows. Not persisted; see [`updates`].
+    pub updates: UpdateStatus,
 }
 
 /// Every field is a handle on a process-wide singleton created before the first window, so

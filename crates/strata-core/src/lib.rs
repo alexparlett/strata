@@ -21,6 +21,9 @@
 //! - [`models`] — the model-listings satellite (AS-06): what each provider last reported and
 //!   when, beside [`config`] rather than in it, because a fetched list is a cache of a remote
 //!   fact rather than something the user edited.
+//! - [`update`] — the in-app updater's mechanism (UP-02): ask GitHub what the newest release
+//!   is, download and verify its archive against Apple's chain, and swap the verified bundle in
+//!   once no window is left. Window-free and blocking, like the listings fetch.
 
 use engine::profile;
 
@@ -33,4 +36,5 @@ pub mod project;
 pub mod register;
 pub mod secret;
 pub mod theme;
+pub mod update;
 pub mod util;

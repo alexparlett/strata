@@ -73,11 +73,11 @@ src/menu.rs                      the macOS menubar: App · **File** (Open… · 
                                  is capturing a chord (`suspend_accelerators`) — the OS resolves an
                                  accelerator before the window sees the key, so an armed menubar
                                  would copy on ⌘C instead of letting it be bound
-src/state/mod.rs                 `AppCtx` — the eight app-globals `main` creates once (themes ·
-                                 config · window registry · theme preview · menubar handles · the
-                                 focused window's open path · agent access · model listings),
-                                 handed to every window root as one value rather than eight
-                                 parameters
+src/state/mod.rs                 `AppCtx` — the app-globals `main` creates once (themes · config ·
+                                 window registry · theme preview · menubar handles · the focused
+                                 window's open path · agent access · model listings · provider
+                                 probes · the assistant runtime · the update status), handed to
+                                 every window root as one value rather than as parameters
 src/agent/                       AA-03 / AA-03b — agent access, the half that outlives any one
                                  window. `AgentCtx` is the pair `main` creates: the **directory**
                                  (lives for the process; windows join and leave it) and the
@@ -115,6 +115,16 @@ src/state/listings.rs            AS-06 — the app-global **model listings** slo
                                  owns the list; persisted because a picker fed only by a live
                                  call is empty at every launch. Distinct from `Probes`, which is
                                  the *outcome* of a request and must not survive a restart
+src/state/updates.rs             UP-02 — the app-global **update status**: what the updater last
+                                 learned, plus the check / download / install actions and the one
+                                 startup check (`use_updates`, mounted by both workspace windows
+                                 like `use_agent_server`). App-global because there is one running
+                                 app to update; **not** persisted, on `Probes`' reasoning. A
+                                 worker outlives the window that started it, so its settled status
+                                 is parked in a process-global the next mount adopts, and the
+                                 install intent is another one — the swap happens in `main` after
+                                 `launch` returns. The mechanism itself is `strata_core::update`;
+                                 the surfaces are UP-03
 src/state/theme_preview.rs       the Settings window's **live theme preview** — the one half of
                                  its uncommitted draft every other window reads, so a pick
                                  repaints them all before it is saved. A second, higher-priority

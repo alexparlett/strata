@@ -52,8 +52,13 @@ sit on the mechanism.
 | # | Task | Status | Depends on |
 |---|---|---|---|
 | UP-01 | Release-side: update archive + team identity | ✅ | — |
-| UP-02 | Check / download / verify / install mechanism | ⬜ | UP-01 |
+| UP-02 | Check / download / verify / install mechanism | ✅ | UP-01 |
 | UP-03 | Surfaces: launcher affordance, dialog, setting, palette command | ⬜ | UP-02 |
 
-Order is the dependency chain. UP-01 also needs a **published release carrying the zip** before
-UP-02's verification can be tested end to end — cut one after landing it.
+Order is the dependency chain. v0.3.1 (2026-08-12) is the published release carrying the zip, and
+UP-02 was verified end to end against it — download, `ditto` unpack, and all three signature
+checks, plus a stapled-ticket and `spctl` confirmation.
+
+**One correction worth carrying forward.** `Settings::check_updates` was added by UP-02, not
+UP-03: the mechanism's startup check is gated on it, and a gate with no way to be off is not a
+gate. UP-03 still owns the Settings **row** and the search-index entry.

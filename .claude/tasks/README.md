@@ -145,13 +145,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Updater** ([`workstream-updater/`](workstream-updater/README.md), UP) — 🟡 in-app updates.
   **UP-01 ✅** (2026-08-12): the release pipeline grows a `ditto`-zipped `.app` beside the DMG,
   the app compiles in its team identity, and a signed build cross-checks the two so it cannot
-  ship signed by a team its own updater would refuse. A release still has to be **cut** before
-  UP-02 can verify end to end. Open: a window-free check/download/verify/install mechanism over the GitHub
-  Releases API with verification on Apple's chain and a quit-shaped install (UP-02), and the
-  surfaces — launcher-rail affordance, one restart confirm, a Settings toggle, a palette
-  command (UP-03). Hand-rolled rather than Sparkle, deliberately; the workstream README records
-  the settled decisions. Planned 2026-08-12, after Developer ID signing + notarization were
-  configured.
+  ship signed by a team its own updater would refuse. **v0.3.1 is cut** and carries the zip.
+  **UP-02 ✅** (2026-08-12): the window-free mechanism — `strata_core::update` (the GitHub
+  Releases check, an https-only download, `ditto` unpack, and verification against Apple's chain
+  failing closed) and `state::updates` (the app-global status, the actions, the one startup
+  check). The install is a quit: the press records the swap and `main` performs it after `launch`
+  returns, which it does. Verified end to end against v0.3.1, refusals included. Open: the
+  surfaces — launcher-rail affordance, one restart confirm, the Settings **row** for the
+  already-landed `check_updates` field, a palette command (UP-03). Hand-rolled rather than
+  Sparkle, deliberately; the workstream README records the settled decisions.
 
 ## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 
@@ -166,8 +168,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Updater workstream** — UP-01 → UP-02 → UP-03, strictly in order (each consumes the last;
-   UP-01 also wants a release cut behind it so UP-02 can verify end to end).
+1. **Updater workstream** — UP-03 is what remains; UP-01 and UP-02 landed 2026-08-12 with the
+   mechanism verified against the published v0.3.1.
 2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
 (The **Assistant** workstream is closed — AS-07 landed 2026-08-11 with AS-03 behind it — and so

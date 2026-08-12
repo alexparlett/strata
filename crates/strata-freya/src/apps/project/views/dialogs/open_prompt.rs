@@ -201,7 +201,7 @@ mod interaction {
     use crate::apps::project::{CloseGuard, CloseTarget, EngineRestart};
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
-    use crate::state::{create_global_theme_preview, ConfigStation, Probes};
+    use crate::state::{create_global_theme_preview, create_global_updates, ConfigStation, Probes};
     use crate::theme::{strata_theme, ThemesCtx};
 
     const HERE: &str = "/data/sales";
@@ -260,6 +260,9 @@ mod interaction {
                     // No runtime: this test opens no chat pane, and building one would spawn
                     // threads for a window that never asks anything.
                     assistant: None,
+                    // Idle: the prompt makes no check, and a real one would dial out from a
+                    // test.
+                    updates: create_global_updates(),
                 });
                 open
             },

@@ -495,6 +495,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   against the empty answer.
 - **Window geometry** is `Platform::root_size` + `Platform::window_position`, both logical. Restore
   only at window **creation**; there is no runtime resize/move from the app.
+- **An update is installed by a quit, and what makes one installable is the signature rather than
+  where it came from.** The press records the swap and calls `quit()`; `main` performs it after
+  `launch` returns, copy-aside-rename-in so a failure rolls back, and `end_quit` clears the intent.
+  Verification is strict codesign, then `TEAM_ID`, then `APP_ID`, in that order and failing closed;
+  the offer needs a **strictly newer** semver; `ditto` unpacks. A worker outlives its window, so it
+  parks its answer in a process-global that the next mount adopts. Outside a bundle, inert.
 
 **Settings, keymap, input**
 

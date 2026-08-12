@@ -193,6 +193,15 @@ pub struct Settings {
     pub open_pref: OpenPref,
     #[serde(default = "default_true")]
     pub confirm_close_running: bool,
+    /// Ask GitHub for a newer release when Strata starts (UP-02). Read by the Freya app's
+    /// `state::updates` startup check and by nothing else: it gates only the **automatic**
+    /// check, so a manual one still works with this off, and it is irrelevant outside an
+    /// installed bundle, where the updater is inert whatever it says.
+    ///
+    /// Its Settings row and search entry are UP-03's; the field is here because it is the gate
+    /// the mechanism reads.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
     /// User key-binding overrides (empty = all defaults). Read by `crate::keymap`.
     #[serde(default)]
     pub keybinds: Vec<KeyBind>,
@@ -316,6 +325,7 @@ settings_merge!(
     default_project_dir,
     open_pref,
     confirm_close_running,
+    check_updates,
     keybinds,
     engine,
     agent_access,
@@ -374,6 +384,7 @@ impl Default for Settings {
             default_project_dir: String::new(),
             open_pref: OpenPref::Ask,
             confirm_close_running: true,
+            check_updates: true,
             keybinds: Vec::new(),
             engine: BTreeMap::new(),
             agent_access: AgentAccess::default(),
