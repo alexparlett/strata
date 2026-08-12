@@ -383,3 +383,64 @@ divided by a parent whose `content` is `Flex` (AGENTS.md §3) — the rule was a
 both sites now state it. The composer's is a test that measures the field's rect against the
 pane's height, because "it rendered" and "it is on screen" are different questions and only the
 second is the one a user asks.
+
+## The Chart workstream (Rz2) — complete
+
+The results Chart surface, end to end: the snapshot ordinal (00), the renderer-first
+`Engine::chart` read (01), the plotters/Skia body (02), the encoder strip + `ChartConfig` (03),
+the guardrails (04), the interactivity pass (06 — bins, legend hide/isolate, log value axis,
+crosshair), Copy Image (08, which grew the fork's clipboard an image side), the Tier B marks
+(10 — heatmap, error band, box plot), the scatter trendline (11) and the Shape panel (09). Its
+folder is removed; the full invariants are `docs/reference/INVARIANTS.md` (the chart entries)
+and `docs/CHART_SPEC.md`.
+
+**What the workstream settled, kept here because it must not be re-litigated:**
+
+- **The chart computes nothing SQL can say.** The first design's engine-side aggregation
+  pipeline (`AggFn`/`Bucket`/`Stride`, auto-stride, imposed category order) was built,
+  adversarially reviewed twice, and **withdrawn**: the hard defects clustered in it, and a
+  `GROUP BY` has no output order, so re-aggregating an already-shaped result destroys the order
+  the user asked for. The histogram is the one computed mark; the trendline (below) is the one
+  computed overlay.
+- **Result order is real, and it is the snapshot ordinal** (`SNAPSHOT_SPEC.md` §9). Measured: a
+  bare snapshot read is nondeterministic above 10 MB.
+- **Refuse, never sample** — over-cap and pivot-duplicates both refuse, and the message names
+  the fix in prose. The refusal overlays keep no control behind them.
+- **The config is intent, and the option sets are the constraint** (03). Unset channels take
+  the schema's defaults; a reference the result cannot answer falls back at *read* time and is
+  never written out of the config; an invalid encoding is unreachable rather than reported.
+- **A chart image is the chart** (08): Copy Image renders the canvas's own `Rc<Frame>` through
+  the same `marks::draw`, and the fork's clipboard grew images by replacing copypasta with
+  arboard inside the existing `Box<dyn ClipboardProvider>` seam.
+- **A time column is two roles** (04): `Instant` and `Clock` — identical on an axis, different
+  wherever a stride is. Kept for chart-side bucketing, and the Shape panel (09) is what finally
+  reads it: a clock column is offered only sub-day strides.
+
+**The 2026-08 redesign's close (09/10/11 built, 05/07 cut — 2026-08-12):**
+
+- **The Shape panel (09) is the re-litigated placement** the guardrails entry invited: a modal
+  working panel off the results toolbar (both bodies), composing visible SQL — group columns
+  with `date_bin` strides, per-measure aggregates, an explicit `ORDER BY` — opened **unrun** in
+  a new tab, seeded from the resolved encoding when the press came from the Chart view. Its
+  aggregate vocabulary is UI-local text rendering (`results/shape/compose.rs`); nothing entered
+  the engine but `quote_col`'s visibility. It also produced the shared **`Modal` base**
+  (`components::modal`): open/closed, Esc and backdrop as a close request, the key barrier —
+  with Enter deliberately left to the surface's own card, because confirming is a dialog
+  semantic and not a modal one. `Dialog` wraps the same base.
+- **The Tier B marks (10) are role mappings, never computations**: the heatmap is the existing
+  pivot read as a matrix (two required categories, the measure as cell colour through the
+  `chart.heat.*` theme ramp, a min/mid/max legend); the band and box read fixed-order ys plus
+  the `y_lo`/`y_hi`/`q1`/`q3` config roles, offered as LOWER/UPPER/Q1/Q3 encoders whose option
+  sets keep collisions unreachable. Serde-compat finding: an unknown mark in `session.json`
+  previously failed the **whole session** into `session.json.corrupt`; `ChartConfig::mark` now
+  reads tolerantly, so a future mark degrades that one tab to its default mark.
+- **The trendline (11) is the one sanctioned computed overlay**, engine-side
+  (`Engine::trend`, one `regr_*` aggregation over the snapshot's finite pairs), because it is a
+  function of the *encoding*, not the query. Its fit is its own read (`TrendSpec`), so the
+  toggle never re-reads the points; degenerate data is an absent overlay, never an error.
+- **Tasks 07 (Tier A palette templates) and 05 (the remaining presets menu) were cut**, by Alex
+  (2026-08-12): command-palette quick-chart entries are not wanted. The Shape panel is the
+  constructive answer to "aggregate it in SQL"; the template-only tiers (ECDF, Pareto, indexed
+  comparison, period delta, gap-fill, sampling) fell with the palette placement, and
+  candlestick remains an ordinary future-mark candidate on the Tier B pattern if it is ever
+  asked for. Do not rebuild them as palette commands.

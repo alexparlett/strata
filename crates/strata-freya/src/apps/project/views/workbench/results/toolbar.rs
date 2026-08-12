@@ -17,6 +17,7 @@ use strata_core::config::Command;
 use super::chart::ChartCapture;
 use super::find::FindState;
 use super::selection::Selection;
+use super::shape::ShapeTarget;
 
 /// The results toolbar, built to the comp — shared by the grid and chart bodies. The
 /// **Table/Chart segmented toggle** sits at the left (P2-07): it reads the tab's per-tab view
@@ -60,6 +61,11 @@ pub struct ResultsToolbar {
     /// notice state has no item at all rather than a dead one — there is no chart to copy, and
     /// a greyed control would suggest there is one that is merely unavailable.
     copy_image: Option<ChartCapture>,
+    /// What a press of **Shape** opens the composer over (Chart 09) — the settled run's SQL
+    /// and schema, seeded from the chart encoding when the press comes from the Chart body.
+    /// `None` while the run hasn't settled rows, which disables the button on `export`'s
+    /// terms.
+    shape: Option<ShapeTarget>,
 }
 
 impl ResultsToolbar {
@@ -69,6 +75,7 @@ impl ResultsToolbar {
             find,
             export,
             copy_image: None,
+            shape: None,
         }
     }
 
@@ -76,6 +83,12 @@ impl ResultsToolbar {
     /// whether a plot was drawn.
     pub fn copy_image(mut self, capture: Option<ChartCapture>) -> Self {
         self.copy_image = capture;
+        self
+    }
+
+    /// The settled run a Shape press composes over (Chart 09).
+    pub fn shape(mut self, shape: Option<ShapeTarget>) -> Self {
+        self.shape = shape;
         self
     }
 }
@@ -107,6 +120,9 @@ impl Component for ResultsToolbar {
         // `Platform` is taken here, because a handler has no scope to read one from.
         let export = self.export.clone();
         let platform = use_hook(Platform::get);
+        // The Shape panel's slot at the project root (Chart 09) — the press fills it, the
+        // panel mounted there acts on it (the drop-confirm pattern).
+        let shape_slot = use_consume::<State<Option<ShapeTarget>>>();
 
         // ── find (Search) ─────────────────────────────────────────────────────────────────
         let find = self.find;
@@ -242,6 +258,23 @@ impl Component for ResultsToolbar {
                         .active(open)
                         .on_press(move |_| find.toggle()),
                 )
+            })
+            // The Shape composer (Chart 09): a grouped query over this settled run, opened
+            // unrun in a new tab. The press only fills the project root's slot — the panel
+            // mounted there is what acts, the drop-confirm pattern. Disabled rather than
+            // absent without a settled run, on `export`'s terms: the capability exists and
+            // is merely not available yet.
+            .item({
+                let shape = self.shape.clone();
+                let slot = shape_slot;
+                ToolbarAction::new(IconName::Rows, "Shape into a grouped query")
+                    .enabled(shape.is_some())
+                    .on_press(move |_| {
+                        if let Some(target) = shape.clone() {
+                            let mut slot = slot;
+                            slot.set(Some(target));
+                        }
+                    })
             })
             .item(
                 ToolbarAction::new(IconName::Reload, "Re-run the query to refresh the snapshot")

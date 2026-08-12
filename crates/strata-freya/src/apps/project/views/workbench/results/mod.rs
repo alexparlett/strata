@@ -24,6 +24,7 @@ mod find;
 mod record_view;
 mod running;
 mod selection;
+mod shape;
 mod sort;
 mod statement;
 mod status_bar;
@@ -55,6 +56,7 @@ pub use datagrid::DataGridThemePreference;
 pub use explain_plan::ExplainPlanThemePreference;
 pub use record_view::RecordViewThemePreference;
 pub use running::{CancelButtonThemePartial, CancelButtonThemePreference};
+pub use shape::{ShapeDialog, ShapeTarget};
 pub use status_bar::StatusBarThemePreference;
 use status_bar::{Pager, RunInfo};
 
@@ -334,6 +336,19 @@ impl Component for ResultsBody {
             })
         };
 
+        // What the Shape press composes over (Chart 09): the press's own SQL — the query
+        // that produced the settled result, never the live buffer — and that result's
+        // schema. Only a materialized result shapes; an empty one has nothing to group.
+        let shape_sql = self.spec.sql.clone();
+        let shape_target = |rows: &QueryPage| -> Option<ShapeTarget> {
+            rows.output.snapshot.map(|_| ShapeTarget {
+                tab: ws,
+                sql: shape_sql.clone(),
+                columns: rows.output.columns.clone(),
+                seed: None,
+            })
+        };
+
         let reader = query.read();
         let (body, bar): (Element, StatusBar) = match &*reader.state() {
             QueryStateData::Pending | QueryStateData::Loading { .. } => (
@@ -356,6 +371,7 @@ impl Component for ResultsBody {
                     rows.output.snapshot,
                     rows.output.columns.clone(),
                 )
+                .shape(shape_target(rows))
                 .into(),
                 StatusBar::new(ResultsState::Chart).info(RunInfo {
                     total: rows.output.total,
@@ -429,6 +445,7 @@ impl Component for ResultsBody {
                         .row_nums(row_nums)
                         .total(rows.output.total)
                         .export(export_target(rows))
+                        .shape(shape_target(rows))
                         .into(),
                     bar,
                 )

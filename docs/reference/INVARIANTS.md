@@ -116,8 +116,11 @@ Things that must not regress. Each was fought for once already.
   is the only operation that can conflate rows, so it is the only thing that refuses on
   duplicates (`ChartData::Duplicates`, refused in favour of the user's own `GROUP BY`). Over a cap it answers
   `ChartData::OverCap`, which carries no data at all — a truncated chart is not a state that can
-  exist. The histogram's binning is the one engine computation (no `width_bucket` in DataFusion
-  54). What was **built and withdrawn** is the first design's engine-side aggregation pipeline —
+  exist. The histogram's binning is the one engine computation over the *data* (no `width_bucket`
+  in DataFusion 54), and the scatter trendline's `Engine::trend` fit (Chart 11, `CHART_SPEC.md`
+  §10) is the one sanctioned computed *overlay*: a function of the encoding rather than the
+  query, its own read keyed by the two encoded columns, so toggling it never re-reads the
+  points. What was **built and withdrawn** is the first design's engine-side aggregation pipeline —
   `AggFn`/`Bucket`/`Stride`, auto-stride resolution, engine-imposed category order. Withdrawn on
   two grounds, both evidenced: every hard defect of two adversarial reviews clustered in that
   machinery (NaN comparator panics, `date_bin` overflow, cap arithmetic, bin-key collapse), and
@@ -230,7 +233,15 @@ Things that must not regress. Each was fought for once already.
     control in the strip that *left* the chart rather than changing it. It was also standing in
     for the chart having no aggregation of its own (`CHART_SPEC.md` §8), and a shortcut that
     makes that gap tolerable is a reason not to close it. What survives is the role split above.
-    Re-litigate the *placement* only with a surface that isn't the strip.
+    Re-litigate the *placement* only with a surface that isn't the strip — **which happened**
+    (Chart 09, settled in planning 2026-08-07, shipped 2026-08-12): the **Shape panel** is that
+    surface, a modal working panel off the results toolbar that composes visible SQL (group
+    columns with `date_bin` strides, per-measure aggregates, an explicit `ORDER BY`) and opens
+    it unrun in a new tab, seeded from the resolved encoding when the press came from the
+    Chart view. Its aggregate vocabulary is UI-local text rendering
+    (`results/shape/compose.rs`) and enters no engine type — renderer-first stands untouched,
+    the refusal overlays still keep no control behind them, and the strip is still not the
+    place (`CHART_SPEC.md` §8 records the same).
 
   And four the **interactivity** pass settled (Rz2/06), all about which side of the read a
   control sits on:

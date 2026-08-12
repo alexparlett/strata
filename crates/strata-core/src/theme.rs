@@ -863,7 +863,7 @@ mod tests {
         }
         assert_eq!(
             Role::COUNT,
-            101,
+            103,
             "the vocabulary is a deliberate, counted set"
         );
     }

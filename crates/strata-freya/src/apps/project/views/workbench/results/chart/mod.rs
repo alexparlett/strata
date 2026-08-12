@@ -68,6 +68,7 @@ use self::config::{encode, resolve, Roles};
 use self::paint::{ChartCanvas, Dress, Frame};
 use self::strip::{ControlStrip, LegendEntry};
 use super::find::FindState;
+use super::shape::{ShapeSeed, ShapeTarget};
 use super::toolbar::ResultsToolbar;
 use crate::apps::export::ExportLaunch;
 use crate::apps::project::contexts::EngineCtx;
@@ -140,6 +141,9 @@ pub struct ChartView {
     snapshot: Option<SnapshotId>,
     /// The result's schema, which is what the encoding is derived from.
     columns: Vec<ColumnInfo>,
+    /// What the toolbar's Shape press composes over (Chart 09) — arriving unseeded; this
+    /// body seeds it from the resolved encoding, which only it knows.
+    shape: Option<ShapeTarget>,
 }
 
 impl ChartView {
@@ -156,7 +160,14 @@ impl ChartView {
             export,
             snapshot,
             columns,
+            shape: None,
         }
+    }
+
+    /// What the Shape press composes over (see the field).
+    pub fn shape(mut self, shape: Option<ShapeTarget>) -> Self {
+        self.shape = shape;
+        self
     }
 }
 
@@ -323,7 +334,29 @@ impl Component for ChartView {
             .width(Size::fill())
             .height(Size::fill())
             .content(Content::Flex)
-            .child(ResultsToolbar::new(self.tab, self.find, self.export.clone()).copy_image(snap))
+            .child(
+                ResultsToolbar::new(self.tab, self.find, self.export.clone())
+                    .copy_image(snap)
+                    // The Shape press from the Chart view arrives seeded from the resolved
+                    // encoding — the cut press's "composed from the encoding" value, in the
+                    // panel's placement (Chart 09). Only real category columns seed groups:
+                    // a scatter's X is a measure, and a row-index X is no column at all.
+                    .shape(self.shape.clone().map(|target| {
+                        ShapeTarget {
+                            seed: Some(ShapeSeed {
+                                groups: encoding
+                                    .x
+                                    .iter()
+                                    .filter(|x| roles.categories().contains(x))
+                                    .chain(encoding.series.iter())
+                                    .cloned()
+                                    .collect(),
+                                measures: encoding.ys.clone(),
+                            }),
+                            ..target
+                        }
+                    })),
+            )
             .child(
                 rect()
                     .width(Size::fill())

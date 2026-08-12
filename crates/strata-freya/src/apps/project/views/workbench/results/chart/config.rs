@@ -1136,7 +1136,7 @@ mod tests {
         // A bar drops all four the way it drops a histogram's bins.
         let bar = ChartConfig {
             mark: Some(ChartMark::Bar),
-            ..config.clone()
+            ..config
         };
         let resolved = resolve(&bar, &roles);
         assert_eq!(

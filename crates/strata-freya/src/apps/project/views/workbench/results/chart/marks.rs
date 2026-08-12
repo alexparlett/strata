@@ -470,7 +470,7 @@ where
         return Ok(());
     };
     chart.draw_series(DashedLineSeries::new(
-        sampled.into_iter(),
+        sampled,
         TREND_DASH,
         TREND_GAP,
         color.stroke_width(2),

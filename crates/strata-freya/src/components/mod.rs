@@ -56,6 +56,7 @@ pub mod dot;
 pub mod form;
 pub mod icon;
 pub mod keycap;
+pub mod modal;
 pub mod run_button;
 pub mod segmented_toggle;
 pub mod sidebar_row;

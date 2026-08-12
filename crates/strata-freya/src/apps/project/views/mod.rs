@@ -48,6 +48,6 @@ pub use workbench::editor::actions;
 pub use workbench::{
     CancelButtonThemePartial, CancelButtonThemePreference, CellViewThemePreference,
     ChartThemePreference, DataGridThemePreference, ExplainPlanThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
-    Workbench,
+    RecordViewThemePreference, ShapeDialog, ShapeTarget, StatusBarThemePreference,
+    TabBarThemePreference, TabThemePreference, Workbench,
 };

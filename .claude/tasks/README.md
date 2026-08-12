@@ -75,13 +75,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   toggle (`TableDef::connection`, bucket-relative sources composed by `project::resolve_source`).
   W7-01 raised the workspace's effective MSRV to **rustc 1.94.1**. Spec:
   `docs/CONNECTIONS_SPEC.md`; settled record: `docs/reference/SETTLED_TASKS.md`.
-- **Chart view** ([`workstream-chart-view/`](workstream-chart-view/README.md), **Rz2**) — the
-  results Chart surface. **The core is built (00–04 ✅)**: the snapshot ordinal, the
-  renderer-first `Engine::chart` read, the plotters/Skia body, the encoder strip + `ChartConfig`,
-  the guardrails, Copy Image (08 ✅, which grew the fork's clipboard an image side) and the
-  interactivity pass (06 ✅ — bin count, legend hide/isolate, log value axis, crosshair). Open:
-  the remaining follow-ons (05, 07, 09–11 — presets, templates, shape panel, Tier B marks,
-  trendline). Spec: `docs/CHART_SPEC.md`.
+- **Chart view** (**Rz2**) — ✅ **done, folder removed**: the results Chart surface end to end —
+  the snapshot ordinal, the renderer-first `Engine::chart` read, the plotters/Skia body, the
+  encoder strip + `ChartConfig`, the guardrails, the interactivity pass, Copy Image (which grew
+  the fork's clipboard an image side), the Tier B marks (heatmap, error band, box plot), the
+  scatter trendline (`Engine::trend`) and the **Shape panel** (the aggregation composer, on the
+  new shared `Modal` base). Tasks 05/07 — the command-palette chart templates — were **cut**
+  (Alex, 2026-08-12): palette quick-chart entries are not wanted, and the Shape panel is the
+  constructive answer. Spec: `docs/CHART_SPEC.md`; settled record (including the cut):
+  `docs/reference/SETTLED_TASKS.md`.
 - **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
   (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
   `strata-core`; no UI surface of its own.
@@ -157,9 +159,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    written twice). What remains is persisting a conversation, which now has a transcript to
    persist: `Chats::settle` is the hook it was shaped for. AS-03's last two controls are the
    retention pair that only means something once it lands.
-2. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
-   trendline.
-3. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
+2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
 
 ## Sourcing

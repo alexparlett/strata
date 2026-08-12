@@ -16,9 +16,9 @@
 //! series row at all, and no menu ever lists a column the read would refuse. The residual
 //! cases — nothing valid left to offer — are the canvas's notice, not an inline error.
 //!
-//! Six mark tiles, three to a row, each a glyph over a name — a tile, not a segment, for the
+//! Nine mark tiles, three to a row, each a glyph over a name — a tile, not a segment, for the
 //! same reason the Export window's format cards aren't segments: a `SegmentedToggle` holding
-//! six labelled options in 232px would give each one 33px.
+//! nine labelled options in 232px would give each one 22px.
 //!
 //! **The legend lives here rather than on the canvas**, and it is also the control that hides
 //! a series — which is a deliberate divergence from
@@ -32,8 +32,8 @@
 //! stands in their place: the chart computes nothing SQL can say (spec §1.2, §1.3), so every
 //! control here changes what is *drawn* and none of them changes the data. Aggregating is the
 //! user's own `GROUP BY`, which the refusal overlays name in prose. A press that wrote that
-//! query into a new tab was built and cut — spec §8 records why, and it is the chart-side
-//! aggregation behind it that is worth revisiting rather than the shortcut.
+//! query into a new tab was built and cut — spec §8 records why — and the surface that
+//! replaced it is the **Shape panel** (Chart 09), off the results toolbar, never this strip.
 
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
@@ -323,6 +323,42 @@ impl ControlStrip {
         choices
     }
 
+    /// The four band-role encoders (Chart 10), in strip order — Q1, Q3, LOWER, UPPER —
+    /// each `None` where the mark does not read the role or nothing is left to offer.
+    fn band_encoders(&self, mark: ChartMark) -> [Option<Encoder>; 4] {
+        let bounds = reads_bounds(mark);
+        let quartiles = reads_quartiles(mark);
+        let Encoding {
+            q1, q3, y_lo, y_hi, ..
+        } = &self.encoding;
+        [
+            quartiles
+                .then(|| self.measure_role("Q1", q1, [q3, y_lo, y_hi], |c, name| c.q1 = Some(name)))
+                .flatten()
+                .map(|encoder| encoder.key("q1")),
+            quartiles
+                .then(|| self.measure_role("Q3", q3, [q1, y_lo, y_hi], |c, name| c.q3 = Some(name)))
+                .flatten()
+                .map(|encoder| encoder.key("q3")),
+            bounds
+                .then(|| {
+                    self.measure_role("LOWER", y_lo, [y_hi, q1, q3], |c, name| {
+                        c.y_lo = Some(name);
+                    })
+                })
+                .flatten()
+                .map(|encoder| encoder.key("lower")),
+            bounds
+                .then(|| {
+                    self.measure_role("UPPER", y_hi, [y_lo, q1, q3], |c, name| {
+                        c.y_hi = Some(name);
+                    })
+                })
+                .flatten()
+                .map(|encoder| encoder.key("upper")),
+        ]
+    }
+
     /// One measure-role encoder (LOWER / UPPER / Q1 / Q3, Chart 10): the measures this
     /// result offers, minus the Y and the other band roles — a bound that collides with
     /// another edge is unreachable, not reported. `None` when nothing is left to offer,
@@ -465,53 +501,7 @@ impl Component for ControlStrip {
         };
 
         // The band roles (Chart 10): a band's bounds, a box plot's quartiles and whiskers.
-        // Each is offered only where the mark reads it and a column is left to offer.
-        let bounds = reads_bounds(mark);
-        let quartiles = reads_quartiles(mark);
-        let q1 = quartiles
-            .then(|| {
-                self.measure_role(
-                    "Q1",
-                    &self.encoding.q1,
-                    [&self.encoding.q3, &self.encoding.y_lo, &self.encoding.y_hi],
-                    |c, name| c.q1 = Some(name),
-                )
-            })
-            .flatten()
-            .map(|encoder| encoder.key("q1"));
-        let q3 = quartiles
-            .then(|| {
-                self.measure_role(
-                    "Q3",
-                    &self.encoding.q3,
-                    [&self.encoding.q1, &self.encoding.y_lo, &self.encoding.y_hi],
-                    |c, name| c.q3 = Some(name),
-                )
-            })
-            .flatten()
-            .map(|encoder| encoder.key("q3"));
-        let lower = bounds
-            .then(|| {
-                self.measure_role(
-                    "LOWER",
-                    &self.encoding.y_lo,
-                    [&self.encoding.y_hi, &self.encoding.q1, &self.encoding.q3],
-                    |c, name| c.y_lo = Some(name),
-                )
-            })
-            .flatten()
-            .map(|encoder| encoder.key("lower"));
-        let upper = bounds
-            .then(|| {
-                self.measure_role(
-                    "UPPER",
-                    &self.encoding.y_hi,
-                    [&self.encoding.y_lo, &self.encoding.q1, &self.encoding.q3],
-                    |c, name| c.y_hi = Some(name),
-                )
-            })
-            .flatten()
-            .map(|encoder| encoder.key("upper"));
+        let [q1, q3, lower, upper] = self.band_encoders(mark);
 
         // The engine does the binning, so this one is part of the read — a new count is a new
         // entry rather than a repaint. Only a histogram has bins to count.
