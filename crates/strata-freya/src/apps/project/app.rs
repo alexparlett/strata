@@ -49,7 +49,8 @@ use crate::platform::{
     close_this_window, open_settings, quit, use_register_window, OpenCtx, Subtree, WindowKind,
 };
 use crate::state::{
-    use_claim_open, use_config, use_promote_recent, use_share_config, AppCtx, ConfigChan,
+    use_claim_open, use_config, use_promote_recent, use_share_config, use_updates, AppCtx,
+    ConfigChan,
 };
 use crate::task::offload;
 use crate::theme::{peek_selection, use_strata_theme, window_background};
@@ -271,6 +272,10 @@ impl App for ProjectApp {
         // is running, and this window is one of the two kinds that is always around to
         // reconcile it (see `agent::server`).
         use_agent_server(self.app.agent.clone(), config);
+        // …and the updater's one startup check, on the same layer and for the same reason
+        // (`state::updates`): it is app-global, and this is one of the two window kinds that is
+        // always around to run it.
+        use_updates(self.app.updates, config);
 
         // Mirror the confirm-close-running pref into the hook's atomic (subscribes to the
         // config's Settings channel, so a change reaches the next OS close immediately).

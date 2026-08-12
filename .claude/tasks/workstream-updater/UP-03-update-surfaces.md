@@ -1,6 +1,23 @@
 # UP-03 · Surfaces: launcher affordance, dialog, setting, palette command
 
-**Workstream:** Updater · **Status:** ⬜ · **Depends on:** UP-02 (`UpdateStatus` + actions)
+**Workstream:** Updater · **Status:** ⬜ · **Depends on:** UP-02 (`UpdateStatus` + actions — all
+landed 2026-08-12)
+
+## What UP-02 left for this task
+- `state::updates`: `Update` (the status enum), `UpdateStatus` on `AppCtx` as `app.updates`,
+  and the three actions `check` / `download` / `install`. `download` and `install` carry an
+  `#[allow(dead_code)]` naming this task as the presser — **remove both allows** when the
+  surfaces land, or they hide a real regression later.
+- `state::updates::CURRENT` is the running version. The launcher rail's
+  `Meta::new(env!("CARGO_PKG_VERSION"))` should read that const instead, so the number the check
+  compares against and the number the rail prints are the same one.
+- `state::updates::install_site()` answers install eligibility (`Unbundled` / `ReadOnly` /
+  `Writable`), cached once per process. That is what step 2's degraded wording keys on; the
+  affordance shows nothing at all when it is `Unbundled`.
+- `Update::Downloading` carries `got` / `total` for step 2's progress text, and `Update::Ready`
+  carries `version` and `page_url` for step 3's dialog body and its link-out.
+- A `Ready` status is deliberately **not** re-checked, so the palette command is a no-op there
+  as well as while `Checking` / `Downloading`.
 
 ## Goal
 The mechanism becomes visible: a setting that gates the automatic check, an affordance where the
@@ -35,8 +52,10 @@ for checking on demand. Deliberately quiet — no toast system, no badge on ever
 
 ## Build
 
-1. **The setting.** `Settings::check_updates`, default **true**, doc comment naming its
-   consumer (the startup check in `state/updates.rs`). The five edits above; the row lands in
+1. **The setting — the field already exists.** UP-02 added `Settings::check_updates` (default
+   **true**, `#[serde(default)]`, in `Default`, in the `settings_merge!` list) because its startup
+   check is gated on it. What is left here is the **row** and the **`settings_index!` entry** —
+   two of the five edits above, neither compiler-checked. The row lands in
    Settings ▸ System beside `ConfirmClose`, wording in the app's IDE register — label
    `Check for updates`, hint one plain sentence (e.g.
    `Ask GitHub for a newer release when Strata starts.`). The toggle gates only the

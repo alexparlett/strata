@@ -25,7 +25,7 @@ use crate::apps::launcher::views::{pick_and_open, LauncherRail, ProjectsPane, Ti
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
-use crate::state::{use_share_config, AppCtx};
+use crate::state::{use_share_config, use_updates, AppCtx};
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
 // `%[no_ext]`: the window's dress is read by four sibling views (title bar · rail · pane ·
@@ -113,6 +113,9 @@ impl App for LauncherApp {
         // kinds is what makes the setting still live when every project is closed. Idempotent,
         // so the second window to run it does nothing (see `agent::server`).
         use_agent_server(self.app.agent.clone(), self.app.config);
+        // The updater's one startup check, mounted on both workspace kinds for the same reason
+        // as the line above (`state::updates`).
+        use_updates(self.app.updates, self.app.config);
 
         let theme = get_theme!(
             &None::<LauncherThemePartial>,

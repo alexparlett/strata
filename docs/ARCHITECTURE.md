@@ -132,8 +132,16 @@ showing), the event log, the agents satellite (bookkeeping only — no surface s
 history (a `.jsonl` file, not a store
 field), the assistant's model listings (`strata_core::models` — what each provider last reported
 serving, beside the config file rather than in it, because a fetched list is a cache of a remote
-fact and not something the user edited), and one app-global config store whose single write path
-also persists.
+fact and not something the user edited), the update status (`state::updates` over
+`strata_core::update` — what the newest release is and where a verified download is staged; not
+persisted, because a check result is a fact about a request made minutes ago), and one app-global
+config store whose single write path also persists.
+
+The updater is the one thing that outlives the event loop. It never mutates the running bundle:
+the press records the swap and calls the ordinary `quit()`, so every close confirm keeps its say,
+and `main` performs it after `launch` has returned and no window is left. What makes a download
+installable is its signature rather than where it came from — strict `codesign`, the team id, the
+bundle id, failing closed — so the network is untrusted by construction.
 
 Config never holds a secret. The one class of secret the app must keep — third-party provider keys
 for the assistant — lives in the OS keystore (`strata_core::secret`, opened once in `main`), and

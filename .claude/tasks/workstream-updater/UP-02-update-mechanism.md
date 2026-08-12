@@ -1,7 +1,7 @@
 # UP-02 · Check / download / verify / install mechanism
 
-**Workstream:** Updater · **Status:** ⬜ · **Depends on:** UP-01 (the `.app.zip` asset +
-`TEAM_ID`; end-to-end verification needs a published release carrying both)
+**Workstream:** Updater · **Status:** ✅ (built 2026-08-12, verified end to end against the
+published v0.3.1) · **Depends on:** UP-01 (the `.app.zip` asset + `TEAM_ID`)
 
 ## Goal
 The whole mechanism, window-free: ask GitHub what the newest release is, download its update
@@ -103,18 +103,70 @@ signatures for tests (AGENTS.md §1); codesign verification against a real relea
 Mac check, and needs UP-01's release published.
 
 ## Acceptance
-- [ ] `strata_core::update`: check/download/verify as blocking fns; reqwest/tokio nowhere in
-      `strata-freya`'s manifest.
-- [ ] The check offers prereleases, skips drafts and unparseable tags, answers "page only"
-      when the zip asset is missing, and never offers a version ≤ the running one.
-- [ ] No request leaves `https`: the redirect policy refuses a scheme downgrade.
-- [ ] Verification fails closed on: bad signature, wrong team, wrong bundle id, ad-hoc build —
-      each with its own message.
-- [ ] A `cargo run` build neither checks nor offers; an unwritable install location degrades to
-      the release page.
-- [ ] Install runs only after the event loop ends; a cancelled quit keeps the staged update and
-      `end_quit` runs; a failed swap rolls back and the old app still launches.
-- [ ] Startup check runs once per process, only when the setting is on.
+- [x] `strata_core::update`: check/download/verify as blocking fns; reqwest/tokio nowhere in
+      `strata-freya`'s manifest. *(`reqwest 0.12` + `semver 1` declared on `strata-core` only,
+      matching the features `object_store` already resolves so no second TLS backend is built.)*
+- [x] The check offers prereleases, skips drafts and unparseable tags, answers "page only"
+      when the zip asset is missing, and never offers a version ≤ the running one. *(Unit tests
+      over inline fixture JSON in `update.rs`, plus a live run against the real release list.)*
+- [x] No request leaves `https`: the redirect policy refuses a scheme downgrade. *(One custom
+      policy on both requests, which also bounds the hops.)*
+- [x] Verification fails closed on: bad signature, wrong team, wrong bundle id, ad-hoc build —
+      each with its own message. *(Two of the four exercised against **real** bundles built from
+      the published archive: an ad-hoc re-sign is refused as "carries no Apple team signature",
+      and a file added inside a verified bundle is refused with codesign's own "a sealed resource
+      is missing or invalid". The other two are unreachable without a second signing identity.)*
+- [x] A `cargo run` build neither checks nor offers; an unwritable install location degrades to
+      the release page. *(`site()` answered `Unbundled` under `cargo run` and the startup check
+      stood down; writability is answered by writing a probe file, since a directory's mode bits
+      do not settle it on macOS. The **degrade** itself is UP-03's — `install_site()` is the
+      handle its affordance reads.)*
+- [x] Install runs only after the event loop ends; a cancelled quit keeps the staged update and
+      `end_quit` runs; a failed swap rolls back and the old app still launches. *(The tail in
+      `main` was confirmed to run on a real ⌘Q — `launch` returns, so the **preferred shape**
+      below was taken and no helper script exists. The swap and its cleanup are unit-tested
+      including the failure arm. The press that records the intent is UP-03's dialog, so the
+      cancelled-quit path is wired but not yet pressable — see the note below.)*
+- [x] Startup check runs once per process, only when the setting is on.
+
+## What was built, and where it differs from the plan
+
+- **`Settings::check_updates` landed here, not in UP-03.** The acceptance box above asks the
+  startup check to be gated on a setting, and a gate with no way to be off is not a gate. The
+  **field** (`config.rs`, its `Default`, the `settings_merge!` list) is the mechanism's gate and
+  is in this change; the **row** in Settings ▸ System and the `settings_index!` entry are
+  untouched and remain UP-03 step 1. Default `true`, `#[serde(default)]`, so existing config
+  files are unaffected.
+- **`launch` returns, so `main` grew a tail.** Settled from source first (winit 0.30's `run_app`
+  is `run_on_demand` on macOS, and Freya's renderer calls `event_loop.exit()` rather than ending
+  the process — only iOS and Web are documented as never returning), then confirmed empirically:
+  a ⌘Q logs `the event loop has ended` from `install_pending`. The fallback helper script in step
+  5 was therefore **not** built and should not be.
+- **A worker outlives the window that started it**, which the plan's "run via `task::offload` and
+  write the slot" does not by itself handle: a task is bound to its window's root scope, and the
+  launcher closes the moment a project opens, so a download settling after that would strand the
+  status on `Downloading` and orphan a verified 111 MB bundle. The worker therefore parks its
+  settled status in a process-global and `use_updates` adopts it on every mount. Nothing polls —
+  there is always a workspace window, and its mount is the second wake.
+- **A `Ready` status is not re-checked.** A manual check that found something newer would leave a
+  verified bundle nobody asked to discard.
+- **Progress is throttled on the worker** (1 MB steps). A write per network chunk is a repaint per
+  network chunk, which is thousands of them for this archive.
+- **The staging layout is a contract**: `<temp>/strata-update-<uuid>/<Name>.app`, so a staged
+  bundle's parent *is* its staging folder and `discard` needs no second value. It refuses to
+  delete a folder that is not one of ours.
+- **`download` and `install` carry an `#[allow(dead_code)]` with the reason**: their presses are
+  UP-03's launcher affordance, palette command and confirm dialog (AGENTS.md §5). Removing those
+  two allows is part of UP-03.
+
+## Known gap (not this task's to fix)
+
+A **Dock-icon Quit** sends Cocoa's `terminate:` un-vetoed (winit 0.30 exposes no
+`applicationShouldTerminate`; noted in `main.rs` and owned by P6-02), so it ends the process
+before `main`'s tail. That cannot be reached from the install press, which goes through
+`platform::quit()` — but a user who presses Restart, gets a close confirm, and then quits from
+the Dock loses the install rather than performing it. The staged bundle is still on disk and the
+press can be made again after relaunch.
 
 ## References
 - `strata-agent/src/assistant/provider.rs:736-793` — the fetch shape to copy.

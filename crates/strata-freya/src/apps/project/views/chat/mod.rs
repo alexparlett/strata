@@ -305,7 +305,10 @@ mod tests {
     use crate::components::metrics::TOOL_SIZE;
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
-    use crate::state::{create_global_theme_preview, AppCtx, ConfigStation, ModelListings, Probes};
+    use crate::state::{
+        create_global_theme_preview, create_global_updates, AppCtx, ConfigStation, ModelListings,
+        Probes,
+    };
     use crate::theme::{strata_theme, ThemesCtx};
 
     /// A config whose AI half is `ai` — everything the composer branches on.
@@ -396,6 +399,9 @@ mod tests {
                     listings,
                     probes,
                     assistant: None,
+                    // Idle and never asked: this pane makes no check, and a real one would
+                    // dial out from a test.
+                    updates: create_global_updates(),
                 });
                 chats
             },

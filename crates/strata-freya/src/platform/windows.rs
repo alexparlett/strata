@@ -36,7 +36,7 @@ use crate::apps::connection::ConnectionTarget;
 use crate::apps::launcher::LauncherApp;
 use crate::apps::project::{window_geometry, ProjectApp};
 use crate::menu::{use_file_menu, MenuScope};
-use crate::state::{write_config, AppCtx, ConfigChan, ConfigStation};
+use crate::state::{abandon_install, write_config, AppCtx, ConfigChan, ConfigStation};
 
 /// What a window is showing. The project variant carries its folder (the
 /// `RecentProject::path` string), which is how "is this project open?" is answered.
@@ -221,8 +221,15 @@ pub fn begin_quit() {
 /// which silently inverts both behaviours the flag gates (the launcher would stop taking
 /// over from the last window, and closed projects would stay in the persisted open-set and
 /// reopen next launch).
+///
+/// It is also where an update install is abandoned (UP-02). The install press is a quit with an
+/// intent recorded in front of it, so a cancelled quit has to forget that intent — and this is
+/// already the one call every dismissing path makes, which is cheaper to keep true than a rule
+/// each dialog remembers. Nothing is lost by it: the staged bundle is a file on disk and the
+/// status still reads `Ready`.
 pub fn end_quit() {
     QUITTING.store(false, Ordering::Relaxed);
+    abandon_install();
 }
 
 /// Whether a quit is in flight (see [`begin_quit`]).

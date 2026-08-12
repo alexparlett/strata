@@ -30,7 +30,7 @@ use crate::agent::create_global_agent;
 use crate::platform::{create_global_open, create_global_windows};
 use crate::state::{
     create_global_config, create_global_listings, create_global_probes,
-    create_global_theme_preview, AppCtx,
+    create_global_theme_preview, create_global_updates, install_pending, AppCtx,
 };
 use crate::theme::ThemesCtx;
 
@@ -124,6 +124,11 @@ fn main() {
     let listings = create_global_listings();
     // The outcome half of the same question — see `state::listings::Probes`.
     let probes = create_global_probes();
+    // What the updater last learned (UP-02). **No dial-out here either**: the startup check
+    // runs from a workspace window's root, where the setting that gates it can be read and
+    // where a task has a scope to live in. Not persisted — a check result is a fact about a
+    // request made minutes ago.
+    let updates = create_global_updates();
     // The assistant's runtime (AS-02/AS-04): **one per app**, because a runtime is threads and
     // several conversations streaming at once are several tasks on the same two. Deliberately
     // *not* the MCP server's runtime, whose lifetime is a setting — the chat pane must not stop
@@ -150,6 +155,7 @@ fn main() {
         listings,
         probes,
         assistant,
+        updates,
     };
     let menu_app = app.clone();
     let launch_config = with_embedded_fonts(LaunchConfig::new())
@@ -184,6 +190,12 @@ fn main() {
         Startup::Launcher => launch_config.with_window(LauncherApp::window(app)),
     };
     launch(launch_config);
+    // **After the event loop.** `launch` returns once the last window has closed (winit 0.30's
+    // `run_app` is `run_on_demand` on macOS, and Freya's renderer calls `event_loop.exit()`
+    // rather than ending the process), which is the one moment an update can be installed: no
+    // window is open, and the bundle being replaced is not being read. A quit nobody asked to
+    // install through leaves nothing here to do.
+    install_pending();
 }
 
 /// The families the themes name (`themes/*.json` `fonts`), embedded rather than assumed. Neither

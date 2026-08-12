@@ -1720,6 +1720,40 @@ Things that must not regress. Each was fought for once already.
   runtime resize/move from the app — restore geometry only at window **creation**
   (`WindowConfig::with_size` + `with_window_attributes(with_position(..))`), which is why launch
   inputs (project root, geometry) are resolved *before* the window opens.
+- **An update is installed by a quit, and what makes one installable is the signature rather than
+  where it came from.** Three rules, and each replaced a tempting shortcut.
+  **The bundle is never mutated while it is running.** The press records the swap in a
+  process-global slot and calls the ordinary `platform::quit()` — every close confirm keeps its
+  say and the open-set persists exactly as on any quit — and `main` performs it *after*
+  `launch` has returned, which on macOS it does (winit 0.30's `run_app` is `run_on_demand`, and
+  Freya's renderer calls `event_loop.exit()` rather than ending the process). A cancelled quit
+  clears the intent, and that clearing lives in `end_quit` because that is already the one call
+  every dismissing path has to make. The swap itself is copy-to-sibling, rename-aside,
+  rename-in, so a failure at the last step renames the original back: the outcome is the new app
+  or the old one, never half of either, and the relaunch is unconditional because the user asked
+  for a restart.
+  **Authenticity is Apple's chain, checked by us, and it fails closed.** `codesign --verify
+  --deep --strict`, then `TeamIdentifier` against `secret::TEAM_ID`, then the staged
+  `Info.plist`'s `CFBundleIdentifier` against `secret::APP_ID` — in that order, because the
+  strict verify is what seals the plist the third check reads. Each refusal has its own wording,
+  and an ad-hoc signature (no team, or the literal `not set`) is refused by name so a locally
+  built app can never be offered as an update. TLS and an https-only redirect policy cover the
+  transport and nothing else: a MITM can withhold an update, never substitute one. The offer
+  requires a **strictly newer** semver, so a replayed listing cannot walk a running app
+  backwards, and the archive is unpacked with `ditto` because anything that drops extended
+  attributes produces a bundle that no longer verifies. There is no system check behind ours —
+  a file the app downloads itself is never quarantined, so Gatekeeper never assesses it.
+  **A worker outlives the window that started it.** The blocking calls run through
+  `task::offload`, but a task is bound to its window's root scope and the launcher closes the
+  moment a project opens, so the worker parks its settled status in a process-global and
+  whoever reaches it first takes it — the awaiting task, or the next window to mount. Nothing
+  polls: there is always a workspace window, and its mount is the second wake. A status can
+  therefore never strand on `Checking` or `Downloading`, which for a third-of-a-gigabyte
+  download would orphan a verified bundle nobody could reach.
+  Outside a bundle the whole thing is **inert** — `update::site()` finds no `.app` in a
+  `cargo run` build, so there is no startup check and no offer, and that is what says so rather
+  than a debug assertion. `strata-core` is versioned independently of the app, so the running
+  version is an **argument** to the check and never the core's own `env!`.
 - **No command bus.** App-level shortcuts are distributed `on_global_key_down` listeners per
   feature (helper: `strata-freya::keymap::on_command`), resolving through the central
   `strata-core::keymap` table. Precedence = document order; a modal barrier = an early-mounted

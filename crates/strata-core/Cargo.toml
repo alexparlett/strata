@@ -64,6 +64,19 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # `Entry::new`, so nothing can be substituted for it. `keyring_core::mock` is the only way
 # to make a keystore *refuse*, and that path is the one this module exists to get right.
 keyring-core = "1"
+# `update`: the GitHub Releases check and the update download (UP-02). **Version 0.12 on
+# purpose** — `object_store` pins it, so this is the same crate already compiled into the graph
+# rather than a second HTTP stack (`strata-agent` carries 0.13 because `genai` does, and the two
+# coexist there). `default-features = false` with exactly the features object_store already turns
+# on: reqwest's defaults would pull `native-tls` in beside the rustls this graph resolves, and a
+# second TLS backend is a second root store to keep straight for no gain.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls-native-roots",
+    "http2",
+] }
+# `update`: comparing a release tag against the running version. Already in the lock (via
+# `rustc_version`), so this is a new direct declaration and no new download.
+semver = "1"
 # `secret`: zero a secret's buffer on drop, with a write the optimiser may not elide. Pure
 # Rust and no build script, which is the line this stops at - `secrets`-style mlock/mprotect
 # guarding wants libsodium linked in, and could only ever guard one copy of several anyway
