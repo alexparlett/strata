@@ -302,7 +302,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: strata-macos-${{ steps.version.outputs.version }}-${{ inputs.arch || 'universal' }}
-          path: target/dist/*.dmg
+          # The DMG a tester installs from, and the .app.zip the in-app updater fetches. The
+          # notarize submission's own zip is deleted by the script before it gets here, so the
+          # glob matches exactly the one archive.
+          path: |
+            target/dist/*.dmg
+            target/dist/*.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -485,4 +490,4 @@ jobs:
             echo "::warning::The release-notes step produced nothing - publishing with GitHub's generated changelog only."
           fi
           ARGS+=(--notes "$NOTES")
-          gh release create "$TAG" target/dist/*.dmg "${ARGS[@]}"
+          gh release create "$TAG" target/dist/*.dmg target/dist/*.zip "${ARGS[@]}"

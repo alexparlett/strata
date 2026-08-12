@@ -74,6 +74,30 @@ use zeroize::Zeroize;
 /// quarantine record and the notarization ticket.
 pub const APP_ID: &str = "com.alexparlett.strata";
 
+/// The Apple Developer team a release build is signed by.
+///
+/// It is an *identity*, not a credential — it is readable out of any distributed bundle's
+/// signature, and only the private key can sign for it — which is why it belongs in source
+/// rather than beside that key in the repo's Actions secrets.
+///
+/// It is written here because it is the anchor the updater verifies a downloaded bundle
+/// against (UP-02): a staged update is installed only if its signature verifies strictly,
+/// claims [`APP_ID`], and names *this* team. That is what makes an archive fetched over an
+/// untrusted network safe to swap in, and it is the only check there is — a file the app
+/// downloads itself is never quarantined, so Gatekeeper never assesses it.
+/// `scripts/bundle-macos.sh` reads this constant the way it reads [`APP_ID`] and fails a
+/// signed build whose signature names a different team, so the app cannot ship signed by a
+/// team its own updater would refuse.
+///
+/// **Which team.** This is the team of the **Developer ID Application** certificate, which is
+/// not the team of the Apple Development certificate sitting in the same keychain: an
+/// individual account has a personal team as well as the paid program's, and only the second
+/// signs something Apple will notarize. The value is that certificate's
+/// `organizationalUnitName`, which is what a distributed bundle carries as its
+/// `TeamIdentifier`. Taking it from the wrong certificate is exactly the slip the build's
+/// cross-check exists to catch, and did.
+pub const TEAM_ID: &str = "397J3SJ3D4";
+
 /// A reference to a secret in the OS keystore: "there is a secret filed under this id", or
 /// absent.
 ///

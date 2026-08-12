@@ -51,7 +51,7 @@ sit on the mechanism.
 
 | # | Task | Status | Depends on |
 |---|---|---|---|
-| UP-01 | Release-side: update archive + team identity | ⬜ | — |
+| UP-01 | Release-side: update archive + team identity | ✅ | — |
 | UP-02 | Check / download / verify / install mechanism | ⬜ | UP-01 |
 | UP-03 | Surfaces: launcher affordance, dialog, setting, palette command | ⬜ | UP-02 |
 

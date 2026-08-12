@@ -142,9 +142,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   against connections: the reader's keys are the def's, the store's are refused toward
   Connections on the key alone), and ED-11 landed the completion offer over all of them in one
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
-- **Updater** ([`workstream-updater/`](workstream-updater/README.md), UP) — ⬜ in-app updates:
-  the release pipeline grows a `ditto`-zipped `.app` beside the DMG and the app compiles in its
-  team identity (UP-01), a window-free check/download/verify/install mechanism over the GitHub
+- **Updater** ([`workstream-updater/`](workstream-updater/README.md), UP) — 🟡 in-app updates.
+  **UP-01 ✅** (2026-08-12): the release pipeline grows a `ditto`-zipped `.app` beside the DMG,
+  the app compiles in its team identity, and a signed build cross-checks the two so it cannot
+  ship signed by a team its own updater would refuse. A release still has to be **cut** before
+  UP-02 can verify end to end. Open: a window-free check/download/verify/install mechanism over the GitHub
   Releases API with verification on Apple's chain and a quit-shaped install (UP-02), and the
   surfaces — launcher-rail affordance, one restart confirm, a Settings toggle, a palette
   command (UP-03). Hand-rolled rather than Sparkle, deliberately; the workstream README records

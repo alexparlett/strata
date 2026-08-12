@@ -1,6 +1,7 @@
 # UP-01 · Release-side: update archive + team identity
 
-**Workstream:** Updater · **Status:** ⬜ · **Depends on:** —
+**Workstream:** Updater · **Status:** ✅ (built 2026-08-12; the release cut is still owed) ·
+**Depends on:** —
 
 ## Goal
 Every release carries an artifact an updater can consume programmatically, and the app compiles
@@ -36,35 +37,66 @@ no app behaviour changes.
 3. **`TEAM_ID`.** A constant beside `APP_ID` in `crates/strata-core/src/secret.rs`:
 
    ```rust
-   pub const TEAM_ID: &str = "FX37775A96";
+   pub const TEAM_ID: &str = "397J3SJ3D4";
    ```
 
-   (Alex's Apple team id, supplied 2026-08-12 — the parenthesised suffix of the signing
-   identity. It is an identity, not a credential: it is readable out of any distributed
-   bundle's signature, so it belongs in source; only the private key can sign for it.) Keep the
-   exact single-line shape so a script can read it the way `bundle-macos.sh:116` reads
-   `APP_ID`, and write the doc comment in that constant's house style: the one-line thesis,
-   then why it lives here (it is the anchor the updater verifies a downloaded bundle against —
-   UP-02). Step 4's cross-check confirms the value against the real signing identity on the
-   first signed build, so a transcription slip cannot survive a release.
-4. **The cross-check.** When the script signs with a real identity, extract the team id from
-   the identity string and compare it against `TEAM_ID` read out of the source (same `sed`
-   shape). A mismatch is a **hard fail**: an app signed by a team its own updater refuses is a
-   release that can never update itself, and the build is the only place that can notice.
+   **Corrected during the build (2026-08-12).** This task shipped the value `FX37775A96`, which
+   is the parenthesised suffix of the *Apple Development* certificate
+   (`Apple Development: alexparlett@gmail.com (FX37775A96)`) — an individual's personal team,
+   and the certificate `bundle-macos.sh` deliberately refuses to sign with because Apple will
+   not notarize it. The Developer ID Application certificate that actually signs releases is
+   `Developer ID Application: Alexander James Parlett (397J3SJ3D4)`, `organizationalUnitName`
+   `397J3SJ3D4`, and that is the `TeamIdentifier` a distributed bundle carries. Step 4's
+   cross-check is what caught it, on the first signed build, exactly as intended.
+
+   It is an identity, not a credential: it is readable out of any distributed bundle's
+   signature, so it belongs in source; only the private key can sign for it. Keep the exact
+   single-line shape so a script can read it the way `bundle-macos.sh:116` reads `APP_ID`, and
+   write the doc comment in that constant's house style: the one-line thesis, then why it lives
+   here (it is the anchor the updater verifies a downloaded bundle against — UP-02).
+4. **The cross-check.** When the script signs with a real identity, compare the team id against
+   `TEAM_ID` read out of the source (same `sed` shape). A mismatch is a **hard fail**: an app
+   signed by a team its own updater refuses is a release that can never update itself, and the
+   build is the only place that can notice.
+
+   Built reading the team back out of the **signature** (`codesign -dvvv`, `TeamIdentifier=`)
+   rather than parsed out of the identity string, which this task asked for: `codesign` accepts
+   a certificate hash as an identity, so the identity string need not contain the team at all,
+   and the signature is the thing the updater will actually read. Same check, one fewer way to
+   be silently unenforced.
 5. **Docs.** `docs/RELEASING.md` gains the zip in its artifact description: what it is for, and
    that its `.app.zip` suffix is the contract UP-02's asset selection keys on (the version in
    the filename is informative; the tag is authoritative).
 
 ## Acceptance
-- [ ] A release run attaches both `Strata-<v>-universal.dmg` and `Strata-<v>-universal.app.zip`;
-      a plain artifact-only run uploads both.
-- [ ] The zip extracts via `ditto -x -k` to a bundle that passes
-      `codesign --verify --deep --strict` and `xcrun stapler validate`.
-- [ ] `TEAM_ID` exists beside `APP_ID`, single-line, sed-readable; a real signing identity whose
-      team id disagrees with it fails the build with a message naming both.
-- [ ] `docs/RELEASING.md` describes the new asset and its naming contract.
+- [x] A release run attaches both `Strata-<v>-universal.dmg` and `Strata-<v>-universal.app.zip`;
+      a plain artifact-only run uploads both. *(Both globs widened; a local `--arch arm64` run
+      leaves exactly one `.zip` and one `.dmg` in `target/dist`. The notarize submission's own zip
+      moved out of `$DIST` to keep that true after a failed submission — under `set -e` a rejection
+      aborts before the cleanup, and nothing empties `$DIST` between runs, so it would have ridden
+      the next successful build onto the release page as a stale second asset.)*
+- [x] The zip extracts via `ditto -x -k` to a bundle that passes
+      `codesign --verify --deep --strict` **and** carries `TeamIdentifier=397J3SJ3D4` /
+      `Identifier=com.alexparlett.strata` — the three facts UP-02 verifies. `xcrun stapler
+      validate` is **unverified locally**: no notary credentials on this machine, so the build
+      took the signed-but-not-notarized rung. Confirm it on the release cut below.
+- [x] `TEAM_ID` exists beside `APP_ID`, single-line, sed-readable; a real signing identity whose
+      team id disagrees with it fails the build with a message naming both. *(Both directions
+      exercised: a real Developer ID build reports `team: 397J3SJ3D4` and proceeds; the same guard
+      against `FX37775A96` exits non-zero naming both values.)*
+- [x] `docs/RELEASING.md` describes the new asset and its naming contract.
 - [ ] **Cut a release after landing this** — UP-02's end-to-end verification needs a published
-      release with the zip attached.
+      release with the zip attached. Check `xcrun stapler validate` on that zip's bundle at the
+      same time.
+
+## Note for whoever runs the next local build
+
+`scripts/bundle-macos.sh` fails at `lipo` in any worktree where `CARGO_TARGET_DIR` is set (it is,
+on Alex's machine): cargo writes to the main checkout's `target/` and the script reads build output
+through relative `target/…` paths. It fails *after* the full release compile. Not a CI problem (no
+such var on the runners) and out of UP-01's scope, so it is filed separately rather than fixed
+here — the `DIST` half is a real design call, since a shared target dir means two worktrees'
+bundles collide in one `dist/`.
 
 ## References
 - `scripts/bundle-macos.sh` — notarize zip at `:321-324`, staple at `:329`, DMG section from

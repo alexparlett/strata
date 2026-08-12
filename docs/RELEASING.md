@@ -16,7 +16,7 @@ in what is done.
 | Input | Default | What it does |
 |---|---|---|
 | **Architectures** | `universal` | `universal` runs on both Apple Silicon and Intel. `arm64` is roughly half the build time when every tester is on Apple Silicon. |
-| **Tag this commit and publish a release page** | off | Off: the DMG appears as an artifact on the run page and nothing about the repo changes. On: the run also creates the tag and a release page with the DMG attached. |
+| **Tag this commit and publish a release page** | off | Off: the build's artifacts appear on the run page and nothing about the repo changes. On: the run also creates the tag and a release page with them attached. |
 | **Bump the crate version first** | `none` | `patch` / `minor` / `major` rewrites the version in `crates/strata-freya/Cargo.toml`, commits it, and pushes it once the build has produced a DMG. Needs the release box ticked. |
 | **Exact version instead of a bump** | *(blank)* | Blank uses the version already in the manifest. Set it to release a specific number instead of bumping to the next one. Rejected if a bump is also chosen — they are two answers to one question. |
 | **How the release notes are written** | `claude` | `claude` summarises the commits since the last release into a *What's new* section. `generated` uses GitHub's changelog on its own. |
@@ -112,19 +112,45 @@ manifest disagrees with it produces a DMG named after the tag rather than after 
 
 ---
 
+## What a build produces
+
+Three things in `target/dist/`, whichever entry point built them:
+
+| File | What it is for |
+|---|---|
+| `Strata.app` | The bundle the other two are made from. Signed, and stapled if the build notarized. |
+| `Strata-<version>-<arch>.dmg` | The **first install**. It carries the drag-to-Applications gesture, which is the thing a person does once. |
+| `Strata-<version>-<arch>.app.zip` | The **update**. What the in-app updater downloads, verifies and swaps in. |
+
+The zip is a `ditto` archive, which is the only kind that round-trips a signed bundle's symlinks
+and extended attributes — a `zip` of the same bundle fails the strict signature check the updater
+runs before it installs anything. It is written after stapling, so the archived bundle carries the
+notarization ticket and validates with no network.
+
+Its `.app.zip` suffix is a contract rather than a convention: it is what the updater's asset
+selection keys on, so a release page carries exactly one asset ending in it. The version in the
+filename is informative — the updater compares the release **tag**, which is the authoritative
+number, and reads nothing out of the asset's name beyond that suffix.
+
+Both are attached to a published release, and both are uploaded as run artifacts when the release
+box is off. An unsigned build produces the same three files: the artifact set does not change shape
+with the signing rung, only what the files are worth does.
+
+---
+
 ## From your laptop
 
 ```bash
 ./scripts/bundle-macos.sh
 ```
 
-Universal `.app` and DMG in `target/dist/`. For a quick check on your own machine:
+Universal, into `target/dist/`. For a quick check on your own machine:
 
 ```bash
 ./scripts/bundle-macos.sh --arch arm64
 ```
 
-`--no-dmg` stops at the `.app`. `--help` lists the lot.
+`--no-dmg` stops after the update archive. `--help` lists the lot.
 
 The first universal build is slow — Skia and DataFusion compile once per architecture. Subsequent
 builds reuse the cargo cache per target.
@@ -153,6 +179,13 @@ allow access again after each update. A Developer ID signature anchors on the bu
 plus the team certificate, which stays the same across versions. That identifier is
 `strata_core::secret::APP_ID`, read out of the Rust source by the bundle script for exactly this
 reason (see `.claude/tasks/workstream-assistant/AS-05-secret-store.md`).
+
+`strata_core::secret::TEAM_ID` sits beside it and is read the same way. It is the team the in-app
+updater requires a downloaded bundle to be signed by, so a signed build whose signature names a
+different team is a **hard failure** — the message names both. An app signed by a team its own
+updater refuses is a release that can never update itself, and the build is the only place that
+can notice: the signature is valid, notarization succeeds, and nothing goes wrong until a tester
+one version later gets no update at all.
 
 > **Note on the certificate you have.** The keychain on this machine holds an *Apple Development*
 > certificate. That is the wrong kind — it signs, but Apple will not notarize a build signed with
