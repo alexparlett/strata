@@ -9,6 +9,7 @@ use freya::prelude::*;
 
 use super::CatalogTheme;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::SP_3;
 use crate::components::typography::Eyebrow;
 
 #[derive(PartialEq)]
@@ -72,7 +73,7 @@ impl Component for CatalogSection {
             .content(Content::Flex)
             .overflow(Overflow::Clip)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .on_press(move |_| {
                 let now = *open.peek();
                 open.set(!now);
@@ -99,8 +100,8 @@ impl Component for CatalogSection {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding(Gaps::new(top, 8., 8., 8.))
+            .spacing(SP_3)
+            .padding(Gaps::new(top, SP_3, SP_3, SP_3))
             .child(title)
             .maybe_child(self.action.clone());
 

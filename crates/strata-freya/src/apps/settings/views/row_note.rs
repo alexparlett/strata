@@ -17,15 +17,16 @@
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_3, SP_5};
 use crate::components::typography::Caption;
 
 /// The note's inset. Its sides line up with the header strip's and a cell's (`CELL_INSET`, the
 /// canvas's `var(--sp-4)`) so the message starts on the same column as the row above it; its 6px
 /// top and bottom are tighter than the canvas's `var(--sp-3)`, which is the value the Engine
 /// pane's error strip shipped with and the one the two grids now share.
-const NOTE_PADDING: Gaps = Gaps::new(6., 16., 6., 16.);
+const NOTE_PADDING: Gaps = Gaps::new(SP_3, SP_5, SP_3, SP_5);
 /// The gap between the glyph, the message and whatever is offered after it.
-const NOTE_GAP: f32 = 8.;
+const NOTE_GAP: f32 = SP_3;
 /// Alpha of the wash behind a note, derived from its tone.
 const WASH_ALPHA: u8 = 20;
 

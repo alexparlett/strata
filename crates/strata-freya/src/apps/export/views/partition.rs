@@ -17,6 +17,7 @@ use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::{Row, ValueField};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_2, SP_3, SP_4, SP_5};
 use crate::components::tones::tones;
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Prose};
 use crate::theme::{use_roles, Role};
@@ -32,7 +33,7 @@ const PANE_HEADER_HEIGHT: f32 = 30.;
 /// the padding that keeps children off it.
 const PANE_BORDER: f32 = 1.;
 /// The pane's corner (canvas `--r-2`).
-const PANE_RADIUS: f32 = 8.;
+const PANE_RADIUS: f32 = R_2;
 /// The filter sits in that header strip, so it is built to clear it.
 const FILTER_HEIGHT: f32 = 24.;
 /// The two panes' rows are **not** the same height in the canvas: a chosen level carries an
@@ -62,7 +63,7 @@ impl Component for Partition {
         let toggle = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(12.)
+            .spacing(SP_4)
             .child(
                 Switch::new()
                     .toggled(enabled)
@@ -88,7 +89,7 @@ impl Component for Panes {
         rect()
             .width(Size::fill())
             .vertical()
-            .spacing(12.)
+            .spacing(SP_4)
             .child(Prose::new(
                 "Writes a Hive-style directory tree — one folder level per column, in the \
                  order shown.",
@@ -98,7 +99,7 @@ impl Component for Panes {
                     .width(Size::fill())
                     .horizontal()
                     .content(Content::Flex)
-                    .spacing(12.)
+                    .spacing(SP_4)
                     .child(rect().width(Size::flex(1.)).child(Available))
                     .child(rect().width(Size::flex(1.)).child(Selected)),
             )
@@ -139,8 +140,8 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .main_align(Alignment::SpaceBetween)
-                .spacing(8.)
-                .padding((0., 12.))
+                .spacing(SP_3)
+                .padding((0., SP_4))
                 .corner_radius(header_radius)
                 .background(theme.header_background)
                 .child(header),
@@ -253,8 +254,8 @@ impl Component for Available {
                         )
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(8.)
-                        .padding((0., 12.))
+                        .spacing(SP_3)
+                        .padding((0., SP_4))
                         .on_press(move |_| {
                             // Adding clears the filter, so the next pick starts from the whole
                             // list rather than a query matching nothing. The **box** is cleared
@@ -354,7 +355,7 @@ impl Component for SelectedRow {
         let badge = rect()
             .width(Size::px(16.))
             .height(Size::px(16.))
-            .corner_radius(8.)
+            .corner_radius(R_2)
             .center()
             .background(theme.badge_background)
             .child(Meta::new((index + 1).to_string()).color(theme.badge_color));
@@ -400,8 +401,8 @@ impl Component for SelectedRow {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((0., 8.))
+            .spacing(SP_3)
+            .padding((0., SP_3))
             .child(badge)
             .child(MonoValue::new(self.name.clone()).width(Size::flex(1.)))
             .child(up)
@@ -443,7 +444,7 @@ impl Component for KeepColumns {
         let row = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(12.)
+            .spacing(SP_4)
             .child(
                 Switch::new()
                     .toggled(keep)
@@ -454,7 +455,7 @@ impl Component for KeepColumns {
         rect()
             .width(Size::fill())
             .vertical()
-            .spacing(12.)
+            .spacing(SP_4)
             .child(row)
             // A statement of what the export will do, shown exactly when it applies. (The
             // canvas also warned about high-cardinality columns off a distinct count taken
@@ -464,9 +465,9 @@ impl Component for KeepColumns {
                 rect()
                     .width(Size::fill())
                     .horizontal()
-                    .spacing(8.)
-                    .padding((8., 12.))
-                    .corner_radius(6.)
+                    .spacing(SP_3)
+                    .padding((SP_3, SP_4))
+                    .corner_radius(R_1)
                     .background(theme.warning_background)
                     .border(Border::new().width(1.).fill(theme.warning_border_fill))
                     .child(Icon::new(IconName::Warning).size(14.).color(warning))
@@ -489,7 +490,7 @@ fn empty(message: &str) -> impl IntoElement {
         .width(Size::fill())
         .height(Size::fill())
         .center()
-        .padding((12., 16.))
+        .padding((SP_4, SP_5))
         .child(
             // `width(fill)` as well as the centred alignment: a hugging text box centred by its
             // parent still sits off-centre once its padding is counted, which is what left this

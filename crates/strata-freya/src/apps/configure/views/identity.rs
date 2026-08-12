@@ -9,6 +9,7 @@ use freya::prelude::*;
 use crate::apps::configure::model::FormatId;
 use crate::apps::configure::ConfigureCtx;
 use crate::components::form::{Row, ValueField, FIELD_HEIGHT};
+use crate::components::metrics::SP_4;
 use crate::components::typography::MonoValue;
 
 /// The canvas's `width: 128px` on the format picker, and the gap between the two controls.
@@ -19,7 +20,7 @@ use crate::components::typography::MonoValue;
 /// in it. (The canvas draws this pair a few pixels taller than the rest; matching that would
 /// mean this row diverging from every other form in the app, which is the worse trade.)
 const FORMAT_WIDTH: f32 = 128.;
-const COLUMN_GAP: f32 = 12.;
+const COLUMN_GAP: f32 = SP_4;
 
 #[derive(PartialEq)]
 pub struct Identity;

@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::IconName;
+use crate::components::metrics::{R_2, SP_2, SP_3, SP_4};
 use crate::components::typography::{Control, Prose, Title};
 use crate::platform::OpenCtx;
 use crate::state::AppCtx;
@@ -87,9 +88,9 @@ impl Component for OpenPromptCard {
         let checkbox_row = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((4., 8.))
-            .corner_radius(8.)
+            .spacing(SP_3)
+            .padding((SP_2, SP_3))
+            .corner_radius(R_2)
             .on_press(move |_: Event<PressEventData>| {
                 let mut remember = remember;
                 remember.toggle();
@@ -113,7 +114,7 @@ impl Component for OpenPromptCard {
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    .spacing(12.)
+                    .spacing(SP_4)
                     .child(
                         Prose::new("Open this project in the current window, or in a new window?")
                             .color(roles.get(Role::TextMuted))

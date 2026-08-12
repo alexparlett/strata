@@ -26,6 +26,7 @@ use crate::apps::project::state::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{HEADER_CONTROL, SIDEBAR_HEADER_HEIGHT, SP_3, SP_4};
 use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::typography::{Eyebrow, InputTypography};
 use crate::theme::{use_roles, Role};
@@ -66,10 +67,6 @@ fn label(text: &'static str, color: Color) -> Rect {
 /// Below this the field has too little left to read a table name back in. Filtering stays
 /// reachable through the command palette.
 const CATALOG_FILTER_MIN: f32 = 80.;
-
-/// The header row's height and the box of the flat controls in it (the canvas's 48 / 24).
-const HEADER_HEIGHT: f32 = 48.;
-const HEADER_CONTROL: f32 = 24.;
 
 #[derive(PartialEq)]
 pub struct Sidebar;
@@ -119,7 +116,7 @@ impl Component for Sidebar {
                 .content(Content::Flex)
                 .overflow(Overflow::Clip)
                 .cross_align(Alignment::Center)
-                .spacing(8.)
+                .spacing(SP_3)
                 .child(
                     InputTypography::mono(
                         Input::new(filter)
@@ -133,7 +130,7 @@ impl Component for Sidebar {
                 .into_element(),
             // Beside its name, an ⓘ: what a connection *is* has no other place to be said (W7).
             SidebarPane::Connections => label("CONNECTIONS", label_color)
-                .spacing(6.)
+                .spacing(SP_3)
                 .child(ConnectionsHint)
                 .into_element(),
         };
@@ -150,8 +147,8 @@ impl Component for Sidebar {
             .child(
                 Toolbar::new()
                     .header()
-                    .height(HEADER_HEIGHT)
-                    .padding(12.)
+                    .height(SIDEBAR_HEADER_HEIGHT)
+                    .padding(SP_4)
                     // The pane's own run flexes, so the row distributes rather than hugs — else
                     // the collapse × is the thing that gets pushed out.
                     .leading(
@@ -277,9 +274,9 @@ mod tests {
     const PANEL_WIDTH: f32 = 260.;
     /// The header's fixed controls are 24×24, in a 48px row (design canvas).
     const CONTROL: f32 = 24.;
-    const HEADER_HEIGHT: f32 = 48.;
+    const SIDEBAR_HEADER_HEIGHT: f32 = 48.;
     /// The header's horizontal padding, per side.
-    const HEADER_PAD: f32 = 12.;
+    const HEADER_PAD: f32 = SP_4;
 
     fn defs() -> ProjectDefs {
         ProjectDefs {
@@ -401,7 +398,7 @@ mod tests {
     fn header_content(runner: &TestingRunner) -> Vec<Box2> {
         areas(runner)
             .into_iter()
-            .filter(|b| b.max_y <= HEADER_HEIGHT + 0.5 && b.width < PANEL_WIDTH)
+            .filter(|b| b.max_y <= SIDEBAR_HEADER_HEIGHT + 0.5 && b.width < PANEL_WIDTH)
             .collect()
     }
 
@@ -542,7 +539,7 @@ mod tests {
         let refresh = header_controls(&runner)[0];
         let point = (
             ((refresh.min_x + refresh.max_x) / 2.) as f64,
-            (HEADER_HEIGHT / 2.) as f64,
+            (SIDEBAR_HEADER_HEIGHT / 2.) as f64,
         );
         runner.move_cursor(point);
         runner.click_cursor(point);

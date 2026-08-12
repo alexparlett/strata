@@ -17,15 +17,16 @@ use super::palette_theme;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::keycap::KeyCap;
+use crate::components::metrics::{R_2, SP_4};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Eyebrow, MonoValue, Prose};
 use crate::theme::{use_roles, Role};
 
 /// The canvas's row box: 42px tall, `--sp-4` inside and between, `--r-2` corners.
 const ROW_HEIGHT: f32 = 42.;
-const ROW_INSET: f32 = 12.;
-const ROW_GAP: f32 = 12.;
-const ROW_RADIUS: f32 = 8.;
+const ROW_INSET: f32 = SP_4;
+const ROW_GAP: f32 = SP_4;
+const ROW_RADIUS: f32 = R_2;
 /// The glyph slot — one width whether it holds an icon or a column's type swatch, so every row's
 /// name starts at the same x.
 const GLYPH_SLOT: f32 = 15.;

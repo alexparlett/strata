@@ -14,6 +14,7 @@ use strata_core::util::fmt_int;
 use super::palette::PlanPalette;
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{pill, HAIRLINE, R_1, R_2, R_XS, SP_1, SP_2, SP_3, SP_4, SP_5};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Path};
 
 /// The time-share bar's fill percentage: self-time over the tree max, floored at 3% so a
@@ -28,6 +29,16 @@ fn bar_pct(self_ms: f64, max_ms: f64) -> f32 {
 /// Mono char-width estimate for the detail grid's key column (`Path` role, 11px JetBrains
 /// Mono) — the Skia-side stand-in for CSS `max-content` (the datagrid's autofit precedent).
 const DETAIL_CHAR_W: f32 = 6.6;
+
+/// One ancestor level's rail column in the tree.
+const RAIL_W: f32 = 22.;
+/// The node kind's swatch beside its name — the canvas's 6px `--r-xs` marker.
+const MARKER: f32 = 6.;
+/// The self-time bar's track, and the leading stripe on a detail group's header. Both are drawn
+/// as pills, so their radius comes off these rather than off the radius scale.
+const BAR_H: f32 = 4.;
+const STRIPE_W: f32 = 2.;
+const STRIPE_H: f32 = 10.;
 
 /// A 1px top-edge-only border — the metrics box's row rule.
 fn top_border() -> BorderWidth {
@@ -69,15 +80,18 @@ pub fn plan_row(
     for on in rails {
         row = row.child(
             rect()
-                .width(Size::px(22.))
+                .width(Size::px(RAIL_W))
                 .height(Size::fill_minimum())
                 .maybe(*on, |el| {
-                    el.padding(Gaps::new(0., 11., 0., 10.)).child(
-                        rect()
-                            .width(Size::fill())
-                            .height(Size::fill())
-                            .background(line),
-                    )
+                    // Centres the 1px connector in the rail column: an arithmetic inset, not a
+                    // gap, so it is off the spacing scale like every alignment nudge.
+                    el.padding(Gaps::new(0., RAIL_W / 2., 0., RAIL_W / 2. - HAIRLINE))
+                        .child(
+                            rect()
+                                .width(Size::fill())
+                                .height(Size::fill())
+                                .background(line),
+                        )
                 }),
         );
     }
@@ -154,12 +168,12 @@ impl Component for PlanNodeCard {
         let head = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .child(
                 rect()
-                    .width(Size::px(6.))
-                    .height(Size::px(6.))
-                    .corner_radius(1.5)
+                    .width(Size::px(MARKER))
+                    .height(Size::px(MARKER))
+                    .corner_radius(R_XS)
                     .background(kind),
             )
             .child(MonoValue::new(self.node.name.clone()).color(kind))
@@ -173,7 +187,7 @@ impl Component for PlanNodeCard {
                     rect()
                         .width(Size::fill())
                         .horizontal()
-                        .spacing(12.)
+                        .spacing(SP_4)
                         .child(
                             Path::new(part.key.clone())
                                 .color(t.key_color)
@@ -187,9 +201,9 @@ impl Component for PlanNodeCard {
             });
             rect()
                 .width(Size::fill())
-                .margin(Gaps::new(4., 0., 0., 0.))
+                .margin(Gaps::new(SP_2, 0., 0., 0.))
                 .vertical()
-                .spacing(2.)
+                .spacing(SP_1)
                 .children(rows.collect::<Vec<_>>())
         });
         let detail_toggle = detail_long.then(|| {
@@ -214,13 +228,13 @@ impl Component for PlanNodeCard {
                 .horizontal()
                 .cross_align(Alignment::Center)
                 .content(Content::wrap_spacing(8.))
-                .spacing(12.)
+                .spacing(SP_4)
                 .maybe(rows_label.is_some(), |el| {
                     el.child(
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(3.)
+                            .spacing(SP_2)
                             .child(
                                 Meta::new(rows_label.clone().unwrap_or_default())
                                     .color(t.value_color),
@@ -232,15 +246,16 @@ impl Component for PlanNodeCard {
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(4.)
+                        .spacing(SP_2)
                         .child(Icon::new(IconName::Clock).color(t.warm_color).size(12.))
                         .child(Meta::new(self.node.self_label.clone()).color(t.warm_color)),
                 )
                 .maybe_child(bytes_label.map(|b| Meta::new(b).color(t.muted_color)));
             let bar = rect()
                 .width(Size::fill())
-                .height(Size::px(4.))
-                .corner_radius(2.)
+                .height(Size::px(BAR_H))
+                // A pill, so half its extent rather than a scale step (`metrics::pill`).
+                .corner_radius(pill(BAR_H))
                 .background(t.border_fill)
                 .overflow(Overflow::Clip)
                 .child(
@@ -251,9 +266,9 @@ impl Component for PlanNodeCard {
                 );
             rect()
                 .width(Size::fill())
-                .margin(Gaps::new(8., 0., 0., 0.))
+                .margin(Gaps::new(SP_3, 0., 0., 0.))
                 .vertical()
-                .spacing(8.)
+                .spacing(SP_3)
                 .child(stats)
                 .child(bar)
         });
@@ -267,10 +282,10 @@ impl Component for PlanNodeCard {
             });
             rect()
                 .width(Size::fill())
-                .margin(Gaps::new(8., 0., 0., 0.))
+                .margin(Gaps::new(SP_3, 0., 0., 0.))
                 .horizontal()
                 .content(Content::wrap_spacing(8.))
-                .spacing(8.)
+                .spacing(SP_3)
                 .children(pills.collect::<Vec<_>>())
         });
 
@@ -291,9 +306,9 @@ impl Component for PlanNodeCard {
                 let show_all = *show_zeros.read();
                 let mut grid = rect()
                     .width(Size::fill())
-                    .margin(Gaps::new(8., 0., 0., 0.))
+                    .margin(Gaps::new(SP_3, 0., 0., 0.))
                     .vertical()
-                    .corner_radius(6.)
+                    .corner_radius(R_1)
                     .border(Border::new().width(1.).fill(t.border_fill))
                     .overflow(Overflow::Clip);
                 for group in METRIC_GROUPS {
@@ -311,14 +326,15 @@ impl Component for PlanNodeCard {
                             .width(Size::fill())
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
-                            .padding((8., 12.))
+                            .spacing(SP_3)
+                            .padding((SP_3, SP_4))
                             .background(t.group_background)
                             .child(
                                 rect()
-                                    .width(Size::px(2.))
-                                    .height(Size::px(10.))
-                                    .corner_radius(1.)
+                                    .width(Size::px(STRIPE_W))
+                                    .height(Size::px(STRIPE_H))
+                                    // A pill on its short axis (`metrics::pill`).
+                                    .corner_radius(pill(STRIPE_W))
                                     .background(self.palette.group(group)),
                             )
                             .child(Eyebrow::new(group.to_uppercase()).color(t.muted_color)),
@@ -330,8 +346,8 @@ impl Component for PlanNodeCard {
                                 .horizontal()
                                 .cross_align(Alignment::Center)
                                 .content(Content::Flex)
-                                .spacing(16.)
-                                .padding((4., 12.))
+                                .spacing(SP_5)
+                                .padding((SP_2, SP_4))
                                 .border(Border::new().width(top_border()).fill(t.border_fill))
                                 .maybe(m.zero, |el| el.opacity(0.55))
                                 .child(
@@ -354,7 +370,7 @@ impl Component for PlanNodeCard {
                     grid = grid.child(
                         rect()
                             .width(Size::fill())
-                            .padding((8., 12.))
+                            .padding((SP_3, SP_4))
                             .background(t.group_background)
                             .border(Border::new().width(top_border()).fill(t.border_fill))
                             .child(PlanLink {
@@ -373,7 +389,7 @@ impl Component for PlanNodeCard {
             });
             rect()
                 .width(Size::fill())
-                .margin(Gaps::new(8., 0., 0., 0.))
+                .margin(Gaps::new(SP_3, 0., 0., 0.))
                 .vertical()
                 .child(toggle)
                 .maybe_child(boxed)
@@ -383,7 +399,7 @@ impl Component for PlanNodeCard {
         // is all-sides — the strip child is the border-left idiom), then the content column.
         rect()
             .width(Size::fill())
-            .corner_radius(8.)
+            .corner_radius(R_2)
             .border(Border::new().width(1.).fill(t.border_fill))
             .background(t.card_background)
             .overflow(Overflow::Clip)
@@ -399,7 +415,7 @@ impl Component for PlanNodeCard {
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    .padding((8., 12.))
+                    .padding((SP_3, SP_4))
                     .child(head)
                     .maybe_child(detail_grid)
                     .maybe_child(detail_toggle)
@@ -434,7 +450,7 @@ impl Component for PlanLink {
             self.color
         };
         rect()
-            .margin(Gaps::new(8., 0., 0., 0.))
+            .margin(Gaps::new(SP_3, 0., 0., 0.))
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |_| on_press.call(()))

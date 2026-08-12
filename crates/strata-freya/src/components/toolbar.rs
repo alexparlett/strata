@@ -29,20 +29,17 @@ use freya::prelude::*;
 
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{HAIRLINE, HEADER_CONTROL, SP_5, TOOL_SIZE};
 use crate::components::tones::tones;
-use crate::components::tool_button::TOOL_SIZE;
 use crate::components::typography::Prose;
 use crate::keymap::{hint_title, KeyHint};
 use crate::state::{use_config, ConfigChan};
 use crate::theme::{use_roles, Role};
 use strata_core::config::Command;
 
-/// A separator's painted width. It is a 1px rule, but it carries the row's spacing on both sides
-/// like any other item, so the arithmetic treats it as an ordinary member.
-const SEPARATOR_W: f32 = 1.;
-
-/// A panel header's control box, against a toolbar's [`TOOL_SIZE`].
-const HEADER_CONTROL_SIZE: f32 = 24.;
+/// A separator's painted width — a [`HAIRLINE`], so off the spacing scale. It carries the row's
+/// spacing on both sides like any other item, so the arithmetic treats it as an ordinary member.
+const SEPARATOR_W: f32 = HAIRLINE;
 
 /// What a [`Toolbar`] shows in one slot.
 #[derive(PartialEq, Clone)]
@@ -288,7 +285,7 @@ impl Toolbar {
     /// 24px flat controls reads as a different kind of thing, which is exactly the drift this
     /// component exists to stop.
     pub fn header(mut self) -> Self {
-        self.control = HEADER_CONTROL_SIZE;
+        self.control = HEADER_CONTROL;
         self.flat = true;
         self
     }
@@ -573,7 +570,7 @@ fn menu_row(label: &str, hint: Option<Command>) -> impl IntoElement {
         .width(Size::fill())
         .cross_align(Alignment::Center)
         .main_align(Alignment::SpaceBetween)
-        .spacing(16.)
+        .spacing(SP_5)
         .child(Prose::new(label.to_string()))
         .maybe_child(hint.map(KeyHint))
 }
@@ -582,13 +579,13 @@ fn menu_row(label: &str, hint: Option<Command>) -> impl IntoElement {
 mod tests {
     use freya::prelude::{rect, IntoElement};
 
-    use super::{fold_plan, ToolbarAction, ToolbarItem, HEADER_CONTROL_SIZE, SEPARATOR_W};
+    use super::{fold_plan, ToolbarAction, ToolbarItem, SEPARATOR_W};
     use crate::components::icon::IconName;
-    use crate::components::tool_button::TOOL_SIZE;
+    use crate::components::metrics::{HEADER_CONTROL, SP_3, TOOL_SIZE};
     use crate::keymap::hint_title;
     use strata_core::config::{Command, Settings};
 
-    const SPACING: f32 = 8.;
+    const SPACING: f32 = SP_3;
     /// The default toolbar control, which is also what the `⋯` trigger costs.
     const OVERFLOW_W: f32 = TOOL_SIZE;
 
@@ -766,10 +763,10 @@ mod tests {
     fn a_header_row_folds_against_its_own_control_size() {
         let items = actions(4);
         // Four 24px controls with 8px gaps: 4*24 + 3*8 = 120.
-        let header_run = HEADER_CONTROL_SIZE * 4. + SPACING * 3.;
+        let header_run = HEADER_CONTROL * 4. + SPACING * 3.;
 
         assert_eq!(
-            fold_plan(&items, header_run, SPACING, HEADER_CONTROL_SIZE)
+            fold_plan(&items, header_run, SPACING, HEADER_CONTROL)
                 .iter()
                 .filter(|k| **k)
                 .count(),

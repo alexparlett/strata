@@ -40,7 +40,7 @@ use freya::prelude::*;
 
 use crate::apps::configure::ConfigureTarget;
 use crate::components::icon::{Icon, IconName};
-use crate::components::PANE_BODY_MIN_W;
+use crate::components::metrics::PANE_BODY_MIN_W;
 use freya::radio::use_radio;
 use strata_core::util::contains_lowercased;
 use strata_model::CatalogKind;
@@ -48,6 +48,7 @@ use strata_model::CatalogKind;
 use self::entry::{EntryRow, SavedQueryRow};
 use self::section::CatalogSection;
 use crate::apps::project::state::{ProjChan, ProjectState};
+use crate::components::metrics::{SP_2, SP_3, SP_4};
 use crate::components::typography::Caption;
 
 define_theme!(
@@ -116,7 +117,7 @@ impl Component for Catalog {
             // per line without it (P5-06).
             .min_width(Size::px(PANE_BODY_MIN_W))
             .vertical()
-            .padding(Gaps::new(8., 8., 12., 8.))
+            .padding(Gaps::new(SP_3, SP_3, SP_4, SP_3))
             .child(TablesSection::new(
                 filter.clone(),
                 open_entries,
@@ -289,7 +290,7 @@ impl Component for QueriesSection {
         // result is a non-match, and "no saved queries yet" would be a lie.
         let empty_note = (queries.is_empty() && self.filter.is_empty()).then(|| {
             rect()
-                .padding(Gaps::new(4., 8., 12., 8.))
+                .padding(Gaps::new(SP_2, SP_3, SP_4, SP_3))
                 .child(Caption::new("No saved queries yet").color(self.theme.meta_color))
         });
 

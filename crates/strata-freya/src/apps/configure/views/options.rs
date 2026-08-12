@@ -20,11 +20,12 @@ use freya::prelude::*;
 use crate::apps::configure::ConfigureCtx;
 use crate::components::divider::Divider;
 use crate::components::form::OptionList;
+use crate::components::metrics::SP_4;
 use crate::components::typography::Eyebrow;
 use crate::components::window::window_theme;
 
 /// The gap under the block's label.
-const BLOCK_GAP: f32 = 12.;
+const BLOCK_GAP: f32 = SP_4;
 
 #[derive(PartialEq)]
 pub struct ImportOptions;

@@ -21,6 +21,7 @@ use strata_model::RightPane;
 
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_1, SP_3};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::theme::{use_roles, Role};
 
@@ -59,8 +60,8 @@ impl Component for RightRail {
             .height(Size::fill())
             .background(background)
             .cross_align(Alignment::Center)
-            .padding((8., 0.))
-            .spacing(2.)
+            .padding((SP_3, 0.))
+            .spacing(SP_1)
             .child(button(
                 IconName::Inspector,
                 "Column inspector",

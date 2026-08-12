@@ -39,6 +39,7 @@ use crate::apps::settings::{
 use crate::components::divider::Divider;
 use crate::components::form::Reveal;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, SP_1, SP_2, SP_3, SP_4};
 use crate::components::typography::{Caption, Control, InputTypography, Path};
 use crate::keymap::on_command;
 use crate::state::use_config_station;
@@ -47,20 +48,20 @@ use crate::state::use_config_station;
 const RAIL_WIDTH: f32 = 244.;
 
 /// A top-level row's own inset from the rail's edge (canvas `--sp-4`).
-const RAIL_INSET: f32 = 12.;
+const RAIL_INSET: f32 = SP_4;
 
 /// Every row's corner (canvas `--r-1`) and the gap to the next one (canvas `--sp-1`).
-const ROW_RADIUS: f32 = 6.;
-const ROW_GAP: f32 = 2.;
+const ROW_RADIUS: f32 = R_1;
+const ROW_GAP: f32 = SP_1;
 
 /// A group heading's padding (canvas `--sp-3 --sp-4`).
-const HEADING_PADDING: Gaps = Gaps::new(8., 12., 8., RAIL_INSET);
+const HEADING_PADDING: Gaps = Gaps::new(SP_3, SP_4, SP_3, RAIL_INSET);
 
 /// The heading's disclosure chevron and the gap after it (canvas `10px` + `--sp-2`), and the
 /// column the two together occupy. Derived rather than restated, so the indents below can't
 /// drift from the chevron they are measured against.
 const CHEVRON_SIZE: f32 = 10.;
-const CHEVRON_GAP: f32 = 4.;
+const CHEVRON_GAP: f32 = SP_2;
 const CHEVRON_COLUMN: f32 = CHEVRON_SIZE + CHEVRON_GAP;
 
 /// Where a group heading's **label** starts — past its own inset and its chevron. Both row
@@ -72,27 +73,27 @@ const LABEL_ORIGIN: f32 = RAIL_INSET + CHEVRON_COLUMN;
 /// (its rows land at 30px); at this size that read as a rounding error rather than a level, so
 /// the step is one token wider — a deliberate divergence, and the only number to change if the
 /// nesting wants adjusting again.
-const NEST_STEP: f32 = 8.;
+const NEST_STEP: f32 = SP_3;
 
 /// A grouped category: its heading's label, plus one nesting step.
-const ROW_PADDING: Gaps = Gaps::new(8., 12., 8., LABEL_ORIGIN + NEST_STEP);
+const ROW_PADDING: Gaps = Gaps::new(SP_3, SP_4, SP_3, LABEL_ORIGIN + NEST_STEP);
 
 /// An **ungrouped** category (Keymap) still indents, to its heading's label but no further: it
 /// has no chevron of its own, so at the rail inset its label would start in the chevron column
 /// and read as a third heading rather than as a peer of the pages. The canvas spells the same
 /// thing out as `calc(--sp-4 + --sp-2 + 10px)`.
-const UNGROUPED_PADDING: Gaps = Gaps::new(8., 12., 8., LABEL_ORIGIN);
+const UNGROUPED_PADDING: Gaps = Gaps::new(SP_3, SP_4, SP_3, LABEL_ORIGIN);
 
 /// The gap under the search box, before whatever it is standing over (canvas `--sp-4`).
-const SEARCH_GAP: f32 = 12.;
+const SEARCH_GAP: f32 = SP_4;
 
 /// A result row's inset (canvas `--sp-3 --sp-4`) and the gap between the two lines it holds
 /// (`--sp-1`).
-const RESULT_PADDING: Gaps = Gaps::new(8., 12., 8., 12.);
-const RESULT_LINE_GAP: f32 = 2.;
+const RESULT_PADDING: Gaps = Gaps::new(SP_3, SP_4, SP_3, SP_4);
+const RESULT_LINE_GAP: f32 = SP_1;
 
 /// The empty state's inset (canvas `--sp-4`).
-const NO_RESULTS_PADDING: Gaps = Gaps::new_all(12.);
+const NO_RESULTS_PADDING: Gaps = Gaps::new_all(SP_4);
 
 #[derive(PartialEq)]
 pub struct Nav;
@@ -200,7 +201,7 @@ impl Component for Nav {
                     // the last result off the bottom of a short window.
                     .content(Content::Flex)
                     .background(theme.nav_background)
-                    .padding(Gaps::new(12., 12., 12., 12.))
+                    .padding(Gaps::new(SP_4, SP_4, SP_4, SP_4))
                     .child(
                         InputTypography::body(
                             Input::new(query)

@@ -25,7 +25,8 @@ flashes — subtle and on one shared set of durations/easings.
   `Tooltip`, `Switch`, `Checkbox`, `Accordion`, `Progressbar`, `Skeleton`, `CursorBlink`.
 
 ## Build
-- **Shared timing consts** (durations + easings) in P5-01's metrics module — the fork's own
+- **Shared timing consts** (durations + easings) in the **Timing** section of
+  `crates/strata-freya/src/components/metrics.rs`, beside `PROGRESS_HOLD` — the fork's own
   150ms/250ms `Popup` pair is the reference; the canvases carry no motion spec (`Strata.dc.html`
   declares `min-width` and has no transitions to port), so the fork is the source of truth here.
 - **Dialog in/out**: give Strata's `Dialog` the fork `Popup`'s motion — prefer reusing the fork's

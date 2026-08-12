@@ -15,7 +15,7 @@
 //! - **Action strip** — a `surface_secondary` band under a hairline, buttons end-aligned, **58px
 //!   tall**: `--sp-4` (12) above and below a [`ACTION_HEIGHT`] button row. The strip stamps that
 //!   height onto its own actions, so a dialog physically cannot ship a squashed button — and the
-//!   number itself belongs to the design system (`components::ACTION_HEIGHT`), not to this
+//!   number itself belongs to the design system (`components::metrics::ACTION_HEIGHT`), not to this
 //!   component, because every committing button in the app wears it.
 //! - **Modal semantics** — Esc dismisses, Enter confirms, and every other key is consumed *at the
 //!   global layer*. That barrier is why dialogs mount early at the window root: same-name global
@@ -42,7 +42,8 @@ use freya::prelude::*;
 
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::ACTION_HEIGHT;
+use crate::components::metrics::ACTION_HEIGHT;
+use crate::components::metrics::{R_2, R_4, SP_3, SP_4, SP_5, SP_6};
 use crate::theme::{use_roles, Role};
 
 /// The comps' card width — 420 for every confirm in the design.
@@ -50,7 +51,7 @@ const DEFAULT_WIDTH: f32 = 420.;
 
 /// The header chip's box and its glyph. One size for every dialog — see the module doc.
 const CHIP: f32 = 38.;
-const CHIP_RADIUS: f32 = 8.;
+const CHIP_RADIUS: f32 = R_2;
 const CHIP_ICON: f32 = 19.;
 /// Alpha of the chip's fill, tinted from the dialog's tone (≈13%, the comps' figure).
 const CHIP_TINT: u8 = 33;
@@ -86,7 +87,7 @@ impl Component for DialogHeader {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(12.)
+            .spacing(SP_4)
             .child(
                 rect()
                     .width(Size::px(CHIP))
@@ -202,8 +203,8 @@ impl Component for Dialog {
                 .horizontal()
                 .main_align(Alignment::End)
                 .cross_align(Alignment::Center)
-                .spacing(8.)
-                .padding((12., 24.))
+                .spacing(SP_3)
+                .padding((SP_4, SP_6))
                 .background(roles.get(Role::SurfaceRaised))
                 .children(self.actions.iter().map(|action| {
                     // The design system's action height, layered over whatever layout theme the
@@ -224,7 +225,7 @@ impl Component for Dialog {
             .width(Size::px(DEFAULT_WIDTH))
             // Never wider than the window on a small screen.
             .max_width(Size::window_percent(92.))
-            .corner_radius(14.)
+            .corner_radius(R_4)
             // The modal card sits on the floating-chrome tier with every other modal
             // (popup, palette, cell/record view) — not on the control fill.
             .background(roles.get(Role::ElevatedSurface))
@@ -243,8 +244,8 @@ impl Component for Dialog {
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    .spacing(12.)
-                    .padding((24., 24., 16., 24.))
+                    .spacing(SP_4)
+                    .padding((SP_6, SP_6, SP_5, SP_6))
                     .maybe_child(self.header.clone())
                     .child(self.body.clone()),
             )

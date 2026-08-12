@@ -26,21 +26,21 @@ use freya::prelude::*;
 use crate::apps::configure::ConfigureCtx;
 use crate::components::form::{form_theme, Row, ValueField, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{EMPTY_TABLE_HEIGHT, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{MonoValue, Prose};
 use crate::components::window::window_theme;
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
-const TOOL_GAP: f32 = 6.;
+const TOOL_GAP: f32 = SP_3;
 /// The list's empty state (canvas `min-height: 88px`), and the gap between two path fields. A
 /// row's own height is the form's `FIELD_HEIGHT` — this list holds fields, so it does not get to
 /// invent a height for them.
-const EMPTY_HEIGHT: f32 = 88.;
 /// A cell's inset — the properties grid's own (`padding: 0 var(--sp-3)`).
-const CELL_INSET: f32 = 12.;
+const CELL_INSET: f32 = SP_4;
 /// The gap between the label row, the toolbar and the list.
-const STACK_GAP: f32 = 8.;
+const STACK_GAP: f32 = SP_3;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
 const MENU_WIDTH: f32 = 180.;
 /// The most of a source row the **bucket prefix** may take before it ellipsizes. Half, so the
@@ -207,7 +207,7 @@ fn menu_row(icon: IconName, label: &str) -> impl IntoElement {
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(8.)
+        .spacing(SP_3)
         .child(Icon::new(icon).size(14.))
         .child(Prose::new(label.to_string()))
 }
@@ -304,7 +304,7 @@ impl Component for PathList {
             return Table::new().child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(EMPTY_HEIGHT))
+                    .height(Size::px(EMPTY_TABLE_HEIGHT))
                     .center()
                     .child(
                         Prose::new("No paths yet. Add one to point at your data.")

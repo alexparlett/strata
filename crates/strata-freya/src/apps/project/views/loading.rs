@@ -33,6 +33,7 @@ use strata_core::util::folder_name;
 
 use crate::apps::project::close::{use_engineless_close, CloseTarget};
 use crate::apps::project::views::WindowDragStrip;
+use crate::components::metrics::SP_5;
 use crate::components::typography::{Control, Title};
 use crate::state::AppCtx;
 use crate::theme::{use_roles, Role};
@@ -93,7 +94,7 @@ impl Component for ProjectLoading {
                 rect()
                     .vertical()
                     .cross_align(Alignment::Center)
-                    .spacing(16.)
+                    .spacing(SP_5)
                     .child(CircularLoader::new().size(28.))
                     .child(Title::new(format!("Opening '{name}'")).color(roles.get(Role::Text)))
                     .child(

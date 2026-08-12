@@ -15,13 +15,14 @@ use freya::router::*;
 
 use crate::apps::settings::{category, settings_theme, Route};
 use crate::components::form::RevealScroll;
+use crate::components::metrics::{SP_3, SP_6};
 use crate::components::typography::Control;
 
 /// The pane's inset (canvas `padding: var(--sp-6)`).
-const PANE_PADDING: Gaps = Gaps::new(24., 24., 24., 24.);
+const PANE_PADDING: Gaps = Gaps::new(SP_6, SP_6, SP_6, SP_6);
 
 /// The gap under the breadcrumb (canvas `margin-bottom: var(--sp-6)`).
-const BREADCRUMB_GAP: f32 = 24.;
+const BREADCRUMB_GAP: f32 = SP_6;
 
 /// The frame around a category's content — the breadcrumb, then whatever the page renders,
 /// scrolling together.
@@ -128,7 +129,7 @@ impl Component for Breadcrumb {
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(6.)
+            .spacing(SP_3)
             .map(group, |el, group| {
                 el.child(Control::new(group).color(theme.hint_color))
                     .child(Control::new("\u{203a}").color(theme.chevron_color))

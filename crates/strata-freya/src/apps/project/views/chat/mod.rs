@@ -62,7 +62,7 @@ use self::header::ChatHeader;
 use self::transcript::Transcript;
 use crate::apps::project::state::{Anchor, Chan, ChatsCtx, SessionState};
 use crate::components::divider::Divider;
-use crate::components::PANE_BODY_MIN_W;
+use crate::components::metrics::{PANE_BODY_MIN_W, SP_4, SP_5};
 use crate::theme::{use_roles, Role};
 use strata_core::util::plural;
 use strata_model::RightPane;
@@ -104,8 +104,8 @@ define_theme!(
 );
 
 /// The gap between turns (canvas `--sp-5`) and the transcript's inset (`--sp-4`).
-const TURN_GAP: f32 = 20.;
-const BODY_PAD: Gaps = Gaps::new_all(14.);
+const TURN_GAP: f32 = SP_5;
+const BODY_PAD: Gaps = Gaps::new_all(SP_4);
 
 /// Read the pane's theme. One lookup, so no surface below reaches for a second.
 pub fn chat_theme() -> ChatTheme {
@@ -302,7 +302,7 @@ mod tests {
         seed_pick, AssistantCtx, Chats, Log, PersistFaults, ProjChan, ProjectState, SessionState,
     };
     use crate::apps::project::views::ChatDrop;
-    use crate::components::tool_button::TOOL_SIZE;
+    use crate::components::metrics::TOOL_SIZE;
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
     use crate::state::{create_global_theme_preview, AppCtx, ConfigStation, ModelListings, Probes};

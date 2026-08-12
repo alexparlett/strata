@@ -34,6 +34,7 @@ use super::{PAD, ROW_HEIGHT};
 use crate::apps::project::state::{FaultKind, FaultsCtx, PersistFaults, ProjChan, ProjectState};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::SP_3;
 use crate::components::tones::Tones;
 use crate::components::typography::Body;
 
@@ -156,7 +157,7 @@ impl Component for ProjectRow {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .padding((0., PAD))
             .child(Icon::new(IconName::Alert).color(self.tones.error).size(15.))
             .child(

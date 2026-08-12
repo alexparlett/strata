@@ -40,8 +40,10 @@ use crate::apps::settings::views::ai::providers::will_have_key;
 use crate::apps::settings::views::ai::row::mark;
 use crate::apps::settings::SettingsCtx;
 use crate::components::dialog::{Dialog, DialogHeader};
+use crate::components::dot::Dot;
 use crate::components::form::{form_theme, ValueField, FIELD_HEIGHT};
 use crate::components::icon::IconName;
+use crate::components::metrics::{SP_3, SP_4};
 use crate::components::tones::{tones, Tones};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Body, Control, Eyebrow, Meta, Prose, Title};
@@ -49,6 +51,9 @@ use crate::state::{Ask, Probe, Tone};
 use crate::theme::{use_roles, Role, RoleColors};
 
 /// The dialog's field column.
+/// The status line's tone dot — the canvas's 6px round status marker.
+const TONE_DOT: f32 = 6.;
+
 const FIELD_WIDTH: f32 = 380.;
 
 /// Which provider is being configured, or none. The pane holds one of these; a dialog is a
@@ -119,16 +124,16 @@ impl Component for ConfigureDialog {
 
         let body = rect()
             .width(Size::px(FIELD_WIDTH))
-            .spacing(12.)
+            .spacing(SP_4)
             .maybe_child(boxes_url.then(|| {
                 rect()
                     .width(Size::fill())
-                    .spacing(6.)
+                    .spacing(SP_3)
                     .child(
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(6.)
+                            .spacing(SP_3)
                             .child(Eyebrow::new("BASE URL").color(roles.get(Role::TextMuted)))
                             .maybe_child(
                                 matches!(provider.base_url, BaseUrl::Required)
@@ -144,14 +149,14 @@ impl Component for ConfigureDialog {
             .maybe_child(boxes_key.then(|| {
                 rect()
                     .width(Size::fill())
-                    .spacing(6.)
+                    .spacing(SP_3)
                     .child(Eyebrow::new("API KEY").color(roles.get(Role::TextMuted)))
                     .child(
                         rect()
                             .width(Size::fill())
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .content(Content::Flex)
                             .child(
                                 ValueField::new(key_buf)
@@ -181,7 +186,7 @@ impl Component for ConfigureDialog {
                     .width(Size::fill())
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .content(Content::Flex)
                     .child(
                         Button::new()
@@ -320,15 +325,9 @@ fn status_line(probe: &Probe, roles: &RoleColors, tones: Tones) -> Element {
             rect()
                 .width(Size::fill())
                 .horizontal()
-                .spacing(6.)
+                .spacing(SP_3)
                 .content(Content::Flex)
-                .child(
-                    rect()
-                        .width(Size::px(6.))
-                        .height(Size::px(6.))
-                        .corner_radius(3.)
-                        .background(color),
-                )
+                .child(Dot::new(color).size(TONE_DOT))
                 // Wrapped, because a provider's own error is a sentence and genai's carry a
                 // second line naming the cause — the half a single-line run silently drops.
                 .child(Body::new(said).width(Size::flex(1.)).wrap().color(color))

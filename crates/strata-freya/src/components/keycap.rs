@@ -25,6 +25,7 @@
 use freya::components::{define_theme, get_theme};
 use freya::prelude::*;
 
+use crate::components::metrics::{R_1, R_XS, SP_1, SP_3};
 use crate::components::typography::MonoValue;
 
 define_theme!(
@@ -52,16 +53,16 @@ pub fn keycap_colors() -> KeyCapColorsTheme {
 /// A key cap's floor — a single character still has to read as a key.
 const KEY_MIN_WIDTH: f32 = 22.;
 const KEY_HEIGHT: f32 = 24.;
-const KEY_INSET: f32 = 8.;
-const KEY_RADIUS: f32 = 6.;
+const KEY_INSET: f32 = SP_3;
+const KEY_RADIUS: f32 = R_1;
 /// The heavier bottom edge that makes a cap read as a key rather than a chip.
 const KEY_EDGE: f32 = 1.;
 const KEY_BOTTOM_EDGE: f32 = 2.;
 
 /// The flat hint's inset and radius (canvas `padding: var(--sp-1) var(--sp-3)`, `--r-xs`).
-const CHIP_INSET_Y: f32 = 2.;
-const CHIP_INSET_X: f32 = 8.;
-const CHIP_RADIUS: f32 = 4.;
+const CHIP_INSET_Y: f32 = SP_1;
+const CHIP_INSET_X: f32 = SP_3;
+const CHIP_RADIUS: f32 = R_XS;
 const CHIP_EDGE: f32 = 1.;
 
 /// Which of the two dresses — see the module doc.

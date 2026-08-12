@@ -21,7 +21,7 @@ use super::{Connections, BODY_PAD, EMPTY_PAD};
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{Chan, ProjChan, ProjectState, SessionState};
 use crate::apps::project::views::{ConnectionRequest, DropTarget};
-use crate::components::{PANE_BODY_MIN_W, PROGRESS_HOLD};
+use crate::components::metrics::{PANE_BODY_MIN_W, PROGRESS_HOLD};
 use crate::theme::strata_theme;
 
 fn s3(bucket: &str, region: &str, auth: S3Auth) -> ConnectionDef {

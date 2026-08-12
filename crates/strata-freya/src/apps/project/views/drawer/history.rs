@@ -35,20 +35,21 @@ use crate::apps::project::query::QueryMode;
 use crate::apps::project::state::{Chan, HistoryCtx, SessionState};
 use crate::components::badge::Badge;
 use crate::components::icon::IconName;
+use crate::components::metrics::{R_2, SP_1, SP_2, SP_3, SP_4};
 use crate::components::typography::{Meta, Path};
 
 /// A card's inner padding (canvas `--sp-3` / `--sp-4`) and its radius (`--r-2`).
-const CARD_PAD_Y: f32 = 8.;
-const CARD_PAD_X: f32 = 12.;
-const CARD_RADIUS: f32 = 8.;
+const CARD_PAD_Y: f32 = SP_3;
+const CARD_PAD_X: f32 = SP_4;
+const CARD_RADIUS: f32 = R_2;
 /// The inset that keeps a card's hover surface off the panel edges, and the gap between cards
 /// (canvas `--sp-1`).
-const LIST_PAD_X: f32 = 8.;
-const CARD_GAP: f32 = 2.;
+const LIST_PAD_X: f32 = SP_3;
+const CARD_GAP: f32 = SP_1;
 /// The gap between the meta line and the SQL under it (`--sp-2`), and within the meta line
 /// itself (`--sp-3`).
-const META_GAP: f32 = 4.;
-const META_SPACING: f32 = 8.;
+const META_GAP: f32 = SP_2;
+const META_SPACING: f32 = SP_3;
 /// How many lines of the SQL preview are shown before it truncates — the canvas's
 /// `-webkit-line-clamp: 2`.
 const PREVIEW_LINES: usize = 2;
@@ -221,7 +222,7 @@ impl Component for Row {
                             .maybe_child(self.lines.map(|n| {
                                 Badge::value(plural(n, "line"), self.theme.meta_color)
                                     .outlined()
-                                    .padding(Gaps::new(0., 4., 0., 4.))
+                                    .padding(Gaps::new(0., SP_2, 0., SP_2))
                             })),
                     )
                     .child(Meta::new(self.at.clone()).color(self.theme.meta_color)),

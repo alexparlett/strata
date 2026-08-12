@@ -50,15 +50,16 @@ use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::form::ValueField;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, R_XS, SP_1, SP_2, SP_3, SP_4, SP_5};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue};
 
 /// The strip's own width (canvas: `width: 232px`) and inset.
 pub const STRIP_WIDTH: f32 = 232.;
-const STRIP_PADDING: f32 = 12.;
+const STRIP_PADDING: f32 = SP_4;
 /// The gap between the tiles, and between one section and the next.
-const TILE_GAP: f32 = 8.;
-const SECTION_GAP: f32 = 16.;
+const TILE_GAP: f32 = SP_3;
+const SECTION_GAP: f32 = SP_5;
 /// Tiles to a row (canvas: `grid-template-columns: 1fr 1fr 1fr`).
 const TILES_PER_ROW: usize = 3;
 /// What a control gets across the strip's inset — the width every encoder's trigger takes.
@@ -68,7 +69,7 @@ const CONTROL_WIDTH: f32 = STRIP_WIDTH - 2. * STRIP_PADDING;
 /// Stated as the arithmetic rather than a number, because the parts are the component's.
 const TRIGGER_LABEL_WIDTH: f32 = CONTROL_WIDTH - 2. * 18. - 18.;
 /// The gap between a section's eyebrow and its control.
-const LABEL_GAP: f32 = 6.;
+const LABEL_GAP: f32 = SP_3;
 /// A menu row's tick column — reserved whether or not the row is ticked, so the labels of a
 /// multi-pick list line up under each other.
 const TICK_WIDTH: f32 = 16.;
@@ -810,14 +811,14 @@ impl Component for LegendRow {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             // A row that does nothing must not light up under the pointer.
             .maybe(pressable && hovered(), |el| {
                 el.background(theme.tile_active_background)
             })
             .maybe(pressable, |el| {
-                el.corner_radius(4.)
-                    .padding((2., 4.))
+                el.corner_radius(R_XS)
+                    .padding((SP_1, SP_2))
                     .on_pointer_enter(move |_| hovered.set(true))
                     .on_pointer_leave(move |_| hovered.set(false))
                     .on_press(move |_| {
@@ -831,7 +832,7 @@ impl Component for LegendRow {
                 rect()
                     .width(Size::px(SWATCH))
                     .height(Size::px(SWATCH))
-                    .corner_radius(2.)
+                    .corner_radius(R_XS)
                     .background(dim(self.entry.swatch)),
             )
             .child(
@@ -889,9 +890,9 @@ impl Component for MarkTile {
             .vertical()
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .spacing(4.)
-            .padding((8., 4.))
-            .corner_radius(8.)
+            .spacing(SP_2)
+            .padding((SP_3, SP_2))
+            .corner_radius(R_2)
             .background(background)
             .border(Border::new().width(1.).fill(border))
             .color(color)

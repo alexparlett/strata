@@ -21,13 +21,14 @@ use crate::apps::export::{
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, LogCtx, LogLevel};
 use crate::components::divider::Divider;
+use crate::components::metrics::ACTION_HEIGHT;
+use crate::components::metrics::{SP_4, SP_5};
 use crate::components::tones::tones;
 use crate::components::typography::{Control, Path};
-use crate::components::ACTION_HEIGHT;
 use strata_core::engine::stopped_on_purpose;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
-const FOOTER_PADDING: Gaps = Gaps::new(12., 16., 12., 16.);
+const FOOTER_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
 
 #[derive(PartialEq)]
 pub struct Footer;
@@ -106,7 +107,7 @@ impl Component for Footer {
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(12.)
+                    .spacing(SP_4)
                     .padding(FOOTER_PADDING)
                     .background(theme.background)
                     .child(rect().width(Size::flex(1.)).child(left))

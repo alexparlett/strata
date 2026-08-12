@@ -35,6 +35,7 @@ use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
 use super::{GROUP_HEIGHT, PAD, ROW_HEIGHT, ROW_INDENT};
 use crate::apps::project::state::{Chan, ProblemGroup, SessionState};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::SP_3;
 use crate::components::tones::{tones, Tones};
 use crate::components::typography::{Body, Caption, Control, Path};
 
@@ -110,7 +111,7 @@ impl Component for Group {
                     .height(Size::px(GROUP_HEIGHT))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .padding((0., PAD))
                     .child(
                         Icon::new(IconName::File)
@@ -167,7 +168,7 @@ impl Component for ProblemRow {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .padding(Gaps::new(0., PAD, 0., ROW_INDENT))
             // Switching to the tab, not jumping to the span: the span is a byte range into the
             // text the pass validated, and moving the caret is the editor's delicate half

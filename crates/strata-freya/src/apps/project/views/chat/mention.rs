@@ -48,6 +48,7 @@ use crate::apps::project::state::{
     Anchor, Chan, ChatId, ChatsCtx, ProjChan, ProjectState, SessionState,
 };
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{HAIRLINE, R_2, SP_2, SP_3};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{InputTypography, Meta};
 
@@ -361,7 +362,7 @@ fn row(offer: &Offer, theme: &ChatTheme) -> Element {
         .width(Size::px(MENU_W - MENU_ROW_CHROME))
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(6.)
+        .spacing(SP_3)
         .child(Icon::new(offer.icon).size(12.).color(theme.meta_color))
         .child(
             Meta::new(offer.name.clone())
@@ -453,7 +454,9 @@ impl Component for AttachPicker {
         };
 
         let body = matched.iter().fold(
-            rect().width(Size::fill()).vertical().spacing(1.),
+            // A hairline between rows, not a gap — off the spacing scale on purpose, like
+            // the canvas's own `gap: 1px` lists.
+            rect().width(Size::fill()).vertical().spacing(HAIRLINE),
             |body, offer| {
                 let anchor = offer.anchor.clone();
                 body.child(
@@ -474,10 +477,10 @@ impl Component for AttachPicker {
             .vertical()
             .background(theme.card_background)
             .border(Border::new().width(1.).fill(theme.card_border_fill))
-            .corner_radius(8.)
+            .corner_radius(R_2)
             // A painted border is not laid out, so the inset carries it (AGENTS.md §3).
-            .padding(Gaps::new_all(6.))
-            .spacing(4.)
+            .padding(Gaps::new_all(SP_3))
+            .spacing(SP_2)
             .child(
                 InputTypography::body(
                     Input::new(query)

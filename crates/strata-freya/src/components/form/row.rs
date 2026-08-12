@@ -15,6 +15,7 @@ use crate::components::form::{
     form_theme, Reveal, RevealScroll, Variant, CONTROL_GAP, HINT_GAP, LABEL_GAP,
 };
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_2, SP_4};
 use crate::components::typography::{Caption, Eyebrow, Meta, Prose, Strong};
 
 /// The ⓘ that carries a fields row's explanation.
@@ -28,7 +29,7 @@ const FLASH_MS: u64 = 1500;
 /// The canvas bleeds the wash 10px past either edge of the row (a spread box-shadow); ours stops at
 /// the row's own box, because a torin child cannot paint outside the bounds its parent laid out for
 /// it and inset-then-negative-margin would move every row on the surface to buy it.
-const FLASH_RADIUS: f32 = 8.;
+const FLASH_RADIUS: f32 = R_2;
 
 #[derive(PartialEq)]
 pub struct Row {
@@ -299,8 +300,8 @@ impl Component for Note {
         // reads are only for the semantic ramp — which a note is not.
         rect()
             .width(Size::fill())
-            .padding((12., 12.))
-            .corner_radius(6.)
+            .padding((SP_4, SP_4))
+            .corner_radius(R_1)
             .background(theme.note_background)
             .border(Border::new().width(1.).fill(theme.note_border_fill))
             .child(Prose::new(self.text.clone()).color(theme.note_color).wrap())

@@ -19,9 +19,9 @@
 use freya::prelude::*;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::TOOL_SIZE;
 
-/// The canvas's square (both toolbars draw it at 28) and the glyph inside it.
-pub const TOOL_SIZE: f32 = 28.;
+/// The glyph inside the button's square (`metrics::TOOL_SIZE`).
 const TOOL_ICON: f32 = 15.;
 
 #[derive(PartialEq)]

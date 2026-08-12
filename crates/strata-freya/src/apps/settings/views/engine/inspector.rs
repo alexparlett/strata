@@ -13,15 +13,16 @@ use freya::prelude::*;
 use crate::apps::settings::settings_theme;
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};
 use crate::components::badge::Badge;
+use crate::components::metrics::{R_1, SP_2, SP_3, SP_4, SP_5};
 use crate::components::tones::tones;
 use crate::components::typography::{Meta, Prose, Strong};
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`) and the gap above it.
-const INSET: Gaps = Gaps::new(12., 16., 12., 16.);
-const GAP_ABOVE: f32 = 12.;
+const INSET: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
+const GAP_ABOVE: f32 = SP_4;
 /// The gaps within it (canvas `var(--sp-3)` between the title's pills, `var(--sp-2)` between rows).
-const PILL_GAP: f32 = 8.;
-const ROW_GAP: f32 = 4.;
+const PILL_GAP: f32 = SP_3;
+const ROW_GAP: f32 = SP_2;
 
 /// What a key with no catalogue entry can honestly be told about itself — the two cases the
 /// inspector used to run together, because a lookup that answers `None` cannot tell them apart.
@@ -67,7 +68,7 @@ impl Component for Inspector {
             .padding(INSET)
             .spacing(ROW_GAP)
             .background(theme.card_background)
-            .corner_radius(CornerRadius::new_all(6.))
+            .corner_radius(CornerRadius::new_all(R_1))
             .border(
                 Border::new()
                     .fill(theme.card_border_fill)
@@ -89,7 +90,7 @@ impl Component for Inspector {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(4.)
+                    .spacing(SP_2)
                     .child(Meta::new("Default:").color(theme.chevron_color))
                     .child(
                         Meta::new(match def.default {
