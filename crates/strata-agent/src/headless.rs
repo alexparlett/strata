@@ -85,8 +85,8 @@ pub struct HeadlessHost {
     described: Vec<Described>,
     page_size: usize,
     /// The agent's open query sessions — **deliberately unbounded**, unlike the app's, which
-    /// caps them per agent so the Agents pane stays readable and a client cannot hold a
-    /// *window's* engine open indefinitely. Here the engine is the connection's: one client
+    /// caps them per agent so a client cannot hold a *window's* engine open indefinitely.
+    /// Here the engine is the connection's: one client
     /// owns this process, each session holds at most one snapshot (retire-on-dispatch), and
     /// all of it goes when the client does. A cap would buy nothing and would cost what the
     /// app's cap has to work to avoid — cancelling a session the agent is still using.
@@ -333,9 +333,9 @@ impl Host for HeadlessHost {
     }
 
     /// The agent's [`AgentIdentity`](crate::AgentIdentity) is deliberately dropped here: it
-    /// exists to label a row in the Agents pane, and headless there is no pane and exactly
-    /// one client. What matters — that a session belongs to the agent that opened it — is the
-    /// id, which every method below matches on.
+    /// exists to name the caller of a tool where a surface has to, and headless there is no
+    /// such surface and exactly one client. What matters — that a session belongs to the
+    /// agent that opened it — is the id, which every method below matches on.
     async fn open_query_session(
         &self,
         _project: &Path,

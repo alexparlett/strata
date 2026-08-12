@@ -400,9 +400,10 @@ impl<H: Host> StrataTools<H> {
     /// marked so every [`Host`] can tell it from a client that dialled in.
     ///
     /// The mark rides [`Agent::in_app`] to `open_query_session`, which is where a host first
-    /// learns an agent exists, so the Agents pane can leave it out of its listing without
-    /// anybody holding an id to compare. It changes nothing else: the assistant is still one
-    /// more agent to the policy gate, the run cache, the scoping key and the query sessions.
+    /// learns an agent exists, so a host that has to name the caller of a tool can tell the
+    /// two apart without holding an id to compare. It changes nothing else: the assistant is
+    /// still one more agent to the policy gate, the run cache, the scoping key and the query
+    /// sessions.
     pub fn in_app(host: Arc<H>) -> Self {
         Self::rooted(host, true)
     }
@@ -509,8 +510,8 @@ impl<H: Host> StrataTools<H> {
         // mid-request and tear its query sessions down under a connection that is still there.
         //
         // Deliberately does **not** mint. A client that has never opened a query session has no
-        // roster entry, and giving it one for a catalog read would put a row in the pane for an
-        // agent doing nothing an agent needs an identity for.
+        // roster entry, and giving it one for a catalog read would mint an agent for a caller
+        // doing nothing an agent needs an identity for.
         let mut live = self.roster.live.lock().unwrap();
         let Some(entry) = live.get_mut(identity) else {
             return Busy::none();
@@ -529,8 +530,8 @@ impl<H: Host> StrataTools<H> {
     /// **A poll, because nothing on our side can observe the fact** (AGENTS.md §2): a client
     /// on the discover lifecycle has no connection, so its departure is not an event anywhere
     /// — there is no socket close, no `DELETE`, and no value whose drop means anything. The
-    /// staleness is therefore bounded and stated rather than hidden: such an agent stays in
-    /// the pane for at most `ttl` after its last call, and never longer.
+    /// staleness is therefore bounded and stated rather than hidden: such an agent stays on
+    /// the roster for at most `ttl` after its last call, and never longer.
     ///
     /// Driven by whichever transport can afford a timer — the HTTP server's own runtime
     /// (`crate::server`). Stopping is [`retire_all`](Self::retire_all)'s job, **not** this one

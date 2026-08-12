@@ -152,8 +152,8 @@ impl Described {
 /// Minted per connection wherever there **is** one, rather than derived from what the client
 /// calls itself: two Claude Code windows are two agents and report the identical
 /// `clientInfo`, so a name is a label and never an identity. Ends when the connection does —
-/// a client that disconnects takes its query sessions with it, which is what "the pane shows
-/// what is happening now" means.
+/// a client that disconnects takes its query sessions with it, so the roster is what is
+/// happening now rather than a history.
 ///
 /// One transport path cannot honour that, and the limit is stated rather than hidden: MCP's
 /// 2026-07-28 discover lifecycle (SEP-2567) removes sessions altogether, so a client on it
@@ -184,18 +184,17 @@ pub struct AgentIdentity {
 impl AgentIdentity {
     /// **The in-process assistant** (AS-01), for whatever attributes it.
     ///
-    /// Not the Agents pane: that pane lists the external clients connected to a project, and
-    /// the assistant is part of the app rather than connected to it — it is left out by
-    /// [`Agent::in_app`], a mark the app itself sets and no client can claim. This identity
-    /// is for everything below that: logs, and any surface that has to name the caller of a
+    /// The assistant is part of the app rather than connected to it, and [`Agent::in_app`] —
+    /// a mark the app itself sets and no client can claim — is what says so. This identity is
+    /// for everything below that: logs, and any surface that has to name the caller of a
     /// tool.
     ///
-    /// A constant this crate owns rather than something the pane passes in. Every other
+    /// A constant this crate owns rather than something a caller passes in. Every other
     /// identity is a *claim* — what a client said it was at `initialize` — and there is no
     /// client here: the assistant is part of Strata, driving [`crate::StrataTools`] directly
     /// with no protocol to introduce itself over. Letting a surface name it would be
-    /// inventing a `clientInfo` for a caller that has none, and the pane would then be
-    /// showing a label nothing minted. The version is this crate's, which is the version of
+    /// inventing a `clientInfo` for a caller that has none, and the log would then attribute
+    /// a run to a label nothing minted. The version is this crate's, which is the version of
     /// the vocabulary it drives.
     pub fn assistant() -> AgentIdentity {
         AgentIdentity {
@@ -221,9 +220,9 @@ pub struct Agent {
     ///
     /// Carried here so the distinction reaches every [`Host`] on the call that first tells it
     /// an agent exists, rather than being an id each surface has to remember and compare. That
-    /// is what makes the Agents pane's rule enforceable: the pane lists the *external* clients
-    /// working in a project, so a host records an in-app agent for ownership and cleanup like
-    /// any other and simply does not list it.
+    /// is what makes the distinction enforceable where it matters: a host records an in-app
+    /// agent for ownership and cleanup exactly like a client that dialled in, and tells the
+    /// two apart only where the user is owed a different sentence (the close confirm's).
     ///
     /// **Minted at construction, never derived from anything a client sends**
     /// ([`StrataTools::in_app`](crate::StrataTools::in_app)). It is false for every value a
@@ -274,8 +273,7 @@ pub enum QuerySessionState {
 /// One of the agent's own query sessions, as `list_query_sessions` reports it.
 ///
 /// **No title.** A tab had one because a person names and reads tabs; a query session has
-/// nothing to be called — what it is, is what has run in it, which the agent already knows
-/// and the Agents pane shows.
+/// nothing to be called — what it is, is what has run in it, which the agent already knows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuerySessionInfo {
     pub session: QuerySessionId,

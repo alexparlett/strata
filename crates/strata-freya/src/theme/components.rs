@@ -19,12 +19,11 @@ use strata_core::theme::{Role, Typography};
 use crate::apps::export::ExportThemePreference;
 use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
-    AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
-    CellViewThemePreference, ChartThemePreference, ChatThemePreference,
-    CommandPaletteThemePreference, ConnectionsThemePreference, DataGridThemePreference,
-    DrawerThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
-    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
-    TabBarThemePreference, TabThemePreference,
+    CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
+    ChartThemePreference, ChatThemePreference, CommandPaletteThemePreference,
+    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
@@ -568,21 +567,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             part_color: role(Role::Accent),
             part_background: role(Role::AccentBadge),
             warn_color: role(Role::Warning),
-        },
-    );
-    th.set(
-        "agents",
-        AgentsThemePreference {
-            name_color: role(Role::Text),
-            session_color: role(Role::TextControl),
-            chevron_color: role(Role::TextDisabled),
-            meta_color: role(Role::TextDisabled),
-            figures_color: role(Role::TextDim),
-            sql_color: role(Role::TextMuted),
-            card_hover_fill: role(Role::GhostElementHover),
-            empty_background: role(Role::SurfaceBackground),
-            empty_border_fill: role(Role::BorderControl),
-            empty_color: role(Role::TextPlaceholder),
         },
     );
     th.set(

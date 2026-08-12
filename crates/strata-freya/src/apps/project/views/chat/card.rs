@@ -36,7 +36,7 @@ pub(super) const CARD_PAD: Gaps = Gaps::new(8., 10., 8., 10.);
 /// The action bar under a card's body (canvas `var(--sp-2) var(--sp-3)`).
 pub(super) const ACTIONS_PAD: Gaps = Gaps::new(4., 6., 4., 6.);
 const DOT: f32 = 6.;
-/// How many lines of a step's SQL preview show before it truncates — the Agents pane's card.
+/// How many lines of a step's SQL preview show before it truncates.
 const PREVIEW_LINES: usize = 2;
 
 /// One tool round.

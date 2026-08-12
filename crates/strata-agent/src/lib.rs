@@ -29,7 +29,7 @@
 //! editor tabs, which AA-03 tried and which put an agent's twenty-step investigation in the
 //! window somebody was working in. A query session maps onto the engine's `WsId`, so the
 //! runs stay real (same engine, same snapshots, same supersede) while the attention stays
-//! the user's; the app shows them in its Agents pane and promotes one into a tab on request.
+//! the user's; nothing an agent runs opens, focuses or closes a tab of the user's own.
 //!
 //! Read-only in v1, the editor's managed-DDL policy exactly: `SELECT` / `EXPLAIN` / `SHOW` /
 //! `DESCRIBE` pass and everything else is refused with the message the editor shows. The

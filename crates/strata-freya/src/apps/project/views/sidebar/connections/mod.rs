@@ -96,7 +96,7 @@ define_theme!(
     }
 );
 
-/// The pane's scroll inset, matching the catalog's and the Agents pane's.
+/// The pane's scroll inset, matching the catalog's.
 const BODY_PAD: Gaps = Gaps::new(8., 8., 12., 8.);
 /// The empty state's inset (canvas `--sp-7 --sp-6`) — generous at the top, because it sits where
 /// the first row would rather than in the middle of the panel.
@@ -441,8 +441,8 @@ fn connection_menu(actions: &ConnectionActions, url: String) -> Menu {
 }
 
 /// The pane header's ⓘ, which is what a connection *is* — the one thing about this surface a
-/// user has no other way to learn. Mounted by the sidebar shell beside the `CONNECTIONS` label,
-/// like the Agents pane's.
+/// user has no other way to learn. Mounted by the sidebar shell beside the `CONNECTIONS`
+/// label.
 #[derive(PartialEq)]
 pub struct ConnectionsHint;
 
@@ -503,8 +503,8 @@ impl Component for AddConnectionButton {
 /// No connections. Not a fault — most projects read local files and never need one — so the copy
 /// says what a connection is for rather than what is missing.
 ///
-/// **Top-aligned, not centred**, the Agents pane's rule: a pane's empty state sits where its
-/// first row would, so switching panes doesn't move the reader's eye down the panel and back.
+/// **Top-aligned, not centred**: a pane's empty state sits where its first row would, so
+/// switching panes doesn't move the reader's eye down the panel and back.
 #[derive(PartialEq)]
 struct Empty {
     theme: ConnectionsTheme,

@@ -3,9 +3,11 @@
 Agent access lets an AI agent — Claude Code, Cursor, Copilot, any MCP client — drive a Strata
 project's data: list the catalog, inspect schemas, validate SQL, and run read-only queries.
 Every query an agent runs is a **real run** on the project's own engine, producing the same
-immutable snapshot a person's press does, in a workspace of the agent's own. The user watches
-the agent's work in the sidebar's **Agents pane** and can promote any query it ran into their
-own editor with one press.
+immutable snapshot a person's press does, in a workspace of the agent's own — and never in a
+tab of the user's. **No surface in the app shows any of it.** The Agents pane that listed
+connected clients and their runs, and the header status dot that said whether the server was
+listening, were both removed on request; the server itself is unchanged and still runs. Where
+this document describes what the user sees, read it as history.
 
 This document describes the system as built. The user-facing half — turning it on, pointing a
 client at it — is the README's *Agent access* section; this is the engineering reference.
@@ -131,22 +133,22 @@ terminal on another desktop: twenty agent queries moved the editor out from unde
 typing, left twenty tabs to close, and cost a diagnostics pass each on the engine the user's
 own press was waiting for. The rule that replaced it: **a surface's state belongs to whoever
 is looking at that surface.** "Shared, last-writer-wins" is a fine rule for content and a bad
-one for attention. So an agent that is not in the window gets a surface of its own — the
-Agents pane — and nothing it does opens, focuses, or closes a tab.
+one for attention. So an agent that is not in the window works entirely outside it, and nothing
+it does opens, focuses, or closes a tab.
 
 Consequences, all deliberate:
 
-- **The user can take over anything the agent found.** A press on a run row in the Agents
-  pane opens its SQL in a **new** tab (through the editor's ordinary `actions::open_sql`
-  funnel) — never the tab the user is working in, because arriving unasked in the active tab
-  is exactly the harm the pane exists to prevent. The result snapshot itself is pageable,
-  sortable and exportable like any other.
+- **Nothing an agent runs reaches the user's editor.** The Agents pane used to offer a press
+  that promoted a run's SQL into a **new** tab through `actions::open_sql`; with the pane gone
+  there is no such gesture, and `actions::open_sql` now serves the chat pane's offer cards
+  alone. The result snapshot itself is still pageable, sortable and exportable to the agent
+  like any other.
 - **Agent activity reaches neither `session.json` nor `.strata/history.jsonl`.** The session
   store is tabs, layout and geometry, and an agent owns no tabs — so reopening a project
   cannot restore work the user never asked for. History is capped and deduplicated before
   the cap, so exploratory agent queries would evict runs the user actually made; history
   records what *the user* ran. A promoted query the user presses Run on enters history the
-  ordinary way. The Agents pane's record is ephemeral and bounded, like the event log.
+  ordinary way. The agents satellite's record is ephemeral and bounded, like the event log.
 - **Agent runs still count as work.** The close confirm asks before destroying a run in
   flight, agent or not — the predicate is the engine's own in-flight answer. What changes is
   the sentence: the dialog asks about the tabs' workspaces and the agents' workspaces
@@ -186,7 +188,8 @@ only — what registration read from footers and metadata.
 ## How a run travels: two planes
 
 Inside the app, the server lives on its own small Tokio runtime (rmcp needs a reactor and the
-UI thread is not one), while tabs, the catalog store and the Agents pane are UI-thread state.
+UI thread is not one), while tabs, the catalog store and the agents satellite are UI-thread
+state.
 Traffic between them is split by what it touches:
 
 - **Control plane** — anything that reads or writes window state travels as an `AgentAsk` on
@@ -207,8 +210,8 @@ with the process-wide service directory on mount and deregisters on unmount, so 
 close or a re-root tears the seam down through the same path an open built it. Per window,
 `use_agent_bridge` (`crates/strata-freya/src/apps/project/state/agent.rs`) spawns **one
 serial driver** that drains both channels, asks first. It records what agents are doing in
-the **agents satellite** (`state/agents.rs`) — the bounded, ephemeral record behind the
-Agents pane, capped per session and per agent the way the event log is capped.
+the **agents satellite** (`state/agents.rs`) — a bounded, ephemeral record with no surface on
+it, capped per session and per agent the way the event log is capped.
 
 A run itself is dispatched **by the caller and bracketed by the window**. The dispatch goes
 straight at the engine on the session's own workspace; the window owns only the half that
@@ -224,7 +227,7 @@ sequenceDiagram
     participant C as MCP client (Claude Code)
     participant S as strata-agent server<br/>(own Tokio runtime)
     participant D as use_agent_bridge driver<br/>(UI executor, per window)
-    participant A as state::agents satellite<br/>(→ the Agents pane)
+    participant A as state::agents satellite<br/>(bookkeeping only)
     participant E as Engine<br/>(private Tokio runtime)
 
     Note over S: token checked, project resolved<br/>(default single; error lists when >1)<br/>one StrataTools per connection = one AgentId
@@ -347,12 +350,13 @@ would invalidate the configuration the user pasted last time. Regenerate edits t
 draft like every other control, so Cancel is its undo. Applying settings starts, stops or
 restarts the server in place; no app restart is involved.
 
-The window header shows a **status dot** whenever the feature is enabled: amber when the
-setting is on but nothing is listening (the port was taken — the one case where the user
-asked for agent access and has not got it), grey when listening with no client, green with
-the connected-client count in its tooltip. The paired-client count is the one polled fact in
-the app, because it is rmcp's own and changes below our seam; the poll exists only while the
-feature is on.
+**Nothing in the app reports whether the server is listening.** The window header used to
+carry a status dot — amber when the setting was on but nothing was listening (a taken port),
+grey when listening with no client, green with the connected-client count in its tooltip —
+and it was removed on request along with the Agents pane. A failed bind now reports through
+`tracing` and nowhere else. The paired-client count was the app's one polled fact, because it
+is rmcp's own and changes below our seam; `AgentServer::clients` went with the dot, so there
+is no poll left.
 
 Client configuration, in whole:
 
@@ -403,13 +407,15 @@ Stated so the reader does not go looking:
 Two things about the assistant bear on this document, and both are unchanged by the pane and its
 store existing:
 
-- **The assistant is held but not listed in the Agents pane.** That pane lists the *external*
-  clients connected to a project; the assistant is part of the app, and its runs render as step
-  cards in its own transcript. It is one more agent to everything described here — its own
-  `AgentId`, its own query sessions, the same gate, and its own rows in the satellite so the
-  ownership check and the caps work — and it is left out of the *listing* alone. The mark is
-  `Agent::in_app`, set by `StrataTools::in_app` and carried to the host on
-  `open_query_session`, never read off the name the agent goes under.
+- **The assistant is held like any other agent, and told apart only where the user is owed a
+  different sentence.** It is part of the app and its runs render as step cards in its own
+  transcript; an MCP client is working in the project from somewhere else. It is one more agent
+  to everything described here — its own `AgentId`, its own query sessions, the same gate, and
+  its own rows in the satellite so the ownership check and the caps work. The one place the two
+  are told apart is `Agents::sessions_of`, which the close confirm asks so it can say "the
+  assistant is running a query" rather than "an agent is". The mark is `Agent::in_app`, set by
+  `StrataTools::in_app` and carried to the host on `open_query_session`, never read off the
+  name the agent goes under.
 - **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
   hands the user a statement to execute. It is never registered on the router, so `tools/list`
   is exactly the ten below and no MCP client is offered it.

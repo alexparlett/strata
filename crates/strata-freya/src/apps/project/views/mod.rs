@@ -15,9 +15,9 @@ mod rail;
 mod right_rail;
 mod shell;
 mod sidebar;
-/// `pub(super)` for the same reason `drawer` is: the sidebar's Agents pane promotes an
-/// agent's query into the user's own tab through the editor's own `actions`, so it holds the
-/// text they can then read, edit and re-run.
+/// `pub(super)` for the same reason `drawer` is: the chat pane's offer cards promote the
+/// assistant's SQL into a tab of the user's own through the editor's own `actions`, so it
+/// holds the text they can then read, edit and run.
 pub(super) mod workbench;
 
 pub use chat::{ask_about, result_anchor, ChatThemePreference};
@@ -40,7 +40,7 @@ pub use shell::Shell;
 ///
 /// [`Origin`]: strata_model::Origin
 pub use sidebar::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
-pub use sidebar::{AgentsThemePreference, CatalogThemePreference, ConnectionsThemePreference};
+pub use sidebar::{CatalogThemePreference, ConnectionsThemePreference};
 /// The editor's shared actions, for the window's command registry
 /// ([`commands`](super::commands)): the palette's Run and Save-as-view rows are the same
 /// presses ⌘↵ and the Eye button make, gate included.

@@ -236,9 +236,9 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
                 LogLevel::Info,
                 match gone {
                     // **The assistant never dialled in, so it cannot disconnect.** Its
-                    // "connection" is the pane's own mount inside this window, and reporting
-                    // that as a disconnect describes a client that was never there — the same
-                    // reason it is kept out of the Agents pane.
+                    // "connection" is its own mount inside this window, and reporting that as
+                    // a disconnect describes a client that was never there — the same reason
+                    // the close confirm names it as itself.
                     Some((named, true)) => format!("{named} stopped"),
                     Some((named, false)) => format!("{named} disconnected"),
                     None => "An agent disconnected".to_string(),

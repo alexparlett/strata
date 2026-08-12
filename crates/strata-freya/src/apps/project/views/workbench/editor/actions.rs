@@ -106,13 +106,13 @@ pub fn load_sql(mut session: Radio<SessionState, Chan>, id: TabId, sql: &str) {
     }
 }
 
-/// Open a **new** tab holding `sql`, focused, and hand back its id — the Agents pane's
-/// promotion (AA-03b).
+/// Open a **new** tab holding `sql`, focused, and hand back its id — the chat pane's promotion
+/// (AS-04).
 ///
 /// A new tab rather than the active one is the whole point: the History drawer loads into the
-/// tab you are in because you asked for that by being there, but an agent's run is somebody
-/// else's work arriving in a surface you were only looking at, and overwriting your buffer with
-/// it is the precise harm the Agents pane exists to prevent.
+/// tab you are in because you asked for that by being there, but an offer is the assistant's
+/// suggestion arriving in a surface you were only reading, and overwriting your buffer with it
+/// would destroy the record of how a number was reached.
 ///
 /// Composed from the two funnels that already exist ([`SessionState::open_blank`] then
 /// [`load_sql`]) rather than a store method of its own, so a promoted query is an ordinary
