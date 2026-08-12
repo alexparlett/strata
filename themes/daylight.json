@@ -94,6 +94,8 @@
     "chart.8": "#4459c4",
     "chart.9": "#b4531f",
     "chart.10": "#5c7a11",
+    "chart.heat.low": "#dbe9f6",
+    "chart.heat.high": "#2b7fd0",
 
     "entity.table": "#0550ae",
     "entity.table.internal": "#0f6f74",

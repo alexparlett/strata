@@ -54,6 +54,10 @@ pub enum IconName {
     MarkScatter,
     MarkHistogram,
     MarkPie,
+    /// The Tier B marks (Chart 10), drawn to read as part of the same set.
+    MarkHeatmap,
+    MarkBand,
+    MarkBox,
     Lines,
     Copy,
     Connections,
@@ -154,6 +158,9 @@ impl IconName {
             IconName::MarkScatter => MARK_SCATTER,
             IconName::MarkHistogram => MARK_HISTOGRAM,
             IconName::MarkPie => MARK_PIE,
+            IconName::MarkHeatmap => MARK_HEATMAP,
+            IconName::MarkBand => MARK_BAND,
+            IconName::MarkBox => MARK_BOX,
             IconName::Lines => LINES,
             IconName::Copy => COPY,
             IconName::Connections => CONNECTIONS,
@@ -284,6 +291,12 @@ const MARK_AREA: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 const MARK_SCATTER: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h.01M10 13h.01M14 15h.01M18 8h.01M8 9h.01"/></svg>"#;
 const MARK_HISTOGRAM: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V12h3v8zM9 20V7h3v13zM14 20V10h3v10zM19 20v-5h1v5z"/></svg>"#;
 const MARK_PIE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9l7.5 4.5A9 9 0 1 0 12 3z"/></svg>"#;
+// A 3x3 grid of cells — the heatmap's matrix.
+const MARK_HEATMAP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h4.5v4.5H4zM9.75 4h4.5v4.5h-4.5zM15.5 4H20v4.5h-4.5zM4 9.75h4.5v4.5H4zM9.75 9.75h4.5v4.5h-4.5zM15.5 9.75H20v4.5h-4.5zM4 15.5h4.5V20H4zM9.75 15.5h4.5V20h-4.5zM15.5 15.5H20V20h-4.5z"/></svg>"#;
+// The line with its two bound edges — the error band.
+const MARK_BAND: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="1.7" d="M3 17l5-6 4 3 8-9"/><path stroke-width="1.1" d="M3 13l5-6 4 3 8-9M3 21l5-6 4 3 8-9"/></svg>"#;
+// One box-and-whisker: whisker, quartile box, median rule.
+const MARK_BOX: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M9 3h6M12 17v4M9 21h6M7 7h10v10H7zM7 12h10"/></svg>"#;
 // Ragged text lines — the plan view's Raw/Tree toggle.
 const LINES: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h13"/></svg>"#;
 // Two overlapped sheets — the record view's Copy row as JSON / CSV buttons.

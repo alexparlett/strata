@@ -41,6 +41,11 @@ pub struct Dress {
     pub tick: Color,
     /// The categorical ramp, in order. A series past the tenth wraps around.
     pub series: [Color; 10],
+    /// The heatmap's sequential ramp — its low and high ends, blended through by a cell's
+    /// normalized value ([`Self::heat_at`]). Its own pair rather than two entries of the
+    /// categorical ramp, because a sequential scale has to read as *one hue getting
+    /// stronger* and the series ramp is built to do the opposite.
+    pub heat: (Color, Color),
     /// The type scale's `meta` role — the small mono the canvas labels its axes in.
     pub label: (String, f64),
 }
@@ -64,11 +69,17 @@ impl Dress {
                 theme.series_9,
                 theme.series_10,
             ],
+            heat: (theme.heat_low, theme.heat_high),
             label: (
                 typography.meta.family.clone(),
                 f64::from(typography.meta.size),
             ),
         }
+    }
+
+    /// The heatmap ramp's colour at `t` in `0..=1` — the low end moved toward the high.
+    pub fn heat_at(&self, t: f32) -> Color {
+        blend(self.heat.0, self.heat.1, t.clamp(0., 1.))
     }
 
     /// The ramp colour for series `i`, wrapping past the tenth.

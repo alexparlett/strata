@@ -118,6 +118,11 @@ define_theme!(
         series_8: Color,
         series_9: Color,
         series_10: Color,
+        /// The heatmap's sequential ramp (Chart 10): a cell's value blends the low end
+        /// toward the high. Distinct from the categorical series ramp on purpose — a
+        /// sequential scale reads as one hue getting stronger.
+        heat_low: Color,
+        heat_high: Color,
     }
 );
 
@@ -415,6 +420,31 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
         ChartData::Table { series, .. } if series.is_empty() => {
             Some((NOTHING, "No column is being plotted.".to_string()))
         }
+        // The Tier B marks' own empty states (Chart 10): each draws nothing at all when the
+        // roles it reads are never complete, and a blank frame is indistinguishable from a
+        // bug. After the empty shapes — "this result has no rows" is still the truer thing
+        // to say about one.
+        ChartData::Table { series, .. }
+            if mark == ChartMark::Heatmap
+                && series
+                    .iter()
+                    .flat_map(|one| one.values.iter().flatten())
+                    .all(|v| !v.is_finite()) =>
+        {
+            Some((NOTHING, "Every cell of this matrix is empty.".to_string()))
+        }
+        ChartData::Table { series, .. } if mark == ChartMark::Band && !complete_rows(series, 3) => {
+            Some((
+                NOTHING,
+                "No row of this result has the centre and both bounds.".to_string(),
+            ))
+        }
+        ChartData::Table { series, .. } if mark == ChartMark::Box && !complete_rows(series, 5) => {
+            Some((
+                NOTHING,
+                "No category of this result has all five measures.".to_string(),
+            ))
+        }
         // After the empty shapes, because "this result has no rows" is the truer thing to say
         // about a result with no rows — but before the pie's, since a hidden series is a state
         // the *user* put the chart into and the only one they can undo from the legend.
@@ -425,6 +455,25 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
         ChartData::Table { series, .. } if mark == ChartMark::Pie => pie_notice(series),
         _ => None,
     }
+}
+
+/// Whether any index has a present, finite value in **each** of the first `need` series —
+/// the "is there anything to draw" question for the marks that read several roles by
+/// position (a band's centre and bounds, a box plot's five).
+fn complete_rows(series: &[ChartSeries], need: usize) -> bool {
+    if series.len() < need {
+        return false;
+    }
+    let len = series[0].values.len();
+    (0..len).any(|i| {
+        series[..need].iter().all(|one| {
+            one.values
+                .get(i)
+                .copied()
+                .flatten()
+                .is_some_and(f64::is_finite)
+        })
+    })
 }
 
 /// Why the values this chart is drawing cannot sit on a logarithmic axis, or `None` when they
@@ -542,6 +591,57 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
                 hidden: false,
             })
             .collect();
+    }
+    // The heatmap's legend keys the **ramp**, not the series: the normalized scale's ends
+    // and middle, from the same min/max the cells blend over. Inert rows — a matrix row
+    // cannot be hidden.
+    if mark == ChartMark::Heatmap {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for value in series
+            .iter()
+            .flat_map(|one| one.values.iter().flatten())
+            .filter(|v| v.is_finite())
+        {
+            lo = lo.min(*value);
+            hi = hi.max(*value);
+        }
+        if !(lo.is_finite() && hi.is_finite()) {
+            return Vec::new();
+        }
+        let stops: Vec<(f32, f64)> = if hi > lo {
+            vec![(0., lo), (0.5, f64::midpoint(lo, hi)), (1., hi)]
+        } else {
+            vec![(0.5, lo)]
+        };
+        return stops
+            .into_iter()
+            .map(|(t, value)| LegendEntry {
+                swatch: dress.heat_at(t),
+                label: axis::readout(value),
+                detail: None,
+                series: None,
+                hidden: false,
+            })
+            .collect();
+    }
+    // A band is one statement in one hue — the centre named once, its bounds the same
+    // colour's tint. A row per bound would key colours nothing separate is wearing.
+    if mark == ChartMark::Band {
+        return series
+            .first()
+            .map(|one| LegendEntry {
+                swatch: dress.series(0),
+                label: one.name.clone(),
+                detail: None,
+                series: None,
+                hidden: false,
+            })
+            .into_iter()
+            .collect();
+    }
+    // A box plot draws in one colour by construction — the scatter and histogram rule.
+    if mark == ChartMark::Box {
+        return Vec::new();
     }
     let toggles = config::hideable(mark);
     series
@@ -725,6 +825,7 @@ mod tests {
                 Color::DARK_GRAY,
                 Color::LIGHT_GRAY,
             ],
+            heat: (Color::BLACK, Color::WHITE),
             label: ("mono".into(), 10.),
         }
     }

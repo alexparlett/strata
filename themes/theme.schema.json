@@ -107,6 +107,8 @@
         "chart.8",
         "chart.9",
         "chart.10",
+        "chart.heat.low",
+        "chart.heat.high",
         "entity.table",
         "entity.view",
         "entity.query",
@@ -398,6 +400,12 @@
           "$ref": "#/$defs/color"
         },
         "chart.10": {
+          "$ref": "#/$defs/color"
+        },
+        "chart.heat.low": {
+          "$ref": "#/$defs/color"
+        },
+        "chart.heat.high": {
           "$ref": "#/$defs/color"
         },
         "entity.table": {

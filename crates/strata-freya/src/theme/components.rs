@@ -727,6 +727,8 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             series_8: role(Role::Chart8),
             series_9: role(Role::Chart9),
             series_10: role(Role::Chart10),
+            heat_low: role(Role::ChartHeatLow),
+            heat_high: role(Role::ChartHeatHigh),
         },
     );
     th.set(

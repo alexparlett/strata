@@ -44,17 +44,30 @@ pub enum ChartMark {
     Histogram,
     /// One slice per category over a single measure ([`ChartQuery::Rows`], capped).
     Pie,
+    /// A matrix of two category columns, the measure as cell colour ([`ChartQuery::Rows`]
+    /// with a required series — the long→wide pivot **is** the matrix, Chart 10).
+    Heatmap,
+    /// A line with the span between two bound columns tinted (`docs/CHART_SPEC.md` §10:
+    /// `y` / `y_lo` / `y_hi` are the user's own SQL, mapped).
+    Band,
+    /// A box plot per category: median, quartile and whisker columns the user's SQL
+    /// computes (spec §10) — never an engine percentile.
+    Box,
 }
 
 impl ChartMark {
-    /// Every mark, in the order the picker offers them (the design's tile grid).
-    pub const ALL: [ChartMark; 6] = [
+    /// Every mark, in the order the picker offers them (the design's tile grid — nine is
+    /// three clean rows of three).
+    pub const ALL: [ChartMark; 9] = [
         ChartMark::Bar,
         ChartMark::Line,
         ChartMark::Area,
         ChartMark::Scatter,
         ChartMark::Histogram,
         ChartMark::Pie,
+        ChartMark::Heatmap,
+        ChartMark::Band,
+        ChartMark::Box,
     ];
 
     /// How this mark reads in the picker.
@@ -66,6 +79,9 @@ impl ChartMark {
             ChartMark::Scatter => "Scatter",
             ChartMark::Histogram => "Histogram",
             ChartMark::Pie => "Pie",
+            ChartMark::Heatmap => "Heatmap",
+            ChartMark::Band => "Band",
+            ChartMark::Box => "Box",
         }
     }
 }
@@ -91,7 +107,12 @@ impl ChartMark {
 pub struct ChartConfig {
     /// The chosen mark, or `None` to take the default for X's role (line over a temporal X,
     /// bar otherwise).
-    #[serde(default)]
+    ///
+    /// Deserialized tolerantly: a mark name this build does not know reads as **unchosen**,
+    /// never as a parse error. `session.json` is one document, so a strict read here would
+    /// let one tab's mark from a newer build set the whole session aside as corrupt — the
+    /// tab degrades to its default mark instead, alone (Chart 10's serde-compat check).
+    #[serde(default, deserialize_with = "mark_compat")]
     pub mark: Option<ChartMark>,
     /// The category axis.
     #[serde(default)]
@@ -102,9 +123,26 @@ pub struct ChartConfig {
     #[serde(default)]
     pub ys: Option<Vec<String>>,
     /// The column the long→wide pivot splits on. `None` is *no split* — both the default and
-    /// the explicit choice, which are the same thing here, so there is nothing to tell apart.
+    /// the explicit choice, which are the same thing here, so there is nothing to tell apart —
+    /// except for a heatmap, whose matrix requires one and derives the default at resolve
+    /// time.
     #[serde(default)]
     pub series: Option<String>,
+    /// A band's lower bound, and a box plot's low whisker (Chart 10). Intent like every
+    /// reference here — a column this result cannot answer falls back at read time — and
+    /// deliberately **no schema-derived default**: a bound is a column the user's SQL
+    /// computed, and guessing one from a name is what the role invariant rules out.
+    #[serde(default)]
+    pub y_lo: Option<String>,
+    /// A band's upper bound, and a box plot's high whisker.
+    #[serde(default)]
+    pub y_hi: Option<String>,
+    /// A box plot's first quartile.
+    #[serde(default)]
+    pub q1: Option<String>,
+    /// A box plot's third quartile.
+    #[serde(default)]
+    pub q3: Option<String>,
     /// How many bins a histogram is cut into, or `None` for the engine's own `√n` choice.
     ///
     /// The one channel here that *is* part of the read: a bin count changes what the engine
@@ -136,6 +174,27 @@ pub struct ChartConfig {
     /// How the settled rows are ordered on the way to the marks.
     #[serde(default)]
     pub sort: ChartSort,
+}
+
+/// [`ChartConfig::mark`]'s tolerant read: an unknown mark name is an unchosen mark.
+///
+/// The mark names ride in `session.json`, one document per project, so a strict enum read
+/// would let a single tab written by a newer build — one that knows a mark this build does
+/// not — fail the whole session into `session.json.corrupt`. Deserializing the raw string
+/// first and then trying the enum keeps the failure where it belongs: that one tab charts
+/// its default mark, and everything else restores untouched.
+fn mark_compat<'de, D>(de: D) -> Result<Option<ChartMark>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::value::StrDeserializer;
+    use serde::de::IntoDeserializer;
+
+    let Some(raw) = Option::<String>::deserialize(de)? else {
+        return Ok(None);
+    };
+    let named: StrDeserializer<serde::de::value::Error> = raw.as_str().into_deserializer();
+    Ok(ChartMark::deserialize(named).ok())
 }
 
 /// What sits on the category axis.
@@ -325,4 +384,28 @@ pub enum ChartData {
     /// the surface names it and offers no control behind it (spec §8).
     /// Carries the encoding's column names so the message can say which.
     Duplicates { x: String, series: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **An unknown mark degrades one tab's mark, never the session.** `session.json` is one
+    /// document, so a strict enum read would let a newer build's mark name set the whole file
+    /// aside as corrupt on downgrade. It reads as unchosen instead — and every other field of
+    /// the same config still lands.
+    #[test]
+    fn an_unknown_mark_reads_as_unchosen_and_spends_nothing_else() {
+        let known: ChartConfig = serde_json::from_str(r#"{ "mark": "heatmap" }"#).unwrap();
+        assert_eq!(known.mark, Some(ChartMark::Heatmap));
+
+        let future: ChartConfig =
+            serde_json::from_str(r#"{ "mark": "hexbin", "log_y": true, "bins": 12 }"#).unwrap();
+        assert_eq!(future.mark, None, "an unknown mark is an unchosen one");
+        assert!(future.log_y, "the rest of the config still lands");
+        assert_eq!(future.bins, Some(12));
+
+        let absent: ChartConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(absent.mark, None);
+    }
 }

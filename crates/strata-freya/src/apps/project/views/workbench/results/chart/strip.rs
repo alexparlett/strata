@@ -43,8 +43,8 @@ use strata_core::engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    allows_row_index, log_axis, series_options, sortable, takes_many_ys, trendable, x_options,
-    y_options, Encoding, Roles,
+    allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options, series_required,
+    sortable, takes_many_ys, trendable, x_options, y_options, Encoding, Roles,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
@@ -93,6 +93,9 @@ fn glyph(mark: ChartMark) -> IconName {
         ChartMark::Scatter => IconName::MarkScatter,
         ChartMark::Histogram => IconName::MarkHistogram,
         ChartMark::Pie => IconName::MarkPie,
+        ChartMark::Heatmap => IconName::MarkHeatmap,
+        ChartMark::Band => IconName::MarkBand,
+        ChartMark::Box => IconName::MarkBox,
     }
 }
 
@@ -297,13 +300,18 @@ impl ControlStrip {
     }
 
     /// The series menu: no split, then every column that can carry one beside the current X.
-    fn series_choices(&self, options: Vec<String>) -> Vec<Choice> {
-        let mut choices = vec![Choice {
-            label: NO_SERIES.to_string(),
-            selected: self.encoding.series.is_none(),
-            next: self.with(|c| c.series = None),
-            keep_open: false,
-        }];
+    /// A mark that **requires** its series (a heatmap's matrix) offers no "None" row — an
+    /// unsplittable heatmap is unreachable rather than reported.
+    fn series_choices(&self, options: Vec<String>, required: bool) -> Vec<Choice> {
+        let mut choices = Vec::new();
+        if !required {
+            choices.push(Choice {
+                label: NO_SERIES.to_string(),
+                selected: self.encoding.series.is_none(),
+                next: self.with(|c| c.series = None),
+                keep_open: false,
+            });
+        }
         for name in options {
             choices.push(Choice {
                 selected: self.encoding.series.as_deref() == Some(name.as_str()),
@@ -313,6 +321,41 @@ impl ControlStrip {
             });
         }
         choices
+    }
+
+    /// One measure-role encoder (LOWER / UPPER / Q1 / Q3, Chart 10): the measures this
+    /// result offers, minus the Y and the other band roles — a bound that collides with
+    /// another edge is unreachable, not reported. `None` when nothing is left to offer,
+    /// which drops the section (the X/series conditional pattern).
+    fn measure_role(
+        &self,
+        label: &'static str,
+        current: &Option<String>,
+        others: [&Option<String>; 3],
+        set: fn(&mut ChartConfig, String),
+    ) -> Option<Encoder> {
+        let options: Vec<Choice> = y_options(&self.roles)
+            .into_iter()
+            .filter(|name| self.encoding.ys.first().map(String::as_str) != Some(name.as_str()))
+            .filter(|name| {
+                !others
+                    .iter()
+                    .any(|other| other.as_deref() == Some(name.as_str()))
+            })
+            .map(|name| Choice {
+                selected: current.as_deref() == Some(name.as_str()),
+                next: self.with(|c| set(c, name.clone())),
+                label: name,
+                keep_open: false,
+            })
+            .collect();
+        (!options.is_empty()).then(|| Encoder {
+            tab: self.tab,
+            label,
+            current: current.clone().unwrap_or_else(|| NO_SERIES.to_string()),
+            options,
+            key: DiffKey::None,
+        })
     }
 }
 
@@ -370,7 +413,14 @@ impl Component for ControlStrip {
         let y = (!y_choices.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                label: "Y AXIS",
+                // The channel is the same one everywhere; what it *means* is the mark's — a
+                // heatmap's measure is its colour and a box plot's is its median, and an
+                // eyebrow saying "Y AXIS" over either would name the wrong thing.
+                label: match mark {
+                    ChartMark::Heatmap => "VALUE (COLOR)",
+                    ChartMark::Box => "MEDIAN",
+                    _ => "Y AXIS",
+                },
                 // Every plotted column, in the order the legend keys them.
                 current: if self.encoding.ys.is_empty() {
                     NO_SERIES.to_string()
@@ -387,17 +437,81 @@ impl Component for ControlStrip {
         let series = (!series_options.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                label: "SERIES (COLOR)",
+                // A heatmap's series channel is its second category axis, and the strip
+                // says so — "SERIES (COLOR)" would promise the categorical ramp over a
+                // mark whose colour is the value.
+                label: if mark == ChartMark::Heatmap {
+                    "Y AXIS"
+                } else {
+                    "SERIES (COLOR)"
+                },
                 current: self
                     .encoding
                     .series
                     .clone()
                     .unwrap_or_else(|| NO_SERIES.to_string()),
-                options: self.series_choices(series_options),
+                options: self.series_choices(series_options, series_required(mark)),
                 key: DiffKey::None,
             }
             .key("series")
         });
+
+        // A heatmap reads X then its second category then the value, so the sections come
+        // in that order — for every other mark the value axis stays second.
+        let (second, third) = if mark == ChartMark::Heatmap {
+            (series, y)
+        } else {
+            (y, series)
+        };
+
+        // The band roles (Chart 10): a band's bounds, a box plot's quartiles and whiskers.
+        // Each is offered only where the mark reads it and a column is left to offer.
+        let bounds = reads_bounds(mark);
+        let quartiles = reads_quartiles(mark);
+        let q1 = quartiles
+            .then(|| {
+                self.measure_role(
+                    "Q1",
+                    &self.encoding.q1,
+                    [&self.encoding.q3, &self.encoding.y_lo, &self.encoding.y_hi],
+                    |c, name| c.q1 = Some(name),
+                )
+            })
+            .flatten()
+            .map(|encoder| encoder.key("q1"));
+        let q3 = quartiles
+            .then(|| {
+                self.measure_role(
+                    "Q3",
+                    &self.encoding.q3,
+                    [&self.encoding.q1, &self.encoding.y_lo, &self.encoding.y_hi],
+                    |c, name| c.q3 = Some(name),
+                )
+            })
+            .flatten()
+            .map(|encoder| encoder.key("q3"));
+        let lower = bounds
+            .then(|| {
+                self.measure_role(
+                    "LOWER",
+                    &self.encoding.y_lo,
+                    [&self.encoding.y_hi, &self.encoding.q1, &self.encoding.q3],
+                    |c, name| c.y_lo = Some(name),
+                )
+            })
+            .flatten()
+            .map(|encoder| encoder.key("lower"));
+        let upper = bounds
+            .then(|| {
+                self.measure_role(
+                    "UPPER",
+                    &self.encoding.y_hi,
+                    [&self.encoding.y_lo, &self.encoding.q1, &self.encoding.q3],
+                    |c, name| c.y_hi = Some(name),
+                )
+            })
+            .flatten()
+            .map(|encoder| encoder.key("upper"));
 
         // The engine does the binning, so this one is part of the read — a new count is a new
         // entry rather than a repaint. Only a histogram has bins to count.
@@ -490,8 +604,12 @@ impl Component for ControlStrip {
                         .spacing(SECTION_GAP)
                         .child(tiles)
                         .maybe_child(x)
-                        .maybe_child(y)
-                        .maybe_child(series)
+                        .maybe_child(second)
+                        .maybe_child(third)
+                        .maybe_child(q1)
+                        .maybe_child(q3)
+                        .maybe_child(lower)
+                        .maybe_child(upper)
                         .maybe_child(bins)
                         .maybe_child(sort)
                         .maybe_child(scale)
@@ -1325,6 +1443,73 @@ mod tests {
         assert!(config(&session).log_y, "the config still holds it");
         click_text(&mut runner, "Line");
         assert!(shows(&runner, "SCALE"));
+    }
+
+    /// **A heatmap's strip names its channels for what they mean on a matrix** — the second
+    /// category is its Y axis and the measure is its colour — and the required series offers
+    /// no "None" row, so an unsplittable heatmap is unreachable.
+    #[test]
+    fn a_heatmap_renames_its_channels_and_requires_the_second_category() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+
+        click_text(&mut runner, "Heatmap");
+        assert_eq!(config(&session).mark, Some(ChartMark::Heatmap));
+        let seen = texts(&runner);
+        for expected in ["X AXIS", "Y AXIS", "VALUE (COLOR)"] {
+            assert!(seen.contains(&expected.to_string()), "{seen:?}");
+        }
+        assert!(
+            !seen.contains(&"SERIES (COLOR)".to_string()),
+            "a heatmap's colour is its value, not a series ramp: {seen:?}"
+        );
+        assert!(
+            seen.contains(&"country".to_string()),
+            "the derived second category: {seen:?}"
+        );
+
+        // Open the second-category picker: no "None" row to press.
+        click_text(&mut runner, "country");
+        assert!(
+            !shows(&runner, NO_SERIES),
+            "a required series offers no None: {:?}",
+            texts(&runner)
+        );
+    }
+
+    /// **A box plot's strip offers its five roles by name** — and the band roles never leak
+    /// onto a mark that does not read them.
+    #[test]
+    fn the_band_roles_are_offered_exactly_where_the_mark_reads_them() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        for absent in ["LOWER", "UPPER", "Q1", "Q3"] {
+            assert!(!shows(&runner, absent), "{absent} on a line");
+        }
+
+        click_text(&mut runner, "Box");
+        let seen = texts(&runner);
+        for expected in ["MEDIAN", "Q1", "Q3", "LOWER", "UPPER"] {
+            assert!(seen.contains(&expected.to_string()), "{seen:?}");
+        }
+
+        click_text(&mut runner, "Band");
+        let seen = texts(&runner);
+        for expected in ["Y AXIS", "LOWER", "UPPER"] {
+            assert!(seen.contains(&expected.to_string()), "{seen:?}");
+        }
+        for absent in ["Q1", "Q3"] {
+            assert!(
+                !seen.contains(&absent.to_string()),
+                "a band has no quartiles: {seen:?}"
+            );
+        }
+
+        // A pick writes the config's own field. The first unset trigger reads "None" and is
+        // LOWER's; its menu offers the measures minus the Y, which leaves `cost`.
+        click_text(&mut runner, NO_SERIES);
+        click_text(&mut runner, "cost");
+        assert_eq!(config(&session).y_lo.as_deref(), Some("cost"));
     }
 
     /// **The trendline is offered only for a scatter, and it writes a repaint** — the fit is
