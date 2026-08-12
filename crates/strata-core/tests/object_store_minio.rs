@@ -659,9 +659,18 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     // published dataset granting `GetObject` but not `ListBucket`. Refusing either would take
     // every table in a working project down with the connection.
     //
-    // So `PermissionDenied` and `Unauthenticated` register, and only `Generic` (the bare
-    // redirect of a wrong region) and `NotFound` refuse. The wrong-region diagnosis — the fault
-    // this probe was built for — is untouched.
+    // So `reachable` refuses **one** thing — a bare redirect, which is a bucket that is not in
+    // the region it was given — and passes everything else a listing can answer, this 403
+    // included. The wrong-region diagnosis, the fault the probe was built for, is untouched.
+    //
+    // It is worth knowing *why* the rule is that blunt, because the obvious version was written
+    // first and this test is what killed it. `reachable` used to match `Error::PermissionDenied`
+    // and `Unauthenticated` to let this phase through, on the strength of `RetryError::error`
+    // mapping 403 and 401 onto them. It does — but the S3 **list** path never reaches that
+    // mapping: `aws/client.rs`'s `From<Error> for crate::Error` sends `ListRequest` (and every
+    // variant but two) to `_ => Generic`, so a 403, a 404 and a redirect all arrive as one
+    // variant and every arm was unreachable. `RetryError` is `pub(crate)`, so the status cannot
+    // be recovered by downcast either. Matching one distinctive message is what is left.
     //
     // Last, and in the same test, for the reason the doc comment gives: this rewrites the
     // environment the phases above depend on.
