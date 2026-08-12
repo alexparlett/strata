@@ -25,12 +25,13 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
-use super::entry::{fold_plan, watched_scan, Folds, ACTIONS_SIZE};
+use super::entry::{fold_plan, watched_scan, Folds};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
 use crate::apps::project::views::{DropTarget, ProfileTarget};
-use crate::components::PROGRESS_HOLD;
+use crate::components::metrics::PROGRESS_HOLD;
+use crate::components::metrics::ROW_ACTION;
 use crate::state::ConfigStation;
 use crate::theme::strata_theme;
 use strata_core::config::AppConfig;
@@ -954,8 +955,8 @@ fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
         runner
             .find_many(|node, _| {
                 let a = node.layout().area;
-                ((a.width() - ACTIONS_SIZE).abs() < 0.5
-                    && (a.height() - ACTIONS_SIZE).abs() < 0.5
+                ((a.width() - ROW_ACTION).abs() < 0.5
+                    && (a.height() - ROW_ACTION).abs() < 0.5
                     && a.min_y() <= mid
                     && a.max_y() >= mid)
                     .then_some(a.max_x())

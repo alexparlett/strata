@@ -16,6 +16,7 @@ use freya::prelude::*;
 use crate::apps::launcher::{LauncherThemePartial, LauncherThemePreference};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_1, SP_2, SP_3, SP_4, SP_5};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::typography::{Control, Meta, Title};
 use crate::platform::open_settings;
@@ -23,7 +24,7 @@ use crate::state::AppCtx;
 
 /// The rail rows' padding (canvas `--sp-3 --sp-4`) — roomier than the catalog's, which sits
 /// in a narrower pane.
-const ROW_PADDING: Gaps = Gaps::new(8., 12., 8., 12.);
+const ROW_PADDING: Gaps = Gaps::new(SP_3, SP_4, SP_3, SP_4);
 
 /// The rail's width (canvas `width: 200px`), the hairline included.
 const RAIL_WIDTH: f32 = 200.;
@@ -49,20 +50,20 @@ impl Component for LauncherRail {
         let brand = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(12.)
-            .padding(Gaps::new(0., 4., 16., 4.))
+            .spacing(SP_4)
+            .padding(Gaps::new(0., SP_2, SP_5, SP_2))
             .child(
                 rect()
                     .width(Size::px(34.))
                     .height(Size::px(34.))
-                    .corner_radius(8.)
+                    .corner_radius(R_2)
                     .overflow(Overflow::Clip)
                     .child(Icon::new(IconName::StrataLogo).size(34.)),
             )
             .child(
                 rect()
                     .vertical()
-                    .spacing(2.)
+                    .spacing(SP_1)
                     .child(Title::new("Strata"))
                     .child(Meta::new(env!("CARGO_PKG_VERSION")).color(theme.label_color)),
             );
@@ -102,8 +103,8 @@ impl Component for LauncherRail {
                     // off the bottom.
                     .content(Content::Flex)
                     .background(theme.rail_background)
-                    .padding(Gaps::new(16., 12., 16., 12.))
-                    .spacing(4.)
+                    .padding(Gaps::new(SP_5, SP_4, SP_5, SP_4))
+                    .spacing(SP_2)
                     .child(brand)
                     .child(projects)
                     // Flexible spacer — pins Settings to the bottom.
@@ -120,7 +121,7 @@ fn row_content(icon: IconName, label: &str) -> impl IntoElement {
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
-        .spacing(12.)
+        .spacing(SP_4)
         .child(Icon::new(icon).size(15.))
         .child(Control::new(label))
 }

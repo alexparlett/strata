@@ -24,6 +24,7 @@ use super::paint::{ChartCanvas, Dress, Frame};
 use super::strip::ControlStrip;
 use super::{legend, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
+use crate::components::metrics::SP_3;
 use crate::components::typography::scale;
 use crate::theme::strata_theme;
 use freya::components::get_theme;
@@ -154,7 +155,7 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
                 .height(Size::fill())
                 .vertical()
                 .content(Content::Flex)
-                .spacing(8.)
+                .spacing(SP_3)
                 .maybe_child(banner.map(super::Banner::new))
                 .child(
                     rect()

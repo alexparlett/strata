@@ -56,16 +56,14 @@ use crate::apps::settings::views::keymap::model::{has_overrides, rows, Blocked, 
 use crate::apps::settings::views::keymap::table::KeyTable;
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, SettingsCtx};
+use crate::components::metrics::{COMPACT_BUTTON, SP_5};
 use crate::components::typography::{Control, Prose};
 use crate::keymap::chord_from_event;
 use crate::menu::menu_chords;
 use crate::state::{use_config, AppCtx, ConfigChan};
 
 /// The gap under the intro line, before the grid (canvas `margin-bottom: var(--sp-5)`).
-const INTRO_GAP: f32 = 16.;
-/// Reset all's height, matching the Engine pane's Revert (canvas `height: 26px`).
-const BUTTON_HEIGHT: f32 = 26.;
-
+const INTRO_GAP: f32 = SP_5;
 /// What the pane says about itself, once, above the grid. A double press on the row, not a single
 /// click on the chord — see the module doc.
 const INTRO: &str =
@@ -142,7 +140,7 @@ impl Component for KeymapPane {
                     )
                     .maybe_child(overridden.then(|| {
                         Button::new()
-                            .height(Size::px(BUTTON_HEIGHT))
+                            .height(Size::px(COMPACT_BUTTON))
                             .on_press(move |_: Event<PressEventData>| {
                                 ctx.edit(keymap::reset_all);
                                 editing.set(Editing::Idle);

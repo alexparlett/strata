@@ -22,14 +22,15 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::form::{Row, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_2, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Caption, MonoValue, Prose};
 use crate::components::window::window_theme;
 
 /// The gap under the section header, between its rows, and beside a control.
-const HEADER_GAP: f32 = 8.;
-const ROW_GAP: f32 = 8.;
-const CONTROL_GAP: f32 = 12.;
+const HEADER_GAP: f32 = SP_3;
+const ROW_GAP: f32 = SP_3;
+const CONTROL_GAP: f32 = SP_4;
 /// The canvas's fixed column for a partition column's name.
 const NAME_WIDTH: f32 = 110.;
 const NAME_ICON: f32 = 11.;
@@ -200,7 +201,7 @@ impl Component for PartitionRow {
                     .width(Size::px(NAME_WIDTH))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(6.)
+                    .spacing(SP_3)
                     .child(
                         Icon::new(IconName::Brackets)
                             .size(NAME_ICON)
@@ -225,8 +226,8 @@ impl Component for Warning {
             .width(Size::fill())
             .horizontal()
             .cross_align(Alignment::Start)
-            .spacing(8.)
-            .padding(Gaps::new(4., 0., 0., 0.))
+            .spacing(SP_3)
+            .padding(Gaps::new(SP_2, 0., 0., 0.))
             .child(
                 Icon::new(IconName::Warning)
                     .size(WARNING_ICON)

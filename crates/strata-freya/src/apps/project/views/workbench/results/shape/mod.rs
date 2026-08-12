@@ -34,10 +34,10 @@ use crate::components::dialog::DialogHeader;
 use crate::components::divider::Divider;
 use crate::components::form::{Form, Row};
 use crate::components::icon::IconName;
+use crate::components::metrics::{ACTION_HEIGHT, R_4, SP_1, SP_2, SP_3, SP_4, SP_5, SP_6};
 use crate::components::modal::Modal;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Caption, Control, Eyebrow, MonoValue, Title};
-use crate::components::ACTION_HEIGHT;
 use crate::theme::{use_roles, Role};
 
 /// The panel's own proportions: a working surface, not a confirm — wider than the confirm
@@ -241,7 +241,7 @@ impl Component for ShapeCard {
             rect()
                 .width(Size::fill())
                 .vertical()
-                .spacing(10.)
+                .spacing(SP_3)
                 .child(Eyebrow::new(label).color(roles.get(Role::TextLabel)))
                 .child(body)
         };
@@ -250,13 +250,13 @@ impl Component for ShapeCard {
 
         let header = rect()
             .width(Size::fill())
-            .padding((24., 24., 16., 24.))
+            .padding((SP_6, SP_6, SP_5, SP_6))
             .child(DialogHeader::new(
                 IconName::Rows,
                 roles.get(Role::Accent),
                 rect()
                     .vertical()
-                    .spacing(2.)
+                    .spacing(SP_1)
                     .child(Title::new("Shape result"))
                     .child(
                         Caption::new(format!(
@@ -271,8 +271,8 @@ impl Component for ShapeCard {
             rect()
                 .width(Size::fill())
                 .vertical()
-                .spacing(20.)
-                .padding((4., 24., 16., 24.))
+                .spacing(SP_5)
+                .padding((SP_2, SP_6, SP_5, SP_6))
                 .child(section("GROUP BY", group_rows))
                 .child(section("MEASURES", measure_rows))
                 .child(section("ORDER BY", order_rows)),
@@ -283,8 +283,8 @@ impl Component for ShapeCard {
             .horizontal()
             .main_align(Alignment::End)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((12., 24.))
+            .spacing(SP_3)
+            .padding((SP_4, SP_6))
             .background(roles.get(Role::SurfaceRaised))
             .child(
                 Button::new()
@@ -307,7 +307,7 @@ impl Component for ShapeCard {
             .height(Size::px(CARD_HEIGHT))
             .max_width(Size::window_percent(92.))
             .max_height(Size::window_percent(88.))
-            .corner_radius(14.)
+            .corner_radius(R_4)
             .background(roles.get(Role::ElevatedSurface))
             .border(Border::new().width(1.).fill(roles.get(Role::Border)))
             .shadow(

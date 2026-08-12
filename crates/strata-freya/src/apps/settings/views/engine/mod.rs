@@ -30,6 +30,7 @@ use crate::apps::settings::views::engine::table::PropTable;
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, SettingsCtx};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{COMPACT_BUTTON, SP_3, SP_5};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Control, Prose};
@@ -39,8 +40,8 @@ pub use model::PropRows;
 
 /// The gap under the blurb, and between the toolbar and the grid (canvas `var(--sp-5)` /
 /// `var(--sp-3)`).
-const BLURB_GAP: f32 = 16.;
-const TOOLBAR_GAP: f32 = 8.;
+const BLURB_GAP: f32 = SP_5;
+const TOOLBAR_GAP: f32 = SP_3;
 
 /// What the pane says about itself, once, above the table.
 const BLURB: &str = "DataFusion options applied to every engine this app starts. Enter any \
@@ -131,13 +132,13 @@ impl Component for EnginePane {
         .filled()
         .maybe_trailing(revertable.then(|| {
             Button::new()
-                .height(Size::px(26.))
+                .height(Size::px(COMPACT_BUTTON))
                 .on_press(move |_: Event<PressEventData>| rows.write().revert(&saved))
                 .child(
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
-                        .spacing(6.)
+                        .spacing(SP_3)
                         .child(Icon::new(IconName::Reload).size(12.))
                         .child(Control::new("Revert changes")),
                 )

@@ -28,6 +28,9 @@ use crate::components::form::{
     form_theme, Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP,
 };
 use crate::components::icon::IconName;
+use crate::components::metrics::{
+    EMPTY_TABLE_HEIGHT, ERROR_STRIPE, SP_1, SP_3, SP_4, TABLE_HEAD_HEIGHT,
+};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
@@ -38,7 +41,7 @@ use crate::theme::{use_roles, Role};
 /// The gap between a control and the thing that qualifies it — an auth pill and the reference it
 /// turned on, an endpoint box and its Allow-HTTP switch (canvas `var(--sp-4)`). Inside the row,
 /// because a qualifier is what its control's answer *means* rather than a second question.
-const QUALIFIER_GAP: f32 = 12.;
+const QUALIFIER_GAP: f32 = SP_4;
 /// The region box, which holds `ap-southeast-1` and never anything longer.
 const REGION_WIDTH: f32 = 180.;
 /// The profile picker (canvas `width: 220px`).
@@ -47,12 +50,10 @@ const PROFILE_WIDTH: f32 = 220.;
 /// strip and cell inset, a row tall enough to hold a field, and the source-path list's toolbar gap
 /// and stack gap. The key column is fixed because an option name is a known width and the value is
 /// whatever the user types.
-const HEAD_HEIGHT: f32 = 32.;
-const CELL_INSET: f32 = 12.;
+const CELL_INSET: f32 = SP_4;
 const OPTION_ROW: f32 = 38.;
 /// The stripe down an invalid row's leading edge, and how wide the suggestion panel stands — a
 /// client option's name is long and the box it hangs off is a third of a narrow window.
-const ERROR_STRIPE: f32 = 2.;
 const SUGGEST_WIDTH: f32 = 300.;
 /// How many offers the panel grows to before it scrolls, and what one of them stands at.
 ///
@@ -63,9 +64,8 @@ const SUGGEST_WIDTH: f32 = 300.;
 const SUGGEST_ROWS: f32 = 3.;
 const SUGGEST_ROW_HEIGHT: f32 = 46.;
 pub const OPTION_KEY_WIDTH: f32 = 210.;
-const EMPTY_HEIGHT: f32 = 88.;
-const TOOL_GAP: f32 = 6.;
-const STACK_GAP: f32 = 8.;
+const TOOL_GAP: f32 = SP_3;
+const STACK_GAP: f32 = SP_3;
 
 /// Every row this provider has, in canvas order.
 #[derive(PartialEq)]
@@ -619,7 +619,7 @@ impl Component for OptionTable {
             return option_table().child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(EMPTY_HEIGHT))
+                    .height(Size::px(EMPTY_TABLE_HEIGHT))
                     .center()
                     .child(
                         Prose::new("No client options. The defaults suit most connections.")
@@ -672,7 +672,7 @@ impl Component for OptionHead {
 
         let cell = |label: &'static str| {
             TableCell::new()
-                .height(Size::px(HEAD_HEIGHT))
+                .height(Size::px(TABLE_HEAD_HEIGHT))
                 .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                 .main_align(Alignment::Start)
                 .child(Control::new(label).color(form.label_color))
@@ -898,7 +898,7 @@ impl Component for SuggestionRow {
         rect()
             .width(Size::fill())
             .vertical()
-            .spacing(2.)
+            .spacing(SP_1)
             .child(MonoValue::new(self.entry.name))
             .child(
                 Caption::new(self.entry.what)

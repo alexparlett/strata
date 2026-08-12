@@ -8,6 +8,7 @@
 
 use freya::prelude::*;
 
+use crate::components::metrics::{R_2, SP_3};
 use crate::theme::{use_roles, Role};
 
 /// Data of a Change event — a stateful control reporting the value it just changed to.
@@ -136,7 +137,7 @@ impl Component for ToggleButton {
         // the content just centres — no hug min-width or horizontal padding.
         let button = rect()
             .height(self.height.clone().unwrap_or(Size::px(28.)))
-            .corner_radius(8.)
+            .corner_radius(R_2)
             .center()
             .background(background)
             .color(color)
@@ -151,7 +152,7 @@ impl Component for ToggleButton {
             })
             .map(self.width.clone(), ContainerSizeExt::width)
             .maybe(self.width.is_none(), |el| {
-                el.min_width(Size::px(28.)).padding((0., 6.))
+                el.min_width(Size::px(28.)).padding((0., SP_3))
             })
             .children(self.elements.clone());
         match &self.title {

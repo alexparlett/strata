@@ -22,6 +22,7 @@ use crate::apps::project::state::{
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_2, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Control, Prose, Title};
 use crate::platform::{self, OpenCtx};
@@ -246,9 +247,9 @@ impl Component for CloseConfirm {
         let checkbox_row = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((4., 8.))
-            .corner_radius(8.)
+            .spacing(SP_3)
+            .padding((SP_2, SP_3))
+            .corner_radius(R_2)
             .on_press(toggle_dont_ask)
             .child(Checkbox::new().selected(dont_ask).size(16.))
             .child(Prose::new("Don't ask again").color(roles.get(Role::TextPlaceholder)));
@@ -267,7 +268,7 @@ impl Component for CloseConfirm {
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    .spacing(12.)
+                    .spacing(SP_4)
                     .child(Prose::new(body).color(roles.get(Role::TextMuted)).wrap())
                     .child(checkbox_row),
             )
@@ -294,7 +295,7 @@ impl Component for CloseConfirm {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .child(Icon::new(action_icon).size(13.))
                             .child(Control::new(action)),
                     ),

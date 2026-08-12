@@ -174,6 +174,12 @@ src/components/                  shared component library
                                  `key` (raised, heavier bottom edge: the row is about the chord)
                                  and `chip` (flat: the chord is a hint). One cap per call; a
                                  chord is composed by the caller
+  metrics.rs                     the design's spacing + radius scale (`SP_1…9` / `R_XS…4`,
+                                 `Design.dc.html` §03) as constants — not theme fields, since a
+                                 step doesn't vary by theme — plus `pill()`, `HAIRLINE`, and the
+                                 fixed sizes more than one surface agrees on (tool button, title
+                                 bar, panel headers, table rows). P5-03's shared durations land
+                                 here beside `PROGRESS_HOLD`
   sidebar_row.rs                 the left pane's row shell: a preset over Freya's `SideBarItem`
                                  (+ `Activable` for selection), so hover/selected dress and a11y
                                  are shared by the catalog and, later, connections (W7)

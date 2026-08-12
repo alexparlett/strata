@@ -25,7 +25,7 @@ use strata_model::{
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::views::ProfileTarget;
-use crate::components::{ACTION_HEIGHT, PANE_BODY_MIN_W};
+use crate::components::metrics::{ACTION_HEIGHT, PANE_BODY_MIN_W};
 use crate::theme::strata_theme;
 
 /// The panel's own width, from the design canvas (`inspectorW: 292`).

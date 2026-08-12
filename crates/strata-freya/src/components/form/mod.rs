@@ -55,6 +55,7 @@ mod row;
 use freya::prelude::*;
 
 use crate::components::divider::Divider;
+use crate::components::metrics::{SP_1, SP_3, SP_4, SP_5, SP_6};
 
 pub use field::{NumberField, PathField, ValueField, FIELD_HEIGHT};
 pub use options::{Choice, Control, Group, Make, OptionList, TextField};
@@ -111,20 +112,20 @@ pub fn form_theme() -> FormTheme {
 
 /// The gap between a fields row's label and its control (canvas `var(--sp-3)`), and between
 /// that label and its ⓘ.
-pub(crate) const LABEL_GAP: f32 = 8.;
+pub(crate) const LABEL_GAP: f32 = SP_3;
 /// The gap under a preferences row's title, before its subtext (canvas `var(--sp-1)`).
-pub(crate) const HINT_GAP: f32 = 2.;
+pub(crate) const HINT_GAP: f32 = SP_1;
 /// The gap between a preferences row's label block and its control (canvas `var(--sp-4)`), and
 /// between a trailing control and the label block beside it.
-pub(crate) const CONTROL_GAP: f32 = 12.;
+pub(crate) const CONTROL_GAP: f32 = SP_4;
 /// The gap between a value box and whatever is set beside it (canvas `var(--sp-3)`) — a
 /// [`NumberField`]'s unit label, a [`PathField`]'s browse button. One constant, because
 /// it is one role: what separates a box from the thing that qualifies it.
-pub(crate) const FIELD_GAP: f32 = 8.;
+pub(crate) const FIELD_GAP: f32 = SP_3;
 /// The gap between two rows of a fields form.
-pub(crate) const ROW_GAP: f32 = 20.;
+pub(crate) const ROW_GAP: f32 = SP_5;
 /// The gap either side of a preferences form's rule (canvas `var(--sp-6)`).
-pub(crate) const RULE_GAP: f32 = 24.;
+pub(crate) const RULE_GAP: f32 = SP_6;
 
 /// Which register a form is set in — see the module doc. Provided by [`Form`] and read by every
 /// [`Row`] under it, so it is chosen once per surface.

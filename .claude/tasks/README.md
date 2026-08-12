@@ -63,7 +63,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 | 2 · Workbench | editor · results grid · tabs · run/explain · find/record/copy · Table/Chart · toolbar · status bar | ✅ done (folder removed) |
 | 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · the whole drawer (Problems · Events · History) | ✅ done (folder removed) |
 | 4 · Multi-window | launcher · settings · export · configure · native close · write resiliency | ✅ done (folder removed) |
-| **5 · Design polish** | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | 🟡 **P5-06 (panel overflow) + P5-08 (scroll acceleration) done; the rest open** → [`phase-5-design-polish/`](phase-5-design-polish/README.md) |
+| **5 · Design polish** | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | 🟡 **P5-01 (spacing/radius scale) + P5-06 (panel overflow) + P5-08 (scroll acceleration) done; the rest open** → [`phase-5-design-polish/`](phase-5-design-polish/README.md) |
 | 6 · Platform + parity | keymap/hotkeys · command palette · native menu · parity sweep | ✅ done (folder removed) |
 
 ## Cross-cutting workstreams (not in a single phase)
@@ -156,21 +156,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-<<<<<<< HEAD
-1. **Assistant AS-07**, with AS-03 closing behind it. The pane is built (AS-04) over the loop
-   (AS-02), Settings ▸ AI (AS-03) and the model listings (AS-06 — the pane consumes
-   `Listings::offer`, and `probe::refresh` **moved** to `state::listings` rather than being
-   written twice). What remains is persisting a conversation, which now has a transcript to
-   persist: `Chats::settle` is the hook it was shaped for. AS-03's last two controls are the
-   retention pair that only means something once it lands.
-=======
-1. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
-   trendline.
->>>>>>> origin/main
-2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
-   with the above.
+1. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
-(The **Assistant** workstream is closed: AS-07 landed 2026-08-11 and AS-03 closed behind it.)
+(The **Assistant** workstream is closed — AS-07 landed 2026-08-11 with AS-03 behind it — and so
+is the **Chart** workstream: 09/10/11 built and 05/07 cut, 2026-08-12.)
 
 ## Sourcing
 

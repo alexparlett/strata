@@ -31,6 +31,7 @@ use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
 use crate::components::keycap::KeyCap;
+use crate::components::metrics::{R_1, SP_2, SP_3, SP_5, TABLE_HEAD_HEIGHT, TABLE_ROW_HEIGHT};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Control, Prose};
@@ -40,21 +41,19 @@ use crate::theme::{use_roles, Role};
 /// two tables. The canvas states a 30px floor for a keymap row and then fills it with 24px caps
 /// inside a 4px inset, and puts a 26px reset button beside them, so its own rows land at 32-34
 /// wherever they carry anything; 34 is where the two agree.
-const HEAD_HEIGHT: f32 = 32.;
-const ROW_HEIGHT: f32 = 34.;
 /// The Shortcut column (canvas `width: 240px`), and the inset both columns share.
 const SHORTCUT_WIDTH: f32 = 240.;
-const CELL_INSET: f32 = 16.;
+const CELL_INSET: f32 = SP_5;
 /// The gap between two caps of one chord, and between the chord and what sits beside it. (A cap's
 /// own box is [`KeyCap`]'s — this grid only says how its caps are spaced.)
-const CAP_GAP: f32 = 4.;
-const SHORTCUT_GAP: f32 = 8.;
+const CAP_GAP: f32 = SP_2;
+const SHORTCUT_GAP: f32 = SP_3;
 /// The dash pattern on an empty slot's edge (canvas `border: 1px dashed`).
 const DASH: f32 = 4.;
-const DASH_GAP: f32 = 3.;
+const DASH_GAP: f32 = SP_2;
 /// The height of the small controls that sit in a row: the capture pill, Add shortcut, Esc.
 const PILL_HEIGHT: f32 = 24.;
-const PILL_RADIUS: f32 = 6.;
+const PILL_RADIUS: f32 = R_1;
 
 /// The grid: a header over one row per command, hugging its content inside the pane's scroll.
 ///
@@ -123,7 +122,7 @@ impl Component for HeadRow {
             })
             .child(
                 TableCell::new()
-                    .height(Size::px(HEAD_HEIGHT))
+                    .height(Size::px(TABLE_HEAD_HEIGHT))
                     .padding(Gaps::new_all(0.))
                     .main_align(Alignment::Start)
                     .child(
@@ -143,7 +142,7 @@ impl Component for HeadRow {
             )
             .child(
                 TableCell::new()
-                    .height(Size::px(HEAD_HEIGHT))
+                    .height(Size::px(TABLE_HEAD_HEIGHT))
                     .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
                     .child(Control::new("Shortcut").color(theme.item_active_color)),
@@ -216,7 +215,7 @@ impl Component for KeyTableRow {
             })
             .child(
                 TableCell::new()
-                    .height(Size::px(ROW_HEIGHT))
+                    .height(Size::px(TABLE_ROW_HEIGHT))
                     .padding(Gaps::new_all(0.))
                     .main_align(Alignment::Start)
                     .child(
@@ -259,7 +258,7 @@ impl Component for CustomBadge {
     fn render(&self) -> impl IntoElement {
         let accent = use_roles().get(Role::Accent);
 
-        Badge::tag("CUSTOM", accent).padding((0., 4.))
+        Badge::tag("CUSTOM", accent).padding((0., SP_2))
     }
 }
 
@@ -314,7 +313,7 @@ impl Component for ShortcutCell {
         };
 
         TableCell::new()
-            .height(Size::px(ROW_HEIGHT))
+            .height(Size::px(TABLE_ROW_HEIGHT))
             .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
             .main_align(Alignment::End)
             .child(content)

@@ -39,17 +39,22 @@ describes.
 | Shared `Toolbar` row | 38 | `components/toolbar.rs:273` | — (explain overrides to 37, `explain_plan/mod.rs:189`) |
 | Drawer header | 36 | `drawer/mod.rs:99` | `:98` claims it matches sidebar + inspector — **false both ways** |
 
-Sidebar and inspector each own a private const **named `HEADER_HEIGHT`** with different values.
-Plausible root cause: only the sidebar header sits on `Toolbar` (P5-06's shared chrome row);
-inspector, drawer and chat build their header rows by hand. Consider moving them onto
-`Toolbar::header()` as the fix rather than syncing three literals.
+Sidebar and inspector each owned a private const **named `HEADER_HEIGHT`** with different values.
+P5-01 rehomed them without renumbering: `SIDEBAR_HEADER_HEIGHT` 48, `RIGHT_PANE_HEADER_HEIGHT` 40
+(the inspector's and the chat pane's, merged — one slot, `Layout::right`, so one row) and
+`DRAWER_HEADER_HEIGHT` 36, all in `components::metrics`. **Which values the canvases want is still
+this task's call**, and it is now one edit per height. Plausible root cause is unchanged: only the
+sidebar header sits on `Toolbar` (P5-06's shared chrome row); inspector, drawer and chat build
+their header rows by hand. Consider moving them onto `Toolbar::header()` as the fix rather than
+syncing three constants.
 
-**Icon-button sizes — six-plus sizes, one shared const:** `TOOL_SIZE = 28.`
-(`tool_button.rs:24`) is the only `pub` size. 30 (project header, menu row, running state), 26
-(the title-bar button, **copied in four windows** + 3 more sites), 24 (panel-header controls,
-defined twice), 22 (`ACTIONS_SIZE`, defined twice, + 5 bare sites), 20 / 18 / 16 (small glyphs),
-`STATUS_SIZE = 12.` defined twice. The **rehoming** is P5-01's job; this audit settles **which
-values the canvases actually want**, then snaps.
+**Icon-button sizes — six-plus sizes, now one module:** P5-01 did the rehoming —
+`components::metrics` holds `TOOL_SIZE` 28, `COMPACT_BUTTON` 26 (was the title-bar copy in four
+windows plus three more sites), `HEADER_CONTROL` 24, `ROW_ACTION` 22 and `STATUS_DOT` 12. What is
+left for this audit is **which values the canvases actually want**, and the 30 / 20 / 18 / 16 bare
+sites it did not touch (they are glyph sizes, not the button box). Note that
+`settings/views/theme.rs`'s 26 was never a title-bar button — it is the preview miniature's rail,
+and stays local.
 
 ## Build
 - Walk each surface against its canvas; list concrete drift and fix the cheap aligns (the two
@@ -59,7 +64,8 @@ values the canvases actually want**, then snaps.
 
 ## Acceptance
 - [ ] Each surface checked against its canvas; residual drift listed and the quick wins fixed.
-- [ ] The header-height and icon-size questions are settled with canvas-sourced values.
+- [ ] The header-height and icon-size questions are settled with canvas-sourced values
+      (one edit each in `components::metrics` now that P5-01 has rehomed them).
 
 ## Freya / references
 - The `.dc.html` canvases (`.claude/design-handoff/`, refreshed 2026-08-12), DEV_TASKS Part 1.

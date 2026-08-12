@@ -14,6 +14,7 @@ use crate::state::use_config_station;
 use strata_core::config::Command;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_3, SP_4, SP_5};
 use crate::components::typography::{Body, Control, Path};
 use crate::keymap::{on_command, use_hint};
 use crate::theme::{use_roles, Role};
@@ -95,7 +96,7 @@ impl Component for Running {
             .vertical()
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .spacing(16.)
+            .spacing(SP_5)
             .background(background)
             // Esc = Cancel while the run is up. This body sits after the tab strip in
             // document order, so an open menu or an in-progress rename claims the Esc
@@ -110,11 +111,11 @@ impl Component for Running {
             .child(
                 rect()
                     .height(Size::px(30.))
-                    .padding((0., 12.))
-                    .corner_radius(8.)
+                    .padding((0., SP_4))
+                    .corner_radius(R_2)
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .background(if hovered() {
                         cancel.hover_background
                     } else {

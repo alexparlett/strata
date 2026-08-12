@@ -28,6 +28,7 @@ use freya::components::Tooltip;
 use super::axis::readout;
 use super::marks;
 use super::ChartTheme;
+use crate::components::metrics::SP_2;
 use crate::components::typography::Meta;
 
 /// Every colour and font the painter needs, lifted out of the theme in `render` so the paint
@@ -299,7 +300,7 @@ const READOUT_OFFSET: f32 = 14.;
 /// The crosshair's own furniture: a hairline, and the inset its readout keeps from the plot's
 /// left edge.
 const HAIRLINE: f32 = 1.;
-const CROSS_READOUT_GAP: f32 = 4.;
+const CROSS_READOUT_GAP: f32 = SP_2;
 
 /// Where the crosshair's value label sits for a rule at row `y`: above it, or **below it** when
 /// above would leave the plot.

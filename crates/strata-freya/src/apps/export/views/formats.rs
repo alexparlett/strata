@@ -12,6 +12,7 @@ use freya::prelude::*;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference, FormatId};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_3, SP_4};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Eyebrow, Meta, Strong};
 use crate::theme::{use_roles, Role};
@@ -30,7 +31,7 @@ impl Component for Formats {
             .width(Size::fill())
             .horizontal()
             .content(Content::Flex)
-            .spacing(8.);
+            .spacing(SP_3);
         for format in FormatId::ALL {
             row = row.child(
                 FormatCard {
@@ -45,7 +46,7 @@ impl Component for Formats {
         rect()
             .width(Size::fill())
             .vertical()
-            .spacing(12.)
+            .spacing(SP_4)
             .child(Eyebrow::new("FORMAT").color(theme.label_color))
             .child(row)
     }
@@ -98,9 +99,9 @@ impl Component for FormatCard {
         rect()
             .width(Size::flex(1.))
             .vertical()
-            .spacing(8.)
-            .padding((12., 12.))
-            .corner_radius(8.)
+            .spacing(SP_3)
+            .padding((SP_4, SP_4))
+            .corner_radius(R_2)
             .background(background)
             .border(Border::new().width(1.).fill(border))
             .on_pointer_enter(move |_| hovered.set(true))

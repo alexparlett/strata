@@ -22,13 +22,14 @@ use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::form::Form;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{pill, R_3, SP_2, SP_3, SP_4};
 use crate::components::typography::Body;
 use crate::state::ThemeSel;
 use crate::theme::{authored_role, Role, ThemesCtx};
 
 /// Cards per row (canvas `grid-template-columns: 1fr 1fr`), and the gutter between them.
 const CARDS_PER_ROW: usize = 2;
-const CARD_GAP: f32 = 12.;
+const CARD_GAP: f32 = SP_4;
 
 /// How far the grid fades once Sync-with-OS owns the choice. It stays legible — it still shows
 /// which theme is in force — but reads as not yours to set.
@@ -198,9 +199,17 @@ impl KeyExt for ThemeCard {
 }
 
 /// Canvas card metrics.
-const CARD_RADIUS: f32 = 10.;
+const CARD_RADIUS: f32 = R_3;
+
+// The miniature's own sub-scale shapes — see [`Preview`]. A text run and the traffic light are
+// drawn as pills; the rail is the one plain box, rounded by eye at this size.
+const RUN: f32 = 5.;
+const TITLE: f32 = 4.;
+const TITLE_RUN: f32 = 34.;
+const RAIL: f32 = 26.;
+const MINI_RADIUS: f32 = 2.;
 const PREVIEW_HEIGHT: f32 = 78.;
-const NAME_ROW_PADDING: Gaps = Gaps::new_symmetric(8., 12.);
+const NAME_ROW_PADDING: Gaps = Gaps::new_symmetric(SP_3, SP_4);
 const CHECK_SIZE: f32 = 16.;
 
 impl Component for ThemeCard {
@@ -292,7 +301,7 @@ impl Component for ThemeCard {
                     // For the spacer below, which pushes the tick to the trailing edge.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .padding(NAME_ROW_PADDING)
                     .child(Body::new(self.name.clone()))
                     .child(Badge::tag(source.0, source.1))
@@ -308,6 +317,11 @@ impl Component for ThemeCard {
 
 /// The miniature app inside a card: a title strip over a rail and three text runs, each drawn
 /// in the previewed theme's own colours.
+///
+/// The **shapes** below are deliberately off the layout scale: this is a drawing of a window at
+/// roughly a tenth scale, so its 4px and 5px runs are a picture of the app's type and chrome
+/// rather than any of it, and rounding them to a scale step would leave a blurred rectangle
+/// rather than a consistent miniature. Its gaps and insets are on the scale like everywhere else.
 #[derive(PartialEq)]
 struct Preview {
     swatch: Swatch,
@@ -322,8 +336,8 @@ impl Component for Preview {
         fn run(width: f32, color: Color) -> impl IntoElement {
             rect()
                 .width(Size::percent(width))
-                .height(Size::px(5.))
-                .corner_radius(2.)
+                .height(Size::px(RUN))
+                .corner_radius(pill(RUN))
                 .background(color)
         }
 
@@ -353,21 +367,21 @@ impl Component for Preview {
                     .height(Size::px(16.))
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(4.)
-                    .padding(Gaps::new_symmetric(0., 8.))
+                    .spacing(SP_2)
+                    .padding(Gaps::new_symmetric(0., SP_3))
                     .background(raised)
                     .child(
                         rect()
-                            .width(Size::px(5.))
-                            .height(Size::px(5.))
-                            .corner_radius(50.)
+                            .width(Size::px(RUN))
+                            .height(Size::px(RUN))
+                            .corner_radius(pill(RUN))
                             .background(line),
                     )
                     .child(
                         rect()
-                            .width(Size::px(34.))
-                            .height(Size::px(4.))
-                            .corner_radius(2.)
+                            .width(Size::px(TITLE_RUN))
+                            .height(Size::px(TITLE))
+                            .corner_radius(pill(TITLE))
                             .background(line),
                     ),
             )
@@ -380,20 +394,20 @@ impl Component for Preview {
                     // For the text-run column's `flex(1.)`, which takes the width the rail
                     // leaves — and whose `percent` runs are measured against it.
                     .content(Content::Flex)
-                    .spacing(8.)
-                    .padding(Gaps::new_all(8.))
+                    .spacing(SP_3)
+                    .padding(Gaps::new_all(SP_3))
                     .child(
                         rect()
-                            .width(Size::px(26.))
+                            .width(Size::px(RAIL))
                             .height(Size::fill())
-                            .corner_radius(2.)
+                            .corner_radius(MINI_RADIUS)
                             .background(raised),
                     )
                     .child(
                         rect()
                             .width(Size::flex(1.))
                             .vertical()
-                            .spacing(4.)
+                            .spacing(SP_2)
                             .child(run(70., accent))
                             .child(run(45., line))
                             .child(run(55., line)),

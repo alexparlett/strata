@@ -5,6 +5,7 @@
 
 use freya::prelude::*;
 
+use crate::components::metrics::SP_2;
 use crate::theme::{use_roles, Role as ThemeRole};
 
 /// Which surface a rule belongs to, and so where its default colour comes from: the sheet's
@@ -66,7 +67,7 @@ impl Divider {
             thickness: 1.,
             color: None,
             role: Role::Menu,
-            margin: Gaps::new_all(4.),
+            margin: Gaps::new_all(SP_2),
         }
     }
 

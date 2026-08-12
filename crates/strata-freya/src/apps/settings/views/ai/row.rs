@@ -34,15 +34,16 @@ use strata_core::ai::ProviderKind;
 
 use crate::apps::settings::{settings_theme, SettingsTheme};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_XS, SP_1, SP_2, SP_3, SP_4};
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Control, Eyebrow, Prose};
 
 /// The canvas's mark tile: a 34px square.
 const MARK: f32 = 34.;
 /// Gap between the tile, the name block and the controls.
-const GAP: f32 = 12.;
+const GAP: f32 = SP_4;
 /// The canvas's row padding.
-const PAD: f32 = 12.;
+const PAD: f32 = SP_4;
 /// The brand mark inside the tile, at the canvas's optical size for a 34px square.
 const MARK_GLYPH: f32 = 17.;
 
@@ -137,12 +138,12 @@ impl Component for ProviderRow {
                     .child(
                         rect()
                             .width(Size::flex(1.))
-                            .spacing(2.)
+                            .spacing(SP_1)
                             .child(
                                 rect()
                                     .horizontal()
                                     .cross_align(Alignment::Center)
-                                    .spacing(8.)
+                                    .spacing(SP_3)
                                     .child(Control::new(self.name.clone()))
                                     .child(badge(self.badge, &theme)),
                             )
@@ -175,7 +176,7 @@ fn tile(glyph: IconName, color: Color, theme: &SettingsTheme) -> Element {
     rect()
         .width(Size::px(MARK))
         .height(Size::px(MARK))
-        .corner_radius(6.)
+        .corner_radius(R_1)
         .background(theme.mark_background)
         .border(Border::new().width(1.).fill(theme.card_border_fill))
         .main_align(Alignment::Center)
@@ -186,8 +187,8 @@ fn tile(glyph: IconName, color: Color, theme: &SettingsTheme) -> Element {
 
 fn badge(text: &'static str, theme: &SettingsTheme) -> Element {
     rect()
-        .padding(Gaps::new(1., 5., 1., 5.))
-        .corner_radius(3.)
+        .padding(Gaps::new(SP_1, SP_2, SP_1, SP_2))
+        .corner_radius(R_XS)
         .background(theme.mark_background)
         .border(Border::new().width(1.).fill(theme.card_border_fill))
         .child(Eyebrow::new(text).color(theme.badge_builtin_color))

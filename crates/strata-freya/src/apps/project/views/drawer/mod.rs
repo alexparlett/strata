@@ -41,6 +41,7 @@ use crate::apps::project::state::{
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{DRAWER_HEADER_HEIGHT, SP_1, SP_3, SP_4};
 use crate::components::typography::{Caption, Control, Meta};
 
 pub use frame::{DrawerBody, DrawerEmpty};
@@ -94,9 +95,6 @@ define_theme!(
 /// for Problems (the canvas's `drawerCountLabel`), of rows for the two logs. `0` hides the label
 /// rather than printing a zero, matching the canvas's `sc-if`.
 pub type DrawerCount = State<usize>;
-
-/// The header row's height, matching the sidebar's and the inspector's.
-const HEADER_HEIGHT: f32 = 36.;
 
 #[derive(PartialEq)]
 pub struct Drawer {
@@ -215,21 +213,21 @@ impl Component for Drawer {
             .child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(HEADER_HEIGHT))
+                    .height(Size::px(DRAWER_HEADER_HEIGHT))
                     .horizontal()
                     // Flex with a flexing title run rather than `SpaceBetween` between two hugging
                     // clusters (P5-06) — see the inspector header for why the old shape drew the
                     // two over each other once the drawer got narrow.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
-                    .padding((0., 12.))
+                    .spacing(SP_3)
+                    .padding((0., SP_4))
                     .child(
                         rect()
                             .width(Size::flex(1.))
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .child(
                                 Caption::new(title)
                                     .color(theme.label_color)
@@ -250,7 +248,7 @@ impl Component for Drawer {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(2.)
+                            .spacing(SP_1)
                             .maybe_child(clear)
                             .child(
                                 TooltipContainer::new(Tooltip::new_text(if expanded {

@@ -14,6 +14,7 @@ use crate::apps::launcher::views::open::open_and_close;
 use crate::apps::launcher::{LauncherThemePartial, LauncherThemePreference};
 use crate::components::avatar::Avatar;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_3, SP_1, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Body, Path as PathText};
 use crate::state::{use_config_station, write_config, AppCtx, ConfigChan};
@@ -82,9 +83,9 @@ impl Component for ProjectRowView {
             .horizontal()
             .cross_align(Alignment::Center)
             .content(Content::Flex)
-            .spacing(12.)
-            .padding(Gaps::new(8., 12., 8., 12.))
-            .corner_radius(10.)
+            .spacing(SP_4)
+            .padding(Gaps::new(SP_3, SP_4, SP_3, SP_4))
+            .corner_radius(R_3)
             .background(if hovered() {
                 theme.row_hover_background
             } else {
@@ -104,7 +105,7 @@ impl Component for ProjectRowView {
                 rect()
                     .vertical()
                     .width(Size::flex(1.))
-                    .spacing(2.)
+                    .spacing(SP_1)
                     .child(
                         Body::new(name.as_str())
                             .color(roles.get(Role::Text))
@@ -122,7 +123,7 @@ impl Component for ProjectRowView {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(2.)
+                    .spacing(SP_1)
                     .child(RowAction {
                         icon: IconName::Pin,
                         title: if pinned { "Unpin" } else { "Pin" }.into(),
@@ -180,7 +181,7 @@ impl Component for RowAction {
                 rect()
                     .width(Size::px(28.))
                     .height(Size::px(28.))
-                    .corner_radius(6.)
+                    .corner_radius(R_1)
                     .center()
                     .background(if hovered() {
                         self.hover_background

@@ -35,6 +35,7 @@ use super::copy;
 use super::datagrid::GridData;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_4, SP_1, SP_3, SP_4, SP_5};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue, Path, Readout};
 use crate::theme::{use_roles, Role};
@@ -208,7 +209,7 @@ impl Component for RecordView {
                                 rect()
                                     .horizontal()
                                     .cross_align(Alignment::Center)
-                                    .spacing(6.)
+                                    .spacing(SP_3)
                                     .child(Icon::new(IconName::Copy).size(12.))
                                     .child(Path::new(label)),
                             ),
@@ -244,8 +245,8 @@ impl Component for RecordView {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((12., 16.))
+            .spacing(SP_3)
+            .padding((SP_4, SP_5))
             .child(
                 MonoValue::new(format!(
                     "Row {} of {}",
@@ -289,8 +290,8 @@ impl Component for RecordView {
             let left = rect()
                 .width(Size::px(150.))
                 .vertical()
-                .spacing(2.)
-                .padding(Gaps::new(2., 0., 0., 0.))
+                .spacing(SP_1)
+                .padding(Gaps::new(SP_1, 0., 0., 0.))
                 .child(
                     MonoValue::new(col.name.clone())
                         .color(theme.name_color)
@@ -312,7 +313,7 @@ impl Component for RecordView {
                     .unwrap_or_else(|| cell.text.clone());
                 rect()
                     .width(Size::flex(1.))
-                    .corner_radius(6.)
+                    .corner_radius(R_1)
                     .background(theme.nested_background)
                     .overflow(Overflow::Clip)
                     .child(
@@ -328,7 +329,7 @@ impl Component for RecordView {
                             .child(
                                 rect()
                                     .width(Size::fill())
-                                    .padding((8., 12.))
+                                    .padding((SP_3, SP_4))
                                     .child(Readout::new(json).color(theme.nested_color).wrap()),
                             ),
                     )
@@ -354,8 +355,8 @@ impl Component for RecordView {
                         .width(Size::fill())
                         .horizontal()
                         .content(Content::Flex)
-                        .spacing(12.)
-                        .padding((12., 16.))
+                        .spacing(SP_4)
+                        .padding((SP_4, SP_5))
                         .child(left)
                         .child(value),
                 )
@@ -371,7 +372,7 @@ impl Component for RecordView {
         let card = rect()
             .width(Size::px(540.))
             .max_width(Size::window_percent(92.))
-            .corner_radius(14.)
+            .corner_radius(R_4)
             .background(theme.background)
             .border(Border::new().width(1.).fill(theme.border_fill))
             .shadow(Shadow::new().y(30.).blur(70.).color(shadow))

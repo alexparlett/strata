@@ -29,6 +29,7 @@ use crate::apps::project::state::{
 };
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::SP_3;
 use crate::components::tones::tones;
 use crate::components::typography::{Control, MonoValue, Prose, Title};
 use crate::theme::{use_roles, Role};
@@ -278,7 +279,7 @@ impl Component for ProfileConfirm {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(8.)
+                            .spacing(SP_3)
                             .child(Icon::new(IconName::Chart).size(13.))
                             .child(Control::new("Run scan")),
                     ),

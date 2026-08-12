@@ -26,6 +26,7 @@ use super::value_tree::{leaf_text, RowKind, TreeModel, TreeRow};
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_4, SP_3, SP_4, SP_5};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue};
 use crate::theme::{use_roles, Role};
@@ -118,7 +119,7 @@ impl Component for ValueTreeBody {
                             rect()
                                 .horizontal()
                                 .cross_align(Alignment::Center)
-                                .spacing(8.)
+                                .spacing(SP_3)
                                 // A list item has no name, so it is titled by its index — the
                                 // subscript a reader would write to reach it.
                                 .child(MonoValue::new(match &node.key {
@@ -203,8 +204,8 @@ impl Component for CellView {
             .horizontal()
             .content(Content::Flex)
             .cross_align(Alignment::Center)
-            .spacing(12.)
-            .padding((12., 16.))
+            .spacing(SP_4)
+            .padding((SP_4, SP_5))
             .child(MonoValue::new(self.value.name.clone()).color(theme.name_color))
             .child(
                 Badge::value(self.value.dtype.clone(), theme.badge_color)
@@ -215,7 +216,7 @@ impl Component for CellView {
                 rect()
                     .width(Size::px(28.))
                     .height(Size::px(28.))
-                    .corner_radius(6.)
+                    .corner_radius(R_1)
                     .center()
                     .maybe(close_hover(), |el| {
                         el.background(theme.close_hover_background)
@@ -242,7 +243,7 @@ impl Component for CellView {
             .width(Size::fill())
             .height(Size::flex(1.))
             .background(theme.body_background)
-            .padding((8., 8.))
+            .padding((SP_3, SP_3))
             .child(ValueTreeBody {
                 model: self.value.tree.clone(),
                 open: self.open,
@@ -253,7 +254,7 @@ impl Component for CellView {
             .height(Size::px(card_h))
             .max_width(Size::window_percent(96.))
             .max_height(Size::window_percent(92.))
-            .corner_radius(14.)
+            .corner_radius(R_4)
             .background(theme.background)
             .border(Border::new().width(1.).fill(theme.border_fill))
             .shadow(Shadow::new().y(30.).blur(70.).color(shadow))

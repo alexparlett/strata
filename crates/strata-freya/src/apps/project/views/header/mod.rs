@@ -33,15 +33,11 @@ use self::project_menu::ProjectMenu;
 use crate::apps::project::views::PaletteOpen;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, SP_3, SP_4, TRAFFIC_LIGHT_GUTTER};
 use crate::components::typography::Title;
 use crate::keymap::use_hint_title;
 use crate::platform::open_settings;
 use crate::state::AppCtx;
-
-/// The gutter that keeps the bar's content clear of the OS traffic lights. The window insets
-/// them to (13, 16) (`with_traffic_light_inset`), so the three buttons end around x = 67; 82 is
-/// the reserve the Dioxus app shipped (`.ps-app.mac .ps-header`).
-const TRAFFIC_LIGHT_GUTTER: f32 = 82.;
 
 define_theme!(
     %[component]
@@ -169,12 +165,12 @@ impl Component for HeaderBar {
         let brand = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .child(
                 rect()
                     .width(Size::px(22.))
                     .height(Size::px(22.))
-                    .corner_radius(6.)
+                    .corner_radius(R_1)
                     .overflow(Overflow::Clip)
                     .child(Icon::new(IconName::StrataLogo).size(22.)),
             )
@@ -199,7 +195,7 @@ impl Component for HeaderBar {
         let cluster = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .child(tip(
                 search_title,
                 action(IconName::Search, 15.).on_press(move |_| palette.set(true)),
@@ -217,8 +213,8 @@ impl Component for HeaderBar {
             .horizontal()
             .cross_align(Alignment::Center)
             .content(Content::Flex)
-            .padding(Gaps::new(0., 12., 0., TRAFFIC_LIGHT_GUTTER))
-            .spacing(12.)
+            .padding(Gaps::new(0., SP_4, 0., TRAFFIC_LIGHT_GUTTER))
+            .spacing(SP_4)
             // Drag / double-press-to-fill: on the bar itself, so it covers the whole strip except
             // the controls that opt out above.
             .on_pointer_down(title_bar_press(is_filled, self.filled_by_app))

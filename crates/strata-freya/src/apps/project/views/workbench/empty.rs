@@ -11,6 +11,7 @@ use strata_core::config::Command;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_4, SP_1, SP_3, SP_4, SP_5, SP_8};
 use crate::components::typography::{Control, Prose, Title};
 use crate::keymap::use_hint;
 use crate::theme::{use_roles, Role};
@@ -51,11 +52,11 @@ impl Component for EmptyState {
         let tile = rect()
             .width(Size::px(60.))
             .height(Size::px(60.))
-            .corner_radius(14.)
+            .corner_radius(R_4)
             .background(tile_bg)
             .border(Border::new().width(1.).fill(tile_border))
             .center()
-            .margin(Gaps::new(0., 0., 16., 0.))
+            .margin(Gaps::new(0., 0., SP_5, 0.))
             .child(Icon::new(IconName::Database).color(icon_c).size(26.));
 
         // New query (primary) — and Reopen closed (secondary), only when something's on the stack.
@@ -65,7 +66,7 @@ impl Component for EmptyState {
         let chip = (!new_hint.is_empty()).then(|| {
             Badge::value(new_hint.clone(), chip_c.with_a(153))
                 .background(chip_c.with_a(51))
-                .padding((2., 5.))
+                .padding((SP_1, 5.))
         });
         let new_btn = Button::new()
             .filled()
@@ -76,7 +77,7 @@ impl Component for EmptyState {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(6.)
+                    .spacing(SP_3)
                     .child(Icon::new(IconName::Plus).size(14.))
                     .child(Control::new("New query"))
                     .maybe_child(chip),
@@ -94,7 +95,7 @@ impl Component for EmptyState {
                             rect()
                                 .horizontal()
                                 .cross_align(Alignment::Center)
-                                .spacing(6.)
+                                .spacing(SP_3)
                                 .child(Icon::new(IconName::Reopen).size(14.))
                                 .child(Control::new("Reopen closed")),
                         ),
@@ -104,7 +105,7 @@ impl Component for EmptyState {
         let actions = rect()
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(12.)
+            .spacing(SP_4)
             .child(new_btn)
             .maybe_child(reopen_btn);
 
@@ -114,17 +115,17 @@ impl Component for EmptyState {
             .vertical()
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .padding(Gaps::new(40., 40., 40., 40.))
+            .padding(Gaps::new(SP_8, SP_8, SP_8, SP_8))
             .background(background)
             .child(tile)
             .child(
                 rect()
-                    .margin(Gaps::new(0., 0., 8., 0.))
+                    .margin(Gaps::new(0., 0., SP_3, 0.))
                     .child(Title::new("No query open").color(title_c)),
             )
             .child(
                 rect()
-                    .margin(Gaps::new(0., 0., 20., 0.))
+                    .margin(Gaps::new(0., 0., SP_5, 0.))
                     .cross_align(Alignment::Center)
                     .child(
                         Prose::new(

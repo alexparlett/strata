@@ -32,17 +32,18 @@ use crate::apps::project::ConnectionRequest;
 use crate::apps::project::{ProjChan, ProjectState};
 use crate::components::form::{form_theme, Row, FIELD_HEIGHT};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{SP_3, SP_4};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Caption, MonoValue, Prose};
 
 /// The gap between the TYPE pill and the CONNECTION picker beside it — the identity row's own
 /// column gap, because this is the same two-controls-on-one-line shape.
-const COLUMN_GAP: f32 = 12.;
+const COLUMN_GAP: f32 = SP_4;
 /// The gap between the picker and the line that says its provider has no connections.
-const EMPTY_GAP: f32 = 8.;
+const EMPTY_GAP: f32 = SP_3;
 /// The glyph beside *New connection…*, and the gap to its label.
 const ITEM_ICON: f32 = 12.;
-const ITEM_GAP: f32 = 8.;
+const ITEM_GAP: f32 = SP_3;
 
 /// The **LOCATION** segmented control: Local · Remote.
 ///

@@ -25,11 +25,12 @@
 //! corner radius, padding and gap all differ, so those stay builder parameters set by the caller
 //! rather than pretending to be one row.
 
+use crate::components::metrics::{SP_1, SP_2, SP_3};
 use freya::components::{Activable, SideBarItem, SideBarItemThemePartial};
 use freya::prelude::*;
 
 /// Vertical gap between consecutive rows (design `--sp-1`).
-const ROW_GAP: f32 = 2.;
+const ROW_GAP: f32 = SP_1;
 
 #[derive(PartialEq)]
 pub struct SidebarRow {
@@ -49,7 +50,7 @@ impl SidebarRow {
     pub fn new() -> Self {
         Self {
             height: Some(30.),
-            padding: Gaps::new(0., 4., 0., 8.),
+            padding: Gaps::new(0., SP_2, 0., SP_3),
             radius: 6.,
             spacing: 8.,
             selected: false,

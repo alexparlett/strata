@@ -5,6 +5,7 @@ use strata_model::TabId;
 use crate::apps::project::state::{Anchor, Chan, ChatsCtx, SessionState};
 use crate::apps::project::views::ask_about;
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_3, SP_4, SP_6};
 use crate::components::tones::tones;
 use crate::components::typography::{Control, Readout, Title};
 use crate::theme::{use_roles, Role};
@@ -63,14 +64,14 @@ impl Component for ErrorState {
             .vertical()
             .main_align(Alignment::Center)
             .cross_align(Alignment::Center)
-            .spacing(12.)
-            .padding((0., 24.))
+            .spacing(SP_4)
+            .padding((0., SP_6))
             .background(background)
             .child(
                 rect()
                     .width(Size::px(46.))
                     .height(Size::px(46.))
-                    .corner_radius(8.)
+                    .corner_radius(R_2)
                     .background(tile_bg)
                     .border(Border::new().width(1.).fill(tile_border))
                     .center()
@@ -102,7 +103,7 @@ impl Component for ErrorState {
                         rect()
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .spacing(6.)
+                            .spacing(SP_3)
                             .child(Icon::new(IconName::Chat).size(13.))
                             .child(Control::new("Ask the assistant")),
                     ),

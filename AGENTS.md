@@ -516,6 +516,11 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   the component's theme **in the fork**, never as a token on the consuming surface. But the test is
   whether the gap is in the *component*: what a table has no opinion about stays composed in the app.
   Don't restate at a call site what a variant already resolves.
+- **Every padding, gap and corner radius comes off the scale in `components::metrics`, and the
+  three exceptions say so at the site.** `SP_1`…`SP_9` / `R_XS`…`R_4`, the design's own token
+  names — constants, never theme fields. Name a step locally (`const CELL_INSET: f32 = SP_4;`),
+  never restate its number. Exceptions: `pill(extent)`, `HAIRLINE`, alignment nudges. The same
+  module holds the fixed sizes more than one surface agrees on; rehoming never renumbers.
 - **A surface with its own component theme reads colours from that theme, not also from the
   roles.** `use_roles()` only where no component theme covers the surface; the semantic tones
   (success/warning/error/info) only through the shared `tones()` hook.

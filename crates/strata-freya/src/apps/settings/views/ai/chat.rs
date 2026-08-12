@@ -43,6 +43,7 @@ use crate::apps::settings::views::ai::probe::{self, FromDraft};
 use crate::apps::settings::views::Pane;
 use crate::apps::settings::{settings_theme, Anchor, SettingsCtx};
 use crate::components::form::{Form, NumberField};
+use crate::components::metrics::{SETTINGS_FIELD_WIDTH, SP_3};
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 use crate::components::typography::{Control, Prose};
 use crate::state::{needs_asking, Ask, Probe, Probes};
@@ -52,7 +53,6 @@ const CONTROL_WIDTH: f32 = 420.;
 
 /// A numeric field's width — Settings > System's own, so the two retention caps in the app are
 /// set in fields of the same size.
-const FIELD_WIDTH: f32 = 130.;
 
 #[derive(PartialEq)]
 pub struct ChatPane;
@@ -79,7 +79,7 @@ impl Component for ChatPane {
                 CHATS_MIN as u32,
                 u32::MAX,
             )
-            .width(Size::px(FIELD_WIDTH))
+            .width(Size::px(SETTINGS_FIELD_WIDTH))
             .unit("conversations")
             .on_change(move |chats: u32| ctx.edit(move |s| s.ai.max_chats = chats as usize)),
         );
@@ -196,7 +196,7 @@ impl Component for ChatPane {
 
         let model = rect()
             .width(Size::px(CONTROL_WIDTH))
-            .spacing(6.)
+            .spacing(SP_3)
             .child(
                 Select::new()
                     .selected_item(Control::new(match chosen.is_empty() {

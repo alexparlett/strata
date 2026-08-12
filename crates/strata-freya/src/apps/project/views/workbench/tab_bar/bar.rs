@@ -5,6 +5,7 @@ use crate::apps::project::views::workbench::tab_bar::controls::TabControls;
 use crate::apps::project::views::workbench::tab_bar::drag;
 use crate::apps::project::views::workbench::tab_bar::tab::{Tab, TAB_HEIGHT};
 use crate::components::divider::Divider;
+use crate::components::metrics::SP_4;
 use crate::components::typography::Body;
 use crate::theme::{use_roles, Role};
 use freya::components::{
@@ -206,7 +207,7 @@ fn drop_slot(name: String, bg: Color) -> impl Into<Element> {
     rect()
         .height(Size::px(TAB_HEIGHT))
         .cross_align(Alignment::Center)
-        .padding(Gaps::new(0., 12., 0., 12.))
+        .padding(Gaps::new(0., SP_4, 0., SP_4))
         .background(bg)
         .child(Body::new(name).color(Color::TRANSPARENT))
 }

@@ -56,6 +56,7 @@ use crate::apps::project::views::{open_saved_query, view_row};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::keycap::KeyCap;
+use crate::components::metrics::{R_4, SP_2, SP_3, SP_4, SP_5, SP_8};
 use crate::components::typography::{InputTypography, Meta, MonoValue};
 use crate::keymap::{chord_from_event, on_command};
 use crate::state::{use_config, use_config_station, ConfigChan};
@@ -107,20 +108,20 @@ pub fn palette_theme() -> CommandPaletteTheme {
 const CARD_WIDTH: f32 = 640.;
 const CARD_MAX_WIDTH: f32 = 92.;
 const CARD_MAX_HEIGHT: f32 = 62.;
-const CARD_RADIUS: f32 = 14.;
-const TOP_INSET: f32 = 12.;
+const CARD_RADIUS: f32 = R_4;
+const TOP_INSET: f32 = SP_4;
 /// The search row (canvas 54px, `0 var(--sp-5)`, `gap: var(--sp-4)`) and its glyph.
 const SEARCH_HEIGHT: f32 = 54.;
-const SEARCH_INSET: f32 = 16.;
-const SEARCH_GAP: f32 = 12.;
+const SEARCH_INSET: f32 = SP_5;
+const SEARCH_GAP: f32 = SP_4;
 const SEARCH_ICON: f32 = 17.;
 /// The results body's own inset (canvas `var(--sp-3)`).
-const BODY_INSET: f32 = 8.;
+const BODY_INSET: f32 = SP_3;
 /// The footer legend (canvas 38px, `0 var(--sp-5)`, `gap: var(--sp-5)`).
 const FOOTER_HEIGHT: f32 = 38.;
-const FOOTER_GAP: f32 = 16.;
+const FOOTER_GAP: f32 = SP_5;
 /// The empty state's breathing room and its glyph (canvas `var(--sp-8) 0`, 26px).
-const EMPTY_INSET: f32 = 40.;
+const EMPTY_INSET: f32 = SP_8;
 const EMPTY_ICON: f32 = 26.;
 
 const PLACEHOLDER: &str = "Search tables, columns, views \u{2014} or run a command\u{2026}";
@@ -543,7 +544,7 @@ impl Component for NoMatches {
             .width(Size::fill())
             .vertical()
             .cross_align(Alignment::Center)
-            .spacing(8.)
+            .spacing(SP_3)
             .padding(Gaps::new(EMPTY_INSET, 0., EMPTY_INSET, 0.))
             .child(
                 Icon::new(IconName::Search)
@@ -570,7 +571,7 @@ impl Component for Footer {
             rect()
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .spacing(4.)
+                .spacing(SP_2)
                 .child(MonoValue::new(cap.to_string()).color(key))
                 .child(Meta::new(what.to_string()).color(theme.label_color))
         };

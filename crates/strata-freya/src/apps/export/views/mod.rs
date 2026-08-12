@@ -19,11 +19,12 @@ use crate::apps::export::views::partition::Partition;
 use crate::apps::export::{preview, ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::OptionList;
+use crate::components::metrics::{R_1, SP_4, SP_5, SP_6};
 use crate::components::typography::{Eyebrow, Readout};
 
 /// The window body's inset (canvas `padding: var(--sp-5)`), and the gap between its sections.
-const BODY_PADDING: Gaps = Gaps::new(16., 16., 16., 16.);
-const SECTION_SPACING: f32 = 24.;
+const BODY_PADDING: Gaps = Gaps::new(SP_5, SP_5, SP_5, SP_5);
+const SECTION_SPACING: f32 = SP_6;
 
 /// Everything between the title bar and the footer, scrolling as one — the format cards, the
 /// option list, the partition picker, then the preview.
@@ -91,7 +92,7 @@ impl Component for Preview {
         rect()
             .width(Size::fill())
             .vertical()
-            .spacing(12.)
+            .spacing(SP_4)
             .child(Divider::horizontal().color(theme.border_fill))
             // The canvas puts an estimated output size on the right of this header. It is
             // computed from invented compression factors, so it isn't here — see `footer`.
@@ -99,8 +100,8 @@ impl Component for Preview {
             .child(
                 rect()
                     .width(Size::fill())
-                    .padding((12., 12.))
-                    .corner_radius(6.)
+                    .padding((SP_4, SP_4))
+                    .corner_radius(R_1)
                     .background(theme.panel_background)
                     .border(Border::new().width(1.).fill(theme.border_fill))
                     .child(Readout::new(text).color(theme.card_color).wrap()),

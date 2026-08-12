@@ -9,6 +9,7 @@ use freya::prelude::*;
 use strata_core::config::Command;
 
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::R_1;
 use crate::keymap::use_hint_title;
 
 define_theme!(
@@ -117,7 +118,7 @@ impl Component for RunButton {
                 rect()
                     .width(Size::px(28.))
                     .height(Size::px(28.))
-                    .corner_radius(6.)
+                    .corner_radius(R_1)
                     .background(bg)
                     .center()
                     .on_pointer_enter(move |_| hovered.set(true))

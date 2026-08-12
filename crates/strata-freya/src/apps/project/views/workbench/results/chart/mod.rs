@@ -75,6 +75,7 @@ use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{ChartSpec, TrendSpec};
 use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_1, R_3, SP_3, SP_4, SP_6};
 use crate::components::typography::{scale, Prose, Title};
 use crate::state::{use_config, ConfigChan};
 
@@ -322,7 +323,7 @@ impl Component for ChartView {
                                 .height(Size::fill())
                                 .vertical()
                                 .content(Content::Flex)
-                                .spacing(8.)
+                                .spacing(SP_3)
                                 .maybe_child(banner.map(Banner::new))
                                 .child(
                                     rect()
@@ -391,7 +392,7 @@ fn canvas_pane(body: impl IntoElement) -> impl IntoElement {
     rect()
         .width(Size::flex(1.))
         .height(Size::fill())
-        .padding((8., 12.))
+        .padding((SP_3, SP_4))
         .overflow(Overflow::Clip)
         .child(body)
 }
@@ -723,9 +724,9 @@ fn pie_notice(series: &[ChartSeries]) -> Option<(&'static str, String)> {
 /// The tile a notice leads with, the width its copy wraps at, and its inset (canvas
 /// `Strata.dc.html`, the chart pane's guardrail overlay).
 const TILE: f32 = 46.;
-const TILE_RADIUS: f32 = 10.;
+const TILE_RADIUS: f32 = R_3;
 const COPY_WIDTH: f32 = 380.;
-const NOTICE_PAD: f32 = 24.;
+const NOTICE_PAD: f32 = SP_6;
 
 /// What stands in for the plot when there is nothing honest to draw: a glyph tile over the
 /// condition, centred in the pane the plot would have filled.
@@ -762,7 +763,7 @@ impl Component for Notice {
                     .width(Size::px(COPY_WIDTH + 2. * NOTICE_PAD))
                     .vertical()
                     .cross_align(Alignment::Center)
-                    .spacing(8.)
+                    .spacing(SP_3)
                     .padding(NOTICE_PAD)
                     .child(
                         rect()
@@ -811,9 +812,9 @@ impl Component for Banner {
             .width(Size::fill())
             .horizontal()
             .cross_align(Alignment::Center)
-            .spacing(8.)
-            .padding((8., 12.))
-            .corner_radius(6.)
+            .spacing(SP_3)
+            .padding((SP_3, SP_4))
+            .corner_radius(R_1)
             .background(theme.warning_background)
             .border(Border::new().width(1.).fill(theme.warning_border_fill))
             .child(Icon::new(IconName::Warning).size(14.).color(warning))

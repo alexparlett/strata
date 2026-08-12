@@ -15,15 +15,15 @@ use freya::prelude::*;
 
 use crate::apps::connection::{ConnectionCtx, Status};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::{R_2, SP_2, SP_4, SP_5, STATUS_GLYPH};
 use crate::components::tones::tones;
 use crate::components::typography::{Path, Readout, Strong};
 use crate::components::window::window_theme;
 use crate::theme::{use_roles, Role};
 
 /// The blocks' inset and the gap inside them (canvas `padding: var(--sp-4) var(--sp-5)`).
-const BLOCK_PADDING: Gaps = Gaps::new(12., 16., 12., 16.);
-const BLOCK_GAP: f32 = 12.;
-const GLYPH: f32 = 14.;
+const BLOCK_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
+const BLOCK_GAP: f32 = SP_4;
 
 #[derive(PartialEq)]
 pub struct StatusBlock;
@@ -44,10 +44,10 @@ impl Component for StatusBlock {
                 .cross_align(Alignment::Center)
                 .spacing(BLOCK_GAP)
                 .padding(BLOCK_PADDING)
-                .corner_radius(8.)
+                .corner_radius(R_2)
                 .background(win.panel_background)
                 .border(Border::new().width(1.).fill(win.border_fill))
-                .child(CircularLoader::new().size(GLYPH))
+                .child(CircularLoader::new().size(STATUS_GLYPH))
                 .child(Path::new(format!("Connecting to '{url}'…")).color(text)),
             // A failure is a *sentence the engine wrote*, so it gets room to wrap rather than a
             // single clipped line — a credential-chain refusal is two clauses long, and this is
@@ -58,15 +58,15 @@ impl Component for StatusBlock {
                 .cross_align(Alignment::Start)
                 .spacing(BLOCK_GAP)
                 .padding(BLOCK_PADDING)
-                .corner_radius(8.)
+                .corner_radius(R_2)
                 .background(win.panel_background)
                 .border(Border::new().width(1.).fill(error))
-                .child(Icon::new(IconName::Alert).size(GLYPH).color(error))
+                .child(Icon::new(IconName::Alert).size(STATUS_GLYPH).color(error))
                 .child(
                     rect()
                         .width(Size::flex(1.))
                         .vertical()
-                        .spacing(4.)
+                        .spacing(SP_2)
                         .child(Strong::new("Couldn't connect").color(error))
                         .child(Readout::new(why).color(error).width(Size::fill()).wrap()),
                 ),

@@ -4,8 +4,8 @@ use crate::apps::export::ExportLaunch;
 use crate::apps::project::state::{Chan, ChatsCtx, SessionState};
 use crate::apps::project::views::{ask_about, result_anchor};
 use crate::components::icon::{Icon, IconName};
+use crate::components::metrics::TOOL_SIZE;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment, TOOLBAR_TWO_ICON_WIDTH};
-use crate::components::tool_button::TOOL_SIZE;
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::components::typography::InputTypography;
 use crate::platform::open_export;
@@ -18,6 +18,7 @@ use super::chart::ChartCapture;
 use super::find::FindState;
 use super::selection::Selection;
 use super::shape::ShapeTarget;
+use crate::components::metrics::{SP_2, SP_3, SP_4};
 
 /// The results toolbar, built to the comp — shared by the grid and chart bodies. The
 /// **Table/Chart segmented toggle** sits at the left (P2-07): it reads the tab's per-tab view
@@ -151,8 +152,8 @@ impl Component for ResultsToolbar {
                 .horizontal()
                 .content(Content::Flex)
                 .cross_align(Alignment::Center)
-                .padding((0., 10.))
-                .spacing(8.)
+                .padding((0., SP_4))
+                .spacing(SP_3)
                 .child(Icon::new(IconName::Search).color(faint).size(14.))
                 .child(
                     InputTypography::mono(
@@ -176,7 +177,7 @@ impl Component for ResultsToolbar {
             // padded wrapper floats the panel 4px clear of the trigger (`Attached` itself
             // anchors flush).
             rect()
-                .padding(Gaps::new(4., 0., 0., 0.))
+                .padding(Gaps::new(SP_2, 0., 0., 0.))
                 .child(Menu::new().on_close(move |()| find.dismiss()).child(panel))
         };
         // **The popover's anchor is not the button.** It sits in the row's pinned slot at zero
