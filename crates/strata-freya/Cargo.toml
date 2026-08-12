@@ -72,6 +72,11 @@ sqlformat = "0.3"
 # prints it. Without an installed subscriber every `tracing::*` call is a silent no-op.
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# …and somewhere for it to go in an installed build. A `.app` launched from Finder has no
+# terminal: its stdout lands in the unified log, which is neither a file the user can send us
+# nor one `RUST_LOG` can be aimed at. The rolling appender is what makes a tester's run
+# readable after the fact (`init_logging`).
+tracing-appender = "0.2"
 
 # Stable per-tab identity (TabId) + serde for the future session snapshot.
 uuid = { version = "1", features = ["v4", "serde"] }

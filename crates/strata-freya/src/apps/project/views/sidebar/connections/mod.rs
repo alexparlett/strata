@@ -108,6 +108,15 @@ const EMPTY_PAD: Gaps = Gaps::new(SP_7, SP_6, SP_7, SP_6);
 const ROW_HEIGHT: f32 = 30.;
 /// What the spinner says on hover (and to a screen reader).
 const CONNECTING: &str = "Connecting…";
+/// What the triangle says on hover (and to a screen reader) — **a pointer, not the reason**.
+///
+/// The engine's own words used to hang here, and a sidebar tooltip is the one place they cannot
+/// be read: `object_store` writes a diagnosis worth two clauses ("Received redirect without
+/// LOCATION, this normally indicates an incorrectly configured region") and this row clipped it
+/// at the first, so the half naming the cause was the half thrown away. A row this narrow can
+/// say *that* something is wrong; it cannot say what. Problems can, wraps it, and has a button
+/// that copies it.
+const REFUSED: &str = "Connection failed. See Problems for the reason.";
 const ITEM_GAP: f32 = SP_4;
 
 /// What the registration pass answered for one row, in the terms the pane renders.
@@ -234,10 +243,11 @@ impl Component for ConnectionRow {
         // over the network, so this is the slowest answer in the pass and the one most worth
         // spinning about once it outlasts the hold.
         let waiting = self.status == Status::Loading;
-        let refused = match &self.status {
-            Status::Refused(why) => Some(why.clone()),
-            _ => None,
-        };
+        // **Whether, not why.** The reason used to be cloned out here and hung on the tooltip;
+        // now the tooltip is [`REFUSED`] and only the fact is read, so carrying the string would
+        // be a clone of the engine's whole sentence on every render of every failed row — and a
+        // full string compare in the `use_side_effect_with_deps` below, where a bool does.
+        let refused = matches!(self.status, Status::Refused(_));
 
         // Whether the wait has outlasted the hold. Re-armed on every entry into and exit from
         // the wait, so a re-scan of a row that was already waiting does not blink its spinner.
@@ -259,11 +269,11 @@ impl Component for ConnectionRow {
         });
 
         // The verdict to keep showing through the gap: the last one that actually settled.
-        let held = use_state(|| None::<String>);
-        use_side_effect_with_deps(&(waiting, refused.clone()), move |(waiting, refused)| {
+        let held = use_state(|| false);
+        use_side_effect_with_deps(&(waiting, refused), move |(waiting, refused)| {
             if !waiting {
                 let mut held = held;
-                held.set_if_modified(refused.clone());
+                held.set_if_modified(*refused);
             }
         });
 
@@ -272,27 +282,25 @@ impl Component for ConnectionRow {
         // reason ellipsized to nothing in a sidebar-width row, which said strictly less than the
         // triangle does and cost the bucket half its width. Each glyph declares its message as
         // an **a11y label** too, so the explanation is not mouse-only.
-        let status = match (
-            waiting && waited(),
-            if waiting {
-                held.read().clone()
-            } else {
-                refused
-            },
-        ) {
+        //
+        // The **reason** is gone from the tooltip for the same reason the text went from the row:
+        // it did not fit, and a diagnosis clipped mid-clause is worse than none, because the
+        // clause that survives reads like the whole answer. So this slot says *that* the
+        // connection failed and where the words are; see [`REFUSED`].
+        let status = match (waiting && waited(), if waiting { held() } else { refused }) {
             (true, _) => Some(
                 tip(CONNECTING).child(CircularLoader::new().size(STATUS_DOT).a11y_alt(CONNECTING)),
             ),
-            (false, Some(why)) => Some(
-                tip(why.clone()).child(
-                    rect().a11y_alt(why).child(
+            (false, true) => Some(
+                tip(REFUSED).child(
+                    rect().a11y_alt(REFUSED).child(
                         Icon::new(IconName::Warning)
                             .color(tones.warning)
                             .size(STATUS_DOT),
                     ),
                 ),
             ),
-            (false, None) => None,
+            (false, false) => None,
         };
 
         // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each

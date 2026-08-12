@@ -23,10 +23,12 @@ use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvid
 use aws_types::os_shim_internal::{Env, Fs};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::*;
+// `list` hands back a stream, and [`reachable`] wants exactly its first item.
+use futures::stream::StreamExt;
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider};
 use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use object_store::http::HttpBuilder;
-use object_store::{ClientConfigKey, CredentialProvider, ObjectStore};
+use object_store::{ClientConfigKey, CredentialProvider, Error, ObjectStore};
 
 use strata_model::{ConnectionDef, GcsAuth, Provider, S3Auth};
 
@@ -50,12 +52,72 @@ use strata_model::{ConnectionDef, GcsAuth, Provider, S3Auth};
 /// (or an `aws sso login` in another terminal) keep working without anything here being
 /// re-run.
 ///
+/// **And then the bucket is asked, too** ([`reachable`]). That is a change of position: this
+/// function used to stop at the credential chain on the argument that asking the bucket costs a
+/// round trip per connection on every project open. It does, and it is worth it — the case that
+/// argument did not cover is a description that is *well-formed and wrong*, which no local check
+/// can see. A bucket named in the wrong region builds a perfectly good store, registers green,
+/// and fails every table under it. One request per connection at open buys a status that means
+/// what it says.
+///
 /// Idempotent: registering over an existing key replaces it, which is what a re-scan wants.
 ///
 /// One thing it cannot clean up, because it is not told about it: a connection whose **bucket**
 /// was edited leaves the store registered under the *old* URL. That is an edit, and the edit
 /// gesture owns it (Connections 03) — nothing here ever sees the def it replaced.
 pub async fn connect(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), String> {
+    let prepared = match prepare(conn).await {
+        // **And then ask the bucket.** See [`reachable`] — the step that makes a connection's row
+        // mean "this bucket answers" rather than "a store was constructed".
+        Ok((url, store)) => match reachable(conn, &store).await {
+            Ok(()) => Ok((url, store)),
+            Err(why) => Err(why),
+        },
+        Err(why) => Err(why),
+    };
+    settle(ctx, conn, prepared)
+}
+
+/// Apply a prepared store to the session, or take back whatever this connection last registered
+/// — the all-or-nothing half of [`connect`]'s contract, and the only place it is written.
+///
+/// Separate from `connect` so the tests' probe-free path settles through the *same* code rather
+/// than a helper that restates it. That distinction has teeth: the first version of that helper
+/// registered on `Ok` and simply returned on `Err`, which silently dropped the deregistration —
+/// and the test whose whole subject is "a refused reconnect leaves nothing behind" went red
+/// against a stand-in that could never have passed it. A test double for a contract has to share
+/// the contract.
+fn settle(
+    ctx: &SessionContext,
+    conn: &ConnectionDef,
+    prepared: Result<(ObjectStoreUrl, Arc<dyn ObjectStore>), String>,
+) -> Result<(), String> {
+    match prepared {
+        Ok((url, store)) => {
+            ctx.register_object_store(url.as_ref(), store);
+            Ok(())
+        }
+        Err(why) => {
+            // Re-parsed rather than threaded through the error: a def refused *before* the URL
+            // was parsed never registered anything under it either, so the lookup simply misses.
+            // Errs when nothing was registered under this key, which is the ordinary case (a
+            // first pass, or a def that has never worked) and not a failure of its own.
+            if let Ok(url) = ObjectStoreUrl::parse(conn.url()) {
+                let _ = ctx.deregister_object_store(url.as_ref());
+            }
+            Err(why)
+        }
+    }
+}
+
+/// Everything a connection can be judged on **without asking its bucket**: the provider's naming
+/// rules, the client options, the registry key, and a store built from all three.
+///
+/// Split out because its two callers want different things after it — [`connect`] probes the
+/// bucket and registers, while the unit tests below assert what a def registers *under*, which is
+/// a question about keying rather than about the network. Without the split, testing the keying
+/// meant reaching a real bucket.
+async fn prepare(conn: &ConnectionDef) -> Result<(ObjectStoreUrl, Arc<dyn ObjectStore>), String> {
     // **The provider's own naming rules, checked from the def's own module** — the same call the
     // connection editor makes, so a name refused at the field is refused here in the same words
     // and a name this accepts is one the editor would have let through. A blank bucket, a name
@@ -70,17 +132,117 @@ pub async fn connect(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), S
             conn.address.trim()
         )
     })?;
-    match build(conn).await {
-        Ok(store) => {
-            ctx.register_object_store(url.as_ref(), store);
-            Ok(())
-        }
-        Err(why) => {
-            // Errs when nothing was registered under this key, which is the ordinary case
-            // (a first pass, or a def that has never worked) and not a failure of its own.
-            let _ = ctx.deregister_object_store(url.as_ref());
-            Err(why)
-        }
+    let store = build(conn).await?;
+    Ok((url, store))
+}
+
+/// **Does this bucket actually answer?** One request, on the connection's own store, and the
+/// difference between a row that means something and a row that means a struct was built.
+///
+/// This used to be deliberately absent, and the reasoning was explicit: [`connect`] asks the
+/// *host's chain* for a credential and never asks the bucket whether it is any good, because
+/// that is a round trip per connection on every project open. What that traded away turned out
+/// to be too much. `AmazonS3Builder` will happily construct a store for a bucket that does not
+/// exist in the region it was given — nothing in the description is checked against anything —
+/// so a mistyped region registered **green**, the pane showed a healthy connection, and every
+/// table over it then failed with `object_store`'s own bare-redirect message, which names no
+/// bucket, no region and no connection. The diagnosis was one clause long and landed on the
+/// wrong surface. A connection's status is worth a request.
+///
+/// **The first page of a listing, not a HEAD and not a whole listing.** `ObjectStore` has no
+/// head-bucket call, so a list is the cheapest thing the trait can express that the server has to
+/// resolve for real. It has to be `list`'s *stream*, taken once: `list_with_delimiter` reads
+/// like the cheaper call and is the more expensive one, because it drains the paginated stream to
+/// assemble a complete `ListResult` (`object_store` `client/list.rs`). Against the Hive lakes
+/// this exists for — tens of thousands of top-level `key=` folders — that is a round trip per
+/// thousand, per connection, on every project open and every whole-catalog re-scan. Pulling one
+/// item off `list` fetches one page and drops the rest unpolled.
+///
+/// An empty bucket ends the stream without yielding, which is a **pass**: nothing was there to
+/// find, and the request that established it succeeded. Only a `Some(Err(..))` is a refusal.
+///
+/// **It refuses exactly one thing: a bucket that is not in the region it was given.** Everything
+/// else the listing can answer — including every flavour of "no" — registers, and is left to the
+/// table that actually reads a path.
+///
+/// That is narrower than it first looks like it should be, and the narrowness is the point twice
+/// over.
+///
+/// **It is the fault this exists for.** A wrong region is the case no local check can see: the
+/// bucket name is valid, the credentials resolve, the store builds, and S3 answers a 301 carrying
+/// no `Location` header, which reaches the user as a sentence naming no bucket, no region and no
+/// connection. Nothing else that a root listing can tell us is worth a refusal.
+///
+/// **And "may I list the root" is a far stronger demand than Strata makes.** `connect` is
+/// `register_pass`'s **first** phase, so no table has registered and there is no prefix to probe
+/// with — a root listing is simply the only question available, not the right one. An
+/// `s3:ListBucket` conditioned on `s3:prefix: ["team/*"]` is AWS's own documented way to hand
+/// somebody a folder and answers **403 at the root** while `s3://lake/team/events/` reads
+/// perfectly; a published dataset granting `GetObject` and not `ListBucket` does the same, and a
+/// single-file source over it never lists at all. Refusing either would take a working project's
+/// every table down with the connection — a worse fault than the one being caught.
+///
+/// So rejected credentials still fail at the first table, which is exactly where they failed
+/// before this probe existed: this declines a *new* win rather than losing an old one.
+///
+/// **Matched on the message, because `object_store` gives us nothing else to match on.** This is
+/// the part worth checking before trusting: the crate *does* classify statuses into
+/// `PermissionDenied` / `NotFound` / … (`client/retry.rs`, `RetryError::error`), but the S3 list
+/// path never reaches it — `aws/client.rs`'s `From<Error> for crate::Error` routes only
+/// `CompleteMultipartRequest` and `DeleteObjectsRequest` through that mapping and sends every
+/// other variant, `ListRequest` included, to `_ => Generic`. So a 403, a 404 and a bare redirect
+/// arrive here as the same variant, and `RetryError` is `pub(crate)` so its `status()` cannot be
+/// reached by downcast either. A first version of this function matched on the variants and was
+/// dead code in every arm; MinIO caught it. Matching one distinctive sentence is the honest
+/// remaining option, and it is a sentence `object_store` defines as a literal
+/// (`RequestError::BareRedirect`).
+///
+/// **HTTP is exempt, and not out of laziness.** `object_store`'s HTTP store lists over WebDAV
+/// `PROPFIND`, which most origins serving files do not implement (MinIO included — see
+/// `tests/object_store_minio.rs`, where it is why the HTTP arm reads a single object). Probing
+/// one by listing would refuse working connections for a verb their server was never going to
+/// answer, which is a worse lie than the one this function exists to remove. An HTTP connection
+/// names a whole origin and its table names the object, so the table's own registration is where
+/// its reachability is genuinely tested.
+async fn reachable(conn: &ConnectionDef, store: &Arc<dyn ObjectStore>) -> Result<(), String> {
+    if matches!(conn.provider, Provider::Http) {
+        return Ok(());
+    }
+    // One page, then dropped: `next()` polls the paginated stream once, and the stream is not
+    // polled again. An exhausted stream (`None`) is an empty bucket, which answered fine.
+    match store.list(None).next().await {
+        Some(Err(e)) if is_bare_redirect(&e) => Err(wrong_region(conn)),
+        // Everything else — an object, an empty bucket, a 403, a 404 — registers. See above.
+        _ => Ok(()),
+    }
+}
+
+/// The one listing failure that says the *connection* is wrong rather than the caller's rights.
+///
+/// S3 answers a cross-region request with a 301 carrying no `Location` header;
+/// `object_store` has a dedicated error for it whose `Display` is this literal
+/// (`client/retry.rs`, `RequestError::BareRedirect`). Its own text goes on to guess at "an
+/// incorrectly configured region" — a guess, because the crate has never heard of the field. We
+/// have, so [`wrong_region`] says it outright.
+///
+/// Substring rather than equality: the sentence arrives wrapped in the layers that carried it
+/// (`Generic S3 error: Error performing list request: …`).
+fn is_bare_redirect(e: &Error) -> bool {
+    e.to_string().contains("redirect without LOCATION")
+}
+
+/// What a wrong region reads as — naming the bucket and the region, which is the whole of the fix.
+fn wrong_region(conn: &ConnectionDef) -> String {
+    match &conn.provider {
+        Provider::S3(s3) => format!(
+            "The bucket '{}' does not answer in region '{}'. Check the region, or that the bucket \
+             exists.",
+            conn.address.trim(),
+            s3.region.trim()
+        ),
+        // No other provider takes a region, so none can be redirected for naming the wrong one;
+        // the generic wording is here so the function is total rather than because it is reachable.
+        _ => format!("'{}' did not answer.", conn.url()),
     }
 }
 
@@ -476,12 +638,14 @@ impl CredentialProvider for SdkCredentials {
     type Credential = AwsCredential;
 
     async fn get_credential(&self) -> object_store::Result<Arc<AwsCredential>> {
-        let creds = self.provider.provide_credentials().await.map_err(|e| {
-            object_store::Error::Generic {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(|e| Error::Generic {
                 store: "S3",
                 source: Box::new(e),
-            }
-        })?;
+            })?;
         Ok(Arc::new(AwsCredential {
             key_id: creds.access_key_id().to_string(),
             secret_key: creds.secret_access_key().to_string(),
@@ -514,6 +678,24 @@ mod tests {
         ctx.runtime_env().object_store(&url).is_ok()
     }
 
+    /// [`connect`] **minus the bucket probe** — every local judgement, and the registration.
+    ///
+    /// The tests below ask what a def registers *under*: that `s3://acme-lake` lands where a
+    /// source path beneath it will look, that a second connect replaces rather than stacks, that
+    /// a refused def leaves nothing behind. Those are questions about naming and keying, and none
+    /// of them is improved by the bucket existing — while `connect` itself now asks a real server
+    /// whether it does. Routing them through the full call would make this suite dial out to AWS
+    /// on every run, invent buckets it does not own, and fail on a plane.
+    ///
+    /// So the network half is **MinIO's to test**, in `tests/object_store_minio.rs`, against a
+    /// bucket that is really there — which is where the rest of `connect`'s remote behaviour has
+    /// always been checked. What stays here is everything that can be settled without a server.
+    /// It settles through [`settle`], the same call `connect` makes, so the all-or-nothing
+    /// contract this suite asserts is the real one and not a restatement of it.
+    async fn connect_unprobed(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), String> {
+        settle(ctx, conn, prepare(conn).await)
+    }
+
     /// The three arms that need no credential chain register without one — and registering is
     /// per bucket, under the key the registry looks a source path up by.
     #[tokio::test]
@@ -543,7 +725,7 @@ mod tests {
                 client_config: Default::default(),
             },
         ] {
-            connect(&ctx, &conn).await.expect("registers");
+            connect_unprobed(&ctx, &conn).await.expect("registers");
             // The whole contract: a source path under the bucket now resolves to a store.
             let source = format!("{}/data/x.parquet", conn.url());
             assert!(reaches(&ctx, &source), "{source}");
@@ -620,7 +802,7 @@ mod tests {
 
         // …and a connection over a resolving chain registers like any other.
         let ctx = SessionContext::new();
-        connect(
+        connect_unprobed(
             &ctx,
             &s3(
                 "signed-lake",
@@ -655,7 +837,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        connect(&ctx, &good).await.expect("registers");
+        connect_unprobed(&ctx, &good).await.expect("registers");
         assert!(reaches(&ctx, "s3://acme-lake/x.parquet"));
 
         // The same bucket, now described by a def that cannot build a store.
@@ -667,7 +849,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        connect(&ctx, &broken).await.expect_err("refused");
+        connect_unprobed(&ctx, &broken).await.expect_err("refused");
         assert!(
             !reaches(&ctx, "s3://acme-lake/x.parquet"),
             "the previous store must not outlive the def that registered it"
@@ -688,7 +870,7 @@ mod tests {
                 allow_http: true,
             },
         );
-        connect(&ctx, &conn).await.expect("registers");
+        connect_unprobed(&ctx, &conn).await.expect("registers");
         assert!(reaches(&ctx, "s3://local-lake/x.parquet"));
     }
 
@@ -752,7 +934,7 @@ mod tests {
             ),
         ];
         for (conn, wanted) in cases {
-            let e = connect(&ctx, &conn).await.expect_err("refused");
+            let e = connect_unprobed(&ctx, &conn).await.expect_err("refused");
             assert!(e.contains(wanted), "{e}");
         }
     }
@@ -806,7 +988,7 @@ mod tests {
                     },
                 )
             };
-            let e = connect(&ctx, &conn).await.expect_err("refused");
+            let e = connect_unprobed(&ctx, &conn).await.expect_err("refused");
             assert!(e.contains(wanted), "{e}");
         }
     }
@@ -831,7 +1013,7 @@ mod tests {
                 },
             )
         };
-        connect(&ctx, &conn).await.expect("registers");
+        connect_unprobed(&ctx, &conn).await.expect("registers");
         assert!(reaches(&ctx, "s3://acme-lake/data/x.parquet"));
     }
 
@@ -853,19 +1035,23 @@ mod tests {
                 },
             )
         };
-        let e = connect(&ctx, &conn(false)).await.expect_err("refused");
+        let e = connect_unprobed(&ctx, &conn(false))
+            .await
+            .expect_err("refused");
         assert!(
             e.contains("plain HTTP") && e.contains("Allow plain HTTP"),
             "{e}"
         );
         // …and with the toggle on it is exactly the connection the MinIO test drives.
-        connect(&ctx, &conn(true)).await.expect("registers");
+        connect_unprobed(&ctx, &conn(true))
+            .await
+            .expect("registers");
         // An https endpoint needs no toggle.
         let mut secure = conn(false);
         if let Provider::S3(s3) = &mut secure.provider {
             s3.endpoint = "https://s3.example.net".into();
         }
-        connect(&ctx, &secure).await.expect("registers");
+        connect_unprobed(&ctx, &secure).await.expect("registers");
     }
 
     /// An address is scheme + authority, so a path in one is a def that would register under a
@@ -899,7 +1085,7 @@ mod tests {
                 "lowercase letters",
             ),
         ] {
-            let e = connect(&ctx, &conn).await.expect_err("refused");
+            let e = connect_unprobed(&ctx, &conn).await.expect_err("refused");
             assert!(e.contains(quoted), "{e}");
         }
     }
@@ -917,8 +1103,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        connect(&ctx, &conn).await.expect("registers");
-        connect(&ctx, &conn).await.expect("registers again");
+        connect_unprobed(&ctx, &conn).await.expect("registers");
+        connect_unprobed(&ctx, &conn)
+            .await
+            .expect("registers again");
         assert!(reaches(&ctx, "s3://acme-lake/x.parquet"));
     }
 }

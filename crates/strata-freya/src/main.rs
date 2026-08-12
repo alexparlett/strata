@@ -24,6 +24,7 @@ use strata_core::config::AppConfig;
 use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
 use strata_core::secret::open_keystore;
+use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::agent::create_global_agent;
 use crate::platform::{create_global_open, create_global_windows};
@@ -58,7 +59,11 @@ fn main() {
     };
     // First thing: nothing logged before this exists. Every `tracing::*` call in the app
     // and in `strata-core` is a no-op until a subscriber is installed.
-    init_logging(Log::Stdout);
+    //
+    // The guard is bound for the whole of `main` — it owns the file writer's worker thread,
+    // and dropping it flushes and stops that thread. Bound to `_guard` rather than `_`, which
+    // would drop it on this line and leave an installed subscriber writing to nothing.
+    let _guard = init_logging(Log::Stdout);
     // Open the OS keystore for the process (AS-05). One call, here, because the default
     // store is process-wide and a module that installed itself on first touch could never
     // be handed a different one. A failure is not fatal and not silent: nothing needs a
@@ -281,8 +286,10 @@ fn cli<A: IntoIterator<Item = String>>(args: A) -> Cli {
 fn headless(folder: &str) {
     // **stderr, always.** stdout is the MCP transport's, and one stray log line on it is a
     // parse error at the client — so the subscriber is pointed away from it before anything
-    // this process does can log, `strata-core` included.
-    init_logging(Log::Stderr);
+    // this process does can log, `strata-core` included. The file half is the same one the GUI
+    // writes, which is what makes a headless run diagnosable at all: its stderr belongs to
+    // whichever client spawned it, and that is usually nowhere the user can see.
+    let _guard = init_logging(Log::Stderr);
     // The same sweep the GUI does, in the same place and for the same reason: once at
     // startup, before this process has an engine of its own. A live engine's snapshot
     // directory is lock-claimed, so an app running beside this one is untouched.
@@ -355,6 +362,7 @@ fn startup(config: &AppConfig, reopen: Vec<String>, folder: Option<String>) -> S
 }
 
 /// Where the log goes — a decision the headless branch has to make and the GUI does not.
+#[derive(Clone, Copy)]
 enum Log {
     Stdout,
     /// `strata mcp`: stdout carries the MCP framing, so a log line on it is a parse error at
@@ -362,19 +370,118 @@ enum Log {
     Stderr,
 }
 
+impl Log {
+    /// The log file's name stem — **and the two must differ**, because these are two processes.
+    ///
+    /// An MCP client can spawn `strata mcp` while the app is open, and a rolling appender is not
+    /// a shared-writer abstraction: each one enforces `max_log_files` by listing the files whose
+    /// name matches its own prefix and unlinking the oldest. Pointed at one stem, the two
+    /// processes prune each other — including, on a day boundary, a file the other still holds
+    /// open, whose remaining lines then go to an unlinked inode and are never seen again. Two
+    /// stems make two independent rotations, and telling an app run from a headless one is worth
+    /// having in its own right.
+    fn stem(self) -> &'static str {
+        match self {
+            Self::Stdout => "strata",
+            Self::Stderr => "strata-mcp",
+        }
+    }
+}
+
+/// How many days of logs are kept. A week covers "it did the thing on Tuesday, here is the
+/// file" without a folder that grows forever on a machine nobody sweeps.
+const LOG_RETENTION: usize = 7;
+
+/// Where the log file goes, following [`user_themes_dir`](strata_core::theme::user_themes_dir)'s
+/// resolution exactly — `$HOME`, then a per-OS convention.
+///
+/// `~/Library/Logs/Strata` on macOS, which is the platform's own answer and the one Console.app
+/// lists under **Log Reports**, so the file is reachable without knowing the path. Elsewhere the
+/// XDG state directory, because a log is state rather than config — it is not something the user
+/// edits, and it must not sit in the folder where they drop themes.
+///
+/// `None` when there is no `$HOME` to hang it off, which is a real case (a bare launchd context)
+/// and not a fault: [`init_logging`] then keeps the console writer and says so.
+fn log_dir() -> Option<PathBuf> {
+    let home = PathBuf::from(env::var_os("HOME")?);
+    #[cfg(target_os = "macos")]
+    let dir = home.join("Library/Logs/Strata");
+    #[cfg(not(target_os = "macos"))]
+    let dir = home.join(".local/state/Strata/logs");
+    Some(dir)
+}
+
 /// Install a tracing subscriber. Defaults to `warn` for deps + `info` for every `strata*`
 /// crate (`EnvFilter` matches targets by prefix, so one directive covers `strata_freya`,
 /// `strata_core`, `strata_model`, …); override with `RUST_LOG`. `try_init` is a no-op if a
 /// subscriber is already installed.
-fn init_logging(to: Log) {
+///
+/// **Two writers, always.** The console one is what a developer running `cargo run` reads; the
+/// file is the only one an *installed* build has. A `.app` launched from Finder inherits no
+/// terminal — its stdout goes to the unified log, where it is neither a file a tester can send
+/// nor a stream `RUST_LOG` can be pointed at — so without the file half, the build that most
+/// needs a diagnosis is the build that cannot produce one. This was not hypothetical: an S3
+/// connection failing with a message the panels truncated had no second copy anywhere.
+///
+/// **The returned guard must be held for the life of the process.** The file writer is
+/// non-blocking — a worker thread owns the actual writes so no `tracing::` call ever waits on
+/// disk — and dropping the guard is what flushes and stops it. Dropped early, the last and most
+/// interesting lines before a crash are the ones that never land.
+///
+/// `None` when there is no file half (no `$HOME`, or the directory cannot be made); the console
+/// writer is installed either way, so logging never depends on the file working.
+#[must_use = "dropping the guard stops the file writer and loses buffered lines"]
+fn init_logging(to: Log) -> Option<WorkerGuard> {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
     use tracing_subscriber::EnvFilter;
+
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,strata=info"));
-    let subscriber = tracing_subscriber::fmt().with_env_filter(filter);
-    let _ = match to {
-        Log::Stdout => subscriber.try_init(),
-        Log::Stderr => subscriber.with_writer(io::stderr).try_init(),
-    };
+
+    // Built before the subscriber so a failure here is just "no file half" rather than "no
+    // logging": the console writer is installed in either branch below.
+    let file = log_dir().and_then(|dir| {
+        if let Err(e) = fs::create_dir_all(&dir) {
+            eprintln!("no log file ({}): {e}", dir.display());
+            return None;
+        }
+        let appender = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            // Per-process, not per-app — see [`Log::stem`].
+            .filename_prefix(to.stem())
+            .filename_suffix("log")
+            .max_log_files(LOG_RETENTION)
+            .build(&dir)
+            .map_err(|e| eprintln!("no log file ({}): {e}", dir.display()))
+            .ok()?;
+        Some(tracing_appender::non_blocking(appender))
+    });
+
+    // **ANSI off, for both.** One `fmt` layer means one set of writers and one escape-code
+    // decision; colouring for the terminal would write the same escapes into the file, where
+    // they are noise in whatever the user opens it with. A readable file beats a coloured
+    // console for a log that exists to be sent to someone.
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false);
+    match (to, file) {
+        (Log::Stdout, Some((file, guard))) => {
+            let _ = subscriber.with_writer(io::stdout.and(file)).try_init();
+            Some(guard)
+        }
+        (Log::Stderr, Some((file, guard))) => {
+            let _ = subscriber.with_writer(io::stderr.and(file)).try_init();
+            Some(guard)
+        }
+        (Log::Stdout, None) => {
+            let _ = subscriber.try_init();
+            None
+        }
+        (Log::Stderr, None) => {
+            let _ = subscriber.with_writer(io::stderr).try_init();
+            None
+        }
+    }
 }
 
 #[cfg(test)]

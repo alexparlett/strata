@@ -162,6 +162,21 @@ fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) 
 
 /// Write the def, persist it, drop what the old URL registered, and ask for the pass. See the
 /// module doc.
+///
+/// **The bucket is not probed here**, and that is a decision with a measurement behind it. A
+/// Save-time `Engine::check_connection` was built first, to refuse an unreachable bucket before
+/// anything was written. It was withdrawn for two reasons that only showed up once it existed.
+///
+/// It is **redundant**: `store::connect` now asks the bucket itself, so the pass this Save asks
+/// for already answers the same question, and this window already watches that row — `Failed`
+/// keeps it open carrying the engine's own words (see the module doc). The probe was a second
+/// round trip to learn what the first one was about to say, and the def being written in between
+/// is exactly what already happens for a credential chain the server rejects.
+///
+/// And it was **expensive in the wrong place**: it put a network call with `object_store`'s ten
+/// retries behind a button that three interaction tests press, taking this crate's suite from 7
+/// seconds to 308. A UI test that dials out to a bucket nobody owns is a bad trade for a refusal
+/// arriving a second earlier.
 fn save(
     mut ctx: ConnectionCtx,
     mut project: RadioStation<ProjectState, ProjChan>,

@@ -40,15 +40,23 @@ use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, Sessi
 use freya::components::{Activable, FloatingTab};
 
 use crate::components::badge::Badge;
-use crate::components::metrics::{SP_1, SP_3, SP_4, SP_7};
+use crate::components::metrics::{SP_1, SP_2, SP_3, SP_4, SP_7};
 use crate::components::tones::{tones, Tones};
 use crate::components::typography::Control;
 
 pub use project::project_error_count;
 
 /// One problem row, and the group header above it (canvas `--sp-2` / `--sp-3` verticals).
+///
+/// `ROW_HEIGHT` is a **floor**, not the height: both scopes' messages wrap, so a row is one line
+/// tall when it fits and as tall as it needs otherwise.
 pub(super) const ROW_HEIGHT: f32 = 26.;
 pub(super) const GROUP_HEIGHT: f32 = 32.;
+/// A row's vertical inset. Zero while every row was exactly one `ROW_HEIGHT` line — a fixed
+/// height centres its own content — and load-bearing now that a wrapped message sets the height
+/// itself. Shared, because both scopes' rows wrap and a drawer whose two lists inset differently
+/// reads as two lists.
+pub(super) const ROW_INSET: f32 = SP_2;
 /// A row's left indent — the canvas's `--sp-7`, so rows sit under their group's name.
 pub(super) const ROW_INDENT: f32 = SP_7;
 /// The panel's horizontal padding (canvas `--sp-4`).

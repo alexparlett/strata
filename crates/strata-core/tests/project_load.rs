@@ -51,11 +51,18 @@ async fn fixture_project_registers_and_queries() {
     let after_connections = defs.connections.len();
 
     // Then tables (views read them), relative sources resolved against the folder.
+    //
+    // **The phase is ordered; the tables inside it are not.** `register_pass` registers tables
+    // concurrently, so which of them answers first is a race — one wide remote table must not be
+    // able to hold up every table listed after it. What is still guaranteed, and asserted here, is
+    // that the whole table phase lands between the connections and the views: a view's `CREATE`
+    // has to plan against tables that already exist.
     let mut failed = Vec::new();
-    for (i, t) in defs.tables.iter().enumerate() {
-        match &outcomes[after_connections + i] {
+    let mut settled = Vec::new();
+    for outcome in &outcomes[after_connections..after_connections + defs.tables.len()] {
+        match outcome {
             RegOutcome::Table { name, result } => {
-                assert_eq!(name, &t.name, "tables settle in defs order");
+                settled.push(name.clone());
                 match result {
                     Ok(meta) => {
                         assert!(!meta.columns.is_empty(), "'{name}' inferred a schema");
@@ -66,6 +73,12 @@ async fn fixture_project_registers_and_queries() {
             other => panic!("expected every table before any view: {other:?}"),
         }
     }
+    // Every table the defs name settled exactly once, whatever order they arrived in.
+    settled.sort();
+    let mut expected: Vec<String> = defs.tables.iter().map(|t| t.name.clone()).collect();
+    expected.sort();
+    assert_eq!(settled, expected, "one outcome per table def");
+    failed.sort();
     // The fixture's one deliberate dud: `signups.json` has a record missing its closing brace,
     // so no reader can take it — a useful Failed-state fixture. (It was pretty-printed JSON until
     // `engine::json_poly` replaced arrow's line-based reader and started reading that correctly;

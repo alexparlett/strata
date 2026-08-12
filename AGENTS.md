@@ -401,7 +401,7 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **Def/runtime split.** Pure serde defs in `strata-model`; `Reg<T>` rows in the store. Tables/views
   keyed by **name**, saved queries by **`Uuid`**, connections by **`url()`** (scheme *and*
   authority — never the bucket, which two providers can share) — and a connection's `Reg<()>` is
-  honest, because connecting registers a store rather than learning anything.
+  honest, because connecting *asks the bucket* rather than only building a store.
 - **A connection registers a bucket, and it registers before anything that reads one.** Connections
   are `register_pass`'s first phase; a whole-catalog ↻ re-connects and a single table's Refresh
   does not. The def stores the authority and derives the scheme from the provider; **Ambient and
@@ -410,6 +410,27 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   name and a key file path, never a key. Identity is the **URL** and the sort is the **address**,
   so `upsert_connection` replaces on one and inserts by the other; an edit that moves either half
   **deregisters the old URL itself**, and the editor's Save asks for a whole-catalog pass.
+- **Connecting asks the bucket, because a description can be well-formed and wrong.** `connect` is
+  `prepare` (naming rules, client options, registry key, built store) then `reachable` — one
+  page off `list(None)`, so it costs one request however large the lake — never
+  `list_with_delimiter`, which drains the whole paginated stream to build its `ListResult`.
+  This **overturns** the earlier rule that connecting learns nothing: that traded a round trip per
+  connection per project open for a status dot that meant "a struct was built", and a mistyped
+  region registered green while every table under it failed on `object_store`'s bare-redirect
+  message. A wrong region is refused **by name**, naming the region. It asks whether the connection
+  is **described** right, never whether it may do everything: `Generic` (bare redirect) and
+  `NotFound` refuse, `PermissionDenied`/`Unauthenticated` **register** — a prefix-scoped
+  `s3:ListBucket` and a `GetObject`-only public bucket both 403 at the root while working
+  perfectly, and `connect` is the pass's first phase so there is no table prefix to probe with.
+  Rejected credentials therefore still fail at the first table, exactly as before the probe.
+  **HTTP is exempt** — its store
+  lists over WebDAV `PROPFIND`, which most file origins do not implement, so probing one would
+  refuse working connections. The connection editor needs **nothing of its own**: Save writes the
+  def, asks for the pass, and watches its row, which is where this refusal lands. A Save-time
+  `check_connection` was built and withdrawn — redundant with the pass, and it put a ten-retry
+  network call behind a button three interaction tests press (7s → 308s).
+  `connect` therefore does network I/O: a test about *keying* goes through `store::settle`, not
+  through `connect`, or the suite dials out to buckets nobody owns.
 - **A table reads through a connection by naming it, and the composition happens once, in
   `resolve_source`.** `TableDef::connection` is the connection's `url()` and the only thing that
   says a table is remote; its sources are bucket-relative exactly then, never relativized, and

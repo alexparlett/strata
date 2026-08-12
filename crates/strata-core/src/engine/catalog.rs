@@ -266,33 +266,63 @@ fn keys_in_pattern(path: &str) -> Vec<String> {
 }
 
 /// The `key=` levels found by listing down from `path`, following the first partition-shaped
-/// prefix at each level. Silent on any store error: a path that cannot be listed is a path with
-/// no partitions to offer, and the *register* is where an unreadable source is reported.
+/// prefix at each level. Silent to the *caller* on any store error: a path that cannot be listed
+/// is a path with no partitions to offer, and the *register* is where an unreadable source is
+/// reported.
+///
+/// **Silent to the caller is not silent to the log.** Four different facts leave this function as
+/// the same empty vec — an unparseable URL, a bucket with no registered store, a listing the
+/// store refused, and a genuine "nothing here is `key=value`" — and the Hive toggle renders all
+/// four as "not partitioned". That is the right *answer* (there is nothing to offer either way)
+/// and a terrible *diagnosis*: a user whose lake is sitting right there gets no way to tell a
+/// broken connection from a layout this does not recognise. So each exit says which it was, at
+/// `info` because detection runs on a toggle press rather than in any loop.
 async fn keys_in_store(ctx: &SessionContext, path: &str) -> Vec<String> {
     let Ok(url) = listing_url(path) else {
+        tracing::info!("no partitions under '{path}': not a source URL");
         return Vec::new();
     };
     let Ok(store) = ctx.runtime_env().object_store(&url) else {
+        // The connection's `connect` never ran, or ran and was refused — a refused connection
+        // registers nothing at all (`store::connect` is all-or-nothing).
+        tracing::info!("no partitions under '{path}': no object store is registered for it");
         return Vec::new();
     };
 
     let mut keys = Vec::new();
     let mut prefix = url.prefix().clone();
-    for _ in 0..MAX_PARTITION_DEPTH {
-        let Ok(listed) = store.list_with_delimiter(Some(&prefix)).await else {
-            break;
+    for depth in 0..MAX_PARTITION_DEPTH {
+        let listed = match store.list_with_delimiter(Some(&prefix)).await {
+            Ok(listed) => listed,
+            Err(e) => {
+                tracing::info!("partition scan of '{path}' stopped at '{prefix}': {e}");
+                break;
+            }
         };
         // Sorted, so the level's key is the same on every run: a store's listing order is its
         // own, and a level holding one stray non-partition prefix would otherwise answer
         // differently each time.
         let mut prefixes = listed.common_prefixes;
         prefixes.sort();
-        let found = prefixes.into_iter().find_map(|p| {
-            // The key is read out before `p` moves into the pair — a `Path`'s parts borrow it.
+        let found = prefixes.iter().find_map(|p| {
+            // The key is read out before `p` is cloned into the pair — a `Path`'s parts borrow it.
             let key = partition_key(p.parts().next_back()?.as_ref())?.to_string();
-            Some((key, p))
+            Some((key, p.clone()))
         });
         let Some((key, next)) = found else {
+            // **Rendered here and nowhere else.** The decisive datum when a lake that *looks*
+            // partitioned finds nothing is what the store actually answered at this level — no
+            // prefixes at all (wrong path, or files with no folders under it) reads very
+            // differently from prefixes that are simply not `key=value`. Built inside this arm
+            // rather than beside the listing, because on the success path it is a `String` per
+            // folder, per level, that nothing ever reads: a first level holding twenty thousand
+            // prefixes allocated twenty thousand of them to throw away.
+            let seen: Vec<String> = prefixes.iter().map(ToString::to_string).collect();
+            tracing::info!(
+                "partition scan of '{path}' found no key=value folder at depth {depth} \
+                 under '{prefix}'; the store listed {} folder(s) there: {seen:?}",
+                seen.len()
+            );
             break;
         };
         keys.push(key);

@@ -645,12 +645,32 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
 
     // --- and now the same connection with credentials the server refuses -----------------
     //
-    // **A connection whose credentials the server rejects fails at the table, not at the
-    // connection** — the honest limit of `connect`'s probe, pinned here rather than left as
-    // folklore. The probe asks the *host's chain* whether it can produce a credential; it
-    // never asks the bucket whether that credential is any good, because that would be a
-    // network round trip per connection on every project open. So a wrong-but-well-formed key
-    // resolves, the connection goes green, and the refusal surfaces on the first read.
+    // **A connection whose credentials the server rejects still registers, and fails at the
+    // table** — and this phase is the one that pins it, because MinIO answering a real 403 is
+    // the only way to reach the arm.
+    //
+    // It is deliberate rather than left over. `store::reachable` asks whether the connection is
+    // *described* right — region, bucket, endpoint — and an authorization answer is not that.
+    // It cannot be: `connect` is `register_pass`'s first phase, so no table has registered and
+    // there is no prefix to probe with, leaving a **root** listing as the only question
+    // available. That is a far stronger demand than Strata makes of the bucket, and two ordinary
+    // setups fail it while working perfectly — an `s3:ListBucket` conditioned on
+    // `s3:prefix: ["team/*"]` (AWS's own documented way to hand somebody a folder), and a
+    // published dataset granting `GetObject` but not `ListBucket`. Refusing either would take
+    // every table in a working project down with the connection.
+    //
+    // So `reachable` refuses **one** thing — a bare redirect, which is a bucket that is not in
+    // the region it was given — and passes everything else a listing can answer, this 403
+    // included. The wrong-region diagnosis, the fault the probe was built for, is untouched.
+    //
+    // It is worth knowing *why* the rule is that blunt, because the obvious version was written
+    // first and this test is what killed it. `reachable` used to match `Error::PermissionDenied`
+    // and `Unauthenticated` to let this phase through, on the strength of `RetryError::error`
+    // mapping 403 and 401 onto them. It does — but the S3 **list** path never reaches that
+    // mapping: `aws/client.rs`'s `From<Error> for crate::Error` sends `ListRequest` (and every
+    // variant but two) to `_ => Generic`, so a 403, a 404 and a redirect all arrive as one
+    // variant and every arm was unreachable. `RetryError` is `pub(crate)`, so the status cannot
+    // be recovered by downcast either. Matching one distinctive message is what is left.
     //
     // Last, and in the same test, for the reason the doc comment gives: this rewrites the
     // environment the phases above depend on.
@@ -664,7 +684,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     engine
         .connect(connection(&endpoint, S3Auth::Ambient))
         .await
-        .expect("the chain resolves, so the connection registers");
+        .expect("a 403 is an authorization answer, not a description fault");
     let refused = engine
         .register(table())
         .await
@@ -673,6 +693,10 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         !refused.is_empty(),
         "the table's row carries the server's refusal"
     );
+
+    // …and the connection editor needs nothing of its own for any of this: Save writes the def,
+    // asks for the pass, and watches its row, which is where a refusal lands. A Save-time probe
+    // was built and withdrawn — see `apps::connection::views::footer::save`.
 
     let _ = fs::remove_dir_all(&project);
 }
