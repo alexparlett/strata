@@ -1,8 +1,9 @@
-//! One virtualized **body row** — the gutter cell + a [`Cell`] per column + the trailing
-//! filler, on the zebra background with the row rule. Built by the grid's
+//! One virtualized **body row** — the gutter cell + a [`Cell`] per *windowed* column (fixed
+//! spacers stand in for the off-window ones, keeping x-positions and the row's width exact) +
+//! the trailing filler, on the zebra background with the row rule. Built by the grid's
 //! `VirtualScrollView` builder for the ~viewport rows only; everything reactive (selection,
-//! widths) is read *inside* — the builder closure is memoized, so state must be read here,
-//! not snapshotted outside (the `VirtualScrollView` rule in CLAUDE.md).
+//! widths, the column window) is read *inside* — the builder closure is memoized, so state
+//! must be read here, not snapshotted outside (the `VirtualScrollView` rule, AGENTS.md §3).
 //!
 //! The row also owns its cells' interaction handlers: gutter double-click → record view
 //! (P2-10), nested-cell double-click → value modal snapshotted at press time (P2-12), and
@@ -17,7 +18,7 @@ use strata_model::Kind;
 
 use super::cell::Cell;
 use super::model::KindColors;
-use super::{DataGridTheme, GridData, GUTTER_W, TRAIL_W};
+use super::{ColWindow, DataGridTheme, GridData, GUTTER_W, TRAIL_W};
 use crate::apps::project::views::workbench::results::cell_view::{page_batch_row, CellValue};
 use crate::apps::project::views::workbench::results::copy;
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
@@ -39,6 +40,10 @@ pub struct Row {
     pub widths: State<Vec<f32>>,
     /// The grid's starting column width — see [`HeaderRow::seed_w`](super::header::HeaderRow).
     pub seed_w: f32,
+    /// The grid's resolved column window (`DataGrid::render` derives it from the horizontal
+    /// scroll, spacer extents included) — read reactively, so a pan rebuilds exactly the
+    /// rows' windowed cells.
+    pub col_window: State<ColWindow>,
     /// The shared selection controller (cells read it reactively for styling).
     pub sel: SelCtl,
     /// The nested-cell modal's open slot (P2-12) — a data-cell double-click fills it.
@@ -52,9 +57,22 @@ pub struct Row {
     /// `Settings::zebra` — off means every row takes the plain row background.
     pub zebra: bool,
     pub theme: DataGridTheme,
+    /// Diff identity (the page row index): lets a scroll step *move* this row instead of
+    /// rebuilding it in another position's scope — set via `.key()` in the grid's builder.
+    pub key: DiffKey,
+}
+
+impl KeyExt for Row {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
 }
 
 impl Component for Row {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
     fn render(&self) -> impl IntoElement {
         let index = self.index;
         let row_base = self.row_base;
@@ -91,6 +109,14 @@ impl Component for Row {
             }
         }));
 
+        // The resolved column window: only these columns get a real cell; the off-window
+        // extent on either side is a fixed spacer (the window carries both sums), so the
+        // visible cells land at their true x and the row keeps its full width. Both reads
+        // subscribe — a pan or a resize reflows the row.
+        let win = *self.col_window.read();
+        let widths = self.widths.read();
+        let col_w = |ci: usize| widths.get(ci).copied().unwrap_or(self.seed_w);
+
         let mut cells = rect()
             .width(Size::fill())
             .height(Size::flex(1.))
@@ -124,10 +150,21 @@ impl Component for Row {
                     record_view.set(Some(index));
                 })),
                 on_secondary: on_menu_row,
+                key: DiffKey::None,
             });
 
-        for (ci, col) in self.data.columns.iter().enumerate() {
-            let w = self.widths.read().get(ci).copied().unwrap_or(self.seed_w);
+        // Leading spacer: the extent of the columns before the window (0px when none — kept
+        // mounted so the sibling list's shape is stable for the differ).
+        cells = cells.child(rect().width(Size::px(win.lead)).height(Size::fill()));
+        for (ci, col) in self
+            .data
+            .columns
+            .iter()
+            .enumerate()
+            .take(win.end)
+            .skip(win.start)
+        {
+            let w = col_w(ci);
             let cell = &self.data.rows[index][ci];
             // Nested non-null value → double-click opens the cell view (P2-12). The
             // handler snapshots the **batch** at press time (the canvas semantics — a later
@@ -162,31 +199,42 @@ impl Component for Row {
                     open_copy_menu();
                 }
             }));
-            cells = cells.child(Cell {
-                width: Size::px(w),
-                text: cell.text.clone(),
-                // Nulls render dimmed (the model keeps the flag exactly for this), in the
-                // gutter's muted tone; everything else takes its type colour.
-                color: if cell.null {
-                    theme.gutter_color
-                } else {
-                    col.kind.cell_color(theme, &palette)
-                },
-                mono: true,
-                cross: Alignment::Start,
-                pad: Gaps::new(0., self.cell_pad.right(), 0., self.cell_pad.left()),
-                hover_bg: theme.cell_hover_background,
-                divider: theme.column_divider_fill,
-                role: CellRole::Data(index, ci),
-                sel: sel_ctl,
-                sel_border: theme.selection_border_fill,
-                active_color: None,
-                active_background: None,
-                on_open: on_nested,
-                on_secondary: on_menu_cell,
-            });
+            cells = cells.child(
+                Cell {
+                    width: Size::px(w),
+                    text: cell.text.clone(),
+                    // Nulls render dimmed (the model keeps the flag exactly for this), in the
+                    // gutter's muted tone; everything else takes its type colour.
+                    color: if cell.null {
+                        theme.gutter_color
+                    } else {
+                        col.kind.cell_color(theme, &palette)
+                    },
+                    mono: true,
+                    cross: Alignment::Start,
+                    pad: Gaps::new(0., self.cell_pad.right(), 0., self.cell_pad.left()),
+                    hover_bg: theme.cell_hover_background,
+                    divider: theme.column_divider_fill,
+                    role: CellRole::Data(index, ci),
+                    sel: sel_ctl,
+                    sel_border: theme.selection_border_fill,
+                    active_color: None,
+                    active_background: None,
+                    on_open: on_nested,
+                    on_secondary: on_menu_cell,
+                    key: DiffKey::None,
+                }
+                // Keyed by the column, so a window shift matches the surviving cells' scopes
+                // across positions — hover and focus state stay put, and only the entering
+                // columns mount. (The survivors still re-render: their handler props carry
+                // `EventHandler`s, whose equality is always false in the fork — the key buys
+                // scope continuity, not a props-equal skip.)
+                .key(ci),
+            );
         }
-        // Trailing dead space (matches the header) so the row extends past the last column.
+        // Trailing spacer: the extent of the columns past the window, then the dead space
+        // (matches the header) so the row extends past the last column.
+        cells = cells.child(rect().width(Size::px(win.tail)).height(Size::fill()));
         cells = cells.child(
             rect()
                 .width(Size::flex(1.))

@@ -1,9 +1,11 @@
 //! The results **datagrid** — our custom virtualized grid (distinct from Freya's built-in `Table`,
-//! which renders a component per cell with no virtualization). A [`VirtualScrollView`] over the rows
-//! (only the ~viewport rows are ever built) with hand-rolled `rect` cells: a row-number gutter,
-//! per-column resizable widths, a type-labelled sticky header, type-coloured cell text, zebra rows,
-//! column / row / header dividers, per-cell hover, and Excel-style selection. Horizontal scroll pans
-//! header + body together for wide tables.
+//! which renders a component per cell with no virtualization). Virtualized in **both** directions:
+//! a [`VirtualScrollView`] over the rows (only the ~viewport rows are ever built) and a
+//! scroll-derived **column window** over the columns (only the ~viewport columns are built; fixed
+//! spacers stand in for the rest, so the scroll extent and alignment stay exact) — with hand-rolled
+//! `rect` cells: a row-number gutter, per-column resizable widths, a type-labelled sticky header,
+//! type-coloured cell text, zebra rows, column / row / header dividers, per-cell hover, and
+//! Excel-style selection. Horizontal scroll pans header + body together for wide tables.
 //!
 //! Layout: this file owns the [`DataGrid`] component + its render (page resolution, scroll
 //! composition, focus + keyboard wiring, the modals), the shared constants, and the `datagrid`
@@ -73,6 +75,72 @@ const EDGE_STEP: f32 = 24.; // px scrolled per pointer-move tick while resizing 
                             // gesture never drifts the horizontal pan (and vice-versa). 1.0 = lock to the larger axis; raise it
                             // to allow more diagonal freedom before locking.
 const SCROLL_AXIS_LOCK: f32 = 1.0;
+/// How far past each horizontal viewport edge the column window extends — two default columns
+/// of slack on each side. The window is derived in a side effect, which settles a task-poll
+/// after the scroll event that moved the view, so a step within the overscan lands on cells
+/// that are already built; a single jump larger than this (a scrollbar-thumb scrub, a hard
+/// fling) shows the spacer for that one frame and back-fills when the effect settles. That is
+/// the accepted cost of deriving the window off the render path.
+const OVERSCAN_W: f32 = 2. * DEFAULT_COL_W;
+/// How much viewport width the *seed* window covers before the first sized layout has run.
+/// Wider than any real screen, so the first paint is never blank — while a thousand-column
+/// result no longer builds every column for that one frame (the un-windowed tree is exactly
+/// the cost this windowing exists to remove, and a Run press remounts the grid).
+const SEED_COVER_W: f32 = 6000.;
+
+/// The resolved column window: the half-open range of columns the header and body build, plus
+/// the extent of the off-window columns on either side — the spacers' widths. Resolved in
+/// **one** place (the side effect in [`DataGrid::render`]) and consumed as a value, so header
+/// and body cannot disagree about which columns are real, and the O(cols) extent sums are paid
+/// once per window move rather than per visible row.
+#[derive(Clone, Copy, PartialEq)]
+pub struct ColWindow {
+    pub start: usize,
+    pub end: usize,
+    /// The summed width of the columns before `start`.
+    pub lead: f32,
+    /// The summed width of the columns from `end` on.
+    pub tail: f32,
+}
+
+impl ColWindow {
+    /// Resolve a `[start, end)` range against the live widths. `start <= end <= widths.len()`
+    /// — the callers' ranges come from [`col_range`] (bounded by construction) or a union of
+    /// two such ranges.
+    fn resolve(widths: &[f32], start: usize, end: usize) -> Self {
+        Self {
+            start,
+            end,
+            lead: widths[..start].iter().sum(),
+            tail: widths[end..].iter().sum(),
+        }
+    }
+}
+
+/// The half-open range of columns whose spans intersect `[lo, hi)`, in content coordinates
+/// (columns start after the gutter). `lo`/`hi` come from the horizontal scroll position ±
+/// [`OVERSCAN_W`]; an empty range means the band sits entirely off the columns (in the gutter,
+/// or in the trailing dead zone).
+fn col_range(widths: &[f32], lo: f32, hi: f32) -> (usize, usize) {
+    let mut left = GUTTER_W;
+    let mut start = None;
+    let mut end = widths.len();
+    for (ci, w) in widths.iter().enumerate() {
+        let right = left + w;
+        if start.is_none() && right > lo {
+            start = Some(ci);
+        }
+        if left >= hi {
+            end = ci;
+            break;
+        }
+        left = right;
+    }
+    // No column's right edge cleared `lo` — the band sits past them all, so the range is
+    // empty at `end`.
+    (start.unwrap_or(end), end)
+}
+
 define_theme!(
     %[component]
     pub DataGrid {
@@ -244,6 +312,49 @@ impl Component for DataGrid {
         // the view and made the drag janky. The grips write it; it settles back to `min_w` on release.
         let hold_w = use_state(|| 0.0f32);
 
+        // ── the column window ──────────────────────────────────────────────────────────────────────
+        // Which columns the header + rows actually build: only the spans intersecting the horizontal
+        // viewport (± OVERSCAN_W), so the tree stays O(visible) in both directions at hundreds of
+        // columns. Derived in a side effect, not in this render — reading the controller's position
+        // subscribes, and the grid must not rebuild per scrolled pixel — and written through
+        // `set_if_modified`, so the consumers re-render only when the window actually moves. Seeded
+        // to the columns covering SEED_COVER_W from the left — scroll starts at 0 and no viewport
+        // is that wide, so the first frames (before the effect's first run has a sized viewport)
+        // are never blank without building every column of a very wide result.
+        let mut col_window = use_state(move || {
+            let end = n.min((SEED_COVER_W / seed_w).ceil() as usize);
+            // Every width is `seed_w` at mount, so the seed's extents need no widths read.
+            ColWindow {
+                start: 0,
+                end,
+                lead: 0.,
+                tail: (n - end) as f32 * seed_w,
+            }
+        });
+        use_side_effect(move || {
+            // Every input is read before any return, so the effect stays subscribed to all of
+            // them on every path.
+            let (sx, _): (i32, i32) = controller.into();
+            let vp_w = viewport.read().width();
+            let resizing = *hold_w.read() != 0.0;
+            let widths = widths.read();
+            if vp_w <= 0. {
+                return; // pre-layout: keep the seed until the viewport has a size
+            }
+            // Scroll x is ≤ 0 (the content's offset), so -sx is the visible band's left edge.
+            let x0 = -(sx as f32);
+            let (mut start, mut end) = col_range(&widths, x0 - OVERSCAN_W, x0 + vp_w + OVERSCAN_W);
+            if resizing {
+                // Grow-only while a resize drag holds the extent: recomputing mid-drag could
+                // unmount the very grip driving the drag (its global listeners with it), while
+                // a drag that auto-scrolls must still get the columns it reveals.
+                let w = *col_window.peek();
+                start = start.min(w.start);
+                end = end.max(w.end);
+            }
+            col_window.set_if_modified(ColWindow::resolve(&widths, start, end));
+        });
+
         // ── selection ──────────────────────────────────────────────────────────────────────────────
         // Shared selection state + a Copy controller the cells call on pointer events. Freya pointer
         // events carry no modifiers, so shift / ⌘ are tracked via the root's global key up/down below.
@@ -318,6 +429,7 @@ impl Component for DataGrid {
             data: data.clone(),
             widths,
             seed_w,
+            col_window,
             controller,
             viewport,
             hold_w,
@@ -350,6 +462,7 @@ impl Component for DataGrid {
                 row_base,
                 widths,
                 seed_w,
+                col_window,
                 sel: sel_ctl,
                 cell_view,
                 record_view,
@@ -357,7 +470,13 @@ impl Component for DataGrid {
                 cell_pad: *cell_pad,
                 zebra: *zebra,
                 theme: theme_b.clone(),
+                key: DiffKey::None,
             }
+            // Keyed by the page row: the differ matches keyed siblings across positions, so a
+            // scroll step *moves* the surviving rows (props unchanged — no re-render) and builds
+            // only the row it revealed. Unkeyed, every row would land on a different position's
+            // scope and rebuild all its cells per step.
+            .key(item.index)
             .into_element()
         })
         .direction(Direction::Vertical)
@@ -419,7 +538,10 @@ impl Component for DataGrid {
                     _ => false,
                 })
             })
-            .on_sized(move |e: Event<SizedEventData>| viewport.set(e.area))
+            // `set_if_modified`: torin re-emits `Sized` on re-measures that moved nothing, and
+            // the column-window effect subscribes to this — a plain `set` would re-run its
+            // O(cols) scan per relayout for a byte-identical viewport.
+            .on_sized(move |e: Event<SizedEventData>| viewport.set_if_modified(e.area))
             // A primary press that reaches here (not consumed by a cell) is on the grid background →
             // clear. A release anywhere ends a drag-paint. Shift / ⌘ are tracked globally (pointer
             // events carry no modifiers), and Esc clears.
@@ -531,5 +653,41 @@ impl Component for DataGrid {
                 })
             }))
             .into_element()
+    }
+}
+
+#[cfg(test)]
+mod window {
+    use super::{col_range, ColWindow, GUTTER_W};
+
+    /// Ten 100px columns behind the gutter: column `ci` spans
+    /// `[GUTTER_W + 100·ci, GUTTER_W + 100·(ci+1))`. The window is the half-open range of
+    /// columns intersecting the asked-for band, empty when the band misses them all.
+    #[test]
+    fn col_range_is_the_intersecting_span() {
+        let widths = [100.0f32; 10];
+        // The whole content visible.
+        assert_eq!(col_range(&widths, 0., 2000.), (0, 10));
+        // A band over the middle: 300 falls in column 2's span, 500 in column 4's.
+        assert_eq!(col_range(&widths, 300., 500.), (2, 5));
+        // Scrolled past every column (the trailing dead zone): empty at the end.
+        assert_eq!(col_range(&widths, 2000., 2400.), (10, 10));
+        // A band inside the gutter only: empty at the start.
+        assert_eq!(col_range(&widths, 0., GUTTER_W), (0, 0));
+        // No columns at all.
+        assert_eq!(col_range(&[], 0., 100.), (0, 0));
+    }
+
+    /// The resolved window carries the off-window extents — the spacers' widths — so the
+    /// consumers never re-derive them.
+    #[test]
+    fn resolve_carries_the_spacer_extents() {
+        let widths = [100.0f32; 10];
+        let win = ColWindow::resolve(&widths, 2, 5);
+        assert_eq!((win.start, win.end), (2, 5));
+        assert_eq!((win.lead, win.tail), (200., 500.));
+        // Degenerate ranges: everything windowed, and nothing windowed.
+        assert_eq!(ColWindow::resolve(&widths, 0, 10).tail, 0.);
+        assert_eq!(ColWindow::resolve(&widths, 10, 10).lead, 1000.);
     }
 }

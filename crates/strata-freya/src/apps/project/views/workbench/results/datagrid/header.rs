@@ -1,6 +1,7 @@
-//! The sticky header row ([`HeaderRow`]): the `#` corner + one [`HeaderCell`] per column —
-//! name + dtype label + sort chevron, with column-select on mousedown and the accent-name
-//! active state — each with its right-edge drag-to-resize grip ([`ColGrip`]).
+//! The sticky header row ([`HeaderRow`]): the `#` corner + one [`HeaderCell`] per *windowed*
+//! column (spacers stand in for the off-window extent, mirroring the body rows) — name +
+//! dtype label + sort chevron, with column-select on mousedown and the accent-name active
+//! state — each with its right-edge drag-to-resize grip ([`ColGrip`]).
 
 use std::rc::Rc;
 
@@ -8,8 +9,8 @@ use freya::prelude::*;
 
 use super::cell::Cell;
 use super::{
-    DataGridTheme, GridData, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H, MAX_COL_W,
-    MIN_COL_W, TRAIL_W,
+    ColWindow, DataGridTheme, GridData, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H,
+    MAX_COL_W, MIN_COL_W, TRAIL_W,
 };
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
 use crate::apps::project::views::workbench::results::sort::SortState;
@@ -34,21 +35,20 @@ const AUTOFIT_CHAR_W: f32 = 7.6;
 /// why it is stated separately instead of folded into a single number.
 const AUTOFIT_PAD: f32 = 2. * SP_4 + SP_2;
 
-/// Per-column content auto-fit width — `max(header name + 3, widest cell) × char-width +
-/// padding`, clamped to the resize bounds. Recomputed per page (a grip double-click fits the
-/// *visible* cells).
-fn autofit_widths(data: &GridData) -> Vec<f32> {
-    (0..data.columns.len())
-        .map(|ci| {
-            let mut max_len = data.columns[ci].name.chars().count() + 3;
-            for row in &data.rows {
-                if let Some(cell) = row.get(ci) {
-                    max_len = max_len.max(cell.text.chars().count());
-                }
-            }
-            (max_len as f32 * AUTOFIT_CHAR_W + AUTOFIT_PAD).clamp(MIN_COL_W, MAX_COL_W)
-        })
-        .collect()
+/// One column's content auto-fit width — `max(header name + 3, widest cell) × char-width +
+/// padding`, clamped to the resize bounds, over the *resolved page's* cells. Computed at the
+/// grip double-click that asks for it, never per render: fitting every column on every header
+/// render made a resize drag O(rows × cols) per pointer move.
+fn autofit_width(data: &GridData, ci: usize) -> f32 {
+    // Indexed, not defended: `ci` comes from enumerating this same page's columns, so an
+    // out-of-range index is a bug to surface, never a state to smooth over.
+    let mut max_len = data.columns[ci].name.chars().count() + 3;
+    for row in &data.rows {
+        if let Some(cell) = row.get(ci) {
+            max_len = max_len.max(cell.text.chars().count());
+        }
+    }
+    (max_len as f32 * AUTOFIT_CHAR_W + AUTOFIT_PAD).clamp(MIN_COL_W, MAX_COL_W)
 }
 
 /// The sticky header row: `#` gutter (select-all corner) + per-column [`HeaderCell`]s +
@@ -62,6 +62,9 @@ pub struct HeaderRow {
     /// The grid's starting column width (`DataGrid::render`) — what a lookup past the end of
     /// `widths` answers with, so the fallback can't be a different width than the seed.
     pub seed_w: f32,
+    /// The grid's resolved column window — read reactively, the same value the body rows
+    /// read, so header and body cannot disagree on which columns are real and which spacer.
+    pub col_window: State<ColWindow>,
     pub controller: ScrollController,
     pub viewport: State<Area>,
     pub hold_w: State<f32>,
@@ -76,8 +79,10 @@ impl Component for HeaderRow {
         // The shared type palette supplies the dtype-label hues (named `palette` — the sort
         // arrow's own fill is the unrelated `arrow` field below).
         let palette = type_palette();
-        // Per-column content auto-fit widths (grip double-click), from this page's cells.
-        let autofit = autofit_widths(&self.data);
+        // The resolved column window — the same value the body rows read (`row.rs`).
+        let win = *self.col_window.read();
+        let widths = self.widths.read();
+        let col_w = |ci: usize| widths.get(ci).copied().unwrap_or(self.seed_w);
         let mut header = rect()
             .width(Size::fill())
             .height(Size::px(HEADER_H))
@@ -100,35 +105,52 @@ impl Component for HeaderRow {
                 active_background: None,
                 on_open: None,
                 on_secondary: None,
+                key: DiffKey::None,
             });
-        for (ci, col) in self.data.columns.iter().enumerate() {
-            let w = self.widths.read().get(ci).copied().unwrap_or(self.seed_w);
-            header = header.child(HeaderCell {
-                index: ci,
-                name: col.name.clone(),
-                dtype: col.dtype.clone(),
-                w,
-                widths: self.widths,
-                seed_w: self.seed_w,
-                controller: self.controller,
-                viewport: self.viewport,
-                hold_w: self.hold_w,
-                sel: self.sel,
-                sort: self.sort,
-                name_color: theme.header_color,
-                active_color: theme.header_active_color,
-                type_color: kind_color(col.kind, &palette),
-                arrow: theme.arrow_fill,
-                divider: theme.header_divider_fill,
-                grip: theme.selection_border_fill,
-                hover_bg: theme.header_hover_background,
-                active_bg: theme.header_active_background,
-                autofit_w: autofit.get(ci).copied().unwrap_or(self.seed_w),
-            });
+        // Leading spacer — the off-window columns' extent, mirroring the body rows.
+        header = header.child(rect().width(Size::px(win.lead)).height(Size::fill()));
+        for (ci, col) in self
+            .data
+            .columns
+            .iter()
+            .enumerate()
+            .take(win.end)
+            .skip(win.start)
+        {
+            header = header.child(
+                HeaderCell {
+                    index: ci,
+                    name: col.name.clone(),
+                    dtype: col.dtype.clone(),
+                    w: col_w(ci),
+                    data: self.data.clone(),
+                    widths: self.widths,
+                    seed_w: self.seed_w,
+                    controller: self.controller,
+                    viewport: self.viewport,
+                    hold_w: self.hold_w,
+                    sel: self.sel,
+                    sort: self.sort,
+                    name_color: theme.header_color,
+                    active_color: theme.header_active_color,
+                    type_color: kind_color(col.kind, &palette),
+                    arrow: theme.arrow_fill,
+                    divider: theme.header_divider_fill,
+                    grip: theme.selection_border_fill,
+                    hover_bg: theme.header_hover_background,
+                    active_bg: theme.header_active_background,
+                    key: DiffKey::None,
+                }
+                // Keyed by the column, like the body cells: a window shift matches the
+                // survivors' scopes across positions (hover state stays put) — see the
+                // body cells' note in `row.rs` on what the key does and does not buy.
+                .key(ci),
+            );
         }
-        // Trailing dead space: keeps the last column's resize grip clear of the content's
-        // right edge so it stays reachable, and gives somewhere to drag when widening the
-        // last column.
+        // Trailing spacer, then the dead space: keeps the last column's resize grip clear
+        // of the content's right edge so it stays reachable, and gives somewhere to drag
+        // when widening the last column.
+        header = header.child(rect().width(Size::px(win.tail)).height(Size::fill()));
         header.child(
             rect()
                 .width(Size::flex(1.))
@@ -147,6 +169,8 @@ pub struct HeaderCell {
     pub name: String,
     pub dtype: String,
     pub w: f32,
+    /// The resolved page — the grip's double-click auto-fit measures its cells.
+    pub data: Rc<GridData>,
     pub widths: State<Vec<f32>>,
     /// The grid's starting column width — see [`HeaderRow::seed_w`].
     pub seed_w: f32,
@@ -163,11 +187,21 @@ pub struct HeaderCell {
     pub grip: Color,
     pub hover_bg: Color,
     pub active_bg: Color,
-    /// Width to snap to on a grip double-click (content auto-fit).
-    pub autofit_w: f32,
+    /// Diff identity (the column index) — see the body cells' keying in `row.rs`.
+    pub key: DiffKey,
+}
+
+impl KeyExt for HeaderCell {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
 }
 
 impl Component for HeaderCell {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
     fn render(&self) -> impl IntoElement {
         let mut hovered = use_state(|| false);
         let sel = self.sel;
@@ -266,7 +300,7 @@ impl Component for HeaderCell {
                 viewport: self.viewport,
                 hold_w: self.hold_w,
                 accent: self.grip,
-                autofit_w: self.autofit_w,
+                data: self.data.clone(),
             })
     }
 }
@@ -291,8 +325,9 @@ struct ColGrip {
     /// extent can't shrink mid-drag (0 = not resizing).
     hold_w: State<f32>,
     accent: Color,
-    /// Width to snap to on a double-click (content auto-fit), computed once from the data.
-    autofit_w: f32,
+    /// The resolved page — a double-click measures this column's cells ([`autofit_width`])
+    /// and snaps to the fit.
+    data: Rc<GridData>,
 }
 
 impl Component for ColGrip {
@@ -303,11 +338,20 @@ impl Component for ColGrip {
         let controller = self.controller;
         let viewport = self.viewport;
         let mut hold_w = self.hold_w;
-        let autofit_w = self.autofit_w;
+        let data = self.data.clone();
         let seed_w = self.seed_w;
 
         let mut clicking = use_state(|| false);
         let mut hovering = use_state(|| false);
+        // The column window can unmount this grip while it is the hovered node (a wheel-pan
+        // with the pointer stationary): its `on_pointer_leave` then never fires, and the
+        // ColResize cursor it set would stay stranded app-wide. The drop is the leave that
+        // unmounting swallows.
+        use_drop(move || {
+            if *hovering.peek() || *clicking.peek() {
+                Cursor::set(CursorIcon::default());
+            }
+        });
         let mut origin_x = use_state(|| 0.0f32);
         let mut start_w = use_state(|| 0.0f32);
         // Auto-scroll we've *intentionally* applied during this drag (px) — tracked here rather than
@@ -334,8 +378,9 @@ impl Component for ColGrip {
             // Double-click → auto-fit the column to its content, and don't start a resize drag. (Checked
             // here, not via `on_press`, because the `prevent_default` above suppresses the press event.)
             if EventsCombos::pressed(e.global_location()).is_double() {
+                let fit = autofit_width(&data, index);
                 if let Some(slot) = widths.write().get_mut(index) {
-                    *slot = autofit_w;
+                    *slot = fit;
                 }
                 return;
             }
