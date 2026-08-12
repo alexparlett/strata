@@ -3,3 +3,4 @@ history.jsonl
 session.json.corrupt
 .*.tmp
 tables/
+chats/

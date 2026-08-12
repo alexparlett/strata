@@ -1,8 +1,81 @@
 # AS-07 · Conversations survive the window
 
-**Workstream:** Assistant · **Status:** ⬜ · **Depends on:** AS-04 (the transcript it persists)
+**Workstream:** Assistant · **Status:** ✅ · **Depends on:** AS-04 (the transcript it persists)
 
-## Goal
+## What shipped, and the three places it differs from the plan below
+
+Built 2026-08-11. The store, the list, the retention cap and the export are in; **AS-03 closes
+with it**. Three decisions were taken during the build and the sections below are older than
+them where they disagree:
+
+1. **A restored conversation is continuable, so the model's own memory is stored too.** §2 as
+   written kept the transcript alone. That restores a conversation you can read and cannot
+   continue — the *appearance* of one — and it is what `INVARIANTS.md` already said ("the value
+   that has to survive is the `Conversation` the model reads back"). Verified before building:
+   the transcript cannot reconstruct that list, because the resolved `@`-mention bodies, the tool
+   results, the captured reasoning parts and the `offer_sql` call/response pairs exist **only**
+   there — and a failed turn plus the differing caps make the two lists genuinely diverge. The
+   seam is `Conversation::{to_json, from_json}` in `strata-agent`, JSON-valued so `genai` still
+   stops at that crate's edge.
+
+   **The consequence, stated:** what rides on disk is genai's own serde shape at the pinned
+   version, not a mirror vocabulary of ours. A `genai` upgrade that moves it must bump
+   `CHAT_VERSION` or rely on `Read::Memoryless` — the third degradation tier, which opens the
+   conversation with a fresh memory rather than losing the user's transcript.
+
+2. **A stale `offer_sql` card degrades silently.** §2 asked it to say so "in the editor's own
+   words". It says nothing: the card loses its Run press and renders as the ordinary code block
+   explanatory SQL already renders as. The user never ran it, and a complaint that their catalog
+   moved is not news about their conversation. The re-check is `tools.validate` on **hydrate** —
+   a dry plan, so "reopening makes no engine call" reads as no run, no scan, no snapshot, no
+   network, which is the bullet's spirit; there is no pure check that can know a table was
+   dropped, because the catalog is the thing being asked. The mark is **never stored** — it is an
+   answer about the catalog as it stands, so persisting it would leave a card retired after the
+   table it named came back.
+
+3. **Clear is per project, in the chat pane's own menu — not Settings.** §4 put it in
+   Settings ▸ AI ▸ Chat, which is app-global while the files are per project; a control there
+   would promise a sweep it cannot honestly perform (a project on an unmounted disk is
+   unreachable by construction). Settings keeps the **cap** alone, which is what closes AS-03.
+
+**And one thing the plan did not ask for** (Alex, same session): an **ellipsis menu** beside the
+close button, holding *Export chat…* and *Clear conversations…*. Export writes **Markdown** — the
+field's convention, and the JSON already lives on disk as the store, so a JSON export would
+duplicate it. Per-row delete stays in the switcher, where it can reach a conversation that is not
+the open one.
+
+### What the adversarial review corrected before this landed
+
+Ten defects, four of them in the first pass's own load-bearing wiring. Recorded because each was a
+plausible-looking shape that was wrong:
+
+- **Export chat did nothing at all.** `spawn` binds to the scope current during dispatch — a menu
+  item's — and the same handler closed the menu, so the task was dropped before its first poll.
+  The press now records the intent and the header's own scope performs it.
+- **A pick change never marked the conversation dirty**, so changing the model and closing the
+  window silently lost it — the exact case the field's doc claimed it caught. All three composer
+  controls now edit through `Chats::repick`.
+- **Root-scoped tasks wrote subtree state after an await.** `spawn_forever` survives a re-root that
+  drops the state it then writes. The presses are scope-bound now; the turn task, which genuinely
+  must outlive the pane, holds `Chat::running` until its record is written so `stop_all` still
+  reaches it.
+- **The confirm was mounted inside the chat header**, where its key barrier is last in document
+  order: Esc over the open dialog would have cancelled a running query instead. It is at the
+  window root now, and the per-row delete — which now removes a *file* — asks through it too.
+- Eviction shelved a conversation without writing it; `chats/` temps were never swept; the stale
+  offer mark was persisted and could never recover; two doc claims were false.
+
+### The cancel race, recorded rather than fixed
+
+The writes hang off three places: the fold task's `Settled` arm (race-free — AS-02 commits to the
+model's memory *before* it emits `Settled`), the stop press, and the subtree's teardown. On the
+last two the cancelled turn's own `Staged::commit` runs on the assistant runtime and may land
+*after* the write. Both interleavings leave a valid provider tail, so the bounded cost is that a
+conversation quit mid-turn may reload with the stopped turn visible in the transcript and absent
+from the model's memory. The transcript is never lost. Closing it would mean awaiting the settle,
+which contradicts "a cancel is a drop" — do not re-litigate.
+
+## Goal (as planned)
 
 A conversation outlives the window it was held in. Close the project, reopen it, and the chats
 are where they were — a list, newest first, each openable back into the pane.

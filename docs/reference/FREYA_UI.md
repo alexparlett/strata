@@ -239,6 +239,33 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   closure is built once and would capture the first frame too. `CanvasContext::size` is logical
   and the canvas is pre-scaled, so everything drawn inside is in logical units. First used by the
   results Chart body (`results/chart/paint.rs`).
+- **A task spawned from a handler belongs to the scope that pressed it, so a press that unmounts
+  its own control cancels its own work.** `spawn` binds `scope_id: current_scope_id()`, which
+  during dispatch is the scope owning the handler's *element*
+  (`freya-core/src/lifecycle/task.rs`); dropping that scope removes the task **before its first
+  poll**, with no error and no log — the handler ran, and nothing happened. Three presses in AS-07
+  hit it, each looking perfectly ordinary: a menu item that closes its menu (Export chat silently
+  did nothing), a dialog button whose press clears the slot that mounts it (Delete and Clear left
+  the file on disk), and the composer's Stop, which flips the control back to Send and so unmounts
+  itself. The tell is that the press *changes state that removes the control it is on* — which is
+  most confirm and menu presses.
+
+  **`spawn_forever` is not the escape.** It is root-scoped, so it outlives the project subtree
+  whose `State` the task writes after an await, and `State::write` panics on a `GenerationalBox`
+  whose owning scope is gone (`freya-core/src/lifecycle/state.rs`) — a re-root or engine restart
+  racing the task is a real crash. Root-scoping is right only for work that genuinely must outlive
+  the pane, and then the task has to stay cancellable by something the subtree still holds (AS-02's
+  turn task keeps `Chat::running` until its record is written, which is what `Chats::stop_all`
+  reaches it by).
+
+  The shape that works: **the press records the intent in a `State`, and a `use_side_effect` in a
+  component scope that outlives the control performs it.** The intent must ride *in* that state and
+  never be captured — `use_side_effect` builds its closure **once** (`use_hook(|| Effect::create(..)
+  )`) and re-runs it when a state it `read()`s changes, so a value cloned out of the render freezes
+  at the first render's. That is not a theoretical trap: the first fix for the confirm captured its
+  target while it was still `None`, which made Delete and Clear do nothing at all — the same
+  silence the bug it was fixing produced. `use_side_effect_with_deps` / `use_reactive` are the
+  other way to say it when the value is a prop.
 - **Reactivity**: `state()`/`.read()` subscribe (re-render on change); `.peek()` does not (use in
   event handlers/actions); `.set()`/`.write()` need `let mut`.
 - **Logical units everywhere.** `on_sized` areas, authored offsets/positions/margins, and (since

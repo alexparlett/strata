@@ -29,7 +29,7 @@
 //!   around the call.
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{from_value, to_string, Error as JsonError, Map, Value};
 
 use crate::error::AgentError;
@@ -67,7 +67,11 @@ pub struct Scope {
 
 /// What the transcript's step card shows beyond the tool's name — the facts a person reads,
 /// none of them derived.
-#[derive(Clone, Debug, Default, PartialEq)]
+///
+/// Serde-able because a step card outlives its window (AS-07): every field is a recorded number
+/// or the engine's own wording, so a card read back from disk shows what it always showed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Facts {
     /// The statement, for the tools that take one.
     pub sql: Option<String>,

@@ -265,7 +265,9 @@ Nothing is measured twice.
 ## What is NOT this task
 
 - No Freya, no Settings UI (AS-03), no transcript rendering (AS-04).
-- No conversation persistence — the transcript is the pane's ephemeral state.
+- No conversation persistence — the transcript is the pane's state. (**AS-07** later stored it,
+  and `Conversation` grew the `to_json`/`from_json` pair for exactly that; nothing else here
+  moved, and the loop still takes its memory by handle.)
 - No RAG, no embeddings, no genai `chain`/`agent` features.
 
 ## Corrected by review (2026-08-09) — do not re-introduce

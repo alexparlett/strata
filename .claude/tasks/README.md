@@ -106,7 +106,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   provider kind saying what *addresses* it; the per-conversation pick of provider/model/effort
   lives on the pane's composer, a split settled 2026-08-09), the pane, the **secret store**
   (OS keystore; config holds references, never keys), the **model listings** a picker reads, and
-  **chat persistence**. **01 ✅** (the ten tools are `StrataTools`' own public methods and
+  **chat persistence**. The workstream is **complete**. **01 ✅** (the ten tools are `StrataTools`' own public methods and
   the `#[tool]` items are wrappers over them; `manifest()` derives the model-facing offer from
   the router that answers `tools/list`), **02 ✅** (`strata_agent::assistant` — one provider
   table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
@@ -151,16 +151,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Assistant AS-07**, with AS-03 closing behind it. The pane is built (AS-04) over the loop
-   (AS-02), Settings ▸ AI (AS-03) and the model listings (AS-06 — the pane consumes
-   `Listings::offer`, and `probe::refresh` **moved** to `state::listings` rather than being
-   written twice). What remains is persisting a conversation, which now has a transcript to
-   persist: `Chats::settle` is the hook it was shaped for. AS-03's last two controls are the
-   retention pair that only means something once it lands.
-2. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
+1. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
    trendline.
-3. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
+2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
+
+(The **Assistant** workstream is closed: AS-07 landed 2026-08-11 and AS-03 closed behind it.)
 
 ## Sourcing
 

@@ -140,8 +140,8 @@ draft-never-execute prompt rules (AS-02), the what-leaves-the-machine note (AS-0
   previews, Snowflake routes to the worksheet's pane, Databricks stays code-first); the rich
   inline grids live only in the business-user surfaces. Mini-table + promote stands.
 
-**Banked for a future delegation surface** (arrives with transcript persistence — **AS-07** —
-not before, and is its own task file when it does): an investigation workbench — a tab holding the
+**Banked for a future delegation surface** (AS-07 has now landed, so this is *possible*; it is
+still unstarted and is its own task file when it comes): an investigation workbench — a tab holding the
 transcript plus a results pane that *subscribes the assistant's run* (a second surface
 subscribes the query again; no second pipeline), for work you delegate rather than steer.
 BigQuery's Data Canvas (evidence as a DAG of materialized results the chat deposits into) is
@@ -164,15 +164,18 @@ query sessions, the same policy gate, the same error taxonomy verbatim — and b
 |---|---|---|---|
 | 01 | In-process facade + tool manifest: the vocabulary callable without rmcp | ✅ | AA-03c |
 | 02 | Provider seam + the loop: `genai`, streaming, tool dispatch, cancel | ✅ | 01 |
-| 03 | Settings ▸ AI: Providers · Chat · MCP | 🟡 | 05 |
+| 03 | Settings ▸ AI: Providers · Chat · MCP | ✅ | 05 |
 | 04 | The chat pane: transcript, selector, step cards, @-mentions, promote, stop | ✅ | 02, 03, 06 |
 | 05 | Secret store: OS-keystore-backed keys, references in config | ✅ | — |
 | 06 | Model listings: a model is picked from its provider, and the list survives a restart | ✅ | 03 |
-| 07 | Conversations survive the window: the `.strata/chats/` store, the list, retention | ⬜ | 04 |
+| 07 | Conversations survive the window: the `.strata/chats/` store, the list, retention | ✅ | 04 |
 
-**03 is 🟡, not ✅.** Providers and MCP are done; AI ▸ Chat was two controls short. The model
-`Select` landed with **06**; what remains is the retention pair that only makes sense once
-conversations persist (**07**). Additive to a working pane, and 03 closes when it lands.
+**03 closed with 07.** Providers and MCP were done; AI ▸ Chat was short the retention control
+that only makes sense once conversations persist. The model `Select` landed with **06**, and the
+**conversation cap** landed with **07** — one control, not the pair this once said: Clear moved
+to the chat pane's own ellipsis menu, because the files are per project and a Settings button is
+app-global (AS-07's §3). That row renders even when no provider is enabled, because retention of
+conversations a project already holds is not a provider question.
 
 ## What 04 settled (2026-08-11 — three of them are changes to what this README said)
 

@@ -24,8 +24,8 @@ pub use chat::{ask_about, result_anchor, ChatThemePreference};
 pub use configure_launch::{ConfigureLauncher, ConfigureRequest};
 pub use connection_launch::{ConnectionLauncher, ConnectionRequest};
 pub use dialogs::{
-    use_profile_actions, CloseConfirm, DropConfirm, DropTarget, OpenPrompt, ProfileActions,
-    ProfileConfirm, ProfileTarget, ProjectLoadFailed,
+    use_profile_actions, ChatConfirm, ChatDrop, CloseConfirm, DropConfirm, DropTarget, OpenPrompt,
+    ProfileActions, ProfileConfirm, ProfileTarget, ProjectLoadFailed,
 };
 pub use drawer::DrawerThemePreference;
 pub use header::{HeaderBar, HeaderBarThemePreference, WindowDragStrip};
