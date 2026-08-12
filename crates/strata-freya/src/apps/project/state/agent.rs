@@ -564,11 +564,11 @@ mod tests {
         agents.opened(&mine, empty);
         agents.opened(&mine, used);
         agents.opened(&theirs, QuerySessionId::new());
-        agents.run_started(mine.id, used, "SELECT 1".into());
+        agents.run_started(mine.id, used);
 
         let listed = sessions(&agents, mine.id, &engine);
         assert_eq!(listed.len(), 2, "the other agent's session is not listed");
-        // Oldest session first, matching the pane's own order.
+        // Oldest session first, the order the agent opened them in.
         assert_eq!(listed[0].session, empty);
         assert!(matches!(listed[0].state, QuerySessionState::Empty));
         // Nothing is executing on this engine, so a session that has run has settled.
