@@ -637,8 +637,8 @@ impl Component for ProjectLoaded {
         // This project's Session store, from the snapshot the load already restored (tabs /
         // order / active / layout), else one blank tab.
         use_init_session(self.loaded.clone());
-        // What each connected agent is doing in this project (AA-03b) — the satellite behind
-        // the sidebar's Agents pane, stood up before the bridge that records into it.
+        // Which agents are working in this project and what they hold (AA-03b) — the window's
+        // own bookkeeping, stood up before the bridge that records into it.
         use_init_agents();
         // Lend this project to the agent-access service directory for as long as *this mount*
         // lasts, and drive the asks that come back (AA-03). Here rather than on the window
@@ -652,8 +652,9 @@ impl Component for ProjectLoaded {
         );
         // The assistant's own handles (AS-04). Its `StrataTools` is minted **once per mount**
         // and `in_app`, so every conversation in this window is the same agent holding the same
-        // query sessions — and the Agents pane leaves it out by construction rather than by
-        // comparing an identity. It reaches this project the way any agent does: through the
+        // query sessions — and the close confirm names it as the assistant by construction
+        // rather than by comparing an identity. It reaches this project the way any agent
+        // does: through the
         // directory, scoped by the project **root**, which is the identity a name may collide
         // with.
         use_provide_context({

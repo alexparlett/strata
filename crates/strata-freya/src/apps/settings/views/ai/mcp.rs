@@ -4,8 +4,11 @@
 //! Three rows and no more. A client-setup line and a live server status were both sketched and
 //! both **descoped**: the first is one client's incantation (`claude mcp add …`) on a surface
 //! that has no business favouring a client, and the README is where every client's setup
-//! belongs; the second is the header's status dot's job, which already says whether the server
-//! is listening and whether anything is paired with it.
+//! belongs; the second is a live reading this pane would have to poll for. The header's status
+//! dot covered it until it was removed, so the app now shows agent-access liveness **nowhere**:
+//! a server that cannot bind (a port another process holds) says so in the tracing log and not
+//! on screen. Worth a Problems condition if it comes up — it is true now and retracts itself,
+//! which is that surface's test — but not a second poll on this pane.
 //!
 //! Every control writes [`SettingsCtx::draft`] and stops there; the footer's Apply commits. The
 //! reader on the other side of that commit is `agent::use_agent_server`, a reconciler every

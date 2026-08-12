@@ -471,7 +471,8 @@ Things that must not regress. Each was fought for once already.
   moved the editor out from under them, left tabs they had to close, and cost a diagnostics pass
   per tab **on the engine their own press needed**. Worse, `list_tabs` handed an agent *every*
   open tab and a `run` on one replaced the buffer the user was typing in. AA-03b moves those runs
-  to **query sessions** of the agent's own, shown in an Agents pane. The fix for the sharp edge
+  to **query sessions** of the agent's own, kept entirely out of the user's window. The fix for
+  the sharp edge
   is structural rather than a guard: `StrataTools` **is** one agent, and every session-scoped
   tool is scoped to that id, so an agent is never handed a handle on another agent's work, let
   alone on a tab. **Which agent, though, comes from the request and not from how long a value
@@ -736,7 +737,7 @@ Things that must not regress. Each was fought for once already.
   Every figure on a step card is the engine's own (`elapsed_ms`, the exact total, the stop's own
   wording), which is what makes AS-02's no-number-without-a-run prompt rule auditable; an
   `offer_sql` card is executable *instead of* a step card, never beside one. Promotion is
-  `actions::open_sql` — the Agents pane's funnel — and **never** a write to the user's buffer,
+  `actions::open_sql` — a **new** tab, focused — and **never** a write to the user's buffer,
   which is often their only record of how a number was reached.
 - **A turn is cancelled by dropping its task, and a dropped run still settles.** The send funnel's
   task owns AS-02's `Running`, whose `tokio_util` drop guard *is* the turn's cancel and the
@@ -749,32 +750,42 @@ Things that must not regress. Each was fought for once already.
   than a `select!` arm because there is nothing to select on: a cancelled future never resumes to
   run a cleanup branch. Without it a stopped run left its satellite row reading `Running` for the
   window's life — AA-03c reaps such a row when a **connection** ends, which covers an MCP client
-  hanging up and not the assistant, whose connection is the pane's whole mount.
-- **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
-  listed — and the mark is minted, never claimed.** That pane answers "what is working on my
-  project right now" about *external* clients; the assistant is part of the app and its runs
-  render as step cards in its own transcript. It stays one more agent to everything below — its
-  own `AgentId`, its own query sessions, the same gate — and the satellite **holds** it like any
-  other, because the ownership check, the per-agent session cap and the teardown all have to work
-  for it and `list_query_sessions` has to answer for it. It is only **listed** that it is not.
+  hanging up and not the assistant, whose connection is its own mount in the window.
+- **The in-app assistant is held like any other agent and told apart only where the user is owed
+  a different sentence — and the mark is minted, never claimed.** The assistant is part of the
+  app and its runs render as step cards in its own transcript; an MCP client is working in the
+  project from somewhere else. It stays one more agent to everything below — its own `AgentId`,
+  its own query sessions, the same gate — and the satellite **holds** it like any other, because
+  the ownership check, the per-agent session cap and the teardown all have to work for it and
+  `list_query_sessions` has to answer for it.
 
-  The mark is `Agent::in_app`, minted by `StrataTools::in_app` and delivered on the call that
-  first tells a host an agent exists, so no surface holds an id to compare and nothing has to
-  remember the rule. Keying on `AgentIdentity::assistant()`'s name instead would let any MCP
-  client hide from the pane by claiming that name at `initialize`, which is the worst possible
+  The one place the two are told apart is `Agents::sessions_of`, which the close confirm asks so
+  it can say "the assistant is running a query" rather than "an agent is" — the second would
+  send the user looking for a client that is not connected. The mark is `Agent::in_app`, minted
+  by `StrataTools::in_app` and delivered on the call that first tells a host an agent exists, so
+  nothing holds an id to compare. Keying on `AgentIdentity::assistant()`'s name instead would let
+  any MCP client claim its way across that line at `initialize`, which is the worst possible
   version of this rule.
 
-  The satellite draws the line in three places and nowhere else. `Agents::agents` is the pane's
-  listing (and `len`, behind the rail badge) — the exclusion itself. `Agents::held` is the
-  unfiltered iterator, which `list_query_sessions` answers from (an agent must see its own
-  sessions) and which the event log attributes from (the assistant is out of the *listing* only,
-  never out of the record). `Agents::sessions_of` is the same line drawn for the close confirm,
-  which asks whose work it is about to destroy and must say "the assistant" rather than "an
-  agent" — pointing at a pane that says nobody is connected is the failure that arm exists to
-  fix. The ownership check and the session cap are inside the satellite and read the field
-  directly, so they never had a filtered view to avoid. And for the same reason the pane omits
-  it, the log says the assistant **stopped** rather than disconnected: it never dialled in, so
-  its "connection" is the pane's own mount.
+  **Nothing lists agents at all.** The Agents pane (the sidebar tool pane, its rail toggle and
+  its live-agent badge) and the header's agent-access status dot were removed on request: the MCP
+  server still runs, and the app shows neither who is connected nor whether it is listening. A
+  server that cannot bind reports through `tracing` and nowhere else. `state::agents` is now pure
+  bookkeeping with no reader on screen, so it holds **only what the bookkeeping reads** — a run
+  is a `seq` and an outcome, and the query text does not travel `AgentAsk::RunStarting` at all.
+  A record kept for a surface must go when the surface does, or it is retention nothing can
+  justify: the dispatch still gets the SQL, because that was never this channel's to carry.
+
+  The satellite draws the line in **one** place. `Agents::held` is the unfiltered iterator,
+  which `list_query_sessions` answers from (an agent must see its own sessions) and which the
+  event log attributes from (the assistant is never out of the record). `Agents::sessions_of`
+  is the line itself, for the close confirm, which asks whose work it is about to destroy and
+  must say "the assistant" rather than "an agent" — sending the user looking for a client that
+  is not connected is the failure that arm exists to fix. The pane's own `agents` / `len`
+  projection went with the pane. The ownership check and the session cap are inside the
+  satellite and read the field directly, so they never had a filtered view to avoid. And for
+  the same reason, the log says the assistant **stopped** rather than disconnected: it never
+  dialled in, so its "connection" is its own mount in the window.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

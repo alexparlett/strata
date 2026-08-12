@@ -117,16 +117,20 @@ pub enum AgentAsk {
     },
     /// A run is about to be dispatched **by the caller, on the engine directly**. This ask is
     /// not the run: it is the one half of it a window has to perform — check that the agent
-    /// holds the session, and record the query as in flight.
+    /// holds the session, and record a run as in flight in it.
     ///
     /// The reply carries the run's sequence number back, so the settle that follows can name
     /// the row it belongs to rather than taking whichever is newest: an agent that presses on
     /// before a slow query finishes would otherwise have the older outcome stamped onto the
     /// newer run.
+    ///
+    /// **It does not carry the SQL.** It did, for the pane that rendered it; the satellite
+    /// records a run's `seq` and outcome and nothing else, so sending the text would be a
+    /// clone per run for a reader that no longer exists. The engine still gets it — the
+    /// dispatch is the caller's, and it never travelled this channel.
     RunStarting {
         agent: AgentId,
         session: QuerySessionId,
-        sql: String,
         reply: oneshot::Sender<Result<u64, AgentError>>,
     },
 }

@@ -5,13 +5,13 @@
 //! [`transcript`], and the [`composer`] with the conversation's provider · model · effort
 //! pick in its footer.
 //!
-//! ## What it is, next to the Agents pane
+//! ## What it is, next to an MCP client
 //!
-//! The other agent surface answers "which external clients are connected to my project right
-//! now". This one is the agent that is *part of the app*: the user is looking at it, which is
-//! why "open this in a tab" is a wanted gesture here and an intrusion there. The assistant is
-//! deliberately absent from the Agents pane — by construction, through
-//! `StrataTools::in_app`, never by comparing a name (AA-03c).
+//! An MCP client is an agent working in the project from somewhere else, and nothing it runs
+//! reaches the user's tabs. This one is the agent that is *part of the app*: the user is
+//! looking at it, which is why "open this in a tab" is a wanted gesture here and an intrusion
+//! there. The app tells the two apart by construction, through `StrataTools::in_app`, never by
+//! comparing a name (AA-03c).
 //!
 //! ## Two kinds of card, and the difference is the whole point
 //!
@@ -27,8 +27,8 @@
 //!
 //! ## Promotion is two presses, and never an edit
 //!
-//! *Open in tab* and *Run* both go through the editor's own `actions::open_sql` — the same funnel
-//! the Agents pane promotes through — so a promoted statement is an ordinary scratch tab:
+//! *Open in tab* and *Run* both go through the editor's own `actions::open_sql`, so a promoted
+//! statement is an ordinary scratch tab:
 //! editable, saveable, undoable. **Nothing here ever writes the user's buffer.** A fix arrives as
 //! a new tab, because the buffer is often the only record of how a number was reached.
 //!
@@ -88,7 +88,7 @@ define_theme!(
         meta_color: Color,
         /// A step card's figures: what the call cost, one step brighter than
         /// [`meta_color`](Self::meta_color) because it is the card's own data rather than its
-        /// furniture — the Agents pane's distinction, on the same kind of row.
+        /// furniture.
         figures_color: Color,
         /// A card's own surface and edge, and the offer card's SQL.
         card_background: Color,

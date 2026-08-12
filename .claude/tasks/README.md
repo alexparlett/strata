@@ -88,9 +88,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Agent access** ([`workstream-agent-access/`](workstream-agent-access/README.md), AA) —
   agent-driven access to a project's data: one read-only tool vocabulary (`strata-agent`) over a
   verified Tokio↔Freya bridge, with thin swappable frontends. **01–05 (incl. 03b/03c) ✅**: the
-  in-app MCP server, the Agents pane (an agent's runs are dispatched straight at the engine and
-  shown in their own surface, promotable into a **new** tab — never a press on the user's tabs),
-  the Settings pane, and the headless `strata mcp <project>` stdio host. **AA-06 (the chat
+  in-app MCP server, the agents satellite (an agent's runs are dispatched straight at the engine
+  and never touch the user's tabs), the Settings pane, and the headless `strata mcp <project>`
+  stdio host. **The Agents pane and the header's status dot were later removed on request**
+  (2026-08-12): the server and the vocabulary are unchanged, and nothing in the app now shows
+  who is connected or whether it is listening. **AA-06 (the chat
   pane) graduated to its own workstream** (below). **AA-07 ✅** (built 2026-08-11) closed the
   folder's last gap: the list-shaped tools were unbounded and the assistant's result cap cut
   them positionally while naming a recovery three of them do not have. Now every list answer
@@ -123,9 +125,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   done and the keystore round trip works; AI ▸ Chat was two controls short and the model
   `Select` landed with 06, leaving the retention pair that only means something once
   conversations persist (07). **07 ⬜.** Two corrections settled with 02 and recorded in that
-  workstream's README: the Agents pane is for **headless MCP clients only** (the assistant is
-  kept out of it by its minted `AgentId`), and a runnable statement is a **tool call**, not a
-  markdown convention. One more settled with 04: the canvas's "Thought for Ns" line is **AS-02's
+  workstream's README: the Agents pane was for **headless MCP clients only** (the assistant was
+  kept out of it by its minted `AgentId` — the mark survives the pane's removal, and is now what
+  lets the close confirm name the assistant as itself), and a runnable statement is a **tool
+  call**, not a markdown convention. One more settled with 04: the canvas's "Thought for Ns" line is **AS-02's
   to enable** — its stream loop folds reasoning chunks into the next request rather than emitting
   them, so there is no event a pane could render.
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),

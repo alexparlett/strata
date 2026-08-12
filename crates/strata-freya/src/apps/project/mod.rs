@@ -55,10 +55,9 @@ pub use state::{CatalogState, Log, PersistFaults, ScanRequest};
 /// does, so the editor still opens from the one place that holds the handles for it.
 pub use views::ConnectionRequest;
 pub use views::{
-    AgentsThemePreference, CancelButtonThemePreference, CatalogThemePreference,
-    CellViewThemePreference, ChartThemePreference, ChatThemePreference,
-    CommandPaletteThemePreference, ConnectionsThemePreference, DataGridThemePreference,
-    DrawerThemePreference, ExplainPlanThemePreference, HeaderBarThemePreference,
-    InspectorThemePreference, RecordViewThemePreference, StatusBarThemePreference,
-    TabBarThemePreference, TabThemePreference,
+    CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
+    ChartThemePreference, ChatThemePreference, CommandPaletteThemePreference,
+    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
+    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
+    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };

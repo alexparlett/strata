@@ -42,21 +42,11 @@ use super::AgentCtx;
 /// say so.
 pub struct Running {
     settings: AgentAccess,
-    /// The listening server. Read for one thing only — how many clients are paired
-    /// ([`clients`](Running::clients), behind the header's status dot) — and otherwise held to
-    /// be dropped.
-    /// `AgentServer`'s `Drop` stops the listener, terminates every live MCP session and shuts
-    /// its runtime down, so clearing the slot is the whole of "stop" — there is no call to
-    /// forget.
+    /// The listening server, never read — held only to be dropped. `AgentServer`'s `Drop` stops
+    /// the listener, terminates every live MCP session and shuts its runtime down, so clearing
+    /// the slot is the whole of "stop" — there is no call to forget.
+    #[allow(dead_code, reason = "held for its Drop; see the field note")]
     server: AgentServer,
-}
-
-impl Running {
-    /// How many MCP clients are paired, or `None` if the answer could not be sampled without
-    /// waiting — see [`AgentServer::clients`].
-    pub fn clients(&self) -> Option<usize> {
-        self.server.clients()
-    }
 }
 
 /// Keep the agent-access server in step with the setting for this window's lifetime. Call once
@@ -118,8 +108,9 @@ fn reconcile(
         })),
         // Reported and left stopped, with the attempt deliberately **not** recorded: the
         // common failure is a port another process holds, and forgetting the attempt is what
-        // makes the next settings write retry rather than latch. AA-04 gives this a status to
-        // show; until then the log is where it says so.
+        // makes the next settings write retry rather than latch. The header's status dot used
+        // to say so on screen and has been removed, so **this trace is the only report** — the
+        // app shows an enabled-but-not-listening server nowhere.
         Err(e) => tracing::error!("{e}"),
     }
 }

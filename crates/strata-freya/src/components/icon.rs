@@ -57,8 +57,6 @@ pub enum IconName {
     Lines,
     Copy,
     Connections,
-    /// The activity rail's Agents pane (AA-03b).
-    Agent,
     /// The **right** rail's two panes (AS-04): the column inspector's split panel, and the
     /// assistant's speech bubble. Both from the canvas's `data-rg="rightrail"` buttons.
     Inspector,
@@ -157,7 +155,6 @@ impl IconName {
             IconName::Lines => LINES,
             IconName::Copy => COPY,
             IconName::Connections => CONNECTIONS,
-            IconName::Agent => AGENT,
             IconName::Inspector => INSPECTOR,
             IconName::Chat => CHAT,
             IconName::Problems => PROBLEMS,
@@ -290,8 +287,6 @@ const LINES: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 2
 const COPY: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>"#;
 // The activity rail's Connections pane (cloud + up-arrow — an object store the project reads from).
 const CONNECTIONS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97 6 6 0 0 0-11.64-1.6A4 4 0 0 0 6 16.5"/><path d="M12 12v6"/><path d="m9 15 3-3 3 3"/></svg>"#;
-// The activity rail's Agents pane (canvas `Strata.dc.html` `data-pane="agents"`).
-const AGENT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="2.5"/><path d="M12 8V4.5"/><circle cx="12" cy="3" r="1.4"/><path d="M9 13v1.5M15 13v1.5"/></svg>"#;
 // The right rail's two panes (canvas `data-rg="rightrail"`): a panel split with a detail column,
 // and a speech bubble.
 const INSPECTOR: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/><path d="M17 9h1M17 13h1"/></svg>"#;

@@ -62,8 +62,8 @@ use crate::task::offload;
 /// its calls land in.
 ///
 /// **One [`StrataTools`] per window, minted `in_app`.** That is what makes every turn in every
-/// conversation the same agent holding the same query sessions, and what keeps the assistant out
-/// of the Agents pane without anybody comparing an identity (AA-03c).
+/// conversation the same agent holding the same query sessions, and what lets the close confirm
+/// name the assistant as itself without anybody comparing an identity (AA-03c).
 #[derive(Clone)]
 pub struct AssistantCtx {
     /// `None` when the assistant's runtime could not be built — a fault the pane states rather

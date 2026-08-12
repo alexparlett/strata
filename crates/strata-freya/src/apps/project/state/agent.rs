@@ -178,7 +178,6 @@ fn answer(
         AgentAsk::RunStarting {
             agent,
             session,
-            sql,
             reply,
         } => {
             if !agents.read().holds(agent, session) {
@@ -188,7 +187,7 @@ fn answer(
             // Read before the write, because the caller has to be told which run to name
             // when it settles.
             let seq = agents.read().next_run();
-            agents.write().run_started(agent, session, sql);
+            agents.write().run_started(agent, session);
             let _ = reply.send(Ok(seq));
         }
     }
@@ -236,9 +235,9 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
                 LogLevel::Info,
                 match gone {
                     // **The assistant never dialled in, so it cannot disconnect.** Its
-                    // "connection" is the pane's own mount inside this window, and reporting
-                    // that as a disconnect describes a client that was never there — the same
-                    // reason it is kept out of the Agents pane.
+                    // "connection" is its own mount inside this window, and reporting that as
+                    // a disconnect describes a client that was never there — the same reason
+                    // the close confirm names it as itself.
                     Some((named, true)) => format!("{named} stopped"),
                     Some((named, false)) => format!("{named} disconnected"),
                     None => "An agent disconnected".to_string(),
@@ -565,11 +564,11 @@ mod tests {
         agents.opened(&mine, empty);
         agents.opened(&mine, used);
         agents.opened(&theirs, QuerySessionId::new());
-        agents.run_started(mine.id, used, "SELECT 1".into());
+        agents.run_started(mine.id, used);
 
         let listed = sessions(&agents, mine.id, &engine);
         assert_eq!(listed.len(), 2, "the other agent's session is not listed");
-        // Oldest session first, matching the pane's own order.
+        // Oldest session first, the order the agent opened them in.
         assert_eq!(listed[0].session, empty);
         assert!(matches!(listed[0].state, QuerySessionState::Empty));
         // Nothing is executing on this engine, so a session that has run has settled.

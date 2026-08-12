@@ -21,7 +21,7 @@ everything below.
 | [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md) | Remote data: S3 / GCS / HTTP connections, the no-secrets credential model, address rules, and tables over buckets. |
 | [IMPORT_OPTIONS.md](IMPORT_OPTIONS.md) | Table Config's per-format read options (CSV, JSON, parquet/Arrow) and Hive partition detection. |
 | [EXPORT_OPTIONS.md](EXPORT_OPTIONS.md) | The export window: formats, per-format options, partitioning, the preview, and the `COPY … TO` it produces. |
-| [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md) | Agent access: the MCP tool vocabulary, the in-app server and headless host, identity, the policy gate, and the Agents pane. |
+| [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md) | Agent access: the MCP tool vocabulary, the in-app server and headless host, identity, and the policy gate. |
 | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) | The theme format: the role vocabulary, syntax scopes, fonts and typography — for anyone writing a theme. |
 
 ## Architecture and operations

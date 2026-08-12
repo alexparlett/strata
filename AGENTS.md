@@ -380,12 +380,16 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   AS-02's `Running`, whose drop guard is the cancel and the engine's abort; the reply keeps what
   streamed, marked stopped. One layer down, `SettleOnDrop` sends the stop settle in the engine's
   own `CANCELLED` wording, so no satellite is left holding a `Running` row.
-- **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
-  listed — and the mark is minted, never claimed.** `StrataTools::in_app` sets `Agent::in_app`,
-  which rides the call that opens a session to every `Host`; `Agents::agents` is the one place the
-  exclusion is expressed, `held` is the unfiltered view `list_query_sessions` and the log's
-  attribution read, and `sessions_of` is the same line drawn for the close confirm, which has to
-  name the assistant as itself. Keying on the identity would let any MCP client hide by claiming it.
+- **The in-app assistant is held like any other agent and told apart only where the user is owed
+  a different sentence — and the mark is minted, never claimed.** `StrataTools::in_app` sets
+  `Agent::in_app`, which rides the call that opens a session to every `Host`; `held` is the
+  unfiltered view `list_query_sessions` and the log's attribution read, and `sessions_of` is the
+  one place the line is drawn — for the close confirm, which has to name the assistant as itself.
+  Keying on the identity would let any MCP client claim its way across that line. **No surface
+  lists agents**: the Agents pane and the header's status dot were removed, so the MCP server is
+  present and unshown, and a server that cannot bind reports only through tracing. The satellite
+  therefore holds **only what the bookkeeping reads** — a run is a `seq` and an outcome, and the
+  SQL travels to the engine and not through `AgentAsk::RunStarting`.
 
 **Stores and state**
 
