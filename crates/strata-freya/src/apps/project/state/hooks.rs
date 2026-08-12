@@ -30,7 +30,7 @@ use super::catalog::{
 };
 use super::history::{History, HistoryCtx};
 use super::log::{log_event, LogCtx, LogLevel};
-use super::persist::{persisted_session, use_report};
+use super::persist::{persisted_session, persisted_session_offloaded, use_report};
 use super::{Chan, ProjChan, ProjectState, SessionState};
 
 /// Initialise this window's Session store and provide it via context, from the snapshot
@@ -327,6 +327,14 @@ pub fn refresh_table(rescan: CatalogRescan, name: String) {
 /// `spawn_forever`, for [`drop_confirm`]'s reason: the answer belongs to the window's store, and
 /// the tab whose statement asked for it may be closed before it arrives.
 ///
+/// **And so the store is asked whether it is still there before it is written.** Root-scoped means
+/// this task outlives the *project subtree* too, not just the tab — and that subtree is remounted
+/// wholesale by a re-root and by an engine restart (which is what a `runtime.*` Settings apply
+/// is). The `EngineCtx` clone keeps the outgoing engine alive, so the call completes and comes
+/// back to a station whose owner has been dropped; writing it then panics, and the release panic
+/// hook ends the process. Nothing bookkeeps this call either, so no close confirm stands between
+/// the two. A row count nobody is left to show is simply dropped.
+///
 /// [`drop_confirm`]: crate::apps::project::views::DropConfirm
 pub fn refresh_table_rows(
     engine: EngineCtx,
@@ -334,7 +342,11 @@ pub fn refresh_table_rows(
     name: String,
 ) {
     spawn_forever(async move {
-        match engine.table_meta(name.clone()).await {
+        let meta = engine.table_meta(name.clone()).await;
+        if !project.is_alive() {
+            return;
+        }
+        match meta {
             // `table_reread`, not `table_registered`: this answer may have been overtaken by a
             // scan pass while the read was in flight, and that pass's is the fresher one.
             Ok(meta) => project
@@ -733,7 +745,7 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
             if written.peek().as_ref() == Some(&snapshot) {
                 return;
             }
-            if !persisted_session(&root, &snapshot, report) {
+            if !persisted_session_offloaded(&root, &snapshot, report).await {
                 return;
             }
             written.set(Some(snapshot));

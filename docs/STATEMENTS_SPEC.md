@@ -146,14 +146,26 @@ stub refusals, reports and the results pane all read it.
   so smuggled nested DDL still dies at the second gate — but it can only refuse a class of plan,
   not name the surface that owns a capability.
 
-**Reserved names.** An intercepted statement that references a `__snap_`-prefixed table — or names
-one as its target — refuses with `Blocked::ReservedName` ("Names starting with '__snap_' are
-reserved for query results"). The read half keeps a typed `COPY (SELECT * FROM __snap_3)` from
-ever writing `__strata_ord` into a user's file; the write half keeps `CREATE TABLE __snap_2` and
-friends off the namespace a Run mints into, where the provider would answer "already exists" for a
-name the same prefix hides from every catalog reader. `register_external` backstops the same rule
-at the funnel, because a def also arrives from Table Config, a hand-edited `project.json`, or an
+**Reserved names.** **Any** statement typed into the editor that references a `__snap_`-prefixed
+table — or names one as its target — refuses with `Blocked::ReservedName` ("Names starting with
+'__snap_' are reserved for query results"). The read half keeps a typed
+`COPY (SELECT * FROM __snap_3)` from ever writing `__strata_ord` into a user's file; the write half
+keeps `CREATE TABLE __snap_2` and friends off the namespace a Run mints into, where the provider
+would answer "already exists" for a name the same prefix hides from every catalog reader.
+`register_external` backstops the write rule at the table funnel and `ddl::views::create` at the
+view funnel, because a def also arrives from Table Config, ⌘S, a hand-edited `project.json`, or an
 older build.
+
+*Queries included, and this is a correction.* The fence was once scoped to the **intercepted**
+forms, on the grounds that snapshots are how results are addressed at all. They are — but that
+addressing is `fetch_page`'s, the chart's and the export's, all of which reach a snapshot through
+`ctx.sql` and never pass the router. What a typed `SELECT * FROM __snap_3` bought instead was a
+way to read another tab's retained result with `__strata_ord` showing as an ordinary column, and
+then to send it through the **Export window** — the ordinal reaching a user's file down a route
+the COPY fence never sees, which is the single thing that fence exists to prevent. `EXPLAIN`
+descends to its inner statement for the same reason: otherwise it is the one spelling left that
+still resolves the name. No Strata surface composes SQL naming a snapshot, so nothing in the app
+is refused by this.
 
 **What the editor refuses**, with the squiggle and the run failure sharing one string:
 
@@ -164,7 +176,7 @@ older build.
 | `DROP` of a non-table, non-view object | "DROP is not supported in the editor. Deregister tables from the catalog" |
 | `INSERT OVERWRITE` | "INSERT OVERWRITE is not supported. Drop the table and recreate it with CREATE TABLE AS" |
 | `PREPARE` of a non-query body | "PREPARE supports queries only" |
-| A `__snap_` name in an intercepted statement | "Names starting with '__snap_' are reserved for query results" |
+| A `__snap_` name in any statement, read or written | "Names starting with '__snap_' are reserved for query results" |
 | A multi-statement buffer | "Run executes one statement at a time" |
 | An empty buffer | "Nothing to run" |
 
@@ -368,7 +380,7 @@ The fences, all resolved before anything runs:
 | `IF NOT EXISTS` | "CREATE VIEW IF NOT EXISTS is not supported. Use CREATE OR REPLACE VIEW" |
 | A column list | "A view's column list is not supported. Alias the columns in the query" |
 | `TEMPORARY`, `MATERIALIZED`, `SECURE`, `OR ALTER`, `TO`, `COMMENT`, `CLUSTER BY`, `COPY GRANTS`, `WITH NO SCHEMA BINDING`, view options, MySQL's `ALGORITHM`/`DEFINER`/`SQL SECURITY` | "CREATE VIEW does not support *CLAUSE*" |
-| A `__snap_` view name or a `__snap_` read in its body | `Blocked::ReservedName`, at the router (§4) |
+| A `__snap_` view name or a `__snap_` read in its body | `Blocked::ReservedName`, at the router (§4), with `ddl::views::create` backstopping |
 
 `DROP VIEW` resolves the target the same way — an unknown name errors, `IF EXISTS` reports a
 no-op with nothing to fold, a table name says which statement drops it ("'t' is a table. Use DROP

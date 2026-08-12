@@ -27,6 +27,9 @@
 //! reads live tables, and reads them twice when it is partitioned — the gate is a pre-flight, not
 //! a lock, and it says so here rather than pretending otherwise.
 
+use std::borrow::Cow;
+use std::env;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
@@ -40,10 +43,12 @@ use datafusion::sql::parser::Statement as DFStatement;
 use crate::engine::export::{
     copy_row_count, partition_columns_are_bare_words, partition_null_refusal,
 };
+use crate::engine::query::snapshots_root;
 use crate::engine::sql::StmtKind;
+use crate::project::strata_dir;
 use crate::util::plural;
 
-use super::StatementOutcome;
+use super::{DataRoot, StatementOutcome};
 
 /// Write a typed `COPY … TO`'s source to disk and report the rows it wrote.
 ///
@@ -53,7 +58,11 @@ use super::StatementOutcome;
 /// through `ctx.sql` would judge one plan and execute another, which is the rule the `INSERT` arm
 /// already keeps. Driving the plan *is* `ctx.sql` minus the re-parse: `execute_logical_plan`
 /// special-cases `Ddl` and `Statement` and hands everything else, `Copy` included, to exactly this.
-pub async fn copy_to(ctx: &SessionContext, stmt: DFStatement) -> Result<StatementOutcome, String> {
+pub async fn copy_to(
+    ctx: &SessionContext,
+    stmt: DFStatement,
+    root: &DataRoot,
+) -> Result<StatementOutcome, String> {
     let DFStatement::CopyTo(copy) = &stmt else {
         // The router classified this as a `COPY` off the parsed statement. Anything else is the
         // two disagreeing.
@@ -80,6 +89,18 @@ pub async fn copy_to(ctx: &SessionContext, stmt: DFStatement) -> Result<Statemen
     let target = copying.output_url.clone();
     let partition_by = copying.partition_by.clone();
     let input = Arc::clone(&copying.input);
+
+    // **A write only ever leaves Strata's own storage alone.** The reserved-name half of this
+    // statement is the router's and covers the *source*; nothing until here has looked at where
+    // the write lands. A `COPY … TO '<project>/.strata/tables/sales/extra.arrow'` drops a file
+    // inside an internal table's directory, which the next scan of that table lists: schema-matched
+    // it is phantom rows, mismatched it is a table that has started failing — silent corruption
+    // either way, and the rule is that silent corruption is refused rather than warned about.
+    //
+    // The *parsed* target, resolved, exactly as `INSERT` gates the target its plan names: a
+    // relative `output_url` is the process's cwd away from an absolute one, and comparing the two
+    // as text would let `.strata/../.strata/tables` through.
+    refuse_owned_target(&target, root)?;
 
     // Defense in depth behind the router's classification, per spec §4: a write and nothing else.
     // `verify_plan` visits subqueries, so DDL smuggled into the source query dies here even though
@@ -108,6 +129,78 @@ pub async fn copy_to(ctx: &SessionContext, stmt: DFStatement) -> Result<Statemen
         // still record it, exactly as they record any successful run.
         effect: None,
     })
+}
+
+/// Refuse a `COPY` whose target lands in storage Strata owns — the project's `.strata/` directory
+/// (internal table data, the session, the conversations) or the snapshot spool.
+///
+/// **The two fenced roots are the two places a stray file changes what Strata later reads.** A
+/// file under `.strata/tables/<slug>/` is listed by that table's next scan; one under the snapshot
+/// spool is read back as a result. Everywhere else on the disk is the user's own, and a `COPY` that
+/// overwrites their file is the statement doing what it says.
+///
+/// **Resolved, never compared as text.** A relative `output_url` is the process's cwd away from an
+/// absolute one, and `'.strata/../.strata/tables'` names the fenced directory without sharing its
+/// prefix. The target need not exist yet, so `canonicalize` cannot be asked about it directly: the
+/// path is made absolute, its `.` and `..` segments are folded away, and both sides are then
+/// anchored on the deepest ancestor that *does* exist — which is what makes a symlinked project
+/// folder compare equal to the path the fence was built from.
+fn refuse_owned_target(target: &str, root: &DataRoot) -> Result<(), String> {
+    // A target with a scheme belongs to an object store, not to this machine's filesystem.
+    // `file:` is the one scheme that *is* a local path, so it is stripped rather than skipped.
+    let local = match target.split_once("://") {
+        Some(("file", rest)) => Cow::Owned(format!("/{}", rest.trim_start_matches('/'))),
+        Some(_) => return Ok(()),
+        None => Cow::Borrowed(target),
+    };
+    let path = resolve(Path::new(local.as_ref()));
+
+    let mut fenced = vec![(PathBuf::from(snapshots_root()), "holds query results")];
+    if let Some(root) = root {
+        fenced.push((strata_dir(root), "holds this project's own data"));
+    }
+    for (dir, what) in fenced {
+        if path.starts_with(resolve(&dir)) {
+            return Err(format!(
+                "{} can't write into '{}', which {what}",
+                StmtKind::Copy.label(),
+                dir.display(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `path` as an absolute path with `.` and `..` folded away, anchored on the deepest ancestor that
+/// exists. See [`refuse_owned_target`] for why each of the three steps is there.
+fn resolve(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir().unwrap_or_default().join(path)
+    };
+    let mut folded = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            Component::CurDir => {}
+            // At the root this is a no-op, which is what a filesystem does with it too.
+            Component::ParentDir => {
+                folded.pop();
+            }
+            other => folded.push(other),
+        }
+    }
+    let mut existing: &Path = &folded;
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let rest = folded.strip_prefix(existing).unwrap_or(Path::new(""));
+            return real.join(rest);
+        }
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return folded,
+        }
+    }
 }
 
 /// Refuse a partitioned `COPY` whose partition columns contain NULLs, in the Export window's

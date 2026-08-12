@@ -210,7 +210,7 @@ pub async fn execute(
         StmtKind::CreateView => views::create_statement(ctx, stmt).await,
         StmtKind::DropView => views::drop_statement(ctx, stmt).await,
         // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
-        StmtKind::Copy => copy::copy_to(ctx, stmt).await,
+        StmtKind::Copy => copy::copy_to(ctx, stmt, &root).await,
         // ED-08 — the session overlay and prepared statements.
         StmtKind::Set => session::set(ctx, stmt, &scope).await,
         StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,

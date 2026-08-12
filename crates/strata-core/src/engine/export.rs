@@ -290,7 +290,11 @@ fn select_sql(snap: &str, spec: &ExportSpec, schema: &Schema, ord: Option<&str>)
         sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
     }
     if let Scope::Page { page, page_size } = spec.scope {
-        let offset = page.saturating_sub(1) * page_size;
+        // Saturating for `fetch_page`'s reason (see there): an overflowing multiply panics in
+        // debug and wraps to a plausible-but-wrong offset in release. This scope's numbers are
+        // the export window's own today, which is why it reads as pedantry — but the guarded
+        // copy's rationale is about the arithmetic, not about who supplies it.
+        let offset = page.saturating_sub(1).saturating_mul(page_size);
         sql.push_str(&format!(" LIMIT {page_size} OFFSET {offset}"));
     }
     sql

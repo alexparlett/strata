@@ -46,8 +46,14 @@ async-trait = "0.1"
 # `config`/`theme`/`plan` persist + (de)serialize.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
-# `config`: app config (recent projects + prefs) in the OS user-config dir.
+# `config`: app config (recent projects + prefs) in the OS user-config dir. `preferences` owns
+# the `AppInfo` identity and the JSON shape; the *file* is read and written here instead, through
+# `util::write_atomic` — the crate's own `save` is `File::create` plus `to_writer`, which is a
+# truncate-then-write with no fsync and no rename, and a config half-written by a kill is one the
+# next launch cannot parse. `app_dirs2` is what resolves the same path it would have used; it is
+# already in the graph as `preferences`' own dependency, so naming it here adds an edge, not code.
 preferences = "2"
+app_dirs2 = "2.5"
 # `util::now_hms`: the local wall clock behind an event-log timestamp. Already in the graph
 # (datafusion → arrow → chrono, with `clock` on), so this only names what we depend on.
 chrono = "0.4"

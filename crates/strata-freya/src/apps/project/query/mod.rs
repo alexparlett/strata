@@ -2,11 +2,9 @@
 //! engine facade. Owned by the results element — no runs store, no query state on the
 //! session.
 //!
-//! The page-read side (`FetchSnapshotPage` and friends) is consumed by the grid's
-//! paging/sort (P2-03) — dead-code/unused-import-allowed until that lands. The chart read
-//! ([`chart`]) is the third capability, on the page read's terms — see its module note.
-#![allow(dead_code)]
-#![allow(unused_imports)]
+//! The page-read side (`FetchSnapshotPage` and friends) is consumed by the grid's paging and
+//! sort; the chart read ([`chart`]) is the third capability, on the page read's terms — see its
+//! module note.
 
 mod chart;
 mod profile;

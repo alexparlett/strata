@@ -600,9 +600,18 @@ impl Component for ModelPicker {
         // conditionally" arm. The provider is a *value* the effect reads, never a reason not to
         // register it.
         let listings = app.listings;
-        let ai = self.ai.clone();
+        // **Through `use_reactive`, not captured.** `use_side_effect` builds its closure once
+        // (`use_hook`), and props carry no write-through — so a plainly captured `picked` and
+        // `ai` are the *first* render's, for the life of the scope. This component is un-keyed in
+        // the footer, so a repick never remounts it: the effect would go on asking about the
+        // provider the pane was opened with, or early-return forever on the `None` a fresh setup
+        // starts from, which is exactly the moment the list is wanted. A key or URL edited in
+        // Settings after mount would likewise never reach `Ask::from_config`. Settings ▸ AI ▸ Chat
+        // reads the same pair the same way.
+        let live_pick = use_reactive(&picked);
+        let live_ai = use_reactive(&self.ai);
         use_side_effect(move || {
-            let Some(kind) = picked else {
+            let Some(kind) = *live_pick.read() else {
                 return;
             };
             if !*open.read() {
@@ -612,7 +621,7 @@ impl Component for ModelPicker {
             // it going round again.
             let _ = listings.read();
             if needs_asking(listings, probes, kind) {
-                refresh(listings, probes, Ask::from_config(&ai, kind));
+                refresh(listings, probes, Ask::from_config(&live_ai.read(), kind));
             }
         });
 

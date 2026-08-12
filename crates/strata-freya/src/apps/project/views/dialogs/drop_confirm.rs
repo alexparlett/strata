@@ -430,6 +430,15 @@ impl Component for DropConfirm {
 /// fallible engine call. That asymmetry is deliberate — the two situations differ in what has
 /// already become true — and the Problems drawer's `Project` scope carries the other half either
 /// way, naming the file that is behind for as long as it is.
+/// Whether the project subtree these two belong to is still mounted — the question every
+/// `spawn_forever` below has to ask before it writes what it learned.
+///
+/// Both, not either: they are separate states of the same subtree, and a check that named only
+/// one would be right by accident rather than by construction.
+fn alive(catalog: Catalog, report: ReportCtx) -> bool {
+    catalog.is_alive() && report.log.is_alive()
+}
+
 fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
@@ -471,11 +480,24 @@ fn drop_row(
                 // `if_exists`: the row came out of the store, and a def whose registration failed
                 // has no provider to deregister — which is a drop that has nothing left to do,
                 // not a drop that failed.
-                if let Err(e) = engine.drop_table(name.clone(), true).await {
+                let outcome = engine.drop_table(name.clone(), true).await;
+                if let Err(e) = &outcome {
+                    tracing::error!("drop table '{name}': {e}");
+                }
+                // **Root-scoped outlives the project subtree, so the subtree is asked.** A re-root
+                // or an engine restart unmounts the whole subtree while this call is in flight —
+                // the `EngineCtx` clone keeps the outgoing engine alive, so the drop finishes and
+                // comes back to a `Catalog` and a log whose owner is gone. Writing them then
+                // panics, and the release panic hook takes the process with it. The drop itself
+                // has already happened, which is the part that mattered; what is skipped is
+                // telling a window that no longer exists.
+                if !alive(catalog, report) {
+                    return;
+                }
+                if let Err(e) = outcome {
                     // The def is already gone, which is the catalog's truth; what may be left is
                     // a stale registration or, on an internal table, its data directory. The log
                     // is the only surface that can say so — the row it would describe is gone.
-                    tracing::error!("drop table '{name}': {e}");
                     log_event(
                         report.log,
                         LogLevel::Warning,
@@ -512,12 +534,19 @@ fn drop_row(
             // hear about it. Verified with a probe — the task ran 0 times. The engine call has
             // to outlive the dialog that ordered it, so it belongs to the root.
             spawn_forever(async move {
-                if let Err(e) = engine.drop_view(name.clone()).await {
+                let outcome = engine.drop_view(name.clone()).await;
+                if let Err(e) = &outcome {
                     // The def is already gone, which is the catalog's truth; a failed DROP VIEW
-                    // leaves a stale registration the next re-scan clears. The log is the only
-                    // surface that can say so — the row it would have described is gone.
+                    // leaves a stale registration the next re-scan clears.
                     tracing::error!("drop view '{name}': {e}");
-                    // Only the part the row above doesn't already say — it named the drop.
+                }
+                // The table arm's reason, and the same answer.
+                if !alive(catalog, report) {
+                    return;
+                }
+                if let Err(e) = outcome {
+                    // The log is the only surface that can say so — the row it would have
+                    // described is gone. Only the part the row above doesn't already say.
                     log_event(
                         report.log,
                         LogLevel::Warning,

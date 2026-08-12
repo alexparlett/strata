@@ -620,6 +620,13 @@ fn dir_path(dir: &Path) -> String {
 /// `sales_eu`, and two tables sharing a directory would overwrite each other's data. It is only
 /// paid by a name that needed sanitizing, so the ordinary table's directory is simply its name —
 /// which matters, because that path is written into `project.json` and read by people.
+///
+/// **A safe name that already looks hashed is hashed anyway**, or the two halves collide with each
+/// other rather than within themselves: `sales eu` slugs to `sales_eu-1f2e3d4c`, and a table
+/// literally named `sales_eu-1f2e3d4c` is all legal characters, so it would take the shortcut and
+/// land in the same directory — where a create removes what is already there. Rare enough to be a
+/// curiosity and cheap enough to close, and closing it is what lets the doc above say "injective"
+/// without a footnote.
 fn slug(name: &str) -> String {
     let safe: String = name
         .chars()
@@ -629,10 +636,20 @@ fn slug(name: &str) -> String {
             _ => '_',
         })
         .collect();
-    if safe == name && !name.is_empty() {
+    if safe == name && !name.is_empty() && !looks_hashed(name) {
         return safe;
     }
     format!("{safe}-{:08x}", hash32(name))
+}
+
+/// Whether `name` ends in the `-` plus eight hex digits that [`slug`] appends, which is the only
+/// shape a sanitized slug can take.
+fn looks_hashed(name: &str) -> bool {
+    name.len() > 9
+        && name.as_bytes()[name.len() - 9] == b'-'
+        && name[name.len() - 8..]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 /// FNV-1a, folded to 32 bits — a **stable** hash, which `DefaultHasher` is not: its seed is an

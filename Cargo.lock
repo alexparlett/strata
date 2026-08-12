@@ -8528,6 +8528,7 @@ dependencies = [
 name = "strata-core"
 version = "0.2.0"
 dependencies = [
+ "app_dirs2",
  "apple-native-keyring-store",
  "async-trait",
  "aws-config",

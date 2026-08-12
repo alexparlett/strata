@@ -250,6 +250,9 @@ fn check_s3_bucket(bucket: &str) -> Result<(), String> {
     if bucket.contains("..") {
         return Err("An S3 bucket name can't contain two dots in a row.".into());
     }
+    if is_dotted_decimal_ip(bucket) {
+        return Err("An S3 bucket name can't be formatted as an IP address.".into());
+    }
     Ok(())
 }
 
@@ -347,6 +350,22 @@ fn check_http_url(url: &str) -> Result<(), String> {
     if authority.is_empty() {
         return Err("An HTTP connection needs a host after its scheme.".into());
     }
+    // **Userinfo is refused rather than carried.** `https://alice:hunter2@files.example.com` is a
+    // well-formed origin and the common way a protected file drop is handed around, so it gets
+    // pasted into this box — and every word of this def rides in `.strata/project.json`, which is
+    // committed and shared. Refusing it here is what keeps the module's promise that nothing in a
+    // def is a secret; a credential belongs in the keystore, not in a URL, and no provider Strata
+    // supports authenticates this way.
+    //
+    // Asked of the **host part only**, and so before the path is trimmed off below: an `@` in a
+    // path is not userinfo, and answering that one with this message would name the wrong half.
+    let host = &authority[..authority.find(['/', '?', '#']).unwrap_or(authority.len())];
+    if let Some(at) = host.find('@') {
+        return Err(format!(
+            "An HTTP connection can't carry a username or password. Drop '{}' from the URL.",
+            &host[..=at],
+        ));
+    }
     // `/` is the path, and `?` / `#` are what a URL puts after one — all three are the table's
     // to carry, not the connection's.
     if let Some(at) = authority.find(['/', '?', '#']) {
@@ -364,9 +383,9 @@ fn starts_and_ends_alphanumeric(bucket: &str) -> bool {
     bucket.starts_with(alphanumeric) && bucket.ends_with(alphanumeric)
 }
 
-/// Whether `bucket` reads as `192.168.5.4` — four decimal octets, which is the only form GCS's
-/// rule names. A name like `999.1.1.1` is not representable as an address and so is not refused
-/// by it.
+/// Whether `bucket` reads as `192.168.5.4` — four decimal octets, which is the only form the GCS
+/// and S3 rules name. A name like `999.1.1.1` is not representable as an address and so is not
+/// refused by either.
 fn is_dotted_decimal_ip(bucket: &str) -> bool {
     let parts: Vec<&str> = bucket.split('.').collect();
     parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok())
@@ -542,10 +561,15 @@ mod tests {
             ("acme-lake-", "start and end"),
             (".acme", "start and end"),
             ("acme..lake", "two dots"),
+            ("192.168.5.4", "ip address"),
         ] {
             let message = s3().check_address(bad).expect_err(bad);
             assert!(message.to_lowercase().contains(why), "{bad}: {message}");
         }
+        // The rule names the *format*, not every dotted name: `999.1.1.1` is no address, and both
+        // providers accept it. Asserted so the two checkers cannot drift apart on it either.
+        assert_eq!(s3().check_address("999.1.1.1"), Ok(()));
+        assert_eq!(gcs().check_address("999.1.1.1"), Ok(()));
     }
 
     /// GCS's rules are **not** S3's, and the differences are the point: an underscore is legal
@@ -609,6 +633,10 @@ mod tests {
             ("https://aserver:8484/", "not a path"),
             ("https://aserver?x=1", "not a path"),
             ("https://a server", "spaces"),
+            // Userinfo: a well-formed origin, and the one shape that would put a password in a
+            // committed file.
+            ("https://alice:hunter2@files.example.com", "password"),
+            ("https://alice@files.example.com", "password"),
         ] {
             let message = http().check_address(bad).expect_err(bad);
             assert!(message.to_lowercase().contains(why), "{bad}: {message}");
@@ -618,6 +646,16 @@ mod tests {
             .check_address("https://aserver:8484/fake")
             .expect_err("a path");
         assert!(message.contains("'/fake'"), "{message}");
+        let message = http()
+            .check_address("https://alice:hunter2@files.example.com")
+            .expect_err("userinfo");
+        assert!(message.contains("'alice:hunter2@'"), "{message}");
+        // An `@` in a *path* is not userinfo, and is answered by the path's own message rather
+        // than by one naming a credential that isn't there.
+        let message = http()
+            .check_address("https://aserver/mail@home")
+            .expect_err("a path");
+        assert!(message.contains("'/mail@home'"), "{message}");
     }
 
     #[test]

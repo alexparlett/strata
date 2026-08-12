@@ -545,9 +545,20 @@ fn tidy_strata_dir(dir: &Path) {
 ///
 /// Rewritten atomically like the rest: it's a read-modify-write of a file the user may have
 /// added their own lines to, so a truncating write could lose them.
+///
+/// **A file that would not read is left alone**, which the atomic write alone does not cover.
+/// Absent is the ordinary case and reads as empty; a *failed* read is a file whose contents are
+/// still there and still unknown, and treating that as empty would rewrite it down to Strata's
+/// six lines — losing exactly what the paragraph above says this function preserves. Missing
+/// entries on a project whose `.gitignore` could not be read for a moment is the harmless half
+/// of the choice.
 fn ensure_gitignore(dir: &Path) {
     let gi = dir.join(".gitignore");
-    let existing = fs::read_to_string(&gi).unwrap_or_default();
+    let existing = match fs::read_to_string(&gi) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(_) => return,
+    };
     let mut lines: Vec<&str> = existing.lines().collect();
     let mut changed = false;
     for wanted in [
