@@ -71,7 +71,7 @@ use super::find::FindState;
 use super::toolbar::ResultsToolbar;
 use crate::apps::export::ExportLaunch;
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::ChartSpec;
+use crate::apps::project::query::{ChartSpec, TrendSpec};
 use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::components::icon::{Icon, IconName};
 use crate::components::typography::{scale, Prose, Title};
@@ -191,6 +191,28 @@ impl Component for ChartView {
         let readable = self.snapshot.is_some() && encoded.is_ok();
         let chart = use_query(spec.query(&engine, readable));
 
+        // The trendline is its own read (Chart 11), keyed by the two columns the scatter
+        // plots — deliberately never part of `ChartQuery`, so the toggle cannot re-read the
+        // points. Subscribed unconditionally (a hook behind a condition is a hook count that
+        // changes between renders) and enabled only when a scatter with the toggle on has a
+        // settled encoding to fit; `encoding.trend` is already false for every other mark.
+        let fit_wanted = readable && encoding.trend;
+        let trend_spec = TrendSpec {
+            snapshot: self.snapshot.unwrap_or(SnapshotId(0)),
+            x: encoding.x.clone().unwrap_or_default(),
+            y: encoding.ys.first().cloned().unwrap_or_default(),
+        };
+        let trend = use_query(trend_spec.query(&engine, fit_wanted));
+        // `None` while loading as much as for a fit the data cannot support: the scatter
+        // draws without the line and the settle repaints it in — a fit is an overlay, never
+        // something the chart waits for.
+        let fit = fit_wanted
+            .then(|| match &*trend.read().state() {
+                QueryStateData::Settled { res: Ok(fit), .. } => *fit,
+                _ => None,
+            })
+            .flatten();
+
         let typography = scale();
         let dress = Dress::new(&theme, &typography);
         // What the plot's colours mean, resolved beside the body that draws them so the two
@@ -265,6 +287,7 @@ impl Component for ChartView {
                                 data,
                                 mark: mark_now,
                                 log_y: encoding.log_y && fallback.is_none(),
+                                trend: fit,
                                 dress,
                             });
                             snap = Some(ChartCapture::new(Rc::clone(&frame), log));

@@ -946,6 +946,7 @@ mod tests {
                 bins: Some(24),
                 hidden: vec!["cost".into()],
                 log_y: true,
+                trend: true,
             },
         );
         s.switch(a);

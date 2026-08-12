@@ -410,3 +410,14 @@ p25/p50/p75 columns the user computes with `percentile_cont(…) WITHIN GROUP`; 
 `y`, `y_lo`, `y_hi`. The chart has no aggregation of its own, so shaping the result is done in
 the query — `docs/CHART_FUNCTIONS.md` is the practical reference for which SQL buys which chart
 shape.
+
+**The scatter trendline is the one sanctioned exception, and it is built** (Chart 11, settled
+in planning 2026-08-07). A dashed least-squares line with an R² label is computed engine-side
+(`Engine::trend`, one `regr_slope`/`regr_intercept`/`regr_r2` aggregation over the snapshot's
+finite pairs) rather than templated into SQL, because the overlay is a function of the
+**encoding** — which two columns the scatter currently plots — not of the query: templating it
+would rewrite the user's SQL on every encoder gesture, which §6's "config is intent" forbids,
+and would smuggle two scalars through a rows read by duplicating them onto every row. The fit
+is its own read (`TrendSpec`, keyed `(snapshot, x, y)` — numbers only, no display config), so
+toggling the overlay never re-reads the points; degenerate data (fewer than two pairs, no
+x-variance) is an absent overlay, never an error. The engine computes nothing else new.

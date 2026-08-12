@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
-use strata_model::{ChartData, ChartQuery, SnapshotId};
+use strata_model::{ChartData, ChartQuery, SnapshotId, Trend};
 
 use crate::apps::project::contexts::EngineCtx;
 
@@ -65,6 +65,48 @@ impl QueryCapability for FetchChart {
 
     async fn run(&self, spec: &ChartSpec) -> Result<ChartData, String> {
         self.0.chart(spec.snapshot, spec.query.clone()).await
+    }
+}
+
+/// The scatter's **trendline read** (Chart 11): the least-squares fit over the same snapshot
+/// [`ChartSpec`] reads, keyed by the two columns the scatter currently plots.
+///
+/// **Numbers only, so no display config in the key** — nothing here renders through
+/// `datafusion.format.*`. And deliberately not an extension of [`ChartQuery`]: the fit is its
+/// own entry, which is what makes toggling the overlay a repaint of data already in hand plus
+/// one cheap aggregate, never a re-read of the points.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TrendSpec {
+    pub snapshot: SnapshotId,
+    pub x: String,
+    pub y: String,
+}
+
+impl TrendSpec {
+    /// The one way to subscribe the fit — [`ChartSpec::query`]'s contract: `stale_time(MAX)`
+    /// because a fixed snapshot and two fixed columns never answer differently, and `enabled`
+    /// is the per-site variable (a scatter with the toggle on, over a settled result).
+    pub fn query(&self, engine: &EngineCtx, enabled: bool) -> Query<FetchTrend> {
+        Query::new(self.clone(), FetchTrend(engine.captured()))
+            .stale_time(Duration::MAX)
+            .enable(enabled)
+    }
+}
+
+/// The trendline capability. `Ok(None)` is a fit the data cannot support — the overlay simply
+/// does not draw.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct FetchTrend(pub Captured<EngineCtx>);
+
+impl QueryCapability for FetchTrend {
+    type Ok = Option<Trend>;
+    type Err = String;
+    type Keys = TrendSpec;
+
+    async fn run(&self, spec: &TrendSpec) -> Result<Option<Trend>, String> {
+        self.0
+            .trend(spec.snapshot, spec.x.clone(), spec.y.clone())
+            .await
     }
 }
 
@@ -126,5 +168,27 @@ mod tests {
                 values: vec![Some(2.), Some(1.), Some(3.)],
             }]
         );
+    }
+
+    /// The trendline rides the same round trip, keyed by its two columns alone.
+    #[test]
+    fn a_trend_read_answers_the_fit_over_the_run_s_snapshot() {
+        let engine = EngineCtx::default();
+        let output = snapshot(
+            &engine,
+            "SELECT * FROM (VALUES (1.0, 3.0), (2.0, 5.0), (3.0, 7.0)) AS t(x, y)",
+        );
+
+        let trends = FetchTrend(engine.captured());
+        let spec = TrendSpec {
+            snapshot: output.snapshot.expect("snapshot handle"),
+            x: "x".into(),
+            y: "y".into(),
+        };
+        let fit = block_on(trends.run(&spec))
+            .expect("trend")
+            .expect("three clean pairs fit a line");
+        assert!((fit.slope - 2.).abs() < 1e-9, "{fit:?}");
+        assert!((fit.intercept - 1.).abs() < 1e-9, "{fit:?}");
     }
 }

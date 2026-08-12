@@ -162,6 +162,9 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
                         .height(Size::flex(1.))
                         .child(ChartCanvas::new(Rc::new(Frame {
                             log_y: encoding.log_y && fallback.is_none(),
+                            // The harness has no engine to fit one; the trendline's own look
+                            // is pinned by the paint tests.
+                            trend: None,
                             data,
                             mark,
                             dress,

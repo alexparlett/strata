@@ -127,6 +127,12 @@ pub struct ChartConfig {
     /// [`sort`](Self::sort) — a repaint, never a re-read.
     #[serde(default)]
     pub log_y: bool,
+    /// Draw a least-squares trendline over the scatter. Kept for every mark and honoured only
+    /// where a fit means something (a scatter), the way [`bins`](Self::bins) is kept for the
+    /// histogram — switching marks never spends the choice. The fit itself is [`Trend`], a
+    /// separate read: flipping this never re-reads the points.
+    #[serde(default)]
+    pub trend: bool,
     /// How the settled rows are ordered on the way to the marks.
     #[serde(default)]
     pub sort: ChartSort,
@@ -257,6 +263,26 @@ pub struct ChartSeries {
 pub struct ChartPoint {
     pub x: f64,
     pub y: f64,
+}
+
+/// The least-squares fit over a scatter's finite points (`docs/CHART_SPEC.md` §10 — the one
+/// sanctioned engine computation beside the histogram). Computed engine-side because the
+/// overlay is a function of the **encoding** — which two columns the scatter currently plots —
+/// not of the query: templating it into SQL would rewrite the user's query on every encoder
+/// gesture, which "config is intent" forbids.
+///
+/// Deliberately **not** part of [`ChartQuery`]: the fit is its own read, keyed by the two
+/// columns, so toggling the overlay never re-reads the points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trend {
+    /// `k` in `y = kx + b`.
+    pub slope: f64,
+    /// `b` in `y = kx + b`.
+    pub intercept: f64,
+    /// The fit's coefficient of determination, in `0..=1`.
+    pub r2: f64,
+    /// How many finite pairs the fit covered.
+    pub n: i64,
 }
 
 /// One histogram bin: the half-open interval `[lo, hi)` and how many rows fell in it. The

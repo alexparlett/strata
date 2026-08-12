@@ -21,13 +21,15 @@ use freya::plot::plotters::coord::cartesian::Cartesian2d;
 use freya::plot::plotters::coord::ranged1d::ValueFormatter;
 use freya::plot::plotters::coord::Shift;
 use freya::plot::plotters::prelude::{
-    AreaSeries, Circle, Color as PlotColor, DrawingArea, DrawingAreaErrorKind, IntoDrawingArea,
-    IntoFont, LineSeries, Pie, RGBAColor, RGBColor, Ranged, Rectangle, TextStyle,
+    AreaSeries, Circle, Color as PlotColor, DashedLineSeries, DrawingArea, DrawingAreaErrorKind,
+    IntoDrawingArea, IntoFont, LineSeries, Pie, RGBAColor, RGBColor, Ranged, Rectangle, Text,
+    TextStyle,
 };
+use freya::plot::plotters::style::text_anchor::{HPos, Pos, VPos};
 use freya::plot::PlotSkiaBackend;
 use freya::plot::PlotSkiaBackendError;
 use freya::prelude::{Color, Size2D};
-use strata_model::{Axis, ChartBin, ChartData, ChartMark, ChartPoint, ChartSeries};
+use strata_model::{Axis, ChartBin, ChartData, ChartMark, ChartPoint, ChartSeries, Trend};
 
 use strata_core::util::clip;
 
@@ -135,7 +137,15 @@ pub fn draw(
             ),
             _ => bars(&area, dress, axis, series, &mut marks, &mut area_out),
         },
-        ChartData::Points(points) => scatter(&area, dress, points, log, &mut marks, &mut area_out),
+        ChartData::Points(points) => scatter(
+            &area,
+            dress,
+            points,
+            log,
+            frame.trend,
+            &mut marks,
+            &mut area_out,
+        ),
         ChartData::Bins(bins) => histogram(&area, dress, bins, log, &mut marks, &mut area_out),
         // A refusal carries nothing to draw at all (spec §1.4) — the body renders the reason
         // in place of the canvas.
@@ -378,12 +388,16 @@ fn scatter<'a>(
     dress: &Dress,
     points: &[ChartPoint],
     log: bool,
+    trend: Option<Trend>,
     hits: &mut Vec<Hit>,
     area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let xs = data_range(points.iter().map(|p| p.x));
     let ys = data_range(points.iter().map(|p| p.y));
     let coord = value_coord(log, points.iter().map(|p| p.y), &ys);
+    // The axis's own span — the log decades where a log axis was built — so the trendline is
+    // clipped to what this chart is actually drawing, not to the linear range.
+    let y_span = coord.range();
     let y_label = coord.tick_label();
     let mut chart = ChartBuilder::on(area)
         .margin_top(MARGIN_TOP)
@@ -407,6 +421,64 @@ fn scatter<'a>(
             format!("{}, {}", readout(p.x), readout(p.y)),
         ));
     }
+    if let Some(fit) = trend {
+        trendline(&mut chart, dress, &xs, &y_span, fit)?;
+    }
+    Ok(())
+}
+
+/// How many vertices the trendline is sampled at across the plotted x-range.
+const TREND_SAMPLES: usize = 64;
+/// The dash and its gap, in pixels — dashed so the fit reads as an overlay, not as data.
+const TREND_DASH: i32 = 6;
+const TREND_GAP: i32 = 4;
+
+/// The dashed least-squares line over the scatter, with its R² beside the line's end
+/// (Chart 11).
+///
+/// **Sampled, not drawn as two endpoints**: plotters maps each vertex through the Y
+/// coordinate, so on a log value axis a straight line in value space is a curve on the canvas
+/// — sampling draws it as one, and on a linear axis the samples are collinear so nothing
+/// changes. Samples outside the axis's own span are dropped, because plotters does not clip a
+/// path to the plotting area and a steep fit would otherwise draw over the label areas.
+fn trendline<X>(
+    chart: &mut ChartContext<'_, PlotSkiaBackend<'_>, Cartesian2d<X, ValueCoord>>,
+    dress: &Dress,
+    xs: &Range<f64>,
+    ys: &Range<f64>,
+    fit: Trend,
+) -> Plot
+where
+    X: Ranged<ValueType = f64>,
+{
+    // The points' own hue at full strength — the points are drawn misted, so the fit reads
+    // as the statement about them rather than as a second series.
+    let color = rgba(dress.series(0));
+    let sampled: Vec<(f64, f64)> = (0..=TREND_SAMPLES)
+        .filter_map(|i| {
+            let x = xs.start + (xs.end - xs.start) * i as f64 / TREND_SAMPLES as f64;
+            let y = fit.slope.mul_add(x, fit.intercept);
+            (y.is_finite() && y >= ys.start && y <= ys.end).then_some((x, y))
+        })
+        .collect();
+    // A fit that never enters the plotted span has nothing honest to draw or to label.
+    let Some(anchor) = sampled.last().copied() else {
+        return Ok(());
+    };
+    chart.draw_series(DashedLineSeries::new(
+        sampled.into_iter(),
+        TREND_DASH,
+        TREND_GAP,
+        color.stroke_width(2),
+    ))?;
+    // Anchored right-and-below its point so the label hangs inside the plot at the line's
+    // top end rather than clipping through the frame.
+    let style = text(dress, &color).pos(Pos::new(HPos::Right, VPos::Bottom));
+    chart.draw_series(std::iter::once(Text::new(
+        format!("R² = {}", readout(fit.r2)),
+        anchor,
+        style,
+    )))?;
     Ok(())
 }
 

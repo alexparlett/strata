@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use freya::prelude::*;
 use strata_core::theme::Typography;
-use strata_model::{ChartData, ChartMark};
+use strata_model::{ChartData, ChartMark, Trend};
 
 use freya::components::Tooltip;
 
@@ -113,6 +113,12 @@ pub struct Frame {
     /// (`config::log_axis`) and against the data (`mod.rs::log_fallback`), so the painter only
     /// has to obey it.
     pub log_y: bool,
+    /// The settled least-squares fit a scatter draws dashed over its points (Chart 11), or
+    /// `None` — toggle off, still loading, or a fit the data cannot support; the painter
+    /// cannot tell those apart and does not need to. In the frame rather than looked up at
+    /// paint time so Copy Image captures the trendline the screen is showing, by
+    /// construction.
+    pub trend: Option<Trend>,
     pub dress: Dress,
 }
 
@@ -564,6 +570,7 @@ mod tests {
                     ),
                     mark: ChartMark::Histogram,
                     log_y: false,
+                    trend: None,
                     dress: Dress::new(&theme, &scale()),
                 })))
         };
@@ -735,6 +742,7 @@ mod tests {
                     ),
                     mark: ChartMark::Histogram,
                     log_y: false,
+                    trend: None,
                     dress: Dress::new(&theme, &scale()),
                 })))
         };

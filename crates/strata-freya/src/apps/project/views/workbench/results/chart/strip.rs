@@ -43,8 +43,8 @@ use strata_core::engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    allows_row_index, log_axis, series_options, sortable, takes_many_ys, x_options, y_options,
-    Encoding, Roles,
+    allows_row_index, log_axis, series_options, sortable, takes_many_ys, trendable, x_options,
+    y_options, Encoding, Roles,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
@@ -422,6 +422,14 @@ impl Component for ControlStrip {
             config: self.config.clone(),
         });
 
+        // The trendline is a scatter's own overlay (Chart 11) — its fit is a separate read
+        // keyed by the encoded columns, so this toggle repaints and never re-reads the points.
+        let trend = trendable(mark).then(|| TrendToggle {
+            tab: self.tab,
+            on: self.encoding.trend,
+            config: self.config.clone(),
+        });
+
         // ⌥ isolates a series, and a pointer event carries no modifiers (AGENTS.md §3) — so
         // the strip mirrors the key state and each row reads it at press time.
         let mut alt = use_state(|| false);
@@ -487,6 +495,7 @@ impl Component for ControlStrip {
                         .maybe_child(bins)
                         .maybe_child(sort)
                         .maybe_child(scale)
+                        .maybe_child(trend)
                         .maybe_child(legend),
                 ),
             )
@@ -657,6 +666,54 @@ impl Component for ScaleToggle {
             .vertical()
             .spacing(LABEL_GAP)
             .child(Eyebrow::new("SCALE").color(theme.label_color))
+            .child(pill)
+    }
+}
+
+/// The scatter's **trendline**: off, or a dashed least-squares fit over the points
+/// (Chart 11).
+///
+/// A display-tier control in [`ScaleToggle`]'s shape — the fit is its own engine read keyed by
+/// the encoded columns, so flipping this never re-reads the points — and its own component for
+/// the same reason: it is only shown for a scatter, and a hook taken behind a condition is a
+/// hook count that changes between renders.
+#[derive(PartialEq)]
+struct TrendToggle {
+    tab: TabId,
+    on: bool,
+    config: ChartConfig,
+}
+
+impl Component for TrendToggle {
+    fn render(&self) -> impl IntoElement {
+        let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
+        let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
+        let tab = self.tab;
+
+        let mut pill = SegmentedToggle::new();
+        // "On", not "Linear": the scale pill beside this one already has a segment of that
+        // name, and two controls answering to one word is a mispress waiting to happen.
+        for (label, title, on) in [
+            ("Off", "No trendline", false),
+            ("On", "Least-squares trendline", true),
+        ] {
+            let next = ChartConfig {
+                trend: on,
+                ..self.config.clone()
+            };
+            pill = pill.child(
+                ToggleSegment::text(label)
+                    .title(title)
+                    .selected(self.on == on)
+                    .on_press(move |_| commit(session, tab, next.clone())),
+            );
+        }
+
+        rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(LABEL_GAP)
+            .child(Eyebrow::new("TRENDLINE").color(theme.label_color))
             .child(pill)
     }
 }
@@ -1268,6 +1325,34 @@ mod tests {
         assert!(config(&session).log_y, "the config still holds it");
         click_text(&mut runner, "Line");
         assert!(shows(&runner, "SCALE"));
+    }
+
+    /// **The trendline is offered only for a scatter, and it writes a repaint** — the fit is
+    /// its own read keyed by the encoded columns, so the toggle never reaches the points'
+    /// `ChartQuery`. The preference is kept across marks like the scale's is.
+    #[test]
+    fn the_trendline_toggle_follows_the_scatter_and_keeps_the_choice() {
+        let (mut runner, session) = runner();
+        settle(&mut runner);
+        assert!(
+            !shows(&runner, "TRENDLINE"),
+            "a line has no fit to offer: {:?}",
+            texts(&runner)
+        );
+
+        click_text(&mut runner, "Scatter");
+        assert!(shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
+        click_text(&mut runner, "On");
+        assert!(config(&session).trend);
+
+        // Another mark drops the control and keeps the choice, so it comes back.
+        click_text(&mut runner, "Bar");
+        assert!(!shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
+        assert!(config(&session).trend, "the config still holds it");
+        click_text(&mut runner, "Scatter");
+        assert!(shows(&runner, "TRENDLINE"));
+        click_text(&mut runner, "Off");
+        assert!(!config(&session).trend);
     }
 
     /// **A legend row is the control that hides its series**, and ⌥ isolates. The modifier

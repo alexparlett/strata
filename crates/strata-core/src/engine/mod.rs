@@ -122,7 +122,7 @@ use query::{
 };
 use sql::{FunctionCatalog, PreparedSym};
 use strata_model::{
-    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId,
+    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId, Trend,
 };
 
 /// A workspace's stable identity — the query tab that owns a run and its current
@@ -1107,6 +1107,31 @@ impl Engine {
             .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt, ord.as_deref()).await })
             .await
             .map_err(|e| format!("chart task failed: {e}"))?
+    }
+
+    /// The least-squares fit over `snapshot`'s finite `(x, y)` pairs (Chart 11) — the
+    /// scatter's trendline, and the one computed *overlay* `docs/CHART_SPEC.md` §10
+    /// sanctions. Engine-side because the overlay is a function of the encoding, not of the
+    /// query: templating it into SQL would rewrite the user's query on every encoder gesture.
+    ///
+    /// [`chart`](Engine::chart)'s tier exactly — snapshot-scoped, side-effect free, pinned
+    /// for the length of the call — and deliberately **not** a [`ChartQuery`] arm, so a UI
+    /// cache can key the fit by the two columns alone and toggling the overlay never
+    /// re-reads the points. `Ok(None)` is a fit the data cannot support (fewer than two
+    /// pairs, or no x-variance): the overlay simply does not draw, never an error the user
+    /// must dismiss.
+    pub async fn trend(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        x: String,
+        y: String,
+    ) -> Result<Option<Trend>, String> {
+        let _reading = self.pin_snapshot(snapshot);
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { chart::run_trend(&ctx, snapshot, &x, &y).await })
+            .await
+            .map_err(|e| format!("trend task failed: {e}"))?
     }
 
     /// Does `snapshot` still exist to be read?

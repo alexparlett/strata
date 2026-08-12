@@ -197,6 +197,34 @@ async fn a_histogram_bins_the_snapshot() {
 /// A chart of a retired snapshot fails like any other read of one — the caller tells that
 /// from a real fault by asking `Engine::snapshot_live`, never by matching prose.
 #[tokio::test]
+async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
+    let eng = Arc::new(Engine::new(Default::default()));
+    let snap = snapshot(&eng).await;
+
+    // amount is exactly 10 x qty in the fixture, so the fit is the line itself.
+    let fit = eng
+        .trend(snap, "qty".into(), "amount".into())
+        .await
+        .expect("trend")
+        .expect("three clean pairs fit a line");
+    assert!((fit.slope - 10.).abs() < 1e-9, "{fit:?}");
+    assert!(fit.intercept.abs() < 1e-9, "{fit:?}");
+    assert!((fit.r2 - 1.).abs() < 1e-9, "{fit:?}");
+    assert_eq!(fit.n, 3);
+
+    // One row is no line — absent, never an error the user has to dismiss.
+    let (out, _) = eng
+        .query(WsId(2), RunTag(1), "SELECT 1.0 AS x, 2.0 AS y".into(), 10)
+        .await
+        .expect("run");
+    let one = out.snapshot.expect("snapshot");
+    assert_eq!(
+        eng.trend(one, "x".into(), "y".into()).await.expect("trend"),
+        None
+    );
+}
+
+#[tokio::test]
 async fn charting_a_retired_snapshot_fails_like_any_other_read() {
     let eng = Arc::new(Engine::new(Default::default()));
     let snap = snapshot(&eng).await;

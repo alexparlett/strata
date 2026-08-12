@@ -206,6 +206,16 @@ pub fn log_axis(mark: ChartMark) -> bool {
     )
 }
 
+/// Whether this mark can carry the least-squares trendline (Chart 11).
+///
+/// Only a scatter: the fit is a statement about how one measure moves with another, which is
+/// the scatter's whole encoding. A line or bar's X may be categorical — regression over
+/// category indices is a number with no meaning — and a histogram's bars are counts of the
+/// one measure it has.
+pub fn trendable(mark: ChartMark) -> bool {
+    mark == ChartMark::Scatter
+}
+
 /// Whether this mark draws **several** series, so a legend press has anything to hide.
 ///
 /// A pie is deliberately not one of them. Hiding a slice would silently recompute every
@@ -235,6 +245,11 @@ pub struct Encoding {
     /// and dropping it would spend a choice the next result might be able to honour.
     pub hidden: Vec<String>,
     pub log_y: bool,
+    /// Whether the least-squares trendline is drawn — resolved against the mark like
+    /// [`log_y`](Self::log_y), so only a scatter ever carries it. The fit itself is a
+    /// separate read ([`TrendSpec`](crate::apps::project::query::TrendSpec)); this is only
+    /// whether to ask for one.
+    pub trend: bool,
     pub sort: ChartSort,
 }
 
@@ -323,6 +338,9 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         // because the strip is where a control is *offered* and this is where the read and
         // the paint agree on what is actually being drawn.
         log_y: config.log_y && log_axis(mark),
+        // The same gate as `log_y`, for the same reason: the config keeps the choice for
+        // every mark, and only a mark that can draw the fit resolves it.
+        trend: config.trend && trendable(mark),
         sort: config.sort,
     }
 }
@@ -876,6 +894,33 @@ mod tests {
             };
             assert_eq!(resolve(&config, &roles).log_y, expected, "{mark:?}");
         }
+    }
+
+    /// **The trendline resolves only for a scatter, and it never reaches the read.** The fit
+    /// is its own entry keyed by the two columns, so the same encoding with the toggle on and
+    /// off is one `ChartQuery` — toggling can never re-read the points.
+    #[test]
+    fn only_a_scatter_resolves_a_trendline_and_the_read_never_carries_it() {
+        let roles = sales();
+        for mark in ChartMark::ALL {
+            let config = ChartConfig {
+                mark: Some(mark),
+                trend: true,
+                ..ChartConfig::default()
+            };
+            assert_eq!(resolve(&config, &roles).trend, trendable(mark), "{mark:?}");
+            assert_eq!(trendable(mark), mark == ChartMark::Scatter, "{mark:?}");
+        }
+
+        let plain = ChartConfig {
+            mark: Some(ChartMark::Scatter),
+            ..ChartConfig::default()
+        };
+        let fitted = ChartConfig {
+            trend: true,
+            ..plain.clone()
+        };
+        assert_eq!(read(&plain, &roles), read(&fitted, &roles));
     }
 
     /// A measure on X is not also a default Y: an untouched config must never plot a column
