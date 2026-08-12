@@ -1,8 +1,9 @@
 //! One grid cell — a hoverable, selectable fixed-width slot. Used for body data cells, the row-number
-//! gutter, and the `#` corner (not the trailing filler). It owns its hover state **locally** and reads
-//! the selection **reactively**, so only the cell under the cursor / in the selection repaints — no
-//! grid-wide re-render, and it updates even inside the memoized virtual scroller. The trailing 1px
-//! column rule lives *inside* the slot width, so header + body slots with the same width stay aligned.
+//! gutter, and the `#` corner (not the trailing filler). It owns its hover state **locally** (a
+//! pointer move repaints only the cell under it) and reads the selection **reactively** — every
+//! mounted cell restyles itself on a selection change, but the grid itself never re-renders, and the
+//! update reaches cells inside the memoized virtual scroller. The trailing 1px column rule lives
+//! *inside* the slot width, so header + body slots with the same width stay aligned.
 
 use freya::prelude::*;
 
@@ -46,9 +47,24 @@ pub struct Cell {
     /// holds one handler per event name and `on_secondary_down` is sugar over
     /// `on_pointer_down`, so a second listener would silently replace the selection one.
     pub on_secondary: Option<EventHandler<Event<PointerEventData>>>,
+    /// Diff identity — the column index for a data cell (set via `.key()`), so a column-window
+    /// shift matches the surviving cells' scopes across positions (hover state stays put, only
+    /// entering columns mount); `None` for the gutter and the `#` corner, which never shift.
+    /// The key does not skip re-renders: the handler props compare unequal by construction.
+    pub key: DiffKey,
+}
+
+impl KeyExt for Cell {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
 }
 
 impl Component for Cell {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
     fn render(&self) -> impl IntoElement {
         let mut hovered = use_state(|| false);
         let sel = self.sel;

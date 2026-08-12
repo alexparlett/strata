@@ -682,11 +682,14 @@ src/apps/project/                the project window (Valin-shaped)
         mod.rs                   results panel — freya-query-driven states (empty / running /
                                  grid / explain / error) off the workbench's `request` slot
         datagrid/                mod, header, cell, row, model, interaction  (sticky typed
-                                 header, virtualized cells, per-column resize + double-click
-                                 autofit; row.rs is one virtualized body row — everything
-                                 reactive read *inside* the memoized builder — owning its cells'
-                                 handlers: record view, value modal, right-click copy menu;
-                                 interaction.rs the focus-routed copy-chord + copy-menu tests)
+                                 header, cells virtualized in **both** directions — a
+                                 VirtualScrollView over the rows × a scroll-derived column
+                                 window, spacers standing in for the off-window extent —
+                                 per-column resize + on-demand double-click autofit; row.rs is
+                                 one virtualized body row — everything reactive read *inside*
+                                 the memoized builder — owning its cells' handlers: record
+                                 view, value modal, right-click copy menu; interaction.rs the
+                                 focus-routed copy-chord + copy-menu tests)
         record_view.rs           the whole-row modal (P2-10): its nested blocks are
                                  `cell_preview_json`'s **bounded, sampled** text (P2-24), built once
                                  per row through a synchronous `PreviewMemo` rather than per render

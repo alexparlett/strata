@@ -61,6 +61,13 @@ impl PartialEq for GridData {
     }
 }
 
+/// `Eq` is what lets an `Rc<GridData>` comparison take std's pointer-identity fast path
+/// (specialized on `T: Eq`) — so a props diff carrying an unchanged page is one pointer
+/// compare instead of a walk of every cell (measured: a resize drag paid that walk per
+/// pointer move through the virtual scroller's `builder_data`). The claim holds: the
+/// manual `eq` above is reflexive — `Arc::ptr_eq` plus float-free display fields.
+impl Eq for GridData {}
+
 impl GridData {
     /// Page 1, riding in the Run's own [`QueryOutput`] — no page fetch on first paint. The
     /// batch is the Run's page-1 batch (`QueryPage::batch`), cheap to clone (`Arc`'d arrays).

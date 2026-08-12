@@ -162,7 +162,7 @@ pub enum StatKey {
 /// `exact` is false when the source truncated the value (Parquet does this to long
 /// strings / binary routinely), making it a bound rather than the value — the inspector
 /// marks those `~`. Computed facts are always exact.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stat {
     pub key: StatKey,
     pub text: String,
@@ -171,7 +171,7 @@ pub struct Stat {
 
 /// One column of a table or view — its type, nullability, nested children, and the
 /// facts read for free from the source.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColumnInfo {
     pub name: String,
     pub dtype: String,
