@@ -63,7 +63,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 | 2 · Workbench | editor · results grid · tabs · run/explain · find/record/copy · Table/Chart · toolbar · status bar | ✅ done (folder removed) |
 | 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · the whole drawer (Problems · Events · History) | ✅ done (folder removed) |
 | 4 · Multi-window | launcher · settings · export · configure · native close · write resiliency | ✅ done (folder removed) |
-| **5 · Design polish** | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | 🟡 **P5-06 (panel overflow) done; the rest open** → [`phase-5-design-polish/`](phase-5-design-polish/README.md) |
+| **5 · Design polish** | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | 🟡 **P5-06 (panel overflow) + P5-08 (scroll acceleration) done; the rest open** → [`phase-5-design-polish/`](phase-5-design-polish/README.md) |
 | 6 · Platform + parity | keymap/hotkeys · command palette · native menu · parity sweep | ✅ done (folder removed) |
 
 ## Cross-cutting workstreams (not in a single phase)
@@ -90,9 +90,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Agent access** ([`workstream-agent-access/`](workstream-agent-access/README.md), AA) —
   agent-driven access to a project's data: one read-only tool vocabulary (`strata-agent`) over a
   verified Tokio↔Freya bridge, with thin swappable frontends. **01–05 (incl. 03b/03c) ✅**: the
-  in-app MCP server, the Agents pane (an agent's runs are dispatched straight at the engine and
-  shown in their own surface, promotable into a **new** tab — never a press on the user's tabs),
-  the Settings pane, and the headless `strata mcp <project>` stdio host. **AA-06 (the chat
+  in-app MCP server, the agents satellite (an agent's runs are dispatched straight at the engine
+  and never touch the user's tabs), the Settings pane, and the headless `strata mcp <project>`
+  stdio host. **The Agents pane and the header's status dot were later removed on request**
+  (2026-08-12): the server and the vocabulary are unchanged, and nothing in the app now shows
+  who is connected or whether it is listening. **AA-06 (the chat
   pane) graduated to its own workstream** (below). **AA-07 ✅** (built 2026-08-11) closed the
   folder's last gap: the list-shaped tools were unbounded and the assistant's result cap cut
   them positionally while naming a recovery three of them do not have. Now every list answer
@@ -108,7 +110,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   provider kind saying what *addresses* it; the per-conversation pick of provider/model/effort
   lives on the pane's composer, a split settled 2026-08-09), the pane, the **secret store**
   (OS keystore; config holds references, never keys), the **model listings** a picker reads, and
-  **chat persistence**. **01 ✅** (the ten tools are `StrataTools`' own public methods and
+  **chat persistence**. The workstream is **complete**. **01 ✅** (the ten tools are `StrataTools`' own public methods and
   the `#[tool]` items are wrappers over them; `manifest()` derives the model-facing offer from
   the router that answers `tools/list`), **02 ✅** (`strata_agent::assistant` — one provider
   table every surface reads, the turn loop with its event stream and cancel, and `offer_sql`,
@@ -125,9 +127,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   done and the keystore round trip works; AI ▸ Chat was two controls short and the model
   `Select` landed with 06, leaving the retention pair that only means something once
   conversations persist (07). **07 ⬜.** Two corrections settled with 02 and recorded in that
-  workstream's README: the Agents pane is for **headless MCP clients only** (the assistant is
-  kept out of it by its minted `AgentId`), and a runnable statement is a **tool call**, not a
-  markdown convention. One more settled with 04: the canvas's "Thought for Ns" line is **AS-02's
+  workstream's README: the Agents pane was for **headless MCP clients only** (the assistant was
+  kept out of it by its minted `AgentId` — the mark survives the pane's removal, and is now what
+  lets the close confirm name the assistant as itself), and a runnable statement is a **tool
+  call**, not a markdown convention. One more settled with 04: the canvas's "Thought for Ns" line is **AS-02's
   to enable** — its stream loop folds reasoning chunks into the next request rather than emitting
   them, so there is no event a pane could render.
 - **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
@@ -153,14 +156,21 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
+<<<<<<< HEAD
 1. **Assistant AS-07**, with AS-03 closing behind it. The pane is built (AS-04) over the loop
    (AS-02), Settings ▸ AI (AS-03) and the model listings (AS-06 — the pane consumes
    `Listings::offer`, and `probe::refresh` **moved** to `state::listings` rather than being
    written twice). What remains is persisting a conversation, which now has a transcript to
    persist: `Chats::settle` is the hook it was shaped for. AS-03's last two controls are the
    retention pair that only means something once it lands.
+=======
+1. **Chart follow-ons** (05, 07, 09–11) — presets, templates, shape panel, Tier B marks,
+   trendline.
+>>>>>>> origin/main
 2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work; can interleave
    with the above.
+
+(The **Assistant** workstream is closed: AS-07 landed 2026-08-11 and AS-03 closed behind it.)
 
 ## Sourcing
 

@@ -33,15 +33,15 @@ use crate::apps::project::close::{
 };
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    load_project, seed_pick, use_agent_bridge, use_autosave, use_diagnostics, use_engine_config,
-    use_engine_restart, use_init_agents, use_init_catalog_selection, use_init_chats,
-    use_init_faults, use_init_history, use_init_log, use_init_project, use_init_session,
-    AssistantCtx, Chan, EngineRestart, Loaded, SessionState,
+    chats_cap, load_project, seed_pick, use_agent_bridge, use_autosave, use_diagnostics,
+    use_engine_config, use_engine_restart, use_init_agents, use_init_catalog_selection,
+    use_init_chats, use_init_faults, use_init_history, use_init_log, use_init_project,
+    use_init_session, use_report, AssistantCtx, Chan, EngineRestart, Loaded, SessionState,
 };
 use crate::apps::project::views::{
-    CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher, DropConfirm, DropTarget,
-    HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget, ProjectLoadFailed,
-    ProjectLoading, RequestKeepers, ShapeDialog, ShapeTarget, Shell,
+    ChatConfirm, ChatDrop, CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher,
+    DropConfirm, DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget,
+    ProjectLoadFailed, ProjectLoading, RequestKeepers, ShapeDialog, ShapeTarget, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -637,8 +637,8 @@ impl Component for ProjectLoaded {
         // This project's Session store, from the snapshot the load already restored (tabs /
         // order / active / layout), else one blank tab.
         use_init_session(self.loaded.clone());
-        // What each connected agent is doing in this project (AA-03b) — the satellite behind
-        // the sidebar's Agents pane, stood up before the bridge that records into it.
+        // Which agents are working in this project and what they hold (AA-03b) — the window's
+        // own bookkeeping, stood up before the bridge that records into it.
         use_init_agents();
         // Lend this project to the agent-access service directory for as long as *this mount*
         // lasts, and drive the asks that come back (AA-03). Here rather than on the window
@@ -652,8 +652,9 @@ impl Component for ProjectLoaded {
         );
         // The assistant's own handles (AS-04). Its `StrataTools` is minted **once per mount**
         // and `in_app`, so every conversation in this window is the same agent holding the same
-        // query sessions — and the Agents pane leaves it out by construction rather than by
-        // comparing an identity. It reaches this project the way any agent does: through the
+        // query sessions — and the close confirm names it as the assistant by construction
+        // rather than by comparing an identity. It reaches this project the way any agent
+        // does: through the
         // directory, scoped by the project **root**, which is the identity a name may collide
         // with.
         use_provide_context({
@@ -669,9 +670,15 @@ impl Component for ProjectLoaded {
             }
         });
         // This window's conversations, seeded from Settings' defaults through the one funnel
-        // that drops a provider which is no longer enabled. Ephemeral: nothing here reaches
-        // `session.json` (AS-07 is what makes a transcript survive a restart).
-        use_init_chats(seed_pick(&config.peek().settings.ai));
+        // that drops a provider which is no longer enabled. The stored ones load here too
+        // (AS-07): heads only, rotated down to the user's cap, with the transcripts read when a
+        // switcher row is actually pressed.
+        use_init_chats(
+            seed_pick(&config.peek().settings.ai),
+            self.root.clone(),
+            chats_cap(config),
+            use_report(),
+        );
         // Debounced autosave of that session back to `.strata/session.json`. Its subscription
         // is inside the effect's own scope, so it never re-renders this root; its `use_drop`
         // is what makes a close — or a re-root — keep the last few hundred milliseconds.
@@ -706,6 +713,10 @@ impl Component for ProjectLoaded {
         // like the close target above, because the dialog is mounted at this root and its
         // trigger is elsewhere — a catalog row's context menu sets it (P3-06).
         let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
+        // The chat pane's own destructive questions (AS-07), in a slot for the same reason the
+        // catalog's are: a confirm mounted inside the pane it belongs to is a key barrier over
+        // nothing, because listeners fire in document order.
+        let chat_target = use_provide_context(|| State::create(None::<ChatDrop>));
         // The profile-cost slot (P3-10), on the same terms: the entry a *first* scan is being
         // confirmed for. Its triggers are the catalog row menus and the inspector's scan card;
         // a re-scan never fills it (`ProfileActions::ask`).
@@ -759,6 +770,12 @@ impl Component for ProjectLoaded {
             // catalog one in document order.
             .child(DropConfirm {
                 target: drop_target,
+            })
+            // The chat pane's delete / clear (AS-07), beside the catalog's and after it: both
+            // destroy a project's work, and the catalog's question is about something the engine
+            // is holding.
+            .child(ChatConfirm {
+                target: chat_target,
             })
             // The profile-cost confirm (P3-10). Last of the three, in the order their questions
             // outrank each other: a running query, then a destructive catalog change, then a

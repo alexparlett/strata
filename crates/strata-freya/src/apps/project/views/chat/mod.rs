@@ -5,13 +5,13 @@
 //! [`transcript`], and the [`composer`] with the conversation's provider · model · effort
 //! pick in its footer.
 //!
-//! ## What it is, next to the Agents pane
+//! ## What it is, next to an MCP client
 //!
-//! The other agent surface answers "which external clients are connected to my project right
-//! now". This one is the agent that is *part of the app*: the user is looking at it, which is
-//! why "open this in a tab" is a wanted gesture here and an intrusion there. The assistant is
-//! deliberately absent from the Agents pane — by construction, through
-//! `StrataTools::in_app`, never by comparing a name (AA-03c).
+//! An MCP client is an agent working in the project from somewhere else, and nothing it runs
+//! reaches the user's tabs. This one is the agent that is *part of the app*: the user is
+//! looking at it, which is why "open this in a tab" is a wanted gesture here and an intrusion
+//! there. The app tells the two apart by construction, through `StrataTools::in_app`, never by
+//! comparing a name (AA-03c).
 //!
 //! ## Two kinds of card, and the difference is the whole point
 //!
@@ -27,8 +27,8 @@
 //!
 //! ## Promotion is two presses, and never an edit
 //!
-//! *Open in tab* and *Run* both go through the editor's own `actions::open_sql` — the same funnel
-//! the Agents pane promotes through — so a promoted statement is an ordinary scratch tab:
+//! *Open in tab* and *Run* both go through the editor's own `actions::open_sql`, so a promoted
+//! statement is an ordinary scratch tab:
 //! editable, saveable, undoable. **Nothing here ever writes the user's buffer.** A fix arrives as
 //! a new tab, because the buffer is often the only record of how a number was reached.
 //!
@@ -46,6 +46,7 @@
 
 mod card;
 mod composer;
+mod export;
 mod header;
 mod mention;
 mod transcript;
@@ -87,7 +88,7 @@ define_theme!(
         meta_color: Color,
         /// A step card's figures: what the call cost, one step brighter than
         /// [`meta_color`](Self::meta_color) because it is the card's own data rather than its
-        /// furniture — the Agents pane's distinction, on the same kind of row.
+        /// furniture.
         figures_color: Color,
         /// A card's own surface and edge, and the offer card's SQL.
         card_background: Color,
@@ -298,8 +299,9 @@ mod tests {
     use crate::agent::{create_global_agent, AgentDirectory};
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{
-        seed_pick, AssistantCtx, Chats, ProjChan, ProjectState, SessionState,
+        seed_pick, AssistantCtx, Chats, Log, PersistFaults, ProjChan, ProjectState, SessionState,
     };
+    use crate::apps::project::views::ChatDrop;
     use crate::components::tool_button::TOOL_SIZE;
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
@@ -328,6 +330,7 @@ mod tests {
             default_provider: Some(ProviderKind::Anthropic),
             default_model: "claude-sonnet-4-5".into(),
             default_effort: None,
+            ..Ai::default()
         }
     }
 
@@ -362,6 +365,13 @@ mod tests {
                     ))
                 });
                 r.provide_root_context(EngineCtx::default);
+                // The header reports through both halves of the write funnel — an export says
+                // so in the log, a conversation the store could not write raises a condition.
+                r.provide_root_context(|| State::create(Log::default()));
+                r.provide_root_context(|| State::create(PersistFaults::default()));
+                // The pane's destructive presses set this slot; the dialog that reads it is
+                // mounted at the window root, which this harness does not stand up.
+                r.provide_root_context(|| State::create(None::<ChatDrop>));
                 let listings: ModelListings =
                     r.provide_root_context(|| State::create_global(Listings::default()));
                 let probes = r.provide_root_context(|| State::create_global(Probes::default()));

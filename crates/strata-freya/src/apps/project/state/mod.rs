@@ -1,7 +1,7 @@
 //! The per-window stores (Radio): the **Session** (open tabs + arrangement) and the
 //! **Project** (the open project's catalog defs — the save targets), plus the two satellites that
 //! need no channels of their own — query [`history`], the [`log`] behind the drawer's Events
-//! tab, and the [`agents`] satellite behind the sidebar's Agents pane. See
+//! tab, and the [`agents`] satellite holding what each agent is working in. See
 //! `docs/FREYA_STATE_ARCHITECTURE.md` §2–§4 (the stores) and §8 (the satellites).
 
 mod agent;
@@ -10,6 +10,7 @@ mod catalog;
 mod channel;
 mod chat;
 mod chat_send;
+mod chat_store;
 mod diagnostics;
 mod engine_config;
 mod history;
@@ -23,7 +24,7 @@ mod statement;
 /// The window's half of agent access: the ask/notice driver (AA-03, re-pointed by AA-03b),
 /// and the satellite it records into.
 pub use agent::use_agent_bridge;
-pub use agents::{use_init_agents, AgentRun, Agents, AgentsCtx, ConnectedAgent};
+pub use agents::{use_init_agents, Agents, AgentsCtx};
 pub use catalog::{
     catalog_settled, use_catalog, use_catalog_rescan, use_catalog_selection,
     use_init_catalog_selection, Catalog, CatalogRescan, CatalogSelection,
@@ -38,8 +39,14 @@ pub use channel::Chan;
 /// up by hand, where the window goes through `use_init_chats`.
 #[cfg(test)]
 pub use chat::Chats;
-pub use chat::{use_init_chats, Anchor, Block, ChatId, ChatsCtx, Pick, Reply, Step, Turn};
-pub use chat_send::{blocked, seed_pick, send, AssistantCtx, Stores};
+pub use chat::{
+    chats_cap, use_init_chats, Anchor, Block, Chat, ChatId, ChatsCtx, Pick, Reply, RowKey, Step,
+    Turn,
+};
+pub use chat_send::{
+    blocked, clear_all, discard, open_stored, seed_pick, send, store, store_shed, AssistantCtx,
+    Stores,
+};
 pub use diagnostics::use_diagnostics;
 pub use engine_config::{use_engine_config, use_engine_restart, EngineRestart};
 /// Only tests name the satellite itself: they stand its context signal up by hand, where the

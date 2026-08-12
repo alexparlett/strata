@@ -88,9 +88,6 @@ pub struct AgentServer {
     /// tasks rather than polling them, so anything placed after the loop's `break` would
     /// simply never run.
     retract: Box<dyn Fn() + Send>,
-    /// The same manager the service routes through, kept so the app can ask how many clients
-    /// are paired right now — see [`clients`](AgentServer::clients).
-    sessions: Arc<LocalSessionManager>,
 }
 
 impl AgentServer {
@@ -130,7 +127,6 @@ impl AgentServer {
 
         let cancel = CancellationToken::new();
         let tools = StrataTools::new(host);
-        let sessions = Arc::new(LocalSessionManager::default());
         let sweeper = tools.clone();
         let service = StreamableHttpService::new(
             // **A connection's worth of agent, where there is a connection.** On the session
@@ -143,7 +139,7 @@ impl AgentServer {
             // same agent and never retract one; the retraction a per-request value performs
             // removes nothing, because its id was never used.
             move || Ok(tools.connection()),
-            Arc::clone(&sessions),
+            Arc::new(LocalSessionManager::default()),
             // Defaults throughout but the token: the DNS-rebinding host allow-list already
             // names loopback, and session mode is left as rmcp ships it so clients that
             // negotiate an older protocol version still pair.
@@ -157,7 +153,6 @@ impl AgentServer {
             rt: Some(rt),
             cancel,
             addr,
-            sessions,
             retract: Box::new(move || sweeper.retire_all()),
         })
     }
@@ -166,29 +161,6 @@ impl AgentServer {
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
-
-    /// How many MCP clients are paired right now, or `None` if the answer could not be
-    /// sampled without waiting.
-    ///
-    /// A **session**, not a request: a Streamable-HTTP client is paired from the `initialize`
-    /// that mints its `Mcp-Session-Id` until the `DELETE` that ends it, which is exactly what
-    /// "an agent is connected" means to someone looking at a status dot — a client sitting
-    /// idle between tool calls is still connected.
-    ///
-    /// **Never blocks**, and that is the whole shape of it: the caller is the render thread,
-    /// the lock is held by whichever request is being routed, and a status light is not worth
-    /// a frame. `None` means "ask again"; the caller keeps what it last saw rather than
-    /// reporting a drop that did not happen.
-    ///
-    /// One honest limit, and it is rmcp's rather than ours: a client that goes away *without*
-    /// sending its `DELETE` — killed, crashed, its connection reset — leaves a session behind
-    /// until `SessionConfig::keep_alive` reaps it, five minutes of inactivity by default. So
-    /// this over-reports for at most that long after an abrupt disconnection, and never
-    /// under-reports. The alternative (call a paired client gone the moment it goes quiet)
-    /// would flap on every agent that sits thinking between tool calls, which is most of them.
-    pub fn clients(&self) -> Option<usize> {
-        self.sessions.sessions.try_read().ok().map(|s| s.len())
-    }
 }
 
 impl Drop for AgentServer {
@@ -196,10 +168,10 @@ impl Drop for AgentServer {
         // **Before** the cancel, and here rather than in the sweep task: a stateless agent
         // has no connection whose drop retracts it, so stopping the server is the last chance
         // to release its query sessions. Without this, turning agent access off (or changing
-        // the port, which builds a fresh server and roster) leaves a ghost row in every
-        // window's Agents pane and holds each session's snapshot for the engine's life —
-        // while a session-lifecycle client retracts itself through `Connection::drop`, so the
-        // two paths would disagree.
+        // the port, which builds a fresh server and roster) leaves a ghost agent in every
+        // window's satellite and holds each session's snapshot for the engine's life — while
+        // a session-lifecycle client retracts itself through `Connection::drop`, so the two
+        // paths would disagree.
         (self.retract)();
         self.cancel.cancel();
         if let Some(rt) = self.rt.take() {

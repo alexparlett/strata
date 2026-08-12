@@ -303,7 +303,6 @@ impl Host for AgentDirectory {
         let started = Self::send(&asks, |reply| AgentAsk::RunStarting {
             agent,
             session,
-            sql: sql.clone(),
             reply,
         })
         .await??;
@@ -315,8 +314,8 @@ impl Host for AgentDirectory {
         // the same — and until this guard existed the settle below simply never ran, leaving the
         // satellite's row on `Running` for the rest of the window's life. AA-03c reaps such a
         // row when a *connection* ends, which covers a client that disconnects and nothing else:
-        // the assistant's connection is the pane's whole mount, so its stopped runs would sit
-        // there until the project closed.
+        // the assistant's connection is its own mount in the window, so its stopped runs would
+        // sit there until the project closed.
         //
         // The guard's message is the engine's own `CANCELLED`, not a word invented here, so the
         // row reads exactly as a cancelled press does (AGENTS.md §2 — a stop is not a failure,
@@ -593,10 +592,9 @@ mod tests {
                 100,
             ),
             async {
-                let Some(AgentAsk::RunStarting { sql, reply, .. }) = asks.recv().await else {
+                let Some(AgentAsk::RunStarting { reply, .. }) = asks.recv().await else {
                     panic!("expected a run-starting ask");
                 };
-                assert_eq!(sql, "SELECT 1");
                 let _ = reply.send(Ok(7));
             },
         ));

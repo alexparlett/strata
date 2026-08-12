@@ -40,7 +40,8 @@ use strata_core::ai::{Ai, Effort, ProviderKind};
 use super::mention::{AttachPicker, MentionPicker, Mentions};
 use super::ChatTheme;
 use crate::apps::project::state::{
-    blocked, send, Anchor, Chan, ChatsCtx, Pick, ProjChan, ProjectState, SessionState, Stores,
+    blocked, send, store, use_report, Anchor, Chan, ChatId, ChatsCtx, Pick, ProjChan, ProjectState,
+    SessionState, Stores,
 };
 use crate::components::icon::{Icon, IconName};
 use crate::components::tool_button::ToolButton;
@@ -137,6 +138,21 @@ impl Component for Composer {
 
         // The one funnel both the button and the Enter key press.
         let stores = Stores { session, project };
+        let report = use_report();
+        let root = project.read().root.clone();
+        // Where a stopped turn's write is performed: this component's scope, which outlives the
+        // Stop button the press itself removes. The conversation rides **in the state** rather
+        // than being captured, because `use_side_effect` builds its closure once and a captured
+        // id would freeze at whichever conversation was open on the first render.
+        let mut stopping = use_state(|| None::<ChatId>);
+        use_side_effect(move || {
+            let Some(target) = *stopping.read() else {
+                return;
+            };
+            stopping.set(None);
+            let root = root.clone();
+            spawn(async move { store(&root, chats, report, target).await });
+        });
         let mut fire = {
             let ai = ai.clone();
             move || {
@@ -145,7 +161,7 @@ impl Component for Composer {
                 // already streaming, nothing configured, nothing typed — and clearing on one
                 // destroys a message the user still has to send, from an Enter that looked like
                 // it worked.
-                if send(&assistant, chats, stores, &ai, id, question) {
+                if send(&assistant, chats, stores, report, &ai, id, question) {
                     text.set(String::new());
                 }
             }
@@ -270,7 +286,21 @@ impl Component for Composer {
                     .child(match running {
                         true => ToolButton::new(IconName::Stop, "Stop")
                             .color(roles.get(Role::Error))
-                            .on_press(move |_| chats.write().stop(id)),
+                            // **A stopped turn is stored too.** `stop` settles the reply marked
+                            // cancelled, and a conversation whose last turn was stopped is
+                            // exactly as much the user's record as one that answered —
+                            // cancelled is never failed, on disk as much as on screen.
+                            //
+                            // The press only records which conversation to write; the effect
+                            // above performs it. Neither `spawn_forever` nor `spawn` works here:
+                            // the first is root-scoped and would write this subtree's state after
+                            // an await, and the second binds to *this button*, which `stop`
+                            // unmounts by flipping the composer back to Send — cancelling the
+                            // write before its first poll.
+                            .on_press(move |_| {
+                                chats.write().stop(id);
+                                stopping.set(Some(id));
+                            }),
                         false => ToolButton::new(IconName::Play, "Send")
                             .color(roles.get(Role::Accent))
                             .enabled(refusal.is_none())
@@ -321,7 +351,7 @@ impl Component for Composer {
 /// the words are.
 #[derive(PartialEq)]
 struct Chips {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pinned: Vec<Anchor>,
     theme: ChatTheme,
 }
@@ -366,7 +396,7 @@ impl Component for Chips {
 /// and the three controls read each other's picks.
 #[derive(PartialEq)]
 struct Footer {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     ai: Ai,
     theme: ChatTheme,
@@ -465,7 +495,7 @@ fn rungs(pick: &Pick) -> Option<&'static [Effort]> {
 /// for.
 #[derive(PartialEq)]
 struct ProviderPicker {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     ai: Ai,
     theme: ChatTheme,
@@ -489,27 +519,23 @@ impl Component for ProviderPicker {
                 menu.child(
                     MenuButton::new()
                         .on_press(move |_| {
-                            if let Some(chat) = chats.write().get_mut(id) {
-                                if chat.pick.provider != Some(kind) {
-                                    chat.pick.provider = Some(kind);
-                                    // The model belongs to a provider, so one that the new
-                                    // provider does not serve is not a pick any more — and a rung
-                                    // is a property of the model, so it goes with it. Both are
-                                    // dropped rather than left to be refused at the next send.
-                                    let serves = listings
-                                        .peek()
-                                        .models(kind)
-                                        .iter()
-                                        .any(|name| name == &chat.pick.model);
-                                    if !serves {
-                                        chat.pick.model = String::new();
-                                    }
-                                    // The rung is re-asked against the new ladder even when the
-                                    // name survives, because the ladder is the pair.
-                                    chat.pick.effort =
-                                        keep_rung(kind, &chat.pick.model, chat.pick.effort);
+                            let serves: Vec<String> = listings.peek().models(kind).to_vec();
+                            chats.write().repick(id, |pick| {
+                                if pick.provider == Some(kind) {
+                                    return;
                                 }
-                            }
+                                pick.provider = Some(kind);
+                                // The model belongs to a provider, so one that the new provider
+                                // does not serve is not a pick any more — and a rung is a
+                                // property of the model, so it goes with it. Both are dropped
+                                // rather than left to be refused at the next send.
+                                if !serves.iter().any(|name| name == &pick.model) {
+                                    pick.model = String::new();
+                                }
+                                // The rung is re-asked against the new ladder even when the
+                                // name survives, because the ladder is the pair.
+                                pick.effort = keep_rung(kind, &pick.model, pick.effort);
+                            });
                             open.set(false);
                         })
                         .child(
@@ -540,7 +566,7 @@ impl Component for ProviderPicker {
 /// **The model**, from what the picked provider reports serving.
 #[derive(PartialEq)]
 struct ModelPicker {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     ai: Ai,
     theme: ChatTheme,
@@ -615,12 +641,12 @@ impl Component for ModelPicker {
                             let name = name.clone();
                             move |_| {
                                 let name = name.clone();
-                                if let Some(chat) = chats.write().get_mut(id) {
+                                chats.write().repick(id, |pick| {
                                     // A rung the new model does not offer is dropped, not kept
                                     // out of sight.
-                                    chat.pick.effort = keep_rung(kind, &name, chat.pick.effort);
-                                    chat.pick.model = name;
-                                }
+                                    pick.effort = keep_rung(kind, &name, pick.effort);
+                                    pick.model = name;
+                                });
                                 open.set(false);
                             }
                         })
@@ -709,7 +735,7 @@ fn picker_trigger(
 /// The reasoning rung, offered only where the model has one.
 #[derive(PartialEq)]
 struct EffortPicker {
-    id: crate::apps::project::state::ChatId,
+    id: ChatId,
     pick: Pick,
     rungs: &'static [Effort],
     theme: ChatTheme,
@@ -732,15 +758,15 @@ impl Component for EffortPicker {
                 menu.child(
                     MenuButton::new()
                         .on_press(move |_| {
-                            if let Some(chat) = chats.write().get_mut(id) {
+                            chats.write().repick(id, |pick| {
                                 // Pressing the rung already set clears it — "no preference" is a
                                 // real value (the model's own default) and otherwise there would
                                 // be no way back to it.
-                                chat.pick.effort = match chat.pick.effort {
+                                pick.effort = match pick.effort {
                                     Some(set) if set == rung => None,
                                     _ => Some(rung),
                                 };
-                            }
+                            });
                             open.set(false);
                         })
                         .child(

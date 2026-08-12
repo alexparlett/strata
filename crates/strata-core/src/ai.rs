@@ -130,7 +130,7 @@ pub struct ProviderSetup {
 /// One struct rather than four flat fields of [`Settings`](crate::config::Settings), for
 /// `AgentAccess`'s reason: they are read and written as a unit, and the Settings draft's
 /// per-field diff is against exactly this value.
-#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Ai {
     /// The providers the user has touched. A kind absent from this map has never been enabled
     /// and holds no credential.
@@ -154,6 +154,39 @@ pub struct Ai {
     /// model's own default — which is also the only valid value for a model with no rungs.
     #[serde(default)]
     pub default_effort: Option<Effort>,
+    /// How many conversations a project keeps (AS-07): the newest kept, both in the window's
+    /// satellite and in `.strata/chats/`, which the load rotates down to it.
+    ///
+    /// Retention rather than display, on `max_history`'s terms and for its reason: an unbounded
+    /// on-disk record of everything the user ever asked about their data is not a default anyone
+    /// opted into. Lowering it in Settings **deletes** the conversations past the new cap on the
+    /// next open, so its floor is [`CHATS_MIN`] and never zero.
+    #[serde(default = "default_max_chats")]
+    pub max_chats: usize,
+}
+
+/// The floor for [`Ai::max_chats`] — the smallest set of conversations a project can keep.
+///
+/// [`HISTORY_MIN`](crate::config::HISTORY_MIN)'s reason exactly: the cap drives the rotation, so
+/// a zero would have the next open delete every stored conversation.
+pub const CHATS_MIN: usize = 1;
+
+/// Matches the `MAX_CHATS` the chat satellite caps a window's live conversations at, so the
+/// stored set and the list a window can hold are one number until the user changes it.
+fn default_max_chats() -> usize {
+    20
+}
+
+impl Default for Ai {
+    fn default() -> Self {
+        Ai {
+            providers: BTreeMap::new(),
+            default_provider: None,
+            default_model: String::new(),
+            default_effort: None,
+            max_chats: default_max_chats(),
+        }
+    }
 }
 
 impl Ai {
@@ -301,6 +334,7 @@ mod tests {
             default_provider: Some(ProviderKind::Anthropic),
             default_model: "claude-sonnet-5".into(),
             default_effort: Some(Effort::High),
+            ..Ai::default()
         };
 
         let written = serde_json::to_string(&ai).unwrap();

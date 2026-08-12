@@ -1,9 +1,12 @@
-//! The window's **agents** satellite (AA-03b) — what each connected agent is doing in this
-//! project, and the record behind the sidebar's Agents pane.
+//! The window's **agents** satellite (AA-03b) — which agents are working in this project, the
+//! query sessions each holds, and what is in flight in them.
+//!
+//! It is the window's bookkeeping, not a surface: the ownership check every session-scoped
+//! tool is answered through, the per-agent session cap, the teardown a retraction owes, and
+//! the close confirm's "whose work is this". Nothing renders it.
 //!
 //! A context signal rather than a store, on the same terms as [`Log`](super::log::Log) and
-//! [`History`](super::history::History): nothing needs surgical per-channel updates, because
-//! one append wakes exactly one reader (the pane, when it is mounted).
+//! [`History`](super::history::History): nothing needs surgical per-channel updates.
 //!
 //! ## Why it is not `SessionState`
 //!
@@ -47,7 +50,6 @@ use std::collections::VecDeque;
 
 use freya::prelude::{use_provide_context, State};
 use strata_agent::{Agent, AgentId, AgentIdentity, QuerySessionId};
-use strata_core::util::now_secs;
 
 use crate::agent::RunOutcome;
 
@@ -62,18 +64,19 @@ const RUNS_PER_SESSION: usize = 50;
 /// take a session that is *working* — see [`Agents::opened`].
 const SESSIONS_PER_AGENT: usize = 20;
 
-/// One query an agent ran.
+/// One run an agent dispatched, and what became of it.
+///
+/// **The SQL is not here.** It was, for the pane that rendered it; with no surface left, a
+/// trail of query text is memory the window holds and nothing can ever read. What the two
+/// consumers below need is the sequence number a settle names its run by, and the outcome
+/// [`is_running`](QuerySession::is_running) reads.
 #[derive(Clone, PartialEq, Debug)]
 pub struct AgentRun {
-    /// Append order — the row's list key, so a run arriving above another doesn't shuffle
-    /// the rest through each other's scopes. Per satellite, which is all a key needs to be.
+    /// Append order — and the key a settle matches on, so an agent that presses on before a
+    /// slow query finishes cannot have the older outcome stamped onto the newer run. Per
+    /// satellite, which is all a key needs to be.
     pub seq: u64,
-    pub sql: String,
     pub outcome: RunOutcome,
-    /// Unix seconds at dispatch. Rendered through
-    /// [`ago`](strata_core::util::ago) at paint, like the History drawer's cards — nothing
-    /// re-renders this list on a clock.
-    pub at: u64,
 }
 
 /// What closing a query session did.
@@ -109,28 +112,19 @@ pub struct QuerySession {
     /// connection does. The engine side of that case is already covered — `DispatchGuard`
     /// retires whatever a dropped run materialized.
     pub closing: bool,
-    /// What the pane calls it — `Session 1`, `Session 2`, per agent, in the order they were
-    /// opened.
-    ///
-    /// A query session genuinely has no name (that is why `QuerySessionInfo` carries none),
-    /// but a *list* of them needs rows a person can tell apart, and every alternative is
-    /// worse: the handle is a uuid, the newest query repeats the card right below it, and a
-    /// position shifts every time a session opens. So it is the tab strip's own answer —
-    /// `next_query_name`'s monotonic counter — applied to the same problem.
-    pub ordinal: usize,
     pub runs: VecDeque<AgentRun>,
 }
 
 impl QuerySession {
     /// Is **any** run in this session still in flight? The satellite's own record of what the
     /// driver observed — `Engine::is_running` is the authority a *tool* is answered with
-    /// (`state::agent::sessions`), and asking it here would put a second answer on screen.
+    /// (`state::agent::sessions`), and asking it here would put a second answer beside it.
     ///
     /// Any, not the newest: MCP permits concurrent requests on one connection, so an agent
     /// can have two runs open in one session, and a fast second settling first would
-    /// otherwise report the session idle while the first is still executing. Every consumer
-    /// wants the same reading — the pane's dress, the eviction gate, and the tombstone above
-    /// — and each of the other two destroys work if it is wrong.
+    /// otherwise report the session idle while the first is still executing. Both consumers
+    /// want the same reading — the eviction gate and the tombstone above — and each destroys
+    /// work if it is wrong.
     pub fn is_running(&self) -> bool {
         self.runs.iter().any(|r| r.outcome == RunOutcome::Running)
     }
@@ -146,19 +140,17 @@ pub struct ConnectedAgent {
     ///
     /// It is **held like any other agent** — the ownership check, the per-agent session cap
     /// and the teardown on retraction all have to work for the assistant exactly as they do
-    /// for an MCP client — and simply not **listed**: see [`Agents::agents`].
+    /// for an MCP client — and told apart only where the difference is a different sentence
+    /// to the user: see [`Agents::sessions_of`].
     pub in_app: bool,
-    /// **Oldest session first** (canvas): the list reads as the order the agent opened them,
-    /// so the ordinals below run 1, 2, 3 down the pane. The *runs* inside a session are the
-    /// other way round, newest first, because that is where "what is it doing now" is read.
+    /// **Oldest session first**: the list reads as the order the agent opened them. The *runs*
+    /// inside a session are the other way round, newest first, because that is where "what is
+    /// it doing now" is read.
     pub sessions: VecDeque<QuerySession>,
-    /// The ordinal the next session gets. Monotonic and never reused, so closing session 2
-    /// does not rename session 3 out from under whoever was reading it.
-    next_ordinal: usize,
 }
 
 impl ConnectedAgent {
-    /// What the pane's row calls this agent.
+    /// What this agent is called — the name the event log attributes its runs to.
     ///
     /// A client is not obliged to introduce itself, and `clientInfo` is the only thing it ever
     /// tells us — so an empty name gets a plain stand-in rather than a blank row.
@@ -168,28 +160,13 @@ impl ConnectedAgent {
             name => name,
         }
     }
-
-    /// The row's tooltip — name and version — or `None` when the client named no version, in
-    /// which case a tooltip would only repeat the row.
-    ///
-    /// The canvas's title also said "· connected"; every agent in this pane is, by
-    /// construction, which is the same tautology that removed the row's status dot.
-    pub fn detail(&self) -> Option<String> {
-        match self.identity.version.trim() {
-            "" => None,
-            version => Some(format!("{} {version}", self.name())),
-        }
-    }
 }
 
 /// Every agent connected to **this** project window.
 ///
-/// **Only connected agents are here**, which is the pane's whole premise (canvas): a client that
-/// disconnects takes its query sessions with it, so this answers "what is working on my project
-/// right now" rather than becoming a second history. It is also why no row wears a
-/// connected/disconnected mark — a mark with one possible value is decoration implying a
-/// distinction the data does not carry, the same reasoning that left the History drawer's cards
-/// without a status dot.
+/// **Only connected agents are here**: a client that disconnects takes its query sessions with
+/// it, so this answers "what is working on my project right now" rather than becoming a second
+/// history.
 #[derive(Default)]
 pub struct Agents {
     agents: VecDeque<ConnectedAgent>,
@@ -212,17 +189,13 @@ impl Agents {
                     identity: agent.identity.clone(),
                     in_app: agent.in_app,
                     sessions: VecDeque::new(),
-                    next_ordinal: 1,
                 });
                 0
             }
         };
-        let ordinal = self.agents[at].next_ordinal;
-        self.agents[at].next_ordinal += 1;
         let held = &mut self.agents[at].sessions;
         held.push_back(QuerySession {
             id: session,
-            ordinal,
             closing: false,
             runs: VecDeque::new(),
         });
@@ -251,8 +224,8 @@ impl Agents {
     ///
     /// Read before the retraction takes a write, because `agent_gone` is broadcast to every
     /// window and `State::write` wakes every subscriber whether or not the mutation changes
-    /// anything — so without this a disconnect re-renders the pane in windows that never saw
-    /// the agent.
+    /// anything — so without this a disconnect wakes every subscriber in windows that never
+    /// saw the agent.
     pub fn knows(&self, agent: AgentId) -> bool {
         self.agents.iter().any(|a| a.id == agent)
     }
@@ -303,7 +276,7 @@ impl Agents {
 
     /// A run has been dispatched into `session`. Ignored when the agent holds no such
     /// session, which the caller has already refused — so this cannot invent a row.
-    pub fn run_started(&mut self, agent: AgentId, session: QuerySessionId, sql: String) {
+    pub fn run_started(&mut self, agent: AgentId, session: QuerySessionId) {
         self.next_seq += 1;
         let seq = self.next_seq;
         let Some(held) = self.session_mut(agent, session) else {
@@ -311,9 +284,7 @@ impl Agents {
         };
         held.runs.push_front(AgentRun {
             seq,
-            sql,
             outcome: RunOutcome::Running,
-            at: now_secs(),
         });
         while held.runs.len() > RUNS_PER_SESSION {
             held.runs.pop_back();
@@ -364,40 +335,23 @@ impl Agents {
         self.next_seq + 1
     }
 
-    /// Every **connected** agent, newest connection first — the projection the pane renders,
-    /// and the enforcement point for "the Agents pane lists the clients that dialled in".
-    ///
-    /// The app's own assistant is held in this satellite like any other agent, because the
-    /// ownership check, the session cap and the teardown all have to work for it — but it is
-    /// not something that connected, so it is not listed. The rule is expressed once, here,
-    /// off a flag the core mints (`Agent::in_app`); nothing compares an id or a name, and a
-    /// client cannot claim its way out of the list. [`held`](Agents::held) is the unfiltered
-    /// view for the two callers that need one.
-    pub fn agents(&self) -> impl Iterator<Item = &ConnectedAgent> {
-        self.agents.iter().filter(|a| !a.in_app)
-    }
-
-    /// Every agent this satellite holds, the assistant included — for the bookkeeping that
-    /// must not care where an agent came from (attribution in the event log).
+    /// Every agent this satellite holds, newest connection first — the assistant included, for
+    /// the bookkeeping that must not care where an agent came from (attribution in the event
+    /// log).
     pub fn held(&self) -> impl Iterator<Item = &ConnectedAgent> {
         self.agents.iter()
     }
 
-    /// How many agents are working in this project. The pane's empty state and the rail's
-    /// dress ask this, so it counts what the pane lists; there is no `is_empty` beside it,
-    /// for `Log::len`'s reason.
-    pub fn len(&self) -> usize {
-        self.agents().count()
-    }
-
-    /// Every query session in flight for agents on one side of the pane's own line: `false` is
-    /// the MCP clients the Agents pane lists, `true` is the app's own assistant.
+    /// Every query session in flight for agents on one side of the line the app draws between
+    /// its own assistant and the clients that dialled in: `false` is the MCP clients, `true` is
+    /// the assistant.
     ///
     /// What the close confirm asks the engine about to tell "an agent is running a query" from
     /// "you are" — and it takes a side because it also has to tell both from "the assistant
-    /// is", which is a different sentence: "an agent" would point the user at a pane that says
-    /// nobody is connected. The discriminator is [`ConnectedAgent::in_app`], the same mark
-    /// [`Agents::agents`] filters on, so one rule answers both.
+    /// is", which is a different sentence: "an agent" would send the user looking for a client
+    /// that is not connected. The discriminator is [`ConnectedAgent::in_app`], the flag the
+    /// core mints; nothing compares an id or a name, so a client cannot claim its way onto the
+    /// other side of the line.
     ///
     /// Tombstones included, deliberately: a session closed while its run was still being
     /// dispatched is one the engine may well still be executing, and the confirm's question
@@ -463,8 +417,8 @@ mod tests {
         session
     }
 
-    /// A run is recorded in flight and then resolved in place, so the pane shows one row per
-    /// query rather than one on dispatch and a second on settle.
+    /// A run is recorded in flight and then resolved in place, so a session holds one entry
+    /// per query rather than one on dispatch and a second on settle.
     #[test]
     fn a_run_is_recorded_running_and_then_settled_in_place() {
         let mut agents = Agents::default();
@@ -472,8 +426,8 @@ mod tests {
         let session = opened(&mut agents, &who);
 
         let seq = agents.next_run();
-        agents.run_started(who.id, session, "SELECT 1".into());
-        let listed = agents.agents().next().unwrap();
+        agents.run_started(who.id, session);
+        let listed = agents.held().next().unwrap();
         assert_eq!(listed.sessions[0].runs.len(), 1);
         assert_eq!(listed.sessions[0].runs[0].outcome, RunOutcome::Running);
 
@@ -487,7 +441,7 @@ mod tests {
                 elapsed_ms: 41,
             },
         );
-        let listed = agents.agents().next().unwrap();
+        let listed = agents.held().next().unwrap();
         assert_eq!(listed.sessions[0].runs.len(), 1, "still one row");
         assert_eq!(
             listed.sessions[0].runs[0].outcome,
@@ -509,9 +463,9 @@ mod tests {
         let session = opened(&mut agents, &who);
 
         let first = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         let second = agents.next_run();
-        agents.run_started(who.id, session, "SELECT fast".into());
+        agents.run_started(who.id, session);
         assert_ne!(first, second);
 
         agents.run_settled(
@@ -531,8 +485,10 @@ mod tests {
             RunOutcome::Stopped("superseded by a newer run".into()),
         );
 
-        let runs = &agents.agents().next().unwrap().sessions[0].runs;
-        assert_eq!(runs[0].sql, "SELECT fast");
+        // Newest first, so the second run is the head — and it wears the outcome its own
+        // `seq` was settled with, not the one that landed after it.
+        let runs = &agents.held().next().unwrap().sessions[0].runs;
+        assert_eq!(runs[0].seq, second);
         assert_eq!(
             runs[0].outcome,
             RunOutcome::Rows {
@@ -541,6 +497,7 @@ mod tests {
                 elapsed_ms: 2
             }
         );
+        assert_eq!(runs[1].seq, first);
         assert!(matches!(runs[1].outcome, RunOutcome::Stopped(_)));
     }
 
@@ -558,8 +515,8 @@ mod tests {
         assert_eq!(agents.closed(mine.id, not_ours), Closed::NoSuchSession);
 
         // And a write against a session the agent does not hold records nothing.
-        agents.run_started(mine.id, not_ours, "SELECT 1".into());
-        let listed: Vec<usize> = agents.agents().map(|a| a.sessions[0].runs.len()).collect();
+        agents.run_started(mine.id, not_ours);
+        let listed: Vec<usize> = agents.held().map(|a| a.sessions[0].runs.len()).collect();
         assert_eq!(listed, vec![0, 0]);
     }
 
@@ -592,7 +549,7 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let seq = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
 
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
         // Closed to the agent from this moment: nothing more can be dispatched into it, and
@@ -615,7 +572,7 @@ mod tests {
         );
         assert_eq!(retire, Some(session));
         assert!(agents.sessions_of(false).is_empty());
-        assert_eq!(agents.len(), 1, "the agent itself stays connected");
+        assert_eq!(agents.held().count(), 1, "the agent itself stays connected");
     }
 
     /// The workspace belongs to whichever run settles **last**. MCP permits concurrent
@@ -628,9 +585,9 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let slow = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         let fast = agents.next_run();
-        agents.run_started(who.id, session, "SELECT fast".into());
+        agents.run_started(who.id, session);
 
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
         assert_eq!(
@@ -644,13 +601,13 @@ mod tests {
         );
     }
 
-    /// **The Agents pane lists the clients that dialled in.** The app's own assistant is held
-    /// like any other agent — its sessions are owned, capped and torn down the same way, and
-    /// `list_query_sessions` must still answer for it — and it is left out of the listing
-    /// alone. The flag comes from the core (`Agent::in_app`), so nothing here compares an id
-    /// or a name and no client can claim its way out of the pane.
+    /// **The assistant is held like any other agent, and told apart by its flag.** Its
+    /// sessions are owned, capped and torn down the same way, and `list_query_sessions` must
+    /// still answer for it — what the flag buys is the close confirm's ability to say "the
+    /// assistant is running a query" rather than "an agent is", which would send the user
+    /// looking for a client that is not connected.
     #[test]
-    fn the_in_app_assistant_is_held_but_never_listed() {
+    fn the_in_app_assistant_is_held_and_told_apart_by_its_flag() {
         let mut agents = Agents::default();
         let dialled = agent("claude-code");
         let assistant = Agent {
@@ -661,26 +618,26 @@ mod tests {
             },
             in_app: true,
         };
-        let mine = QuerySessionId::new();
-        agents.opened(&dialled, QuerySessionId::new());
+        let (mine, theirs) = (QuerySessionId::new(), QuerySessionId::new());
+        agents.opened(&dialled, theirs);
         agents.opened(&assistant, mine);
-
-        // Listed: the client only. The rail badge and the pane's empty state agree.
-        let listed: Vec<&str> = agents.agents().map(ConnectedAgent::name).collect();
-        assert_eq!(listed, vec!["claude-code"]);
-        assert_eq!(agents.len(), 1);
 
         // Held: both — so the assistant owns its session and can be retracted.
         assert_eq!(agents.held().count(), 2);
         assert!(agents.holds(assistant.id, mine));
         assert!(agents.knows(assistant.id));
+
+        // Told apart: each side answers with its own sessions and nobody else's.
+        assert_eq!(agents.sessions_of(false), vec![theirs]);
+        assert_eq!(agents.sessions_of(true), vec![mine]);
+
         assert_eq!(agents.gone(assistant.id), vec![mine]);
     }
 
-    /// A client that names itself after the assistant is still a client. The pane's rule keys
-    /// on a flag the core mints, never on the identity, which is a claim made at `initialize`.
+    /// A client that names itself after the assistant is still a client. The line keys on a
+    /// flag the core mints, never on the identity, which is a claim made at `initialize`.
     #[test]
-    fn claiming_the_assistants_name_does_not_hide_a_client() {
+    fn claiming_the_assistants_name_does_not_move_a_client() {
         let mut agents = Agents::default();
         let liar = Agent {
             id: AgentId::new(),
@@ -690,8 +647,11 @@ mod tests {
             },
             in_app: false,
         };
-        agents.opened(&liar, QuerySessionId::new());
-        assert_eq!(agents.len(), 1);
+        let theirs = QuerySessionId::new();
+        agents.opened(&liar, theirs);
+
+        assert_eq!(agents.sessions_of(false), vec![theirs]);
+        assert!(agents.sessions_of(true).is_empty());
     }
 
     /// An ordinary settle retires nothing — the deferred teardown is the tombstone's alone.
@@ -701,7 +661,7 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let seq = agents.next_run();
-        agents.run_started(who.id, session, "SELECT 1".into());
+        agents.run_started(who.id, session);
 
         assert_eq!(
             agents.run_settled(who.id, session, seq, RunOutcome::Plan { analyze: false }),
@@ -722,7 +682,7 @@ mod tests {
         let mut agents = Agents::default();
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
 
         assert_eq!(agents.gone(who.id), vec![session]);
@@ -738,19 +698,19 @@ mod tests {
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
         let slow = agents.next_run();
-        agents.run_started(who.id, session, "SELECT slow".into());
+        agents.run_started(who.id, session);
         let fast = agents.next_run();
-        agents.run_started(who.id, session, "SELECT fast".into());
+        agents.run_started(who.id, session);
 
         agents.run_settled(who.id, session, fast, RunOutcome::Plan { analyze: false });
-        let listed = agents.agents().next().unwrap();
+        let listed = agents.held().next().unwrap();
         assert!(
             listed.sessions[0].is_running(),
             "the newest settled, but the slow one is still in flight"
         );
 
         agents.run_settled(who.id, session, slow, RunOutcome::Plan { analyze: false });
-        let listed = agents.agents().next().unwrap();
+        let listed = agents.held().next().unwrap();
         assert!(!listed.sessions[0].is_running());
     }
 
@@ -770,7 +730,7 @@ mod tests {
         expected.sort_by_key(|s| s.0);
         assert_eq!(released, expected);
 
-        assert_eq!(agents.len(), 1);
+        assert_eq!(agents.held().count(), 1);
         assert_eq!(agents.sessions_of(false), vec![kept]);
         // Retracting twice is a no-op, not a panic — a `Drop` can race a close.
         assert!(agents.gone(going.id).is_empty());
@@ -783,12 +743,17 @@ mod tests {
         let mut agents = Agents::default();
         let who = agent("claude-code");
         let session = opened(&mut agents, &who);
-        for i in 0..RUNS_PER_SESSION + 3 {
-            agents.run_started(who.id, session, format!("SELECT {i}"));
+        let mut dispatched = Vec::new();
+        for _ in 0..RUNS_PER_SESSION + 3 {
+            dispatched.push(agents.next_run());
+            agents.run_started(who.id, session);
         }
-        let runs = &agents.agents().next().unwrap().sessions[0].runs;
+        let runs = &agents.held().next().unwrap().sessions[0].runs;
         assert_eq!(runs.len(), RUNS_PER_SESSION);
-        assert_eq!(runs[0].sql, format!("SELECT {}", RUNS_PER_SESSION + 2));
+        // Oldest first out, and the trail is newest-first: the head is the last run
+        // dispatched, and the three over the cap are the ones missing from the tail.
+        assert_eq!(runs[0].seq, *dispatched.last().unwrap());
+        assert_eq!(runs[RUNS_PER_SESSION - 1].seq, dispatched[3]);
 
         // Settle the **whole** trail first: eviction deliberately skips a session that is
         // still working (see `the_session_cap_skips_a_session_that_is_working`), and this
@@ -803,7 +768,7 @@ mod tests {
             evicted.extend(agents.opened(&who, QuerySessionId::new()));
         }
         assert_eq!(
-            agents.agents().next().unwrap().sessions.len(),
+            agents.held().next().unwrap().sessions.len(),
             SESSIONS_PER_AGENT
         );
         assert!(
@@ -815,13 +780,13 @@ mod tests {
     /// **The display cap never destroys work.** The driver retires whatever `opened` evicts,
     /// so taking a session with a run in flight would abort it — and the engine settles an
     /// abort as `cancelled`, which the vocabulary reports to the agent as "you stopped this"
-    /// for a cancellation the *pane's* bound performed.
+    /// for a cancellation the *cap* performed.
     #[test]
     fn the_session_cap_skips_a_session_that_is_working() {
         let mut agents = Agents::default();
         let who = agent("claude-code");
         let busy = opened(&mut agents, &who);
-        agents.run_started(who.id, busy, "SELECT slow".into());
+        agents.run_started(who.id, busy);
         let mut idle = Vec::new();
         for _ in 1..SESSIONS_PER_AGENT {
             idle.push(opened(&mut agents, &who));
@@ -846,7 +811,7 @@ mod tests {
         let mut held = Vec::new();
         for _ in 0..SESSIONS_PER_AGENT {
             let session = opened(&mut agents, &who);
-            agents.run_started(who.id, session, "SELECT slow".into());
+            agents.run_started(who.id, session);
             held.push(session);
         }
 
@@ -871,44 +836,8 @@ mod tests {
         );
     }
 
-    /// A session's name is minted once and never reused, so closing one does not renumber the
-    /// rest under a reader's eyes.
-    #[test]
-    fn session_ordinals_are_monotonic_per_agent() {
-        let mut agents = Agents::default();
-        let (a, b) = (agent("claude-code"), agent("codex"));
-        let first = opened(&mut agents, &a);
-        let second = opened(&mut agents, &a);
-        opened(&mut agents, &b);
-
-        let ordinals = |agents: &Agents, who: AgentId| -> Vec<usize> {
-            agents
-                .agents()
-                .find(|held| held.id == who)
-                .unwrap()
-                .sessions
-                .iter()
-                .map(|s| s.ordinal)
-                .collect()
-        };
-        // Oldest first, so the ordinals read 1, 2 down the pane.
-        assert_eq!(ordinals(&agents, a.id), vec![1, 2]);
-        // Per agent, so the second agent starts at one of its own.
-        assert_eq!(ordinals(&agents, b.id), vec![1]);
-
-        agents.closed(a.id, first);
-        assert_eq!(
-            ordinals(&agents, a.id),
-            vec![2],
-            "session 2 is still session 2"
-        );
-        opened(&mut agents, &a);
-        assert_eq!(ordinals(&agents, a.id), vec![2, 3], "and the next is 3");
-        assert!(agents.holds(a.id, second));
-    }
-
-    /// A client that introduced itself is named, with its version in the tooltip; one that did
-    /// not still gets a row a person can read, and no tooltip repeating it.
+    /// A client that introduced itself is named; one that did not still reads as something,
+    /// because the name is what the event log attributes a run to.
     #[test]
     fn an_agent_reads_as_something_even_unnamed() {
         let mut agents = Agents::default();
@@ -923,16 +852,9 @@ mod tests {
             QuerySessionId::new(),
         );
 
-        let rows: Vec<(&str, Option<String>)> =
-            agents.agents().map(|a| (a.name(), a.detail())).collect();
-        // Agents stay **newest connection first** — a client that has just paired is the one
-        // you are most likely looking for — while the sessions inside one run the other way.
-        assert_eq!(
-            rows,
-            vec![
-                ("Agent", None),
-                ("claude-code", Some("claude-code 1.0".to_string())),
-            ]
-        );
+        let names: Vec<&str> = agents.held().map(ConnectedAgent::name).collect();
+        // Agents stay **newest connection first**, while the sessions inside one run the
+        // other way.
+        assert_eq!(names, vec!["Agent", "claude-code"]);
     }
 }

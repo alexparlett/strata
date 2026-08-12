@@ -482,7 +482,8 @@ Things that must not regress. Each was fought for once already.
   moved the editor out from under them, left tabs they had to close, and cost a diagnostics pass
   per tab **on the engine their own press needed**. Worse, `list_tabs` handed an agent *every*
   open tab and a `run` on one replaced the buffer the user was typing in. AA-03b moves those runs
-  to **query sessions** of the agent's own, shown in an Agents pane. The fix for the sharp edge
+  to **query sessions** of the agent's own, kept entirely out of the user's window. The fix for
+  the sharp edge
   is structural rather than a guard: `StrataTools` **is** one agent, and every session-scoped
   tool is scoped to that id, so an agent is never handed a handle on another agent's work, let
   alone on a tab. **Which agent, though, comes from the request and not from how long a value
@@ -684,10 +685,8 @@ Things that must not regress. Each was fought for once already.
 - **A window holds conversations, the pick is per conversation, and a step card is a citation.**
   `state::chat`'s `Chats` is the transcript satellite — several conversations, both the list and
   each conversation's turns capped, in the image of `state::agents` and `state::log`. Nothing here
-  reaches `session.json` (AS-07 is what makes a transcript survive a restart, and the value that
-  has to survive is the `Conversation` the model reads back, not the blocks the pane paints —
-  `Chats::settle` is where that writer hooks) and nothing reaches `history.jsonl` (the **adoption**
-  rule: a promoted tab's own Run press is what records).
+  reaches `session.json` and nothing reaches `history.jsonl` (the **adoption** rule: a promoted
+  tab's own Run press is what records).
 
   Each conversation carries its own `Pick`, seeded from Settings through `seed_pick`, which drops
   a provider that is no longer enabled — in Settings a disabled provider also loses its key, so
@@ -698,12 +697,58 @@ Things that must not regress. Each was fought for once already.
   picked model does not offer is dropped rather than kept out of sight (`Brain::resolve` refuses
   one before a socket opens, and the control that set it is gone by then).
 
+- **A conversation survives its window, and what has to survive is both lists — the turns the pane
+  paints *and* the `Conversation` the model reads back.** AS-07's store is `.strata/chats/<uuid>.json`,
+  a satellite on `history.jsonl`'s terms (one document per conversation, because a single file
+  would make every turn in every chat rewrite every other one), gitignored through
+  `ensure_gitignore` because a transcript quotes the user's own data and `.strata/` sits in
+  people's repos. Storing only the transcript restores a conversation you can read and cannot
+  continue — the *appearance* of one — because the resolved `@`-mention bodies, the tool results,
+  the captured reasoning parts and the `offer_sql` call/response pairs exist **only** in the
+  model's list, and a failed turn plus the differing caps make the two genuinely diverge. The seam
+  is `Conversation::{to_json, from_json}`, **JSON-valued** so `genai` still stops at
+  `strata-agent`'s edge; what rides on disk is therefore genai's own serde shape at the pin, and an
+  upgrade that moves it bumps `CHAT_VERSION` or degrades to `Read::Memoryless`. Three tiers, one
+  rule: the worst outcome is losing what the model remembered, never what the user wrote.
+
+  The writes hang off the three points a conversation is known to have stopped changing — the turn
+  task after its settle (race-free: AS-02 commits to the memory *before* it emits `Settled`), the
+  stop press, and the subtree teardown, which writes **synchronously on the render thread** like
+  `use_autosave`'s own `use_drop`, because a task spawned there dies with the scope and "it is
+  there after a quit" is the feature. Only `dirty` conversations write, and `dirty` is set by
+  everything that changes what would be stored — including a **pick**, through `Chats::repick`,
+  which is the one funnel all three composer controls edit through.
+
+  **A task that writes this subtree's state after an await must be cancellable by this subtree.**
+  The standalone presses (open a stored conversation, delete, clear) use scope-bound `spawn`, like
+  `clear_history`'s own writer: root-scoped, they would still be holding `Chats` and the report
+  satellites if a re-root dropped the subtree mid-write. The turn task is the one that genuinely
+  must outlive the pane, and the only thing that can reach it is `Chat::running` — so it holds
+  that handle until its record is written and releases it with `Chats::finish`, not at the settle.
+  A turn is not over until it is on disk. On the cancel paths the cancelled turn's commit may still
+  land after the write; both interleavings are valid provider tails, so the bounded cost is a
+  stopped turn the model does not remember — recorded, not fixed, because awaiting the settle would
+  contradict "a cancel is a drop".
+
+  Over-cap eviction **demotes to the shelf** rather than dropping, since the document is already
+  stored — and `evict` *answers* what it shed, because `Chats` does no IO and a conversation still
+  dirty when it left would leave its row pointing at a file older than the row claims. Reopening is
+  a **read**: no run, no scan, no snapshot, no network. A restored `offer_sql` card is re-checked
+  once with `tools.validate` (a dry plan, the one host call a reopen makes) and a stale one
+  **degrades silently** to an ordinary code block — the user never ran it, and a complaint that the
+  catalog moved is not news. That mark is **never stored**: it is an answer about the catalog as it
+  stands, and persisting it would leave a card retired after the table it named came back.
+  Retention is `Ai::max_chats`, rotated down on load like history's; **Clear is per project**,
+  because the files are a project's and a Settings button is app-global. Both it and the per-row
+  delete ask through one confirm mounted at the **window root** — a dialog mounted inside the pane
+  it belongs to is a key barrier over nothing, since listeners fire in document order.
+
   A turn's blocks stay in **arrival order** — the model speaks, calls a tool, speaks again, and a
   transcript that hoisted every card to the bottom would separate its reasoning from its evidence.
   Every figure on a step card is the engine's own (`elapsed_ms`, the exact total, the stop's own
   wording), which is what makes AS-02's no-number-without-a-run prompt rule auditable; an
   `offer_sql` card is executable *instead of* a step card, never beside one. Promotion is
-  `actions::open_sql` — the Agents pane's funnel — and **never** a write to the user's buffer,
+  `actions::open_sql` — a **new** tab, focused — and **never** a write to the user's buffer,
   which is often their only record of how a number was reached.
 - **A turn is cancelled by dropping its task, and a dropped run still settles.** The send funnel's
   task owns AS-02's `Running`, whose `tokio_util` drop guard *is* the turn's cancel and the
@@ -716,32 +761,42 @@ Things that must not regress. Each was fought for once already.
   than a `select!` arm because there is nothing to select on: a cancelled future never resumes to
   run a cleanup branch. Without it a stopped run left its satellite row reading `Running` for the
   window's life — AA-03c reaps such a row when a **connection** ends, which covers an MCP client
-  hanging up and not the assistant, whose connection is the pane's whole mount.
-- **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
-  listed — and the mark is minted, never claimed.** That pane answers "what is working on my
-  project right now" about *external* clients; the assistant is part of the app and its runs
-  render as step cards in its own transcript. It stays one more agent to everything below — its
-  own `AgentId`, its own query sessions, the same gate — and the satellite **holds** it like any
-  other, because the ownership check, the per-agent session cap and the teardown all have to work
-  for it and `list_query_sessions` has to answer for it. It is only **listed** that it is not.
+  hanging up and not the assistant, whose connection is its own mount in the window.
+- **The in-app assistant is held like any other agent and told apart only where the user is owed
+  a different sentence — and the mark is minted, never claimed.** The assistant is part of the
+  app and its runs render as step cards in its own transcript; an MCP client is working in the
+  project from somewhere else. It stays one more agent to everything below — its own `AgentId`,
+  its own query sessions, the same gate — and the satellite **holds** it like any other, because
+  the ownership check, the per-agent session cap and the teardown all have to work for it and
+  `list_query_sessions` has to answer for it.
 
-  The mark is `Agent::in_app`, minted by `StrataTools::in_app` and delivered on the call that
-  first tells a host an agent exists, so no surface holds an id to compare and nothing has to
-  remember the rule. Keying on `AgentIdentity::assistant()`'s name instead would let any MCP
-  client hide from the pane by claiming that name at `initialize`, which is the worst possible
+  The one place the two are told apart is `Agents::sessions_of`, which the close confirm asks so
+  it can say "the assistant is running a query" rather than "an agent is" — the second would
+  send the user looking for a client that is not connected. The mark is `Agent::in_app`, minted
+  by `StrataTools::in_app` and delivered on the call that first tells a host an agent exists, so
+  nothing holds an id to compare. Keying on `AgentIdentity::assistant()`'s name instead would let
+  any MCP client claim its way across that line at `initialize`, which is the worst possible
   version of this rule.
 
-  The satellite draws the line in three places and nowhere else. `Agents::agents` is the pane's
-  listing (and `len`, behind the rail badge) — the exclusion itself. `Agents::held` is the
-  unfiltered iterator, which `list_query_sessions` answers from (an agent must see its own
-  sessions) and which the event log attributes from (the assistant is out of the *listing* only,
-  never out of the record). `Agents::sessions_of` is the same line drawn for the close confirm,
-  which asks whose work it is about to destroy and must say "the assistant" rather than "an
-  agent" — pointing at a pane that says nobody is connected is the failure that arm exists to
-  fix. The ownership check and the session cap are inside the satellite and read the field
-  directly, so they never had a filtered view to avoid. And for the same reason the pane omits
-  it, the log says the assistant **stopped** rather than disconnected: it never dialled in, so
-  its "connection" is the pane's own mount.
+  **Nothing lists agents at all.** The Agents pane (the sidebar tool pane, its rail toggle and
+  its live-agent badge) and the header's agent-access status dot were removed on request: the MCP
+  server still runs, and the app shows neither who is connected nor whether it is listening. A
+  server that cannot bind reports through `tracing` and nowhere else. `state::agents` is now pure
+  bookkeeping with no reader on screen, so it holds **only what the bookkeeping reads** — a run
+  is a `seq` and an outcome, and the query text does not travel `AgentAsk::RunStarting` at all.
+  A record kept for a surface must go when the surface does, or it is retention nothing can
+  justify: the dispatch still gets the SQL, because that was never this channel's to carry.
+
+  The satellite draws the line in **one** place. `Agents::held` is the unfiltered iterator,
+  which `list_query_sessions` answers from (an agent must see its own sessions) and which the
+  event log attributes from (the assistant is never out of the record). `Agents::sessions_of`
+  is the line itself, for the close confirm, which asks whose work it is about to destroy and
+  must say "the assistant" rather than "an agent" — sending the user looking for a client that
+  is not connected is the failure that arm exists to fix. The pane's own `agents` / `len`
+  projection went with the pane. The ownership check and the session cap are inside the
+  satellite and read the field directly, so they never had a filtered view to avoid. And for
+  the same reason, the log says the assistant **stopped** rather than disconnected: it never
+  dialled in, so its "connection" is its own mount in the window.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine

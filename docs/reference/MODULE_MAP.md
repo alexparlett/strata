@@ -84,8 +84,9 @@ src/agent/                       AA-03 / AA-03b — agent access, the half that 
                                  **server slot** (what is listening now, or nothing — dropping it
                                  *is* stop). The window's half lives with the window, because that
                                  is what it is made of (`apps/project/state/agent.rs` beside the
-                                 diagnostics driver, `state/agents.rs` beside the log satellite,
-                                 `views/sidebar/agents/` beside the catalog pane)
+                                 diagnostics driver, `state/agents.rs` beside the log satellite).
+                                 **No surface shows any of it**: the Agents pane and the header's
+                                 status dot were removed, so the server runs unshown
   directory.rs                   the cross-thread service registry **and** the app's `Host` impl:
                                  each mount of `ProjectRoot` lends its `Arc<Engine>` (the data
                                  plane) and two senders (asks, bounded and answered; notices,
@@ -106,8 +107,6 @@ src/agent/                       AA-03 / AA-03b — agent access, the half that 
                                  `agent_access` setting, mounted by the two **workspace** windows
                                  (there is always one alive) and idempotent, the theme
                                  derivation's shape. Mints the token on first use and persists it
-  status.rs                      the header's dot — the app's one *polled* fact, and the module
-                                 doc says why: the count is rmcp's, created below our own seam
 src/state/listings.rs            AS-06 — the app-global **model listings** slot: what each
                                  provider last reported serving, loaded from its own file in
                                  `main` (no dial-out there) and written by `write_listings`, the
@@ -561,7 +560,7 @@ src/apps/project/                the project window (Valin-shaped)
                                  model + effort pick · send-becomes-stop), mention.rs (the `@`
                                  picker over the catalog **store**)
     rail.rs                      the 48px activity rail: two `ToggleButton` groups — the top
-                                 picks the sidebar pane (Catalog · Agents · Connections), the
+                                 picks the sidebar pane (Catalog · Connections), the
                                  bottom the drawer tab (Problems · Events · History). `on` is
                                  *derived* from the layout, the single source of truth; a press
                                  routes through the layout store's toggle
@@ -582,16 +581,6 @@ src/apps/project/                the project window (Valin-shaped)
     sidebar/
       mod.rs                     sidebar shell — pane-specific header (the catalog's filter +
                                  refresh row, Connections' label + ⓘ + `+`) over the active pane
-      agents/                    AA-03b — what each connected agent is doing: mod (pane + theme +
-                                 the header's ⓘ, agent group over session group), run (the run
-                                 card). Built to the canvas out of vocabulary the app already
-                                 has (Freya's `TreeItem` with our own chevrons, the History
-                                 drawer's card). **Only connected agents appear**, so no row
-                                 wears a connected mark. A press opens a run's SQL in a **new**
-                                 tab (`actions::open_sql`) — never the active one, which is the
-                                 harm the pane exists to prevent — and there is no double-press
-                                 to run. That press is the *only* way an agent's work reaches the
-                                 tab strip
       catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
                                  saved-query rows), columns (flatten + tests), menu (P3-06: one
                                  item list per row kind, shared by right-click and the ⋮ so the

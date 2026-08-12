@@ -47,6 +47,12 @@ pub enum ProjectFile {
     Session,
     /// `.strata/history.jsonl` — the persisted run history.
     History,
+    /// `.strata/chats/` — the saved conversations (AS-07).
+    ///
+    /// The **store**, not one document: a write failure is the store falling behind, and which
+    /// conversation's turn happened to be the one that could not be written is not what the
+    /// user has to act on.
+    Chats,
 }
 
 impl ProjectFile {
@@ -56,6 +62,7 @@ impl ProjectFile {
             Self::Defs => "save project defs",
             Self::Session => "save session",
             Self::History => "save query history",
+            Self::Chats => "save conversation",
         }
     }
 
@@ -65,6 +72,7 @@ impl ProjectFile {
             Self::Defs => "project file",
             Self::Session => "session file",
             Self::History => "query history",
+            Self::Chats => "conversation store",
         }
     }
 
@@ -75,6 +83,7 @@ impl ProjectFile {
             Self::Defs => "project.json",
             Self::Session => "session.json",
             Self::History => "history.jsonl",
+            Self::Chats => "chats/",
         }
     }
 }

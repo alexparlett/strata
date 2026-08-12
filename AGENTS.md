@@ -364,20 +364,36 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   router; it validates before the card exists, which is what lets it hand over a write the
   assistant is itself refused. Explanatory SQL stays an ordinary code block.
 - **A window holds conversations, the pick is per conversation, and a step card is a citation.**
-  `state::chat`'s `Chats` is ephemeral and capped, seeded through `seed_pick` (a provider that is
-  no longer enabled is not a pick); a turn's blocks stay in **arrival order**, every figure on a
-  step card is the engine's own, and an `offer_sql` card is executable *instead of* a step card,
-  never beside one. Promotion is `actions::open_sql` — never a write to the user's buffer.
+  `state::chat`'s `Chats` is capped, seeded through `seed_pick` (a provider that is no longer
+  enabled is not a pick); a turn's blocks stay in **arrival order**, every figure on a step card is
+  the engine's own, and an `offer_sql` card is executable *instead of* a step card, never beside
+  one. Promotion is `actions::open_sql` — never a write to the user's buffer.
+- **A conversation survives its window, and what has to survive is both lists — the turns the pane
+  paints *and* the `Conversation` the model reads back.** `.strata/chats/<uuid>.json`, one document
+  per conversation, gitignored; the seam is `Conversation::{to_json, from_json}`, JSON-valued so
+  `genai` stops at `strata-agent`'s edge. Written after the turn's settle, at the stop press, and
+  at teardown (synchronously, `use_autosave`'s shape), dirty ones only — and a **pick** is dirtying,
+  through the one `Chats::repick` funnel. A task writing this subtree's state after an await must
+  be cancellable by it: the presses use scope-bound `spawn`, and the turn task holds `Chat::running`
+  until its record is on disk (`Chats::finish`). Reopening is a **read** — no run, no scan, no
+  network, one `validate` per offer card — and a stale card degrades **silently** to a code block,
+  a mark that is never stored. Eviction demotes to the shelf and *answers* what it shed; retention
+  is `Ai::max_chats`, rotated on load; Clear and the per-row delete ask through one confirm at the
+  **window root**.
 - **A turn is cancelled by dropping its task, and a dropped run still settles.** The task owns
   AS-02's `Running`, whose drop guard is the cancel and the engine's abort; the reply keeps what
   streamed, marked stopped. One layer down, `SettleOnDrop` sends the stop settle in the engine's
   own `CANCELLED` wording, so no satellite is left holding a `Running` row.
-- **The Agents pane lists the clients that dialled in, so the in-app assistant is held but not
-  listed — and the mark is minted, never claimed.** `StrataTools::in_app` sets `Agent::in_app`,
-  which rides the call that opens a session to every `Host`; `Agents::agents` is the one place the
-  exclusion is expressed, `held` is the unfiltered view `list_query_sessions` and the log's
-  attribution read, and `sessions_of` is the same line drawn for the close confirm, which has to
-  name the assistant as itself. Keying on the identity would let any MCP client hide by claiming it.
+- **The in-app assistant is held like any other agent and told apart only where the user is owed
+  a different sentence — and the mark is minted, never claimed.** `StrataTools::in_app` sets
+  `Agent::in_app`, which rides the call that opens a session to every `Host`; `held` is the
+  unfiltered view `list_query_sessions` and the log's attribution read, and `sessions_of` is the
+  one place the line is drawn — for the close confirm, which has to name the assistant as itself.
+  Keying on the identity would let any MCP client claim its way across that line. **No surface
+  lists agents**: the Agents pane and the header's status dot were removed, so the MCP server is
+  present and unshown, and a server that cannot bind reports only through tracing. The satellite
+  therefore holds **only what the bookkeeping reads** — a run is a `seq` and an outcome, and the
+  SQL travels to the engine and not through `AgentAsk::RunStarting`.
 
 **Stores and state**
 
@@ -549,6 +565,13 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   follow-up `on_press` — do double-click detection inside that same handler.
 - **`VirtualScrollView` memoizes its builder closure**, so captured snapshots go stale. Each child
   reads shared state reactively.
+- **A task spawned from a handler belongs to the scope that pressed it, so a press that unmounts
+  its own control cancels its own work** — silently, before the first poll. A menu item that closes
+  its menu, a dialog button that clears its own slot, a Stop that flips back to Send: all three
+  shipped broken. `spawn_forever` is not the escape (root-scoped, it writes subtree `State` after
+  an await and panics on a freed box). The press records the intent in a `State`; a
+  `use_side_effect` in a scope that outlives the control performs it — with the intent **in** that
+  state, never captured, because the effect's closure is built once.
 - **Two siblings on the same layer have no paint order — set a layer.** A layer's nodes are an
   unordered set, so "declared second" is not "painted second"; the covered element reads as
   though it had alpha. `Layer::Relative(1)` for a sibling, `Overlay` only to clear the window.

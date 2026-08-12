@@ -1,13 +1,12 @@
 //! The left **sidebar**: the frame (P3-01), the catalog pane that fills it (P3-02), and the
-//! Connections (W7) and Agents (AA-03b) panes beside it.
+//! Connections pane (W7) beside it.
 //!
 //! The shell owns the header row and the collapse (×); what sits to the left of the × is the
 //! active pane's, per the design canvas — the catalog puts its **filter + refresh** there (there
-//! is no "CATALOG" label; the filter field is the header), while Connections and Agents keep a
-//! section label with an ⓘ beside it, and Connections adds its own `+`. The body below the
-//! divider is the pane itself.
+//! is no "CATALOG" label; the filter field is the header), while Connections keeps a section
+//! label with an ⓘ beside it and adds its own `+`. The body below the divider is the pane
+//! itself.
 
-mod agents;
 mod catalog;
 mod connections;
 
@@ -16,8 +15,6 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::SidebarPane;
 
-pub use self::agents::AgentsThemePreference;
-use self::agents::{Agents, AgentsHint};
 use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
 /// The catalog's actions, on through to the command palette — see the catalog's own module.
@@ -39,7 +36,7 @@ use crate::theme::{use_roles, Role};
 ///
 /// The name sits in a flexing, clipping cell of its own rather than straight in the row. Flex
 /// sizes the *wrapper*, but a text child still hugs, and `Overflow` defaults to painting outside
-/// the box — so at a narrow width "AGENTS" drew over the ⓘ beside it and then over the collapse ×
+/// the box — so at a narrow width the name drew over the ⓘ beside it and then over the collapse ×
 /// (P5-06). Anything the caller adds after it keeps its room.
 fn label(text: &'static str, color: Color) -> Rect {
     rect()
@@ -134,25 +131,16 @@ impl Component for Sidebar {
                     .width(Size::flex(1.)),
                 )
                 .into_element(),
-            // Beside its name, the same ⓘ affordance the Agents pane uses and for the same
-            // reason: what a connection *is* has no other place to be said (W7).
+            // Beside its name, an ⓘ: what a connection *is* has no other place to be said (W7).
             SidebarPane::Connections => label("CONNECTIONS", label_color)
                 .spacing(6.)
                 .child(ConnectionsHint)
-                .into_element(),
-            // The same ⓘ, for the same reason: the query-session model is the one concept
-            // here a user has no other way to learn, so the canvas puts it behind a mark
-            // rather than in a line of pane copy nobody reads twice.
-            SidebarPane::Agents => label("AGENTS", label_color)
-                .spacing(6.)
-                .child(AgentsHint)
                 .into_element(),
         };
 
         let body = match pane {
             SidebarPane::Catalog => Catalog::new(filter).into_element(),
             SidebarPane::Connections => Connections::new().into_element(),
-            SidebarPane::Agents => Agents::new().into_element(),
         };
 
         rect()

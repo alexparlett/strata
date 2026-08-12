@@ -3,7 +3,7 @@
 //! `QueryTab`, which own the editor buffer) is the frontend's; these are only its durable
 //! shape, so `strata-core::project` can read/write them concretely (like `ProjectDefs`).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::chart::ChartConfig;
@@ -67,10 +67,46 @@ pub struct SessionSnapshot {
 pub enum SidebarPane {
     Catalog,
     Connections,
-    /// What each connected agent is doing (AA-03b). A *tool pane* rather than a drawer tab
-    /// because an agent's work is a live thing you look at while you work, like the catalog,
-    /// not a log of what already finished.
-    Agents,
+}
+
+/// A stored pane this build may no longer have — see [`sidebar_pane`].
+///
+/// The fallback arm is a `String` and **not** `IgnoredAny`: a pane name this build has retired
+/// is the one thing worth tolerating here, and taking anything at all would swallow a genuinely
+/// malformed value (`42`, `{}`, `[1, 2]`) that ought to fail the load and get the file kept
+/// aside for recovery.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredPane {
+    Known(SidebarPane),
+    // Never read, and it must stay a `String` rather than the unit type rustc suggests: the
+    // *type* is the check. `()` deserializes only from `null`, which would take this arm for
+    // the one input that already means "collapsed" and let `42` through the other.
+    #[allow(dead_code, reason = "the field's type is the validation; see above")]
+    Retired(String),
+}
+
+/// Read [`Layout::sidebar`], treating a pane this build no longer offers as the **default**
+/// pane rather than as a corrupt session.
+///
+/// `#[serde(default)]` covers a *missing* field and nothing else, so a session written while
+/// a since-removed pane was open would fail the whole `SessionSnapshot` — which the loader
+/// answers by moving `session.json` aside, costing the user every tab they had open. A pane
+/// that no longer exists is not corruption; it is a layout value with nowhere to go.
+///
+/// It resolves to [`SidebarPane::Catalog`], not to `None`: the stored value said the sidebar
+/// was **open**, and that half of it is still true and still the user's arrangement. `None`
+/// stays reserved for what it has always meant — an explicit `null`, the sidebar collapsed —
+/// which the arm below keeps distinct.
+fn sidebar_pane<'de, D>(d: D) -> Result<Option<SidebarPane>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<StoredPane>::deserialize(d)? {
+        Some(StoredPane::Known(pane)) => Some(pane),
+        Some(StoredPane::Retired(_)) => Some(SidebarPane::Catalog),
+        None => None,
+    })
 }
 
 /// Which assistive surface the **right** rail shows. `None` on [`Layout::right`] means the
@@ -106,7 +142,7 @@ pub enum DrawerTab {
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Layout {
     /// The open sidebar pane, or `None` when collapsed.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "sidebar_pane")]
     pub sidebar: Option<SidebarPane>,
     /// The open right pane, or `None` when the right side is collapsed.
     #[serde(default)]
@@ -215,4 +251,50 @@ pub struct WindowGeom {
     /// Inner (client) size.
     pub width: f32,
     pub height: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A session written while a since-retired pane was open still loads, and keeps its
+    /// tabs.** That is the whole point of the lenient read: the alternative is a parse
+    /// failure, which the loader answers by moving `session.json` aside — so removing a pane
+    /// would cost anyone who had it open everything they had open with it.
+    ///
+    /// Through `SessionSnapshot` rather than `Layout`, because the tabs are the claim.
+    #[test]
+    fn a_retired_sidebar_pane_keeps_the_session_it_was_written_in() {
+        let tab = format!(
+            r#"{{"id":"{}","name":"query 1","origin":"Scratch","text":"SELECT 1"}}"#,
+            Uuid::nil()
+        );
+        let restored: SessionSnapshot = serde_json::from_str(&format!(
+            r#"{{"tabs":[{tab}],"layout":{{"sidebar":"Agents"}}}}"#
+        ))
+        .unwrap();
+
+        assert_eq!(restored.tabs.len(), 1, "the tabs survive");
+        // Open, on the default pane — the stored value said the sidebar was up.
+        assert_eq!(restored.layout.sidebar, Some(SidebarPane::Catalog));
+    }
+
+    /// …and a pane this build does have is read as itself, while an explicit `null` still
+    /// means the sidebar is collapsed.
+    #[test]
+    fn a_stored_sidebar_pane_reads_back() {
+        let open: Layout = serde_json::from_str(r#"{"sidebar":"Connections"}"#).unwrap();
+        assert_eq!(open.sidebar, Some(SidebarPane::Connections));
+
+        let collapsed: Layout = serde_json::from_str(r#"{"sidebar":null}"#).unwrap();
+        assert_eq!(collapsed.sidebar, None);
+    }
+
+    /// A value that is not a pane name at all is **not** tolerated: it is corruption, and the
+    /// loader's answer to that is to keep the file aside rather than write over it.
+    #[test]
+    fn a_malformed_sidebar_value_still_fails_the_load() {
+        assert!(serde_json::from_str::<Layout>(r#"{"sidebar":42}"#).is_err());
+        assert!(serde_json::from_str::<Layout>(r#"{"sidebar":{}}"#).is_err());
+    }
 }

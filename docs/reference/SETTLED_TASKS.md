@@ -336,8 +336,8 @@ satellite: a capped list, a live id, and a `Pick` (provider · model · effort) 
 Settings' defaults through `seed_pick` — which drops a provider that is no longer enabled, since
 in Settings a disabled provider also loses its key. Deleting the last conversation opens a fresh
 one, which is what lets `active` be an id rather than an `Option`. Nothing reaches `session.json`
-and nothing reaches history: the first is AS-07's to change, the second is the **adoption** rule
-and stays.
+and nothing reaches history: the second is the **adoption** rule and stays, and the first became
+`.strata/chats/` with **AS-07** (below) rather than a session field.
 
 **Provider is picked by picking a model.** The footer's model list is grouped under the enabled
 providers, so choosing a model chooses both — one control instead of two that can disagree about
@@ -383,6 +383,48 @@ divided by a parent whose `content` is `Flex` (AGENTS.md §3) — the rule was a
 both sites now state it. The composer's is a test that measures the field's rect against the
 pane's height, because "it rendered" and "it is on screen" are different questions and only the
 second is the one a user asks.
+
+**Assistant 07 (conversations survive the window, AS-07)** is ✅, and it closed **AS-03** behind
+it. The store is `.strata/chats/<uuid>.json` — a satellite on `history.jsonl`'s terms, gitignored
+through `ensure_gitignore` so a transcript quoting the user's data never surfaces in a committed
+project.
+
+**What has to survive is both lists, and that is the correction the task file itself carried.**
+AS-07 was written to persist the transcript; the transcript alone restores a conversation you can
+read and cannot continue, because the resolved `@`-mention bodies, the tool results, the captured
+reasoning parts and the `offer_sql` call/response pairs live **only** in the model's
+`Conversation` — and a failed turn plus the two different caps make the lists genuinely diverge.
+The seam is `Conversation::{to_json, from_json}`, **JSON-valued** so `genai` still stops at
+`strata-agent`'s edge; the consequence is that a `genai` upgrade moving that serde shape is a
+change to this document, absorbed by `CHAT_VERSION` or by the `Read::Memoryless` tier.
+
+**Three degradation tiers, and none of them takes the pane down**: an unknown version is skipped
+with a log line, an unparseable file is skipped, and a memory this build cannot read still yields
+the transcript with a fresh memory under it. The worst outcome is losing what the model
+remembered, never what the user wrote.
+
+**Reopening is a read.** No run, no scan, no snapshot, no network — the step cards are recorded
+values. The one thing it asks the catalog is whether each restored `offer_sql` statement still
+plans (`tools.validate`, a dry plan), and a stale one **degrades silently** to an ordinary code
+block: the user never ran it, so a complaint that their catalog moved is not news. Two other
+corrections settled the same way — over-cap eviction **demotes to the shelf** rather than dropping
+(the document is already stored, so a discard would be the window forgetting something still
+listed), and **Clear is per project**, in the pane's own ellipsis menu, because the files belong to
+a project while a Settings button is app-global and would promise a sweep it cannot perform.
+Settings keeps the **cap** alone, rotated down on load like history's.
+
+**The cancel race is recorded rather than fixed.** Writes hang off the fold's `Settled` arm
+(race-free: AS-02 commits to the memory *before* it emits `Settled`), the stop press, and the
+subtree teardown — synchronous there, like `use_autosave`'s own `use_drop`, since a task spawned
+in teardown dies with the scope. On the two cancel paths the turn's own commit may land after the
+write; both interleavings leave a valid provider tail, so the bounded cost is a stopped turn the
+model does not remember. Closing it would mean awaiting the settle, which contradicts "a cancel is
+a drop".
+
+**Export is Markdown, and is not the store.** The pane's ellipsis menu writes the readable
+conversation — prose, the statements, and each step's own engine figures — because the JSON is
+already on disk and a second copy of it is not a deliverable. A stopped turn exports marked
+stopped, in the settle's own words.
 
 ## The Chart workstream (Rz2) — complete
 

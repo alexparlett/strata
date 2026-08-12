@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
 use strata_model::{ConnectionDef, HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
+use uuid::Uuid;
 
 use crate::util::{
     collapse_sql, sweep_stale_temp_dirs, sweep_stale_temps, write_atomic, TEMP_GLOB,
@@ -52,6 +53,19 @@ const TABLES_DIR: &str = "tables";
 /// The `.gitignore` line covering [`TABLES_DIR`]. A trailing slash, so it ignores the directory
 /// rather than a file that happens to be called `tables`.
 const TABLES_GLOB: &str = "tables/";
+/// Where a **conversation** lives, under `.strata/` (AS-07): one JSON document per chat, named
+/// for its own id.
+///
+/// A directory of documents rather than one file, because a conversation is rewritten every time
+/// it grows and a single `chats.json` would make every turn in every chat rewrite every other
+/// one. Not `.jsonl` either: a chat is a document with a head and tens of turns, not an unbounded
+/// append log.
+const CHATS_DIR: &str = "chats";
+/// The `.gitignore` line covering [`CHATS_DIR`], and it is not cosmetic: a transcript quotes the
+/// user's own data — column names, values, whatever the assistant read back in prose — while
+/// `project.json` beside it is a *committed* file, so `.strata/` is a directory people have in
+/// their repos.
+const CHATS_GLOB: &str = "chats/";
 
 /// The committed definitions — the shape of `.strata/project.json`.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
@@ -402,10 +416,98 @@ pub fn clear_history(root: &Path) -> Result<(), String> {
     }
 }
 
+/// The `.strata/chats/` of the project folder `root` — where AS-07's conversations live.
+///
+/// A conversation belongs to a **project**, not to the app: it refers to that project's tables,
+/// its tabs and its results, and means nothing beside a different one.
+pub fn chats_dir(root: &Path) -> PathBuf {
+    strata_dir(root).join(CHATS_DIR)
+}
+
+/// Where conversation `id` is stored. The id is a [`Uuid`] rather than a name, so a filename
+/// cannot be anything but a filename — there is no user text on this path to escape.
+pub fn chat_path(root: &Path, id: &Uuid) -> PathBuf {
+    chats_dir(root).join(format!("{id}.json"))
+}
+
+/// Write one conversation document, whole and atomically.
+///
+/// [`write_atomic`] for the same reason [`save_session`] uses it: this fires at every turn
+/// boundary, so a kill lands on one of these writes eventually, and a truncated document would
+/// cost the user the conversation rather than the turn.
+pub fn save_chat(root: &Path, id: &Uuid, json: &str) -> Result<(), String> {
+    let dir = strata_dir(root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    tidy_strata_dir(&dir);
+    let chats = chats_dir(root);
+    fs::create_dir_all(&chats).map_err(|e| e.to_string())?;
+    let path = chat_path(root, id);
+    write_atomic(&path, json.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Every stored conversation document, in no particular order — the caller sorts by what it
+/// reads out of the heads.
+///
+/// An absent directory is **empty, not an error**: it is how a project that has never held a
+/// conversation spells itself, exactly as an absent `history.jsonl` spells "no runs yet". A
+/// [`write_atomic`] temp is skipped by extension, so a load racing a write never tries to parse
+/// a half-written document.
+pub fn chat_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let dir = chats_dir(root);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    Ok(entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter(|path| {
+            // `.{name}.{pid}.{seq}.tmp` ends in `.tmp`, but a temp written *for* a chat document
+            // is named after it, so filter on the leading dot the temp name carries.
+            !path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+        })
+        .collect())
+}
+
+/// Forget one conversation — the switcher's per-row delete.
+///
+/// An absent file is success: the row and the file are two records of one thing, and a delete
+/// that has already happened is the state the caller asked for.
+pub fn delete_chat(root: &Path, id: &Uuid) -> Result<(), String> {
+    let path = chat_path(root, id);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// Discard every stored conversation in `root` — the chat pane's **Clear conversations**.
+///
+/// The documents are removed one by one rather than the directory as a whole, so a file this
+/// build could not parse is still cleared and nothing outside the store is touched. Idempotent
+/// on the same terms as [`clear_history`]: an absent directory is already "no conversations".
+pub fn clear_chats(root: &Path) -> Result<(), String> {
+    for path in chat_files(root)? {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+    }
+    Ok(())
+}
+
 /// The housekeeping every durable `.strata/` write does on its way in: keep the
 /// `.gitignore` current, and clear out any [`write_atomic`] temp a killed process left
-/// behind ([`sweep_stale_temps`] decides which of those are safe to touch). Both are
-/// best-effort and neither can fail the save that called it.
+/// behind ([`sweep_stale_temps`] decides which of those are safe to touch), in `.strata/` and in
+/// each subdirectory that is written the same way. Both are best-effort and neither can fail the
+/// save that called it.
 ///
 /// It rides the write path rather than the project open so it is self-contained — the dir
 /// exists by this point, and a `read_dir` of a five-entry directory is nothing beside the
@@ -418,13 +520,19 @@ fn tidy_strata_dir(dir: &Path) {
     // leaves a `.tmp-…` under `tables/` (ED-04). Cheap — a `read_dir` of a directory holding
     // one entry per internal table — and skipped entirely on the usual project, which has none.
     sweep_stale_temp_dirs(&dir.join(TABLES_DIR));
+    // And the other subdirectory published by rename: a conversation's document is written with
+    // `write_atomic`, whose temp lands *beside the target* — inside `chats/`, which the sweep of
+    // `.strata/` itself never reaches. One per interrupted write, and nothing else would ever
+    // remove them.
+    sweep_stale_temps(&dir.join(CHATS_DIR));
 }
 
 /// Ensure `.strata/.gitignore` ignores the local, per-user files — the working session,
 /// the copy kept aside when that session won't parse, the query-history log, the internal
-/// tables' data ([`TABLES_GLOB`]) and the in-flight temp of any [`write_atomic`]
-/// ([`TEMP_GLOB`]) — adding any that are missing while preserving other lines. Run from every
-/// local-file write, so an older `.gitignore` (session-only) gets upgraded.
+/// tables' data ([`TABLES_GLOB`]), the saved conversations ([`CHATS_GLOB`]) and the in-flight
+/// temp of any [`write_atomic`] ([`TEMP_GLOB`]) — adding any that are missing while preserving
+/// other lines. Run from every local-file write, so an older `.gitignore` (session-only) gets
+/// upgraded, which is what lets a new entry reach existing projects with no migration.
 ///
 /// `tables/` is the one entry that is not merely per-user noise: it is the design (ED-04). An
 /// internal table's **def** is committed like every other, and its data is not, so a colleague
@@ -447,6 +555,7 @@ fn ensure_gitignore(dir: &Path) {
         SESSION_JSON_CORRUPT,
         HISTORY_JSONL,
         TABLES_GLOB,
+        CHATS_GLOB,
         TEMP_GLOB,
     ] {
         if !lines.iter().any(|l| l.trim() == wanted) {
@@ -547,8 +656,8 @@ mod tests {
     use super::*;
     use std::env;
     use std::process;
+    use std::time::{Duration, SystemTime};
     use strata_model::{ChartConfig, Layout, Origin, ResultsView, TabId, TabSnapshot, WindowGeom};
-    use uuid::Uuid;
 
     /// A fresh temp project folder, cleaned up on drop.
     struct TempRoot(PathBuf);
@@ -581,7 +690,7 @@ mod tests {
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert_eq!(
             gi,
-            "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\n.*.tmp\n"
+            "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\nchats/\n.*.tmp\n"
         );
         // `assert!` over `assert_eq!` here and below: the model types are serde
         // vocabulary and deliberately don't derive `Debug`.
@@ -711,7 +820,7 @@ mod tests {
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert_eq!(
             gi,
-            "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\n.*.tmp\n"
+            "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\nchats/\n.*.tmp\n"
         );
     }
 
@@ -907,6 +1016,90 @@ mod tests {
         // to record one.
         append_history(&root.0, &run("SELECT 2", 1)).unwrap();
         assert_eq!(load_history(&root.0, 100).unwrap().len(), 1);
+    }
+
+    /// A conversation is one document under `.strata/chats/`, and the directory is gitignored
+    /// the moment the first one is written — a transcript quotes the user's own data, and
+    /// `.strata/` is a directory people have in their repos.
+    #[test]
+    fn a_chat_is_one_document_and_the_directory_is_gitignored() {
+        let root = TempRoot::new("chats");
+        // Absent → no conversations, not an error.
+        assert!(chat_files(&root.0).unwrap().is_empty());
+
+        let one = Uuid::new_v4();
+        let two = Uuid::new_v4();
+        save_chat(&root.0, &one, "{\"version\":1}").unwrap();
+        save_chat(&root.0, &two, "{\"version\":1}").unwrap();
+
+        let mut found: Vec<String> = chat_files(&root.0)
+            .unwrap()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        let mut want = vec![format!("{one}.json"), format!("{two}.json")];
+        want.sort();
+        assert_eq!(found, want);
+        assert_eq!(
+            fs::read_to_string(chat_path(&root.0, &one)).unwrap(),
+            "{\"version\":1}"
+        );
+
+        let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
+        assert!(gi.lines().any(|l| l == "chats/"), "{gi}");
+    }
+
+    /// A killed write leaves its temp *inside* `chats/`, so the sweep has to reach in there — the
+    /// `.strata/` pass never sees it, and nothing else would ever remove it.
+    ///
+    /// Back-dated past the staleness threshold, because that threshold is the whole safety rule:
+    /// a temp from another pid that is only seconds old may still be a write in flight.
+    #[test]
+    fn a_stranded_chat_temp_is_swept_by_the_next_write() {
+        let root = TempRoot::new("chats-temp");
+        let one = Uuid::new_v4();
+        save_chat(&root.0, &one, "{}").unwrap();
+        // A temp named the way `write_atomic` names one, from a pid that is not ours.
+        let stranded = chats_dir(&root.0).join(format!(".{one}.json.1.0.tmp"));
+        fs::write(&stranded, b"half a document").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3 * 60 * 60);
+        fs::File::options()
+            .write(true)
+            .open(&stranded)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(stranded.exists());
+
+        save_chat(&root.0, &Uuid::new_v4(), "{}").unwrap();
+        assert!(!stranded.exists(), "the temp was not swept");
+        // …and the real documents are untouched.
+        assert_eq!(chat_files(&root.0).unwrap().len(), 2);
+    }
+
+    /// Both ways a conversation is forgotten are idempotent, because a row and its file are two
+    /// records of one thing: a delete that already happened is the state the caller asked for.
+    #[test]
+    fn forgetting_a_chat_is_idempotent_one_at_a_time_or_all_at_once() {
+        let root = TempRoot::new("chats-clear");
+        let one = Uuid::new_v4();
+        let two = Uuid::new_v4();
+        save_chat(&root.0, &one, "{}").unwrap();
+        save_chat(&root.0, &two, "{}").unwrap();
+
+        delete_chat(&root.0, &one).unwrap();
+        assert_eq!(chat_files(&root.0).unwrap().len(), 1);
+        delete_chat(&root.0, &one).unwrap();
+
+        clear_chats(&root.0).unwrap();
+        assert!(chat_files(&root.0).unwrap().is_empty());
+        clear_chats(&root.0).unwrap();
+
+        // …and the store comes back on the next turn rather than the project being left unable
+        // to keep one.
+        save_chat(&root.0, &one, "{}").unwrap();
+        assert_eq!(chat_files(&root.0).unwrap().len(), 1);
     }
 
     /// A present-but-unparseable file must surface as **damage**, never masquerade as "no

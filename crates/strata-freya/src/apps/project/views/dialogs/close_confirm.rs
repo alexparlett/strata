@@ -315,9 +315,9 @@ enum Whose {
     /// The only run is a query session's, and the session belongs to a client that dialled in.
     Agent,
     /// The only run is the app's **own** assistant's. A separate arm rather than one more
-    /// caller of [`Whose::Agent`]: the assistant is not in the Agents pane, on purpose, so
-    /// "an agent is running a query" would send the user to a pane that says nobody is
-    /// connected — the same failure the agent arm itself exists to fix, one layer in.
+    /// caller of [`Whose::Agent`]: the assistant is part of the app rather than a client that
+    /// dialled in, so "an agent is running a query" would send the user looking for one that
+    /// is not connected — the same failure the agent arm itself exists to fix, one layer in.
     Assistant,
     /// No run at all, and the engine says something else is going: a profile scan, an export, or
     /// a table's data being deleted (ED-05). "Queries are running" shown to somebody who started
