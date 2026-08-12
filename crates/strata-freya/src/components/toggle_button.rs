@@ -2,14 +2,12 @@
 //! chrome-less press-to-flip button whose `on` state wears the accent-soft tint — matching
 //! the segmented toggle's selected look. First used as the plan view's Raw/Tree switch
 //! (P2-05), but any mode toggle wears it. The content is the caller's children (usually an
-//! `Icon`), inheriting the dress via the ambient colour; rest and active dress are the
-//! `toggle_button` rows of the mapping table (`theme/components.rs`), and the hover is the
-//! comp's soft semantic overlay (the same accent-wash recipe as `ToggleSegment`).
+//! `Icon`), inheriting the dress via the ambient colour; rest, hover, active and focus-ring
+//! dress are all `toggle_button` rows of the mapping table (`theme/components.rs`).
 
 use freya::prelude::*;
 
 use crate::components::metrics::{R_2, SP_3};
-use crate::theme::{use_roles, Role};
 
 /// Data of a Change event — a stateful control reporting the value it just changed to.
 /// App-defined: `Event<D>` is generic, so the toggle maps its press event into this with
@@ -31,8 +29,16 @@ define_theme!(
         %[fields]
         background: Color,
         color: Color,
+        /// The comp's plain-icon-button hover: a soft text-colour wash under a brightened
+        /// glyph. A field rather than an alpha computed off a role, so a theme can retune the
+        /// wash without every icon button agreeing on the same 7%.
+        hover_background: Color,
+        hover_color: Color,
         active_background: Color,
         active_color: Color,
+        /// The keyboard focus ring. Pointer focus paints nothing, so the ring is the answer to
+        /// "where is the keyboard" and not a second press affordance.
+        focus_border_fill: Color,
     }
 );
 
@@ -117,19 +123,27 @@ impl ToggleButton {
 impl Component for ToggleButton {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, ToggleButtonThemePreference, "toggle_button");
-        // The comp's plain-icon-button hover (semantic — read from the palette): a 7%
-        // text-colour overlay under a brightened glyph. The `on` dress wins over hover.
-        let hover = use_roles().get(Role::Text);
         let mut hovered = use_state(|| false);
         let mut on = use_reactive(&self.toggle);
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
 
+        // The `on` dress wins over hover.
         let (background, color) = if on() {
             (theme.active_background, theme.active_color)
         } else if hovered() {
-            (hover.with_a(18), hover)
+            (theme.hover_background, theme.hover_color)
         } else {
             (theme.background, theme.color)
         };
+        // Only the keyboard gets a ring: a press focuses the button too, so an any-focus ring
+        // would leave the last-pressed toggle outlined for the rest of the session.
+        let focus_ring = (focus() == Focus::Keyboard).then(|| {
+            Border::new()
+                .fill(theme.focus_border_fill)
+                .width(2.)
+                .alignment(BorderAlignment::Inner)
+        });
         let on_change = self.on_change.clone();
         // Default: 28px tall, at least square, hugging wider content — the caller's children
         // inherit the state's colour ambiently (icons via `currentColor`, labels via the
@@ -141,9 +155,20 @@ impl Component for ToggleButton {
             .center()
             .background(background)
             .color(color)
+            .border(focus_ring)
+            .a11y_id(a11y_id)
+            .a11y_focusable(true)
+            .a11y_role(AccessibilityRole::Button)
+            // The tooltip names the button for the pointer; the same string names it for the
+            // keyboard, which is now a tab stop and whose children are icons carrying no text
+            // to be named from. It lands here because this is the focusable node.
+            .map(self.title.clone(), AccessibilityExt::a11y_alt)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
+            // `on_press` covers the OS activation keys as well as the pointer, so focusing on
+            // press is all a keyboard operator needs (Freya's own `Button` does the same).
             .on_press(move |e: Event<PressEventData>| {
+                a11y_id.request_focus();
                 let v = !*on.peek();
                 on.set(v);
                 if let Some(on_change) = &on_change {

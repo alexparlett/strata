@@ -104,25 +104,41 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.background = role(Role::SurfaceBackground);
         p.shadow = clear();
     });
+    // A field's four states, on all three variants: the box never changes fill (the canvas's
+    // field keeps `--c-panel` throughout), hover brightens the outline, focus takes it to the
+    // accent, and the keyboard adds the accent wash ring outside it.
     builtin::<InputColorsThemePreference>(th, "input", |p| {
         p.background = role(Role::SurfaceBackground);
+        p.hover_background = role(Role::SurfaceBackground);
         p.focus_background = role(Role::SurfaceBackground);
         p.placeholder_color = role(Role::TextPlaceholder);
         p.border_fill = role(Role::BorderControl);
+        p.hover_border_fill = role(Role::BorderStrong);
+        p.focus_border_fill = role(Role::BorderFocused);
+        p.focus_ring_fill = role(Role::AccentMuted);
     });
     builtin::<InputColorsThemePreference>(th, "filled_input", |p| {
         p.background = role(Role::SurfaceBackground);
+        p.hover_background = role(Role::SurfaceBackground);
         p.focus_background = role(Role::SurfaceBackground);
         p.color = role(Role::Text);
         p.placeholder_color = role(Role::TextPlaceholder);
         p.border_fill = role(Role::BorderControl);
+        p.hover_border_fill = role(Role::BorderStrong);
         p.focus_border_fill = role(Role::BorderFocused);
+        p.focus_ring_fill = role(Role::AccentMuted);
     });
+    // The flat field carries no outline, and every one in Strata sits inside a box that does
+    // (the palette's search row, a rename slot, the composer's bar) — so the hover belongs to
+    // that box and this field declines it rather than growing a fill the canvas never draws.
     builtin::<InputColorsThemePreference>(th, "flat_input", |p| {
         p.background = role(Role::SurfaceBackground);
+        p.hover_background = role(Role::SurfaceBackground);
         p.focus_background = role(Role::SurfaceBackground);
         p.placeholder_color = role(Role::TextPlaceholder);
+        p.hover_border_fill = clear();
         p.focus_border_fill = role(Role::BorderFocused);
+        p.focus_ring_fill = role(Role::AccentMuted);
     });
     builtin::<SwitchColorsThemePreference>(th, "switch", |p| {
         p.background = role(Role::BorderOverlay);
@@ -351,6 +367,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             hint_color: role(Role::TextPlaceholder),
             empty_color: role(Role::TextDim),
             card_color: role(Role::Text),
+            card_hover_border_fill: role(Role::BorderStrong),
             card_active_background: role(Role::AccentSelection),
             card_active_border_fill: role(Role::Accent),
             badge_background: role(Role::Accent),
@@ -416,6 +433,11 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             running_background: role(Role::ErrorBackground),
             running_hover_background: role(Role::ErrorBackgroundHover),
             running_color: role(Role::Error),
+            // `AccentRing`, not `BorderFocused`, because this button is accent-*filled*: both
+            // built-ins author `border.focused` at the same value as `accent`, so the ring
+            // would paint in the idle button's own fill and show nothing. Same answer the
+            // bridge already gives `filled_button` (`secondary` -> `AccentRing`).
+            focus_border_fill: role(Role::AccentRing),
         },
     );
     // Tracks `run_button`'s running dress — the same cancel meaning, one set of roles.
@@ -461,8 +483,12 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             border_fill: role(Role::BorderControl),
             divider_fill: role(Role::BorderControl),
             item_color: role(Role::TextControl),
+            // Translucent by authorship, which is what a wash painted over a toolbar pill, a
+            // form pill and a raised strip alike has to be.
+            item_hover_background: role(Role::ElevatedElementHover),
             item_active_background: role(Role::AccentSelection),
             item_active_color: role(Role::Accent),
+            item_focus_border_fill: role(Role::BorderFocused),
         },
     );
     th.set(
@@ -470,8 +496,13 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         ToggleButtonThemePreference {
             background: role(Role::GhostElementBackground),
             color: role(Role::TextDim),
+            // As above: a toggle sits on the rail, a toolbar and a header, so its wash is the
+            // translucent one rather than a fill authored for one tier.
+            hover_background: role(Role::ElevatedElementHover),
+            hover_color: role(Role::Text),
             active_background: role(Role::AccentMuted),
             active_color: role(Role::Accent),
+            focus_border_fill: role(Role::BorderFocused),
         },
     );
     th.set(
@@ -692,6 +723,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             label_color: role(Role::TextLabel),
             tile_color: role(Role::TextControl),
             tile_border_fill: role(Role::BorderControl),
+            tile_hover_border_fill: role(Role::BorderStrong),
             tile_active_background: role(Role::AccentSelection),
             tile_active_border_fill: role(Role::Accent),
             tile_active_color: role(Role::Accent),

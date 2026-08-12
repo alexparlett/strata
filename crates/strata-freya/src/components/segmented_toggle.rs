@@ -24,7 +24,6 @@ use freya::prelude::*;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{R_1, R_2, SP_1, SP_4, SP_5};
 use crate::components::typography::Control;
-use crate::theme::{use_roles, Role};
 
 define_theme!(
     %[component]
@@ -37,8 +36,14 @@ define_theme!(
         border_fill: Color,
         divider_fill: Color,
         item_color: Color,
+        /// A segment's hover wash: the soft text-colour overlay the comp gives every
+        /// flush-control row. A field rather than an alpha computed off a role, so the wash is
+        /// retunable and the two toggles cannot drift apart.
+        item_hover_background: Color,
         item_active_background: Color,
         item_active_color: Color,
+        /// A segment's keyboard focus ring. Pointer focus paints nothing.
+        item_focus_border_fill: Color,
     }
 );
 
@@ -179,8 +184,9 @@ enum SegmentContent {
 }
 
 /// One 24px-tall segment: a glyph or label wearing its tooltip `title`, the active dress
-/// (accent tint + accent content) when `selected`, and the comp's soft hover (a 7% text-colour
-/// overlay derived from its own theme) otherwise.
+/// (accent tint + accent content) when `selected`, and the comp's soft hover wash otherwise.
+/// Focusable, so a keyboard operator can tab to a segment and activate it; the ring it wears
+/// then is `item_focus_border_fill`.
 #[derive(PartialEq)]
 pub struct ToggleSegment {
     content: SegmentContent,
@@ -236,13 +242,14 @@ impl Component for ToggleSegment {
             SegmentedToggleThemePreference,
             "segmented_toggle"
         );
-        let hover = use_roles().get(Role::Text).with_a(18);
         let mut hovered = use_state(|| false);
+        let a11y_id = use_a11y();
+        let focus = use_focus(a11y_id);
 
         let background = if self.selected {
             theme.item_active_background
         } else if hovered() {
-            hover
+            theme.item_hover_background
         } else {
             Color::TRANSPARENT
         };
@@ -252,6 +259,14 @@ impl Component for ToggleSegment {
         } else {
             theme.item_color
         };
+        // Only the keyboard gets a ring: a press focuses the segment too, so an any-focus ring
+        // would leave the last-pressed segment outlined alongside the selected one.
+        let focus_ring = (focus() == Focus::Keyboard).then(|| {
+            Border::new()
+                .fill(theme.item_focus_border_fill)
+                .width(2.)
+                .alignment(BorderAlignment::Inner)
+        });
         // Set once on the pill (see the module doc); a bare segment outside one lays out as the
         // toolbar it was first written for.
         let variant = use_try_consume::<Variant>().unwrap_or_default();
@@ -259,9 +274,16 @@ impl Component for ToggleSegment {
         let segment = rect()
             .center()
             .background(background)
+            .border(focus_ring)
+            .a11y_id(a11y_id)
+            .a11y_focusable(true)
+            .a11y_role(AccessibilityRole::Button)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
+            // `on_press` covers the OS activation keys as well as the pointer, so focusing on
+            // press is all a keyboard operator needs (Freya's own `ButtonSegment` does the same).
             .on_press(move |e| {
+                a11y_id.request_focus();
                 if let Some(on_press) = &on_press {
                     on_press.call(e);
                 }
@@ -275,8 +297,12 @@ impl Component for ToggleSegment {
                 .corner_radius(FORM_SEGMENT_RADIUS),
         };
         let segment = match (&self.content, variant) {
+            // A text segment is named by the label it shows; a glyph one has no text in its
+            // subtree at all, so the tooltip string has to name it or the tab stop this
+            // segment now is announces as an unlabelled button.
             (SegmentContent::Icon(icon), _) => segment
                 .width(Size::px(TOOLBAR_ICON_WIDTH))
+                .map(self.title.clone(), AccessibilityExt::a11y_alt)
                 .child(Icon::new(*icon).color(color).size(15.)),
             (SegmentContent::Text(label), Variant::Toolbar) => segment
                 .padding((0., TOOLBAR_TEXT_PADDING))

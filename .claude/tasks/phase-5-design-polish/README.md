@@ -30,7 +30,7 @@ Settings ▸ AI roster of eight named provider rows (the app settled **one OpenA
 | # | Task | Status | DEV_TASKS | Depends on |
 |---|---|---|---|---|
 | P5-01 | Spacing & radius token scale across surfaces | ✅ | F3 | — |
-| P5-02 | Hover / focus / active interaction states | ⬜ | — | — |
+| P5-02 | Hover / focus / active interaction states | ✅ | — | — |
 | P5-03 | Animations & transitions | ⬜ | — | P5-01 (shared timing consts) |
 | P5-04 | Theme dial-in (Midnight / Daylight) | ⬜ | W5 | — |
 | P5-05 | Per-surface design audit (Freya drift pass) | ⬜ | Part 1 | P5-01 (a scale to snap to) |
@@ -47,8 +47,9 @@ Settings ▸ AI roster of eight named provider rows (the app settled **one OpenA
    against a field set about to change.
 2. **P5-07** — mechanical; one component, eight call sites.
 3. ~~**P5-01**~~ — done: the scale and the shared sizes are `components::metrics`.
-4. **P5-02**, then **P5-03** — both carry a fork half; P5-03 puts its durations in P5-01's
-   **Timing** section, beside `PROGRESS_HOLD`.
+4. ~~**P5-02**~~, then **P5-03** — both carry a fork half; P5-03 puts its durations in P5-01's
+   **Timing** section, beside `PROGRESS_HOLD`. P5-02 is done, and it took two of P5-10's
+   fifteen groups with it (`toggle_button`, `segmented_toggle`).
 5. **P5-04**, then **P5-05 last** — the dial-in and the audit judge the app *after* it matches
    the tokens and themes it is judged against.
 

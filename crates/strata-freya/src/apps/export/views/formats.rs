@@ -91,7 +91,7 @@ impl Component for FormatCard {
         let (background, border) = if selected {
             (theme.card_active_background, theme.card_active_border_fill)
         } else if hovered() {
-            (theme.panel_background, accent.with_a(120))
+            (theme.panel_background, theme.card_hover_border_fill)
         } else {
             (theme.panel_background, theme.control_border_fill)
         };

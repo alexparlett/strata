@@ -1071,8 +1071,8 @@ impl Component for MarkTile {
     }
 }
 
-/// A tile's three colours, by state — selected wins over hover, which is the accent edge on
-/// an otherwise resting tile.
+/// A tile's three colours, by state — selected wins over hover, which is the emphasized edge
+/// plus the accent content on an otherwise resting tile.
 fn tile_dress(theme: &ChartTheme, selected: bool, hovered: bool) -> (Color, Color, Color) {
     if selected {
         (
@@ -1083,7 +1083,7 @@ fn tile_dress(theme: &ChartTheme, selected: bool, hovered: bool) -> (Color, Colo
     } else if hovered {
         (
             theme.panel_background,
-            theme.tile_active_border_fill.with_a(120),
+            theme.tile_hover_border_fill,
             theme.tile_active_color,
         )
     } else {

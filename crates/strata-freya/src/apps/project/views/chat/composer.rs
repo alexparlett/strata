@@ -180,10 +180,11 @@ impl Component for Composer {
         // scrolling instead. Enter sends and Shift+Enter is a newline — the fork's rule, stated
         // once there rather than re-decided at this call site.
         //
-        // **Undressed, because the bar around it is the box.** The field's own background, border
-        // and focus ring are cleared per instance rather than in the shared `input` theme (every
-        // other flat input in the app still wants them); the bar below carries all three, so
-        // there is one outline and it lights up around everything the message is made of —
+        // **Undressed, because the bar around it is the box.** Every one of the field's own state
+        // colours — rest, hover, focus and the keyboard ring — is cleared per instance rather than
+        // in the shared `input` theme (every other flat input in the app still wants them); the
+        // bar below carries all of them, so there is one outline and it lights up around
+        // everything the message is made of —
         // IntelliJ's shape, and the reason the chips and the actions live *inside* it.
         let field = InputTypography::body(
             Input::new(text)
@@ -192,9 +193,12 @@ impl Component for Composer {
                 .theme_colors(
                     InputColorsThemePartial::new()
                         .background(Color::TRANSPARENT)
+                        .hover_background(Color::TRANSPARENT)
                         .focus_background(Color::TRANSPARENT)
                         .border_fill(Color::TRANSPARENT)
-                        .focus_border_fill(Color::TRANSPARENT),
+                        .hover_border_fill(Color::TRANSPARENT)
+                        .focus_border_fill(Color::TRANSPARENT)
+                        .focus_ring_fill(Color::TRANSPARENT),
                 )
                 .multiline(true)
                 .max_height(ceiling(*self.pane_height.read(), expanded()))
