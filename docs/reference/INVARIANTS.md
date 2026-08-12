@@ -830,9 +830,10 @@ Things that must not regress. Each was fought for once already.
   **`ConnectionDef::url()`** — scheme *and* authority, which is what the object-store registry keys
   on. Not the bucket: `s3://lake` and `gs://lake` share one and are two connections, so a
   bucket-keyed fold lands both answers on whichever row comes first and leaves the other `Loading`
-  for the life of the window, with no error anywhere to say so. The `()` is not laziness — connecting *registers* an object store, it does not infer
-  anything, so there is no answer to carry and the three `Reg` states are the whole value (the
-  pane's status dot). They live in the committed `project.json` beside the rest, which
+  for the life of the window, with no error anywhere to say so. The `()` is not laziness —
+  connecting registers an object store and asks whether its bucket answers, but it infers nothing
+  *about* the bucket, so there is no value to carry and the three `Reg` states are the whole answer
+  (the pane's status dot). They live in the committed `project.json` beside the rest, which
   `CONNECTIONS_SPEC.md` §5 had left open against the gitignored session: a def carrying only a
   profile *name* and a key *file path* holds nothing a colleague may not have, and a catalog whose
   tables live in a bucket is not shareable if the bucket isn't.
@@ -853,6 +854,62 @@ Things that must not regress. Each was fought for once already.
   additive and only ever sees the def it is given, so nothing else ever would), and the editor's
   Save asks for a **whole-catalog** pass — the width connections belong to, and the one that
   re-registers the tables that were reading the store it just replaced.
+- **Connecting asks the bucket, because a description can be well-formed and wrong.** `connect` is
+  `prepare` — the provider's naming rules, the client options, the registry key, and a store built
+  from all three — followed by `reachable`: one `list_with_delimiter(None)`, delimiter-scoped so it
+  returns that bucket's top-level folders rather than a page of keys, however large the lake.
+
+  This **overturns** the rule that stood here before it, and the reversal is worth stating plainly
+  because the original had a real argument. `connect` used to stop at the credential chain, on the
+  grounds that asking the bucket is a network round trip per connection on *every project open*.
+  It is. What that argument did not cover is a def that is **well-formed and wrong**, which no
+  local check can see: `AmazonS3Builder` validates a bucket name against nothing, so a mistyped
+  region built a perfectly good store, registered **green**, and left every table under it failing
+  with `object_store`'s bare "Received redirect without LOCATION" — a message that names no bucket,
+  no region and no connection, and which the sidebar then truncated at the comma, discarding the
+  only clause that hinted at the cause. One request per connection at open buys a status dot that
+  means what it says. A cross-region refusal is reworded **by name**, naming the region, because
+  `object_store` can only guess at a field it has never heard of and we have the value in hand.
+
+  **It asks whether the connection is *described* right, not whether it may do everything**, and
+  that line decides which failures are fatal. It has to be drawn there: `connect` is
+  `register_pass`'s **first** phase, so no table has registered and there is no prefix to probe
+  with, leaving a **root** listing as the only question available — a far stronger demand than
+  Strata makes of the bucket. So `Generic` (the bare redirect of a wrong region) and `NotFound`
+  refuse, while `PermissionDenied` and `Unauthenticated` **register**, matched on
+  `object_store::Error`'s own variants rather than on its prose. The two allowed arms are ordinary,
+  not exotic: an `s3:ListBucket` conditioned on `s3:prefix: ["team/*"]` is AWS's documented way to
+  hand somebody a folder and answers 403 at the root while `s3://lake/team/events/` reads fine, and
+  a published dataset granting `GetObject` but not `ListBucket` does the same — refusing either
+  would take a working project's every table down with the connection. What that gives up is
+  catching **rejected credentials** here; they fail at the first table instead, which is exactly
+  where they failed before the probe existed, so this declines a new win rather than losing an old
+  one. One case cannot be helped: S3 answers 403 rather than 404 for a bucket that does not exist
+  when the caller lacks `ListBucket`, so a mistyped bucket under a scoped policy still registers.
+
+  **HTTP is exempt**, and not out of laziness: `object_store`'s HTTP store lists over WebDAV
+  `PROPFIND`, which most origins serving files do not implement (MinIO included — it is why that
+  integration test's HTTP arm reads a single object). Probing one by listing would refuse working
+  connections for a verb the server was never going to answer, which is a worse lie than the one
+  this exists to remove. An HTTP connection names an origin and its table names the object, so the
+  table's own registration is where its reachability is genuinely tested.
+
+  The **connection editor needs nothing of its own**, and that is worth recording because the
+  obvious design is wrong. A Save-time `Engine::check_connection` — the same judgement without
+  registering, so an unreachable bucket was never written to `project.json` — was built first and
+  withdrawn. It is **redundant**: Save already writes the def, asks for a whole-catalog pass, and
+  watches its row, and `connect` running in that pass now asks the very same question; the probe
+  was a second round trip to learn what the first was about to say, and a def written and then
+  refused is exactly what already happens for a credential chain the server rejects. And it was
+  **expensive in the wrong place** — it put a network call carrying `object_store`'s ten retries
+  behind a button three interaction tests press, taking `strata-freya`'s suite from 7 seconds to
+  308. A refusal arriving one round trip earlier does not buy that.
+
+  The cost to carry: **`connect` now does network I/O**, so a test about naming or keying must go
+  through `store::settle` (the all-or-nothing half, shared with `connect` rather than restated) and
+  not through `connect` itself — otherwise the unit suite dials out to buckets nobody owns and
+  fails offline. The network half belongs to `tests/object_store_minio.rs`, against a bucket that
+  is really there.
 - **A table reads through a connection by naming it, and the composition happens once, in
   `resolve_source`.** `TableDef::connection` is the connection's `url()` and nothing else about it
   (W7 · 04): a *reference*, because the bucket, the provider and where its credentials come from
