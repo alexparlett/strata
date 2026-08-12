@@ -33,10 +33,20 @@
 
 use std::path::Path;
 
+use futures::stream::{self, StreamExt};
 use strata_model::{ConnectionDef, TableDef};
 
 use crate::engine::{Engine, TableMeta, TableSpec, ViewMeta};
 use crate::project::{resolve_source, ProjectDefs};
+
+/// How many tables register at once ([`register_pass`]'s table phase).
+///
+/// A ceiling on *this* pass's fan-out, not a parallelism target: a single registration already
+/// fetches `datafusion.execution.meta_fetch_concurrency` (32 by default) file footers in
+/// parallel, so eight tables is already ~256 requests in flight against whatever store they
+/// live on. Enough that a slow remote table cannot hold up a project's worth of local ones,
+/// small enough that opening a project is not a thundering herd at one bucket.
+const TABLE_CONCURRENCY: usize = 8;
 
 /// What the engine answered for one def — the pass's per-entry product. A failed entry
 /// does not abort the pass; its outcome is the row.
@@ -127,8 +137,8 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// Connect `connections`, register `tables`, then create `views` on `engine`, handing
 /// `settled` what it answered for each. **Ordering is the contract**: connections first
 /// (a table's source path cannot resolve to an object store that isn't registered — see
-/// [`Engine::connect`]); then tables (a view's SQL reads tables), each in the order given;
-/// then views by fixed-point rounds — DataFusion
+/// [`Engine::connect`]); then tables (a view's SQL reads tables), **concurrently and in no
+/// particular order** ([`TABLE_CONCURRENCY`]); then views by fixed-point rounds — DataFusion
 /// requires a view's dependencies to exist when its `CREATE VIEW` plans, so from cold,
 /// each round creates what it can and a view whose dependency landed last round
 /// succeeds this round. A round without progress means the remainder are genuinely
@@ -160,10 +170,28 @@ pub async fn register_pass(
         settled(RegOutcome::Connection { url, result });
     }
 
-    for spec in tables {
-        let name = spec.name.clone();
-        let result = engine.register(spec).await;
-        settled(RegOutcome::Table { name, result });
+    // **Tables register concurrently, and settle as they answer.** Nothing orders one table
+    // against another: each reads its own sources and reaches the catalog only through
+    // `register_table`. The serial loop this replaces made the pass cost the *sum* of its
+    // tables, so one wide remote table — a Hive lake of thousands of parquet files, whose
+    // schema inference is a footer read per file over S3 — held every table behind it,
+    // including local ones that register in milliseconds. It also held the app's scan claim,
+    // and with it validation, for that whole time.
+    //
+    // Bounded, because the fan-out multiplies: each registration already runs
+    // `datafusion.execution.meta_fetch_concurrency` (32) footer fetches of its own, so this is
+    // a ceiling of ~256 requests in flight rather than one per table in the project.
+    let mut registrations = stream::iter(tables)
+        .map(|spec| {
+            let name = spec.name.clone();
+            async move {
+                let result = engine.register(spec).await;
+                RegOutcome::Table { name, result }
+            }
+        })
+        .buffer_unordered(TABLE_CONCURRENCY);
+    while let Some(outcome) = registrations.next().await {
+        settled(outcome);
     }
 
     let mut pending = views;
@@ -314,6 +342,12 @@ mod tests {
 
     /// A failed table is its row, not the pass's: the outcome is `Err` and the rest
     /// proceed.
+    ///
+    /// Asserted **without regard to order**, deliberately. Tables register concurrently
+    /// ([`TABLE_CONCURRENCY`]), so which of two settles first is a race — and it is not a
+    /// property worth pinning: `settled` is documented as "called with each outcome as the
+    /// engine answers it", and the app folds outcomes onto catalog rows by name. A positional
+    /// assertion here would be testing the scheduler.
     #[tokio::test]
     async fn a_failed_table_does_not_abort_the_pass() {
         let root = scratch("bad_table");
@@ -325,19 +359,61 @@ mod tests {
 
         let out = run(&root, &defs).await;
 
-        match &out[..] {
-            [RegOutcome::Table {
-                name: b,
-                result: Err(_),
-            }, RegOutcome::Table {
-                name: g,
-                result: Ok(_),
-            }] => {
-                assert_eq!(b, "bad");
-                assert_eq!(g, "good");
-            }
-            other => panic!("{other:?}"),
+        let mut settled = names(&out);
+        settled.sort_unstable();
+        assert_eq!(settled, vec![("bad", false), ("good", true)], "{out:?}");
+    }
+
+    /// The table phase settles every def exactly once, in no guaranteed order.
+    ///
+    /// Concurrency is why the order is unguaranteed: a serial pass cost the sum of its tables, so
+    /// one wide remote table (thousands of parquet footers over S3) stalled every local table
+    /// behind it — and the app's scan claim, and with it validation, for the same duration.
+    ///
+    /// **What it does not assert is that the phase is concurrent**, and that is worth stating
+    /// rather than leaving as a gap someone fills in badly later.
+    ///
+    /// The obvious test is completion order against defs order: list the expensive table first,
+    /// assert it does not settle first, since the serial loop this replaced settled it first
+    /// every time. That version was written, shipped, and **flaked** — a fast table only
+    /// overtakes a slow one if the runtime gives it a thread, and on a machine already running a
+    /// build it may not until the slow one is done. It is a race the concurrent implementation
+    /// usually wins and is not guaranteed to, which makes it a test that fails at random. A
+    /// flaky test is worse than an absent one: it trains people to re-run rather than to read.
+    ///
+    /// There is no seam on `Engine` to inject a controllable delay, so there is nothing here to
+    /// assert deterministically. The concurrency is one `buffer_unordered` in a function whose
+    /// shape is the assertion; what this test pins is what a test *can* pin — that the phase
+    /// still settles every table exactly once, whatever order they arrive in, which is the
+    /// property the app's fold depends on.
+    #[tokio::test]
+    async fn every_table_settles_exactly_once_whatever_the_order() {
+        let root = scratch("concurrent_tables");
+        let mut wide = String::from("id,name\n");
+        for i in 0..50_000 {
+            wide.push_str(&format!("{i},row{i}\n"));
         }
+        fs::write(root.join("wide.csv"), &wide).unwrap();
+        fs::write(root.join("a.csv"), "id\n1\n").unwrap();
+        fs::write(root.join("b.csv"), "id\n1\n").unwrap();
+        let defs = ProjectDefs {
+            tables: vec![
+                table("wide", "wide.csv"),
+                table("a", "a.csv"),
+                table("b", "b.csv"),
+            ],
+            ..Default::default()
+        };
+
+        let out = run(&root, &defs).await;
+
+        let mut settled = names(&out);
+        settled.sort_unstable();
+        assert_eq!(
+            settled,
+            vec![("a", true), ("b", true), ("wide", true)],
+            "one outcome per table, none dropped and none doubled: {out:?}"
+        );
     }
 
     /// A view over a table that failed to register gets whatever the engine answers for
@@ -400,6 +476,16 @@ mod tests {
     /// connections and two registry keys, so an outcome carrying only `"lake"` would be
     /// indistinguishable between them, and a caller folding by it would answer one row twice
     /// and leave the other waiting forever.
+    ///
+    /// **Every connection here is one that is refused locally**, and that is deliberate.
+    /// `Engine::connect` now asks the bucket whether it answers (`store::reachable`), so a def
+    /// that is merely *well-formed* is no longer one this test can settle `Ok` — it would send
+    /// this suite to `s3.eu-west-2.amazonaws.com` and `storage.googleapis.com` on every run, for
+    /// buckets nobody owns, and fail on a plane. Each of the three is refused before any socket
+    /// opens (a blank region twice, a blank service-account path once), which costs the test
+    /// nothing it was actually asserting: the subject is *order* and *identity*, and an outcome
+    /// carries its URL whether it succeeded or not. `("local", true)` is still what proves the
+    /// pass carried on to the table phase after three refusals.
     #[tokio::test]
     async fn connections_settle_first_and_each_under_its_own_url() {
         let root = scratch("connections");
@@ -409,7 +495,6 @@ mod tests {
                 ConnectionDef {
                     address: "lake".into(),
                     provider: Provider::S3(S3Store {
-                        region: "eu-west-2".into(),
                         auth: S3Auth::Anonymous,
                         ..Default::default()
                     }),
@@ -419,7 +504,9 @@ mod tests {
                 ConnectionDef {
                     address: "lake".into(),
                     provider: Provider::Gcs(GcsStore {
-                        auth: GcsAuth::Anonymous,
+                        auth: GcsAuth::ServiceAccount {
+                            path: String::new(),
+                        },
                     }),
                     client_config: Default::default(),
                 },
@@ -442,8 +529,8 @@ mod tests {
         assert_eq!(
             names(&out),
             vec![
-                ("s3://lake", true),
-                ("gs://lake", true),
+                ("s3://lake", false),
+                ("gs://lake", false),
                 ("s3://no-region", false),
                 ("local", true)
             ],
