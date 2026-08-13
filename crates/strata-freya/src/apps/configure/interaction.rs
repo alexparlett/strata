@@ -318,9 +318,13 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
 /// A def over a connection **this project no longer has** keeps naming it, and the footer says
 /// so rather than letting the reference be saved again — the treatment a format with no reader
 /// gets, for the same reason.
+///
+/// The draft is otherwise **whole**, path included, because the footer leads with what the draft
+/// itself can answer: an empty box is "a table needs a source path", which is a different
+/// sentence about a different thing to fix.
 #[test]
 fn a_forgotten_connection_is_named_and_blocks_save() {
-    let mut draft = draft("events/");
+    let mut draft = draft_both("/data/events.parquet", "events/");
     draft.location = Where::Remote;
     draft.provider = ProviderId::S3;
     draft.connection = Some("s3://gone".into());
