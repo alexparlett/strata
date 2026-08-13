@@ -1637,6 +1637,13 @@ mod tests {
     /// A request that never had to be retried omits the retry clause entirely (`RetryError`
     /// writes it only when `retries != 0`), so the bookkeeping still has to come off the short
     /// form — this is the shape a first-attempt 403 or a refused connection takes.
+    ///
+    /// Note the fixture's **trailing space**: `RequestError::Status` interpolates an absent body
+    /// as `""` after `{status}: `, so this is genuinely what the crate emits. It is kept, and the
+    /// expectation has no trailing space, because `readable` opens with `raw.trim()` — both ends,
+    /// once, before the loop — and every peel after that hands back a *suffix* of that string, so
+    /// the tail can never grow whitespace back. Written down because the peel steps themselves
+    /// only `trim_start`, which reads like the tail is unhandled until you notice the first line.
     #[test]
     fn the_bookkeeping_comes_off_a_request_that_was_not_retried() {
         let raw = "Object Store error: Generic S3 error: Error performing GET \

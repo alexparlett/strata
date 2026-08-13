@@ -67,7 +67,7 @@ const PROFILING: &str = "Profiling…";
 
 /// A status glyph wearing its message as a tooltip. Dropped below, like the rest of the app's
 /// overlays, so it can't cover the row above it in a dense list.
-fn tip(message: impl Into<std::borrow::Cow<'static, str>>) -> TooltipContainer {
+fn tip(message: impl Into<Cow<'static, str>>) -> TooltipContainer {
     TooltipContainer::new(Tooltip::new_text(message)).position(AttachedPosition::Bottom)
 }
 
