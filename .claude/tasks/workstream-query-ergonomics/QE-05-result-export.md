@@ -1,40 +1,39 @@
 # QE-05 · Agent result export — the first curated write
 
-**Workstream:** Query ergonomics · **Status:** ⬜ (open decision for Alex below) ·
-**Depends on:** nothing structurally; the permission decision gates implementation
+**Workstream:** Query ergonomics · **Status:** ⬜ · **Depends on:** nothing
 
 ## Goal
 
-An agent can land a settled result on disk without a Python-CSV detour (feedback item 12) —
-as the spec's reserved shape: a **new, separately permissioned tool**, never a loosening of
-`run` (docs/AGENT_ACCESS_SPEC.md:437-439: "Curated writes … arrive as new, separately
-permissioned tools; `run` never loosens"). This is the first curated write, so the shape it
-takes becomes the precedent for any later one — that is why the permission model is decided
-before code.
+An agent can land a settled result on disk without a Python-CSV detour (feedback item 12):
+`export_result(query_session, path, format)`, always available, never a loosening of `run`
+(docs/AGENT_ACCESS_SPEC.md:437-439). This is the first curated write, so its shape is the
+precedent for any later one.
 
-## The open decision (Alex)
+## The decision (Alex, 2026-08-13)
 
-A tool call must not block on a dialog (settled — the reason profiling isn't exposed at all,
-spec :183-186), so per-call confirmation is out. The candidates:
+**Always available, no consent surface, agent-supplied path.** The candidate Settings toggle
+was declined on a correct observation: `read_page` already hands the agent every byte of the
+result, so a gate on writing those bytes to the user's own disk protects no data the read
+surface has not already exposed. (Per-call confirmation was never a candidate — a tool call
+must not block on a dialog, the settled reason profiling isn't exposed at all, spec
+:183-186.)
 
-- **A. Standing consent in Settings** — Settings ▸ AI (or MCP) gains "Agents may export
-  results to disk", default **off**, plus a directory the exports land in (default e.g.
-  `~/Downloads`, path chosen through the normal picker). The tool exists on the router
-  always (a stable manifest), and refuses with "Result export is disabled in Settings" when
-  the toggle is off — mirroring how every refusal names its fix. **Recommended**: it is the
-  T2 principle ("only a gate that is a question for the user may be skipped") answered once,
-  ahead of time, by the user.
-- **B. Assistant-only, via the offer funnel** — no MCP tool at all; rely on `offer_sql`
-  handing the user a `COPY … TO` card (validated under the **editor's** capability, which is
-  what already lets the assistant offer writes it cannot run). Zero new permission surface,
-  but headless/MCP agents — where the feedback came from — get nothing.
-- **C. Both**: A for MCP, and note in system.md that the assistant should prefer the offer
-  card (keeps the user in the loop) unless asked to save directly.
+What still needs protecting is the **write**, not the data, so the whole fence is the path
+rules:
 
-If A (or C), a sub-decision: is the destination the agent's to choose (a path parameter,
-fenced inside the consented directory) or always minted by Strata (session-named file in the
-consented directory, format parameter only)? Minted is safer and smaller; a path parameter
-inside the fence is more useful. Recommend **minted for v1**.
+- The settled resolved-target gate: never into `.strata/` or the snapshot spool (a stray
+  file under an internal table's directory is phantom rows on its next scan) — the same gate
+  `ddl::copy` runs, reached the same way.
+- **Refuse overwriting an existing file**, by name, with no overwrite flag in v1. This is
+  the one genuinely new risk of an agent-supplied path (a driven client clobbering the
+  user's files); minting a fresh name is the agent's job and a refusal is cheap.
+- Parent directory must exist — export creates a file, never a tree.
+
+This deliberately relaxes the spec's reserved wording ("separately permissioned tools"):
+the permission turned out to be a fiction once read access is total, and the spec's curated-
+writes paragraph is rewritten in this task to say what the real fence is. `run`'s policy,
+`Blocked::CopyTo` and the read-only classification are untouched — the write is a new tool
+whose only effect is a file on the user's own disk, outside Strata-owned storage.
 
 ## Current state (verified 2026-08-13)
 
@@ -61,39 +60,39 @@ inside the fence is more useful. Recommend **minted for v1**.
   snapshot, and the `Busy` guard on the call already holds the agent against the sweep for
   the duration.
 
-## Build (once decided; written for option A/C)
+## Build
 
-1. Settings: the toggle + directory on the AI/MCP pane, through the existing settings merge
-   machinery; both reach the app config store, never per-project.
-2. `Host::export_result(session, format) → path` (the driver asks the engine; headless host
-   answers the same from its own engine — same vocabulary, second deployment). Formats:
-   csv / parquet / ndjson, reusing `EXPORT_OPTIONS`' vocabulary where it fits.
-3. `StrataTools::export_result` public method + `#[tool]` wrapper (Busy guard + Caller
-   resolution, then delegate — the settled wrapper shape); refusals: toggle off (names
-   Settings), no such session (existing wording), no result yet (existing wording).
-   `manifest()` picks it up from the router untouched.
-4. The answer states the written path and row/byte counts from the write pass — the
+1. `Host::export_result(session, path, format) → written path` (the driver asks the engine;
+   the headless host answers the same from its own engine — same vocabulary, second
+   deployment). Formats: csv / parquet / ndjson, reusing `EXPORT_OPTIONS`' vocabulary where
+   it fits.
+2. `StrataTools::export_result` public method + `#[tool]` wrapper (Busy guard + Caller
+   resolution, then delegate — the settled wrapper shape); refusals: no such session
+   (existing wording), no result yet (existing wording), owned storage / existing file /
+   missing parent (each by name, the path fences above). `manifest()` picks it up from the
+   router untouched.
+3. The answer states the written path and row/byte counts from the write pass — the
    engine's own figures, never restated.
-5. Tests: mock-host tool tests (refusal matrix, happy path), one engine test proving
+4. Tests: mock-host tool tests (refusal matrix, happy path), one engine test proving
    `__strata_ord` is absent and order survives into the file, one proving the `.strata/`
-   fence holds even if the consented directory is inside a project (edge: consented dir
-   *is* a project's `.strata` — refused by the resolved-target gate).
-6. `docs/AGENT_ACCESS_SPEC.md`: the "What is not built" bullet moves to a "curated writes"
-   section describing the permission shape; system.md tells the assistant when to prefer
-   the offer card (option C's line).
+   fence and the refuse-overwrite each hold (edge: a path *inside* a project's `.strata` —
+   refused by the resolved-target gate, not by string prefix).
+5. `docs/AGENT_ACCESS_SPEC.md`: the "What is not built" bullet becomes a "curated writes"
+   section recording the decision above and its reasoning; system.md gains one line — the
+   assistant may still prefer an `offer_sql` COPY card when the user should stay in the
+   loop, and `export_result` when asked to save directly.
 
 ## Acceptance
 
-- With the toggle off (default), nothing changes anywhere — same manifest minus nothing (the
-  tool is listed but refuses), `run` policy untouched, existing tests unedited.
-- With consent, an MCP agent saves a session's result to the consented directory in the
-  asked format; the file carries no `__strata_ord`; the reply's figures are the engine's.
-- The permission decision and its reasoning are recorded here and in the spec.
+- An MCP agent saves a session's result to a path it names, in the asked format; the file
+  carries no `__strata_ord`; the reply's figures are the engine's.
+- Every refusal names its reason: owned storage, existing file, missing parent, no result.
+- `run`'s policy is untouched — existing classification tests unedited.
+- The decision and its reasoning are recorded here and in the spec.
 
 ## Files
 
 `crates/strata-agent/src/{tools.rs, host.rs, wire.rs, headless.rs, mock.rs}` ·
 `crates/strata-freya/src/agent/directory.rs` + `apps/project/state/agent.rs` (driver arm) ·
 `crates/strata-core/src/engine/{export.rs or ddl/copy.rs}` (the engine method) ·
-`crates/strata-core/src/config.rs`-adjacent settings plumbing + the Settings ▸ AI pane ·
-`docs/AGENT_ACCESS_SPEC.md`.
+`crates/strata-agent/src/assistant/system.md` · `docs/AGENT_ACCESS_SPEC.md`.

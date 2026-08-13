@@ -36,7 +36,9 @@ answer are in the task.
 
 Dependencies: QE-01..05 are independent of each other. QE-06 references QE-01's function by
 name, so it lands last (or its guidance ships without that line and gains it with QE-01).
-QE-05 carries an open **permission-model decision** for Alex before implementation.
+QE-05's permission model is **decided** (Alex, 2026-08-13): always available, agent-supplied
+path — read access already hands over the data, so the fence is the write rules (owned
+storage refused, no overwrite), not a consent gate.
 
 ## Settled facts the tasks stand on (source-verified 2026-08-13)
 
@@ -59,9 +61,11 @@ QE-05 carries an open **permission-model decision** for Alex before implementati
   stated bound, not a pin.
 - Export from the agent is deliberately absent, and the spec reserves its shape:
   "**Curated writes** … arrive as new, separately permissioned tools; `run` never loosens"
-  (docs/AGENT_ACCESS_SPEC.md:437-439). QE-05 is that reserved task. The assistant already has
-  a today-answer: `offer_sql` validates under the **editor's** capability, so it can hand the
-  user a `COPY … TO` card the assistant itself is refused.
+  (docs/AGENT_ACCESS_SPEC.md:437-439). QE-05 is that reserved task — with the permission
+  half deliberately relaxed by decision (see the task): the data is already fully readable
+  through the tool, so the fence is the write rules, and `run` still never loosens. The
+  assistant also keeps its today-answer: `offer_sql` validates under the **editor's**
+  capability, so it can hand the user a `COPY … TO` card the assistant itself is refused.
 - `datafusion.sql_parser.enable_ident_normalization` already exists in `ENGINE_KEYS`
   (`engine/config.rs:321`, default `true`), is offered in Settings ▸ Engine ▸ Properties, is
   **settable by typed `SET`** (absent from `refuse_reserved_key`'s list), and the language

@@ -218,8 +218,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   `regexp_extract_all` (QE-02) — then three agent-surface tasks: `describe_table`
   collapsing N same-shaped UUID-keyed siblings into one counted shape (QE-03), the stateless
   idle sweep's 5-minute TTL raised and stated to the model (QE-04), and result export as the
-  spec's reserved first **curated write**, with a permission-model decision for Alex recorded
-  in the task (QE-05); QE-06 lands the guidance + workaround spellings where the model reads
+  spec's reserved first **curated write**, its permission model decided (Alex, 2026-08-13:
+  always on, agent-supplied path — read access already hands over the data, so the fence is
+  the write rules) (QE-05); QE-06 lands the guidance + workaround spellings where the model reads
   them. The workstream README carries the **upstream ledger** — five reported gaps that are
   DataFusion 54 behaviour (pinned by the federation crates), each with its workaround, so
   nobody re-diagnoses them.
@@ -254,7 +255,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    nothing after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after
    DB-04; DB-06 and DB-07 close on the tree.
 2. **Query ergonomics (QE)** — six independent tasks; QE-01 first (it is the headline fix and
-   QE-06's guidance names it), QE-05 waits on its permission decision.
+   QE-06's guidance names it).
 3. **Internal tables in the UI (IT)** — the one remaining task, IT-02 (Save results as
    table); small, sits on nothing open.
 4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
