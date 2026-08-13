@@ -374,6 +374,12 @@ naming a connection the project no longer has keeps naming it, and Save is block
 Rewriting it to local disk would silently re-point the table at a relative path on the user's own
 machine.
 
+The two locations hold **separate** paths in the draft (`local_sources` / `remote_source`) and the
+toggle moves none between them: the disk's list and the bucket's one path are written against
+different roots, so a flip shows the other arm's own answer — empty until it is typed — and a flip
+back finds the first arm as it was left. Nothing is seeded either way; an empty box blocks Save
+with the same "A table needs at least one source path".
+
 ### The typed form (ED-10)
 
 A `CREATE EXTERNAL TABLE` typed into the editor reaches the same def, and its `LOCATION` is where

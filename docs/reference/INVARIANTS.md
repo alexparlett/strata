@@ -1063,7 +1063,13 @@ Things that must not regress. Each was fought for once already.
   back out, because a bucket-relative path has nothing to do with the project folder. Forgetting
   a connection therefore has a **consequence**, and the confirm names it: the tables whose def
   reads through it (`tables_over`) and the views behind those (`views_over`), which is the reading
-  a table drop already reports.
+  a table drop already reports. In the Configure window the two locations hold **separate** paths
+  (`ConfigureDraft::local_sources` / `remote_source`, projected by `nonblank_sources`) and the
+  toggle moves none between them: a list written against the disk and one written against a
+  bucket are different answers to different questions, so carrying the first over wrote
+  `/data/events.parquet` under a bucket that had nothing to do with it — and, from an empty list,
+  seeded a blank row in the one section whose toolbar is absent, so a remote table's only path was
+  a row nobody added and nobody could remove. Nothing seeds either arm; an empty one blocks Save.
 - **A connection's address is its provider's own, and every rule about it lives in one place.**
   The field is `address` rather than `bucket` because the three providers do not address the same
   thing: S3 and GCS name a bucket whose scheme the provider states, while HTTP names a **whole

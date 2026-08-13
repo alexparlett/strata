@@ -407,11 +407,15 @@ src/apps/configure/              the Configure-table window (P4-11 — `Configur
                                  than holding an engine or a second "make the engine match the
                                  defs" of its own. **location.rs** is the LOCATION toggle and,
                                  behind its object-store arm, the TYPE / CONNECTION pair (W7 ·
-                                 04): the draft records the connection's `url()`, the source list
-                                 goes single-path under the bucket as a prefix, and
+                                 04): the draft records the connection's `url()`, the section goes
+                                 single-path under the bucket as a prefix, and
                                  `register::table_spec` composes the two — so the window needs no
                                  engine call and the picker's *New connection…* sets the project
-                                 window's own `ConnectionRequest` rather than opening an editor
+                                 window's own `ConnectionRequest` rather than opening an editor.
+                                 That path is the draft's **own** field (`remote_source`, beside
+                                 `local_sources`): the toggle carries none between the two and
+                                 seeds neither, so each arm keeps what was typed into it and a
+                                 blank row is always one the user added
 src/apps/connection/             the **connection editor** window (W7 · 03 —
                                  `Connections.dc.html`): add or edit one remote object store.
                                  mod.rs (root · window config · `ConnectionCtx` · `Status`),

@@ -20,6 +20,10 @@
 //! box in place of a one-row framed table is drawing the same thing: what actually goes is the
 //! toolbar (a control that would add rows the def cannot carry) and the empty state (a list that
 //! always holds exactly one row has none).
+//!
+//! That row is the draft's `remote_source` and the local list is its `local_sources` — two
+//! fields, projected by the LOCATION in play (`ConfigureDraft::path_at`), so the toggle swaps what
+//! these rows show without moving a path between two roots it means different things under.
 
 use freya::prelude::*;
 
@@ -116,7 +120,7 @@ impl Component for Toolbar {
         let ctx = use_consume::<ConfigureCtx>();
         // Subscribes: remove is disabled on an empty list, which is the one thing the toolbar
         // has to know about the list.
-        let has_rows = !ctx.draft.read().sources.is_empty();
+        let has_rows = ctx.draft.read().path_count() > 0;
 
         rect()
             .horizontal()
@@ -236,12 +240,9 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
     // wherever the OS last left the panel.
     let start = {
         let draft = ctx.draft.peek();
-        draft
-            .sources
-            .get(draft.clamp_selection(*ctx.selected_path.peek()))
-            .cloned()
-    }
-    .filter(|s| !s.trim().is_empty());
+        draft.path_at(draft.clamp_selection(*ctx.selected_path.peek()))
+    };
+    let start = (!start.trim().is_empty()).then_some(start);
 
     spawn(async move {
         let mut dialog = rfd::AsyncFileDialog::new().set_title("Choose a source");
@@ -302,7 +303,7 @@ impl Component for PathList {
         let (count, selected, prefix, remote) = {
             let draft = ctx.draft.read();
             (
-                draft.sources.len(),
+                draft.path_count(),
                 draft.clamp_selection(*ctx.selected_path.read()),
                 draft.bucket_prefix(),
                 draft.remote(),
@@ -384,13 +385,7 @@ impl Component for PathRow {
         // this row and the draft agreed on, so neither effect acts on a change the other made.
         // In state rather than captured — `use_side_effect` builds its closure once, so a
         // captured comparison value freezes at the first render.
-        let initial = ctx
-            .draft
-            .peek()
-            .sources
-            .get(index)
-            .cloned()
-            .unwrap_or_default();
+        let initial = ctx.draft.peek().path_at(index);
         let text = use_state({
             let initial = initial.clone();
             move || initial
@@ -422,13 +417,7 @@ impl Component for PathRow {
         });
         // In: a value this row did not type reaches the box.
         use_side_effect(move || {
-            let outer = ctx
-                .draft
-                .read()
-                .sources
-                .get(index)
-                .cloned()
-                .unwrap_or_default();
+            let outer = ctx.draft.read().path_at(index);
             if outer == *reported.peek() {
                 return;
             }

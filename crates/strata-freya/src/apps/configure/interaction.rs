@@ -151,11 +151,21 @@ fn click_lowest(runner: &mut TestingRunner, text: &str) {
     settle(runner);
 }
 
+/// A table over the **local disk**, with one path in the list.
 fn draft(source: &str) -> ConfigureDraft {
     ConfigureDraft {
         name: "events".into(),
-        sources: vec![source.into()],
+        local_sources: vec![source.into()],
         ..Default::default()
+    }
+}
+
+/// The same table with a **bucket-relative** path typed into the object store's box as well —
+/// deliberately a different value, a flip carrying nothing between the two.
+fn draft_both(local: &str, remote: &str) -> ConfigureDraft {
+    ConfigureDraft {
+        remote_source: remote.into(),
+        ..draft(local)
     }
 }
 
@@ -196,9 +206,13 @@ fn remote_with_no_connection_explains_itself_and_blocks_save() {
 /// **The headline**: flipping to the object store picks the project's connection, the path box
 /// wears that bucket, and Save writes a def naming the connection with the path left
 /// bucket-relative — which is what `register::table_spec` composes back into an address.
+///
+/// The draft opens with a path on **each** arm, so what is saved also says which of the two the
+/// LOCATION chose.
 #[test]
 fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
-    let (mut runner, (ctx, project, _)) = runner("save", true, draft("events/2024/"));
+    let draft = draft_both("/data/events.parquet", "events/2024/");
+    let (mut runner, (ctx, project, _)) = runner("save", true, draft);
     settle(&mut runner);
 
     click_lowest(&mut runner, "Remote");
@@ -234,6 +248,11 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
         ["events/2024/"],
         "stored as typed — relativizing it against the project folder would mangle it"
     );
+    assert_eq!(
+        ctx.draft.peek().local_sources,
+        ["/data/events.parquet"],
+        "and the disk's own path was neither saved nor forgotten"
+    );
 }
 
 /// **And back again.** The flip to Local is the direction that *shortens* the form and returns
@@ -241,19 +260,36 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
 /// rather than going up — and the one nothing else drives.
 ///
 /// What it asserts is that the whole surface returns: the TYPE / CONNECTION pair is gone, the
-/// label is plural again, the bucket prefix is off the box, and the connection is *remembered*
-/// rather than discarded, which is what makes a flip back and forth free.
+/// label is plural again, the bucket prefix is off the box, and the connection, the disk's paths
+/// and the bucket's path are all *remembered* rather than discarded, which is what makes a flip
+/// back and forth free.
 #[test]
 fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
-    let (mut runner, (ctx, ..)) = runner("back", true, draft("events/2024/"));
+    let draft = draft_both("/data/events.parquet", "events/2024/");
+    let (mut runner, (ctx, ..)) = runner("back", true, draft);
     settle(&mut runner);
 
     click_lowest(&mut runner, "Remote");
     assert!(shows(&runner, "CONNECTION"), "{:?}", texts(&runner));
+    assert_eq!(
+        ctx.draft.peek().nonblank_sources(),
+        ["events/2024/"],
+        "the bucket's own path is what the one box holds"
+    );
 
     click_lowest(&mut runner, "Local");
 
     assert!(!ctx.draft.peek().remote());
+    assert_eq!(
+        ctx.draft.peek().nonblank_sources(),
+        ["/data/events.parquet"],
+        "and the disk's list comes back whole, without retyping"
+    );
+    assert_eq!(
+        ctx.draft.peek().remote_source,
+        "events/2024/",
+        "with the bucket's path still there for the next flip"
+    );
     assert_eq!(
         ctx.draft.peek().connection.as_deref(),
         Some("s3://acme-lake"),
@@ -335,7 +371,7 @@ fn internal_shows_columns_and_hides_everything_about_files() {
 fn internal_is_offered_on_a_new_table_and_refused_on_an_edit() {
     let mut draft = ConfigureDraft {
         name: "orders".into(),
-        sources: vec!["/data/orders.parquet".into()],
+        local_sources: vec!["/data/orders.parquet".into()],
         ..Default::default()
     };
     let (mut editing, (ctx, _, _)) = runner("internal-edit", false, draft.clone());
