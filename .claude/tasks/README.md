@@ -61,7 +61,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 | 0 · Core extraction | `strata-model` / `strata-core` split; both frontends on the shared core | ✅ done |
 | 1 · Skeleton + engine round-trip | window shell, per-window state scaffold, direct-call facade + freya-query | ✅ done |
 | 2 · Workbench | editor · results grid · tabs · run/explain · find/record/copy · Table/Chart · toolbar · status bar | ✅ done (folder removed) |
-| 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · the whole drawer (Problems · Events · History) | ✅ done (folder removed) |
+| 3 · Catalog + inspector + drawer | sidebar/catalog · column inspector + profiling · the whole drawer (Problems · Events · History) | ✅ done (folder removed) — the catalog pane is slated for the DB-05 tree redesign |
 | 4 · Multi-window | launcher · settings · export · configure · native close · write resiliency | ✅ done (folder removed) |
 | **5 · Design polish** | spacing/radius tokens, hover/focus, animation, theme dial-in per surface | 🟡 **P5-01 (spacing/radius scale) + P5-02 (interaction states) + P5-06 (panel overflow) + P5-08 (scroll acceleration) done; the rest open** → [`phase-5-design-polish/`](phase-5-design-polish/README.md) |
 | 6 · Platform + parity | keymap/hotkeys · command palette · native menu · parity sweep | ✅ done (folder removed) |
@@ -74,7 +74,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   sidebar pane, the editor window (`apps/connection/`), and the Configure window's LOCATION
   toggle (`TableDef::connection`, bucket-relative sources composed by `project::resolve_source`).
   W7-01 raised the workspace's effective MSRV to **rustc 1.94.1**. Spec:
-  `docs/CONNECTIONS_SPEC.md`; settled record: `docs/reference/SETTLED_TASKS.md`.
+  `docs/CONNECTIONS_SPEC.md`; settled record: `docs/reference/SETTLED_TASKS.md`. **The DB
+  workstream (below) now extends this**: databases join as a fourth provider arm, the
+  no-secrets rule is deliberately rewritten (keystore refs), and the sidebar pane retires
+  into DB-05's data-sources tree — read the DB README before treating W7's surfaces as
+  settled.
 - **Chart view** (**Rz2**) — ✅ **done, folder removed**: the results Chart surface end to end —
   the snapshot ordinal, the renderer-first `Engine::chart` read, the plotters/Skia body, the
   encoder strip + `ChartConfig`, the guardrails, the interactivity pass, Copy Image (which grew
@@ -87,7 +91,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
   (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
   `strata-core`; no UI surface of its own.
-- **Agent access** ([`workstream-agent-access/`](workstream-agent-access/README.md), AA) —
+- **Agent access** (`workstream-agent-access/`, folder removed — settled record in
+  `docs/reference/SETTLED_TASKS.md`; AA) —
   agent-driven access to a project's data: one read-only tool vocabulary (`strata-agent`) over a
   verified Tokio↔Freya bridge, with thin swappable frontends. **01–05 (incl. 03b/03c) ✅**: the
   in-app MCP server, the agents satellite (an agent's runs are dispatched straight at the engine
@@ -102,7 +107,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   walks a nested schema under a byte budget with path drill-down and name search, the
   assistant caps what it asks `run` for, and a cut result names the cut tool's own recovery.
   Docs: `docs/AGENT_ACCESS_SPEC.md` (as-built, dataflow diagram inlined).
-- **Assistant** ([`workstream-assistant/`](workstream-assistant/README.md), AS) — the native
+- **Assistant** (`workstream-assistant/`, folder removed — settled record in
+  `docs/reference/SETTLED_TASKS.md`; AS) — the native
   chat pane, graduated from AA-06 with its brain decision settled: an app-owned agentic loop
   over a **pluggable provider seam** (the `genai` crate — Anthropic, OpenAI, Gemini, Ollama,
   OpenAI-compatible), driving the AA tool vocabulary in-process. Seven tasks: in-process facade
@@ -123,18 +129,21 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   conversations per window behind a switcher, prose through the fork's `MarkdownViewer`, a
   citation card per tool round and an executable card per `offer_sql`, `@`-mentions over the
   catalog store, the three friction entries through one `ask_about` funnel, and the
-  cancelled-run drop guard the task owed `agent::directory`). **03 🟡** — Providers and MCP are
+  cancelled-run drop guard the task owed `agent::directory`). **03 ✅** (closed by 07's
+  retention pair) — Providers and MCP are
   done and the keystore round trip works; AI ▸ Chat was two controls short and the model
   `Select` landed with 06, leaving the retention pair that only means something once
-  conversations persist (07). **07 ⬜.** Two corrections settled with 02 and recorded in that
+  conversations persist (07). **07 ✅** (landed 2026-08-11, closing 03's retention pair with
+  it — the closing note below and this line agree now; the 🟡/⬜ marks that used to sit here
+  were stale). Two corrections settled with 02 and recorded in that
   workstream's README: the Agents pane was for **headless MCP clients only** (the assistant was
   kept out of it by its minted `AgentId` — the mark survives the pane's removal, and is now what
   lets the close confirm name the assistant as itself), and a runnable statement is a **tool
   call**, not a markdown convention. One more settled with 04: the canvas's "Thought for Ns" line is **AS-02's
   to enable** — its stream loop folds reasoning chunks into the next request rather than emitting
   them, so there is no event a pane could render.
-- **Editor statements** ([`workstream-editor-statements/`](workstream-editor-statements/README.md),
-  ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
+- **Editor statements** (`workstream-editor-statements/`, folder removed — settled record in
+  `docs/reference/SETTLED_TASKS.md`; ED) — lifting the managed-DDL policy into a full-statement editor: internal tables persisted
   under `.strata/tables/` (CTAS/INSERT/DROP), typed view DDL, typed `CREATE EXTERNAL TABLE`,
   editor `COPY TO`, session statements + `CREATE FUNCTION`. Providers for identity/visibility,
   interception for lifecycle; the agent surface stays read-only. **01–11 ✅, workstream done** —
@@ -142,6 +151,26 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   against connections: the reader's keys are the def's, the store's are refused toward
   Connections on the key alone), and ED-11 landed the completion offer over all of them in one
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
+- **Database connections**
+  ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — ⬜
+  federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
+  registers a DataFusion **catalog** (not an object store), built on
+  `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
+  54), so the editor cross-joins parquet onto live Postgres with same-source subplans pushed
+  down to the server. Eight tasks: federation groundwork in `build_context` (DB-01), the
+  model + secrets + pool + catalog-provider mechanism with its testcontainers-Postgres
+  integration test (DB-02), the statement-policy audit over remote catalogs (DB-03), the
+  connection editor's Postgres form (DB-04), the **data-sources tree** — a DataGrip-shaped
+  holistic redesign of the catalog pane that absorbs and retires the Connections pane
+  (DB-05) — then gestures + completion (DB-06) and inspector + profiling over remote tables
+  (DB-07) on the tree, plus the JSON-accessor pushdown rewrite (DB-08), which sits directly
+  on DB-02 and can land any time after it. Read the workstream README first — it records the settled decisions, including
+  the big ones: the whole database registers automatically as a catalog (no per-table defs;
+  discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
+  while the store/discovery **invariant** underneath is not, and the connections no-secrets
+  rule is **rewritten, not routed around** (passwords index the keystore by *derived*
+  UUIDv5 refs, so the committed def never changes per machine — Alex, 2026-08-13). Planned
+  2026-08-13 from source-verified research on both crates.
 - **Updater** ([`workstream-updater/`](workstream-updater/README.md), UP) — ✅ in-app updates.
   **UP-01 ✅** (2026-08-12): the release pipeline grows a `ditto`-zipped `.app` beside the DMG,
   the app compiles in its team identity, and a signed build cross-checks the two so it cannot
@@ -172,11 +201,17 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Phase 5 polish** — the consistency + finish pass, largely theme/token work. All that remains.
+1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 →
+   DB-02 first; DB-03, DB-04 and DB-08 sit on DB-02 independently (DB-08 needs nothing
+   after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after DB-04;
+   DB-06 and DB-07 close on the tree.
+2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
-(The **Assistant** workstream is closed — AS-07 landed 2026-08-11 with AS-03 behind it — and so
-are the **Chart** workstream, 09/10/11 built and 05/07 cut on 2026-08-12, and the **Updater**,
-UP-03 landing its surfaces on 2026-08-13.)
+(Every other workstream is closed: **Connections/W7**, **Polymorphic JSON**, **Agent
+access**, **Editor statements**, the **Assistant** — AS-07 landed 2026-08-11 with AS-03
+behind it — the **Chart** workstream, 09/10/11 built and 05/07 cut on 2026-08-12, and the
+**Updater**, UP-03 landing its surfaces on 2026-08-13. The DB workstream above is the open
+one.)
 
 ## Sourcing
 
