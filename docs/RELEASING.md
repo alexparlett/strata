@@ -138,6 +138,84 @@ with the signing rung, only what the files are worth does.
 
 ---
 
+## Homebrew
+
+```bash
+brew tap alexparlett/strata
+brew trust alexparlett/strata
+brew install --cask strata
+```
+
+That installs the DMG the release page carries — the same file, from the same URL, checked against
+the same bytes.
+
+Three commands rather than one, and both of the extra two are Homebrew's rules rather than ours.
+`brew install --cask alexparlett/strata/strata` no longer taps on the user's behalf ("If you trust
+this tap, tap it explicitly"), and since `HOMEBREW_REQUIRE_TAP_TRUST` became the default, a cask in
+a third-party tap is refused until `brew trust` has been given for the tap or the cask. Neither can
+be worked around from this side, so the install instructions say all three.
+
+The cask lives in **[alexparlett/homebrew-strata](https://github.com/alexparlett/homebrew-strata)**,
+a repository of its own: Homebrew resolves a tap by the name `homebrew-<tap>`, and this repo is not
+called that. Nothing else is in it.
+
+Nobody edits it either. [`scripts/update-cask.sh`](../scripts/update-cask.sh) generates
+`Casks/strata.rb` from the DMG a release publishes, and the Release workflow runs it in the step
+after the publish. Every line of the cask is read off the artifact rather than off what the run
+meant to build:
+
+| In the cask | Read from |
+|---|---|
+| `version` | the release tag, checked against the version in the DMG's filename |
+| `sha256` | `shasum` of the file Homebrew will download |
+| `depends_on arch:` | the architecture in that filename — absent for a universal build |
+| `caveats` | whether the DMG carries an Apple notarization ticket |
+
+That last row is why the script fetches the artifact rather than trusting the checksum GitHub
+already publishes for it. A cask that installs quietly and leaves you with an app macOS refuses to
+open is the worst outcome available here, so the quarantine instructions appear exactly while they
+are true, and the question is asked of the file (`stapler validate`) rather than of the machine
+generating the cask — `spctl` accepts everything on a host where Gatekeeper assessments are off,
+which a CI runner may well be.
+
+The cask also declares `auto_updates`, because Strata's in-app updater swaps the bundle in place:
+without it `brew upgrade` would reinstall over a newer app it has no way to see. `--greedy` still
+upgrades it.
+
+### What checks the result
+
+The tap runs `brew style` and `brew audit --cask --online` on every push, which is where a bad
+generation is caught — and the only place `brew audit` can run at all, since it refuses to start on
+a Mac whose Command Line Tools are out of date.
+
+One audit check is skipped by name: `github_prerelease_version`, because Strata's releases are
+deliberately prereleases (tester builds, kept out of the "Latest release" slot) and Homebrew holds
+that a cask should not point at one. It is a whole check rather than a warning, so skipping it by
+name is what keeps the URL and homepage checks running. It stops being a skip the day the
+**Mark as prerelease** input starts defaulting to off.
+
+### The token, and doing it by hand
+
+The workflow step needs one secret, `HOMEBREW_TAP_TOKEN` — a fine-grained PAT with **Contents:
+read and write** on `alexparlett/homebrew-strata` and nothing else. This repo's `GITHUB_TOKEN`
+cannot write to another repository, which is the whole reason it exists.
+
+Without the secret the release publishes normally and the run posts a notice saying the cask was
+not updated. A token that is present and does not work fails the step: the release is already out,
+and a cask silently stuck a version behind is worse than a red run. Either way the recovery is the
+same script:
+
+```bash
+gh repo clone alexparlett/homebrew-strata
+./scripts/update-cask.sh --tap homebrew-strata --tag v0.3.2 --commit
+```
+
+`--tag` defaults to the version this checkout calls itself, so the tag is only worth passing for an
+older release. Without `--commit` the file is written and the commit is left to you. `--dmg` takes
+a DMG that is already on disk instead of downloading one, which is what the workflow passes.
+
+---
+
 ## From your laptop
 
 ```bash

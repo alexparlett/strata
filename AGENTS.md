@@ -812,6 +812,11 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
 - **The version lives in one file and is reached through one script** (`scripts/version.sh`, which
   writes as well as reads). A bump is refused without the release box; the commit is pushed after
   the build and never rebased.
+- **The Homebrew cask is generated from the artifact, never edited in the tap.**
+  `scripts/update-cask.sh` reads the version, checksum, architecture and Gatekeeper caveat off the
+  published DMG and writes `Casks/strata.rb` into `alexparlett/homebrew-strata`; the Release
+  workflow runs it after the publish. Notarization is asked of the bytes (`stapler`), never of the
+  machine (`spctl`).
 - **The app bundle is self-contained**, and that is a claim each new asset has to keep — naming a
   new font family or weight in a theme means embedding it in the same change.
 - **One Strata window across every session — enforced** by `.claude/hooks/block-second-strata.sh`.

@@ -347,6 +347,24 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   The release notes are the signing rule again — written by `claude-code-action`, `continue-on-error`,
   falling back to GitHub's changelog with a warning that says so, because better notes are a better
   release page and not a precondition for having one.
+- **The Homebrew cask is generated from the artifact, never edited in the tap.**
+  `scripts/update-cask.sh` writes `Casks/strata.rb` into a checkout of
+  `alexparlett/homebrew-strata` — a separate repository only because Homebrew resolves a tap by the
+  name `homebrew-<tap>` — and the Release workflow runs it in the step after the publish, so a cask
+  cannot describe a release that does not exist. Every field is read off the **DMG**: the version
+  from its filename (checked against the tag, which is the `v0.4.0`-shipped-`0.2.0` bug caught one
+  layer further out), the `sha256` from its bytes, `depends_on arch:` from the architecture it names,
+  and the Gatekeeper `caveats` from whether it carries a notarization ticket. That last one is why
+  the script downloads the file rather than trusting the checksum GitHub already publishes: a cask
+  that installs quietly and leaves an app macOS refuses to open is the worst outcome available, so
+  the note has to appear exactly while it is true. It asks `stapler validate`, a property of the
+  bytes, and **not** `spctl`, which accepts everything on a host where Gatekeeper assessments are
+  disabled — a CI runner being exactly the machine nobody checks. `auto_updates true`, because the
+  in-app updater swaps the bundle in place and `brew upgrade` would otherwise reinstall over a newer
+  app it cannot see. The push needs `HOMEBREW_TAP_TOKEN` (this repo's `GITHUB_TOKEN` cannot write to
+  another repository); absent, the step posts a notice and the release still publishes, and present
+  but broken, it fails — a cask silently a version behind is worse than a red run on a release that
+  is already out.
 - **The app bundle is self-contained, and that is a claim each new asset has to keep.** Themes are
   `include_str!`'d and the two families the themes name (`themes/*.json` `fonts`) are
   `include_bytes!`'d and registered through `LaunchConfig::with_font` in `main.rs` — because

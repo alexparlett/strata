@@ -504,3 +504,51 @@ jobs:
           fi
           ARGS+=(--notes "$NOTES")
           gh release create "$TAG" target/dist/*.dmg target/dist/*.zip "${ARGS[@]}"
+
+      # `brew tap alexparlett/strata` then `brew install --cask strata`. The cask is generated from the DMG this run
+      # built - version, architecture, checksum and the Gatekeeper caveat all read off the file - so
+      # it cannot describe a release that does not exist yet. Hence *after* the publish, and only on
+      # a run that publishes.
+      #
+      # The tap is a repository of its own, because Homebrew requires the name `homebrew-<tap>`, so
+      # writing to it needs a token this repository's GITHUB_TOKEN cannot be: HOMEBREW_TAP_TOKEN,
+      # a fine-grained PAT with Contents: read and write on alexparlett/homebrew-strata and nothing
+      # else. Without it the step says so and moves on. A cask one version behind is a smaller
+      # problem than a release run that goes red after it has already published - but a token that
+      # is present and does not work is a real failure, and fails here.
+      - name: Update the Homebrew cask
+        if: steps.version.outputs.publish == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::notice::No HOMEBREW_TAP_TOKEN secret - the Homebrew cask was not updated. Run scripts/update-cask.sh by hand."
+            exit 0
+          fi
+
+          # One DMG per run: `--arch` builds one. Two would mean this job produced something the
+          # cask cannot describe, and picking one of them silently is how a cask ends up pointing
+          # at the architecture nobody tested.
+          set -- target/dist/*.dmg
+          if [ "$#" -ne 1 ]; then
+            echo "::error::Expected exactly one DMG in target/dist, found $#."
+            exit 1
+          fi
+          DMG="$1"
+
+          TAP="$RUNNER_TEMP/homebrew-strata"
+          git clone --quiet --depth 1 \
+            "https://x-access-token:$TAP_TOKEN@github.com/$OWNER/homebrew-strata.git" "$TAP"
+          git -C "$TAP" config user.name "github-actions[bot]"
+          git -C "$TAP" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          ./scripts/update-cask.sh --tap "$TAP" --tag "$TAG" --dmg "$DMG" --commit
+
+      # The clone above holds the token in its own git config. The runner is thrown away, but not
+      # until the job ends, and nothing after this needs it.
+      - name: Clean up the tap clone
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/homebrew-strata"
