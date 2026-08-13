@@ -601,15 +601,23 @@ pub fn load() -> AppConfig {
     cfg
 }
 
+/// Where an unparseable config is kept — the file's own name with `.corrupt` **appended**.
+///
+/// Appended, not `with_extension`: the file is `config.prefs.json`, whose extension is `json`, so
+/// replacing it yields `config.prefs.prefs.json.corrupt` — a name that works by accident and reads
+/// like a bug. `session.json.corrupt` is the shape this is following.
+fn corrupt_config_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".corrupt");
+    PathBuf::from(name)
+}
+
 /// [`load`]'s three-way read, split out so the outcome is a value rather than a control-flow
 /// comment. `Err` is only ever the unreadable case; the other two return a config.
 fn read_config() -> Result<AppConfig, String> {
-    let path = match config_path() {
-        Ok(path) => path,
-        // No config dir at all: nothing to read and nowhere to write. Left writable — `save`
-        // will report its own failure, which is the honest place for it.
-        Err(e) => return Err(e),
-    };
+    // No config dir at all: nothing to read and nowhere to write. Left writable — `save` will
+    // report its own failure, which is the honest place for it.
+    let path = config_path()?;
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(AppConfig::default()),
@@ -625,7 +633,7 @@ fn read_config() -> Result<AppConfig, String> {
     match serde_json::from_slice(&bytes) {
         Ok(cfg) => Ok(cfg),
         Err(e) => {
-            let aside = path.with_extension("prefs.json.corrupt");
+            let aside = corrupt_config_path(&path);
             let kept = fs::rename(&path, &aside).is_ok();
             tracing::error!(
                 "config '{}' did not parse: {e}.{}",
@@ -657,8 +665,9 @@ fn read_config() -> Result<AppConfig, String> {
 /// once race the same way. Neither is hypothetical on a file written on every window mount.
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
     if !WRITABLE.load(Ordering::Relaxed) {
-        return Err("not saving config: this session could not read the file it would replace"
-            .to_string());
+        return Err(
+            "not saving config: this session could not read the file it would replace".to_string(),
+        );
     }
     let path = config_path()?;
     if let Some(dir) = path.parent() {
@@ -715,6 +724,17 @@ mod tests {
             p
         };
         assert_eq!(config_path().expect("a config path"), theirs);
+    }
+
+    /// The kept-aside name is the config's own with `.corrupt` on the end — not the extension
+    /// swapped, which on a `.prefs.json` gives `config.prefs.prefs.json.corrupt`.
+    #[test]
+    fn a_corrupt_config_is_kept_beside_the_file_it_came_from() {
+        let path = PathBuf::from("/tmp/Strata/config.prefs.json");
+        assert_eq!(
+            corrupt_config_path(&path),
+            PathBuf::from("/tmp/Strata/config.prefs.json.corrupt")
+        );
     }
 
     #[test]

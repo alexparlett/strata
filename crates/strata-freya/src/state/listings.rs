@@ -140,7 +140,7 @@ impl Probe {
     pub fn status(&self) -> Option<(Tone, String)> {
         match self {
             Probe::Untested => None,
-            Probe::Testing => Some((Tone::Working, "testing…".into())),
+            Probe::Testing => Some((Tone::Working, "Testing…".into())),
             Probe::Verified { count } => Some((
                 Tone::Good,
                 match count {

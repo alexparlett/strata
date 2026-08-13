@@ -496,7 +496,7 @@ impl ExportDraft {
         });
         groups.push(Group {
             label: "MAX ROW GROUP SIZE".into(),
-            hint: Some("Rows per row group — larger scans faster, costs more memory"),
+            hint: Some("Rows per row group. Larger scans faster, costs more memory"),
             control: Control::Seg {
                 options: ROW_GROUPS
                     .into_iter()

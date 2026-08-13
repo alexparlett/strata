@@ -227,7 +227,7 @@ impl Component for PlanNodeCard {
                 .width(Size::fill())
                 .horizontal()
                 .cross_align(Alignment::Center)
-                .content(Content::wrap_spacing(8.))
+                .content(Content::wrap_spacing(SP_3))
                 .spacing(SP_4)
                 .maybe(rows_label.is_some(), |el| {
                     el.child(
@@ -284,7 +284,7 @@ impl Component for PlanNodeCard {
                 .width(Size::fill())
                 .margin(Gaps::new(SP_3, 0., 0., 0.))
                 .horizontal()
-                .content(Content::wrap_spacing(8.))
+                .content(Content::wrap_spacing(SP_3))
                 .spacing(SP_3)
                 .children(pills.collect::<Vec<_>>())
         });

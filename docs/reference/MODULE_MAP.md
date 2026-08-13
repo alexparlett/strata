@@ -436,7 +436,9 @@ src/apps/project/                the project window (Valin-shaped)
                                  needn't know the chord
   contexts/engine_ctx.rs         EngineCtx = Arc<Engine>, provided via use_provide_context, built
                                  with the app's `datafusion.*` overrides — a launch value, since
-                                 the RuntimeEnv is fixed when the SessionContext is
+                                 the RuntimeEnv is fixed when the SessionContext is. The forwarders
+                                 (pin_snapshot, chart, trend, export) are the methods taking
+                                 `&Arc<Engine>`, which Deref cannot reach
   query/                         the freya-query capabilities over the engine facade — run_query
                                  (RunQuery · FetchSnapshotPage), validate, profile (P3-09: the
                                  scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`

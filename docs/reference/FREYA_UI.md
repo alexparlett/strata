@@ -223,6 +223,16 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   (`use_hook`), so a captured value freezes at the first render and the field can never be typed
   back to where it started — and a plainly captured `EventHandler` (an `Rc<RefCell<dyn FnMut>>`
   snapshot) freezes the same way. Reactive values need `use_reactive`.
+
+  **The handler halves were still captured until the pre-release review**, in the shared fields
+  themselves: `NumberField`, `PathField`, `FieldControl` and `ValueField`'s `max_len`. Each got
+  away with it for a different accidental reason — the current callers' handlers close over `Copy`
+  context handles, and `FieldControl` is keyed by group label so a format switch remounts it — and
+  none of those reasons is a property of the components. The first caller whose handler closed over
+  a row id, an index or a cloned draft would have got silently stale calls with no diagnostic at
+  all. Shared machinery takes the rule rather than the luck; the same review found the live
+  instance of it in the chat composer's `ModelPicker`, where an un-keyed component froze its
+  provider at mount and never refreshed the model list after a repick.
 - **A built-in control's press reaches its ancestors, so never wrap one in a pressable parent.**
   `Switch`'s `on_press` does not `stop_propagation`, so a "click the whole row to toggle" ancestor
   takes the same click and toggles **twice** — back to where it started, which reads as a dead

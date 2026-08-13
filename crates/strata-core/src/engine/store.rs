@@ -1130,9 +1130,8 @@ mod tests {
                 // reset connection rather than as a response.
                 let _ = stream.read(&mut [0; 1024]);
                 // No `Location`, which is the whole point.
-                let _ = stream.write_all(
-                    b"HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n",
-                );
+                let _ = stream
+                    .write_all(b"HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n");
             }
         });
         format!("http://127.0.0.1:{port}")

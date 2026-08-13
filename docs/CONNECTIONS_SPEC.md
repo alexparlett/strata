@@ -133,16 +133,25 @@ Each provider's published naming rules live in **one place** — `Provider::chec
 by both the engine's `connect` and the connection editor, so a name refused at the field is
 refused by the engine in the same words:
 
-- **S3** — AWS's four general-purpose bucket rules: 3–63 characters;
-  lowercase/digits/dots/hyphens; alphanumeric at both ends; no `..`. The S3-compatible stores are
-  all at least this strict, so applying AWS's rules refuses nothing they would have accepted.
+- **S3** — AWS's general-purpose bucket rules: 3–63 characters;
+  lowercase/digits/dots/hyphens; alphanumeric at both ends; no `..`; not formatted as an IP
+  address. The S3-compatible stores are all at least this strict, so applying AWS's rules refuses
+  nothing they would have accepted. (The IP rule is AWS's own and was missing while the GCS
+  checker beside it had the identical one, so an IP-shaped bucket passed the field and died later
+  on the store's error — the exact outcome the check exists to prevent.)
 - **GCS** — Google's rules, which are deliberately *not* the same: underscores allowed, a dotted
   name may run to 222 characters (each part to 63), no dotted-decimal IP, no `goog` prefix, no
   `google` anywhere.
 - **HTTP** — a whole origin URL. Anything after the authority is **refused by name** rather than
   trimmed: the registry keys on scheme + authority, so a path here would register under a key
   nothing looks up. The message quotes the part to drop and says it belongs to the table that
-  reads through the connection.
+  reads through the connection. **Userinfo is refused too** — `https://alice:hunter2@files.example.com`
+  is a well-formed origin and the ordinary way a protected file drop is handed around, so it gets
+  pasted here; every word of a `ConnectionDef` rides in the committed, shared `.strata/project.json`,
+  and it would be echoed on the Connections row and in the Forget confirm besides. It is asked of
+  the host part only, before the path is trimmed, so an `@` inside a *path* is answered by the
+  path's own message instead. No provider Strata supports authenticates this way, so nothing is
+  lost by refusing it.
 
 The checks are deliberately not exhaustive — each provider reserves further names no local check
 can settle — they catch what is *statically* wrong so the user is told at the field instead of by

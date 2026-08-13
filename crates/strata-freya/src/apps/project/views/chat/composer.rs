@@ -369,7 +369,7 @@ impl Component for Chips {
             rect()
                 .width(Size::fill())
                 .horizontal()
-                .content(Content::wrap_spacing(4.))
+                .content(Content::wrap_spacing(SP_2))
                 .spacing(SP_2),
             |row, (at, anchor)| {
                 row.child(

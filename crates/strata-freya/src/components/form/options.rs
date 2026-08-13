@@ -392,7 +392,12 @@ impl<E: Clone + PartialEq + 'static> Component for FieldControl<E> {
         });
 
         let make = self.field.make;
-        let on_edit = self.on_edit.clone();
+        // `use_reactive`, not a capture: `use_side_effect` builds its closure once and an
+        // `EventHandler` has no write-through, so a captured one is the first render's for the
+        // life of the scope. The group list is keyed by label, so a *format* switch remounts this
+        // and hides the problem — but that is the keying being lucky, not the handler being
+        // right. Same rule as `NumberField`'s.
+        let on_edit = use_reactive(&self.on_edit);
         use_side_effect(move || {
             // Reported unconditionally: a surface's edit path is idempotent, so a no-op costs
             // nothing — and comparing here against a captured value is precisely the bug this
@@ -400,7 +405,7 @@ impl<E: Clone + PartialEq + 'static> Component for FieldControl<E> {
             // at the first render and typing a field back to its original value wrote nothing).
             // `ValueField` has already trimmed the state to `max_len`, so this reads what the
             // box shows.
-            on_edit.call(make.edit(text.read().clone()));
+            on_edit.read().call(make.edit(text.read().clone()));
         });
 
         ValueField::new(text)

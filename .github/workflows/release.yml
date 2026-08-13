@@ -108,19 +108,30 @@ jobs:
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
+          # Through `env`, never interpolated into the script below. A `${{ }}` expansion is a
+          # textual paste into the shell *before* it runs, so a ref or an input carrying `;` or a
+          # backtick would execute here - in a job that holds the signing secrets. Git refnames
+          # forbid spaces and a few metacharacters but not those, and `inputs.version` is free
+          # text. The choice-typed inputs below are safe by their own definition and still ride
+          # here, so the rule is one rule rather than a judgement per line.
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
           COMMIT=false
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$EVENT_NAME" = "push" ]; then
             # A tag push names its own version, and the tag already exists by definition. Nothing is
             # committed either: HEAD is a detached tag, so there is no branch for this run to guess.
-            TAG="${{ github.ref_name }}"
+            TAG="$REF_NAME"
             VERSION="${TAG#v}"
             PUBLISH=true
           else
-            BUMP="${{ inputs.bump }}"
-            VERSION="${{ inputs.version }}"
-            PUBLISH="${{ inputs.release }}"
+            BUMP="$INPUT_BUMP"
+            VERSION="$INPUT_VERSION"
+            PUBLISH="$INPUT_RELEASE"
 
             if [ -n "$VERSION" ] && [ "$BUMP" != "none" ]; then
               echo "::error::Give either a bump or an exact version, not both - they are two answers to one question."
@@ -321,10 +332,12 @@ jobs:
       # workflows from GITHUB_TOKEN pushes): it moves one version string, and this run just built it.
       - name: Push the version bump
         if: steps.version.outputs.commit == 'true' && steps.bump.outputs.changed == 'true'
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          git push origin "HEAD:refs/heads/${{ github.ref_name }}" || {
-            echo "::error::Could not push the version bump to ${{ github.ref_name }} - the branch has probably moved since the build started. The DMG is attached to this run and nothing was tagged."
+          git push origin "HEAD:refs/heads/$REF_NAME" || {
+            echo "::error::Could not push the version bump to $REF_NAME - the branch has probably moved since the build started. The DMG is attached to this run and nothing was tagged."
             exit 1
           }
 

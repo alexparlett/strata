@@ -437,6 +437,18 @@ something wrong:
 | A partition identifier is one bare word | DF 54's COPY parser renders each with `Ident::to_string()` and the planner looks it up by that string, so `PARTITIONED BY ("order date")` reaches `field_with_name` with its quotes attached and fails about a column nobody named | `export::partition_columns_are_bare_words` — **shared**, not copied, and asked before planning so the refusal is ours |
 | No NULL in a partition column | DF 54 has no `__HIVE_DEFAULT_PARTITION__`: it files the row under a *neighbouring* value's directory, so the output reads back claiming a value it never had | `ddl::copy::no_null_partition_values`, in `export::partition_null_refusal`'s wording |
 | No `__snap_` source | a snapshot carries `__strata_ord`, which must never reach a user's file | the router (§4), `Blocked::ReservedName` |
+| The target is not storage Strata owns | a file dropped under `.strata/tables/<slug>/` is listed by that table's next scan — phantom rows if the schema matches, a table that has started failing if it does not — and silent corruption is refused rather than warned about | `ddl::copy::refuse_owned_target`, off the *resolved* path |
+
+The target check is the one that looks at where the write **lands** rather than what it reads, and
+it fences exactly two roots: the project's `.strata/` and the snapshot spool, because those are the
+two places a stray file changes what Strata later reads back. Everywhere else on the disk is the
+user's own, and a `COPY` that overwrites their file is the statement doing what it says. It compares
+resolved paths and never text — a relative `output_url` is the process's cwd away from an absolute
+one, and `.strata/../.strata/tables` names the directory without sharing its prefix. Since the
+target need not exist yet, the path is made absolute, its `.` and `..` folded, and both sides
+anchored on the deepest ancestor that *does* exist, which is what makes a symlinked project folder
+compare equal rather than slipping past. A target carrying a non-`file:` scheme is an object
+store's and not a path into this machine at all.
 
 The NULL gate's *mechanism* differs from the window's because the sources do. The window reads
 exact per-column counts the snapshot's write pass already produced, for free; a typed COPY's source

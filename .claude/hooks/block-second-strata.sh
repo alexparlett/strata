@@ -21,7 +21,26 @@
 
 set -uo pipefail
 
+deny() {
+  # Hand-built rather than through `jq`, so the one arm that fires when `jq` itself is missing can
+  # still answer. The reason text carries no characters that need escaping.
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
+  exit 0
+}
+
+# **Fail closed**, for the destructive-git hook's reason: without `jq` the payload cannot be read
+# at all, `command` would be the empty string, and every launch would be silently allowed for as
+# long as the tool is missing. A hook that cannot judge must not answer "allow".
+if ! command -v jq >/dev/null 2>&1; then
+  deny "Blocked by .claude/hooks/block-second-strata.sh: jq is not installed, so the hook cannot read the command it is meant to check. Install jq (brew install jq) or launch the app yourself."
+fi
+
 command=$(jq -r '.tool_input.command // empty')
+
+# Normalized before matching, exactly as the destructive-git hook does it and for the same reason:
+# `cargo "run"` and a backslash-newline between the two words are the same launch to the shell,
+# and a regex over the raw string sees neither.
+normalized=$(printf '%s' "$command" | tr '\n' ' ' | tr -d '"'"'"'\\')
 
 # `cargo` (with any global options) then `run` / `r`. Matched anywhere in the string — after `&&`,
 # `;`, `|`, inside `$(…)` — like the destructive-git hook, since chaining is how the rule gets
@@ -31,9 +50,21 @@ command=$(jq -r '.tool_input.command // empty')
 # verb's own terminators count: `$(cargo run)` and `cargo run;` are launches too. (Whitespace-only
 # was the bug the git hook shipped with — see there.) `-` is outside the class, so a hypothetical
 # `cargo run-foo` is not a match, while `cargo run --release` is.
+#
+# **And the built binary is a launch too.** `cargo run` is how a session starts the app, but it is
+# not the only way to put a second window on the screen: running `target/debug/strata-freya`
+# directly, or `open`ing a bundled `Strata.app`, opens exactly the window this hook exists to
+# prevent — while the doc above claimed the rule was enforced. Matched by the paths that reach the
+# binary, which is what the liveness check below already keys on.
+#
+# That over-matches: `ls target/debug/strata-freya` is not a launch and would be refused too. It
+# costs a rephrase, it only bites while a window is genuinely up (the check below), and the
+# alternative is a second window and a clobbered app config — so the bias goes this way, as it
+# does in the destructive-git hook.
 launch='(^|[^[:alnum:]_-])cargo([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*[[:space:]]+(run|r)([^[:alnum:]_-]|$)'
+direct='target/[^[:space:]]*/strata-freya|Strata\.app'
 
-printf '%s' "$command" | grep -Eq "$launch" || exit 0
+printf '%s' "$normalized" | grep -Eq "$launch|$direct" || exit 0
 
 # A live Strata is a running *binary* under some worktree's `target/`, which is what makes this
 # work across worktrees: each has its own build, and all of them match. The pattern cannot

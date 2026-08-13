@@ -182,7 +182,12 @@ done
 
 step "Assembling $APP_NAME.app"
 
-rm -rf "$APP"
+# The whole output directory, not just this version's files. The release workflow attaches
+# `target/dist/*.dmg` and `target/dist/*.zip` by glob, and every artifact here carries its version
+# in its name - so a previous version's DMG left behind on a machine that builds twice rides onto
+# the next release page as a second, stale download. Clearing the directory is what makes the glob
+# mean "what this run produced", which is what the workflow assumes it means.
+rm -rf "$DIST"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 BINARIES=()
@@ -325,12 +330,19 @@ fi
 
 # Submit one file and wait for Apple's verdict. `notarytool submit --wait` exits non-zero on a
 # rejection, so `set -e` stops the build rather than shipping something Apple refused.
+#
+# The Apple-ID rung reads its password from **stdin** rather than the command line. A submission
+# waits minutes, and for all of them an argument is visible to any `ps` on the machine - which on
+# a shared or multi-tenant builder is every other tenant. `--password -` is notarytool's own way
+# of saying "read it from stdin", so this costs nothing and needs no keychain profile. The
+# API-key rung, which is the preferred one and the only one CI wires, passes a file *path* and
+# was never exposed this way.
 notarize() {
   case "$HAVE_NOTARY" in
     1) xcrun notarytool submit "$1" --key "$AC_API_KEY_PATH" --key-id "$AC_API_KEY_ID" \
       --issuer "$AC_API_ISSUER_ID" --wait ;;
-    2) xcrun notarytool submit "$1" --apple-id "$AC_APPLE_ID" --password "$AC_PASSWORD" \
-      --team-id "$AC_TEAM_ID" --wait ;;
+    2) printf '%s' "$AC_PASSWORD" | xcrun notarytool submit "$1" --apple-id "$AC_APPLE_ID" \
+      --password - --team-id "$AC_TEAM_ID" --wait ;;
     *) fail "notarize() called with no credentials configured" ;;
   esac
 }

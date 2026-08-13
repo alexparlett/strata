@@ -522,6 +522,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             color: role(Role::TextDim),
             active_color: role(Role::Text),
             accent: role(Role::Accent),
+            close: role(Role::TextDisabled),
         },
     );
     th.set(

@@ -69,7 +69,12 @@ fn open_on_a_result(engine: &Arc<Engine>, sort: Option<(String, bool)>) -> Expor
 }
 
 /// Press Export: build the spec for `path` exactly as the footer does, and write it.
-fn export_to(engine: &Arc<Engine>, draft: &ExportDraft, target: &ExportTarget, path: &Path) -> usize {
+fn export_to(
+    engine: &Arc<Engine>,
+    draft: &ExportDraft,
+    target: &ExportTarget,
+    path: &Path,
+) -> usize {
     let spec = draft
         .spec(target, path.to_string_lossy().into_owned())
         .expect("the draft builds a spec");

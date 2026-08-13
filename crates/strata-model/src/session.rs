@@ -69,21 +69,94 @@ pub enum SidebarPane {
     Connections,
 }
 
-/// A stored pane this build may no longer have — see [`sidebar_pane`].
+/// A stored layout value this build may no longer have a variant for — see [`sidebar_pane`] for
+/// the rule in full, and [`retired_to`] for the readers built on it.
 ///
-/// The fallback arm is a `String` and **not** `IgnoredAny`: a pane name this build has retired
-/// is the one thing worth tolerating here, and taking anything at all would swallow a genuinely
+/// The fallback arm is a `String` and **not** `IgnoredAny`: a name this build has retired is the
+/// one thing worth tolerating here, and taking anything at all would swallow a genuinely
 /// malformed value (`42`, `{}`, `[1, 2]`) that ought to fail the load and get the file kept
-/// aside for recovery.
+/// aside for recovery. A retired variant that carried *data* is therefore still strict, which is
+/// the deliberate half of the trade: those are rare, and the alternative accepts nonsense.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum StoredPane {
-    Known(SidebarPane),
+enum Stored<T> {
+    Known(T),
     // Never read, and it must stay a `String` rather than the unit type rustc suggests: the
     // *type* is the check. `()` deserializes only from `null`, which would take this arm for
     // the one input that already means "collapsed" and let `42` through the other.
     #[allow(dead_code, reason = "the field's type is the validation; see above")]
     Retired(String),
+}
+
+/// Read a **non-optional** layout field, resolving a variant this build has retired to `fallback`
+/// rather than failing the whole session.
+///
+/// The generic half of [`sidebar_pane`]'s rule, and it exists because that rule was written for
+/// one field while applying word for word to every other closed vocabulary in a session: the cost
+/// of a strict read is not the field, it is `session.json` moved aside and every open tab lost.
+fn retired_to<'de, D, T>(d: D, fallback: T) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(match Stored::<T>::deserialize(d)? {
+        Stored::Known(value) => value,
+        Stored::Retired(_) => fallback,
+    })
+}
+
+/// Read an **optional** layout field, resolving a retired variant to `fallback` while keeping
+/// `null` meaning what it has always meant: that surface is collapsed.
+///
+/// The two are genuinely different answers, which is why the stored `None` is not simply reused
+/// as the fallback — the file said the surface was *open*, and that half is still true and still
+/// the user's arrangement.
+fn retired_open<'de, D, T>(d: D, fallback: T) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(match Option::<Stored<T>>::deserialize(d)? {
+        Some(Stored::Known(value)) => Some(value),
+        Some(Stored::Retired(_)) => Some(fallback),
+        None => None,
+    })
+}
+
+/// [`Layout::right`]'s reader — a retired pane leaves the right side open on the inspector.
+fn right_pane<'de, D>(d: D) -> Result<Option<RightPane>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    retired_open(d, RightPane::Inspector)
+}
+
+/// [`Layout::drawer`]'s reader — a retired tab leaves the drawer open on Problems.
+fn drawer_tab<'de, D>(d: D) -> Result<Option<DrawerTab>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    retired_open(d, DrawerTab::Problems)
+}
+
+/// [`Layout::problems_tab`]'s reader — a retired scope falls back to the default one.
+fn problems_tab<'de, D>(d: D) -> Result<ProblemsTab, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    retired_to(d, ProblemsTab::default())
+}
+
+/// [`TabSnapshot::origin`]'s reader — a retired origin makes the tab a scratch tab.
+///
+/// It keeps its text, which is the part that cannot be regenerated; what it loses is a binding to
+/// a view or saved query this build no longer understands. Losing one tab's binding is a much
+/// smaller thing than losing the session.
+fn tab_origin<'de, D>(d: D) -> Result<Origin, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    retired_to(d, Origin::Scratch)
 }
 
 /// Read [`Layout::sidebar`], treating a pane this build no longer offers as the **default**
@@ -102,11 +175,7 @@ fn sidebar_pane<'de, D>(d: D) -> Result<Option<SidebarPane>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(match Option::<StoredPane>::deserialize(d)? {
-        Some(StoredPane::Known(pane)) => Some(pane),
-        Some(StoredPane::Retired(_)) => Some(SidebarPane::Catalog),
-        None => None,
-    })
+    retired_open(d, SidebarPane::Catalog)
 }
 
 /// Which assistive surface the **right** rail shows. `None` on [`Layout::right`] means the
@@ -145,10 +214,10 @@ pub struct Layout {
     #[serde(default, deserialize_with = "sidebar_pane")]
     pub sidebar: Option<SidebarPane>,
     /// The open right pane, or `None` when the right side is collapsed.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "right_pane")]
     pub right: Option<RightPane>,
     /// The open drawer tab, or `None` when collapsed.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "drawer_tab")]
     pub drawer: Option<DrawerTab>,
     #[serde(default = "default_sidebar_w")]
     pub sidebar_w: f32,
@@ -169,7 +238,7 @@ pub struct Layout {
     /// Which of the Problems drawer's two scopes is showing. Layout, not a view-local flag, for
     /// the reason every other field here is: it is part of the arrangement the user set up, so
     /// it survives collapsing the drawer, switching to Events and back, and a restart.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "problems_tab")]
     pub problems_tab: ProblemsTab,
 }
 
@@ -229,6 +298,7 @@ impl Default for Layout {
 pub struct TabSnapshot {
     pub id: TabId,
     pub name: String,
+    #[serde(deserialize_with = "tab_origin")]
     pub origin: Origin,
     /// The rope contents (`rope.to_string()`), rebuilt into a fresh buffer on load.
     pub text: String,
@@ -296,5 +366,64 @@ mod tests {
     fn a_malformed_sidebar_value_still_fails_the_load() {
         assert!(serde_json::from_str::<Layout>(r#"{"sidebar":42}"#).is_err());
         assert!(serde_json::from_str::<Layout>(r#"{"sidebar":{}}"#).is_err());
+    }
+
+    /// **Every closed vocabulary in a session reads the same way**, not just the sidebar.
+    ///
+    /// The rule was written for one field and applies word for word to the rest: retiring a
+    /// `DrawerTab`, adding a `RightPane` and downgrading, or renaming a Problems scope would each
+    /// otherwise fail the whole `SessionSnapshot` — and the loader answers that by moving
+    /// `session.json` aside, which costs every open tab. Each falls back the way the sidebar
+    /// does: the surface stays *open*, on the default choice.
+    #[test]
+    fn a_retired_layout_value_keeps_the_session_it_was_written_in() {
+        let layout: Layout = serde_json::from_str(
+            r#"{"right":"Agents","drawer":"Terminal","problems_tab":"connections"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(layout.right, Some(RightPane::Inspector));
+        assert_eq!(layout.drawer, Some(DrawerTab::Problems));
+        assert_eq!(layout.problems_tab, ProblemsTab::Queries);
+
+        // Known values still read as themselves, and `null` still means collapsed.
+        let known: Layout =
+            serde_json::from_str(r#"{"right":"Chat","drawer":"History","problems_tab":"project"}"#)
+                .unwrap();
+        assert_eq!(known.right, Some(RightPane::Chat));
+        assert_eq!(known.drawer, Some(DrawerTab::History));
+        assert_eq!(known.problems_tab, ProblemsTab::Project);
+
+        let collapsed: Layout = serde_json::from_str(r#"{"right":null,"drawer":null}"#).unwrap();
+        assert_eq!(collapsed.right, None);
+        assert_eq!(collapsed.drawer, None);
+
+        // And malformed is still malformed.
+        assert!(serde_json::from_str::<Layout>(r#"{"drawer":42}"#).is_err());
+    }
+
+    /// A tab whose `origin` this build cannot read becomes a scratch tab **and keeps its text**,
+    /// rather than taking the whole session down with it.
+    #[test]
+    fn a_retired_tab_origin_keeps_the_tab() {
+        let tab = format!(
+            r#"{{"id":"{}","name":"query 1","origin":"Notebook","text":"SELECT 1"}}"#,
+            Uuid::nil()
+        );
+        let restored: SessionSnapshot =
+            serde_json::from_str(&format!(r#"{{"tabs":[{tab}]}}"#)).unwrap();
+
+        assert_eq!(restored.tabs.len(), 1);
+        assert_eq!(restored.tabs[0].origin, Origin::Scratch);
+        assert_eq!(restored.tabs[0].text, "SELECT 1", "the SQL is what matters");
+
+        // A binding this build *does* understand is untouched.
+        let bound = format!(
+            r#"{{"id":"{}","name":"v","origin":{{"View":"sales"}},"text":""}}"#,
+            Uuid::nil()
+        );
+        let restored: SessionSnapshot =
+            serde_json::from_str(&format!(r#"{{"tabs":[{bound}]}}"#)).unwrap();
+        assert_eq!(restored.tabs[0].origin, Origin::View("sales".into()));
     }
 }

@@ -338,7 +338,7 @@ impl Component for DropConfirm {
                                     rect()
                                         .width(Size::fill())
                                         .horizontal()
-                                        .content(Content::wrap_spacing(4.))
+                                        .content(Content::wrap_spacing(SP_2))
                                         .spacing(SP_2)
                                         // `into_iter`: the names are owned and unused after
                                         // this, so the chips take them rather than cloning

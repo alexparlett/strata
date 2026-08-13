@@ -6,6 +6,11 @@ tasks inside each migration phase**, because the phases themselves are very larg
 
 Read this index first, then open only the phase/workstream file you're working in.
 
+**Before the public release, read [`PRE_RELEASE_REVIEW.md`](PRE_RELEASE_REVIEW.md)** — the
+six-lens correctness/security review, what it fixed, and the handful of items deliberately left
+with the reasoning for each. The "left, deliberately" section is the part to re-read before
+deciding something there is a bug.
+
 ## How this is organised
 
 - **One folder per phase / workstream.** Each has a `README.md` describing the phase and indexing its
