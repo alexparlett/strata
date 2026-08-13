@@ -163,9 +163,12 @@ constructing clients. A wedged trust store, a wedged loader, and slow client con
 shape of macOS security services (`trustd` / `syspolicyd`) misbehaving on this machine, not three
 separate bugs.
 
-**Worth chasing before release** precisely *because* it is intermittent: this test is in CI's
-`test` job, so a flaky trust-store read is a flaky pipeline. The thing to establish is whether it
-ever fires on a GitHub runner or only here. A reboot is the first thing to try.
+**Answered: it is this machine, not the pipeline.** The question left here was whether the flake
+ever fires on a GitHub runner. PR #146's `test` job — which is the job this test runs in, since it
+is a `strata-core` *lib* test and only `object_store_minio` is skipped there — passed on the first
+attempt, alongside `minio` and `review`. So the trust-store read is sound on a clean macOS runner
+and the fault is local to this workstation. A reboot is the first thing to try; nothing in CI or
+in the code needs a change for it.
 
 ### What was actually verified, and how
 
