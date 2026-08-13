@@ -19,7 +19,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::engine::store::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
-use strata_model::{ConnectionDef, GcsAuth, GcsStore, Provider, ProviderId, S3Auth, S3Store};
+use strata_model::{
+    ConnectionDef, GcsAuth, GcsStore, PgStore, Provider, ProviderId, S3Auth, S3Store,
+};
 
 /// What this window is editing: a new connection, or an existing one by
 /// [`url`](ConnectionDef::url).
@@ -118,6 +120,16 @@ pub struct ConnectionDraft {
     // --- GCS ---
     pub gcs_auth: GcsAuthId,
     pub sa_path: String,
+    // --- Postgres ---
+    /// A database connection's settings, carried **whole and unedited** until DB-04 builds the
+    /// rows for them.
+    ///
+    /// The provider picker does not offer `PG` yet (`views::form::ProviderPicker`), so the only
+    /// way one reaches this window is a def written by hand — and the window must round-trip it
+    /// rather than quietly replacing it with defaults on Save. Held as the def's own type for
+    /// the same reason the S3 fields are held flat: this is what the draft *has*, and when the
+    /// fields arrive they edit it in place.
+    pub pg: PgStore,
     /// The connection's client options, **as rows** — see [`ConfigRows`].
     pub client_config: ConfigRows,
 }
@@ -143,6 +155,7 @@ impl Default for ConnectionDraft {
             allow_http: false,
             gcs_auth: GcsAuthId::Ambient,
             sa_path: String::new(),
+            pg: PgStore::default(),
             client_config: ConfigRows::default(),
         }
     }
@@ -333,7 +346,16 @@ impl ConnectionDraft {
     /// The providers it *isn't* keep their defaults: the def has nothing to say about them.
     pub fn of(def: &ConnectionDef) -> Self {
         let mut draft = Self {
-            provider: def.provider.id(),
+            // **Clamped to what the picker renders**, the same guard the Configure window's own
+            // `of` applies: `ProviderPicker` offers `OBJECT_STORES` until DB-04 builds the
+            // database rows, so a draft opening on `Postgres` would light no segment at all and
+            // one press would silently retype the connection, discarding `pg` on Save. The
+            // settings still round-trip — see [`ConnectionDraft::pg`] — but the *picker* cannot
+            // show a provider it does not offer, so the draft must not claim one.
+            provider: match def.provider.id() {
+                id if id.is_object_store() => id,
+                _ => ProviderId::S3,
+            },
             address: def.address.clone(),
             client_config: ConfigRows::of(&def.client_config),
             ..Default::default()
@@ -361,6 +383,8 @@ impl ConnectionDraft {
                 }
             },
             Provider::Http => {}
+            // Carried whole — see [`ConnectionDraft::pg`].
+            Provider::Postgres(pg) => draft.pg = pg.clone(),
         }
         draft
     }
@@ -373,10 +397,11 @@ impl ConnectionDraft {
     /// is not a legal origin is refused by [`Provider::check_address`] and named in the footer,
     /// never trimmed off behind the user's back.
     ///
-    /// **S3 and GCS lose a scheme typed with the bucket**, because theirs is the picker's answer
-    /// and `ConnectionDef::url` puts it back. Stripped on the way in rather than on the way out,
-    /// the rule a length-capped field follows: a box showing `s3://acme-lake` over a def storing
-    /// `acme-lake` shows one thing and means another.
+    /// **Every other provider loses a scheme typed with the address**, because theirs is the
+    /// picker's answer and `ConnectionDef::url` puts it back. Stripped on the way in rather than
+    /// on the way out, the rule a length-capped field follows: a box showing `s3://acme-lake`
+    /// over a def storing `acme-lake` shows one thing and means another. A pasted
+    /// `postgres://db:5432/analytics` lands the same way, on the same rule.
     pub fn set_address(&mut self, typed: String) {
         self.address = match self.provider {
             ProviderId::Http => typed,
@@ -389,6 +414,7 @@ impl ConnectionDraft {
     pub fn address_label(&self) -> &'static str {
         match self.provider {
             ProviderId::Http => "URL",
+            ProviderId::Postgres => "SERVER",
             _ => "BUCKET",
         }
     }
@@ -396,6 +422,7 @@ impl ConnectionDraft {
     pub fn address_noun(&self) -> &'static str {
         match self.provider {
             ProviderId::Http => "URL",
+            ProviderId::Postgres => "server",
             _ => "bucket",
         }
     }
@@ -431,6 +458,7 @@ impl ConnectionDraft {
                     },
                 }),
                 ProviderId::Http => Provider::Http,
+                ProviderId::Postgres => Provider::Postgres(self.pg.clone()),
             },
         }
     }
@@ -478,14 +506,29 @@ impl ConnectionDraft {
                 }
             }
             ProviderId::Http => {}
+            // Only what the *def* can answer for itself. The catalog name's clash against the
+            // project's other connections is `check_catalog_name`'s and belongs in the footer
+            // beside the URL clash, which is DB-04's — the same split the S3 rows follow.
+            ProviderId::Postgres => {
+                if let Err(why) = self.pg.check_catalog() {
+                    return Some(why);
+                }
+                if let Err(why) = self.pg.check_user() {
+                    return Some(why);
+                }
+            }
         }
-        // The client options last: they are the same on every provider, and a half-typed one is
-        // less urgent than a connection with no region.
-        if let Some(why) = self.client_config.blocker() {
-            return Some(why);
-        }
-        if let Err(why) = check_client_config(&def.client_config) {
-            return Some(why);
+        // The client options last: they are the same on every **object store**, and a half-typed
+        // one is less urgent than a connection with no region. Skipped entirely for a provider
+        // whose form shows no CLIENT OPTIONS section (`views::form::Fields`), or the footer would
+        // block Save naming a row the window does not render and the user cannot reach.
+        if self.provider.is_object_store() {
+            if let Some(why) = self.client_config.blocker() {
+                return Some(why);
+            }
+            if let Err(why) = check_client_config(&def.client_config) {
+                return Some(why);
+            }
         }
         None
     }
@@ -510,6 +553,11 @@ impl ConnectionDraft {
             ProviderId::Http => {
                 "HTTP(S) sources are always read anonymously. There are no credentials and no \
                  region to configure."
+            }
+            ProviderId::Postgres => {
+                "The password is kept in this machine's keystore and read per connection. The \
+                 project file keeps only the server, database, user, catalog name and SSL mode, \
+                 so a colleague opening this project enters their own password once."
             }
         }
     }

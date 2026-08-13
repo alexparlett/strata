@@ -624,7 +624,15 @@ pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String 
 ///
 /// Kept beside [`resolve_source`] so the composition rule has one home in both directions — a
 /// round-trip is asserted in this module's tests. The split is at the first `/` after the scheme,
-/// which is exactly where [`ConnectionDef::url`](strata_model::ConnectionDef::url) stops.
+/// which is exactly where an **object store's**
+/// [`ConnectionDef::url`](strata_model::ConnectionDef::url) stops.
+///
+/// A **database** connection's URL does not stop there — `postgres://reader@host:5432/analytics`
+/// carries a role and a path, because it identifies a catalog rather than keying an object-store
+/// registry. Nothing is owed here: a `postgres://` location split by this function yields a URL
+/// no connection has, and the caller's existing membership check refuses it by name (`ddl::external`,
+/// pinned by DB-03). Which is the right answer — a table's `LOCATION` names *files*, and a
+/// database has none.
 pub fn split_remote(location: &str) -> Option<(String, String)> {
     let (scheme, rest) = location.split_once("://")?;
     if scheme.is_empty() {

@@ -109,9 +109,19 @@ pub const TEAM_ID: &str = "397J3SJ3D4";
 /// A consumer mints one per thing-that-has-a-key and keeps it for that thing's life, so an
 /// edit overwrites in place ([`SecretRef::put`]) rather than stranding the old entry under
 /// an id nobody remembers.
+///
+/// **Or derives one, for a secret whose def is shared** — see [`SecretRef::derived`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SecretRef(Uuid);
+
+/// The namespace every [derived](SecretRef::derived) reference is built in.
+///
+/// A fixed, arbitrary UUID, the way `new_v5` is meant to be used: it makes the derivation
+/// Strata's, so two applications deriving `"pg-password:postgres://…"` do not land on one id.
+/// It is not a secret and it is not a version — changing it orphans every derived entry
+/// already in a keystore, exactly as changing [`APP_ID`] does.
+const STRATA_SECRET_NS: Uuid = Uuid::from_u128(0x5734_7a1a_9c4f_5d2b_8e6a_0f1c_3b7d_9e42);
 
 /// A secret in memory: a pasted key on its way to the keystore, or one just read back.
 ///
@@ -179,6 +189,33 @@ impl SecretRef {
         Self(Uuid::new_v4())
     }
 
+    /// The reference for a secret belonging to a thing that is **described in a shared file** —
+    /// derived from that description rather than minted, so the description carries no
+    /// machine-local id.
+    ///
+    /// `Uuid::new_v5` over `"{kind}:{name}"`: deterministic, so the same def addresses the same
+    /// keystore slot on every machine, while each machine's keystore holds its own entry (or
+    /// none). `kind` is the family of secret (`"pg-password"`), `name` the thing's own identity
+    /// within it (`ConnectionDef::url`).
+    ///
+    /// **The contract, which is not optional.** A minted [`SecretRef`] in a *committed* file
+    /// would be rewritten by every colleague who entered their own password — two machines
+    /// ping-ponging one id through git forever. So a derived ref exists precisely because the
+    /// def must never store it: it stores the *expectation* that there is a secret
+    /// (`PgPassword::Keystore`), and the ref is recomputed from the identity whenever one is
+    /// needed. Two consequences ride with it, and whoever moves the identity owes both:
+    /// migrate the entry ([`migrate_derived`]), and accept that a machine with no entry is a
+    /// normal state that must be reported rather than treated as a fault.
+    ///
+    /// `mint`'s consumers are untouched: an app-config secret is not shared, so nothing about
+    /// the assistant's provider keys changes.
+    pub fn derived(kind: &str, name: &str) -> Self {
+        Self(Uuid::new_v5(
+            &STRATA_SECRET_NS,
+            format!("{kind}:{name}").as_bytes(),
+        ))
+    }
+
     /// Store `secret` under this reference, replacing whatever was there.
     ///
     /// There is no "put an empty secret": clearing a key is [`SecretRef::delete`], and
@@ -221,6 +258,30 @@ impl SecretRef {
     fn entry(&self) -> Result<Entry, SecretError> {
         Entry::new(APP_ID, &self.0.to_string()).map_err(classify)
     }
+}
+
+/// Move the secret filed under `old` to `new` — what an edit that changes a
+/// [derived](SecretRef::derived) identity owes, since the ref moves with it.
+///
+/// Get, put, delete, in that order: a failure anywhere leaves the old entry readable, which is
+/// the recoverable direction (the user re-enters a password at worst; a delete-first order that
+/// failed halfway would lose one). **Best-effort about absence**, because absence is the
+/// ordinary case rather than an error — this machine may simply never have had the secret the
+/// def expects, and an edit must not fail for that. What it does not swallow is a keystore that
+/// *refuses*: that reaches the caller, because it means the migration did not happen and the
+/// old entry is still where it was.
+///
+/// Beside the type rather than in whichever surface needed it first, so an identity move from
+/// the connection editor, a future palette gesture or a project merge all clean up the same way.
+pub fn migrate_derived(old: &SecretRef, new: &SecretRef) -> Result<(), SecretError> {
+    if old == new {
+        return Ok(());
+    }
+    let Some(secret) = old.get()? else {
+        return Ok(());
+    };
+    new.put(&secret)?;
+    old.delete()
 }
 
 impl Secret {
@@ -395,6 +456,72 @@ mod tests {
         assert_eq!(json, format!("\"{}\"", key.0));
         assert_eq!(serde_json::from_str::<SecretRef>(&json).unwrap(), key);
         assert_ne!(key, SecretRef::mint());
+    }
+
+    /// **A derived reference is the same reference every time, on every machine** — which is
+    /// the whole property, because the def that addresses it is committed and shared and
+    /// carries no id of its own.
+    ///
+    /// Pinned as a *literal*, not merely as "two calls agree": a change to the namespace or to
+    /// the `"{kind}:{name}"` spelling would still pass a self-consistency check while orphaning
+    /// every password already in a keystore.
+    #[test]
+    fn a_derived_reference_is_stable_across_calls_and_machines() {
+        let url = "postgres://reader@db.internal:5432/analytics";
+        let key = SecretRef::derived("pg-password", url);
+        assert_eq!(key, SecretRef::derived("pg-password", url));
+        assert_eq!(
+            key.0.to_string(),
+            "c9251ca2-1ae3-5c70-9612-712916f594c3",
+            "the derivation is what makes one def address one slot everywhere"
+        );
+
+        // Different in every part of the identity, and different from a minted one.
+        assert_ne!(
+            key,
+            SecretRef::derived(
+                "pg-password",
+                "postgres://writer@db.internal:5432/analytics"
+            )
+        );
+        assert_ne!(key, SecretRef::derived("other-kind", url));
+        assert_ne!(key, SecretRef::mint());
+    }
+
+    /// An identity move carries the secret with it: the new ref reads what the old one held,
+    /// and the old entry is gone. Absence is not a failure — a machine that never held this
+    /// connection's password must still be able to edit the connection.
+    #[test]
+    fn migrating_a_derived_secret_moves_the_entry_and_tolerates_absence() {
+        mocked();
+        let old = SecretRef::derived("pg-password", "postgres://reader@a:5432/x");
+        let new = SecretRef::derived("pg-password", "postgres://reader@b:5432/x");
+        old.put(&Secret::new("hunter2").unwrap()).unwrap();
+
+        migrate_derived(&old, &new).expect("migrates");
+        assert_eq!(
+            new.get().unwrap().as_ref().map(Secret::expose),
+            Some("hunter2")
+        );
+        assert_eq!(
+            old.get(),
+            Ok(None),
+            "the old slot is not left holding a copy"
+        );
+
+        // Nothing to move is not an error, and neither is a move to where you already are.
+        let absent = SecretRef::derived("pg-password", "postgres://reader@c:5432/x");
+        migrate_derived(&absent, &new).expect("nothing to move");
+        assert_eq!(
+            new.get().unwrap().as_ref().map(Secret::expose),
+            Some("hunter2"),
+            "and it did not overwrite the destination with nothing"
+        );
+        migrate_derived(&new, &new).expect("a no-op move");
+        assert_eq!(
+            new.get().unwrap().as_ref().map(Secret::expose),
+            Some("hunter2")
+        );
     }
 
     #[test]

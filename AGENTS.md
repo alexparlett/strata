@@ -200,13 +200,18 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **An engine's config is a launch value; a live change is `set_config`, and a runtime key is a
   restart** — which is the `ProjectRoot` remount, not a second path. A **removed** key goes back to
   its `ENGINE_KEYS` default; `restart_owed` measures against `built_runtime`.
-- **Strata owns the catalog and schema providers, for identity and visibility — never lifecycle.**
-  One catalog, one schema (`register_schema` refuses, so `CREATE SCHEMA` is impossible by
-  construction; `CREATE DATABASE` cannot be — the `CatalogProviderList` has no way to say no, so
-  the router is its gate). One map keyed by `fold_ident`; `table_names()` hides `__snap_` while
+- **Strata owns the catalog list, catalog and schema providers, for identity and visibility —
+  never lifecycle.** The **workspace** catalog has one schema (`register_schema` refuses, so a
+  user-typed `CREATE SCHEMA` is impossible by construction; `CREATE DATABASE` cannot be — the
+  `CatalogProviderList` has no way to say no, so the router is its gate). The *session* holds one
+  further catalog per database connection, registered programmatically, which is Strata's own act
+  and never what that refusal fenced. One map keyed by `fold_ident`; `table_names()` hides
+  `__snap_` while
   `table()` still resolves it, which is the *only* enumeration path DataFusion has and so is what
   makes `datafusion.catalog.information_schema` safe to default **on**. Everything else is
-  `MemorySchemaProvider` verbatim. Lifecycle is intercepted in front of `ctx.sql` — a sync
+  `MemorySchemaProvider` verbatim, and `StrataCatalogList` is `MemoryCatalogProviderList` plus the
+  one operation DataFusion has no method for — *removal*, without which a forgotten database would
+  answer for the life of the window. Lifecycle is intercepted in front of `ctx.sql` — a sync
   `register_table` with no caller identity can neither spool a CTAS nor authorize a `DROP`.
 - **One classification with a capability axis, in front of dispatch.** `classify(stmt, Capability)`
   answers `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)` off the parsed statement, both
@@ -423,12 +428,13 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   keyed by **name**, saved queries by **`Uuid`**, connections by **`url()`** (scheme *and*
   authority — never the bucket, which two providers can share) — and a connection's `Reg<()>` is
   honest, because connecting *asks the bucket* rather than only building a store.
-- **A connection registers a bucket, and it registers before anything that reads one.** Connections
+- **A connection registers a bucket — or, for a database, a catalog — and it registers before
+  anything that reads one.** Connections
   are `register_pass`'s first phase; a whole-catalog ↻ re-connects and a single table's Refresh
   does not. The def stores the authority and derives the scheme from the provider; **Ambient and
   Named profile are two providers**, because naming a profile on `aws-config`'s default chain
-  leaves `Environment` in front of it; and **no arm of `engine::store` takes a secret** — a profile
-  name and a key file path, never a key. Identity is the **URL** and the sort is the **address**,
+  leaves `Environment` in front of it; and **no arm of `engine::store` takes a secret value** — a
+  profile name and a key file path, never a key. Identity is the **URL** and the sort is the **address**,
   so `upsert_connection` replaces on one and inserts by the other; an edit that moves either half
   **deregisters the old URL itself**, and the editor's Save asks for a whole-catalog pass.
 - **Connecting asks the bucket, because a description can be well-formed and wrong.** `connect` is
@@ -452,6 +458,18 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   network call behind a button three interaction tests press (7s → 308s).
   `connect` therefore does network I/O: a test about *keying* goes through `store::settle`, not
   through `connect`, or the suite dials out to buckets nobody owns.
+- **A database connection is a fourth `Provider` arm that registers a *catalog*, and the whole
+  database comes through it — discovery gets catalogs, declaration gets defs.** Same def, same
+  `Reg` row, same pass phase, same Forget; what differs is `engine::db` — the def's SQL-identifier
+  `catalog` name, a pool whose construction *is* the probe, and a provider registered on
+  `StrataCatalogList` (DataFusion's list can register a catalog and never remove one). No per-table
+  defs: a bucket cannot say what its tables are, a database answers for itself, and pinning one
+  relation is a **view**. Ours rather than the crate's `DatabaseCatalogProvider` (it snapshots the
+  listing, uses the default dialect and skips federation); `pg_class` not `pg_tables`, so remote
+  views show; providers cached per relation and `table_type` answered from the cached `relkind`, so
+  `SHOW TABLES` costs nothing remote; `jsonb` maps to text, never a refusal. `PgStore.schemas`
+  scopes **display, never resolution**, and `Engine::db_listing` is the one tagged read every
+  surface shares. Read-only in v1; a reconnect replaces, rename included.
 - **A table reads through a connection by naming it, and the composition happens once, in
   `resolve_source`.** `TableDef::connection` is the connection's `url()` and the only thing that
   says a table is remote; its sources are bucket-relative exactly then, never relativized, and
@@ -480,6 +498,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `main`, and `APP_ID` is the bundle id `bundle-macos.sh` reads. Never a plaintext fallback.
   In memory it is **zeroed, not guarded** — mlock/mprotect would cover one link of six and read as
   stronger than it is; exposure is managed by lifetime (read per use, never cache).
+- **A secret whose def is *shared* is addressed by a `SecretRef::derived`, and the def stores only
+  the expectation.** `Uuid::new_v5` over `"{kind}:{name}"` — the same slot on every machine, each
+  machine's own entry — because a minted ref in a committed `project.json` is two colleagues
+  ping-ponging one id through git. Whoever moves the identity migrates the entry
+  (`secret::migrate_derived`); a machine with no entry is a **row failing with the fix named**,
+  never a fault. `mint`'s consumers (app config) are untouched.
 - **One app-global config store.** Disk is a startup input read **once** — no file watching, ever.
   `write_config` is the sole write path. Settings is a **channel**, not its own global.
 - **The config file is read three ways and written atomically, and a file this session could not
@@ -794,18 +818,19 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   asserting the gitlink **before** compiling. `-D warnings` is scoped to the clippy invocation;
   the toolchain step's `rustflags: ''` stays, so a dependency's warning cannot fail the build.
 - **Only the tests that need the container runtime queue for it, and the split is a test target.**
-  Two jobs: `minio` runs `--test object_store_minio` entire (so a test added to that file needs no
-  workflow edit) and carries the queue, the cloud agent and the release step; `test` is the same
-  `--workspace` run with those tests `--skip`ped, and queues behind nothing. Never split by taste
-  or by package. The lists cannot drift silently: `test` has no runtime, so a renamed or added
-  minio test runs *there* and fails loud.
+  Two jobs: `containers` runs each container binary entire (`--test object_store_minio --test
+  postgres_federation`, so a test added to either needs no workflow edit) and carries the queue,
+  the cloud agent and the release step; `test` is the same `--workspace` run with those tests
+  `--skip`ped by **name**, and queues behind nothing. Never split by taste or by package. The
+  lists cannot drift silently: `test` has no runtime, so a renamed or added container test runs
+  *there* and fails loud.
 - **The container runtime is a single shared worker, so the job that uses it serializes repo-wide —
   and it queues rather than cancels.** A job-level, constant-named concurrency group with
   `queue: max`; the per-ref workflow group keeps the superseding. Never `queue: single` here — a
   silently cancelled run on main is no coverage of main.
 - **A cloud session outlives the job that opened it, so the job releases it — and the test still
   waits out a handover it cannot watch.** `action: terminate` with `if: always()` (a *cancelled*
-  job is the worst case), plus a bounded retry in `object_store_minio.rs` on the capacity refusal
+  job is the worst case), plus a bounded retry in each container test on the capacity refusal
   **only**. Serialization alone was shipped once and was not enough. Anything else still panics.
 - **The release path is a script CI calls, never a pipeline written in YAML.** Signing degrades
   honestly and says which rung it took; the tag is created **after** the build.

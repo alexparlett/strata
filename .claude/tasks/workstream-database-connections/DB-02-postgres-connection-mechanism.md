@@ -1,6 +1,11 @@
 # DB-02 · The Postgres arm: model, secrets, pool, catalog provider, registration
 
-**Workstream:** Database connections · **Status:** ⬜ · **Depends on:** DB-01
+**Workstream:** Database connections · **Status:** ✅ (2026-08-13) · **Depends on:** DB-01
+
+> **As built is at the bottom of this file** — six corrections to the plan, two of them
+> structural: `CatalogProviderList` cannot remove a catalog (so the engine owns the list now),
+> and the snapshot ordinal had to stop being a plan-level window (so it is written by the
+> writer now, `docs/SNAPSHOT_SPEC.md` §9).
 
 ## Goal
 
@@ -237,3 +242,238 @@ this; nothing here paints.
 `tokio-postgres`, `testcontainers-modules` + `postgres` feature) ·
 `crates/strata-core/tests/postgres_federation.rs` (new) · `.github/workflows/ci.yml` (targets,
 skip names, and the split's prose) · docs per Build 5.
+
+---
+
+## As built (2026-08-13)
+
+The plan held. Five things came out differently, and the first is structural.
+
+### 1. `CatalogProviderList` cannot remove a catalog, so the engine owns the list
+
+The plan said "deregister the catalog"; DataFusion 54 has no such call. `CatalogProviderList` is
+`register_catalog` / `catalog_names` / `catalog` and nothing else, and `MemoryCatalogProviderList`
+is an insert-only `DashMap` — so a forgotten database connection would have gone on answering
+`pg.public.orders` for the life of the window, which is the exact inverse of the
+catalog-is-the-store rule.
+
+Fixed where the limitation is rather than around it: **`providers::StrataCatalogList`** is
+DataFusion's list plus `deregister`, installed with `SessionStateBuilder::with_catalog_list` so
+the builder registers the workspace catalog *into* it (nothing about `build_context`'s existing
+order moves). Keyed by `fold_ident`, like `StrataSchemaProvider` and for the same reason —
+DataFusion looks a catalog up already folded. It refuses nothing, so `CREATE DATABASE`'s gate is
+still the router's, unchanged. `providers::deregister_catalog(ctx, name)` reaches it through
+DataFusion's own documented downcast on `dyn CatalogProviderList`.
+
+### 2. `check_catalog_name` is called with two different "existing" sets, on purpose
+
+The plan's signature is unchanged (`existing: &[ConnectionDef], candidate: &ConnectionDef`), but
+the engine cannot hand it the project's defs — `Engine::connect` is given one def and
+`Connections` deliberately holds URLs only. So `Databases` (the live-pool map) carries each live
+connection's def, and `db::connect` folds against **what is registered**, while the editor folds
+against **what is stored** (DB-04). Same function, same wording; the difference is honest and
+documented — a connection that failed to connect reserves no catalog name, because nothing is
+registered under it. The shape half of the rule is `PgStore::check_catalog`, which needs no set at
+all and is what the engine reaches for `strata` and for "is this even an identifier".
+
+### 3. `settle` is shared by taking the take-back as an argument
+
+The plan asked for "one function over a registration enum". Built as
+`engine::connect::{Registration, settle}`: the enum names the two registries (object store /
+catalog), and the take-back is a closure, because the two removals are genuinely different code
+(a URL re-parse vs. the catalog name this URL last went in under). What is shared is the
+*contract* — register on `Ok`, take back on `Err`, never both — which is the thing the burn scar
+at `store.rs` was about. `store::settle` now delegates and keeps its own doc.
+
+### 4. `SchemaProvider::table_type` is async in DF 54, and `register_table` already refuses
+
+The plan called `table_names` sync (it is) and `table_type` sync (it is not — `async fn`, and its
+default is `self.table(name).await`). The override still does exactly what the plan wanted:
+`information_schema.tables` and `SHOW TABLES` cost **zero** remote calls. `register_table` /
+`deregister_table` have default impls that already refuse; they are overridden anyway, to say
+which connection is read-only rather than "schema provider does not support registering tables".
+
+### 5. The integration test drives `Engine::connect`, with a mocked *keystore*
+
+The plan had it call `db::connect` with `StaticPasswordProvider`, which would have needed
+`Engine`'s `SessionContext` exposed and would have skipped the genuinely new machinery — the
+derived ref, `KeystorePassword`, the `spawn_blocking` read. Instead the test installs
+`keyring_core::mock` as this binary's store (exactly as `secret`'s own unit tests do) and drives
+`Engine::connect` / `Engine::disconnect` end to end. `secret::open_keystore` is still never called
+in a test process, so no real Keychain is touched, and `tests/secret_keystore.rs` still owns that
+round trip. The password seam is unchanged and still an argument to `db::connect`.
+
+### 6. The snapshot ordinal had to leave the plan (the one change outside this task's files)
+
+Not anticipated at all, and it is the reason the integration test was red for a day. Every
+federated read failed with Postgres's `42P01`, and the cause was **ours**: `materialize` added
+the `__strata_ord` ordinal as a plan-level `row_number() OVER ()` (`df.with_column`), so the
+federation rule swallowed Strata's snapshot bookkeeping along with the scan and shipped it to
+Postgres to compute. That is wrong on its own terms — the ordinal is *defined* as numbering the
+stream the writer consumes, and a remote `row_number()` numbers the remote result — and it also
+dragged the scan into DataFusion 54's unparser along a derived-table path that does not rebase
+outer column qualifiers, producing SQL that names a relation its own `FROM` has aliased away.
+
+The fix (chosen by Alex from three options) is **B: number the batches in the writer**. It
+makes the spec's own sentence true by construction rather than by measurement, and it cannot
+reach a plan, an optimizer rule or an unparser at all — for this database arm or any later one.
+`docs/SNAPSHOT_SPEC.md` §9 is rewritten: the window is now recorded as *tried and withdrawn*,
+with the federation reason, and the `EXPLAIN` carve-out keeps its exclusion but loses its
+(now dead) planning justification. `tests/snapshot_order.rs` passes unchanged and becomes
+confirmation rather than the standing guard.
+
+Rejected: **A** (force the window local) — same intent, no clean lever in DF 54, so it would be
+B with a hack where B has a design; **C** (an `ast_analyzer` at the federation seam rebasing the
+qualifiers) — buys more, including user-written federated windows, at the price of owning
+compensating surgery for an upstream defect indefinitely, and would *still* have been shipping
+our ordinal to someone else's server.
+
+What is left is a genuine, narrower gap — an expression or window over an already-projected
+federated subquery — pinned in the integration test and recorded in the workstream README.
+
+### Test corrections found while getting it green
+
+Four assertions were wrong in ways worth recording, because three of them were wrong *about the
+tooling* rather than about the subject:
+
+- **`EXPLAIN` through `Engine::query` is clipped.** A result cell is cut to `DISPLAY_CHARS` for
+  the grid, so a deep physical plan loses its tail — which is exactly where
+  `VirtualExecutionPlan` sits. Plan assertions go through `Engine::explain`'s unclipped
+  `logical_text`/`physical_text`, the same read the plan view makes.
+- **`EXPLAIN`'s plan is not the plan that executes.** `Engine::query` spools through
+  `materialize`, so what runs carries the ordinal and what `EXPLAIN` renders does not. Two
+  false leads came from reading one as evidence about the other; the account that settled it
+  was PostgreSQL's own log, which prints `STATEMENT:` after every `ERROR`.
+- **A `VALUES` list is not a local table.** It carries no table provider, so federation finds
+  nothing to disagree with and sweeps the whole join into the remote statement — the mixed-plan
+  phase was asserting against a plan that was not mixed. It now registers a real CSV file table,
+  which is the case the workstream exists for.
+- **The filter-pushdown assertion matched an unquoted rendering** (`customer = 20`) where the
+  unparser quotes identifiers. It matches the clause, not a spelling.
+
+Two smaller notes:
+
+- **`secret::forget_derived` was not built.** `SecretRef::delete()` already is that funnel and
+  already tolerates absence, so the wrapper would have added a name and nothing else.
+  `migrate_derived` *was* built: it encodes a non-obvious ordering (get → put → delete,
+  best-effort about absence, loud about a keystore that refuses), which is worth one home.
+  DB-04/DB-05 call `migrate_derived` for an identity move and
+  `SecretRef::derived(db::PG_PASSWORD, &url).delete()` for a Forget.
+- **The connection editor's provider picker offers `OBJECT_STORES` too**, not just Configure's
+  TYPE pill. The plan named only the latter, on the reasoning that the editor *should* eventually
+  offer PG — it should, and DB-04 is what makes that true. Until its rows exist, offering the
+  option would produce a def with no fields to fill in. `ConnectionDraft` carries a `pg: PgStore`
+  so a hand-written def still round-trips through the window unchanged rather than being replaced
+  by defaults on Save; DB-04 edits that field in place.
+
+### Prose that changed
+
+`docs/SNAPSHOT_SPEC.md` §9 (the ordinal is written, not planned — the window recorded as tried
+and withdrawn, with the federation reason, and the `EXPLAIN` carve-out's dead justification
+replaced), `engine/query.rs`'s `materialize` comment to match,
+`connection.rs` and `engine/store.rs` module docs, `ConnectionDef::url`'s doc,
+`project::split_remote`'s correspondence note, `register.rs`'s module doc + `register_pass` +
+`RegOutcome::Connection`, `docs/CONNECTIONS_SPEC.md` (title, the two opening rules, providers,
+identity, address rules, registration order, and a new **Database connections** section),
+`docs/reference/ENGINE.md`, `docs/reference/INVARIANTS.md` (the catalog-providers entry gains its
+scoping and `StrataCatalogList`; two new entries for the database arm and the derived-ref
+password; the `secret` entry records the rewrite), `AGENTS.md` §2 (the same, in one-liner form),
+`docs/ARCHITECTURE.md`, `docs/README.md`'s CONNECTIONS_SPEC row, and `.github/workflows/ci.yml`
+(the `minio` job is now `containers` and runs both binaries; the `test` job's skip list gains the
+new test's function name; the split's prose is about both).
+
+### Acceptance evidence
+
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` → exit 0.
+- `cargo test -p strata-core --locked` → all binaries green with a container runtime attached,
+  **both** container tests run: 615 lib tests, `snapshot_order` (the ordinal's guard, unchanged
+  and passing against the new write-time numbering), `object_store_minio`, and
+  `postgres_federation`. Workspace run green.
+- The Postgres test drives the real entry points end to end: `Engine::connect` with the
+  keystore bridge (mocked *store*, real bridge), four named refusals, the whole-database
+  enumeration through `information_schema`, the scoped-and-tagged `db_listing`, single-table
+  filter pushdown, a same-connection join federating into **one** remote node, a CSV file table
+  joined onto a remote one (mixed plan, join local), `jsonb` as text, the two pinned gaps, the
+  read-only refusal, a rename replacing in place, and disconnect making the catalog stop
+  resolving.
+- `ProviderId::ALL` is pinned at **four**, and `OBJECT_STORES` is asserted equal to the arms
+  `is_object_store()` accepts, so the two lists cannot drift.
+- The persisted-shape test carries a Postgres literal whose `password` is the bare expectation
+  (`"keystore"`), and there is **no UUID anywhere in the string**. `SecretRef::derived` is pinned
+  to a literal id, not merely to self-consistency.
+- `rg 'datafusion_table_providers|PostgresConnectionPool' crates/` matches only
+  `crates/strata-core/src/engine/db.rs`, `crates/strata-core/Cargo.toml` and the integration
+  test's `keyring`-free imports — nothing outside `engine::db` constructs a pool or names a
+  provider-crate type.
+
+### What a max-effort adversarial review changed (2026-08-13)
+
+Ten independent finder angles over the whole diff, then a verification pass. Fifteen findings
+reported; the ones that changed code, and the reasoning worth keeping:
+
+**Two were the same mistake made twice — a fix applied to one of two symmetric sites.**
+
+- `check_user` refused connection-string metacharacters in the *role* but nothing refused them in
+  the **host or database**, which are interpolated into the same unquoted libpq string. A database
+  legitimately named `sales\2024` became `dbname=sales\2024`, which the driver parses as
+  `sales2024` — so the app connected to, enumerated and federated a **different database** with
+  nothing anywhere saying so. Now one `check_conn_value` rule serves all three, and
+  `parse_pg_address` is the single parse of `host:port/database` (the engine no longer splits the
+  address a second time, which also deleted two unreachable error strings and gave the IPv6
+  bracket rule one home).
+- `ConfigureDraft::of` got an `is_object_store()` clamp and `ConnectionDraft::of` did not, so a
+  Postgres def opened the connection editor with **no segment lit** in the provider pill and one
+  press on `S3` silently retyped the connection, discarding `pg` on Save — defeating the exact
+  round-trip that field exists for. The same asymmetry had left the CLIENT OPTIONS *row* gated on
+  `is_object_store()` while its *validator* stayed unconditional, so a hand-written def with a bad
+  client option was unsaveable with no control rendered to fix it.
+
+**Three were consequences of the ordinal rewrite that the change itself did not think through.**
+
+- `catalog_names()` returned the **folded** map keys where `MemoryCatalogProviderList` returns the
+  registered spelling, so a catalog named `Warehouse` printed as `warehouse` in every
+  `information_schema` view and `SHOW` form while every other surface said `Warehouse`. The
+  integration test passed only because its fixture catalog is lowercase. The list now stores the
+  registered name beside the provider.
+- Deleting `batch.project(&user_columns)` removed the guard that forced the stream's width to
+  equal the declared schema's, leaving `nulls[i]` an unbounded index — a panic on the engine task
+  instead of an error, unwinding past the partial-snapshot cleanup. Bounded now.
+- `RecordBatch::try_new` **validates** where `FileWriter::write` validates nothing, so the rewrite
+  added a failure mode the old path did not have. Kept deliberately (a batch contradicting its own
+  declared schema is a fault worth failing loudly on, and spooling it writes a file whose schema
+  lies) — but the comment claiming a mismatch "should fail at the write as it always did" was
+  simply false and is now replaced by a statement of the new behaviour.
+
+**Two were lifetime and ordering hazards.**
+
+- A **Forget landing during an in-flight connect** left the catalog registered and the pool open
+  forever: `disconnect` is synchronous, `connect` is a spawned task, so the take-back found nothing
+  and the connect then registered anyway — for a def that no longer existed, so no gesture could
+  ever name it again. `Engine::connect` now re-checks membership after settling and takes the
+  registration straight back out.
+- `Engine::drop` shut the runtime down **before** the pools dropped (fields drop after the body, in
+  declaration order, and `ctx` reaches every pool through the registered provider), while bb8's
+  connection drop can `tokio::spawn`. `Databases::shutdown` now clears the catalogs while the
+  runtime is still up. The `Databases` doc claiming it held the last strong reference was wrong.
+- A reconnect deregistered before it re-registered, leaving the catalog name unbound for a window
+  another thread could resolve in. It now registers first and takes back the displaced entry after.
+
+**And a set of stale prose, each of which would have misled the next session.** `INVARIANTS.md`
+still documented the ordinal as a plan-level `row_number() OVER ()` — the file AGENTS.md routes
+agents to for the full text, so the next reader would have been told authoritatively to re-litigate
+the design this task removed. `AGENTS.md` §7 and `WORKFLOW.md` still described a `minio` job that
+`ci.yml` had renamed. `snapshot_order.rs`'s own test doc comments still explained themselves by the
+deleted window. `db.rs`'s module doc and a `Cargo.toml` dependency comment both claimed the
+integration test uses `StaticPasswordProvider`, which appears nowhere in the workspace. And the
+`ProviderId::ALL` guard was kept with its message intact — "the picker offers every provider there
+is" — when neither picker reads `ALL` any more, so it guarded nothing and DB-04 could ship the
+Postgres form without ever making it selectable.
+
+**Deliberately not fixed** (recorded rather than argued with): `migrate_derived` remains
+unreferenced pre-work — two angles called it out under AGENTS §5, and they are right on the letter,
+but it is an approved decision in this task's plan and DB-04's file names it as the funnel;
+`Databases::peers` still clones defs, `listing()` still clones relations per call, and
+`register_pass` still connects serially — all real, all DB-05/DB-07 territory once there is a
+surface making those calls; the Forget confirm still shows no consequences for a database
+connection and neither Forget nor Save touches the keystore entry — those are DB-04's and DB-05's
+surfaces and both task files carry the note.

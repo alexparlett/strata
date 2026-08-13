@@ -114,8 +114,28 @@ resolving per request, so short-lived credentials refresh themselves. **Ambient 
 are two different providers**, not one chain with a setting: naming a profile on the default chain
 only configures its Profile arm, which sits behind `Environment`, so an exported `AWS_ACCESS_KEY_ID`
 silently wins and the chosen profile is never read. **No arm anywhere in that module takes a
-secret**, and that absence is the feature: a connection carries a profile *name* and a key *file
-path*, never a key.
+secret value**, and that absence is the feature: a connection carries a profile *name* and a key
+*file path*, never a key.
+
+**A database connection registers a *catalog*, on the same terms and against a different
+registry.** `Provider::Postgres` is a fourth arm of the same `ConnectionDef`, and everything about
+it that differs lives in `engine::db`: a connection pool whose construction *is* the probe (DNS,
+TCP, auth, `SELECT 1`, all-or-nothing exactly like `store::connect` — there is no separate
+reachability step, because a database either let us in or did not), a one-round-trip `pg_class`
+enumeration, and a catalog provider registered on `StrataCatalogList` under a **user-chosen SQL
+identifier**, because SQL cannot address `postgres://host/db` and relations must be reachable as
+`pg.public.orders`. Both arms settle through one `connect::settle`, which takes the take-back as an
+argument: the registries differ, the contract does not. `StrataCatalogList` exists because
+DataFusion's `CatalogProviderList` can register a catalog and never remove one — without removal a
+forgotten connection would answer for the life of the window. The whole database comes through
+automatically: **discovery gets catalogs, declaration gets defs**, so there are no per-table defs,
+providers are built lazily and cached per relation, and `SchemaProvider::table_type` is overridden
+so `SHOW TABLES` costs nothing remote. Federation (DB-01's optimizer rule and query planner) is
+what turns a same-connection join into one remote statement; the full picture, pushdown
+expectations included, is [`CONNECTIONS_SPEC.md`](../CONNECTIONS_SPEC.md). Its **password** is the
+one credential Strata holds: kept in the OS keystore under a ref *derived* from the connection's
+identity, read per pool connection, and never in the def — which carries only the expectation that
+one exists.
 
 **The SQL function set is the live registry, not a list we keep.** `build_context` registers
 `datafusion-functions-json`'s Postgres-style accessors (`json_get` / `->` / `->>`; **not** `?`,

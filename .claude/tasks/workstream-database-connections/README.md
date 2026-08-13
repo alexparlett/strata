@@ -35,6 +35,13 @@ profiling) sit on the tree.
   `ProviderId::ALL` is pinned by **test**, not the compiler, and the loops over it are where
   a new arm ships silently (the Configure TYPE pill needs the object-store predicate,
   DB-02).
+- **DataFusion cannot remove a catalog, so the engine owns the catalog list** (built at DB-02,
+  and the one structural surprise in it). `CatalogProviderList` is `register_catalog` /
+  `catalog_names` / `catalog` and nothing more; `MemoryCatalogProviderList` is insert-only. Without
+  removal a forgotten database connection answers `pg.public.orders` for the life of the window —
+  the inverse of the catalog-is-the-store rule. `providers::StrataCatalogList` is DataFusion's list
+  plus `deregister`, installed via `SessionStateBuilder::with_catalog_list` so the workspace
+  catalog lands in it. It refuses nothing, so `CREATE DATABASE`'s gate stays the router's.
 - **Connecting registers a *catalog*, not an object store.** `store::connect`'s
   `register_object_store` path does not apply; a Postgres connection builds a connection pool
   (whose construction *is* the probe: DNS + TCP + auth + `SELECT 1`, all-or-nothing exactly like
@@ -177,6 +184,25 @@ profiling) sit on the tree.
   there is no silent local fallback, and the results pane's error path is the surface, per the
   existing "a run failure is the results pane's" rule.
 
+## Known gaps (measured at DB-02, not theoretical)
+
+- **DataFusion 54's unparser drops the qualifier rebase on a derived table.** When a federated
+  subplan puts a projection under another projection (or under a window), the unparser emits
+  `… FROM (SELECT …) AS "derived_projection"` and leaves the *outer* column references qualified
+  by the original relation — so the statement names a relation its own `FROM` has aliased away
+  and Postgres answers `42P01`. Postgres would run the intended statement perfectly well; the
+  defect is entirely in the SQL we generate, and there is no newer `datafusion-federation` or
+  `datafusion-table-providers` to bump to (0.5.5 / 0.13.0 are latest).
+
+  **This used to break every federated read**, because the snapshot ordinal was a plan-level
+  `row_number() OVER ()` and so rode into the remote statement on top of the user's projection.
+  DB-02 moved the ordinal into the writer (`docs/SNAPSHOT_SPEC.md` §9) — which it should have
+  been anyway, since the ordinal is defined as numbering the stream the writer consumes — and
+  the gap shrank to genuine user shapes: a window or an expression over an already-projected
+  federated subquery (`SELECT id, row_number() OVER () FROM (SELECT id FROM pg.public.orders)`).
+  Pinned in `tests/postgres_federation.rs` the way DB-01 pinned `IN (subquery)`; closing it
+  needs an upstream unparser fix, not anything this workstream owns.
+
 ## Known risks (watch during DB-02, verify in its test)
 
 - **Unparser gaps**: DF-specific functions (created macros should be `simplify`-expanded before
@@ -203,7 +229,7 @@ profiling) sit on the tree.
 | # | Task | Status | Depends on |
 |---|---|---|---|
 | DB-01 | Federation groundwork in `build_context` | ✅ | — |
-| DB-02 | The Postgres arm: model, secrets, pool, catalog provider, registration | ⬜ | DB-01 |
+| DB-02 | The Postgres arm: model, secrets, pool, catalog provider, registration | ✅ | DB-01 |
 | DB-03 | Statement policy over remote catalogs | ⬜ | DB-02 |
 | DB-04 | The connection editor's Postgres form | ⬜ | DB-02 |
 | DB-05 | The data-sources tree: the catalog pane redesigned | ⬜ | DB-02, DB-04 |

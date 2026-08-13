@@ -39,9 +39,16 @@ paints, never where truth lives.
   `ConnectionsHint`. All of it is absorbed or retired here. `SidebarPane::{Catalog,
   Connections}` arms are `sidebar/mod.rs:112-140`; the rail toggle and `Chan::Layout`
   plumbing follow the one-pane-per-edge rule (AGENTS §2).
-- **Engine reads** (DB-02): `Engine::db_listing(url)` over the provider's caches — schemas
-  (connect-time), relations per schema with relkind (lazy, `pg_class`), columns per table
-  (cached provider's Arrow schema). No new network path; ↻ re-connects and thus refreshes.
+- **Engine reads** (DB-02, as built): **`Engine::db_listing(&ConnectionDef)`** — the def, not the
+  URL, because the tagging reads `PgStore::schemas` off it. It answers
+  `Option<(String /* catalog name */, Vec<db::SchemaListingView>)>`, where a
+  `SchemaListingView { name, relations: Vec<db::Relation { name, relkind }>, visibility }` is
+  already **scoped and tagged** (`SchemaVisibility::{Live, EnabledButMissing, NotEnabled}`) — so
+  the tree and the schema picker read one answer and neither re-derives visibility. `None` means
+  "not a live database connection".
+  It is **synchronous and free**: it reads the connect-time enumeration held beside the pool, not
+  the network, so it needs no freya-query keying of its own. Columns per table are still a read
+  through the cached provider's Arrow schema (DB-07). ↻ re-connects, and that *is* the refresh.
 - **Store reads**: `ProjectState` rows for defs and `ConnRow`s; `tables_over(url)` /
   `views_over(tables)` (project.rs:744, 761) give an object-store node its children and
   Forget its consequences.

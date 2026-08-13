@@ -158,7 +158,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
   ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
-  **DB-01 ✅ (2026-08-13), the rest open** —
+  **DB-01 + DB-02 ✅ (2026-08-13), the rest open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
@@ -175,7 +175,17 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   with no test edited, and one correction recorded in its file: the rule is a no-op for every
   plan DataFusion can execute, but not structurally (its expression walk refuses
   `Expr::InSubquery` before consulting providers — which only changes the wording of an error
-  DataFusion already raised). Read the workstream README first — it records the settled decisions, including
+  DataFusion already raised). **DB-02 is in too** — `Provider::Postgres(PgStore)` on the def,
+  `SecretRef::derived` beside `mint` (so the committed def carries only the *expectation* of a
+  password), `engine::db`: the pool that is its own probe, the one-round-trip `pg_class`
+  enumeration, and a lazily-listing, per-relation-cached catalog provider built through
+  `PostgresTableFactory` — dispatched from `Engine::connect`/`disconnect` with `register_pass`
+  untouched, plus `Engine::db_listing` (scoped and tagged) for DB-05/06 and a real-PostgreSQL
+  integration test in the container CI job. One structural correction is recorded in its file:
+  DataFusion's `CatalogProviderList` can register a catalog and never remove one, so the engine
+  now installs its own list (`StrataCatalogList`) — without it a forgotten connection would go on
+  answering for the life of the window.
+  Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
   while the store/discovery **invariant** underneath is not, and the connections no-secrets
@@ -224,10 +234,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅, so
-   **DB-02 is next**; DB-03, DB-04 and DB-08 sit on DB-02 independently (DB-08 needs nothing
-   after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after DB-04;
-   DB-06 and DB-07 close on the tree.
+1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅ and
+   DB-02 ✅, so **DB-03, DB-04 and DB-08 are next** and sit on DB-02 independently (DB-08 needs
+   nothing after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after
+   DB-04; DB-06 and DB-07 close on the tree.
 2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
 (Every other workstream is closed: **Connections/W7**, **Polymorphic JSON**, **Agent

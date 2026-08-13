@@ -1,26 +1,35 @@
-# Connections — reading from remote object stores
+# Connections — reading from remote sources
 
-How Strata reads parquet/CSV/JSON out of S3, GCS and plain HTTP(S). A **connection** is a
-project-scoped description of one remote object store: the bucket (or origin) it names, the
-provider that serves it, and a *reference* to where credentials live. Tables then read through a
-connection by naming it.
+How Strata reads parquet/CSV/JSON out of S3, GCS and plain HTTP(S), and how it queries a live
+PostgreSQL. A **connection** is a project-scoped description of one remote source: the bucket,
+origin or server it names, the provider that serves it, and a *reference* to where credentials
+live. Tables read through an object-store connection by naming it; a database connection needs no
+tables at all — see [Database connections](#database-connections).
 
 Two rules shape everything below:
 
-- **Strata never stores, prompts for, or reads a secret.** A connection carries only non-secret
-  metadata — bucket, region, endpoint, an auth *mode* — plus at most a named `~/.aws` profile or a
-  service-account key **file path**. Credentials resolve at query time from the machine's own
-  provider chains. There is no key, token or secret field anywhere in the model
-  (`crates/strata-model/src/connection.rs`), so one cannot be persisted by accident.
+- **No connection field is a secret value.** A connection carries only non-secret metadata —
+  bucket, region, endpoint, an auth *mode*, a server and a role — plus at most a named `~/.aws`
+  profile, a service-account key **file path**, or the bare statement that this machine's OS
+  keystore holds a password. There is no key or token field anywhere in the model
+  (`crates/strata-model/src/connection.rs`), so one cannot be persisted by accident. Object-store
+  credentials resolve at query time from the machine's own provider chains, and never touch
+  Strata; a database password is held by `strata_core::secret` and read per use.
 - **DataFusion resolves nothing itself.** There is no built-in "read `s3://…`": the embedder
   builds an `object_store` and registers it per bucket, or every scan fails with *"No suitable
-  object store found"*. Registering that store is the whole of what a connection *does*
-  (`crates/strata-core/src/engine/store.rs`).
+  object store found"*. Registering that store is the whole of what an object-store connection
+  *does* (`crates/strata-core/src/engine/store.rs`). A database connection is the same shape
+  against a different registry: it builds a connection pool and registers a **catalog**
+  (`crates/strata-core/src/engine/db.rs`).
 
 ## Providers
 
-Three providers — **S3**, **GCS**, **HTTP** (`ProviderId::ALL`, pinned at three by test). The
-provider is an **explicit picker** in the editor, never inferred from a typed URL scheme.
+Four providers — **S3**, **GCS**, **HTTP** and **PG** (`ProviderId::ALL`, pinned at four by test).
+The provider is an **explicit picker** in the editor, never inferred from a typed URL scheme.
+
+The first three register an object store; PG registers a catalog. Where a surface asks *which
+connection do these files read through* it offers `ProviderId::OBJECT_STORES` rather than `ALL` —
+the Configure window's LOCATION **TYPE** pill, and nothing else.
 
 - **S3-compatible** stores (Cloudflare R2, MinIO, Alibaba OSS, Tencent COS) ride the S3 provider
   via its **Endpoint** field plus an **Allow plain HTTP** toggle — they are not separate
@@ -32,12 +41,13 @@ provider is an **explicit picker** in the editor, never inferred from a typed UR
 
 ## Identity and persistence
 
-**A connection's identity is its URL** — scheme *and* authority, `ConnectionDef::url()` — because
-that is exactly what DataFusion's object-store registry keys on. Never the bucket alone:
-`s3://lake` and `gs://lake` share a bucket and are two different connections over two different
-stores. Everything that addresses a connection (a registration outcome, a store row, the
-Configure picker, a table def) names it by this URL. The pane's sort order is the **address**, so
-`upsert_connection` replaces by URL and inserts in address order.
+**A connection's identity is its URL** — `ConnectionDef::url()`. For an object store that is
+scheme *and* authority, because that is exactly what DataFusion's object-store registry keys on.
+Never the bucket alone: `s3://lake` and `gs://lake` share a bucket and are two different
+connections over two different stores. Everything that addresses a connection (a registration
+outcome, a store row, the Configure picker, a table def, a derived keystore slot) names it by this
+URL. The pane's sort order is the **address**, so `upsert_connection` replaces by URL and inserts
+in address order.
 
 The def stores the **address** and derives the scheme from the provider:
 
@@ -47,6 +57,12 @@ The def stores the **address** and derives the scheme from the provider:
 - **HTTP** — the whole origin (`http://aserver:8484`). `http` and `https` are two different
   origins, so the scheme is part of the address and only the person typing knows which their
   server speaks.
+- **PG** — `host:port/database` (`db.internal:5432/analytics`). Its URL is
+  `postgres://{user}@{address}`, which does *not* stop at the authority: a database connection
+  keys no object-store registry, and the two further things that make two of them different — the
+  database and the **role** — belong in its identity. Two roles over one database are two
+  connections with two sets of visible schemas, and the provider crate's own join-pushdown context
+  agrees, keying on host + port + db + user.
 
 Defs persist in the committed `.strata/project.json` (`ProjectDefs::connections`), beside the
 tables and views. Nothing in a def needs gitignoring: a profile *name* and a key *file path* hold
@@ -116,6 +132,10 @@ stand, and the editor blocks Save on the same terms.
 
 ## Connecting is all-or-nothing
 
+Both arms settle through one body (`engine::connect::settle`), which takes the take-back as an
+argument: the registries differ — an object store keyed by URL, a catalog keyed by its SQL name —
+and the contract does not.
+
 `engine::store::connect` **probes the credential chain before registering**: it resolves the
 chain once, throws the answer away, and only then registers the store. On `Err` nothing is
 registered — including anything an earlier pass registered under the same URL, which is
@@ -152,10 +172,32 @@ refused by the engine in the same words:
   the host part only, before the path is trimmed, so an `@` inside a *path* is answered by the
   path's own message instead. No provider Strata supports authenticates this way, so nothing is
   lost by refusing it.
+- **PG** — `host:port/database`. The port is required and never defaulted to 5432: a Postgres off
+  5432 is the ordinary case for a container, a tunnel or a pooler, and a def reading
+  `db.internal/analytics` while it means `:5432` shows one thing and connects to another — the
+  same argument that keeps S3's region out of `object_store`'s silent default. A scheme is refused
+  (the provider supplies it), a second `/` is refused (one database), and userinfo is refused for
+  HTTP's reason — the role is its own field. The port is the **last** `:`, so an IPv6 literal
+  reads either way (`::1:5432/db` or `[::1]:5432/db`); `engine::db` unwraps the brackets before
+  the driver sees the host, which takes the address itself.
+
+  The **role** is checked on the same terms (`PgStore::check_user`), and for a sharper reason: the
+  driver's parameters are interpolated into a connection string with no quoting, so a space or an
+  `=` in the user fails as a connection string the parser cannot read rather than as "that user is
+  wrong". `CREATE ROLE "read only"` is legal Postgres and simply cannot be dialled through this
+  stack, so it is refused by name. It is also half of `ConnectionDef::url()` — the connection's
+  identity, and the input its keystore slot derives from.
 
 The checks are deliberately not exhaustive — each provider reserves further names no local check
 can settle — they catch what is *statically* wrong so the user is told at the field instead of by
 a signing error.
+
+**A database's catalog name has a rule of its own**, `check_catalog_name`, called by the engine's
+registration and the editor's blocker alike: a bare SQL identifier (leading letter or `_`, then
+letters, digits and `_`), not the workspace's own catalog (`strata`), and not another connection's
+— folded, because unquoted identifiers are. The two callers ask different sets on purpose: the
+editor folds against what is *stored*, so it can warn before anything is dialled, and the engine
+folds against what is *registered*, because a connection that failed to connect reserves nothing.
 
 ## Client options
 
@@ -220,8 +262,96 @@ store.
 Connections are the **first phase** of the project registration pass
 (`strata_core::register::register_pass`): every connection registers before any table, because a
 table's source path cannot resolve to an object store that is not registered yet — an ordering
-bug there would look exactly like a broken table. A whole-catalog ↻ re-connects everything; a
+bug there would look exactly like a broken table — and because a view over `pg.public.orders`
+cannot plan before that catalog exists. A whole-catalog ↻ re-connects everything; a
 single table's Refresh does not re-connect anything.
+
+## Database connections
+
+A **PG** connection registers a DataFusion **catalog** rather than an object store, so the editor
+can `SELECT … FROM pg.public.orders JOIN events …` — cross-joining file-based tables onto live
+PostgreSQL, with filters, projections and whole same-source subplans pushed down to the server.
+Built on `datafusion-table-providers-postgres` and `datafusion-federation`, both pinned in
+lockstep with the `datafusion` version (`crates/strata-core/Cargo.toml` says why).
+
+**The whole database comes through, and nothing is declared per table.** Connect enumerates every
+schema the role can see and every relation in them — one round trip against `pg_class`, filtered
+to `relkind IN ('r','p','v','m','f')` and to what the role may `USAGE`/`SELECT`, system schemas
+excluded — and registers a catalog whose table providers are built lazily on first use and then
+cached. There are no per-table defs and no manual adds. The line is *discovery gets catalogs,
+declaration gets defs*: a bucket cannot say what its tables are — someone must declare globs, a
+format and its options, and that declaration can fail, which is what the `Reg` rows exist to show
+— while a database answers for itself. Pinning one remote relation into the workspace is a
+**view** (`CREATE VIEW orders AS SELECT * FROM pg.public.orders`), which needs no new machinery.
+
+`pg_class` rather than the provider crate's own `pg_tables` listing: remote views, materialized
+views, partitioned tables and foreign tables must show and resolve, or the catalog lies about what
+is queryable. That is one of three reasons the catalog/schema provider is ours rather than the
+crate's `DatabaseCatalogProvider`; the others are that it snapshots the listing at construction (a
+↻ could not refresh it) and that it skips the federation wrapper, silently forfeiting the pushdown
+this exists for.
+
+**The def:**
+
+| Field | What it is |
+|---|---|
+| `catalog` | How queries address the database — the catalog half of `catalog.schema.table`. |
+| `user` | The role, and half the connection's identity. |
+| `sslmode` | libpq's own vocabulary, in libpq's spellings. Defaults to `prefer`, as libpq does. |
+| `sslrootcert` | A root-certificate **file path**, read only by the two verifying modes. |
+| `password` | `none` or `keystore` — the **expectation**, never a reference. |
+| `schemas` | The schemas this connection *shows*. Defaults to `["public"]`. |
+
+**The password.** This is where W7's "Strata never stores, prompts for or reads a secret" was
+deliberately **rewritten** rather than routed around: that rule was a consequence of the OS
+keystore not existing when W7 was built, and of object stores happening to have host-side
+credential chains where a database does not. The password is captured exactly as an assistant
+provider key is (`strata_core::secret`) and read **per pool connection**, never cached.
+
+The reference is **derived**, not minted: `SecretRef::derived("pg-password", def.url())`, a
+`Uuid::new_v5` over a fixed namespace. A minted id in a committed, shared `project.json` would be
+rewritten by every colleague who entered their own password — two machines ping-ponging one id
+through git forever. A derived one addresses the same slot on every machine while each machine's
+keystore holds its own entry, and the def therefore stores only `PgPassword::Keystore`: storing a
+derivable value beside the fields it derives from is two statements of one fact that can disagree.
+The consequences are carried honestly — an identity edit **migrates** the entry
+(`secret::migrate_derived`), a Forget deletes it without needing a stored ref, and on a machine
+with no entry the row settles failed naming the fix ("No password is stored on this machine for
+'…'"), the same shape as an expired SSO session.
+
+**Connecting is the probe, with nothing extra.** Building the pool resolves the host, opens a TCP
+connection, authenticates, builds the pool and runs `SELECT 1`; any of them failing is the whole
+answer. There is no separate reachability step, because unlike a bucket — whose description can be
+well-formed and wrong in a way only the bucket knows — a database either let us in or did not. A
+reconnect **replaces**: whatever that URL last registered comes out, under the name it went in
+under, so the editor's rename (same URL, new catalog name) is handled by the registration rather
+than by a surface remembering.
+
+**Schema visibility scopes display, never resolution.** `schemas` is DataGrip's "N of M schemas"
+choice. The engine registers every schema regardless — the providers are lazy, so that costs
+nothing — which means a query naming a schema that is not enabled still resolves and runs.
+`Engine::db_listing` is the one read every surface shares, and it answers **scoped and tagged**
+(`Live | EnabledButMissing | NotEnabled`), so nothing re-derives visibility. It reads the
+connect-time enumeration, which is why a ↻ *is* the refresh.
+
+**What is pushed down, so nobody re-measures it.** A single-table filter, projection and `LIMIT`
+push down even without federation (the scan unparses them; anything unsupported falls back and
+re-applies locally). A same-connection join, aggregate or TopK federates into **one** remote
+statement. A pg × parquet join is ambiguous at the join node: the largest single-provider subtree
+under the pg side still federates, and the join itself runs locally. A federated subplan that
+unparses to SQL the server rejects fails **loudly at execute time** — there is no silent local
+fallback, and the results pane's error path is the surface.
+
+`jsonb` and other exotic types arrive as `Utf8` JSON text (`UnsupportedTypeAction::String`), which
+the app's own Postgres-style accessors already read. The crate's default would refuse the whole
+relation for one such column. This is representation honesty rather than silent corruption: the
+value is intact, only the type is wider.
+
+**Read-only in v1.** Nothing writes to a database: `INSERT` gates on whether the target is a table
+Strata owns, and the schema provider refuses a registration in its own words underneath that.
+
+Verified end to end against a real PostgreSQL in
+`crates/strata-core/tests/postgres_federation.rs`.
 
 ## Tables over a connection
 
