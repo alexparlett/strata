@@ -123,9 +123,37 @@ Ruled out as a cause: the dependency graph did not move — the only lock change
 is untouched by this branch, and `strata-agent`'s provider tests — also untouched — sat over 60s
 on client construction in the same run, which points at the same shared cause.
 
+**And it is one symptom of three.** In the same sittings, freshly-built test binaries repeatedly
+stalled at 0% CPU *before `main`* — a `sample` showed the whole process sitting in `_dyld_start` —
+and `strata-agent`'s provider tests, which this branch also never touched, sat over 60 seconds
+constructing clients. A wedged trust store, a wedged loader, and slow client construction are the
+shape of macOS security services (`trustd` / `syspolicyd`) misbehaving on this machine, not three
+separate bugs.
+
 **Worth chasing before release** precisely *because* it is intermittent: this test is in CI's
 `test` job, so a flaky trust-store read is a flaky pipeline. The thing to establish is whether it
-ever fires on a GitHub runner or only on this machine.
+ever fires on a GitHub runner or only here. A reboot is the first thing to try.
+
+### What was actually verified, and how
+
+A single `cargo test --workspace` never completed on this machine — it stalled in the loader, twice,
+at different binaries. So the suite was verified **per target** instead, every one of them green:
+
+| Target | Result |
+|---|---|
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | clean, exit 0 |
+| `strata-core` lib | 589 passed |
+| `strata-core` `engine_export` / `snapshot_order` / `engine_chart` | 20 / 11 / 7 passed |
+| `strata-core` `object_store_minio` | 1 passed, against a real MinIO container |
+| `strata-model` | 26 passed |
+| `strata-agent` lib + integration | 122 passed, plus its suites |
+| `strata-freya` | 696 passed, 11 ignored, exit 0 |
+| `UPDATE_SCHEMA=1 … schema_in_sync` | in sync (the new `tab.close` field maps to an existing role, so the schema did not move) |
+| fork, as its own workspace | `freya-core` + `freya-radio` build clean |
+
+The MinIO run matters twice over: it is the only thing that exercises the S3 credential bridge, and
+it is what proves the tightened rejected-credentials assertion (a 403, not merely "an error")
+matches what MinIO actually answers.
 
 **Method note for whoever picks this up:** the failure was invisible for a while because
 `cargo test … | tail -n` and `cargo test … | rg …` both report the *pipe's* exit status, not
