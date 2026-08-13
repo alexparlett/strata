@@ -715,6 +715,11 @@ fn wait_out_the_spinner_delay(runner: &mut TestingRunner) {
 /// transient**, so `users` shows nothing yet — only once the wait outlasts the hold-back does it
 /// join. Every settled row stays silent throughout, and none of it is text in the row any more,
 /// which is the point of the slot.
+///
+/// The whole-list `assert_eq` also pins the **short** half of `entry::TIP_CHARS`: both of these
+/// refusals are one sentence Strata wrote, so each is shown entire with nothing appended. The
+/// pointer to Problems appears only where something was actually left out
+/// (`a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store`).
 #[test]
 fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
     let (mut runner, ..) = runner();
@@ -767,6 +772,48 @@ fn dropping_a_table_flags_the_views_that_read_it() {
             .iter()
             .any(|w| w == "Reads orders, which is no longer in the catalog."),
         "the view over the dropped table is flagged"
+    );
+}
+
+/// **A refusal too long for the tooltip is clipped *here*, and the store still holds it whole.**
+///
+/// This is the fault the engine's old 240-character cap caused: the limit belonged to this
+/// overlay and was applied to the string every consumer reads, so Problems — which wraps it —
+/// and its copy button both handed back a sentence cut mid-clause. The clip is this surface's
+/// now, and it names the surface that has the rest.
+#[test]
+fn a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store() {
+    let long = format!("Registration failed: {}", "detail ".repeat(60).trim_end());
+    assert!(long.chars().count() > 240, "the case only bites when long");
+
+    let (mut runner, (.., mut store, _, _, _)) = runner();
+    store
+        .write_channel(ProjChan::Tables)
+        .table_failed("users", long.clone());
+    settle(&mut runner);
+
+    let shown = status_labels(&runner)
+        .into_iter()
+        .find(|l| l.starts_with("Registration failed: detail"))
+        .expect("the triangle says what it can");
+
+    assert!(
+        shown.ends_with("See Problems for the full message."),
+        "a clipped tooltip names where the rest is: {shown:?}"
+    );
+    assert!(
+        shown.chars().count() < long.chars().count(),
+        "and it is genuinely shorter than the message"
+    );
+    let kept = store
+        .peek()
+        .registration_faults()
+        .into_iter()
+        .find(|f| f.name == "users")
+        .expect("the fault is on the row");
+    assert_eq!(
+        kept.why, long,
+        "the store — and so Problems, and so its copy button — keeps the whole thing"
     );
 }
 

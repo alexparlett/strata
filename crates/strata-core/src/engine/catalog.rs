@@ -433,11 +433,47 @@ fn listing_url(p: &str) -> Result<datafusion::datasource::listing::ListingTableU
 
 // ---- registration failure messages (P3-07) ----
 
-/// The longest engine text we'll pass through. A failure reaches the user as a catalog
-/// row's tooltip *and* its a11y label, and DataFusion is willing to interpolate an entire
-/// parsed document into an error (the JSON array case below did exactly that), so an
-/// unrecognised message is capped rather than trusted.
-const MAX_PASSTHROUGH: usize = 240;
+/// The wrapper names DataFusion prepends as a failure crosses each crate boundary, in the
+/// spelling it writes them.
+///
+/// Every one of these names a **layer the message travelled through**, not a cause — which is
+/// what makes stripping them safe on the pass-through path, beside the mappers that do diagnose.
+/// Unrecognised text is left exactly as it arrived, so the list being incomplete costs noise
+/// rather than meaning.
+const LAYERS: &[&str] = &["External error", "Object Store error", "Execution error"];
+
+/// `object_store`'s own store wrapper, which is a **format with an open store name** rather than
+/// a list: `#[error("Generic {} error: {}", store, source)]` (`object_store/src/lib.rs`), where
+/// the name is each backend's private `STORE` const — `S3`, `GCS`, `HTTP`, `MicrosoftAzure`,
+/// `LocalFileSystem`, `InMemory`, and whatever the crate adds next.
+///
+/// Matched as the pattern it is, because enumerating it is how the list goes stale: the first
+/// version of this file *did* enumerate, and shipped `GoogleCloudStorage` (the crate says `GCS`)
+/// while omitting `HTTP` — one of Strata's three providers, and the one whose tables are the only
+/// place an HTTP connection's reachability is tested at all, since `store::reachable` exempts it.
+///
+/// [`STORE_WORDS`] is what keeps the pattern from being greedy: a store name is one word, or two
+/// where the crate writes `HTTP client`, never a sentence. Without it a message that merely opens
+/// with "Generic " would have everything up to its first ` error: ` cut away — which is not a
+/// message DataFusion writes, but it is the difference between a rule and a coincidence.
+const STORE_PREFIX: &str = "Generic ";
+const STORE_SUFFIX: &str = " error: ";
+const STORE_WORDS: usize = 2;
+
+/// `object_store`'s retry bookkeeping: which request was made, against what, how long it took and
+/// how many attempts it was given — figures about the client, not about what is wrong.
+///
+/// The shape is `RetryError`'s `Display` (`object_store/src/client/retry.rs`):
+///
+/// ```text
+/// Error performing {METHOD} {uri} in {elapsed:?}[, after {n} retries, max_retries: {m},
+/// retry_timeout: {t:?} ] - {cause}
+/// ```
+///
+/// so the cut is at the **first** ` - `: everything before it is that bookkeeping, and neither a
+/// `Duration`'s `Debug` nor a URI can contain the separator (a URI cannot hold a raw space).
+const RETRY_PREFIX: &str = "Error performing ";
+const RETRY_CAUSE: &str = " - ";
 
 /// Whether a source path is a glob rather than a name that can be looked up on disk.
 fn is_glob(p: &str) -> bool {
@@ -538,9 +574,20 @@ fn failing_source<'a>(spec: &'a TableSpec, raw: &str) -> Option<&'a str> {
 /// Translate a registration failure into something the user can act on.
 ///
 /// Only failures we actually recognise are rewritten; anything else passes through as
-/// DataFusion wrote it (capped — see [`MAX_PASSTHROUGH`]). Translating an unfamiliar error
+/// DataFusion wrote it, [unwrapped](readable) but **whole**. Translating an unfamiliar error
 /// would mean guessing at its cause, and a confident wrong diagnosis is worse than a raw
 /// one the user can search for.
+///
+/// **Nothing is capped here, and that is a change.** The pass-through used to be cut at 240
+/// characters with a trailing `…`, on account of the one surface that could not hold a sentence:
+/// a catalog row's tooltip and its a11y label. That put a **narrow surface's limit into the
+/// string every consumer reads** — so the Problems drawer, which wraps, and its copy button,
+/// which exists precisely so a message can be pasted into a search, both handed back a sentence
+/// cut mid-clause. An unreachable bucket reports well past 240 characters and names its cause in
+/// the last clause, so the cut kept the bookkeeping and threw away the answer.
+///
+/// The limit now lives with the surface that has it (`catalog::entry`'s `TIP_CHARS`, which says
+/// where the rest is), and what leaves here is whole.
 fn register_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -> String {
     if let Some(m) = json_shape_error(spec, raw) {
         return m;
@@ -548,11 +595,72 @@ fn register_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -
     if let Some(m) = no_files_error(spec, ext, raw, holds) {
         return m;
     }
-    if raw.chars().count() > MAX_PASSTHROUGH {
-        let cut: String = raw.chars().take(MAX_PASSTHROUGH).collect();
-        return format!("{cut}…");
+    readable(raw)
+}
+
+/// `raw` with the wrapper stack peeled off, down to the sentence that says what is wrong.
+///
+/// DataFusion and `object_store` report a failure by **prepending a name per crate boundary it
+/// crossed**, so a bucket that will not answer arrives as one line carrying three layers and the
+/// client's retry settings before it reaches the point:
+///
+/// ```text
+/// External error: Object Store error: Generic S3 error: Error performing GET
+/// http://127.0.0.1:4566/lake/a.parquet in 5.383s, after 10 retries, max_retries: 10,
+/// retry_timeout: 180s  - HTTP error: error sending request for url (…): connection refused
+/// ```
+///
+/// That is what reads as a stack trace, and the whole of what the user needs is the tail. Peeling
+/// is **not** diagnosis — a layer name says where the message has been, never what happened — so
+/// this belongs on the pass-through path rather than among the mappers above, and what it hands
+/// back is still DataFusion's own words.
+///
+/// **Every literal here is checked against the crate that writes it**, named at each constant.
+/// The first version of this function was written from a doc comment instead
+/// (`store::is_bare_redirect`'s, since corrected) and matched three strings `object_store` has
+/// never emitted, so it stripped nothing at all on the one path it exists for — while its unit
+/// test, whose fixture had been written to match the code rather than copied from the crate,
+/// passed.
+///
+/// It loops because the layers nest, and it stops the moment it stops recognising one. Peeling
+/// everything away is treated as not recognising the message at all: a string that *is* only
+/// wrappers has no tail to keep, and the raw line is more use than an empty row.
+pub(crate) fn readable(raw: &str) -> String {
+    let mut s = raw.trim();
+    loop {
+        if let Some(rest) = LAYERS
+            .iter()
+            .find_map(|layer| s.strip_prefix(layer).and_then(|r| r.strip_prefix(':')))
+            .map(str::trim_start)
+        {
+            s = rest;
+            continue;
+        }
+        // `Generic {store} error: …`, matched as a pattern — see [`STORE_PREFIX`]. The *first*
+        // ` error: ` is the wrapper's, because the format puts it immediately after the store
+        // name, and the name is bounded so the pattern cannot eat a sentence.
+        if let Some(rest) = s.strip_prefix(STORE_PREFIX).and_then(|r| {
+            let (store, rest) = r.split_once(STORE_SUFFIX)?;
+            (store.split_whitespace().count() <= STORE_WORDS).then_some(rest)
+        }) {
+            s = rest.trim_start();
+            continue;
+        }
+        // Only where `object_store` writes it — leading — so a message that merely *contains*
+        // ` - ` keeps it.
+        if let Some((_, rest)) = s
+            .strip_prefix(RETRY_PREFIX)
+            .and_then(|r| r.split_once(RETRY_CAUSE))
+        {
+            s = rest.trim_start();
+            continue;
+        }
+        break;
     }
-    raw.to_string()
+    match s.is_empty() {
+        true => raw.trim().to_string(),
+        false => s.to_string(),
+    }
 }
 
 /// A JSON source is read in one of two **shapes** (`JsonShape`), and reading it in the wrong
@@ -1502,19 +1610,120 @@ mod tests {
         assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", raw), raw);
     }
 
+    /// **The fault this file's cap used to cause.** An unreachable bucket reports well past 240
+    /// characters, and the clause naming the cause is the last one — so a cut at 240 kept the
+    /// bookkeeping and threw away the answer, in the drawer and on the clipboard alike. Nothing
+    /// is cut now; the wrappers come off instead.
+    ///
+    /// **The fixture is `object_store`'s own `Display` output, assembled from the crate rather
+    /// than from prose about it** (`RetryError` in `client/retry.rs`, `Error::Generic` in
+    /// `lib.rs`, both 0.13.2) — note the uppercase method, the URI, and the ` - ` before the
+    /// cause. The first version of this test invented a plausible-looking string instead, which
+    /// made it pass over a `readable` that stripped nothing.
     #[test]
-    fn a_runaway_message_is_capped() {
-        let raw = "Internal error: ".to_string() + &"x".repeat(5_000);
-        let msg = message(&spec("t", &[], "parquet"), ".parquet", &raw);
+    fn an_unreachable_bucket_keeps_the_clause_that_names_the_cause() {
+        let raw = "External error: Object Store error: Generic S3 error: Error performing GET \
+                   http://127.0.0.1:4566/lake/a.parquet in 5.383s, after 10 retries, \
+                   max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request for \
+                   url (http://127.0.0.1:4566/lake/a.parquet): connection refused";
+        assert!(raw.chars().count() > 240, "the case only bites when long");
         assert_eq!(
-            msg.chars().count(),
-            MAX_PASSTHROUGH + 1,
-            "capped, plus the marker"
+            message(&spec("t", &[], "parquet"), ".parquet", raw),
+            "HTTP error: error sending request for url \
+             (http://127.0.0.1:4566/lake/a.parquet): connection refused"
         );
-        assert!(msg.ends_with('…'));
-        assert!(
-            msg.starts_with("Internal error: "),
-            "the useful head survives"
+    }
+
+    /// A request that never had to be retried omits the retry clause entirely (`RetryError`
+    /// writes it only when `retries != 0`), so the bookkeeping still has to come off the short
+    /// form — this is the shape a first-attempt 403 or a refused connection takes.
+    ///
+    /// Note the fixture's **trailing space**: `RequestError::Status` interpolates an absent body
+    /// as `""` after `{status}: `, so this is genuinely what the crate emits. It is kept, and the
+    /// expectation has no trailing space, because `readable` opens with `raw.trim()` — both ends,
+    /// once, before the loop — and every peel after that hands back a *suffix* of that string, so
+    /// the tail can never grow whitespace back. Written down because the peel steps themselves
+    /// only `trim_start`, which reads like the tail is unhandled until you notice the first line.
+    #[test]
+    fn the_bookkeeping_comes_off_a_request_that_was_not_retried() {
+        let raw = "Object Store error: Generic S3 error: Error performing GET \
+                   http://127.0.0.1:4566/lake/a.parquet in 0.031s - Server returned non-2xx \
+                   status code: 403 Forbidden: ";
+        assert_eq!(
+            message(&spec("t", &[], "parquet"), ".parquet", raw),
+            "Server returned non-2xx status code: 403 Forbidden:"
         );
+    }
+
+    /// The store wrapper is a **format**, not a list, so a backend nobody enumerated unwraps too.
+    /// `GCS` and `HTTP` are the two the enumerated version got wrong — one misspelt, one missing —
+    /// and `HTTP client` is why the store name is not narrowed to a single token.
+    #[test]
+    fn any_backends_store_wrapper_comes_off() {
+        for store in [
+            "S3",
+            "GCS",
+            "HTTP",
+            "HTTP client",
+            "MicrosoftAzure",
+            "LocalFileSystem",
+            "Wasbs",
+        ] {
+            let raw = format!("Generic {store} error: something specific went wrong");
+            assert_eq!(
+                message(&spec("t", &[], "parquet"), ".parquet", &raw),
+                "something specific went wrong",
+                "the {store} wrapper"
+            );
+        }
+    }
+
+    /// …and the store name is bounded, so a message that merely opens with "Generic " keeps
+    /// everything in front of its first ` error: ` rather than having it cut away.
+    #[test]
+    fn a_generic_opening_is_not_a_store_wrapper() {
+        let raw = "Generic failure while reading the footer error: unexpected end of file";
+        assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", raw), raw);
+    }
+
+    /// A runaway message is passed through **whole**. Every surface that shows it wraps and
+    /// scrolls, and its copy button exists so a message worth searching for can be pasted — both
+    /// of which a cap defeats.
+    #[test]
+    fn a_runaway_message_is_not_cut() {
+        let raw = "Internal error: ".to_string() + &"x".repeat(5_000);
+        assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", &raw), raw);
+    }
+
+    /// Peeling stops at the first thing it does not recognise, so a real message that happens to
+    /// sit under one wrapper keeps all of itself.
+    #[test]
+    fn only_the_wrappers_come_off() {
+        assert_eq!(
+            message(
+                &spec("t", &[], "parquet"),
+                ".parquet",
+                "Object Store error: Parquet error: Invalid Parquet file. Corrupt footer"
+            ),
+            "Parquet error: Invalid Parquet file. Corrupt footer"
+        );
+    }
+
+    /// A message that is *only* wrappers has no tail to keep, so the raw line survives rather
+    /// than the row going blank.
+    #[test]
+    fn a_message_that_is_all_wrapper_is_left_alone() {
+        let raw = "External error: Object Store error:";
+        assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", raw), raw);
+    }
+
+    /// The retry clause is dropped only where `object_store` writes it — **leading**. ` - ` is
+    /// ordinary punctuation, so a message that merely contains one keeps everything in front of
+    /// it; without the prefix guard this cut would silently edit the user's own data out of a
+    /// diagnosis.
+    #[test]
+    fn a_dash_mid_message_is_not_a_retry_wrapper() {
+        let raw = "Arrow error: column 'order - id' is not nullable";
+        assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", raw), raw);
     }
 }

@@ -37,7 +37,7 @@ use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{CreateTableOptions, CreateView, Statement as SqlStatement};
 use datafusion::sql::TableReference;
 
-use crate::engine::catalog::{column_info, dependents_of_view, plan_deps, ViewMeta};
+use crate::engine::catalog::{column_info, dependents_of_view, plan_deps, readable, ViewMeta};
 use crate::engine::query::is_snapshot_name;
 use crate::engine::sql::{Blocked, StmtKind};
 use crate::engine::{fold_ident, quote_ident};
@@ -66,7 +66,11 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         return Err(Blocked::ReservedName.editor_message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
+    // [`readable`], the same unwrapping a refused *table* gets: a view's failure lands in the
+    // same Problems list, one row below its cause, so a view carrying DataFusion's wrapper stack
+    // beside a table that has had it peeled would read as two faults worded by two apps. It is a
+    // no-op on a message with no wrappers, which is most of them.
+    let df = ctx.sql(&stmt).await.map_err(|e| readable(&e.to_string()))?;
     // The DDL only takes effect when its (empty) result is driven.
     let _ = df.collect().await;
     // The freshly-registered view's own `DataFrame` gives both the columns and what it reads —
@@ -79,7 +83,7 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
     let t = ctx
         .table(TableReference::bare(fold_ident(name)))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| readable(&e.to_string()))?;
     let deps = plan_deps(t.logical_plan());
     let columns = t.schema().fields().iter().map(|f| column_info(f)).collect();
     Ok(ViewMeta {

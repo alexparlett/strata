@@ -225,8 +225,12 @@ async fn reachable(conn: &ConnectionDef, store: &Arc<dyn ObjectStore>) -> Result
 /// incorrectly configured region" — a guess, because the crate has never heard of the field. We
 /// have, so [`wrong_region`] says it outright.
 ///
-/// Substring rather than equality: the sentence arrives wrapped in the layers that carried it
-/// (`Generic S3 error: Error performing list request: …`).
+/// Substring rather than equality: the sentence arrives wrapped in the layers that carried it,
+/// which for a listing is `Error::Generic`'s `Generic {store} error: ` around `RetryError`'s
+/// `Error performing {METHOD} {uri} in {elapsed:?}[, after {n} retries, …] - `. Quoted from the
+/// two `Display` impls (`lib.rs`, `client/retry.rs`), because this comment used to give the shape
+/// as `Generic S3 error: Error performing list request: …` — a plausible sentence the crate does
+/// not write, which `catalog::readable` was later built from and matched nothing against.
 fn is_bare_redirect(e: &Error) -> bool {
     e.to_string().contains("redirect without LOCATION")
 }

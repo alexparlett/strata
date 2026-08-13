@@ -310,6 +310,16 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **Problems holds *conditions*, at two scopes; a run failure is the results pane's.** The test is
   "is it true now, and does it retract itself" — reconciliation, remembered condition, or event.
   The rail badge must total **every** scope from the same functions the scopes use.
+- **A refusal is stored whole; the surface that cannot hold it clips it, and says where the rest
+  is.** A limit belongs to the surface that has it, never to the string every other surface reads —
+  the engine's 240-char cap existed for a tooltip and clipped the Problems row and its copy button
+  with it. The cap is `catalog::entry`'s `TIP_CHARS` now.
+- **A wrapper is not a diagnosis, so peeling one is not diagnosing — but read every literal off
+  the crate that writes it.** `catalog::readable` strips DataFusion's crate-boundary names
+  (`LAYERS`), `object_store`'s store wrapper (`STORE_WRAPPER`, a **format**, never a list of
+  backends) and its retry bookkeeping, and nothing else; both the table and the view funnel reach
+  it. An unfamiliar error is still never translated. Quoting a doc comment instead of the
+  `Display` impl is how the first version matched strings the crate has never emitted.
 
 **Agent access**
 
