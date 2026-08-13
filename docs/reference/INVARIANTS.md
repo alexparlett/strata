@@ -1052,7 +1052,13 @@ Things that must not regress. Each was fought for once already.
   future runs `DispatchGuard`'s drop, which aborts the detached task — but an abort is delivered
   at the next **await**, and `create` has none left after `register_external`. `Registering` is
   deliberately *not* held: that pass is the project window's and answers on the catalog row
-  whether this window is watching or not.
+  whether this window is watching or not. **And a window that refuses to close has to say so to
+  winit as well as to itself** — Esc and the Cancel button are in-app presses, but the native
+  traffic-light button and ⌘Q both route through `process_close_request`, which closes
+  unconditionally when a window registered no `on_close`. So the predicate is mirrored into an
+  `Arc<AtomicBool>` built with the `WindowConfig` and read by a `with_on_close` hook, the shape
+  `project::close::close_bridge` already uses. Gating only the in-app paths leaves the two that
+  do not pass through them.
 - **A form over a statement authors only what a form can be wrong about; every other refusal is
   the arm's own, reached rather than restated.** The panel's own vocabulary is four sentences (a
   row with no name, a row with no type, a table with no name, a table with no columns).

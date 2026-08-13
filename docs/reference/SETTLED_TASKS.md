@@ -542,7 +542,10 @@ after the spawned task's await and `ddl::tables::create` publishes its spool by 
 its own last await, so a window dismissed mid-create leaves a data directory nothing points at
 and nothing sweeps. Cancel and Esc both read `Status::holds_window`, so they cannot disagree.
 `Registering` is not held: that pass belongs to the project window's scan driver and answers on
-the catalog row regardless. (Found in review of #154.)
+the catalog row regardless. The predicate is also mirrored into an `Arc<AtomicBool>` the window's
+`with_on_close` hook reads — the native traffic-light button and ⌘Q go through winit's
+`process_close_request`, which closes unconditionally without a hook, so gating only the in-app
+presses left two doors open. (Both found in review of #154.)
 
 **`ToggleSegment` grew an `enabled`** for the create-only segment: shown and faded rather than
 absent, because a segment that vanished would change the control's shape and the answer is still

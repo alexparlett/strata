@@ -88,7 +88,8 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   or epoch bump. Save keeps its `Status::Registering` wait, so `use_watch_registration` closes the
   window on the row the fold just landed — and **holds the window shut while its own create is in
   flight** (`Status::holds_window`), because the fold is on the far side of that task's await and
-  the spool is already published by rename before it.
+  the spool is already published by rename before it — mirrored into the window's `with_on_close`
+  hook too, or the native close button and ⌘Q walk straight past it.
 - **A form over a statement authors only what a form can be wrong about; every other refusal is
   the arm's own, reached rather than restated.** `duplicate_column`, `unenforced_clause`,
   `fold_ident`, `ProjectState::name_taken`. **The type field is free text probed per row** —

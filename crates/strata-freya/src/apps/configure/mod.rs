@@ -47,6 +47,9 @@ mod interaction;
 mod model;
 mod views;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use freya::prelude::*;
 use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
@@ -248,6 +251,16 @@ pub struct ConfigureApp {
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
     /// this window closing with the project window it configures.
     pub owner: WindowId,
+    /// Whether this window is refusing to close — the `on_close` half of
+    /// [`Status::holds_window`], mirrored into a flag the winit hook can read.
+    ///
+    /// Esc and the Cancel button are in-app presses this window answers itself, but the native
+    /// traffic-light button and ⌘Q are **winit's**: both route through `process_close_request`,
+    /// which closes unconditionally when a window registered no `on_close` hook. So the same
+    /// predicate has to be reachable from outside the component tree, and an `Arc<AtomicBool>`
+    /// built with the window is what reaches — the shape `project::close::close_bridge` already
+    /// uses for the same job.
+    pub close_hold: Arc<AtomicBool>,
 }
 
 impl ConfigureApp {
@@ -271,6 +284,11 @@ impl ConfigureApp {
             let id = sel.effective(strata_core::theme::os_is_dark());
             window_background(app.themes.get_or_default(&id))
         };
+        // The close hold, built here because it has to be readable from **both** sides: the
+        // component mirrors this window's status into it, and the `on_close` hook below is
+        // winit's own and has no component tree to consult.
+        let close_hold = Arc::new(AtomicBool::new(false));
+        let hook_hold = close_hold.clone();
         WindowConfig::new_app(ConfigureApp {
             app,
             project,
@@ -282,6 +300,22 @@ impl ConfigureApp {
             report,
             connections,
             owner,
+            close_hold,
+        })
+        // **The native close button and ⌘Q come through here, and nothing else stops them.**
+        // `process_close_request` takes a window's `on_close` and defaults to
+        // `CloseDecision::Close` when there is none, and `platform::quit_windows` requests a
+        // close on *every* window — so without this hook a create in flight would be dropped by
+        // the red button or by ⌘Q, exactly as it would by Esc, leaving a published spool no def
+        // points at. The parameter annotations keep the closure generic over
+        // `RendererContext`'s lifetime, as `close_bridge`'s does.
+        .with_on_close(move |_ctx: RendererContext<'_>, _id: WindowId| {
+            match hook_hold.load(Ordering::Relaxed) {
+                // No dialog and nothing to drain: the window is already saying "Creating…" and
+                // it closes itself the moment the fold lands.
+                true => CloseDecision::KeepOpen,
+                false => CloseDecision::Close,
+            }
         })
         .with_title("Table configuration")
         // The OS title is hidden (this window draws its own bar), so it names the *kind* of
@@ -404,6 +438,12 @@ impl App for ConfigureApp {
         // awaited: the pass belongs to the project window's driver, and its answer arrives on
         // the row. See the module doc.
         use_watch_registration(ctx);
+        // Mirror the one predicate into the flag winit reads, so the red button and ⌘Q refuse on
+        // exactly the terms Esc and Cancel do (see [`ConfigureApp::close_hold`]).
+        let close_hold = self.close_hold.clone();
+        use_side_effect(move || {
+            close_hold.store(ctx.status.read().holds_window(), Ordering::Relaxed);
+        });
 
         let win = window_theme();
         let text = use_roles().get(Role::Text);
