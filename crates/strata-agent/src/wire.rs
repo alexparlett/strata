@@ -275,6 +275,11 @@ pub(crate) fn windowed<T>(items: Vec<T>, page: Option<usize>, per: usize) -> Win
 
 /// The `list_tables` projection: filter by name, then window — totals first, so a narrowed
 /// answer always states what it matched against.
+///
+/// `databases` rides outside the window and outside `total` on purpose: they are not entries, and
+/// counting them into a total the caller pages through would promise pages that do not exist.
+/// They are **not** filtered by `matching` either — a narrowed listing that dropped the
+/// connections would read as a project with none.
 pub fn tables_result(
     entries: Vec<CatalogEntry>,
     databases: Vec<String>,
@@ -293,10 +298,6 @@ pub fn tables_result(
     TablesResult {
         total: w.total,
         entries: w.shown.into_iter().map(entry_wire).collect(),
-        // Outside the window and outside 'total' on purpose: these are not entries, and
-        // counting them into a total the caller pages through would promise pages that do not
-        // exist. They are also **not** filtered by 'matching' — a narrowed listing that dropped
-        // the connections would read as a project with none.
         databases,
         page: w.page,
         page_size: w.page_size,

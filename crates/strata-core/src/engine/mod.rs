@@ -1572,7 +1572,10 @@ impl Engine {
     /// wrote to say why.
     ///
     /// Existence is asked of `table_exist`, deliberately: that reads the connect-time listing
-    /// and costs nothing, where `table` is the round trip. So the common miss never dials out.
+    /// and costs nothing, where `table` is the round trip. So the common miss never dials out —
+    /// and a relation the listing has but `table` then answers `None` for is one dropped
+    /// server-side since the connect, an absence either way, which the caller's own not-found
+    /// says better than a fault would.
     pub async fn describe_remote(&self, name: String) -> Result<Option<RemoteRelation>, String> {
         let reference = TableReference::parse_str(&name);
         let TableReference::Full { catalog, .. } = &reference else {
@@ -1611,9 +1614,6 @@ impl Engine {
             .await
             .map_err(|e| format!("Reading '{name}' failed: {e}"))?
             .map_err(|e| catalog::readable(&e.to_string()))?;
-        // Listed a moment ago and gone now: the listing is the connect-time enumeration, so this
-        // is a relation dropped server-side since. An absence either way, and the caller's own
-        // not-found says it better than a fault would.
         Ok(provider.map(|provider| RemoteRelation {
             connection,
             relation,
@@ -3950,6 +3950,12 @@ mod remote_catalog_tests {
     /// none of them is a failure. `Err` is reserved for a relation the connection lists whose
     /// introspection then fails, which no fake catalog can produce — that arm is the real
     /// server's (`tests/postgres_federation.rs`).
+    ///
+    /// Names are folded like every other in the session, and the answer carries the connection's
+    /// and the server's own spellings rather than the caller's. The absent set covers the four
+    /// ways a name is not this method's business: not in the connection, not a database catalog
+    /// (`strata`, and `STRATA`, which the catalog list resolves by folding), and not qualified
+    /// into one at all, which is a def's name for the store to answer.
     #[tokio::test]
     async fn describe_remote_answers_for_a_relation_and_nothing_else() {
         let engine = Engine::new(BTreeMap::new());
@@ -3972,8 +3978,6 @@ mod remote_catalog_tests {
             vec!["id", "total"]
         );
 
-        // Case-insensitively, like every other name in the session — and answering with the
-        // connection's and the server's own spellings either way, never the caller's.
         let folded = engine
             .describe_remote("PG.PUBLIC.ORDERS".into())
             .await
@@ -3983,13 +3987,9 @@ mod remote_catalog_tests {
         assert_eq!(folded.relation, "public.orders");
 
         for name in [
-            // Not in the connection.
             "pg.public.gone",
-            // Not a database catalog — and not the workspace under a quoted spelling either,
-            // which the catalog list resolves by folding.
             "strata.public.orders",
             "STRATA.public.orders",
-            // Not qualified into one at all: a def's name, which the store answers for.
             "orders",
             "public.orders",
         ] {

@@ -767,6 +767,10 @@ impl<H: Host> StrataTools<H> {
     /// bridge went mid-ask, `NoProject` that there is nothing open — and the engine handle this
     /// method already holds outlives a closed window, so a blanket fallback would answer such a
     /// call successfully and throw the real failure away.
+    ///
+    /// A failed *introspection* is likewise not a not-found: the relation is in the connection's
+    /// listing and the server or the session is what went wrong, so `describe_remote`'s `Err`
+    /// travels as the engine's own sentence.
     pub async fn describe_table(
         &self,
         params: DescribeTableParams,
@@ -775,9 +779,6 @@ impl<H: Host> StrataTools<H> {
         let described = match self.host.describe(&project.root, &params.name).await {
             Ok(described) => described,
             Err(AgentError::NotFound(absent)) => {
-                // A failed introspection is the engine's own sentence, not a not-found: the
-                // relation is in the connection's listing and the server or the session is what
-                // went wrong.
                 let remote = engine
                     .describe_remote(params.name.clone())
                     .await

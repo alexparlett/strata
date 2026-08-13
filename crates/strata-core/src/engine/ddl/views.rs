@@ -55,6 +55,13 @@ const WHAT: &str = "Views";
 /// file), so it goes through [`quote_ident`] rather than straight into the statement — which is
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
+///
+/// A failure comes back through [`view_error`], the table funnel's `register_error` from the
+/// other side: one diagnosis — a relation a database connection no longer has — in front of the
+/// same unwrapping a refused *table* gets. A view's failure lands in the same Problems list, one
+/// row below its cause, so a view carrying DataFusion's wrapper stack beside a table that has had
+/// it peeled would read as two faults worded by two apps. Both halves are no-ops on a message
+/// they do not recognise, which is most of them.
 pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewMeta, String> {
     // **The reserved namespace, backstopped at the funnel**, exactly as `register_external` does
     // it for tables (`docs/STATEMENTS_SPEC.md` §4). The router refuses a `__snap_` target in a
@@ -66,12 +73,6 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         return Err(Blocked::ReservedName.editor_message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    // [`view_error`], the table funnel's `register_error` from the other side: one diagnosis (a
-    // relation a database connection no longer has) in front of the same unwrapping a refused
-    // *table* gets. A view's failure lands in the same Problems list, one row below its cause, so
-    // a view carrying DataFusion's wrapper stack beside a table that has had it peeled would read
-    // as two faults worded by two apps. Both halves are no-ops on a message they do not
-    // recognise, which is most of them.
     let df = ctx
         .sql(&stmt)
         .await

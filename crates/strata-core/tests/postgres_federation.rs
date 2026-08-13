@@ -712,8 +712,6 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         );
     }
 
-    // …and the relation the refusals were about is still there, still readable. This is the half
-    // the fake catalog cannot assert: a refusal is only correct if the name was good.
     assert_eq!(
         rows(
             engine,
@@ -724,8 +722,6 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         vec![vec!["3".to_string()]]
     );
 
-    // A workspace-catalog `__snap_` name is reserved; the same spelling inside the connection is
-    // an ordinary relation the server happens to have called that, and reading it is fine.
     let Err(why) = engine
         .run(
             WsId(1),
@@ -738,7 +734,6 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         panic!("the workspace's snapshot namespace is reserved");
     };
     assert!(why.contains("__snap_"), "{why}");
-    // Not found on the server, and that is the point: it got past the fence and was *looked up*.
     let Err(why) = engine
         .run(
             WsId(1),
@@ -760,15 +755,21 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
 /// a file and a database. A phase of the test above.
 ///
 /// Driven on a **second engine** through the real registration pass, because three of the four
-/// things under test are about replay: a view over a connection must re-register after it on
-/// re-open, its recorded dependencies must tell the two sources apart, and a relation that
-/// vanished server-side must land a sentence naming the connection rather than a planning error.
+/// things under test are about replay. In order: **(a)** dropping the local table names the view
+/// as a dependent, which is the question the `tables`/`remote` split had to keep answerable and
+/// is asked of the engine that holds the plans; **(b)** its recorded dependencies carry the
+/// remote name qualified and the workspace half bare, where recording by bare component would
+/// make both read as tables of this project; **(c)** it re-registers on replay *after* the
+/// connection, which is phase order and the reason connections are the pass's first phase; and
+/// **(d)** with the remote half taken away server-side it settles `Failed` naming the connection.
+/// Nothing on our side observes that removal — the view goes on answering from the plan it
+/// inlined — so the reconciliation is the next pass, and what it must say is which connection no
+/// longer has the relation.
+///
+/// The raw client's driver task is bound as `driver`, not `connection`: it is not a
+/// `ConnectionDef`, and that name would shadow this file's own [`connection`] builder for the
+/// rest of the scope.
 async fn cross_source_views(port: u16, dir: &Path) {
-    // A relation of this phase's own, so dropping it server-side disturbs no other phase.
-    //
-    // `driver`, not `connection`: the driver task the raw client rides is not a `ConnectionDef`,
-    // and binding it under that name shadows this file's own [`connection`] builder for the rest
-    // of the scope.
     let (client, driver) = tokio_postgres::connect(
         &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
         tokio_postgres::NoTls,
@@ -814,11 +815,7 @@ async fn cross_source_views(port: u16, dir: &Path) {
     let engine = Engine::new(BTreeMap::new());
     let outcomes = replay(&engine, dir, &defs).await;
 
-    // (c) It re-registers on replay, after the connection — which is phase order, and the reason
-    // connections are the pass's first phase.
     let spanning = view_meta(&outcomes, "spanning").expect("the cross-source view re-registers");
-    // (b) Its dependencies carry the qualified remote name, and only the workspace half is a
-    // bare one. Recorded by bare component, both halves would read as tables of this project.
     assert_eq!(spanning.tables, vec!["tiers".to_string()]);
     assert_eq!(
         spanning.remote,
@@ -826,8 +823,6 @@ async fn cross_source_views(port: u16, dir: &Path) {
         "the remote half is recorded whole"
     );
 
-    // (a) Dropping the local table names it as a dependent — the question the split had to keep
-    // answerable, asked of the engine that holds the plans.
     let Ok(dropped) = engine
         .run(WsId(1), RunTag(30), "DROP TABLE tiers".to_string(), 200)
         .await
@@ -843,9 +838,6 @@ async fn cross_source_views(port: u16, dir: &Path) {
         report.message
     );
 
-    // (d) The remote half taken away server-side. Nothing on our side observes it — the view goes
-    // on answering from the plan it inlined — so the reconciliation is the next pass, and what it
-    // must say is which connection no longer has the relation.
     client
         .batch_execute("DROP TABLE public.transient;")
         .await

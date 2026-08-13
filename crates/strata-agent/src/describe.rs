@@ -74,6 +74,10 @@ const SOURCES_FULL: usize = 100;
 
 /// Project a [`Described`] into the wire answer, walked as `params` asks.
 ///
+/// The `Remote` arm adds one fact, the connection, and takes its *kind* from the server's own
+/// answer: a remote view is a view, and saying "table" about one would be the very thing that
+/// arm exists to stop the tool doing — claiming something it was not told.
+///
 /// Fallible and parameterized, which is why this is a function rather than the `From` it
 /// replaced: a 'path' that resolves nowhere is a refusal. The Failed and Pending arms ignore
 /// the walk parameters entirely — the state is the answer, and a path refusal on a table
@@ -116,9 +120,6 @@ pub fn describe_result(
             reads,
             ..schema_view(name, &columns, params)?
         }),
-        // The connection is the fact this arm adds; the *kind* is the server's own answer,
-        // because a remote view is a view and saying "table" about one would be the one thing
-        // this arm exists to stop the tool doing — claiming something it was not told.
         Described::Remote {
             name,
             connection,
@@ -621,6 +622,8 @@ mod tests {
     /// **A relation in a database connection's catalog** (DB-03): its columns, the connection
     /// it is in, and the server's own word for what it is — and none of the def facts, because
     /// there is no def. A `not found` here would be false about something the agent can query.
+    ///
+    /// The second half is the kind: the server's word, not a guess, so a remote view is a view.
     #[test]
     fn a_remote_relation_describes_as_itself() {
         let described = Described::Remote {
@@ -639,7 +642,6 @@ mod tests {
             "a remote relation has no def to report facts from"
         );
 
-        // The server's own word, not a guess: a remote view is a view.
         let remote_view = Described::Remote {
             name: "pg.public.big_orders".into(),
             connection: "pg".into(),

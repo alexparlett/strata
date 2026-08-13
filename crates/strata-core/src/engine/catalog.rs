@@ -610,13 +610,16 @@ pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
 /// The relation `raw` says is missing, when it is one inside a **live database connection's**
 /// catalog — `None` for every other failure, workspace names included, where DataFusion's own
 /// wording already names something the user can look at in the catalog pane.
+///
+/// Only the first segment of the resolved name is read, because the catalog is the only part
+/// this has to judge; the rest is the relation's own address inside the database, which the
+/// sentence prints back whole. A catalog name cannot contain a `.` — `PgStore::check_catalog`
+/// admits only `[A-Za-z_][A-Za-z0-9_]*` — so that split cannot land mid-name.
 fn missing_relation(ctx: &SessionContext, raw: &str) -> Option<String> {
     let name = raw
         .split_once(MISSING_PREFIX)
         .and_then(|(_, rest)| rest.split_once(MISSING_SUFFIX))
         .map(|(name, _)| name)?;
-    // The catalog is the first segment, and the only part this has to read: the rest is the
-    // relation's own address inside the database, which the sentence prints back whole.
     let folded = fold_ident(name.split_once('.').map(|(catalog, _)| catalog)?);
     if folded == CATALOG {
         return None;
@@ -1849,6 +1852,9 @@ mod cross_source_tests {
     /// A remote scan is recorded **qualified**, a workspace scan **bare**, and a cross-source
     /// plan carries one of each — which is the whole fix: recorded by bare component, the two
     /// sides of this join would be one indistinguishable `orders`.
+    ///
+    /// The second half asserts the other direction: the workspace's own longer spellings are not
+    /// remote, and do not become a second key for a table already recorded under its bare name.
     #[tokio::test]
     async fn a_remote_scan_is_recorded_qualified() {
         let ctx = session().await;
@@ -1859,9 +1865,6 @@ mod cross_source_tests {
         .await;
         assert_eq!(mixed.tables, vec!["orders".to_string()]);
         assert_eq!(mixed.remote, vec!["pg.public.orders".to_string()]);
-
-        // The workspace's own longer spellings are not remote, and do not become a second key
-        // for a table already recorded under its bare name.
         let spelled = deps(&ctx, "SELECT id FROM strata.public.orders").await;
         assert_eq!(spelled.tables, vec!["orders".to_string()]);
         assert!(spelled.remote.is_empty());
@@ -1890,7 +1893,10 @@ mod cross_source_tests {
         );
     }
 
-    /// The one diagnosis [`view_error`] makes, and the two it declines to.
+    /// The one diagnosis [`view_error`] makes, and the two it declines to: a workspace name
+    /// keeps DataFusion's words, because the catalog pane has a row for it and that is a better
+    /// thing to be pointed at than a refresh, and so does a catalog nothing registered, where
+    /// there is no connection to name.
     #[tokio::test]
     async fn a_missing_remote_relation_names_its_connection() {
         let ctx = session().await;
@@ -1902,8 +1908,6 @@ mod cross_source_tests {
             "'pg.public.gone' is not in the database connection 'pg'. Refresh the catalog to \
              re-read the database"
         );
-        // A workspace name keeps DataFusion's words: the catalog pane has a row for it, which
-        // is a better thing to be pointed at than a refresh.
         assert_eq!(
             view_error(
                 &ctx,
@@ -1911,7 +1915,6 @@ mod cross_source_tests {
             ),
             "Error during planning: table 'strata.public.gone' not found"
         );
-        // And so does a catalog nothing registered — there is no connection to name.
         assert_eq!(
             view_error(
                 &ctx,

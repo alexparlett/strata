@@ -695,10 +695,11 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
 /// (more than three parts, or a part that is not an identifier) resolves nowhere at all and is
 /// therefore reserved by nothing — the arms refuse it in their own words
 /// (`ddl::bare_name`), and a query naming it never plans.
+///
+/// **The prefix is tested first, and only then the qualifier.** This runs per relation per
+/// statement on every re-validation, the answer is almost always no, and the prefix test is seven
+/// bytes wide where normalizing the reference allocates a `TableReference` from a cloned name.
 fn is_reserved(name: &ObjectName) -> bool {
-    // **The prefix first, and only then the qualifier.** This runs per relation per statement on
-    // every re-validation, the answer is almost always no, and the prefix test is seven bytes
-    // wide where normalizing the reference allocates a `TableReference` from a cloned name.
     let named = name
         .0
         .last()
@@ -1647,6 +1648,16 @@ mod tests {
     /// it a question about now. A qualifier naming no catalog resolves nowhere, and the two arms
     /// that could care already say so — `ddl::bare_name` refuses it by name, and a query naming
     /// it does not plan.
+    ///
+    /// The second half holds the other direction — the workspace's own longer spellings are
+    /// still inside the namespace, or the scoping would have opened a way round the fence rather
+    /// than bounding it. **The quoted spellings are the ones that bite**, and they are here
+    /// because the first version of this scoping compared the catalog raw: the catalog list
+    /// resolves by `fold_ident`, so `"STRATA"` reaches the workspace catalog while an unfolded
+    /// compare reads it as somewhere else, which let `SELECT * FROM "STRATA".public.__snap_3`
+    /// resolve and hand back another tab's snapshot with `__strata_ord` on it. The unquoted
+    /// spellings alone could not have caught it, because the parser folds those before the
+    /// predicate ever sees them.
     #[test]
     fn the_reserved_namespace_is_the_workspace_catalog() {
         for sql in [
@@ -1661,16 +1672,6 @@ mod tests {
                 "{sql}: {out:?}"
             );
         }
-        // And the workspace's own longer spellings are still inside it, or the scoping would
-        // have opened a way round the fence rather than bounding it.
-        //
-        // **The quoted spellings are the ones that bite**, and they are here because the first
-        // version of this scoping compared the catalog raw: the catalog list resolves by
-        // `fold_ident`, so `"STRATA"` reaches the workspace catalog while an unfolded compare
-        // reads it as somewhere else — which let `SELECT * FROM "STRATA".public.__snap_3`
-        // resolve and hand back another tab's snapshot with `__strata_ord` on it, the one thing
-        // this fence exists to stop. The unquoted spellings alone could not have caught it,
-        // because the parser folds those before the predicate ever sees them.
         for sql in [
             "SELECT * FROM public.__snap_3",
             "SELECT * FROM strata.public.__snap_3",

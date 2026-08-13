@@ -422,9 +422,12 @@ mod tests {
 
     /// Every statement that names a target: refused, naming the connection, whatever the arm.
     ///
-    /// One test over the list rather than eight, because the point *is* that they answer
-    /// identically — eight tests asserting one sentence would let seven of them keep passing
-    /// while an arm quietly grew a wording of its own.
+    /// One test over the list rather than seven, because the point *is* that they answer
+    /// identically — seven tests asserting one sentence would let six of them keep passing while
+    /// an arm quietly grew a wording of its own.
+    ///
+    /// The `INSERT` takes its source from the target's own columns, so the target's *schema*
+    /// cannot be what refuses it: this is about the target's catalog and nothing else.
     #[tokio::test]
     async fn every_statement_that_names_a_target_refuses_a_remote_one() {
         let (_root, eng) = engine("targets").await;
@@ -432,8 +435,6 @@ mod tests {
         for sql in [
             "CREATE TABLE pg.public.orders (id INT)",
             "CREATE TABLE pg.public.orders AS SELECT 1 AS id",
-            // Its own columns as the source, so the target's schema cannot be what refuses it —
-            // this test is about the target's *catalog* and nothing else.
             "INSERT INTO pg.public.orders SELECT id, total FROM pg.public.orders",
             "DROP TABLE pg.public.orders",
             "DROP VIEW pg.public.orders",
