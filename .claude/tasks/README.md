@@ -255,7 +255,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    DB-04; DB-06 and DB-07 close on the tree.
 2. **Query ergonomics (QE)** — six independent tasks; QE-01 first (it is the headline fix and
    QE-06's guidance names it), QE-05 waits on its permission decision.
-3. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
+3. **Internal tables in the UI (IT)** — the one remaining task, IT-02 (Save results as
+   table); small, sits on nothing open.
+4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
 (Every other workstream is closed: **Connections/W7**, **Polymorphic JSON**, **Agent
 access**, **Editor statements**, the **Assistant** — AS-07 landed 2026-08-11 with AS-03
