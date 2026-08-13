@@ -208,6 +208,21 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   gesture over it, so no surface restates a rule. A palette row was built and then cut.
   **Workstream done.** Hand-rolled rather than Sparkle, deliberately; the workstream README
   records the settled decisions.
+- **Query ergonomics**
+  ([`workstream-query-ergonomics/`](workstream-query-ergonomics/README.md), QE) — ⬜ **all
+  six tasks open, planned 2026-08-13** from field feedback on deep object-keyed JSON (the
+  `sample/config.json` shape) queried through the agent surface. Two engine UDF tasks —
+  the struct family `struct_keys`/`struct_entries`/`struct_get`/`to_json` (QE-01, the whole
+  fix for the dynamic-key story: enumeration off the null bitmaps and access by computed
+  key, Arrow-side first, JSON text only as the heterogeneous-shape fallback), and
+  `regexp_extract_all` (QE-02) — then three agent-surface tasks: `describe_table`
+  collapsing N same-shaped UUID-keyed siblings into one counted shape (QE-03), the stateless
+  idle sweep's 5-minute TTL raised and stated to the model (QE-04), and result export as the
+  spec's reserved first **curated write**, with a permission-model decision for Alex recorded
+  in the task (QE-05); QE-06 lands the guidance + workaround spellings where the model reads
+  them. The workstream README carries the **upstream ledger** — five reported gaps that are
+  DataFusion 54 behaviour (pinned by the federation crates), each with its workaround, so
+  nobody re-diagnoses them.
 - **Internal tables in the UI**
   ([`workstream-internal-tables-ui/`](workstream-internal-tables-ui/README.md), IT) — ⬜
   **both tasks open, planned 2026-08-13** — an internal table can today be created **only** by
@@ -238,13 +253,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    DB-02 ✅, so **DB-03, DB-04 and DB-08 are next** and sit on DB-02 independently (DB-08 needs
    nothing after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after
    DB-04; DB-06 and DB-07 close on the tree.
-2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
+2. **Query ergonomics (QE)** — six independent tasks; QE-01 first (it is the headline fix and
+   QE-06's guidance names it), QE-05 waits on its permission decision.
+3. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
 (Every other workstream is closed: **Connections/W7**, **Polymorphic JSON**, **Agent
 access**, **Editor statements**, the **Assistant** — AS-07 landed 2026-08-11 with AS-03
 behind it — the **Chart** workstream, 09/10/11 built and 05/07 cut on 2026-08-12, and the
-**Updater**, UP-03 landing its surfaces on 2026-08-13. The DB workstream above is the open
-one.)
+**Updater**, UP-03 landing its surfaces on 2026-08-13. The open workstreams above are DB,
+QE and IT.)
 
 ## Sourcing
 
