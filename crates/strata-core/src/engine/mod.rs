@@ -49,6 +49,7 @@ pub mod sql;
 /// apply ([`store::CLIENT_KEYS`]) and refuses the ones it does not ([`store::check_client_config`])
 /// — the same call `connect` makes, so a form and the store cannot disagree about an option.
 pub mod store;
+mod udfs;
 pub mod value_tree;
 
 /// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
@@ -2097,6 +2098,7 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
         tracing::warn!("engine: JSON functions unavailable: {e}");
     }
+    udfs::register(&ctx);
     // DataFusion's seam for `CREATE FUNCTION` (ED-09): `execute_logical_plan` calls the factory
     // and registers what it returns, and without one installed the statement fails with
     // "Function factory has not been configured". Installed on every engine rather than only the
