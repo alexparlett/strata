@@ -400,7 +400,7 @@ impl ScalarUDFImpl for StructEntries {
         let array = struct_arg(&args, self.name())?;
         let structs = array.as_struct();
         let children = unify_children(structs, &value_type)?;
-        let sources: Vec<&dyn Array> = children.iter().map(|c| c.as_ref()).collect();
+        let sources: Vec<&dyn Array> = children.iter().map(AsRef::as_ref).collect();
         let validity: Vec<_> = structs.columns().iter().map(validity).collect();
 
         let mut keys = StringBuilder::new();
@@ -542,7 +542,7 @@ impl ScalarUDFImpl for StructGet {
             .collect();
         let children = unify_children(structs, &value_type)?;
         let missing = new_null_array(&value_type, 1);
-        let mut sources: Vec<&dyn Array> = children.iter().map(|c| c.as_ref()).collect();
+        let mut sources: Vec<&dyn Array> = children.iter().map(AsRef::as_ref).collect();
         sources.push(missing.as_ref());
         let absent = (sources.len() - 1, 0);
         let validity: Vec<_> = structs.columns().iter().map(validity).collect();
