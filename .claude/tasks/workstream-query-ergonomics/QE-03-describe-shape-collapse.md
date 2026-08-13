@@ -12,6 +12,16 @@ the real win over any page-size change: "contentBlocks.<uuid>.variants[].eligibi
 applies to `matching` search results, which today return thousands of hits differing only in
 the key segment, 25 to a page.
 
+Framing, for the "why not just return the schema" question: `describe_table` **is** the Arrow
+schema — but `json_poly` has no Map arm, so data keys become schema fields, and the schema
+itself is the 241k-field pathology the budget machinery exists to survive. The collapse is
+JSON Schema's `additionalProperties` said in the tool's own vocabulary: one value shape, keys
+unconstrained, count stated — without switching output formats (Arrow types outrun JSON
+Schema's, and the path/drill-down contract already works). The deeper alternative — inferring
+map-like objects as Arrow `Map` so every surface shrinks — is recorded against in QE-01's
+considered-and-not-built list (record-vs-map is an inference-time heuristic; DF's Map function
+coverage is its sparsest).
+
 ## Current state (verified 2026-08-13)
 
 - The whole algorithm is `crates/strata-agent/src/describe.rs` (872 lines incl. tests):
