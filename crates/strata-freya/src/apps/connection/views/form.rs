@@ -93,7 +93,10 @@ impl Component for Fields {
         let mut form = Form::new()
             .child(ProviderPicker { key: DiffKey::None }.key(format!("provider·{scope}")))
             .child(Authority { key: DiffKey::None }.key(format!("authority·{scope}")));
-        if provider != ProviderId::Http {
+        // Named, not `!= Http`: [`Auth`] is the two object stores' credential pill and its
+        // fall-through arm is S3's, so anything else reaching it would render AWS's auth modes
+        // over a connection that has none — which is this module's own rule broken.
+        if matches!(provider, ProviderId::S3 | ProviderId::Gcs) {
             form = form.child(Auth { key: DiffKey::None }.key(format!("auth·{scope}")));
         }
         if provider == ProviderId::S3 {
@@ -101,9 +104,12 @@ impl Component for Fields {
                 .child(RegionField { key: DiffKey::None }.key(format!("region·{scope}")))
                 .child(Endpoint { key: DiffKey::None }.key(format!("endpoint·{scope}")));
         }
-        // Every provider's store is built on one HTTP client, so this section is offered whatever
-        // the picker says.
-        form = form.child(ClientOptions { key: DiffKey::None }.key(format!("client·{scope}")));
+        // Every *object store* is built on one HTTP client, so this section is offered whatever
+        // the picker says — but a database speaks no HTTP, and `object_store`'s client keys mean
+        // nothing to it (`ConnectionDef::client_config`).
+        if provider.is_object_store() {
+            form = form.child(ClientOptions { key: DiffKey::None }.key(format!("client·{scope}")));
+        }
         // Unlabelled, unlike every row above it: the note is a standing statement about the
         // whole form rather than an answer to a question, and a label over it would imply there
         // is something here to set.
@@ -119,6 +125,13 @@ impl Component for Fields {
 
 /// **PROVIDER** — explicit, never inferred from a typed URL scheme (spec §1). The one control
 /// that decides which of the rows below exist.
+///
+/// **[`ProviderId::OBJECT_STORES`] until DB-04 builds the database form.** The `Postgres` arm
+/// exists on the model and in the engine (DB-02), but this window has no rows for a catalog
+/// name, a user, an SSL mode or a password yet — so offering it would be a picker option that
+/// produces a def nothing here can fill in or correct. A def that already names one still opens
+/// and round-trips (`ConnectionDraft` carries its settings verbatim); what is missing is the
+/// ability to *choose* it, and that arrives with the fields, in the task that owns them.
 #[derive(PartialEq)]
 struct ProviderPicker {
     key: DiffKey,
@@ -140,7 +153,7 @@ impl Component for ProviderPicker {
         let current = ctx.draft.read().provider;
 
         let mut pill = SegmentedToggle::new().form();
-        for id in ProviderId::ALL {
+        for id in ProviderId::OBJECT_STORES {
             pill = pill.child(
                 // `ProviderId::label`, not a word typed here: the pane's row badge names
                 // providers from the same table, and a name written twice is a name that can

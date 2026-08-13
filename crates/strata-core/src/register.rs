@@ -1,5 +1,5 @@
 //! The **project registration pass** (AA-01) — one implementation of "register the
-//! defs on the engine": connect each object store, register each table, then create each
+//! defs on the engine": connect each connection, register each table, then create each
 //! view, and report what the engine answered per def. Extracted from the Freya app's
 //! project-open hook so a headless host (AA-05) can run the same sequence with no store
 //! to fold into; the app's hook consumes [`register_pass`] and keeps only what is
@@ -52,9 +52,11 @@ const TABLE_CONCURRENCY: usize = 8;
 /// does not abort the pass; its outcome is the row.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RegOutcome {
-    /// A connection's object store went in, or the connection could not describe one
-    /// ([`Engine::connect`]). Nothing is *learned* by connecting — a store is registered,
-    /// not inferred — so the payload is the answer itself.
+    /// A connection's object store or database catalog went in, or the connection could not
+    /// describe one ([`Engine::connect`]). Nothing the *store* learns is reported here — an
+    /// object store is registered, not inferred, and a database's enumeration is read back
+    /// through [`Engine::db_listing`] rather than folded onto a row — so the payload is the
+    /// answer itself.
     Connection {
         /// The connection's identity: [`ConnectionDef::url`], **not** its bucket. The bucket
         /// alone is not unique — `s3://lake` and `gs://lake` are two connections and two
@@ -136,7 +138,8 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 
 /// Connect `connections`, register `tables`, then create `views` on `engine`, handing
 /// `settled` what it answered for each. **Ordering is the contract**: connections first
-/// (a table's source path cannot resolve to an object store that isn't registered — see
+/// (a table's source path cannot resolve to an object store that isn't registered, and a
+/// view over `pg.public.orders` cannot plan before that catalog exists — see
 /// [`Engine::connect`]); then tables (a view's SQL reads tables), **concurrently and in no
 /// particular order** ([`TABLE_CONCURRENCY`]); then views by fixed-point rounds — DataFusion
 /// requires a view's dependencies to exist when its `CREATE VIEW` plans, so from cold,
@@ -148,9 +151,13 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// ([`view_order`]) or an outer view inlines a stale inner plan.
 ///
 /// Connections need no ordering among themselves and are not retried: each registers one
-/// bucket and reads nothing the pass provides, so a failure is final for this pass and its
-/// only consequence is that tables over that bucket fail too — which they then report on
-/// their own rows, saying no object store was found.
+/// bucket or one catalog and reads nothing the pass provides, so a failure is final for this
+/// pass. What that failure *costs* differs by kind, and the difference is worth knowing when
+/// reading a project's rows. An object store that did not register takes the tables over its
+/// bucket with it, and each of those says so on its own row ("no object store found"). A
+/// **database** has no def rows at all — its relations are discovered, not declared — so a
+/// refused one leaves nothing failed except the connection's own row and whatever *views*
+/// read across it, which fail in the view phase naming a table that does not resolve.
 ///
 /// `settled` is called with each outcome as the engine answers it — the app folds
 /// catalog rows and log entries per answer rather than after the whole pass, and a

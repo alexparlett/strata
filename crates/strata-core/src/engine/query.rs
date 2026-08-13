@@ -26,16 +26,15 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
-use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{Array, ArrayRef, UInt64Array};
 use datafusion::arrow::compute::concat_batches;
-use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use datafusion::arrow::ipc::CompressionType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::Column;
 use datafusion::execution::options::{ArrowReadOptions, ReadOptions};
-use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
@@ -371,6 +370,38 @@ fn ordinal_name(schema: &Schema) -> String {
 /// The unescalated ordinal column name (`docs/SNAPSHOT_SPEC.md` §9).
 const ORDINAL_BASE: &str = "__strata_ord";
 
+/// The spool file's schema: the result's own, with the ordinal appended last.
+///
+/// `UInt64` and non-nullable, which is what the plan-level `row_number()` this replaced
+/// produced — so the file's shape, and every reader's view of it, is unchanged.
+fn ordinal_schema(schema: &SchemaRef, ord: &str) -> SchemaRef {
+    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new(ord, DataType::UInt64, false));
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// `batch` with the ordinal appended, numbering its rows from `written` — the count already
+/// spooled, so the value is the row's position in the file.
+///
+/// **1-based**, which is what the `row_number()` this replaced produced. Nothing reads the
+/// values (every reader only orders by them), but the file's shape is described in
+/// `docs/SNAPSHOT_SPEC.md` §9 and there is no reason to make that description false.
+///
+/// One allocation per batch, of a contiguous range — as cheap as an Arrow column gets; the
+/// user's own columns are carried over by reference.
+fn with_ordinal(
+    batch: &RecordBatch,
+    schema: &SchemaRef,
+    written: u64,
+) -> Result<RecordBatch, String> {
+    let first = written + 1;
+    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+    columns.push(Arc::new(UInt64Array::from_iter_values(
+        first..first + batch.num_rows() as u64,
+    )));
+    RecordBatch::try_new(Arc::clone(schema), columns).map_err(|e| e.to_string())
+}
+
 /// Run the query **once**, streaming every batch straight to a fresh IPC snapshot
 /// on disk while counting the exact total and capturing the first page — no separate
 /// `COUNT`, no re-read, bounded memory. On failure the partial snapshot is cleaned up
@@ -521,25 +552,34 @@ async fn materialize(
     // for concatenating page 1 into its `RecordBatch`.
     let arrow_schema = df.schema().inner().clone();
 
-    // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9) rides the spool **query itself**:
-    // `row_number() OVER ()` numbers the exact single stream the writer consumes. Measured
-    // twice before trusting it: the numbering is contiguous on the racy over-threshold plan
-    // shape (and a user's ORDER BY survives beneath the window), and the window costs the
-    // spool nothing — the plan keeps its RepartitionExec, so the expensive projection still
-    // parallelises and only the numbering rides the merged stream. `tests/snapshot_order.rs`
-    // re-measures the ordering property on every run, which is the standing guard should a
-    // planner upgrade ever change window semantics. Added *after* `columns` and
-    // `arrow_schema` were captured, so the user-visible schema never contains it — the file
-    // does, and every reader orders by it and projects it away. (`with_column` would replace
-    // a user column of the same name, but `ordinal_name` escalated around every name in this
-    // result, so the replace branch is unreachable.)
+    // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9) is **written, not planned**: the writer
+    // numbers each batch as it spools it, from the running row count. It is therefore the
+    // literal index of the row in the file, which is exactly what every reader's
+    // `ORDER BY __strata_ord` means — the property holds by construction rather than by
+    // measurement. `tests/snapshot_order.rs` still pins it, now as confirmation.
     //
-    // Two plans cannot carry it, and both spool **without** one (`ord: None`) — the
-    // pre-ordinal read behavior, which every reader handles:
-    // - An `EXPLAIN` / `EXPLAIN ANALYZE`. DataFusion requires those at the plan root, so a
-    //   window on top fails the whole run with "Explain must be root of the plan" — and the
-    //   managed-DDL policy promises the editor can run them. Their output is a handful of
-    //   plan rows, nowhere near the scan-split threshold where order goes nondeterministic.
+    // **It used to be `row_number() OVER ()` in the plan, and that was wrong twice over.**
+    // Wrong in principle: a plan-level window is the *query's* to evaluate, so a query over a
+    // federated database (DB-02) had our snapshot bookkeeping pushed across the wire for
+    // Postgres to compute — numbering the remote result rather than the stream this loop
+    // consumes, which is the one thing the ordinal is defined as. Wrong in practice: it also
+    // took the scan into DataFusion 54's unparser along a derived-table path that forgets to
+    // rebase the outer column qualifiers, so the remote statement named a relation its own
+    // `FROM` had aliased away and **every** federated read failed with Postgres's
+    // `42P01`. Numbering at write time cannot reach a plan, an optimizer rule or an unparser
+    // at all, for this database arm or any later one. (A user's *own* window over a remote
+    // table still meets that unparser defect; `tests/postgres_federation.rs` pins it as a
+    // known gap, the way DB-01 pinned `IN (subquery)`.)
+    //
+    // Appended *after* `columns` and `arrow_schema` were captured, so the user-visible schema
+    // never contains it — the file does, and every reader orders by it and projects it away.
+    //
+    // Two results still spool **without** one (`ord: None`) — the pre-ordinal read behavior,
+    // which every reader handles:
+    // - An `EXPLAIN` / `EXPLAIN ANALYZE`. The planning constraint that forced this is **gone**
+    //   with the window (nothing sits on the plan root any more); the exclusion stays because
+    //   the ordinal would buy such a result nothing — a handful of plan rows, nowhere near the
+    //   scan-split threshold where read order goes nondeterministic.
     // - A result with duplicate column names (`SELECT a.i, b.i FROM … JOIN …`). The
     //   registered table resolves columns by name, so a typed column appended after two
     //   same-named ones makes every later read mis-map the second onto the ordinal's slot
@@ -554,16 +594,20 @@ async fn materialize(
         columns.iter().all(|c| seen.insert(c.name.as_str()))
     };
     let ord = (plain && unique).then(|| ordinal_name(&arrow_schema));
-    let df = match &ord {
-        Some(ord) => df
-            .with_column(ord.as_str(), row_number())
-            .map_err(|e| e.to_string())?,
-        None => df,
-    };
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
-    // The window appends its column last, so the user's columns are exactly the captured
-    // schema's width — everything user-facing below reads this projection of each batch.
-    let user_columns: Vec<usize> = (0..arrow_schema.fields().len()).collect();
+    // The spool file's schema, when there is an ordinal: the result's own plus the ordinal
+    // column. Built from the **first batch's** schema rather than from `arrow_schema` so the
+    // writer is handed exactly the schema its batches carry; `None` means this result spools
+    // without an ordinal, so the slot has one meaning and the write below needs no second
+    // condition to read it by.
+    //
+    // **This is where a schema disagreement now surfaces.** `RecordBatch::try_new` validates
+    // (exact types, and no nulls under a non-nullable field) where `FileWriter::write` validates
+    // nothing at all, so a stream whose later batch contradicts its own declared schema fails
+    // the run here rather than spooling a file whose schema lies about its contents. That is a
+    // deliberate change of behaviour and the repo's own bar for it — fail loud on an
+    // unrecoverable fault — but it is genuinely new, so it is stated rather than implied.
+    let mut ord_schema: Option<SchemaRef> = None;
 
     let mut writer: Option<FileWriter<File>> = None;
     let mut total = 0usize;
@@ -572,22 +616,42 @@ async fn materialize(
     let mut page1_batches: Vec<RecordBatch> = Vec::new();
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| e.to_string())?;
+        // The stream's own width, which everything user-facing below indexes by. It is the
+        // declared schema's in every plan DataFusion can produce; taking the minimum is what
+        // keeps a disagreement an odd result rather than an index-out-of-bounds panic on the
+        // engine task — the guard the deleted `batch.project(&user_columns)` used to provide.
+        let width = batch.num_columns().min(nulls.len());
         if writer.is_none() {
+            let schema = match &ord {
+                Some(ord) => {
+                    let schema = ordinal_schema(&batch.schema(), ord);
+                    ord_schema = Some(Arc::clone(&schema));
+                    schema
+                }
+                None => batch.schema(),
+            };
             let out = File::create(&file).map_err(|e| e.to_string())?;
             writer = Some(
-                FileWriter::try_new_with_options(out, &batch.schema(), ipc_write_options()?)
+                FileWriter::try_new_with_options(out, &schema, ipc_write_options()?)
                     .map_err(|e| e.to_string())?,
             );
         }
         if let Some(w) = writer.as_mut() {
-            w.write(&batch).map_err(|e| e.to_string())?;
+            // Numbered from the rows already written, so the ordinal is the row's index in
+            // the file — see the `ord` comment above.
+            let spooled = match &ord_schema {
+                Some(schema) => &with_ordinal(&batch, schema, total as u64)?,
+                None => &batch,
+            };
+            w.write(spooled).map_err(|e| e.to_string())?;
         }
-        let user = batch.project(&user_columns).map_err(|e| e.to_string())?;
-        total += user.num_rows();
-        for (i, col) in user.columns().iter().enumerate() {
+        // The stream carries the user's columns and nothing else now, so everything
+        // user-facing reads the batch itself rather than a projection of it.
+        total += batch.num_rows();
+        for (i, col) in batch.columns().iter().take(width).enumerate() {
             nulls[i] += col.null_count() as u64;
         }
-        append_batch_capped(&user, &mut page1, &mut page1_batches, page_size, fmt)?;
+        append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, fmt)?;
     }
 
     // Only register a snapshot if the query produced rows; an empty result has

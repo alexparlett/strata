@@ -107,9 +107,11 @@ flowchart LR
   registration — and is why its `LOCATION` names a **connection** the project already has rather
   than describing a bucket of its own.
 - A statement's outcome is a value the app folds — a `StatementReport` carrying a `StoreEffect` —
-  never something read back out of DataFusion. Strata owns the catalog and schema providers for
-  identity and visibility only; lifecycle is intercepted in front of `ctx.sql`, because a sync
-  `register_table` with no caller identity can neither spool a CTAS nor authorize a `DROP`.
+  never something read back out of DataFusion. Strata owns the catalog list, catalog and schema
+  providers for identity and visibility only; lifecycle is intercepted in front of `ctx.sql`,
+  because a sync `register_table` with no caller identity can neither spool a CTAS nor authorize a
+  `DROP`. The **workspace** catalog is one catalog with one flat, bare-name schema; a database
+  connection registers a sibling catalog beside it, with as many schemas as the server has.
 
 The statement surface and its policy tables are [STATEMENTS_SPEC.md](STATEMENTS_SPEC.md).
 
@@ -188,9 +190,14 @@ vocabulary, identity model and UI bridge are [AGENT_ACCESS_SPEC.md](AGENT_ACCESS
 
 - **Registration** — a table def names its sources (files, directories, globs; local or
   bucket-relative through a named connection) and its per-format read options; the registration
-  pass connects object stores first, then tables, then views to a fixed point. Failures land on
+  pass connects connections first, then tables, then views to a fixed point. Failures land on
   the def's row, visible with their reason. [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md),
   [IMPORT_OPTIONS.md](IMPORT_OPTIONS.md).
+- **Databases** — a PostgreSQL connection registers a DataFusion **catalog** instead of an object
+  store, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
+  and a same-source subplan is pushed back to the server as one statement
+  (`datafusion-federation`). Discovery gets catalogs; declaration gets defs.
+  [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md).
 - **Export** — the export window renders an `ExportSpec` into one `COPY … TO` over the pinned
   snapshot, with per-format options and Hive partitioning. [EXPORT_OPTIONS.md](EXPORT_OPTIONS.md).
 

@@ -222,10 +222,13 @@ async fn a_user_column_named_like_the_ordinal_survives() {
 }
 
 /// **A query that already has its own partitioned window keeps it, and the ordinal stays
-/// global.** The hazard is specific: if the appended `row_number() OVER ()` were merged into
-/// the user's window spec, the ordinal would number *within their partitions* — duplicates —
-/// and ordered paging over it would be nondeterministic among ties. Page contents in exact
-/// result order transitively prove the ordinal stayed one global sequence.
+/// global.** The hazard this was written for is gone by construction: the ordinal used to be a
+/// `row_number() OVER ()` appended to the *plan*, where it could in principle be merged into the
+/// user's window spec and number within their partitions. It is now numbered by the writer from
+/// the count already spooled (`docs/SNAPSHOT_SPEC.md` §9), so nothing can merge it into anything.
+/// The assertion is kept because it still pins the half that matters and always did — a user's
+/// own window is evaluated as they wrote it, and the ordinal is one global sequence over the
+/// stream the writer consumes.
 #[tokio::test]
 async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
     let eng = Engine::new(Default::default());
@@ -326,9 +329,12 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
     }
 }
 
-/// **A typed `EXPLAIN` still runs.** DataFusion requires Explain/Analyze at the plan root,
-/// so those plans spool without an ordinal rather than failing under the window — a
-/// statement class the managed-DDL policy promises the editor can run.
+/// **A typed `EXPLAIN` still runs, and spools without an ordinal.** The reason is no longer a
+/// constraint: DataFusion requires Explain/Analyze at the plan root, which is what made the old
+/// plan-level window fail them outright, and the writer-side ordinal has no such problem. The
+/// exclusion is now a choice — a handful of plan rows cannot reach the nondeterminism the ordinal
+/// exists for — so what this pins is the statement class the managed-DDL policy promises the
+/// editor can run, and that its pages read back.
 #[tokio::test]
 async fn explain_runs_and_pages_without_an_ordinal() {
     let eng = Engine::new(Default::default());

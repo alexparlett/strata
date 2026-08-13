@@ -240,12 +240,18 @@ impl ConfigureDraft {
     /// reader ([`strata_model::Provider`]). A def naming a connection this project no longer has
     /// keeps the reference and opens on the first provider; `Save` is blocked until it is
     /// re-pointed (`views::footer`), which is the same treatment a format with no reader gets.
+    ///
+    /// A def naming a **database** connection gets that same treatment, and the filter below is
+    /// what gives it: a table reads files, the TYPE pill offers only
+    /// [`ProviderId::OBJECT_STORES`], and a draft opening on a provider the pill cannot render
+    /// would show no segment selected while the picker under it offered database URLs.
     pub fn of(def: &TableDef, connections: &[ConnectionDef]) -> Self {
         let provider = def
             .connection
             .as_deref()
             .and_then(|url| connections.iter().find(|c| c.url() == url))
             .map(|c| c.provider.id())
+            .filter(|id| id.is_object_store())
             .unwrap_or(ProviderId::S3);
         let mut draft = Self {
             name: def.name.clone(),
@@ -801,6 +807,10 @@ impl ConfigureDraft {
 /// The URL is both the value and the label: it is the project's identity for a connection (the
 /// pane, the registration outcome and the forget confirm all name one this way), and a bucket
 /// alone cannot tell `s3://lake` from `gs://lake`.
+///
+/// `provider` is always one of [`ProviderId::OBJECT_STORES`] here, because the TYPE pill above
+/// this picker is the only thing that sets it and that is what it offers: a table reads *files*,
+/// and a database connection registers no object store to read them from.
 pub fn connections_for(connections: &[ConnectionDef], provider: ProviderId) -> Vec<String> {
     connections
         .iter()

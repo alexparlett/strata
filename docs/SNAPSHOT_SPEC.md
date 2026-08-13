@@ -310,36 +310,44 @@ and the freya-query page cache then **freezes** whichever answer a read happened
 views can hold contradictory copies of one page. §1 promises stable paging; without an order key
 the read path cannot deliver it.
 
-**The fix: order is a column, written by the spool query itself.** `materialize` adds
-`row_number() OVER ()` to the plan it streams — a **UInt64, 1-based** column (nothing reads its
-values, only their order), aliased `__strata_ord` — **after** `QueryOutput::columns` is
-captured, so the user-visible schema never contains it. The window
-sits on the same single stream the writer consumes, and therefore numbers rows in exactly the
-order they are written: measured on the racy over-threshold plan shape (contiguous across 3M
-rows; a user's `ORDER BY` preserved beneath the window; and **no spool cost** — the plan keeps
-its `RepartitionExec`, so the projection still parallelises and only the numbering rides the
-merged stream, timed at parity over a CPU-heavy 6M-row spool), and **re-measured on every test
-run** by the regression suite below, which is the standing guard should a planner upgrade ever
-change window ordering semantics. If the result already has a
-column of that name, the name escalates by prefix (`___strata_ord`, …) until free — the chosen
-name rides in the write pass's `SnapshotStats`, beside the null counts, with exactly the
-snapshot's lifetime.
+**The fix: order is a column, written by the writer as it spools.** `materialize` appends
+`__strata_ord` — a **UInt64, 1-based** column (nothing reads its values, only their order) — to
+each batch on its way into the IPC file, numbered from the count already written, and **after**
+`QueryOutput::columns` is captured, so the user-visible schema never contains it. The value is
+therefore the row's literal position in the file, which is precisely what every reader's
+`ORDER BY __strata_ord` means: the property holds by construction rather than by measurement,
+and the regression suite below pins it as confirmation. If the result already has a column of
+that name, the name escalates by prefix (`___strata_ord`, …) until free — the chosen name rides
+in the write pass's `SnapshotStats`, beside the null counts, with exactly the snapshot's
+lifetime.
 
-*Considered and replaced:* the first implementation stitched an `Int64` array into each batch
-by hand inside the writer loop. Same guarantee, but expressed below the query layer — review
-asked why the order wasn't simply part of the query, the window form was measured to hold, and
-the hand assembly (schema extension, per-batch array construction) went. What the swap leans on
-that the stitching did not — the window preserving its input order — is exactly what the
-regression suite pins.
+*Tried in between, and withdrawn:* for a time this was `row_number() OVER ()` added to the plan
+(`with_column`) rather than to the batches. It was adopted because review asked why the order
+was not simply part of the query, and it was measured to hold — contiguous across 3M rows on the
+racy over-threshold shape, a user's `ORDER BY` preserved beneath the window, and no spool cost,
+since the plan kept its `RepartitionExec` and only the numbering rode the merged stream.
+
+What that measurement could not cover is a *federated* result (DB-02). A plan-level window is
+the **query's** to evaluate, so a read over a remote database had Strata's snapshot bookkeeping
+pushed across the wire for Postgres to compute — numbering the remote result rather than the
+stream the writer consumes, which is the one thing the ordinal is defined as. It also dragged
+the scan into DataFusion 54's unparser along a derived-table path that does not rebase outer
+column qualifiers, so the generated statement named a relation its own `FROM` had aliased away
+and **every** federated read failed with Postgres's `42P01` — a defect in the SQL we emit, not
+in anything Postgres refuses. Numbering at write time cannot reach a plan, an optimizer rule or
+an unparser at all, for that database arm or any later one, and it makes the ordinal's
+definition tautological instead of measured. The window's one genuine advantage — being visible
+to the planner — was never used by anything.
 
 **Two plans spool without an ordinal** (`SnapshotStats.ord: None`), and their reads are
 unordered exactly as every snapshot's were before ordinals existed — both are small or
 degraded shapes where that is the honest behavior:
 
-- An `EXPLAIN` / `EXPLAIN ANALYZE`: DataFusion requires those at the plan root, so a window on
-  top fails the whole run — and the statement router's Query arm promises the editor can run
-  them (`docs/STATEMENTS_SPEC.md`). Their output is a handful of plan rows, nowhere near the
-  split threshold.
+- An `EXPLAIN` / `EXPLAIN ANALYZE`. This was once a hard constraint — DataFusion requires those
+  at the plan root, so the window that used to carry the ordinal failed the whole run, and the
+  statement router's Query arm promises the editor can run them (`docs/STATEMENTS_SPEC.md`).
+  Numbering at write time removes the constraint; the exclusion stays because it would buy such
+  a result nothing — a handful of plan rows, nowhere near the split threshold.
 - A result with **duplicate column names** (`SELECT a.i, b.i FROM … JOIN …`): the registered
   table resolves columns by name, so a typed column appended after two same-named ones made
   every later read mis-map the second onto the ordinal's slot and fail. Ordinal-less, such a

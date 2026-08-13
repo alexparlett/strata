@@ -29,6 +29,11 @@ mod arrow_stats;
 mod catalog;
 mod chart;
 pub mod config;
+/// The all-or-nothing contract a connection registers under, shared by [`store`] and [`db`].
+mod connect;
+/// `pub` for the surfaces that read a live database's shape — the data-sources tree, the schema
+/// picker and completion all go through [`Engine::db_listing`], whose vocabulary is here.
+pub mod db;
 mod ddl;
 mod explain;
 pub mod export;
@@ -114,16 +119,19 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
 use crate::engine::plan::QueryPlan;
+use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
+use db::Databases;
 use ddl::StrataFunctionFactory;
 use functions::Functions;
-use providers::StrataCatalogProvider;
+use providers::{StrataCatalogList, StrataCatalogProvider};
 use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
     ReadPolicy,
 };
 use sql::{FunctionCatalog, PreparedSym};
 use strata_model::{
-    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId, Trend,
+    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, PgPassword, Provider, QueryOutput,
+    SnapshotId, TabId, Trend,
 };
 
 /// A workspace's stable identity — the query tab that owns a run and its current
@@ -338,6 +346,10 @@ pub struct Engine {
     internal: InternalTables,
     /// Which connections this engine has been told about — see [`Connections`].
     connections: Connections,
+    /// The database connections that are **live**: their pools and the catalogs they registered
+    /// (DB-02) — see [`Databases`]. A field on the engine rather than something a task holds,
+    /// because a pool owns bb8's driver tasks and the engine's `Drop` has to be what ends them.
+    databases: Databases,
     /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
     /// Default on a fresh engine, which is what makes a restart clear the session.
     session: SessionScope,
@@ -473,6 +485,7 @@ impl Engine {
             data_root: Mutex::default(),
             internal: InternalTables::default(),
             connections: Connections::default(),
+            databases: Databases::default(),
             session: SessionScope::default(),
         }
     }
@@ -1407,40 +1420,102 @@ impl Engine {
 
     // --- catalog ----------------------------------------------------------
 
-    /// Register the object store one [`ConnectionDef`] describes, so tables can be
-    /// registered over its bucket (W7).
+    /// Register what one [`ConnectionDef`] describes: an **object store**, so tables can be
+    /// registered over its bucket (W7), or a **database catalog**, so its relations resolve as
+    /// `pg.public.orders` (DB-02).
     ///
     /// **Before any table that reads it.** DataFusion resolves no remote scheme on its own:
     /// without this, a source path under `s3://acme-lake` fails its registration with "No
     /// suitable object store found" no matter how well-formed the def is. That ordering is
     /// [`register_pass`](crate::register::register_pass)'s, so every replay of a project gets
-    /// it.
+    /// it — and a database connection needs exactly the same phase for a different reason, since
+    /// a view over `pg.public.orders` cannot be created before the catalog exists.
     ///
-    /// `Err` means nothing was registered, and carries what to fix — a missing region, a
-    /// profile the credential chain does not answer for. See [`store::connect`].
+    /// **The provider decides the arm, and there is one spawn either way**, so the two cannot
+    /// drift apart on which runtime they ride: bb8 spawns a driver task per pooled connection,
+    /// and those have to land on the engine's own runtime or the engine's `Drop` does not end
+    /// them.
+    ///
+    /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
+    /// the credential chain does not answer for, a server that refused the user, a password this
+    /// machine does not have. See [`store::connect`] and [`db::connect`].
     pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
         let ctx = self.ctx.clone();
         // Noted **whatever the outcome** — see [`Connections`]. A def that could not describe a
         // store is still a connection this project has, and a typed statement over its bucket is
         // one this engine should judge on the def rather than on today's credentials.
-        self.connections.note(&conn.url());
-        self.rt()
-            .spawn(async move { store::connect(&ctx, &conn).await })
+        let url = conn.url();
+        self.connections.note(&url);
+        let dbs = self.databases.clone();
+        let settled = self
+            .rt()
+            .spawn(async move {
+                match conn.provider.clone() {
+                    Provider::Postgres(pg) => {
+                        // The password seam is [`db::connect`]'s argument, and this is the only
+                        // caller that builds the keystore-backed one: the reference is derived
+                        // from the connection's URL, and the value is read per pool connection
+                        // and never held.
+                        let passwords = match pg.password {
+                            PgPassword::None => None,
+                            PgPassword::Keystore => {
+                                Some(Arc::new(db::KeystorePassword::new(conn.url()))
+                                    as Arc<dyn PasswordProvider>)
+                            }
+                        };
+                        db::connect(&ctx, &dbs, &conn, &pg, passwords).await
+                    }
+                    _ => store::connect(&ctx, &conn).await,
+                }
+            })
             .await
-            .map_err(|e| format!("connect task failed: {e}"))?
+            .map_err(|e| format!("connect task failed: {e}"))?;
+        // **A Forget that landed while this was dialling wins.** `disconnect` is synchronous and
+        // this is a spawned task, so a confirm during a slow connect finds nothing registered yet
+        // and takes nothing back — and then this registers a store or a catalog for a def that no
+        // longer exists, which no later gesture can name because the gesture is given the def's
+        // URL. `Connections` is the record of membership and `disconnect` removes it, so its
+        // absence here is exactly "this connection was forgotten mid-flight"; taking the
+        // registration straight back out is the whole fix, and it is idempotent for the ordinary
+        // case where nothing was registered at all.
+        if self.connections.resolve(&url).is_none() {
+            self.disconnect(&url);
+        }
+        settled
     }
 
-    /// Forget the object store a connection registered — the Forget gesture's engine half
-    /// (W7), addressed by the same [`ConnectionDef::url`] [`connect`](Self::connect) put it in
-    /// under.
+    /// Forget what a connection registered — the Forget gesture's engine half (W7), addressed
+    /// by the same [`ConnectionDef::url`] [`connect`](Self::connect) put it in under.
     ///
     /// Synchronous, like [`deregister`](Self::deregister) and for the same reason: DataFusion
     /// just drops the entry from its registry, so there is no work to spawn and no answer to
-    /// await. Nothing is reported — see [`store::disconnect`] for why neither of its no-ops is
-    /// a fault.
+    /// await. Dropping the pool is synchronous too — bb8's driver tasks end with it, on the
+    /// runtime they were spawned on.
+    ///
+    /// **Both arms are asked**, because a URL is all this is given — the def is gone by the time
+    /// a Forget reaches here. Neither is a fault when it does nothing: see [`store::disconnect`]
+    /// and [`db::disconnect`].
     pub fn disconnect(&self, url: &str) {
         self.connections.forget(url);
         store::disconnect(&self.ctx, url);
+        db::disconnect(&self.ctx, &self.databases, url);
+    }
+
+    /// What a live database connection registered: the catalog it is addressed by, and its
+    /// schemas **scoped and tagged** against the def's own [`PgStore::schemas`] — `None` for a
+    /// connection that is not a live database.
+    ///
+    /// The one read the data-sources tree, the schema picker and completion share, so no
+    /// consumer re-derives visibility from the def. It reads the connect-time enumeration
+    /// rather than asking the server, which is what makes it free to call: a ↻ re-runs the
+    /// registration pass, and *that* is the refresh.
+    ///
+    /// Synchronous and not on the runtime, because there is no I/O in it.
+    pub fn db_listing(&self, conn: &ConnectionDef) -> Option<(String, Vec<db::SchemaListingView>)> {
+        let Provider::Postgres(pg) = &conn.provider else {
+            return None;
+        };
+        db::listing(&self.databases, conn, pg)
     }
 
     /// The AWS profile names this machine's own configuration defines — what the connection
@@ -1713,6 +1788,14 @@ impl Drop for Engine {
         // The window is going: whoever still holds the flag must not be told we're busy.
         self.publish_inflight(&lc);
         drop(lc);
+        // **The pools go before the runtime does.** A `bb8` connection's drop can reach
+        // `tokio::spawn` on its broken-or-expired branch, which panics once the runtime is
+        // shutting down — and field drops run *after* this body, in declaration order, with
+        // `ctx` (which reaches every pool through the registered catalog provider) ahead of
+        // `databases`. So neither field is the last strong reference on its own; clearing the
+        // registered catalogs here is what makes the pools drop while the runtime they ride is
+        // still up. A no-op for a project with no database connection.
+        self.databases.shutdown(&self.ctx);
         // Context-safe shutdown: don't block on worker threads (a plain `Runtime` drop
         // panics inside another async context); aborted tasks are dropped in the background.
         if let Some(rt) = self.rt.take() {
@@ -1844,6 +1927,13 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
         .with_config(config)
         .with_runtime_env(rt)
         .with_default_features()
+        // **Our catalog list, because DataFusion's cannot remove a catalog** (DB-02):
+        // `CatalogProviderList` has `register_catalog` and no counterpart, so forgetting a
+        // database connection could not make its catalog stop resolving. Installed on the
+        // *builder* rather than after the fact, so the workspace catalog the builder registers
+        // below lands in this list rather than in one that is then thrown away. It refuses
+        // nothing — see `providers`.
+        .with_catalog_list(Arc::new(StrataCatalogList::default()))
         // Federation (DB workstream): DataFusion's own default rule list with
         // `FederationOptimizerRule` inserted immediately after `scalar_subquery_to_join`, which
         // is where it has to sit — scalar subqueries must be decorrelated before the rule walks
@@ -1924,7 +2014,11 @@ fn registered_function(ctx: &SessionContext, name: &str) -> bool {
 }
 
 /// The catalog + schema **we own** — see [`build_context`].
-const CATALOG: &str = "strata";
+///
+/// The catalog's name is `strata-model`'s, because a database connection's own catalog name may
+/// not be it ([`strata_model::PgStore::check_catalog`]) and a name written down twice is a name
+/// that can disagree.
+const CATALOG: &str = strata_model::WORKSPACE_CATALOG;
 const SCHEMA: &str = "public";
 
 /// Re-initialise the UDFs that read `ConfigOptions` **when they were registered**, after a write

@@ -12,6 +12,33 @@ what the first draft of this task put on the Connections pane.
 
 ## Current state (verified 2026-08-13)
 
+**What DB-02 landed in this window, and what it deliberately left** (2026-08-13):
+
+- `ProviderPicker` iterates **`ProviderId::OBJECT_STORES`**, not `ALL`. Flipping it to `ALL` is
+  this task's first line — and nothing else will remind you: `ProviderId::ALL`'s guard test no
+  longer claims anything about a picker (it cannot, since neither picker reads `ALL`), so the
+  suite stays green with Postgres unselectable. `ConnectionDraft::of` clamps a non-object-store
+  def to `S3` for the same reason; that clamp comes **out** when the rows land, or a stored
+  Postgres connection opens as an S3 one.
+  (DB-02 narrowed it because offering `PG` before the rows exist produces a def with no fields
+  to fill in.)
+- `ConnectionDraft` already carries **`pg: PgStore`**, whole and unedited, and `of`/`def`
+  round-trip it — so a hand-written def survives the window today. This task edits that field in
+  place; it does not introduce it.
+- The CLIENT OPTIONS **validator** is gated on `is_object_store()` to match its row. When this
+  task adds rows it must keep the two in step: a rule with no control behind it blocks Save with
+  nothing on screen to clear.
+- `blocker`'s `ProviderId::Postgres` arm already asks `PgStore::check_catalog` (shape, and not
+  `strata`) and `PgStore::check_user`. What it does **not** ask is `check_catalog_name` against the
+  project's other connections — that needs the def list, so it belongs in the **footer**, beside
+  the URL clash, exactly as this task's Build says.
+- `address_label` / `address_noun` answer `SERVER` / `server`, and `set_address` strips a pasted
+  scheme like every non-HTTP provider. `note()` has the keystore sentence.
+- The password funnel is `strata_core::secret`: `SecretRef::derived(strata_core::engine::db::PG_PASSWORD,
+  &def.url())` for put/get/delete, and **`secret::migrate_derived(&old, &new)`** for an identity
+  move (address or user), which is built and is the one place that ordering lives. There is no
+  `forget_derived` — a Forget is `SecretRef::derived(…).delete()`, which already tolerates absence.
+
 - The editor (`crates/strata-freya/src/apps/connection/`): the window doc is mod.rs:1-47
   (window-not-modal, single-instance, no secret held); the per-provider-rows rule is
   `views/form.rs:10-11` — "a control that cannot mean anything for the chosen provider is

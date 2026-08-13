@@ -32,6 +32,24 @@ datafusion-functions-json = "0.54"
 # The `sql` feature is what DB-02's providers need (the SQL-federation half: the unparsing
 # executor and `SQLFederationProvider`). Declared here so the manifest edit lands once.
 datafusion-federation = { version = "0.5.5", features = ["sql"] }
+# `engine::db`: the Postgres arm (DB-02). The **leaf** crate rather than the umbrella
+# `datafusion-table-providers`, which would compile MySQL, SQLite, DuckDB, ClickHouse, ODBC and
+# FlightSQL beside it; adding a second database later is adding its own leaf.
+#
+# `-common` is named too because the seams live there rather than being re-exported: the
+# `PasswordProvider` trait the keystore bridge implements, `UnsupportedTypeAction` and
+# `to_secret_map`.
+#
+# Both are in the **lockstep** set described above the federation dependency — they pin
+# datafusion ^54 and arrow ^58, and `TableProvider`, the unparser and the federation plan node
+# all cross the boundary, so a DataFusion bump moves all four together. Default features (which
+# is `federation`) are what put `SqlTable`s behind a `FederatedTableProviderAdaptor`, i.e. what
+# makes a whole same-source subplan reach the server as one statement.
+datafusion-table-providers-postgres = "0.13"
+datafusion-table-providers-common = "0.13"
+# The password type that crate's `PasswordProvider` answers in. Named directly because
+# `engine::db` implements the trait; it is already in the graph as the providers' own dependency.
+secrecy = "0.10"
 # `engine::store`: the object stores a connection registers (W7). DataFusion already carries
 # `object_store` with only its local-filesystem feature on; naming it here with `aws`/`gcp`/`http`
 # is what turns those three on — Cargo unifies features, so this is the *same* crate DataFusion
@@ -74,7 +92,9 @@ chrono = "0.4"
 tracing = "0.1.44"
 # `secret`: the OS-keystore reference id. Also what the tests mint saved-query ids with (the
 # type itself reaches the API via strata-model), which is why it was a dev-dependency before.
-uuid = { version = "1", features = ["v4", "serde"] }
+# `v5` is `SecretRef::derived` (DB-02): a reference computed from a shared def's own identity,
+# so the committed `project.json` carries no machine-local id.
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 # `secret`: the OS keystore behind the assistant's provider keys (AS-05).
 #
 # `keyring-core` is the API — entries, the error taxonomy, and the process-wide default
@@ -142,7 +162,15 @@ zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 # so without the feature the runtime is up, configured, and invisible, and the failure reads as
 # `SocketNotFoundError("/var/run/docker.sock")` as if no runtime existed at all.
 testcontainers = { version = "0.27", features = ["properties-config"] }
-testcontainers-modules = { version = "0.15", features = ["minio"] }
+# `postgres` beside `minio`: `tests/postgres_federation.rs` (DB-02) drives a real PostgreSQL for
+# exactly the reason the MinIO test drives a real S3 — the thing under test is a whole
+# introspect-plan-unparse-execute round trip against a server, and a mock of it would be written
+# by the same understanding of Postgres that the code under test has.
+testcontainers-modules = { version = "0.15", features = ["minio", "postgres"] }
+# Seeds that database, and is deliberately a *lower layer* than the pool and factory under test:
+# the fixture is written with the raw driver, so the test and the code cannot agree on a shared
+# misunderstanding. Already in the graph via the Postgres provider, whose `bb8-postgres` pins it.
+tokio-postgres = "0.7"
 # Seeds the bucket the test then reads. Deliberately a *different* client from the one under
 # test: `object_store` cannot create a bucket at all, and having the write side be an
 # independent implementation is what stops the fixture and the code under test agreeing on a

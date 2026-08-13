@@ -8,10 +8,16 @@
 //! scheme + authority, no path ([`ObjectStoreUrl::parse`] enforces it, so a bucket with a
 //! path in it is refused here rather than registering under a key nothing looks up).
 //!
-//! **Nothing in this module reads, writes or holds a secret.** Every arm resolves through
-//! the host's own provider chain, a named profile, a key **file** the OS already lets the
-//! user read, or not at all (anonymous). The one place a credential value exists is inside
+//! **No arm of this module takes a secret value.** Every arm resolves through the host's own
+//! provider chain, a named profile, a key **file** the OS already lets the user read, or not
+//! at all (anonymous). The one place a credential value exists is inside
 //! [`SdkCredentials::get_credential`], for the length of one signed request.
+//!
+//! That is the object-store half of a rule the DB workstream deliberately rewrote (see
+//! [`strata_model::connection`]): a secret Strata genuinely must hold lives in the OS keystore
+//! and is read per use ([`crate::secret`], and [`db`](super::db) for the database arm that
+//! does it). Nothing changes here — object stores have host-side credential chains, so this
+//! module still needs no secret at all.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -31,6 +37,8 @@ use object_store::http::HttpBuilder;
 use object_store::{ClientConfigKey, CredentialProvider, Error, ObjectStore};
 
 use strata_model::{ConnectionDef, GcsAuth, Provider, S3Auth};
+
+use super::connect::{self, Registration};
 
 /// Build the object store `conn` describes and register it on `ctx`, so tables over its
 /// bucket can be registered and scanned.
@@ -79,35 +87,32 @@ pub async fn connect(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), S
 }
 
 /// Apply a prepared store to the session, or take back whatever this connection last registered
-/// — the all-or-nothing half of [`connect`]'s contract, and the only place it is written.
+/// — this arm's half of [`connect::settle`]'s contract.
 ///
 /// Separate from `connect` so the tests' probe-free path settles through the *same* code rather
 /// than a helper that restates it. That distinction has teeth: the first version of that helper
 /// registered on `Ok` and simply returned on `Err`, which silently dropped the deregistration —
 /// and the test whose whole subject is "a refused reconnect leaves nothing behind" went red
 /// against a stand-in that could never have passed it. A test double for a contract has to share
-/// the contract.
+/// the contract, which is now shared one level further out as well.
 fn settle(
     ctx: &SessionContext,
     conn: &ConnectionDef,
     prepared: Result<(ObjectStoreUrl, Arc<dyn ObjectStore>), String>,
 ) -> Result<(), String> {
-    match prepared {
-        Ok((url, store)) => {
-            ctx.register_object_store(url.as_ref(), store);
-            Ok(())
-        }
-        Err(why) => {
-            // Re-parsed rather than threaded through the error: a def refused *before* the URL
-            // was parsed never registered anything under it either, so the lookup simply misses.
-            // Errs when nothing was registered under this key, which is the ordinary case (a
-            // first pass, or a def that has never worked) and not a failure of its own.
+    connect::settle(
+        ctx,
+        prepared.map(|(url, store)| Registration::ObjectStore(url, store)),
+        // The URL is re-parsed rather than threaded through the error: a def refused *before*
+        // the URL was parsed never registered anything under it either, so the lookup simply
+        // misses. Deregistering errs when nothing was registered under this key, which is the
+        // ordinary case (a first pass, or a def that has never worked) and not a failure.
+        || {
             if let Ok(url) = ObjectStoreUrl::parse(conn.url()) {
                 let _ = ctx.deregister_object_store(url.as_ref());
             }
-            Err(why)
-        }
-    }
+        },
+    )
 }
 
 /// Everything a connection can be judged on **without asking its bucket**: the provider's naming
@@ -543,6 +548,15 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
                 .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
         }
+        // A database connection registers a catalog, not an object store, and
+        // [`Engine::connect`] routes one to [`db`](super::db) before it can arrive here.
+        // Answered rather than `unreachable!()` because a dispatch that ever went wrong should
+        // be a refused connection with a row saying so, not a panic taking the window's engine
+        // with it.
+        Provider::Postgres(_) => Err(format!(
+            "'{}' is a database connection, not an object store.",
+            conn.url()
+        )),
     }
 }
 

@@ -38,8 +38,9 @@ After **any theme change**, regenerate + verify the schema:
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
 `themes/theme.schema.json` must match the `Role` vocabulary + the editor's syntax scopes).
 
-**`cargo test` needs a container runtime.** The connections integration test
-(`strata-core/tests/object_store_minio.rs`, W7) drives a real MinIO through testcontainers and is
+**`cargo test` needs a container runtime.** Two integration tests drive real servers through
+testcontainers — `strata-core/tests/object_store_minio.rs` (W7, MinIO) and
+`strata-core/tests/postgres_federation.rs` (DB-02, PostgreSQL) — and both are
 deliberately **not** `#[ignore]`d — an ignored test is one nobody runs, and this is the only thing
 that would catch a regression in the S3 credential bridge. Testcontainers Cloud, Docker or colima
 all serve — the runtime is found from `~/.testcontainers.properties` (which a Testcontainers Cloud

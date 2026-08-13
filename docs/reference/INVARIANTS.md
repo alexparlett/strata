@@ -358,14 +358,23 @@ Things that must not regress. Each was fought for once already.
   on the next), and a 200k-row snapshot with a text column pages stably but starting at row
   57 345, so `fetch_page`'s pages disagree with the spooled page 1 — rows duplicated and missing
   as the user pages, and the page cache freezes whichever answer a read happened to get. The fix
-  is written order: `materialize` adds `row_number() OVER ()` to the spool query itself (the
-  column is a **UInt64, 1-based** — nothing reads its values, only their order), aliased to
-  `__strata_ord` after `QueryOutput::columns` is captured, name-escalated on collision and
-  recorded in `SnapshotStats.ord: Option<String>`. Two plans spool **without** one, `None`, and
-  read unordered as at base: an `EXPLAIN`/`EXPLAIN ANALYZE` (DataFusion requires those at the
-  plan root, so the window would fail a statement the DDL policy promises to run) and a result
-  with duplicate column names (name-keyed reads would mis-map a duplicate onto the ordinal's
-  slot). The registration **declares** the file's order (`with_file_sort_order`), so an ordered
+  is written order: `materialize` appends `__strata_ord` to each batch **as the writer spools
+  it**, numbered from the count already written (a **UInt64, 1-based** column — nothing reads its
+  values, only their order), after `QueryOutput::columns` is captured, name-escalated on
+  collision and recorded in `SnapshotStats.ord: Option<String>`. The value is therefore the row's
+  literal position in the file, which is exactly what every reader's `ORDER BY __strata_ord`
+  means — the property holds by construction rather than by measurement. **It was a plan-level
+  `row_number() OVER ()` until DB-02 and must not go back**: a window in the plan is the
+  *query's* to evaluate, so a read over a federated database had Strata's own bookkeeping pushed
+  across the wire for Postgres to compute, numbering the remote result rather than the stream the
+  writer consumes; it also dragged the scan into DataFusion 54's unparser along a derived-table
+  path that does not rebase outer column qualifiers, so every federated read failed. The full
+  argument, and the measurements the window was originally adopted on, are `SNAPSHOT_SPEC.md` §9.
+  Two results spool **without** an ordinal, `None`, and read unordered as at base: an
+  `EXPLAIN`/`EXPLAIN ANALYZE` (the planning constraint that forced this is gone with the window;
+  the exclusion stays because a handful of plan rows cannot reach the nondeterminism the ordinal
+  exists for) and a result with duplicate column names (name-keyed reads would mis-map a
+  duplicate onto the ordinal's slot). The registration **declares** the file's order (`with_file_sort_order`), so an ordered
   read plans as a stream, not a sort — measured: a page at offset 2.9M of a 3M-row snapshot is
   543 ms as an undeclared TopK holding every candidate row, 97 ms declared, with shallow pages
   planning as scan-level limit pushdown and exports streaming into their `COPY`. Unsorted reads
@@ -887,10 +896,12 @@ Things that must not regress. Each was fought for once already.
   `CONNECTIONS_SPEC.md` §5 had left open against the gitignored session: a def carrying only a
   profile *name* and a key *file path* holds nothing a colleague may not have, and a catalog whose
   tables live in a bucket is not shareable if the bucket isn't.
-- **A connection registers a bucket, and it registers before anything that reads one.** A table's
+- **A connection registers a bucket — or, for a database, a catalog — and it registers before
+  anything that reads one.** A table's
   source path resolves through the object store registered for its bucket, so `register_pass` runs
   connections as its **first** phase — otherwise a perfectly correct table def fails with "no
-  suitable object store found" and the diagnosis lands on the wrong row. Connections need no
+  suitable object store found" and the diagnosis lands on the wrong row (and a view over
+  `pg.public.orders` fails to plan). Connections need no
   ordering among themselves and get no fixed-point retry (each registers one bucket and reads
   nothing the pass provides). A **whole-catalog ↻ re-connects; a single table's Refresh does not** —
   a re-connect is what fixes the case ↻ exists for (fill in the region, run `aws sso login`), and
@@ -963,6 +974,80 @@ Things that must not regress. Each was fought for once already.
   not through `connect` itself — otherwise the unit suite dials out to buckets nobody owns and
   fails offline. The network half belongs to `tests/object_store_minio.rs`, against a bucket that
   is really there.
+- **A database connection is a fourth `Provider` arm that registers a catalog, and the whole
+  database comes through it — discovery gets catalogs, declaration gets defs.** (DB-02.)
+  `Provider::Postgres(PgStore)` is the same `ConnectionDef`, the same `ConnRow`/`Reg<()>`, the same
+  editor window, the same `register_pass` phase 1 and the same Forget: the `TableOrigin` lesson,
+  applied. What differs lives in `engine::db` and nowhere else — the def's `catalog` field (the
+  first on any provider that is an **SQL identifier**, because SQL cannot address
+  `postgres://host/db` and relations must be reachable as `pg.public.orders`), a connection **pool**
+  whose construction *is* the probe (DNS, TCP, auth, `SELECT 1`, all-or-nothing exactly like
+  `store::connect`, so there is no separate `reachable` step), and a catalog provider registered on
+  `StrataCatalogList`. Both arms settle through **one** `connect::settle`, which takes the
+  take-back as an argument: the registries differ, the contract does not.
+
+  **No per-table defs, no manual adds** (settled with Alex, 2026-08-13). Connect enumerates every
+  schema the role can see and every relation in them, in one round trip, and lists them lazily —
+  three-part names, remote schemas preserved. A def per remote table was considered and rejected:
+  it restates configuration the server owns, goes stale silently, costs an introspection per def
+  per pass, and mints failure states for things whose only real failure is the connection's. The
+  line is *discovery gets catalogs, declaration gets defs*: a bucket cannot say what its tables
+  are — someone must declare globs, a format and options, and that declaration can fail, which is
+  what the `Reg` rows exist to show — while a database answers for itself. Pinning one remote
+  relation into the workspace is a **view**, which needs no new machinery at all.
+
+  **The provider is ours, and the three reasons are in the crate's source.** Its own
+  `DatabaseCatalogProvider` snapshots the schema and table list at construction (a ↻ could not
+  refresh it), builds plain `SqlTable`s with the default unparser dialect, and skips the federation
+  wrapper — so the generic path silently forfeits exactly the pushdown this workstream exists for.
+  Ours builds through `PostgresTableFactory` (dialect + federation) and **caches a provider per
+  relation**, so diagnostics' validation costs one remote introspection per relation per connect
+  rather than one per keystroke; `SchemaProvider::table_type` is **overridden** to answer from the
+  cached `relkind`, because its default is `self.table(name).await` and `information_schema.tables`
+  calls it for every relation in every catalog — with the override `SHOW TABLES` costs zero remote
+  calls. (`information_schema.columns` still builds providers; bounded by the cache, and accepted.)
+  The listing reads **`pg_class`** (`relkind IN r,p,v,m,f`), not the crate's `pg_tables`: remote
+  views, matviews, partitioned and foreign tables must show and resolve, or the tree lies about
+  what is queryable. `UnsupportedTypeAction::String` maps `jsonb` and other exotics to `Utf8` JSON
+  text the app's own accessors already read — the crate's default (`Error`) would make any table
+  with one such column entirely unreadable, and this is representation honesty rather than silent
+  corruption: the value is intact, only the type is wider.
+
+  **Schema visibility scopes display, never resolution.** `PgStore.schemas` is committed
+  configuration (DataGrip's "N of M schemas"); registration exposes every schema regardless, so a
+  query naming a non-enabled one still runs. `Engine::db_listing` is the one read every surface
+  shares and it answers **scoped and tagged** (`Live | EnabledButMissing | NotEnabled`), so no
+  consumer re-derives visibility. It reads the connect-time enumeration, which is why a ↻ — a
+  re-run of the registration pass — *is* the refresh.
+
+  **Read-only against the database in v1**, and a reconnect **replaces**: `db::connect` deregisters
+  whatever that URL last registered, under the name it went in under, so the editor's rename (same
+  URL, new catalog name) is handled by construction rather than by a surface remembering.
+- **A connection's password lives in the OS keystore under a ref *derived* from the connection's
+  identity, and the def stores only the expectation.** (DB-02, and the deliberate rewrite of W7's
+  no-secrets rule — see the entry below on `strata_core::secret`.) `PgPassword::{None, Keystore}`
+  is the whole of what `project.json` carries; the reference is
+  `SecretRef::derived("pg-password", def.url())`, a `Uuid::new_v5` over a fixed namespace.
+
+  **Not a minted ref, and the reason is git.** A minted `SecretRef` in a *committed* file would be
+  rewritten by every colleague who entered their own password — two machines ping-ponging one id
+  through the project file forever. A derived one is the same slot on every machine while each
+  machine's keystore holds its own entry, and storing it beside the fields it derives from would be
+  two statements of one fact that can disagree the moment the identity moves.
+
+  Three consequences ride with it, and each is carried rather than papered over. An identity edit
+  (address or user) moves the ref, so whoever moves it **migrates** the entry
+  (`secret::migrate_derived`: get → put → delete, best-effort about absence, loud about a keystore
+  that refuses) — exactly as a moved URL already deregisters itself. A Forget deletes the entry
+  without needing a stored ref. And on a machine with no entry the row settles **failed naming the
+  fix** ("No password is stored on this machine for '…'"), the same honest shape as an expired SSO
+  session — and re-entering it touches nothing in git.
+
+  The value itself is read **per pool connection** and never cached (`db::KeystorePassword`, on
+  `spawn_blocking` because a keystore call is a blocking platform call), and the password seam is
+  an **argument** to `db::connect` rather than something it reaches for — which is what lets the
+  integration test substitute the *keystore* (`keyring_core::mock`) while still driving the real
+  bridge through `Engine::connect`.
 - **A table reads through a connection by naming it, and the composition happens once, in
   `resolve_source`.** `TableDef::connection` is the connection's `url()` and nothing else about it
   (W7 · 04): a *reference*, because the bucket, the provider and where its credentials come from
@@ -1529,10 +1614,18 @@ Things that must not regress. Each was fought for once already.
   pane, for two reasons that generalise: navigating away and back must not discard a half-finished
   edit, and the footer has to answer "what is blocking Apply?" (`blocker()`) without the pane being
   mounted to answer it — a button disabled for a reason the user cannot see reads as broken.
-- **Strata owns the catalog and schema providers, for identity and visibility — never lifecycle.**
+- **Strata owns the catalog list, catalog and schema providers, for identity and visibility —
+  never lifecycle. The workspace has one catalog with one schema; the *session* has as many
+  catalogs as there are database connections.**
   `engine::providers` installs a `StrataCatalogProvider` (one schema, `public`, `register_schema` /
   `deregister_schema` refusing) and a `StrataSchemaProvider` (one map, keyed by `fold_ident`) in
-  `build_context`, before anything registers. Two jobs and no third: DataFusion 54's
+  `build_context`, before anything registers. The scoping word is load-bearing since DB-02: a
+  Postgres connection registers a **sibling** catalog with as many schemas as the server has
+  (`engine::db`), and what stays one-catalog-one-schema is the *workspace*, whose flat bare-name
+  namespace is the deepest assumption in the app. Registering a catalog programmatically is
+  Strata's own act and was never what `register_schema` fenced — that refusal is about *user-typed*
+  `CREATE SCHEMA`, and it is unchanged.
+  Two jobs and no third: DataFusion 54's
   `SchemaProvider::register_table` is **sync** and carries **no caller identity**, so it can neither
   spool a CTAS result (already whole in RAM by then) nor authorize a `DROP` (`Engine::register`,
   snapshot retirement and DF's own `CREATE OR REPLACE VIEW` all deregister routinely — a provider
@@ -1553,7 +1646,14 @@ Things that must not regress. Each was fought for once already.
   `create_catalog` registers into the `CatalogProviderList`, whose `register_catalog` returns an
   `Option` — a refusing list could only lie ("already exists") or silently no-op, both worse than
   the router's refusal. `Blocked::CreateDatabase` is the gate for it, and the first line for
-  `CREATE SCHEMA` too.
+  `CREATE SCHEMA` too. **`StrataCatalogList` changes none of that** (DB-02): it is
+  `MemoryCatalogProviderList` plus the one operation DataFusion has no trait method for —
+  *removal*. `CatalogProviderList` can register a catalog and never take one back, so forgetting a
+  database connection could not make its catalog stop resolving, and a removed source that stays
+  silently queryable is the exact inverse of the catalog-is-the-store rule. Installed on the
+  `SessionStateBuilder` so the workspace catalog lands in it rather than in a list thrown away
+  afterwards, keyed by `fold_ident` (catalog names are unquoted identifiers, and DataFusion looks
+  one up already folded), and refusing nothing.
   Everything else is `MemorySchemaProvider`'s behaviour verbatim, duplicate-name error included, so
   every reader, `find_and_deregister`, `table_exist` and snapshot retirement work with **no**
   call-site changes. The `fold_ident` keying is what makes the one namespace genuinely
@@ -1674,8 +1774,14 @@ Things that must not regress. Each was fought for once already.
   the store, or one just read back — derives **no** `Serialize`, has no `Display`, and prints
   `Secret(<redacted>)`. So a provider key reaching `config.json` is not carelessness, it is a
   program that does not compile. This extends the connections posture ("no arm of `engine::store`
-  takes a secret") to the case where the app really must hold one: third-party API keys for the
-  assistant's provider roster. The agent-access bearer token stays a plain config string on
+  takes a secret **value**") to the case where the app really must hold one: third-party API keys
+  for the assistant's provider roster — and, since DB-02, a database password, which is where the
+  connections rule was **rewritten** rather than routed around. The rule was never "Strata never
+  holds a secret" on principle; it was a consequence of this module not existing when W7 was built,
+  and of object stores happening to have host-side credential chains where a database does not. The
+  standing form is: *no def field is a secret value; a secret Strata must keep lives here and is
+  read per use.* `engine::store` is unchanged — it still needs no secret at all.
+  The agent-access bearer token stays a plain config string on
   purpose — locally minted, for our own loopback server, worthless elsewhere — and "stored like
   the token" was the wrong precedent to extend to a billing credential; migrating it here is a
   recorded follow-on that needs a config upgrade path.

@@ -271,18 +271,19 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   this repo. That override was originally a note that denying warnings needed two long-standing
   warnings resolved first; both were, in the change that added this gate.
 - **Only the tests that need the container runtime queue for it, and the split is a test target.**
-  Everything the shared MinIO worker forces on a job — the repo-wide queue below, the cloud agent,
-  the release step, the capacity retry — was being paid for by the whole suite, when one test file
-  needs it. So the workflow is two jobs. `minio` keeps the apparatus and runs
-  `cargo test -p strata-core --locked --test object_store_minio`: the **binary entire**, because
-  `crates/strata-core/tests/object_store_minio.rs` is the only file in the workspace that mentions
-  testcontainers, so drawing the line at the test target means a test added to it is covered
-  without a workflow edit. It is also the cheap job to leave queueing — one package and its
+  Everything the shared container worker forces on a job — the repo-wide queue below, the cloud
+  agent, the release step, the capacity retry — was being paid for by the whole suite, when two
+  test files need it. So the workflow is two jobs. `containers` keeps the apparatus and runs
+  `cargo test -p strata-core --locked --test object_store_minio --test postgres_federation`: the
+  **binaries entire**, because those two files are the only ones in the workspace that mention
+  testcontainers, so drawing the line at the test target means a test added to either is covered
+  without a workflow edit. One invocation, so the two share a build and a cloud session rather
+  than checking a worker out twice. It is also the cheap job to leave queueing — one package and its
   dependencies, so no Skia and none of the fork's UI crates. `test` is the same `cargo test
   --workspace --locked` as before with those tests named in a `--skip`, and queues behind nothing;
   it is the job a PR is normally waiting on, and now nothing on another branch can hold it up.
   The two lists are not kept in agreement by hand and must not be: `test` has **no** container
-  runtime, so a minio test renamed or added without amending the skip runs there, finds nothing,
+  runtime, so a container test renamed or added without amending the skip runs there, finds nothing,
   and fails loud — which is what that test is built to do rather than pass quietly. Do not split
   this by package, by "slow vs fast", or by taste; the only axis that carries the property is
   whether the runtime is needed.
@@ -294,7 +295,7 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   not a second one. The test then fails loud, correctly: it cannot tell a busy provider from a
   missing one, and it must never call the latter fine. Merging a PR is exactly when the overlap
   happens — the merge commit pushes to main while other branches are still building — which is why
-  **main** was the ref that kept failing while its own PR had just passed. So the `minio` job carries
+  **main** was the ref that kept failing while its own PR had just passed. So the `containers` job carries
   a second, **job-level** concurrency group with a constant name: the workflow-level group is
   per-ref and supersedes within a branch, this one is repo-wide and only ever waits. Waiting is
   free — a pending job holds no runner and `timeout-minutes` does not start until it runs. The
@@ -315,7 +316,7 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   case that matters most, because `cancel-in-progress` means we generate those deliberately and a
   cancelled run kills the agent in the way least likely to release anything. Even then the release
   happens where nothing on our side can observe it finishing, which is why
-  `object_store_minio.rs` also **retries a capacity refusal, and only that** — the two spellings of
+  Each container test also **retries a capacity refusal, and only that** — the two spellings of
   one fault (`too many concurrent requests`, or the truncated response `hyper` calls
   `IncompleteMessage`), on a bounded budget. Every other failure panics with the message it always
   had: "no runtime" must keep failing loudly, or it reads as "the code is fine". Do not collapse

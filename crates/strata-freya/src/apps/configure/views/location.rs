@@ -147,6 +147,13 @@ fn connections_at_press(station: RadioStation<ProjectState, ProjChan>) -> Vec<Co
 /// **TYPE** — the provider whose connections the picker offers. Its labels are
 /// [`ProviderId::label`]'s, the same table the pane's row badge and the connection editor's own
 /// picker read.
+///
+/// **[`ProviderId::OBJECT_STORES`], not `ALL`.** This row asks which connection a set of *files*
+/// is read through, and a database connection registers no object store — offering one would put
+/// "read these parquet files through my Postgres connection" in the pill, and leave the
+/// CONNECTION picker under it empty with nothing saying why. `ALL` is a fixed-length const, so
+/// nothing about a new provider arm makes this loop notice on its own; the narrower list is what
+/// says out loud which question is being asked.
 #[derive(PartialEq)]
 struct ProviderFilter;
 
@@ -159,7 +166,7 @@ impl Component for ProviderFilter {
         let current = ctx.draft.read().provider;
 
         let mut pill = SegmentedToggle::new().form();
-        for id in ProviderId::ALL {
+        for id in ProviderId::OBJECT_STORES {
             pill = pill.child(
                 ToggleSegment::text(id.label())
                     .selected(id == current)

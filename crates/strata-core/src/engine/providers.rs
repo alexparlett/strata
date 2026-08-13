@@ -1,4 +1,5 @@
-//! The catalog and schema **Strata owns** — identity and visibility, never lifecycle.
+//! The catalog list, catalog and schema **Strata owns** — identity and visibility, never
+//! lifecycle.
 //!
 //! DataFusion 54's provider traits are resolution and enumeration interfaces:
 //! `register_table` is sync and carries no caller identity, so nothing here could spool a
@@ -7,13 +8,24 @@
 //! shape of the namespace and decide what enumerating it returns, which is exactly the two
 //! jobs this module has:
 //!
-//! * **Identity** — one catalog, one schema, tables keyed by [`fold_ident`].
-//!   [`StrataCatalogProvider::register_schema`] refuses, so `CREATE SCHEMA x` fails at the
-//!   provider even when a statement reaches `ctx.sql` with the router bypassed. (`CREATE
-//!   DATABASE` cannot be stopped here: DataFusion's `create_catalog` registers into the
-//!   `CatalogProviderList`, whose `register_catalog` returns an `Option` and so has no way to
-//!   refuse — `context/mod.rs:1030-1050`. The router's `Blocked::CreateDatabase` is the only
-//!   gate that can say no about it, and it is the first line for `CREATE SCHEMA` too.)
+//! * **Identity** — **the workspace catalog** has one schema, with tables keyed by
+//!   [`fold_ident`]. [`StrataCatalogProvider::register_schema`] refuses, so `CREATE SCHEMA x`
+//!   fails at the provider even when a statement reaches `ctx.sql` with the router bypassed.
+//!   (`CREATE DATABASE` cannot be stopped here: DataFusion's `create_catalog` registers into
+//!   the [`CatalogProviderList`], whose `register_catalog` returns an `Option` and so has no
+//!   way to refuse — `context/mod.rs:1030-1050`, and [`StrataCatalogList`] is no different.
+//!   The router's `Blocked::CreateDatabase` is the only gate that can say no about it, and it
+//!   is the first line for `CREATE SCHEMA` too.)
+//!
+//!   That scoping is load-bearing since the DB workstream: the session holds **N** catalogs —
+//!   the workspace's plus one per database connection — and a remote catalog has as many
+//!   schemas as the server does. What is one-catalog-one-schema is the *workspace*, whose
+//!   flat, bare-name namespace is the deepest assumption in the app.
+//! * **Removability** — [`StrataCatalogList`], which exists for one reason DataFusion cannot
+//!   serve: `CatalogProviderList` has `register_catalog` and no counterpart, and
+//!   `MemoryCatalogProviderList` is an insert-only map. Forgetting a database connection has
+//!   to make its catalog stop resolving, or a removed source stays silently queryable until
+//!   the window is re-opened — the exact inverse of the catalog-is-the-store rule.
 //! * **Visibility** — [`StrataSchemaProvider::table_names`] drops the `__snap_`-prefixed
 //!   result snapshots while `table()` still resolves them. Every `information_schema` view
 //!   and every `SHOW` form enumerates through `table_names()`
@@ -33,11 +45,98 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use async_trait::async_trait;
-use datafusion::catalog::{CatalogProvider, SchemaProvider, TableProvider};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use datafusion::common::{exec_err, DataFusionError, Result};
+use datafusion::prelude::SessionContext;
 
 use super::query::is_snapshot_name;
 use super::{fold_ident, SCHEMA};
+
+/// The engine's **catalog list**: DataFusion's, plus the one operation it does not have.
+///
+/// `MemoryCatalogProviderList` can register a catalog and never remove one, so a database
+/// connection could be forgotten and go on answering `pg.public.orders` for the life of the
+/// window. This is the same map with [`deregister`](Self::deregister) on it — installed at
+/// [`build_context`](super::build_context) time via `SessionStateBuilder::with_catalog_list`,
+/// so the builder registers the workspace catalog into *this* list and nothing else moves.
+///
+/// Keyed by [`fold_ident`] because catalog names are unquoted identifiers and DataFusion looks
+/// one up already folded (`TableReference::resolve`) — the same rule, in the same place, as
+/// [`StrataSchemaProvider`]'s table names.
+///
+/// It refuses nothing: `register_catalog` returns an `Option` by DataFusion's own signature, so
+/// there is no "no" to say here and `CREATE DATABASE`'s gate stays the router's, exactly as
+/// before.
+#[derive(Debug, Default)]
+pub struct StrataCatalogList {
+    /// Keyed by [`fold_ident`], valued by the name it was **registered under** beside the
+    /// provider: DataFusion enumerates catalogs through [`catalog_names`](Self::catalog_names)
+    /// and stamps whatever it answers into `information_schema.tables.table_catalog` and every
+    /// `SHOW` form, so folding the *enumeration* — which `MemoryCatalogProviderList` does not do
+    /// — would print a catalog name no def, no surface and no user ever wrote. A database
+    /// connection deliberately registers the user's own spelling.
+    catalogs: RwLock<BTreeMap<String, Registered>>,
+}
+
+/// One entry: the name it was registered under, and the provider. See [`StrataCatalogList`].
+type Registered = (String, Arc<dyn CatalogProvider>);
+
+impl StrataCatalogList {
+    /// Take the catalog registered under `name` back out — the half `CatalogProviderList` is
+    /// missing. `None` when nothing was registered under it, which is the ordinary case for a
+    /// connection that never connected and is not a fault.
+    pub fn deregister(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.catalogs
+            .write()
+            .unwrap()
+            .remove(&fold_ident(name))
+            .map(|(_, catalog)| catalog)
+    }
+}
+
+impl CatalogProviderList for StrataCatalogList {
+    fn register_catalog(
+        &self,
+        name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Option<Arc<dyn CatalogProvider>> {
+        self.catalogs
+            .write()
+            .unwrap()
+            .insert(fold_ident(&name), (name, catalog))
+            .map(|(_, catalog)| catalog)
+    }
+
+    /// The names catalogs were **registered under**, not the folded keys — see the field.
+    fn catalog_names(&self) -> Vec<String> {
+        self.catalogs
+            .read()
+            .unwrap()
+            .values()
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.catalogs
+            .read()
+            .unwrap()
+            .get(&fold_ident(name))
+            .map(|(_, catalog)| Arc::clone(catalog))
+    }
+}
+
+/// Remove the catalog registered under `name` from `ctx` — [`StrataCatalogList::deregister`]
+/// reached through the session, which is all a caller holds.
+///
+/// `None` when nothing was registered under that name. The downcast is DataFusion's own
+/// documented pattern for a custom list (`impl dyn CatalogProviderList`), and it cannot miss on
+/// an engine this crate built: [`build_context`](super::build_context) installs the list before
+/// anything can replace it.
+pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+    let list = Arc::clone(ctx.state_ref().read().catalog_list());
+    list.downcast_ref::<StrataCatalogList>()?.deregister(name)
+}
 
 /// Strata's catalog: exactly one schema, [`SCHEMA`], for the whole life of the engine.
 ///

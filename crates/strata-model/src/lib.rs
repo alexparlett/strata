@@ -33,7 +33,10 @@ pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
     ChartSeries, ChartSort, ChartX, Trend,
 };
-pub use connection::{ConnectionDef, GcsAuth, GcsStore, Provider, ProviderId, S3Auth, S3Store};
+pub use connection::{
+    check_catalog_name, parse_pg_address, ConnectionDef, GcsAuth, GcsStore, PgAddress, PgPassword,
+    PgSslMode, PgStore, Provider, ProviderId, S3Auth, S3Store, WORKSPACE_CATALOG,
+};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;

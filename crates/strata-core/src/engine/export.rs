@@ -595,7 +595,8 @@ mod tests {
     }
 
     /// The snapshot table's schema as `run_export` sees it: the user's columns plus the
-    /// ordinal (a `UInt64` — `row_number()`'s output type), which the SELECT must exclude.
+    /// ordinal (a `UInt64`, the type the spool writer numbers with), which the SELECT must
+    /// exclude.
     fn result_schema() -> Schema {
         Schema::new(vec![
             Field::new("amount", DataType::Int64, true),
