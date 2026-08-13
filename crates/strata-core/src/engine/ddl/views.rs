@@ -38,7 +38,8 @@ use datafusion::sql::sqlparser::ast::{CreateTableOptions, CreateView, Statement 
 use datafusion::sql::TableReference;
 
 use crate::engine::catalog::{column_info, dependents_of_view, plan_deps, ViewMeta};
-use crate::engine::sql::StmtKind;
+use crate::engine::query::is_snapshot_name;
+use crate::engine::sql::{Blocked, StmtKind};
 use crate::engine::{fold_ident, quote_ident};
 use strata_model::ViewDef;
 
@@ -55,6 +56,15 @@ const WHAT: &str = "Views";
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
 pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewMeta, String> {
+    // **The reserved namespace, backstopped at the funnel**, exactly as `register_external` does
+    // it for tables (`docs/STATEMENTS_SPEC.md` §4). The router refuses a `__snap_` target in a
+    // *typed* `CREATE VIEW`, but this body is also what ⌘S and the project-load replay run, so a
+    // name reaches here from two directions the router never sees. A view registered into that
+    // namespace is invisible to every catalog reader (the schema provider hides the prefix) and
+    // costs a **Run** the first time a snapshot wants the same name.
+    if is_snapshot_name(name) {
+        return Err(Blocked::ReservedName.editor_message());
+    }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
     let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
     // The DDL only takes effect when its (empty) result is driven.

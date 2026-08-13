@@ -44,7 +44,7 @@ use crate::apps::project::query::{QueryOutcome, RunId, RunQuery};
 use crate::state::{use_config_station, ConfigStation};
 
 use super::log::{log_event, LogCtx, LogLevel};
-use super::persist::{persisted_history, use_report, ReportCtx};
+use super::persist::{persisted_history_offloaded, use_report, ReportCtx};
 use super::{ProjChan, ProjectState};
 
 /// How many recent runs are kept, in memory and on disk: the user's `max_history` setting
@@ -219,7 +219,7 @@ fn record_run(
     // list that reaches disk is the one this run produced.
     let rewrite = replaced.then(|| history.peek().file_order());
     spawn(async move {
-        persisted_history(&root, rewrite.as_deref(), &entry, report);
+        persisted_history_offloaded(&root, rewrite, entry, report).await;
     });
 }
 

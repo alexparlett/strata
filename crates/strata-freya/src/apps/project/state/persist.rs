@@ -33,6 +33,8 @@ use freya::prelude::{use_consume, use_provide_context, State};
 use strata_core::project as project_io;
 use strata_model::{HistoryEntry, SessionSnapshot};
 
+use crate::task::offload;
+
 use super::log::{log_event, LogCtx, LogLevel};
 use super::project::ProjectState;
 
@@ -208,13 +210,24 @@ pub fn persisted(
     file: ProjectFile,
     write: impl FnOnce() -> Result<(), String>,
 ) -> bool {
+    settled(report, file, write())
+}
+
+/// [`persisted`]'s reporting half, for a write that has **already happened** — which is the shape
+/// an offloaded one comes back in.
+///
+/// Split out rather than duplicated: the reporting is the part with the fault-store and log
+/// bookkeeping in it, and a second copy of that is a second set of rules about when a condition
+/// clears. `ReportCtx`'s handles are not `Send`, so this necessarily runs on the render thread
+/// while the write itself need not.
+pub fn settled(report: ReportCtx, file: ProjectFile, outcome: Result<(), String>) -> bool {
     let mut faults = report.faults;
     // Both arms **peek before writing**, and both bind the answer to a `let` before touching the
     // store. Peeking first is what keeps a repeating writer from waking every subscriber on every
     // attempt (this is the hot path — the autosave lands here every 500ms of activity). Binding
     // first is what keeps the read guard from living across the write on the same
     // `GenerationalBox`, which CLAUDE.md records as a runtime borrow panic.
-    match write() {
+    match outcome {
         Ok(()) => {
             let was_behind = faults.peek().holds(file);
             if was_behind {
@@ -268,20 +281,57 @@ pub fn persisted_session(root: &Path, snapshot: &SessionSnapshot, report: Report
     })
 }
 
+/// [`persisted_session`] with the file work off the render thread — what the **debounced
+/// autosave** uses.
+///
+/// **Because every `.strata/` write fsyncs.** `write_atomic` is temp, `sync_all`, rename, and the
+/// autosave lands every 500ms of activity: run on the UI executor that is a flush-to-disk per
+/// debounce on a healthy machine, and the whole app frozen on a sick one. `open_project` was
+/// offloaded for the second half of exactly that reason — "a project on a mount that stopped
+/// answering froze the whole app" — and the mount a session is written to is the mount it was
+/// read from.
+///
+/// The reporting stays here, on the render thread, for [`settled`]'s reason. `None` from
+/// [`offload`] is work that never ran at all, which is not a fact about the file: nothing is
+/// reported, exactly as `chat_send::store` treats it.
+///
+/// The **final** save on close or re-root stays synchronous and has to: `use_drop` cannot await,
+/// and there is no scope left to await in.
+pub async fn persisted_session_offloaded(
+    root: &Path,
+    snapshot: &SessionSnapshot,
+    report: ReportCtx,
+) -> bool {
+    let root = root.to_path_buf();
+    let snapshot = snapshot.clone();
+    let Some(outcome) = offload(move || project_io::save_session(&root, &snapshot)).await else {
+        return false;
+    };
+    settled(report, ProjectFile::Session, outcome)
+}
+
 /// The history write — an **append** for a query the log doesn't hold, a whole-file **rewrite**
 /// for a re-run that moved an existing entry (an append can add a line but not move one).
 ///
 /// Which of the two it is comes from the caller's push; both are the same failure to report.
-pub fn persisted_history(
+/// Off the render thread, for [`persisted_session_offloaded`]'s reason — the rewrite arm writes
+/// the whole capped list through `write_atomic`, fsync included, and the caller is already a task.
+pub async fn persisted_history_offloaded(
     root: &Path,
-    rewrite: Option<&[HistoryEntry]>,
-    entry: &HistoryEntry,
+    rewrite: Option<Vec<HistoryEntry>>,
+    entry: HistoryEntry,
     report: ReportCtx,
 ) -> bool {
-    persisted(report, ProjectFile::History, || match rewrite {
-        Some(entries) => project_io::save_history(root, entries),
-        None => project_io::append_history(root, entry),
+    let root = root.to_path_buf();
+    let Some(outcome) = offload(move || match rewrite {
+        Some(entries) => project_io::save_history(&root, &entries),
+        None => project_io::append_history(&root, &entry),
     })
+    .await
+    else {
+        return false;
+    };
+    settled(report, ProjectFile::History, outcome)
 }
 
 #[cfg(test)]
@@ -290,6 +340,7 @@ mod tests {
     use crate::apps::project::state::log::Log;
     use freya::prelude::{rect, IntoElement, State};
     use freya_testing::TestingRunner;
+    use futures::executor::block_on;
 
     /// A scratch project root of this test's own.
     ///
@@ -409,8 +460,11 @@ mod tests {
     fn a_history_append_that_fails_is_an_event_and_says_so() {
         let root = temp_root("history");
         let e = entry("select 1");
-        let p =
-            probe(|report| while_read_only(&root, || persisted_history(&root, None, &e, report)));
+        let p = probe(|report| {
+            while_read_only(&root, || {
+                block_on(persisted_history_offloaded(&root, None, e.clone(), report))
+            })
+        });
 
         assert!(!p.landed);
         assert_eq!(p.events.len(), 1, "one event: {:?}", p.events);
@@ -436,7 +490,14 @@ mod tests {
         let e = entry("select 1");
         let all = [entry("select 1"), entry("select 2")];
         let p = probe(|report| {
-            while_read_only(&root, || persisted_history(&root, Some(&all), &e, report))
+            while_read_only(&root, || {
+                block_on(persisted_history_offloaded(
+                    &root,
+                    Some(all.to_vec()),
+                    e.clone(),
+                    report,
+                ))
+            })
         });
 
         assert!(!p.landed);

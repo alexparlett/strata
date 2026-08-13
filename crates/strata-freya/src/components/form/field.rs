@@ -154,11 +154,13 @@ impl ValueField {
 impl Component for ValueField {
     fn render(&self) -> impl IntoElement {
         let value = self.value;
-        let max_len = self.max_len;
+        // Reactive for `NumberField`'s reason: the effect's closure is built once, so a caller
+        // that narrows its own limit would otherwise keep trimming to the first render's.
+        let max_len = use_reactive(&self.max_len);
         // Trim in place, so the box can never show more than the caller will read. Guarded, or
         // the write would wake every reader of this state on each keystroke.
         use_side_effect(move || {
-            let Some(max_len) = max_len else {
+            let Some(max_len) = *max_len.read() else {
                 return;
             };
             let raw = value.read().clone();
@@ -292,7 +294,20 @@ impl Component for NumberField {
         let focus = use_focus(a11y_id);
 
         let (min, max) = (self.min, self.max);
-        let on_change = self.on_change.clone();
+        // **Held in state and `peek`ed, not captured and not `read`.** `use_side_effect` builds
+        // its closure once, and an `EventHandler` is an `Rc<RefCell<dyn FnMut>>` minted fresh
+        // every render with no write-through — so a plainly captured one is the *first* render's
+        // for the life of the scope. Today's callers survive that because their handlers close
+        // over `Copy` context handles; the first one closing over a row id or a cloned draft
+        // would get silently stale calls with nothing to show for it.
+        //
+        // `use_reactive` refreshes it, but the effect must **peek**: `EventHandler`'s `PartialEq`
+        // is `false` unconditionally (freya-core `event_handler.rs`), so `use_reactive` writes on
+        // *every* render, and a `read` here would subscribe this effect to a value that changes
+        // every render — re-running it every render for a handler that has not meaningfully
+        // moved. Peeking takes the current handler at the moment the effect's real trigger
+        // (`text`) fires, which is exactly what is wanted.
+        let on_change = use_reactive(&self.on_change);
         use_side_effect(move || {
             let Ok(parsed) = text.read().trim().parse::<u32>() else {
                 return;
@@ -300,7 +315,7 @@ impl Component for NumberField {
             let clamped = parsed.clamp(min, max);
             if clamped != *reported.peek() {
                 reported.set(clamped);
-                if let Some(on_change) = &on_change {
+                if let Some(on_change) = on_change.peek().as_ref() {
                     on_change.call(clamped);
                 }
             }
@@ -432,14 +447,15 @@ impl Component for PathField {
             move || value
         });
 
-        let on_change = self.on_change.clone();
+        // `use_reactive` + `peek` for `NumberField`'s reason — see there.
+        let on_change = use_reactive(&self.on_change);
         use_side_effect(move || {
             let current = text.read().clone();
             if current == *reported.peek() {
                 return;
             }
             reported.set(current.clone());
-            if let Some(on_change) = &on_change {
+            if let Some(on_change) = on_change.peek().as_ref() {
                 on_change.call(current);
             }
         });

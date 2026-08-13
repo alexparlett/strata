@@ -100,7 +100,7 @@ use std::fs::File;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
 use datafusion::common::TableReference;
@@ -1287,13 +1287,6 @@ impl Engine {
         }
     }
 
-    /// Take one hold without the `Arc` a [`SnapshotPin`] needs — for [`ExportGuard`], which
-    /// borrows the engine for the length of one call. Always released by that guard's `Drop`.
-    fn acquire_pin(&self, snapshot: SnapshotId) {
-        let mut lc = self.lifecycle.lock().unwrap();
-        *lc.pins.entry(snapshot).or_insert(0) += 1;
-    }
-
     /// Drop one hold, retiring the snapshot for real if this was the last one and a retire
     /// arrived while it was pinned.
     fn release_pin(&self, snapshot: SnapshotId) {
@@ -1358,17 +1351,23 @@ impl Engine {
     /// its own for its whole life; this one makes the call correct on its own terms, for a
     /// caller that has no window.
     pub async fn export(
-        &self,
+        self: &Arc<Self>,
         snapshot: SnapshotId,
         spec: export::ExportSpec,
     ) -> Result<(String, usize), String> {
-        // **A guard, not a bracketed pair.** This method awaits, and the caller is a UI task
-        // that is dropped when its scope goes — so closing the export window mid-write drops
-        // this future at the await below. Decrementing after the await would then never run:
-        // the in-flight flag would stay true for the engine's whole life (every later window
-        // close would claim work was running) and the pin would never release, leaving a
-        // snapshot that survives every re-run for the rest of the session.
-        let _writing = ExportGuard::new(self, snapshot);
+        // **The holds ride on the write, not on the caller.** This method awaits, and the caller
+        // is a UI task dropped when its scope goes — so closing the export window mid-write drops
+        // this future at the await below while the spawned write carries on. A guard living here
+        // would release both holds at that drop and leave the write unprotected: a re-run in the
+        // owning tab would then retire the snapshot this `COPY` is still streaming (deregistering
+        // the table and unlinking the IPC file), and the user's file would end truncated, or its
+        // Hive tree half-built, with nothing to report it. The close-while-running flag would go
+        // false in the same breath, so quitting mid-write would not ask either.
+        //
+        // So the hold is **owned** and moves into the task below. It is released when the write
+        // ends, on every path the write can end by — which is the only reading of "in flight"
+        // that matches what is actually happening on disk.
+        let holding = ExportHold::new(self, snapshot);
         // Copied out under the lock: the partitioned-export gate reads what this snapshot's write
         // pass counted, and the spawned task must not hold the lifecycle lock across an await.
         // A snapshot with no recorded stats is one nothing counted, which the gate treats as
@@ -1383,8 +1382,12 @@ impl Engine {
             .unwrap_or_default();
         let task = {
             let ctx = self.ctx.clone();
-            self.rt()
-                .spawn(async move { export::run_export(&ctx, snapshot, spec, &stats).await })
+            self.rt().spawn(async move {
+                // Moved in, so the pin and the in-flight count outlive a dropped caller by
+                // exactly as long as the write does. Dropped when this task ends, however it ends.
+                let _holding = holding;
+                export::run_export(&ctx, snapshot, spec, &stats).await
+            })
         };
 
         // Dropping this future does *not* stop the write: the spawned task detaches and the
@@ -1620,33 +1623,46 @@ impl Drop for BackgroundGuard<'_> {
 /// being written — released together by `Drop`.
 ///
 /// The export half is the pin: a write must read the snapshot it was opened on even if the tab
-/// behind it re-runs. [`SnapshotPin`] is the owned variant, for a holder that outlives one
-/// method.
-struct ExportGuard<'a> {
+/// behind it re-runs. **Owned**, unlike [`BackgroundGuard`], because the thing it protects is the
+/// spawned write and not the call that started it — see [`Engine::export`] for what a
+/// caller-scoped guard let happen.
+struct ExportHold {
     snapshot: SnapshotId,
-    /// The engine rides here rather than beside it — one copy of the reference, so a later edit
-    /// cannot have the pin and the count answer to two of them. Dropped after this struct's own
-    /// `Drop` body, which is the order the lock wants (see there).
-    background: BackgroundGuard<'a>,
+    /// **Weak, and that is load-bearing.** This hold rides on a task running on the runtime the
+    /// engine owns, so a strong `Arc` here would close a cycle — engine owns runtime owns task
+    /// owns hold owns engine — and the engine would never drop. The write does not need it
+    /// either: `run_export` holds its own clone of the `SessionContext`. An engine that has gone
+    /// has no bookkeeping left to correct, so a failed upgrade is the whole handling.
+    engine: Weak<Engine>,
 }
 
-impl<'a> ExportGuard<'a> {
-    /// Claim both halves. Constructing the guard *is* the acquire, so there is no way to hold
-    /// one without having taken what it releases.
-    fn new(engine: &'a Engine, snapshot: SnapshotId) -> Self {
-        engine.acquire_pin(snapshot);
+impl ExportHold {
+    /// Claim both halves. Constructing the hold *is* the acquire, so there is no way to hold one
+    /// without having taken what it releases.
+    fn new(engine: &Arc<Engine>, snapshot: SnapshotId) -> Self {
+        let mut lc = engine.lifecycle.lock().unwrap();
+        *lc.pins.entry(snapshot).or_insert(0) += 1;
+        lc.background += 1;
+        engine.publish_inflight(&lc);
+        drop(lc);
         Self {
             snapshot,
-            background: BackgroundGuard::new(engine),
+            engine: Arc::downgrade(engine),
         }
     }
 }
 
-impl Drop for ExportGuard<'_> {
+impl Drop for ExportHold {
     fn drop(&mut self) {
-        // `release_pin` takes the lifecycle lock itself, and this mutex is not reentrant — so it
-        // runs here, before the field's own `Drop` takes the lock again.
-        self.background.engine.release_pin(self.snapshot);
+        let Some(engine) = self.engine.upgrade() else {
+            return;
+        };
+        // `release_pin` takes the lifecycle lock itself, and this mutex is not reentrant — so the
+        // count's own critical section is a separate one, after it.
+        engine.release_pin(self.snapshot);
+        let mut lc = engine.lifecycle.lock().unwrap();
+        lc.background = lc.background.saturating_sub(1);
+        engine.publish_inflight(&lc);
     }
 }
 

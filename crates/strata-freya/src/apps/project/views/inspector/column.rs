@@ -152,7 +152,7 @@ impl ColumnPanel {
                     // The three runs wrap rather than truncate: a long dtype (`Timestamp`,
                     // `Decimal`) beside a long owner name would otherwise push "from …" out of
                     // a narrow panel.
-                    .content(Content::wrap_spacing(8.))
+                    .content(Content::wrap_spacing(SP_3))
                     .spacing(SP_3)
                     .child(Badge::value(self.facts.dtype.clone(), swatch).radius(BADGE_RADIUS))
                     .child(

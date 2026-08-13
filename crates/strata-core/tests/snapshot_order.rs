@@ -9,6 +9,8 @@
 //! The fixtures here are deliberately **over** the split threshold — the failure was invisible
 //! below it, which is why no test ever saw it.
 
+use std::sync::Arc;
+
 use strata_core::engine::export::{Compression, Csv, ExportSpec, Format, Partition, Scope};
 use strata_core::engine::{Engine, RunTag, WsId};
 use strata_model::{Cell, SnapshotId};
@@ -137,7 +139,9 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
 /// batch, not an exported file.
 #[tokio::test]
 async fn the_ordinal_is_bookkeeping_and_never_leaks() {
-    let eng = Engine::new(Default::default());
+    // An `Arc`, because this test exports: `Engine::export` takes `&Arc<Self>` so the pin and the
+    // in-flight count it claims can be handed to the spawned write and outlive the call.
+    let eng = Arc::new(Engine::new(Default::default()));
     let (out, page1) = eng
         .query(
             WsId(1),
@@ -382,7 +386,8 @@ async fn duplicate_named_columns_still_read() {
 /// `keep_partition_by_columns`.
 #[tokio::test]
 async fn a_partitioned_export_never_writes_the_ordinal() {
-    let eng = Engine::new(Default::default());
+    // An `Arc` for the exporting test above's reason.
+    let eng = Arc::new(Engine::new(Default::default()));
     let (out, _) = eng
         .query(
             WsId(1),

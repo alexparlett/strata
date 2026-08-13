@@ -658,7 +658,10 @@ impl CredentialProvider for SdkCredentials {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::process;
+    use std::thread;
 
     use datafusion::datasource::listing::ListingTableUrl;
     use strata_model::{GcsStore, S3Store};
@@ -1108,5 +1111,59 @@ mod tests {
             .await
             .expect("registers again");
         assert!(reaches(&ctx, "s3://acme-lake/x.parquet"));
+    }
+
+    /// A server answering every request with a redirect that carries no `Location` header —
+    /// which is exactly what S3 does to a cross-region request, and the only way to reach
+    /// [`is_bare_redirect`] without owning two buckets in two regions.
+    ///
+    /// Loopback, on a port the OS picks, serving from a thread that lives as long as the
+    /// process. This is not the suite dialling out: nothing leaves the machine, and the
+    /// listener is the test's own.
+    fn bare_redirect_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = listener.local_addr().expect("an address").port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                // Read whatever the client sends before answering, or it sees the write as a
+                // reset connection rather than as a response.
+                let _ = stream.read(&mut [0; 1024]);
+                // No `Location`, which is the whole point.
+                let _ = stream
+                    .write_all(b"HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// **The wrong-region refusal, pinned to behaviour rather than to a sentence.**
+    ///
+    /// [`is_bare_redirect`] matches a literal out of `object_store`'s error prose, because the
+    /// crate routes S3 list failures into `Generic` and offers nothing structured to ask. That
+    /// makes the refusal one dependency bump away from silently reverting — a mistyped region
+    /// would register green again and every table under it would fail on `object_store`'s own
+    /// bare-redirect message, with the rest of this suite still passing.
+    ///
+    /// So this drives the real path: `connect`, against a server that answers the way a
+    /// cross-region S3 does, asserting the refusal is **ours** and names the region. A reworded
+    /// upstream message fails here instead of in a user's project.
+    #[tokio::test]
+    async fn a_bare_redirect_is_refused_as_a_wrong_region() {
+        let ctx = SessionContext::new();
+        let conn = s3(
+            "acme-lake",
+            S3Store {
+                region: "eu-west-2".into(),
+                auth: S3Auth::Anonymous,
+                endpoint: bare_redirect_server(),
+                allow_http: true,
+            },
+        );
+        let e = connect(&ctx, &conn).await.expect_err("refused");
+        assert!(e.contains("'eu-west-2'"), "{e}");
+        assert!(e.contains("'acme-lake'"), "{e}");
+        // And a refused connection leaves nothing registered behind it.
+        assert!(!reaches(&ctx, "s3://acme-lake/x.parquet"));
     }
 }

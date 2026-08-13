@@ -124,6 +124,10 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
   over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
   path's refusals.
+- **A `COPY … TO` may not land in storage Strata owns, and the gate is the *resolved* target.**
+  The project's `.strata/` and the snapshot spool are refused; a stray file under an internal
+  table's directory is read back as phantom rows by that table's next scan, and everywhere else on
+  the disk is the user's own.
 - **A typed `COPY` is DataFusion's own write behind the two checks the Export window used to stand
   in for, and the Export window is unchanged.** `ddl::copy::copy_to` plans once, gates that plan
   and drives it — no text re-rendered, so the plan judged is the plan that runs. The bare-word
@@ -185,7 +189,10 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   file — and `register_external` must hand it over by hand (`ListingTable::with_cache`), as
   `register_listing_table` already does for snapshots.
 - **A reader that outlives one Run pins the snapshot it reads** (`Engine::pin_snapshot`, RAII).
-  Never a staleness check or warning instead.
+  Never a staleness check or warning instead. **A hold that protects spawned work belongs to that
+  work, not to the call that started it** (`ExportHold`, weak so the runtime the task rides is not
+  kept alive by it): a guard living in the caller's future releases when a UI scope drops it,
+  leaving the detached write to be retired out from under itself.
 - **The snapshot is Arrow IPC, so a result's type survives it.** Parquet cannot write a union at
   all; exact null counts now come from the write pass (`query::SnapshotStats`).
 - **A stopped run is not a failed one, and `engine::stopped_on_purpose` is the only thing that knows
@@ -205,8 +212,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   answers `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)` off the parsed statement, both
   surfaces in one match arm. `Capability::Agent` stays read-only and message-identical; the
   editor's refusals shrink to a short list and the older `Blocked` variants stay as the agent
-  path's messages; default stays deny; a `__snap_` name in an intercepted statement is refused.
-  Every interception is a second gesture into a funnel that already exists.
+  path's messages; default stays deny. A `__snap_` name is refused to **every** statement the user
+  types, read or written — a plain `SELECT` included, because reading a snapshot hands back another
+  tab's result with `__strata_ord` showing and Export then writes that to a file, around the fence
+  that exists to stop exactly this; `EXPLAIN` descends to its inner statement, and
+  `register_external` and `ddl::views::create` backstop the write half at the two funnels a def can
+  also arrive through. Every interception is a second gesture into a funnel that already exists.
 - **`Engine::run` routes; only its query arm touches the snapshot lifecycle.** One statement per
   Run, `Query` delegating to `query()` byte-for-byte, `Intercept` to `ddl::execute` under the
   in-flight bracket `explain` shares, `Refuse` to the squiggle's own message before DataFusion
@@ -439,7 +450,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   confirm names the tables over the bucket and the views behind them.
 - **A connection's address is its provider's own, and every rule about it lives in one place.**
   `address`, not `bucket`: S3 and GCS name a bucket and take the provider's scheme, HTTP names a
-  **whole origin URL** and a path is refused rather than trimmed. `Provider::check_address` is the
+  **whole origin URL** and a path is refused rather than trimmed — as is **userinfo**, because a
+  `https://user:pass@host` pasted into that box would put a password in the committed
+  `project.json`. `Provider::check_address` is the
   one copy of the two providers' (different) naming rules, called by the store *and* the editor;
   `client_config` is `object_store`'s `ClientConfigKey` map, on the def because one HTTP client
   serves all three, offered from `CLIENT_KEYS` and refused by `check_client_config`. `allow_http`
@@ -459,6 +472,11 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   stronger than it is; exposure is managed by lifetime (read per use, never cache).
 - **One app-global config store.** Disk is a startup input read **once** — no file watching, ever.
   `write_config` is the sole write path. Settings is a **channel**, not its own global.
+- **The config file is read three ways and written atomically, and a file this session could not
+  read is never written over.** Absent is a first launch, unparseable is kept aside as
+  `.corrupt` and then replaced, unreadable latches writing off for the process. Never
+  `unwrap_or_default()`: a write follows within seconds of launch, so one conflated failure
+  persists the defaults over every setting the user has.
 - **A draft of shared state commits a per-field diff against its seed, never the whole struct**
   (`Settings::merge_onto`, exhaustive via `settings_merge!`). "Anything to apply?" is `draft != seed`.
 - **The theme is pure derived state — deliberately not stored.** Copy `theme.peek().name` out before
@@ -609,6 +627,10 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   follow-up `on_press` — do double-click detection inside that same handler.
 - **`VirtualScrollView` memoizes its builder closure**, so captured snapshots go stale. Each child
   reads shared state reactively.
+- **A root-scoped task outlives the project subtree, so it asks before it writes one**
+  (`State::is_alive` / `RadioStation::is_alive`, both fork additions). Cancelling on unmount is
+  the other answer and the right one for work that should stop; a drop that is deleting data has
+  to finish, and only its *reporting* is skipped.
 - **A task spawned from a handler belongs to the scope that pressed it, so a press that unmounts
   its own control cancels its own work** — silently, before the first poll. A menu item that closes
   its menu, a dialog button that clears its own slot, a Stop that flips back to Send: all three
@@ -655,9 +677,11 @@ capability another task owns:
 
 - Ship the UI affordance **inert** — no handler behind it — and add a "wire into X" note to
   **both** task files. Whether it also *looks* unavailable is a design call, not a rule: a menu item
-  is **parked** (`MenuButton::enabled(false)`, `catalog/menu.rs`) because a menu is a list of things
+  is **parked** (`MenuButton::enabled(false)`) because a menu is a list of things
   you can do right now, while a surface's **primary call to action keeps its full dress** (the
   inspector's scan card) because greying it out misrepresents the canvas the surface is built to.
+  Nothing is parked today — the helper that spelled it went with the last task that needed one,
+  which is the second bullet applied to this bullet's own machinery.
   Either way the capability arrives with the task that owns it, and nothing at the call site changes
   but the handler.
 - Do **not** build the shared mechanism early, do not fold a local one-off, and leave **no
@@ -701,6 +725,11 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   real MinIO and is deliberately not `#[ignore]`d — an ignored test is one nobody runs. Point
   `DOCKER_HOST` at it if it is not on the default socket; CI gets one from
   `atomicjar/testcontainers-cloud-setup-action`.
+- **Read cargo's own exit status, never a pipe's.** `cargo test … | tail -20` and
+  `cargo test … | rg 'test result'` both report the *last stage's* status, so a run that failed to
+  compile reads as a pass and a filter that misses the failure line reads as a clean suite. Both
+  happened during the pre-release review, one of them twice. Redirect to a file and check `$?`, or
+  read the `test result:` lines themselves.
 - **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
   `adversarial-review` skill: isolated read-only lenses handed artifacts and the contract but never
   the intent, then a refutation gate that defaults to killing a finding. In front of the build
@@ -773,10 +802,15 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
 - **The app bundle is self-contained**, and that is a claim each new asset has to keep — naming a
   new font family or weight in a theme means embedding it in the same change.
 - **One Strata window across every session — enforced** by `.claude/hooks/block-second-strata.sh`.
-  A refusal, not a kill.
+  A refusal, not a kill — and it matches the built binary and a bundled `Strata.app` as well as
+  `cargo run`, because those open the same window the rule exists to prevent.
 - **No destructive git — enforced, not merely agreed.** `git checkout`/`restore`/`reset`/`clean` are
-  blocked by a `PreToolUse` hook that reads the whole command string, so chaining behind `&&`, `;`
-  or `$(…)` does not get past it. Use `git switch`, `git stash`, `git diff`, or ask. Any other
+  blocked by a `PreToolUse` hook that reads the whole command string **normalized** — quotes
+  stripped, line continuations folded — so chaining behind `&&`, `;` or `$(…)` does not get past
+  it, and neither does a quoted verb or a backslash-newline between the two words. It over-matches
+  by design (a sentence *about* one of these verbs is refused too, this bullet included); a
+  rephrase is the cheap error and a miss is the expensive one. Both hooks **fail closed** without
+  `jq`, since a hook that cannot read the payload must not answer "allow". Use `git switch`, `git stash`, `git diff`, or ask. Any other
   delete/overwrite of work you didn't just create: standalone, explicitly described, and not at all
   with substantial uncommitted work in the tree unless you have asked.
 - **Task files are the working contract.** Keep the `.claude/tasks/` file true — corrections, wiring

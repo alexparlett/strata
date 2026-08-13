@@ -14,7 +14,6 @@ use crate::components::metrics::{SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::typography::{Body, InputTypography};
 use crate::keymap::on_command;
-use crate::theme::{use_roles, Role};
 use freya::components::DragZone;
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -34,6 +33,10 @@ define_theme!(
         color: Color,
         active_color: Color,
         accent: Color,
+        /// The resting close glyph. A field rather than a role read beside the destructure: once a
+        /// component has a theme, every colour it paints is one of that theme's own (AGENTS.md §3),
+        /// and the × had been the one exception.
+        close: Color,
     }
 );
 
@@ -368,10 +371,13 @@ impl Component for TabChrome {
             color,
             active_color,
             accent,
+            close,
             ..
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
-        let (dot_color, x_color) = (tones().warning, use_roles().get(Role::TextDisabled));
+        // The dot stays a semantic tone — that is the sanctioned exception, and "unsaved" is a
+        // meaning rather than this component's dress.
+        let (dot_color, x_color) = (tones().warning, close);
 
         let (bg, fg, accent_fill) = if self.active {
             (active_background, active_color, accent)

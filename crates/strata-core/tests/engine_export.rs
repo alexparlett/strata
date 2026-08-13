@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use strata_core::engine::export::{
     Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
@@ -18,8 +19,10 @@ use strata_core::engine::{Engine, RunOutcome, RunTag, WsId};
 /// Five rows, three columns, unsorted on `column1` so a sorted export is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
 
-fn engine() -> Engine {
-    Engine::new(Default::default())
+/// An `Arc`, because `Engine::export` takes `&Arc<Self>`: the pin and the in-flight count it
+/// claims are handed to the spawned write and have to outlive the call that started it.
+fn engine() -> Arc<Engine> {
+    Arc::new(Engine::new(Default::default()))
 }
 
 /// A unique scratch directory per test, removed on the way out by the caller.
@@ -464,7 +467,7 @@ async fn a_partition_column_that_isnt_a_bare_word_fails_before_planning() {
 async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
     let dir = scratch("pin-rerun");
     let out = dir.join("out.csv");
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
 
     let (first, _) = eng
         .query(WsId(1), RunTag(1), SQL.into(), 2)
@@ -504,7 +507,7 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
 
 #[tokio::test]
 async fn an_unpinned_snapshot_still_retires_at_the_rerun() {
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
     let (first, _) = eng
         .query(WsId(1), RunTag(1), SQL.into(), 2)
         .await
@@ -522,7 +525,7 @@ async fn an_unpinned_snapshot_still_retires_at_the_rerun() {
 
 #[tokio::test]
 async fn the_last_hold_is_the_one_that_retires() {
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
     let (first, _) = eng
         .query(WsId(1), RunTag(1), SQL.into(), 2)
         .await
@@ -551,7 +554,7 @@ async fn the_last_hold_is_the_one_that_retires() {
 /// Closing the tab is the other retire path a pin has to survive.
 #[tokio::test]
 async fn a_pin_survives_the_owning_tab_closing() {
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
     let (first, _) = eng
         .query(WsId(1), RunTag(1), SQL.into(), 2)
         .await
@@ -574,7 +577,7 @@ async fn a_pin_survives_the_owning_tab_closing() {
 /// deferral only fires for a retire that actually arrived.
 #[tokio::test]
 async fn releasing_a_pin_alone_retires_nothing() {
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
     let (first, _) = eng
         .query(WsId(1), RunTag(1), SQL.into(), 2)
         .await
@@ -587,17 +590,24 @@ async fn releasing_a_pin_alone_retires_nothing() {
         .expect("still the workspace's current snapshot");
 }
 
-/// **A dropped export future must not leak its bookkeeping.** `Engine::export` awaits, and its
-/// caller is a UI task that is dropped when the export window closes — so if the count and the
-/// pin were released *after* the await, closing the window mid-write would leave the engine
-/// permanently claiming work in flight and holding a snapshot nothing can retire.
+/// **A dropped export future hands its bookkeeping to the write, and gets it back when the write
+/// ends.** `Engine::export` awaits, and its caller is a UI task dropped when the export window
+/// closes — while the write itself is spawned and detaches.
+///
+/// Both halves are asserted here because each one was wrong at some point. A guard released
+/// *after* the await would leave the engine permanently claiming work in flight and holding a
+/// snapshot nothing can retire; a guard living in the **caller's future** — which is what shipped
+/// until the pre-release review — releases the pin the moment the window closes, so a re-run in
+/// the owning tab retires the snapshot the `COPY` is still streaming and the user's file ends
+/// truncated with nothing to report it. The hold therefore rides on the spawned write: claimed
+/// for exactly as long as there is a write, and released on every path that write can end by.
 #[tokio::test]
-async fn dropping_an_export_mid_write_releases_its_pin_and_its_count() {
+async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
     let dir = scratch("export-cancelled");
     let out = dir.join("out.csv");
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
 
-    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     eng.watch_inflight(flag.clone());
 
     let (first, _) = eng
@@ -613,18 +623,37 @@ async fn dropping_an_export_mid_write_releases_its_pin_and_its_count() {
 
         let fut = eng.export(snap, spec(&out, Format::Csv(csv())));
         futures::pin_mut!(fut);
-        // One poll so the guard is taken and the work is dispatched, then drop it unfinished.
+        // One poll so the hold is taken and the work is dispatched, then drop it unfinished.
         let waker = futures::task::noop_waker();
         let mut cx = std::task::Context::from_waker(&waker);
         let _ = fut.as_mut().poll(&mut cx);
     }
 
+    // **The write outlives its caller and finishes the file.** Bounded rather than unbounded: a
+    // hold that is never released is the leak this test's first version was written for, and it
+    // has to fail here rather than hang.
+    let mut settled = false;
+    for _ in 0..400 {
+        if !flag.load(std::sync::atomic::Ordering::Relaxed) {
+            settled = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
     assert!(
-        !flag.load(std::sync::atomic::Ordering::Relaxed),
-        "a dropped export must not leave the engine claiming work in flight"
+        settled,
+        "the hold must be released when the write ends, or the engine claims work forever"
     );
 
-    // And the pin went with it, so the snapshot retires on the next re-run like any other.
+    // The file is whole — header plus all five rows — which is the thing the pin was protecting.
+    let written = fs::read_to_string(&out).expect("the dropped caller still left a file");
+    assert_eq!(
+        written.lines().count(),
+        6,
+        "a detached write must still finish its file: {written:?}"
+    );
+
+    // And the pin went with the write, so the snapshot retires on the next re-run like any other.
     eng.query(WsId(1), RunTag(2), SQL.into(), 2)
         .await
         .expect("re-run");
@@ -667,7 +696,7 @@ async fn exporting_without_a_snapshot_says_so_plainly() {
 async fn a_partition_column_with_nulls_is_refused() {
     let dir = scratch("partition-null");
     let out = dir.join("tree");
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
 
     let (output, _) = eng
         .query(
@@ -704,7 +733,7 @@ async fn a_partition_column_with_nulls_is_refused() {
 async fn a_partition_column_without_nulls_is_allowed() {
     let dir = scratch("partition-no-null");
     let out = dir.join("tree");
-    let eng = std::sync::Arc::new(engine());
+    let eng = engine();
 
     let (output, _) = eng
         .query(

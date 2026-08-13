@@ -132,15 +132,6 @@ impl CatalogActions {
             .child(menu_row(icon, label))
     }
 
-    /// An item whose target isn't built yet: rendered, disabled, so the menu shows the row's
-    /// full vocabulary and the shape can't drift when the owning task lands.
-    #[allow(dead_code)]
-    fn parked(&self, icon: IconName, label: impl Into<String>) -> MenuButton {
-        MenuButton::new()
-            .enabled(false)
-            .child(menu_row(icon, label))
-    }
-
     /// **Ask about this row** (AS-04): open the chat pane with the entry pinned, so the schema
     /// is attached to the next question rather than spent as a tool round.
     ///

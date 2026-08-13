@@ -182,7 +182,12 @@ done
 
 step "Assembling $APP_NAME.app"
 
-rm -rf "$APP"
+# The whole output directory, not just this version's files. The release workflow attaches
+# `target/dist/*.dmg` and `target/dist/*.zip` by glob, and every artifact here carries its version
+# in its name - so a previous version's DMG left behind on a machine that builds twice rides onto
+# the next release page as a second, stale download. Clearing the directory is what makes the glob
+# mean "what this run produced", which is what the workflow assumes it means.
+rm -rf "$DIST"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 BINARIES=()
@@ -325,6 +330,20 @@ fi
 
 # Submit one file and wait for Apple's verdict. `notarytool submit --wait` exits non-zero on a
 # rejection, so `set -e` stops the build rather than shipping something Apple refused.
+#
+# The Apple-ID rung passes its password as an argument, which is visible to any `ps` on the
+# machine for the minutes a submission takes. That is a real (if small) exposure on a shared
+# builder, and it stays, because notarytool offers no safe alternative that works unattended:
+# `xcrun notarytool submit --help` documents exactly three ways in, and only this one can be
+# scripted. Omitting `--password` gives "a secure prompt on the command line", which hangs a
+# build; there is no stdin convention (`--password -` submits the literal string `-` and Apple
+# rejects it, which `set -e` then turns into a failed release). The one real fix is
+# `notarytool store-credentials` + `--keychain-profile`, and that needs a keychain profile set up
+# on the builder ahead of time - worth doing if this rung ever runs anywhere shared, but it is a
+# setup step rather than a change to this line.
+#
+# The API-key rung above is the preferred one and the only one CI wires, and it passes a file
+# *path* rather than a secret, so it was never exposed this way.
 notarize() {
   case "$HAVE_NOTARY" in
     1) xcrun notarytool submit "$1" --key "$AC_API_KEY_PATH" --key-id "$AC_API_KEY_ID" \

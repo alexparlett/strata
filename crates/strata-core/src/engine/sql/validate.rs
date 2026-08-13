@@ -490,14 +490,26 @@ pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict {
         // statement the editor would run itself is refused before it can collide with
         // a live snapshot registration — which the provider answers "already exists"
         // to, so the collision costs a *Run*, on a name the same prefix hides from
-        // every catalog reader. The agent column is untouched — it already refuses
-        // every intercepted form, with its own words.
+        // every catalog reader.
+        //
+        // **Reads included, which means plain queries too.** A `SELECT * FROM __snap_3`
+        // classifies as an ordinary query, and left to run it hands back another tab's
+        // retained result carrying `__strata_ord` as an ordinary column — which Export
+        // then writes into the user's file, around the very fence that keeps the
+        // ordinal out of a typed `COPY`'s output. One namespace, one answer, whatever
+        // the statement's form.
         Capability::Editor => match editor {
-            Verdict::Intercept(_) if names_reserved(stmt) => Verdict::Refuse(Blocked::ReservedName),
+            Verdict::Intercept(_) | Verdict::Query if names_reserved(stmt) => {
+                Verdict::Refuse(Blocked::ReservedName)
+            }
             verdict => verdict,
         },
+        // The agent's own refusals come first and keep their wording — it already
+        // refuses every intercepted form, and a reserved name is not why. What is left
+        // is the read, which leaks the same ordinal into a tool result.
         Capability::Agent => match agent {
             Some(blocked) => Verdict::Refuse(blocked),
+            None if names_reserved(stmt) => Verdict::Refuse(Blocked::ReservedName),
             None => Verdict::Query,
         },
     }
@@ -647,8 +659,13 @@ fn names_reserved(stmt: &DFStatement) -> bool {
             };
             targets.iter().any(is_reserved) || reads_reserved(s.as_ref())
         }
-        // Never intercepted (`EXPLAIN`), or naming nothing (`RESET`).
-        DFStatement::Explain(_) | DFStatement::Reset(_) => false,
+        // `EXPLAIN` names whatever its inner statement names, and is asked here rather than
+        // waved through: it is a *query* verdict, and since this predicate now gates those too,
+        // stopping at the wrapper would make `EXPLAIN SELECT * FROM __snap_3` the one spelling
+        // that still resolves a reserved name.
+        DFStatement::Explain(explain) => names_reserved(&explain.statement),
+        // Names nothing.
+        DFStatement::Reset(_) => false,
     }
 }
 
@@ -1567,7 +1584,7 @@ mod tests {
     /// registration — which fails as "already exists", on a name the same prefix keeps
     /// invisible.
     #[test]
-    fn a_snapshot_name_is_refused_in_an_intercepted_statement() {
+    fn a_snapshot_name_is_refused_in_any_statement() {
         for sql in [
             // Written.
             "CREATE EXTERNAL TABLE __snap_2 STORED AS PARQUET LOCATION 'f.parquet'",
@@ -1581,6 +1598,18 @@ mod tests {
             "CREATE TABLE mine AS SELECT * FROM __snap_3",
             "COPY (SELECT * FROM __snap_3) TO 'out.parquet'",
             "COPY __snap_3 TO 'out.parquet'",
+            // **A plain query too**, which the intercepted forms' fence used to let past on
+            // the grounds that snapshots are how results are addressed at all. They are — but
+            // that addressing is `fetch_page`'s and the chart's, which reach the snapshot
+            // through `ctx.sql` and never come by here. What a *typed* one buys is a way to
+            // read another tab's retained result with its `__strata_ord` showing as an ordinary
+            // column, and then to Export it: the ordinal reaches a user's file down a route the
+            // COPY fence never sees, which is the one thing that fence exists to stop.
+            "SELECT 1 FROM __snap_3",
+            "SELECT * FROM __snap_3",
+            // And through the wrapper, or `EXPLAIN` would be the one spelling that still
+            // resolves the name.
+            "EXPLAIN SELECT * FROM __snap_3",
         ] {
             let out = run(sql);
             assert_eq!(out.len(), 1, "{sql}: {out:?}");
@@ -1590,11 +1619,6 @@ mod tests {
                 "{sql}"
             );
         }
-        // A query may still read one — snapshots are how results are addressed at all,
-        // and only the intercepted forms can write or export through the prefix.
-        assert!(run("SELECT 1 FROM __snap_3")
-            .iter()
-            .all(|d| d.message != Blocked::ReservedName.editor_message()));
     }
 
     // ---- the capability axis (ED-01) ---------------------------------------

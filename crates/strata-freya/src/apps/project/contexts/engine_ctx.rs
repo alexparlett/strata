@@ -11,6 +11,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use freya::query::Captured;
+use strata_core::engine::export::ExportSpec;
 use strata_core::engine::{Engine, SnapshotPin};
 
 use strata_model::{ChartData, ChartQuery, SnapshotId, TabId, Trend};
@@ -51,7 +52,6 @@ impl EngineCtx {
 
     /// Wrap this handle for a freya-query capability field — invisible to cache identity.
     /// (Consumed by the results pane's `use_query` wiring, P2-02.)
-    #[allow(dead_code)]
     pub fn captured(&self) -> Captured<EngineCtx> {
         Captured(self.clone())
     }
@@ -71,6 +71,19 @@ impl EngineCtx {
     /// keeps the engine alive), and deref only ever hands out `&Engine`.
     pub fn pin_snapshot(&self, snapshot: SnapshotId) -> SnapshotPin {
         self.eng.pin_snapshot(snapshot)
+    }
+
+    /// Write `snapshot` to a file (P4-06) — the Export window's footer press.
+    ///
+    /// Not reachable through `Deref` for the same reason [`Self::pin_snapshot`] isn't:
+    /// [`Engine::export`] takes `&Arc<Engine>`, because the pin and the in-flight count it
+    /// claims are handed to the spawned write and have to outlive this call.
+    pub async fn export(
+        &self,
+        snapshot: SnapshotId,
+        spec: ExportSpec,
+    ) -> Result<(String, usize), String> {
+        self.eng.export(snapshot, spec).await
     }
 
     /// Read `snapshot` as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the results Chart body's

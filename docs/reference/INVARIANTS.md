@@ -797,6 +797,23 @@ Things that must not regress. Each was fought for once already.
   satellite and read the field directly, so they never had a filtered view to avoid. And for
   the same reason, the log says the assistant **stopped** rather than disconnected: it never
   dialled in, so its "connection" is its own mount in the window.
+- **A root-scoped task outlives the project subtree, so it asks before it writes one.**
+  `spawn_forever` pins a task to `ScopeId::ROOT`, which is the right home for work that must
+  outlive the *tab* or the *dialog* that ordered it — a drop confirm closes itself in the same
+  tick it presses, and a scope-bound task there is cancelled before its first poll. But the
+  project subtree is keyed on `(root, generation)` and unmounts wholesale on a re-root **and** on
+  an engine restart (which is what a `runtime.*` Settings apply is), while the `EngineCtx` clone
+  the task carries keeps the outgoing engine alive — so the call completes and comes back to a
+  store whose owner has been dropped. `State::write_unchecked` panics on a freed box, and the
+  release panic hook ends the process.
+
+  Cancelling is one answer and the one `Chats::stop_all` takes, because a streaming turn holds a
+  provider connection and an engine run that genuinely should stop. It is the *wrong* answer for
+  a drop that is deleting a table's data, which has to finish. So the fork grows the predicate the
+  situation actually wants — `State::is_alive` / `RadioStation::is_alive`, a liveness question the
+  API could not previously express — and `refresh_table_rows` and both `drop_row` arms ask it
+  after the await. The work happens either way; only the reporting is skipped, because there is
+  nobody left to report to.
 - **The catalog is the `ProjectState` store, not a query.** Never build a `FetchCatalog`
   capability: introspecting DataFusion hides the defs whose registration **failed** — precisely
   the rows the catalog exists to show, because a table that is merely broken has no engine
@@ -1279,6 +1296,19 @@ Things that must not regress. Each was fought for once already.
   subscriber: lifetime is a held handle, never imperative bookkeeping. Never answer this with a
   warning or a staleness check instead — "your results moved" is a worse product than results
   that don't move, and a check races the very dispatch it is checking for.
+
+  **And a hold that protects spawned work belongs to that work, not to the call that started it.**
+  `Engine::export` plans on the caller's future but *drives* the write on a spawned task, and the
+  export window's press is a scope-bound `spawn` — so closing the window drops the caller while
+  the write is still streaming. A guard living in that future releases the pin and the in-flight
+  count right there: a re-run in the owning tab then retires the snapshot the `COPY` is reading
+  (deregistering the table and unlinking the IPC file), and the user's file ends truncated or its
+  Hive tree half-built, with nothing to report it — while the close-while-running flag has already
+  gone false, so quitting mid-write does not ask either. `ExportHold` is therefore owned and moves
+  into the task, released when the write ends however it ends. It holds a **`Weak<Engine>`**, which
+  is load-bearing rather than cautious: the task runs on the runtime the engine owns, so a strong
+  `Arc` would close a cycle (engine → runtime → task → hold → engine) and the engine would never
+  drop. The write does not need it either — `run_export` holds its own `SessionContext` clone.
 - **Silent corruption is refused, never warned about — and the refusal is checked against read
   data, not declared metadata.** DataFusion 54 misfiles a NULL partition value into a neighbouring
   value's directory, so a Hive-partitioned export whose key column has nulls writes rows under the
@@ -1521,14 +1551,46 @@ Things that must not regress. Each was fought for once already.
   silent rewording. Default stays deny — a parse failure is the caller-side `Err`, the sqlparser
   wildcard is `Refuse(Unsupported)`, and the five-variant DFParser match is wildcard-free so a new
   DataFusion statement is a compile error.
-  **Reserved names, read and write**: a `__snap_`-prefixed identifier anywhere in an *intercepted*
-  statement — targets included — is refused, because the same prefix hides the collision from every
+  **Reserved names, read and write**: a `__snap_`-prefixed identifier anywhere in a statement the
+  user typed — targets included — is refused, because the same prefix hides the collision from every
   catalog reader and the collision itself is unrecoverable either way (the provider answers
   "already exists", so it is the *Run* that fails, on a name the user cannot see). The predicate is
   one function (`engine::query::is_snapshot_name`, beside `snapshot_name`) so the naming rule, the
   refusal and the hiding rule cannot drift; the write targets sqlparser does not annotate for
   `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name list) are named explicitly rather than
   assumed.
+
+  This fence covered only the **intercepted** forms until the pre-release review, on the stated
+  grounds that a query may read a snapshot because snapshots are how results are addressed at all.
+  They are — but that addressing is `fetch_page`'s, the chart's and the export's, every one of
+  which reaches the snapshot through `ctx.sql` and never passes the router, so the allowance bought
+  nothing the app uses. What it did buy was a typed `SELECT * FROM __snap_3`: another tab's
+  retained result, with `__strata_ord` showing as an ordinary column, which the **Export window**
+  then writes into the user's file — the ordinal reaching a user's file down a route the COPY
+  fence never sees, which is the single thing that fence exists to prevent. So the refusal covers
+  `Verdict::Query` too, on both surfaces (the agent's own refusals keep their wording and come
+  first), and `names_reserved` descends into an `EXPLAIN`'s inner statement, or that would be the
+  one spelling left that still resolves the name. No Strata surface composes SQL naming a snapshot,
+  so nothing in the app is refused by it.
+
+  The two funnels a def can reach without a statement carry the write half themselves:
+  `register_external` for tables, and `ddl::views::create` for views — which had no such backstop,
+  so a view saved as `__snap_7` through ⌘S or a hand-edited `project.json` registered into the
+  reserved namespace and cost a Run the first time the counter reached 7.
+- **A `COPY … TO` may not land in storage Strata owns, and the gate is the *resolved* target.**
+  The reserved-name half of that statement is the router's and covers the **source**; nothing looked
+  at where the write went. A `COPY … TO '<project>/.strata/tables/sales/extra.arrow'` drops a file
+  inside an internal table's directory, which that table's next scan lists — schema-matched it is
+  phantom rows, mismatched it is a table that has started failing, and silent corruption is refused
+  rather than warned about. The project's `.strata/` and the snapshot spool are the two fenced
+  roots, because they are the two places a stray file changes what Strata later *reads*; everywhere
+  else is the user's own disk, and a `COPY` that overwrites their file is the statement doing what
+  it says. Compared resolved and never as text: a relative `output_url` is the process's cwd away
+  from an absolute one, `.strata/../.strata/tables` names the directory without sharing its prefix,
+  and the target need not exist yet — so the path is made absolute, its `.`/`..` folded, and both
+  sides anchored on the deepest ancestor that does exist, which is what makes a symlinked project
+  folder compare equal. A target carrying a non-`file:` scheme belongs to an object store and is
+  not a path into this machine at all.
   Every interception is a **second gesture into a funnel that already exists**, never a second
   implementation: typed view DDL onto the body ⌘S runs (`ddl::views::create`, ED-06), a `SET` onto
   the `ConfigOptions::set` call `Engine::set_config` makes (ED-08), typed
@@ -1611,6 +1673,32 @@ Things that must not regress. Each was fought for once already.
   whole process on the way past. What reduces exposure here is **lifetime** — read a key per use,
   never cache one, never let it reach a buffer that outlives the call. Reopen only with a change
   that closes the chain, not a better allocator for one link of it.
+- **The config file is read three ways and written atomically, and a file this session could not
+  read is never written over.** `config::load` used to be `AppConfig::load(..).unwrap_or_default()`,
+  which read *absent*, *unparseable* and *unreadable* as one thing — and because `write_config`
+  fires on every project-window mount, the defaults it returned were persisted over the real file
+  within seconds of launch. One transient read failure therefore cost every keybind, every engine
+  override, the whole AI provider roster (whose `SecretRef`s then name keystore entries nothing
+  can reach again), the agent-access token and the recents list, with no copy kept anywhere.
+  `session.json` has had the corrupt-vs-unreadable split and the kept-aside file since P4-14; the
+  one file that cannot be regenerated by re-running anything had neither.
+
+  So: **absent** is an ordinary first launch. **Unparseable** — which includes a strict enum token
+  from a newer build, since one bad `Command` or `ProviderKind` fails the whole document — moves
+  the bytes to `<config>.corrupt` before returning defaults, so the settings are recoverable by
+  hand and the next write has nothing left to destroy. **Unreadable** returns defaults for the
+  session and latches `WRITABLE` off; it is only ever cleared, never set, so a restart is what
+  re-asks the question. The latch is deliberately not a `Result` threaded to the nine call sites:
+  the rule is about the file rather than any one write, and a per-call answer would be recomputed
+  identically at all nine.
+
+  The write is `util::write_atomic` — the same temp + `sync_all` + rename every `.strata/` write
+  uses. `preferences`' own `save` is `File::create` then `to_writer`: truncate first, no fsync, no
+  rename, so a kill mid-write leaves a config that parses as nothing, and two instances writing at
+  once race the same way. The crate keeps `AppInfo` and the JSON shape; `app_dirs2` (already in
+  the graph as `preferences`' own dependency) resolves the path, and a test asserts our path is
+  byte-for-byte the one it computed, so an upgrade cannot silently orphan every existing user's
+  settings.
 - **One app-global config store.** `RadioStation<AppConfig, ConfigChan>` created once in `main`,
   shared into every window (`use_share_config`). Disk is a startup input, read **once** — no file
   watching, ever; after launch only the UI writes. `write_config` (src/state/config.rs) is the

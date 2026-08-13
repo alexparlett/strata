@@ -689,9 +689,17 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .register(table())
         .await
         .expect_err("MinIO rejects the signature");
+    // **What the refusal says, not merely that there is one.** Any non-empty string passed this
+    // before — a registration bug, a wrong endpoint, a listing fault — so the phase asserted the
+    // credential bridge worked by asserting that *something* went wrong. MinIO answers a bad
+    // signature with a 403, and that is the specific thing this phase exists to reach.
+    let lower = refused.to_lowercase();
     assert!(
-        !refused.is_empty(),
-        "the table's row carries the server's refusal"
+        lower.contains("403")
+            || lower.contains("forbidden")
+            || lower.contains("access denied")
+            || lower.contains("signature"),
+        "the row should carry MinIO's rejection of the signature, got: {refused}"
     );
 
     // …and the connection editor needs nothing of its own for any of this: Save writes the def,

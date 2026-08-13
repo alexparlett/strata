@@ -75,7 +75,7 @@ pub fn is_snapshot_name(name: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(SNAPSHOT_PREFIX))
 }
 
-fn snapshots_root() -> String {
+pub(crate) fn snapshots_root() -> String {
     let mut d = env::temp_dir();
     d.push("strata_snapshots");
     d.to_string_lossy().into_owned()

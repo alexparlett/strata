@@ -620,6 +620,16 @@ fn dir_path(dir: &Path) -> String {
 /// `sales_eu`, and two tables sharing a directory would overwrite each other's data. It is only
 /// paid by a name that needed sanitizing, so the ordinary table's directory is simply its name —
 /// which matters, because that path is written into `project.json` and read by people.
+///
+/// **Injective within each half, and the halves can in principle meet**: `sales eu` slugs to
+/// `sales_eu-<hash>`, and a table literally named `sales_eu-<that same hash>` is all legal
+/// characters, so it takes the shortcut and lands in the same directory. Hashing safe names that
+/// *look* hashed would close that, and it is deliberately not done — this function's answer is
+/// the directory an **existing** table's data is already in, and `table_dir` re-derives it from
+/// the name on every drop. Changing the rule would therefore move the slug of tables already on
+/// disk, whose drop would then delete a path that does not exist and orphan the real one forever
+/// (the ED-05 failure the one-drop funnel exists to prevent). A collision that needs a user to
+/// name one table the hash of another is the smaller hazard, and it is the one that stays.
 fn slug(name: &str) -> String {
     let safe: String = name
         .chars()

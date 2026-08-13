@@ -11,7 +11,12 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
 - **Fix limitations in the fork, not around it.** When an app design starts reaching for a
   workaround (a registry, a scale-factor correction, a duplicated theme token), the right move is
   usually a semantic fix in the fork — deterministic listener ordering, logical `root_size`,
-  `SelectPlacement`, disabled colors on `ButtonColors`, `set_window_parent` all landed this way.
+  `SelectPlacement`, disabled colors on `ButtonColors`, `set_window_parent`, `State::is_alive`
+  all landed this way. The last one is the shape to copy when the gap is a *question the API
+  cannot ask*: `spawn_forever` exists so a task can outlive its component, `GenerationalBox`
+  already distinguishes a dropped value from a borrowed one, and only the `State` wrapper was
+  throwing that away and panicking on both. The app-side workaround would have been a registry of
+  task handles per subtree — a mechanism — where the fork wanted one predicate.
   The platform-specific half goes in its own `freya-winit` module beside `traffic_light.rs`
   (`cfg`-gated, a documented no-op elsewhere), the primitive on `RendererContext` (the only place
   that holds every window at once), and the discoverable API on `WinitPlatformExt` hopping to it —
@@ -54,6 +59,18 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **Read cargo's own exit status, never a pipe's.** `cargo test … | tail -20` and
+  `cargo test … | rg 'test result'` report the status of `tail` and `rg`, which is zero whatever
+  cargo did. The failure modes are both silent and both happened during the pre-release review: a
+  run piped to `tail -15` reported "exit code 0" while it had not compiled at all (the errors were
+  above the window), and a run piped to a `test result|FAILED` filter reported success while one
+  test binary had failed to build. Neither is a filter that can be tightened — the exit status is
+  simply not cargo's any more. Redirect to a file and check `$?`, or read the `test result:` lines,
+  which say `ok` or `FAILED` per binary and cannot be truncated into looking like the other.
+
+  The same trap sits under `cargo clippy … | tail` and under any `&&`-free chain that ends in a
+  formatter. It is worth naming because the reflex — pipe a long build through `tail` so the output
+  fits — turns the check into something that cannot fail.
 - **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the
   workspace rather than at every site it fires.** The command is
   `cargo clippy --workspace --all-targets --locked -- -D warnings`, and CI runs it before the
@@ -329,9 +346,11 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
 - **One Strata window across every session — enforced.** Several sessions can be live in several
   worktrees, and each can build its own binary; a second instance clobbers the shared app config
   (read once at startup, last writer wins for recents / settings / the open-project set). So
-  `.claude/hooks/block-second-strata.sh` refuses `cargo run` while any Strata is alive anywhere,
+  `.claude/hooks/block-second-strata.sh` refuses a launch while any Strata is alive anywhere,
   naming the worktree that owns it. A **refusal, not a kill**: the running window may be what the
-  user is looking at. This is a convention between agent sessions, *not* an app-level single-
+  user is looking at. A *launch* is `cargo run` **and** the two ways around it — running
+  `target/<profile>/strata-freya` directly, or `open`ing a bundled `Strata.app` — which put the
+  same second window on screen while the hook's own doc claimed the rule was enforced. This is a convention between agent sessions, *not* an app-level single-
   instance lock — that is a real feature (one process, N windows, a second launch focuses) and
   belongs to P4-01.
 - **No destructive git — now enforced, not merely agreed.** `git checkout`/`restore`/`reset`/
@@ -340,9 +359,24 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   command string, so chaining one behind `&&`, `;` or `$(…)` does not get past it — which is
   exactly how the rule was broken while it was only written down. Both hooks bound the verb with
   "not an identifier character" on **each** side: the git one originally required whitespace-or-end
-  *after* the verb, so `git reset;`, `git clean|cat` and `$(git clean)` slipped through the very
+  *after* the verb, so a trailing `;`, a `|cat` and a `$(…)` wrapper slipped through the very
   chaining forms it claimed to catch (found while building the Strata hook, which had copied the
-  pattern). If you add a third hook, copy the fixed pattern and test the terminator forms. Ask the user to run it, or reach
+  pattern).
+
+  Two later gaps, both of the same kind — **a regex over the raw string reads one spelling and the
+  shell reads all of them**. A quoted verb and a backslash-newline between the two words are the
+  same call and matched neither pattern, so the command is now **normalized** first: quotes
+  stripped, continuations and newlines folded to spaces. That over-matches on purpose (a sentence
+  *about* one of these verbs is refused too — this paragraph is, which is why it does not spell
+  them), and for a guard standing in front of unrecoverable data loss a refusal the user can
+  rephrase around is the cheap error. And both hooks used `set -uo pipefail` with no `-e`, so a
+  missing `jq` left the command empty, matched nothing and **silently allowed everything**; they
+  now fail closed with a deny that names the missing tool. If you add a third hook, copy the fixed
+  pattern, fail closed the same way, and add its cases to **`.claude/hooks/test-hooks.sh`** — a
+  runnable harness over both hooks (`bash .claude/hooks/test-hooks.sh`) covering the terminator,
+  quoting, continuation and missing-`jq` forms, so the next gap of this kind fails a test instead
+  of being found by a review. It spells none of the guarded verbs literally, because the git hook
+  reads the argv of the very call that runs it. Ask the user to run it, or reach
   for something that destroys nothing: `git switch` to change branch, `git stash` to park work,
   `git diff` to inspect. Any other delete/overwrite of work you didn't just create still follows
   the original rule: **standalone**, with an explicit description, and not at all when there is
