@@ -66,15 +66,22 @@ profiling) sit on the tree.
   at connect, lists tables lazily, and builds providers through `PostgresTableFactory` (dialect
   + federation included), cached per table so diagnostics' validation costs one remote
   introspection per table per connect, not one per keystroke.
-- **Federation is installed unconditionally, in `build_context`.**
-  `datafusion_federation::default_optimizer_rules()` (inserts `FederationOptimizerRule` after
-  `scalar_subquery_to_join` — the ordering is load-bearing, decorrelation must run first) plus
-  `FederatedQueryPlanner` as the query planner. With no `FederatedTableProviderAdaptor` in a
-  plan the rule is a no-op, so local-only projects pay nothing. The query-planner slot is
+- **Federation is installed unconditionally, in `build_context`.** ✅ **built (DB-01,
+  2026-08-13).** `datafusion_federation::default_optimizer_rules()` (inserts
+  `FederationOptimizerRule` after `scalar_subquery_to_join` — the ordering is load-bearing,
+  decorrelation must run first) plus `FederatedQueryPlanner` as the query planner, both on a
+  `SessionStateBuilder` that inlines what `SessionContext::new_with_config_rt` did. With no
+  `FederatedTableProviderAdaptor` in a plan the rule rewrites nothing, so local-only projects
+  pay a walk that finds nothing. The query-planner slot is
   single-occupancy: we use the default planner today, and `FederatedQueryPlanner` is the default
   planner plus one extension planner, so this is a no-op swap — but a future custom planner must
   *include* `FederatedPlanner` rather than replace it. Statement routing is in front of
-  DataFusion and is unaffected.
+  DataFusion and is unaffected. **One correction from building it:** "no-op" holds for every plan
+  DataFusion can execute, but not *structurally* — the rule's expression walk refuses
+  `Expr::InSubquery` before it looks at providers, so a surviving one now errors naming the
+  federation rule. Measured both ways: the only shape that reaches it is one DataFusion's
+  physical planner already refused, so nothing that worked stopped working and only the wording
+  changed. DB-01's file has the table.
 - **The no-secrets rule is rewritten, not routed around.** Alex (2026-08-13): the rule was a
   consequence of the keystore not existing when W7 was built, not a standing prohibition. The
   password is captured in the editor exactly as `ai/keys.rs` captures a provider key (typed →
@@ -179,7 +186,12 @@ profiling) sit on the tree.
   federation seam, with a named refusal for anything unmapped. `IN (subquery)` reaching the
   federation scanner is `not_impl_err`, and `datafusion.optimizer.skip_failed_rules` defaults
   to `false`, so such a query errors rather than degrading — DF's decorrelation usually
-  removes these first; the integration test pins one.
+  removes these first; the integration test pins one. **Measured at DB-01**: the refusal is
+  raised by the rule's *expression* walk, before any provider is consulted, so it is not
+  specific to a remote query — but the one shape that survives decorrelation to reach it
+  (`SELECT a IN (SELECT …) FROM t`) is one DataFusion's physical planner already refuses, so
+  the local blast radius is a changed error message and nothing more. DB-01's file has the
+  before/after table.
 - **TLS is native-tls** (Security.framework on macOS — fine, and no bundle-self-containment
   impact); `verify-ca`/`verify-full` are the crate's emulation over tokio-postgres.
 - **Pool lifetime**: bb8 spawns a driver task per connection; the pool must live on the
@@ -190,7 +202,7 @@ profiling) sit on the tree.
 
 | # | Task | Status | Depends on |
 |---|---|---|---|
-| DB-01 | Federation groundwork in `build_context` | ⬜ | — |
+| DB-01 | Federation groundwork in `build_context` | ✅ | — |
 | DB-02 | The Postgres arm: model, secrets, pool, catalog provider, registration | ⬜ | DB-01 |
 | DB-03 | Statement policy over remote catalogs | ⬜ | DB-02 |
 | DB-04 | The connection editor's Postgres form | ⬜ | DB-02 |

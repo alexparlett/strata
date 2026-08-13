@@ -106,9 +106,10 @@ use std::time::Instant;
 use datafusion::common::TableReference;
 use datafusion::execution::runtime_env::RuntimeEnv;
 // `register_udf` is `FunctionRegistry`'s, not an inherent method on `SessionState`.
-use datafusion::execution::{FunctionRegistry, SessionState};
+use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
 use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::*;
+use datafusion_federation::{default_optimizer_rules, FederatedQueryPlanner};
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
@@ -1825,17 +1826,50 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     // Source spans on planner errors power the validator's squiggles (P2-18) — owned,
     // like the catalog names, so an override can't silently degrade diagnostics.
     config.options_mut().sql_parser.collect_spans = true;
-    let mut ctx = match build_runtime(overrides) {
-        Ok(rt) => SessionContext::new_with_config_rt(config, rt),
+    let rt = match build_runtime(overrides) {
+        Ok(rt) => rt,
         Err(e) => {
             tracing::warn!("engine runtime config invalid ({e}); using defaults");
-            // Not `new_with_config`: that would take DataFusion's whole runtime, list-files
-            // cache included, and a bad *memory limit* must not quietly turn the file listings
-            // stale as well. Fall back to our own defaults with no overrides applied.
-            let rt = build_runtime(&BTreeMap::new()).expect("default runtime");
-            SessionContext::new_with_config_rt(config, rt)
+            // Not DataFusion's own `RuntimeEnv::default()`: that would take its whole runtime,
+            // list-files cache included, and a bad *memory limit* must not quietly turn the file
+            // listings stale as well. Fall back to our own defaults with no overrides applied.
+            build_runtime(&BTreeMap::new()).expect("default runtime")
         }
     };
+    // Built through `SessionStateBuilder` rather than `SessionContext::new_with_config_rt`,
+    // because the two federation slots (DB-01) exist only on the builder. The first three calls
+    // *are* `new_with_config_rt`'s body verbatim (DF 54 `context/mod.rs`), so nothing about the
+    // config, the runtime env or the default feature set moves — only the two lines below them.
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(rt)
+        .with_default_features()
+        // Federation (DB workstream): DataFusion's own default rule list with
+        // `FederationOptimizerRule` inserted immediately after `scalar_subquery_to_join`, which
+        // is where it has to sit — scalar subqueries must be decorrelated before the rule walks
+        // the plan looking for a federatable subtree. Installed unconditionally: it *rewrites*
+        // only a plan containing a `FederatedTableProviderAdaptor`, so a project with nothing but
+        // files pays a walk that finds nothing.
+        //
+        // It is not, however, a **structural** no-op, which is worth knowing before diagnosing a
+        // report of "federation" in an error on a file-only project. The rule's expression walk
+        // refuses `Expr::InSubquery` (`not_impl_err`) before it consults any provider, and
+        // `datafusion.optimizer.skip_failed_rules` is `false`, so a surviving one fails the
+        // query naming this rule. `DecorrelatePredicateSubquery` runs immediately ahead of it and
+        // removes every filter-position shape; what is left — `SELECT a IN (SELECT …) FROM t`, an
+        // `InSubquery` in a projection — is one DataFusion's *physical* planner already refused
+        // ("Physical plan does not support logical expression InSubquery"), a few steps later.
+        // Measured both ways at DB-01: nothing that ran stopped running, only the wording moved.
+        .with_optimizer_rules(default_optimizer_rules())
+        // **The query-planner slot is single-occupancy.** `FederatedQueryPlanner` is
+        // `DefaultPhysicalPlanner::with_extension_planners([FederatedPlanner])` — the default
+        // planner plus one extension planner for the `Federated` plan node — so this swap is a
+        // no-op for every plan that has no such node. A future custom `QueryPlanner` must
+        // therefore *include* `FederatedPlanner` among its extension planners rather than
+        // displace it, or federated subplans stop being physically plannable at all.
+        .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
+        .build();
+    let mut ctx = SessionContext::new_with_state(state);
     // Our own catalog + schema, in place of the `MemoryCatalogProvider` the session builder
     // just registered under the same name, and **before** anything registers a table: identity
     // (one schema, folded names) and visibility (result snapshots resolve but do not
