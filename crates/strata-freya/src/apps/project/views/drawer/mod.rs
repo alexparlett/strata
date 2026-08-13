@@ -119,17 +119,9 @@ impl Component for Drawer {
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
         let tab = layout.drawer.unwrap_or(DrawerTab::Problems);
-        // The remembered restore height *is* the expanded flag — see
-        // `SessionState::toggle_drawer_height`.
         let expanded = layout.drawer_restore_h.is_some();
-        // One source for every colour the drawer paints (AGENTS.md §3) — the sheet is reached for
-        // only inside the bodies, and only for the semantic severity ramp.
         let theme = get_theme!(&self.theme, DrawerThemePreference, "drawer");
-        // The body's tally. Each body resets it on unmount, so switching tabs can never leave the
-        // previous one's number under the new one's title.
         let count: DrawerCount = use_state(|| 0usize);
-        // The two logs **Clear** empties, one per tab (below), and the project whose
-        // `history.jsonl` the History one has to unwrite as well.
         let log = use_consume::<LogCtx>();
         let history = use_consume::<HistoryCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
@@ -167,9 +159,6 @@ impl Component for Drawer {
             .height(Size::px(24.))
             .on_press(move |_| {
                 let mut radio = radio;
-                // Two halves of one resize: the layout write re-seeds the panel's
-                // `initial_size` (its next mount, and the session file), and the controller
-                // moves the panel that is on screen now.
                 let h = radio.write_channel(Chan::Layout).toggle_drawer_height();
                 set_drawer_panel_height(sizing, h);
             })
@@ -183,13 +172,6 @@ impl Component for Drawer {
             );
 
         let shown = *count.read();
-        // Clear: the two log tabs only (never Problems — see the module doc). Events empties the
-        // window's ephemeral event log; History empties the satellite **and** removes
-        // `history.jsonl`, so the rows don't come straight back on the next open.
-        //
-        // Enabled off the mounted body's **count** rather than a second read of either log: for
-        // both tabs the count *is* the list's length, so the number in the header and the button
-        // beside it can never disagree.
         let clear = (tab != DrawerTab::Problems).then(|| {
             Button::new()
                 .flat()
@@ -215,9 +197,6 @@ impl Component for Drawer {
                     .width(Size::fill())
                     .height(Size::px(DRAWER_HEADER_HEIGHT))
                     .horizontal()
-                    // Flex with a flexing title run rather than `SpaceBetween` between two hugging
-                    // clusters (P5-06) — see the inspector header for why the old shape drew the
-                    // two over each other once the drawer got narrow.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
                     .spacing(SP_3)
@@ -233,11 +212,6 @@ impl Component for Drawer {
                                     .color(theme.label_color)
                                     .text_overflow(TextOverflow::Ellipsis),
                             )
-                            // Problems puts its **scopes** here instead of a number: each tab
-                            // carries its own count, so a total beside the title would be a third
-                            // copy of the same two figures (the IntelliJ arrangement — the panel
-                            // name and its scopes share one bar). The other two tabs have one
-                            // list and so one tally.
                             .maybe_child((tab == DrawerTab::Problems).then_some(ScopeStrip))
                             .maybe_child(
                                 (tab != DrawerTab::Problems && shown > 0)

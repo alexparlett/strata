@@ -151,8 +151,6 @@ impl CodeEditorData {
     /// the longest-line measurement from scratch (a whole-buffer rewrite has no useful
     /// incremental state).
     pub fn set_text(&mut self, text: &str) {
-        // A programmatic rewrite is its own undo step (and its own history change, so
-        // dirty tracking sees it) — never merged into the last typing burst.
         self.history.seal_transaction();
         let len = self.rope.len_utf16_cu();
         if len > 0 {
@@ -164,7 +162,6 @@ impl CodeEditorData {
         self.selection = TextSelection::new_cursor(self.rope.len_utf16_cu());
         self.dragging = TextDragging::default();
         self.pending_edit = None;
-        // A whole-buffer rewrite invalidates every span; validation re-derives them.
         self.decorations.clear();
         self.hover = None;
         self.metrics.highlighter.invalidate_tree();
@@ -197,8 +194,6 @@ impl CodeEditorData {
         self.selection = TextSelection::new_cursor(start + inserted);
         self.dragging = TextDragging::default();
         self.pending_edit = None;
-        // Decoration spans around the edit may have shifted; the popup hover must not
-        // pin to stale facts. The squiggles themselves refresh on the next validation.
         self.hover = None;
         self.metrics.highlighter.invalidate_tree();
         self.parse();
@@ -225,8 +220,6 @@ impl CodeEditorData {
                     return None;
                 }
                 let start = self.rope.byte_to_char(start);
-                // `byte_to_char` floors a mid-char byte; keep at least one char covered,
-                // clamped back inside the rope.
                 let end = self
                     .rope
                     .byte_to_char(end)
@@ -243,8 +236,6 @@ impl CodeEditorData {
             return false;
         }
         self.decorations = decorations;
-        // The spans under the mouse may be gone/moved — don't leave a popup pinned to
-        // stale facts; the next pointer move re-establishes it.
         self.hover = None;
         true
     }
@@ -279,7 +270,6 @@ impl CodeEditorData {
         };
         match (&self.hover, &target) {
             (None, None) => false,
-            // Same decoration under the pointer — keep the frozen anchor.
             (Some(h), Some(t)) if h.deco == t.deco => false,
             _ => {
                 self.hover = target;
@@ -394,7 +384,6 @@ impl CodeEditorData {
 
                     let dist_position = location.mul(*scale_factor);
 
-                    // Calculate the end of the highlighting
                     let dist_char = paragraph
                         .get_glyph_position_at_coordinate(dist_position.to_i32().to_tuple());
                     let to = dist_char.position as usize;
@@ -406,14 +395,11 @@ impl CodeEditorData {
 
                     let current_selection = self.selection().clone();
 
-                    // Extends by whatever unit the press used, so a drag after a double
-                    // press moves word by word instead of undoing the word it selected.
                     let dragging = self.dragging.clone();
                     let pointer = self.measure_selection(to, editor_line).pos();
                     let new_selection =
                         self.drag_selection(pointer, &dragging, current_selection.clone());
 
-                    // Update the cursor if it has changed
                     if current_selection != new_selection {
                         *self.selection_mut() = new_selection;
                         processed = true;
@@ -423,26 +409,22 @@ impl CodeEditorData {
             EditableEvent::Release => {
                 self.dragging.clicked = false;
             }
-            EditableEvent::KeyDown { key, modifiers } => {
-                match key {
-                    // Handle dragging
-                    Key::Named(NamedKey::Shift) => {
-                        self.dragging.shift = true;
+            EditableEvent::KeyDown { key, modifiers } => match key {
+                Key::Named(NamedKey::Shift) => {
+                    self.dragging.shift = true;
+                }
+                _ => {
+                    let event = self.process_key(key, &modifiers, true, true, true, true);
+                    if event.contains(TextEvent::TEXT_CHANGED) {
+                        self.parse();
+                        self.measure(font_size, font_family, font_weight);
+                        self.dragging = TextDragging::default();
                     }
-                    // Handle editing
-                    _ => {
-                        let event = self.process_key(key, &modifiers, true, true, true, true);
-                        if event.contains(TextEvent::TEXT_CHANGED) {
-                            self.parse();
-                            self.measure(font_size, font_family, font_weight);
-                            self.dragging = TextDragging::default();
-                        }
-                        if !event.is_empty() {
-                            processed = true;
-                        }
+                    if !event.is_empty() {
+                        processed = true;
                     }
                 }
-            }
+            },
             EditableEvent::KeyUp { key, .. } => {
                 if *key == Key::Named(NamedKey::Shift) {
                     self.dragging.shift = false;
@@ -473,7 +455,6 @@ impl TextEditor for CodeEditorData {
         let idx_utf8 = self.utf16_cu_to_char(idx);
         let selection = self.selection.clone();
 
-        // Capture byte offset and position before mutation for InputEdit.
         let start_byte = self.rope.char_to_byte(idx_utf8);
         let start_line = self.rope.char_to_line(idx_utf8);
         let start_line_byte = self.rope.line_to_byte(start_line);
@@ -485,8 +466,7 @@ impl TextEditor for CodeEditorData {
 
         let inserted_text_len = len_after_insert - len_before_insert;
 
-        // Compute new end position after insertion.
-        let new_end_char = idx_utf8 + 1; // one char inserted
+        let new_end_char = idx_utf8 + 1;
         let new_end_byte = self.rope.char_to_byte(new_end_char);
         let new_end_line = self.rope.char_to_line(new_end_char);
         let new_end_line_byte = self.rope.line_to_byte(new_end_line);
@@ -516,7 +496,6 @@ impl TextEditor for CodeEditorData {
         let idx_utf8 = self.utf16_cu_to_char(idx);
         let selection = self.selection.clone();
 
-        // Capture byte offset and position before mutation for InputEdit.
         let start_byte = self.rope.char_to_byte(idx_utf8);
         let start_line = self.rope.char_to_line(idx_utf8);
         let start_line_byte = self.rope.line_to_byte(start_line);
@@ -528,7 +507,6 @@ impl TextEditor for CodeEditorData {
 
         let inserted_text_len = len_after_insert - len_before_insert;
 
-        // Compute new end position after insertion.
         let inserted_chars = text.chars().count();
         let new_end_char = idx_utf8 + inserted_chars;
         let new_end_byte = self.rope.char_to_byte(new_end_char);
@@ -562,7 +540,6 @@ impl TextEditor for CodeEditorData {
         let text = self.rope.slice(range.clone()).to_string();
         let selection = self.selection.clone();
 
-        // Capture byte offsets and positions before mutation for InputEdit.
         let start_byte = self.rope.char_to_byte(range.start);
         let old_end_byte = self.rope.char_to_byte(range.end);
         let start_line = self.rope.char_to_line(range.start);
@@ -578,7 +555,6 @@ impl TextEditor for CodeEditorData {
 
         let removed_text_len = len_before_remove - len_after_remove;
 
-        // After removal, new_end == start (the removed range collapses to a point).
         self.pending_edit = Some(InputEdit::new_edit(
             start_byte,
             old_end_byte,
@@ -675,7 +651,6 @@ impl TextEditor for CodeEditorData {
             TextSelection::Range { from, to } => (from, to),
         };
 
-        // Use left-to-right selection
         let (start, end) = if start < end {
             (start, end)
         } else {
@@ -690,7 +665,6 @@ impl TextEditor for CodeEditorData {
     }
 
     fn undo(&mut self) -> Option<TextSelection> {
-        // Undo can make arbitrary changes — invalidate the tree for a full re-parse.
         self.pending_edit = None;
         self.metrics.highlighter.invalidate_tree();
         let undone = self.history.undo(&mut self.rope);
@@ -701,7 +675,6 @@ impl TextEditor for CodeEditorData {
     }
 
     fn redo(&mut self) -> Option<TextSelection> {
-        // Redo can make arbitrary changes — invalidate the tree for a full re-parse.
         self.pending_edit = None;
         self.metrics.highlighter.invalidate_tree();
         let redone = self.history.redo(&mut self.rope);
@@ -737,7 +710,6 @@ mod tests {
         let mut data = CodeEditorData::new(Rope::from_str("sél x\nfrom t"), None::<EditorLanguage>);
 
         let msg = || "boom".to_string();
-        // "sél" is 4 bytes (é is 2) but 3 chars.
         assert!(data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
         assert_eq!(
             data.decorations,
@@ -748,10 +720,8 @@ mod tests {
             }]
         );
 
-        // Re-applying the same spans reports no change (write_if-friendly).
         assert!(!data.set_decorations([(0..4, DecorationSeverity::Error, msg())]));
 
-        // A span past the end of the text is dropped, not panicked on.
         assert!(data.set_decorations([(100..104, DecorationSeverity::Warning, msg())]));
         assert!(data.decorations.is_empty());
     }
@@ -765,7 +735,6 @@ mod tests {
         let r0 = data.revision();
         data.insert("se", 0);
         let r1 = data.revision();
-        // Same history transaction (within the merge window) — still a new revision.
         data.insert("lct", 2);
         let r2 = data.revision();
         assert!(r0 < r1 && r1 < r2);
@@ -785,20 +754,16 @@ mod tests {
     #[test]
     fn replace_range_is_single_undo_step() {
         let mut data = CodeEditorData::new(Rope::from_str(""), None::<EditorLanguage>);
-        // A typing burst (merges into one history transaction)…
         data.insert("se", 0);
         data.insert("l", 2);
         assert_eq!(data.history.current_change(), 1);
 
-        // …then the accept replaces the partial word.
         data.replace_range(0..3, "SELECT");
         assert_eq!(data.rope.to_string(), "SELECT");
         assert_eq!(data.cursor_pos(), "SELECT".len());
 
-        // One undo restores the typed prefix (the accept was exactly one step)…
         data.undo_edit();
         assert_eq!(data.rope.to_string(), "sel");
-        // …and the next removes the burst.
         data.undo_edit();
         assert_eq!(data.rope.to_string(), "");
 

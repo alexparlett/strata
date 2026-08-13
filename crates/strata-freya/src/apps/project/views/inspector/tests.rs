@@ -35,8 +35,6 @@ const PANEL_WIDTH: f32 = 292.;
 /// own `column_info`, so the fixture's dtype spelling, display kind and chart role all come
 /// from one Arrow type instead of being stated separately and drifting.
 fn col(name: &str, dtype: DataType, stats: Vec<Stat>) -> ColumnInfo {
-    // Derive the row, then attach the facts — the order production uses (`free_stats` fills
-    // `stats` on an already-derived column), rather than a struct update over a derived value.
     let mut column = column_info(&Field::new(name, dtype, true));
     column.stats = stats;
     column
@@ -136,8 +134,6 @@ fn project() -> ProjectState {
             rows: None,
         },
     );
-    // The scannable one: a CSV, so the source reports nothing at all — no row count, no stats.
-    // Everything the profile test asserts was therefore *computed*.
     p.table_registered(
         SCAN_TABLE,
         TableMeta {
@@ -188,10 +184,6 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
             let session = r.provide_root_context(|| {
                 RadioStation::<SessionState, Chan>::create(SessionState::default())
             });
-            // The zone's scan half (P3-09): the engine its subscription awaits, and the
-            // profile-confirm slot its card fills. The engine really holds `regions`, so one test
-            // can run a real scan and assert the settled zone; every other test's rows carry no
-            // request, so nothing subscribes and nothing is scanned.
             r.provide_root_context(|| {
                 let engine = EngineCtx::default();
                 block_on(engine.register(TableSpec {
@@ -536,11 +528,9 @@ fn a_settled_scan_shows_what_it_computed_and_when() {
     );
     assert!(shows(&runner, "Profile table"), "the offer, before the ask");
 
-    // What the confirm's Run scan does — the request the zone subscribes to.
     project
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, SCAN_TABLE);
-    // A real scan of five rows: poll until it settles rather than assuming a pass count.
     runner.poll(Duration::from_millis(10), Duration::from_millis(2_000));
 
     assert!(
@@ -563,7 +553,6 @@ fn a_settled_scan_shows_what_it_computed_and_when() {
         !shows(&runner, "Profile table"),
         "the card is gone: its controls moved to the zone header"
     );
-    // That header is the crowded one — an age readout beside two icon buttons, in a 292px panel.
     let past = past_the_edge(&runner);
     assert!(
         past.is_empty(),
@@ -672,8 +661,6 @@ fn past_the_edge_at(runner: &TestingRunner, width: f32) -> Vec<(f32, f32)> {
 /// content to the left of zero, or content wider than the floor it was promised.
 #[test]
 fn the_panel_lays_out_within_its_body_floor_at_stub_width() {
-    // The shell's `PANEL_STUB_W`. Restated rather than imported because it is a shell constant and
-    // this is the panel's own test; if the two ever disagree the shell is what moves.
     const STUB: f32 = 84.;
 
     for width in [STUB, 120., 180., PANEL_WIDTH] {
@@ -703,7 +690,6 @@ fn the_panel_lays_out_within_its_body_floor_at_stub_width() {
             ),
         );
 
-        // Never narrower than the body's floor: under it the panel clips rather than reflowing.
         let bound = width.max(PANE_BODY_MIN_W);
         let past: Vec<_> = runner.find_many(|node, _| {
             let a = node.layout().area;

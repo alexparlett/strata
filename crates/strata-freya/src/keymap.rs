@@ -27,8 +27,6 @@ pub fn chord_from_event(e: &KeyboardEventData) -> Option<KeyChord> {
     let key = match &e.key {
         Key::Character(c) => c.to_lowercase(),
         Key::Named(named) => match named {
-            // `Super` / `Hyper` are spec-deprecated aliases of Meta, but a platform may
-            // still deliver them — they must fold to "modifier only", not to a key.
             #[allow(deprecated)]
             NamedKey::Shift
             | NamedKey::Control
@@ -130,8 +128,6 @@ fn edit_chord(chord: &KeyChord) -> Option<EditChord> {
     let mut chars = chord.key.chars();
     let key = match (chars.next(), chars.next()) {
         (Some(c), None) => ChordKey::Character(c),
-        // Named keys are stored by name ("Enter", "ArrowUp" — see `chord_from_event`),
-        // which is exactly keyboard-types' `NamedKey` `FromStr` vocabulary.
         _ => match chord.key.parse::<NamedKey>() {
             Ok(named) => ChordKey::Named(named),
             Err(_) => {
@@ -210,7 +206,6 @@ mod test {
 
     #[test]
     fn folds_characters_lowercased_and_primary_from_meta_or_ctrl() {
-        // ⇧⌘T arrives as the character "T".
         let chord = chord_from_event(&event(
             Key::Character("T".into()),
             Modifiers::META | Modifiers::SHIFT,
@@ -219,7 +214,6 @@ mod test {
         assert!(chord.primary && chord.shift && !chord.alt);
         assert_eq!(chord.key, "t");
 
-        // Ctrl folds into primary too.
         let chord =
             chord_from_event(&event(Key::Character("t".into()), Modifiers::CONTROL)).unwrap();
         assert!(chord.primary);
@@ -251,7 +245,6 @@ mod test {
     fn edit_bindings_follow_settings() {
         use strata_core::config::{KeyBind, KeyChord};
 
-        // Defaults: the full editing set, one chord each.
         let bindings = edit_bindings(&Settings::default());
         assert_eq!(bindings.select_all, vec![EditChord::primary('a')]);
         assert_eq!(bindings.copy, vec![EditChord::primary('c')]);
@@ -260,7 +253,6 @@ mod test {
         assert_eq!(bindings.undo, vec![EditChord::primary('z')]);
         assert_eq!(bindings.redo, vec![EditChord::primary_shift('z')]);
 
-        // Rebind redo to ⌘Y, unbind undo entirely: the editor follows.
         let settings = Settings {
             keybinds: vec![
                 KeyBind {
@@ -283,7 +275,6 @@ mod test {
         assert!(bindings.undo.is_empty());
         assert_eq!(bindings.redo, vec![EditChord::primary('y')]);
 
-        // Named keys convert through keyboard-types' vocabulary.
         let settings = Settings {
             keybinds: vec![KeyBind {
                 command: Command::Undo,

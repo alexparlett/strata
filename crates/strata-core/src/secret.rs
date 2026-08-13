@@ -2,61 +2,38 @@
 //! backed by the OS keystore (macOS Keychain, the Windows Credential Manager, the Secret
 //! Service elsewhere).
 //!
-//! The rule this module exists to make *structural* is: **config stores a reference, never
-//! the secret.** [`SecretRef`] is the entire config-side vocabulary — a minted id and
-//! nothing else — and [`Secret`] has no serde path at all, no `Display`, and a redacting
-//! `Debug`. So a provider key reaching `config.json` is not a mistake to be careful about;
-//! it is a program that does not compile. That is the same posture the connections work
-//! settled ("no arm of `engine::store` takes a secret"), extended to the one case where the
-//! app really does have to hold one: third-party API keys for the assistant's provider
-//! roster (AS-03).
+//! The rule this module makes *structural* is: **config stores a reference, never the secret.**
+//! [`SecretRef`] is the entire config-side vocabulary, and [`Secret`] has no serde path, no
+//! `Display`, and a redacting `Debug` — so a provider key reaching `config.json` is not a mistake to
+//! be careful about, it is a program that does not compile.
 //!
-//! **Why not the config file.** The agent-access bearer token
-//! ([`crate::config::AgentAccess::token`]) is a plain string in app config, which is
-//! tolerable because we mint it locally for our own loopback server and it is worthless
-//! anywhere else. A provider key is a billing credential for somebody else's service. A
-//! plaintext profile file is the wrong home for that, and "stored like the token" was the
-//! wrong precedent to extend. (Migrating the token itself onto this store is a deliberate
-//! follow-on and not done here: it would need a config upgrade path, and the token is not
-//! worth one yet.)
+//! **Why not the config file.** The agent-access bearer token is a plain string there, tolerable
+//! because we mint it locally for our own loopback server. A provider key is a billing credential
+//! for somebody else's service, so "stored like the token" was the wrong precedent to extend.
+//! (Migrating the token onto this store needs a config upgrade path and is not worth one yet.)
 //!
-//! **Nothing here is async, and every call blocks.** A keystore read is a synchronous
-//! platform call that can wait on a lock, a user prompt or a daemon, so a caller on the
-//! render thread goes through `strata_freya::task::offload` like every other blocking read.
-//! Making the API async would only hide that it is one thread's work either way.
+//! **Nothing here is async, and every call blocks.** A keystore read is a synchronous platform call
+//! that can wait on a lock, a prompt or a daemon, so a caller on the render thread goes through
+//! `strata_freya::task::offload` like every other blocking read.
 //!
-//! **What is done about the value while it is in memory, and what deliberately is not.**
-//! [`Secret`] zeroes its buffer on drop, and [`SecretRef::get`] zeroes the string the
-//! keystore handed back as soon as it has been wrapped — those are the two copies this
-//! module owns, and zeroing them shortens the window a freed allocation sits readable. It is
-//! **not** a claim that the key is protected in memory, and the honest reason is that a
-//! guarded allocation could not make that claim either: a pasted key exists in the text
-//! field's own `String` (which reallocates as it grows, leaving prefixes in freed heap), in
-//! the settings draft, in `security-framework`'s buffer on the way to `securityd`, and later
-//! in the HTTP header and TLS write buffers of whatever sends it. Guarding **one** link of
-//! that chain buys a feeling rather than a property. mlock/mprotect-style crates (`secrets`)
-//! also want libsodium linked in, which the self-contained universal bundle cannot have for
-//! free, and they defend against swap, core dumps and cross-process reads — all of which
-//! macOS already handles (encrypted swap, no core file by default, `task_for_pid` refused to
-//! anything without root or a debugger entitlement, and an attacker holding *that* can drive
-//! the Keychain as us anyway).
-//! What actually reduces exposure here is lifetime, so keep it short: read a key per use
-//! rather than caching one, and never let it reach a buffer that outlives the call.
+//! **In memory it is zeroed, not guarded.** [`Secret`] zeroes its buffer on drop and
+//! [`SecretRef::get`] zeroes the string the keystore handed back — the two copies this module owns.
+//! That is not a claim the key is protected in memory, and a guarded allocation could not make one
+//! either: a pasted key also exists in the text field's own reallocating `String`, the settings
+//! draft, `security-framework`'s buffer, and later the HTTP and TLS write buffers. Guarding one
+//! link of six buys a feeling rather than a property, and mlock-style crates want libsodium linked
+//! into a bundle that must stay self-contained. What reduces exposure is lifetime: read a key per
+//! use, never cache one.
 //!
-//! **Why `keyring-core` and the platform store crates directly, rather than the `keyring`
-//! all-in-one.** `keyring`'s `v1` module is the same three lines of platform selection
-//! ([`open_keystore`] below), but it installs its store from a `LazyLock` inside `Entry::new` — so a
-//! process can never observe the install, never choose the keychain, and never substitute
-//! anything for it. That last one matters most: `keyring_core::mock` is the only way to
-//! make a keystore *refuse*, and proving that a refusal surfaces as a typed error rather
-//! than a silent fallback is the whole point of the failure taxonomy below. Linking the
-//! core plus a store is the ecosystem's own documented shape for a client that wants
-//! control, not a workaround.
+//! **Why `keyring-core` plus the platform stores rather than the `keyring` all-in-one.** `keyring`
+//! installs its store from a `LazyLock` inside `Entry::new`, so a process can never observe the
+//! install, choose the keychain, or substitute anything. That last one matters most:
+//! `keyring_core::mock` is the only way to make a keystore *refuse*, and proving a refusal surfaces
+//! as a typed error rather than a silent fallback is the point of the taxonomy below.
 //!
-//! **Signing.** Keychain access is per code signature: a `cargo run` dev binary and the
-//! signed `.app` are different principals, so an item written by one is not readable by the
-//! other without a prompt. That is macOS behaving correctly, not a bug — see
-//! `.claude/tasks/workstream-assistant/AS-05-secret-store.md` for what was observed.
+//! **Signing.** Keychain access is per code signature, so an item written by a `cargo run` dev
+//! binary is not readable by the signed `.app` without a prompt. macOS behaving correctly, not a
+//! bug — `.claude/tasks/workstream-assistant/AS-05-secret-store.md` records what was observed.
 
 use std::fmt;
 
@@ -231,9 +208,6 @@ impl SecretRef {
     /// who asks.
     pub fn get(&self) -> Result<Option<Secret>, SecretError> {
         match self.entry()?.get_password() {
-            // The store hands back a plain `String` that would otherwise be freed with the
-            // key still in it. Wrapping copies, so the original is zeroed here rather than
-            // left to `drop` — the one copy adjacent to ours that we can reach at all.
             Ok(mut value) => {
                 let secret = Secret::new(&value);
                 value.zeroize();
@@ -476,7 +450,6 @@ mod tests {
             "the derivation is what makes one def address one slot everywhere"
         );
 
-        // Different in every part of the identity, and different from a minted one.
         assert_ne!(
             key,
             SecretRef::derived(
@@ -509,7 +482,6 @@ mod tests {
             "the old slot is not left holding a copy"
         );
 
-        // Nothing to move is not an error, and neither is a move to where you already are.
         let absent = SecretRef::derived("pg-password", "postgres://reader@c:5432/x");
         migrate_derived(&absent, &new).expect("nothing to move");
         assert_eq!(

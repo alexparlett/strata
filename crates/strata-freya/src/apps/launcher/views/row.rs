@@ -53,13 +53,9 @@ impl Component for ProjectRowView {
             pinned,
             open,
         } = self.row.clone();
-        // The station, never a subscribing radio: a pin / remove is a write, and the row
-        // already re-renders because the list above it re-derives.
         let config = use_config_station();
         let app = self.app.clone();
 
-        // Pin / unpin, and drop from the list. Both are single edits on the `Recents`
-        // channel: the list above re-derives, every other window's switcher with it.
         let pin_path = path.clone();
         let on_pin = move || {
             write_config(config, &[ConfigChan::Recents], |cfg| {
@@ -91,15 +87,9 @@ impl Component for ProjectRowView {
             } else {
                 Color::TRANSPARENT
             })
-            // `over`/`out`, not `enter`/`leave`: the latter are exclusive to the deepest
-            // listening node, so moving onto one of the row's own action buttons would fire
-            // the row's leave and drop its tint out from under the cursor. This is the pair
-            // Freya's own `Button` uses for its hover fill.
             .on_pointer_over(move |_| hovered.set(true))
             .on_pointer_out(move |_| hovered.set_if_modified(false))
             .on_press(on_open)
-            // The accent tile marks a project that already has a window — pressing the row
-            // focuses it rather than opening a second.
             .child(Avatar::new(name.as_str()).active(open).size(32.))
             .child(
                 rect()
@@ -127,8 +117,6 @@ impl Component for ProjectRowView {
                     .child(RowAction {
                         icon: IconName::Pin,
                         title: if pinned { "Unpin" } else { "Pin" }.into(),
-                        // A pinned row's pin wears the accent; everything else is recessive
-                        // until hovered.
                         color: if pinned {
                             roles.get(Role::Accent)
                         } else {

@@ -29,7 +29,6 @@ impl EmptyState {
 impl Component for EmptyState {
     fn render(&self) -> impl IntoElement {
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
-        // The tab a reopen would restore — drives both the button and its named tooltip.
         let last_closed = radio.read().closed.last().map(|(_, t)| t.name.clone());
         let new_hint = use_hint(Command::NewTab);
 
@@ -41,14 +40,9 @@ impl Component for EmptyState {
             roles.get(Role::TextPlaceholder),
             roles.get(Role::Text),
             roles.get(Role::TextMuted),
-            // The comp's chip over the accent fill: a translucent `text.on_accent` (the
-            // on-accent ink) scrim, the caps at 60% of the same — theme-derived, no
-            // literal colour.
             roles.get(Role::TextOnAccent),
         );
 
-        // The hero: a 60×60 rounded tile (elevated surface + hairline border) with a faint database
-        // glyph.
         let tile = rect()
             .width(Size::px(60.))
             .height(Size::px(60.))
@@ -59,10 +53,6 @@ impl Component for EmptyState {
             .margin(Gaps::new(0., 0., SP_5, 0.))
             .child(Icon::new(IconName::Database).color(icon_c).size(26.));
 
-        // New query (primary) — and Reopen closed (secondary), only when something's on the stack.
-        // The chord chip only mounts while the new-tab command is bound.
-        // Both alphas are passed explicitly: a keycap is dimmer than a status badge on *both*
-        // axes (a 20% fill under a 60% label), so it doesn't take the standard derived tint.
         let chip = (!new_hint.is_empty()).then(|| {
             Badge::value(new_hint.clone(), chip_c.with_a(153))
                 .background(chip_c.with_a(51))

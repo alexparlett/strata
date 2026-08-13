@@ -45,71 +45,42 @@ impl Component for CloseConfirm {
     fn render(&self) -> impl IntoElement {
         let confirm = self.confirm;
         let platform = use_hook(Platform::get);
-        // Cloned, not copied: `CloseTarget::Reroot` carries the folder to open.
         let target = confirm.read().clone();
-        // The window's open path, for the re-root variant's answer — the same handle every
-        // other open surface uses, so a confirmed re-root goes through one mechanism.
         let open = use_consume::<OpenCtx>();
-        // The window's engine generation, for the restart variant's answer — bumping it is the
-        // rebuild, exactly as setting the root is the re-root.
         let restart = use_consume::<EngineRestart>();
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio_station::<ProjectState, ProjChan>();
-        // Whose work is actually in flight — see `whose_work`.
         let engine = use_consume::<EngineCtx>();
         let agents = use_consume::<AgentsCtx>();
         let config = use_config_station();
         let settings = use_config(ConfigChan::Settings);
         let roles = use_roles();
         let warning = tones().warning;
-        // The action wears the shared `cancel_button` dress (the running body's Cancel)
-        // — the themes' authored stop-the-query tone, not a hardcoded red.
         let cancel = get_theme!(
             &None::<CancelButtonThemePartial>,
             CancelButtonThemePreference,
             "cancel_button"
         );
 
-        // Stop & close / Stop & exit — shared by the button and the Enter key, so it's
-        // `Clone` (the theme handle isn't `Copy`) and each handler takes its own.
         let close_anyway = {
             let app = self.app.clone();
             move || {
                 let mut radio = radio;
                 let mut confirm = confirm;
-                // Read the target into a value FIRST. `match *confirm.peek() { … }` keeps the
-                // scrutinee's temporary — and so the generational-box borrow — alive for the
-                // whole match, and the `set(None)` inside then panics ("already borrowed").
-                // Verified with a probe: the match form panics, this one doesn't.
                 let target = confirm.peek().clone();
                 match target {
                     Some(CloseTarget::Tab(id)) => {
-                        // The root's tab-diff funnel cancels/retires the tab's engine state.
                         radio.write().close_one(id);
                         confirm.set(None);
                     }
-                    // The shared close path: bypasses the on_close veto (this *is* the
-                    // confirmed close) and hands over to the launcher if we're the last.
-                    // Dismiss first — the close is several async hops (it may stand a
-                    // launcher up before this window goes), and a dialog left armed across
-                    // them can be pressed again and open a *second* launcher.
                     Some(CloseTarget::Window) => {
                         confirm.set(None);
-                        // `spawn_forever`, not `spawn`: dismissing unmounts the dialog subtree
-                        // this handler belongs to, and scope teardown drops that scope's tasks
-                        // before they are ever polled — the window would simply never close.
-                        // See the same note in `drop_confirm::drop_row`.
                         spawn_forever(platform::close_this_window(platform.clone(), app.clone()));
                     }
-                    // Dismiss first for the same reason, and more sharply: the re-root
-                    // unmounts this very subtree, so a slot left armed would arrive at the
-                    // new project still asking about the old one's queries.
                     Some(CloseTarget::Reroot(root)) => {
                         confirm.set(None);
                         open.reroot_confirmed(root);
                     }
-                    // And the same again: the bump unmounts this subtree, so the slot is
-                    // cleared before it goes.
                     Some(CloseTarget::Restart) => {
                         confirm.set(None);
                         restart.restart();
@@ -119,14 +90,8 @@ impl Component for CloseConfirm {
             }
         };
         let close_anyway_key = close_anyway.clone();
-        // Every dismissal path (the keep button, Esc, the backdrop). Dismissing a *window*
-        // confirm is also the answer to the quit that raised it: without clearing the flag
-        // it would latch, and every later close would behave as though the app were exiting.
         let keep_open = move || {
             let mut confirm = confirm;
-            // Same borrow rule as `close_anyway`: read it out before writing. Only the
-            // *window* variant answers a quit — a declined re-root or tab close never began
-            // one, and clearing the flag for them would abandon a quit still in flight.
             let quitting = matches!(&*confirm.peek(), Some(CloseTarget::Window));
             if quitting {
                 platform::end_quit();
@@ -138,16 +103,8 @@ impl Component for CloseConfirm {
             return rect().into_element();
         };
 
-        // **Whose** queries these are. The gate itself is unchanged and must be — it is the
-        // engine's own engine-wide flag (AGENTS.md §2), and excluding an agent's work would
-        // mean a second, weaker predicate plus a long investigation destroyed with no notice.
-        // What changes is the sentence: "Queries are running" shown to somebody who pressed
-        // Run on nothing sends them looking for a query they never started — and that is as
-        // true of a drop deleting a table's data as it is of an agent's run.
         let whose = whose_work(&engine, &radio.read(), &agents.read());
 
-        // The canvas copy, per variant (`ccIsProject`) — plus the re-root, which is the
-        // window variant's question about a project rather than the app.
         let (title, body, keep, action, action_icon) = match target {
             CloseTarget::Window => (
                 "Confirm exit",
@@ -204,8 +161,6 @@ impl Component for CloseConfirm {
                 IconName::Reload,
             ),
         };
-        // The subject line: what is being closed — except for the re-root, where naming the
-        // project being *opened* is what identifies the action the user just took.
         let name = match target {
             CloseTarget::Tab(id) => radio
                 .read()
@@ -215,14 +170,9 @@ impl Component for CloseConfirm {
                 .unwrap_or_default(),
             CloseTarget::Window => project.read().name.clone(),
             CloseTarget::Reroot(root) => folder_name(&root),
-            // The engine belongs to the project, so naming it is what says *whose* engine.
             CloseTarget::Restart => project.read().name.clone(),
         };
 
-        // Checked = don't ask = the `confirm_close_running` setting off. Toggling writes
-        // the app-global config (the close guard mirrors it immediately) and persists in
-        // the same funnel — the comp's checkbox edits the setting directly, not a local
-        // draft.
         let dont_ask = !settings.read().settings.confirm_close_running;
         let toggle_dont_ask = move |_: Event<PressEventData>| {
             write_config(config, &[ConfigChan::Settings], |cfg| {
@@ -230,7 +180,6 @@ impl Component for CloseConfirm {
             });
         };
 
-        // The title run beside the chip: what is being closed, over its name.
         let header = DialogHeader::new(
             IconName::Warning,
             warning,
@@ -254,14 +203,8 @@ impl Component for CloseConfirm {
             .child(Checkbox::new().selected(dont_ask).size(16.))
             .child(Prose::new("Don't ask again").color(roles.get(Role::TextPlaceholder)));
 
-        // The card, the strip and the modal keys (Esc keeps, Enter stops) are `Dialog`'s; this
-        // supplies the comp's own header, body and its two actions.
         Dialog::new()
-            // Esc and the backdrop are dismissals, so they go through `keep_open` — clearing
-            // the quit flag, not just the dialog.
             .on_dismiss(move |()| keep_open())
-            // Enter takes the second clone: `close_anyway` captures the `AppCtx` the launcher
-            // hand-off needs, so it isn't `Copy` and can't be moved into two handlers.
             .on_confirm(move |()| close_anyway_key())
             .header(header)
             .body(
@@ -364,8 +307,6 @@ fn whose_work(engine: &EngineCtx, session: &SessionState, agents: &Agents) -> Wh
     }
     match engine.has_background_work() {
         true => Whose::Background,
-        // A run with no surface left to name it. The user agreed to stop it once already, so the
-        // sentence they get is the one they got then.
         false => Whose::Queries,
     }
 }

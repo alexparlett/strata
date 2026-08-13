@@ -70,8 +70,6 @@ pub struct Location;
 impl Component for Location {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // The station, not a subscribed read: this pill draws three labels and needs the
-        // connections only to hand `set_location` one (see [`connections_at_press`]).
         let station = use_radio_station::<ProjectState, ProjChan>();
         let (location, editing) = (
             ctx.draft.read().location,
@@ -81,12 +79,6 @@ impl Component for Location {
         let segment = |label: &'static str, wants: Where| {
             ToggleSegment::text(label)
                 .selected(location == wants)
-                // **Internal is create-only.** A table Strata already stores has nothing in this
-                // window to edit — which is why its catalog row has no Configure item at all
-                // (ED-04) — and an existing external table cannot be turned into one without
-                // silently discarding the def that points at the user's files. The segment is
-                // gated rather than absent so the control does not change shape between a new
-                // table and an edit.
                 .enabled(wants != Where::Internal || !editing)
                 .on_press(move |_| {
                     let connections = connections_at_press(station);
@@ -178,8 +170,6 @@ struct ProviderFilter;
 impl Component for ProviderFilter {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // The station, for [`Location`]'s reason: three fixed labels, and a list only the press
-        // needs.
         let station = use_radio_station::<ProjectState, ProjChan>();
         let current = ctx.draft.read().provider;
 
@@ -232,8 +222,6 @@ impl Component for ConnectionPicker {
                     .into()
             })
             .collect();
-        // Sets the slot and stops — the project root's `ConnectionLauncher` owns the window, and
-        // this item is one more trigger for it rather than a second way to open one.
         options.push(
             MenuItem::new()
                 .on_press(move |_| request.set(Some(ConnectionTarget::New)))
@@ -266,16 +254,11 @@ impl Component for ConnectionPicker {
                             .children(options),
                     ),
             )
-            // Only when the provider has nothing to offer: with a list on screen, a line saying
-            // there is none would contradict it.
             .maybe_child(offered.is_empty().then(|| {
                 rect()
                     .width(Size::fill())
                     .padding(Gaps::new(EMPTY_GAP, 0., 0., 0.))
                     .child(
-                        // Two sentences, not the canvas's dash: the Connections pane's own empty
-                        // state is written this way, and user-facing text here carries no
-                        // em-dashes (AGENTS.md §3).
                         Caption::new(format!(
                             "No {} connections yet. Add one to continue.",
                             provider.label()

@@ -55,7 +55,6 @@ pub fn flatten_cols(
             name: c.name.clone(),
             dtype: c.dtype.clone(),
             kind: c.kind,
-            // Partition columns are a top-level concept only.
             is_part: depth == 0 && parts.iter().any(|(n, _)| n == &c.name),
             depth,
             has_children,
@@ -108,7 +107,6 @@ mod tests {
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["address", "id"]);
         assert!(rows[0].has_children && !rows[0].is_expanded);
-        // A leaf never offers a chevron.
         assert!(!rows[1].has_children);
     }
 
@@ -129,7 +127,6 @@ mod tests {
     #[test]
     fn nesting_recurses_only_through_expanded_ancestors() {
         let cols = vec![col("a", vec![field("b", vec![field("c", vec![])])])];
-        // The grandchild's key is open, but its parent is not — so it stays hidden.
         let rows = flatten(&cols, &[], &["orders::a.b"]);
         assert_eq!(rows.len(), 1, "a closed ancestor hides the whole branch");
 
@@ -142,8 +139,6 @@ mod tests {
 
     #[test]
     fn a_repeated_name_at_two_depths_keeps_distinct_paths() {
-        // The bug this shape exists to prevent: selecting the nested `city` must not also
-        // match the top-level one. Keys and paths differ even though the names don't.
         let cols = vec![
             col("address", vec![field("city", vec![])]),
             col("city", vec![]),

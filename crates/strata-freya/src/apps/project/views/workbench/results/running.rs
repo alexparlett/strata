@@ -65,13 +65,8 @@ impl Component for Running {
             roles.get(Role::TextPlaceholder),
             roles.get(Role::SurfaceRaised),
         );
-        // The Cancel control's own theme component — its mapping-table rows track
-        // `run_button`'s `running_*` set (the same cancel dress the toolbar's Run→Cancel
-        // flip wears, P2-15).
         let cancel = get_theme!(&self.theme, CancelButtonThemePreference, "cancel_button");
 
-        // Ticks from mount — the body is keyed on the press's nonce, so a new Run always
-        // restarts from zero. The ticker task is scope-bound: settling unmounts it.
         let mut elapsed = use_state(Duration::default);
         use_hook(move || {
             let start = Instant::now();
@@ -87,7 +82,6 @@ impl Component for Running {
         let on_cancel = self.on_cancel.clone();
         let on_esc = on_cancel.clone();
         let config = use_config_station();
-        // Derived even though Cancel is fixed — one source for every glyph.
         let esc_hint = use_hint(Command::Cancel);
 
         rect()
@@ -98,9 +92,6 @@ impl Component for Running {
             .cross_align(Alignment::Center)
             .spacing(SP_5)
             .background(background)
-            // Esc = Cancel while the run is up. This body sits after the tab strip in
-            // document order, so an open menu or an in-progress rename claims the Esc
-            // first; when it reaches here it's consumed.
             .on_global_key_down(on_command(config, Command::Cancel, move || {
                 on_esc.call(());
                 true

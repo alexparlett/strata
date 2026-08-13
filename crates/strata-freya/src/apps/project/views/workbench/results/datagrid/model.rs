@@ -46,9 +46,6 @@ pub struct GridData {
 
 impl PartialEq for GridData {
     fn eq(&self, other: &Self) -> bool {
-        // The batch compares by *identity* (the same underlying Arrow arrays — clones of one
-        // batch share them), not by content: the display rows already deep-compare, and a
-        // content compare of the arrays would double the diffing cost for nothing.
         self.columns == other.columns
             && self.rows == other.rows
             && self.batch.columns().len() == other.batch.columns().len()

@@ -75,10 +75,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
         .await
         .expect("the project opens");
 
-    // The transport: one duplex pair, the server on one end and the client on the other.
-    // **The server side is spawned**, because `serve` completes the MCP handshake before it
-    // returns and a paired in-memory transport has nobody else to complete it: awaiting the
-    // server here would wait for an `initialize` the client below has not been built to send.
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
     let served = tokio::spawn(StrataTools::new(Arc::new(host)).serve(server_io));
     let client = ().serve(client_io).await.expect("the client initializes against it");
@@ -87,7 +83,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
         .expect("the server task")
         .expect("the vocabulary serves over an async read/write transport");
 
-    // One project by construction, and it is the folder the process was opened on.
     let projects = client
         .call_tool(CallToolRequestParams::new("list_projects"))
         .await
@@ -97,8 +92,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
     assert_eq!(projects["projects"].as_array().map(Vec::len), Some(1));
     assert_eq!(projects["projects"][0]["name"], "sales");
 
-    // The catalog is the registration pass's own answers: the def the engine refused is a row
-    // carrying its error, not a missing row.
     let tables = client
         .call_tool(CallToolRequestParams::new("list_tables"))
         .await
@@ -127,7 +120,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
         "{entries:?}"
     );
 
-    // A schema is what registration read.
     let described = client
         .call_tool(
             CallToolRequestParams::new("describe_table")
@@ -140,7 +132,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
     assert_eq!(described["columns"][0]["name"], "id");
     assert_eq!(described["columns"][1]["name"], "name");
 
-    // The full agent loop: open a query session, run in it, page the settled snapshot.
     let session = client
         .call_tool(CallToolRequestParams::new("open_query_session"))
         .await
@@ -169,7 +160,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
     assert_ne!(run.is_error, Some(true), "{run:?}");
     let ran = run.structured_content.expect("structured content");
     assert_eq!(ran["status"], "ok");
-    // Bounded by the page, exact in the total — the view really planned over the table.
     assert_eq!(ran["rows"], json!([["1"], ["2"]]));
     assert_eq!(ran["total"], 3);
 
@@ -188,8 +178,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
         .expect("structured content");
     assert_eq!(page["rows"], json!([["3"]]));
 
-    // **The policy gate is above the transport, so it is in front of this one too** — and the
-    // refusal is a tool result the model can read and recover from, not a protocol fault.
     let refused = client
         .call_tool(
             CallToolRequestParams::new("run").with_arguments(
@@ -205,9 +193,6 @@ async fn a_client_drives_a_project_with_no_app_running() {
     let text = format!("{:?}", refused.content);
     assert!(text.contains("Table Config"), "{text}");
 
-    // **Nothing the user owns was written.** The project keeps the one file it arrived with:
-    // no `session.json` (an agent holds no tabs), no `history.jsonl` (history is the user's),
-    // and no app config anywhere near this process.
     let mut written: Vec<String> = fs::read_dir(root.join(".strata"))
         .expect("the project's own directory")
         .flatten()

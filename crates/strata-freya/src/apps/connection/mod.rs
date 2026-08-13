@@ -21,21 +21,16 @@
 //! **No theme of its own** (Configure's rule): the chrome is `components::window`, everything
 //! form-shaped is the shared `form` theme, and the semantic tones come through `tones()`.
 //!
-//! ## Save writes the def and asks for the pass; it registers nothing itself
-//!
-//! Save writes onto the shared project store, persists it through `persisted_defs`, and asks the
-//! project window's one scan driver for a **whole-catalog** re-scan
-//! ([`refresh_catalog`](crate::apps::project::state::refresh_catalog)). That width is the honest
-//! one: `plan_scan` puts connections in `ScanScope::All` alone, precisely because the case that
-//! needs a re-connect — a region corrected, an `aws sso login` run — is the one this window
-//! exists for, and because every table over the bucket was registered against the store this
-//! save is replacing. So Save *is* the ↻ the user would otherwise press, with the def written
+//! **Save writes the def and asks for the pass; it registers nothing itself.** It writes onto the
+//! shared project store, persists through `persisted_defs`, and asks the window's one scan driver
+//! for a **whole-catalog** re-scan. That width is the honest one: the case needing a re-connect is
+//! the one this window exists for, and every table over the bucket was registered against the store
+//! this save replaces. So Save *is* the ↻ the user would otherwise press, with the def written
 //! first.
 //!
-//! This window then **watches its row**: `Loading` is the connecting state, `Ready` closes it,
-//! `Failed` keeps it open carrying the engine's own reason — which is worth staying open for
-//! here more than anywhere else in the app, because the reason ("The AWS profile 'analytics'
-//! resolved no credentials") describes the very field the user still has in front of them.
+//! It then **watches its row**: `Loading` is the connecting state, `Ready` closes it, `Failed`
+//! keeps it open carrying the engine's own reason — worth staying open for here more than anywhere
+//! else, because that reason describes the very field the user still has in front of them.
 //!
 //! **An edit that moves the bucket or the provider moves the connection's identity**, and the
 //! store registered under the old URL survives it: `engine::store::connect` only ever sees the
@@ -201,8 +196,6 @@ impl ConnectionApp {
         report: ReportCtx,
         owner: WindowId,
     ) -> WindowConfig {
-        // Match the theme's window body so a resize doesn't flash the default white — through
-        // `peek_selection`, since Settings may be previewing a theme right now.
         let background = {
             let sel = peek_selection(app.config, app.preview);
             let id = sel.effective(strata_core::theme::os_is_dark());
@@ -219,16 +212,10 @@ impl ConnectionApp {
             report,
             owner,
         })
-        // The OS title is hidden (this window draws its own bar), so it names the *kind* of
-        // window: the real one — "New connection" / "Edit connection" — is on the bar the user
-        // is actually looking at, and `with_title` takes a `&'static str` in any case.
         .with_title("Connection")
         .with_size(480., 588.)
-        // Below this the footer's note and its two buttons stop fitting on one row.
         .with_min_size(420., 400.)
         .with_background(background)
-        // The 50px strip centres macOS's 16px buttons at y = 17; AppKit's default origin is
-        // (7, 6), so the inset is the difference.
         .with_traffic_light_inset(9., 11.)
         .with_window_attributes(move |attrs, _| {
             attrs
@@ -241,15 +228,12 @@ impl ConnectionApp {
 
 impl App for ConnectionApp {
     fn render(&self) -> impl IntoElement {
-        // The window-root steps every app takes: this window's theme derived from the shared
-        // settings, and the app-globals into context.
         use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();
             move || app
         });
-        // The project window's catalog store, its scan request and its log — shared, not forked.
         let project = self.project;
         use_share_radio(move || project);
         let rescan = self.rescan;
@@ -260,15 +244,10 @@ impl App for ConnectionApp {
             let engine = self.engine.clone();
             move || engine
         });
-        // Both halves provided **individually**, because `use_report` consumes them that way.
         let report = self.report;
         use_provide_context(move || report.log);
         use_provide_context(move || report.faults);
 
-        // Join the live window registry, so a second Edit on this connection focuses this window
-        // rather than opening another — and point the menubar here as a **panel** while this
-        // window is focused, or File ▸ Close Project (and its ⇧⌘W) would close this window while
-        // naming the project. Esc is how a connection editor closes.
         let owner = self.owner;
         let target = self.target.clone();
         use_register_window(
@@ -281,24 +260,14 @@ impl App for ConnectionApp {
             },
             MenuScope::Panel,
         );
-        // …and close with the *subtree* the handles above belong to, not merely with the window
-        // that owns it.
         use_owner_pin(self.app.clone(), owner, self.subtree.clone());
 
         let ctx = use_provide_context({
             let target = self.target.clone();
             let project = self.project;
             move || {
-                // Seeded from the def this window opened on, field by field, so opening an
-                // existing connection and pressing Save without touching anything writes back
-                // the def that was already there.
                 let draft = match target.editing() {
                     None => ConnectionDraft::default(),
-                    // **No blank fallback** (AGENTS.md §1). A window subtitled `s3://acme-lake`
-                    // whose draft is an empty New-connection form still reports that URL as the
-                    // identity it is moving from, so its first Save would deregister a
-                    // connection it never showed. A row that is gone between the open and the
-                    // first render is a fault, not a state to render.
                     Some(url) => project
                         .peek()
                         .connections
@@ -319,10 +288,6 @@ impl App for ConnectionApp {
             }
         });
 
-        // The profile list, read once per window off the engine's runtime (it reads files, so it
-        // must not run on the thread drawing every window). Not gated on the provider: the read
-        // is one small parse, and gating it would put a spinner in the picker the first time
-        // anybody chose Named profile.
         use_hook({
             let engine = self.engine.clone();
             move || {
@@ -334,8 +299,6 @@ impl App for ConnectionApp {
             }
         });
 
-        // The connection this window is waiting on, watched on the store rather than awaited:
-        // the pass belongs to the project window's driver, and its answer arrives on the row.
         use_watch_connection(ctx);
 
         let win = window_theme();
@@ -348,18 +311,12 @@ impl App for ConnectionApp {
             .vertical()
             .content(Content::Flex)
             .background(win.background)
-            // The window's ambient text colour, like every other window root's.
             .color(text)
             .child(TitleBar)
             .child(ConnectionBody)
             .child(Footer)
-            // Esc and ⌘Q. Deliberately the LAST child — same-name global listeners fire in
-            // document order, so anything a view mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc closes, always. The def is written only by Save, and a pass in flight
-                    // belongs to the *project* window's scan driver, which lands its answer on
-                    // the pane's row whether this window is watching or not.
                     Command::Cancel => {
                         platform.close_current_window();
                         true

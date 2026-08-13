@@ -38,9 +38,6 @@ pub struct EditorTab {
 
 impl EditorTab {
     pub fn new(id: TabId, running: State<Option<RunId>>) -> Self {
-        // Keyed by the tab: the pane renders in one fixed slot, and without a key a tab
-        // switch would reuse the scope — the mounted `CodeEditor`'s props all compare equal
-        // (`Writable` is always-equal), so it would keep the *previous* tab's buffer binding.
         Self {
             id,
             running,
@@ -61,11 +58,6 @@ impl Component for EditorTab {
         let id = self.id;
         let a11y_id = use_a11y();
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
-        // The slice must yield `&mut CodeEditorData` for *any* read/write the mounted `CodeEditor`
-        // makes — including a commit that fires one event *after* the tab was closed (closing the
-        // active tab via the nav-dropdown × runs `close_one` on the same click, before the editor's
-        // commit-on-click-outside global handler). So the lens is total: a live tab yields its own
-        // editor; a just-closed tab falls back to a throwaway scratch buffer (that write is moot).
         let editor = radio.slice_mut(Chan::Tab(id), move |s: &mut SessionState| {
             if s.tabs.contains_key(&id) {
                 &mut s.tabs.get_mut(&id).unwrap().editor
@@ -77,13 +69,7 @@ impl Component for EditorTab {
         });
         let editor = editor.into_writable();
         let config = use_config_station();
-        // One `Settings` subscription for the whole component — `Radio` is `Copy`, and the two
-        // effects below both want the same channel (the edit chords, and the parser dialect).
-        // The station above only peeks, inside handlers.
         let settings = use_config(ConfigChan::Settings);
-        // Keep the buffer's history chords in lockstep with the settings: freya-edit
-        // matches `EditBindings` in `process_key` (no hardcoded ⌘Z/⌘Y left), so a
-        // rebind in Settings retargets undo/redo live, without remounting the editor.
         {
             let mut editor = editor.clone();
             use_side_effect(move || {
@@ -91,33 +77,8 @@ impl Component for EditorTab {
                 editor.write_if(|mut data| data.set_edit_bindings(bindings));
             });
         }
-        // Validation is NOT driven from here. The window's one driver (`state::diagnostics`)
-        // keeps every open tab's diagnostics and squiggles in step with its text and the
-        // catalog — including tabs with no editor mounted, which is precisely what this
-        // component being the driver made impossible.
         let engine = use_consume::<EngineCtx>();
-        // Autocomplete (P2-04): the editor calls this provider synchronously per
-        // qualifying keystroke / ⌃⌘Space. The `Catalog` snapshot is **memoized** —
-        // rebuilt only when the project catalog actually changes (a registration
-        // landing, a view saved), never per keystroke: the rebuild clones every
-        // name/dtype in the catalog, and at scale (hundreds of tables × thousands
-        // of columns) paying that per character would be the one thing that could
-        // make the synchronous pipeline felt. The effect subscribes to the project
-        // station; the provider just peeks the cached snapshot.
-        //
-        // It also reads the **settings**, for the parser dialect the snapshot carries:
-        // `datafusion.sql_parser.dialect` is what `lex` tokenises with, so a change to it has
-        // to re-lex rather than leave completion reading the buffer by rules the planner has
-        // already stopped using (WJ-04). From the config rather than back off the engine —
-        // `use_engine_config` is a *sibling* effect on the same write, and asking the engine
-        // here would make the answer depend on which of the two Freya runs first. `lex`
-        // resolves the name the way the planner does, so the two land on the same dialect
-        // even when the value is one `ConfigOptions` refuses.
         let project = use_radio_station::<ProjectState, ProjChan>();
-        // The catalog **epoch**, read so the snapshot is rebuilt by a mutation that moves no store
-        // row: a `PREPARE` or a `DEALLOCATE` (ED-08) leaves nothing in `ProjectState` and every
-        // other catalog mutation bumps this too, so subscribing here costs no extra rebuild and
-        // makes "what the engine resolves against moved" one signal rather than two.
         let epoch = use_catalog();
         let mut catalog = use_state(sql::Catalog::default);
         {
@@ -140,9 +101,6 @@ impl Component for EditorTab {
                             v.reg.ready().map(|i| i.columns.as_slice()).unwrap_or(&[]),
                         )
                     }),
-                    // By handle: the engine's function catalog is swappable (a `CREATE FUNCTION`
-                    // replaces it), and it is the largest part of this snapshot, so the rebuild
-                    // takes the `Arc` rather than copying a thousand symbols per epoch.
                     engine.functions(),
                     engine.prepared(),
                     dialect,
@@ -167,29 +125,12 @@ impl Component for EditorTab {
             })
             .child(
                 rect().width(Size::fill()).height(Size::flex(1.)).child(
-                    // Type (family · size · weight · line height) comes from the
-                    // `code_editor` theme — the editor dresses and measures itself.
                     CodeEditor::new(editor, a11y_id)
                         .a11y_auto_focus(true)
                         .gutter(true)
                         .show_whitespace(false)
                         .highlight_current_line(false)
                         .on_completions(on_completions)
-                        // Primary-held chords belong to the app keymap unless the
-                        // editor owns them: skip the editor's processing —
-                        // otherwise ⌘T types a "t" and ⌘↵ inserts a newline — while
-                        // the global listeners still fire (only `prevent_default`
-                        // would cancel those, and this calls only
-                        // `stop_propagation`, like the default pre-handler). The
-                        // editor owns exactly the chords that currently resolve to
-                        // an editing command (`Command::is_edit` — select all /
-                        // copy / cut / paste / undo / redo, all rebindable): those
-                        // flow through to `process_key`, where the buffer's own
-                        // `EditBindings` (synced from these same settings above)
-                        // match them. Named keys keep flowing: Ctrl/Alt+arrows are
-                        // editor navigation. (⌃Space/⌘Space and the popup's nav
-                        // keys never reach this gate — the editor's completion
-                        // branch consumes them first.)
                         .on_pre_key_down(move |e: Event<KeyboardEventData>| {
                             e.stop_propagation();
                             if let Key::Named(NamedKey::Tab) = &e.key {

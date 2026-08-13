@@ -154,11 +154,7 @@ impl ValueField {
 impl Component for ValueField {
     fn render(&self) -> impl IntoElement {
         let value = self.value;
-        // Reactive for `NumberField`'s reason: the effect's closure is built once, so a caller
-        // that narrows its own limit would otherwise keep trimming to the first render's.
         let max_len = use_reactive(&self.max_len);
-        // Trim in place, so the box can never show more than the caller will read. Guarded, or
-        // the write would wake every reader of this state on each keystroke.
         use_side_effect(move || {
             let Some(max_len) = *max_len.read() else {
                 return;
@@ -171,14 +167,6 @@ impl Component for ValueField {
             }
         });
 
-        // The caller's width goes on the **wrapper**, and the `Input` fills it.
-        //
-        // `InputTypography` is a `rect()` around the input, so it — not the input — is what a
-        // parent lays out. Sizing only the input leaves the wrapper hugging whatever that
-        // resolved to, which is invisible for a `px` width and wrong for a relative one: a
-        // `flex(1.)` input inside a hugging wrapper is not a flex child of the row at all, so
-        // the row divides nothing, the wrapper hugs the full width, and the control beside it
-        // (a `DirectoryField`'s browse button) is pushed off the surface.
         InputTypography::mono(
             Input::new(self.value)
                 .width(Size::fill())
@@ -192,8 +180,6 @@ impl Component for ValueField {
                     el.placeholder(self.placeholder.unwrap_or_default())
                 })
                 .map(self.leading.clone(), Input::leading)
-                // Every state colour, not the resting pair: a field that keeps its hover
-                // outline or its keyboard ring is drawing the second box this asked not to.
                 .maybe(self.bare, |el| {
                     el.background(Color::TRANSPARENT)
                         .hover_background(Color::TRANSPARENT)
@@ -216,19 +202,16 @@ impl Component for ValueField {
 /// a control that shows one number and hands over another is worse than one that corrects
 /// itself. An unparseable box is left alone: the parent keeps the last good value.
 ///
-/// **It reports changes, it does not re-read the parent.** `on_change` fires only when the
-/// clamped value actually differs from the last one reported, tracked in state rather than
-/// captured — `use_side_effect` builds its closure once, so a captured comparison value freezes
-/// at the first render and the field can never be typed back to where it started. That bug is
-/// why this comparison lives where it does.
+/// **It reports changes, it does not re-read the parent.** `on_change` fires only when the clamped
+/// value differs from the last one reported, tracked **in state** rather than captured:
+/// `use_side_effect` builds its closure once, so a captured comparison value freezes at the first
+/// render and the field can never be typed back to where it started.
 ///
-/// **Reporting is per keystroke; the box is normalized when it is left.** Every accepted
-/// keystroke reports, because the thing that commits a value is usually a `Button` and `Button`
-/// moves focus and calls its handler in the same breath — a value that waited for blur would
-/// never reach the draft being committed. But that leaves the box free to show something the
-/// caller never received (`abc`, an empty box, `9999` where the max is 2000), so losing focus
-/// re-echoes what was last reported. Echoed from `reported` and not from `value`, which keeps
-/// the rule above: this still never re-reads the parent.
+/// **Reporting is per keystroke; the box is normalized when it is left.** Every accepted keystroke
+/// reports, because what commits a value is usually a `Button`, which moves focus and calls its
+/// handler in the same breath — a value waiting for blur would never reach the draft. That leaves
+/// the box free to show something the caller never received, so losing focus re-echoes what was
+/// last reported — from `reported` and not from `value`, which keeps the rule above.
 #[derive(PartialEq)]
 pub struct NumberField {
     value: u32,
@@ -287,26 +270,11 @@ impl Component for NumberField {
     fn render(&self) -> impl IntoElement {
         let value = self.value;
         let mut text = use_state(move || value.to_string());
-        // What was last handed to the caller. In state, not captured — see the type doc.
         let mut reported = use_state(move || value);
-        // The box's id is ours, so the effect below can see it lose focus.
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
 
         let (min, max) = (self.min, self.max);
-        // **Held in state and `peek`ed, not captured and not `read`.** `use_side_effect` builds
-        // its closure once, and an `EventHandler` is an `Rc<RefCell<dyn FnMut>>` minted fresh
-        // every render with no write-through — so a plainly captured one is the *first* render's
-        // for the life of the scope. Today's callers survive that because their handlers close
-        // over `Copy` context handles; the first one closing over a row id or a cloned draft
-        // would get silently stale calls with nothing to show for it.
-        //
-        // `use_reactive` refreshes it, but the effect must **peek**: `EventHandler`'s `PartialEq`
-        // is `false` unconditionally (freya-core `event_handler.rs`), so `use_reactive` writes on
-        // *every* render, and a `read` here would subscribe this effect to a value that changes
-        // every render — re-running it every render for a handler that has not meaningfully
-        // moved. Peeking takes the current handler at the moment the effect's real trigger
-        // (`text`) fires, which is exactly what is wanted.
         let on_change = use_reactive(&self.on_change);
         use_side_effect(move || {
             let Ok(parsed) = text.read().trim().parse::<u32>() else {
@@ -321,9 +289,6 @@ impl Component for NumberField {
             }
         });
 
-        // Leaving the box is when it is made to agree with what it reported — see the type doc.
-        // `reported` is peeked, not read: this must wake on focus alone, or the echo would land
-        // mid-keystroke and overwrite what is being typed.
         use_side_effect(move || {
             if focus() == Focus::Not {
                 text.set_if_modified(reported.peek().to_string());
@@ -335,8 +300,6 @@ impl Component for NumberField {
             .height(self.height.clone())
             .a11y_id(a11y_id);
 
-        // Without a unit the box *is* the control, so it is returned bare — a wrapper would
-        // change how a caller's `width` lands in the row around it.
         match self.unit {
             None => box_.into_element(),
             Some(unit) => rect()
@@ -440,14 +403,11 @@ impl Component for PathField {
             let value = self.value.clone();
             move || value
         });
-        // What was last handed to the caller. Seeded from `value`, so the first pass reports
-        // nothing — the caller already holds this.
         let mut reported = use_state({
             let value = self.value.clone();
             move || value
         });
 
-        // `use_reactive` + `peek` for `NumberField`'s reason — see there.
         let on_change = use_reactive(&self.on_change);
         use_side_effect(move || {
             let current = text.read().clone();
@@ -482,15 +442,9 @@ impl Component for PathField {
                         ButtonLayoutThemePartial::default()
                             .width(Size::px(BROWSE_WIDTH))
                             .height(Size::px(FIELD_HEIGHT))
-                            // The stated box *is* the size: the stock 6/12 padding would leave
-                            // the glyph 10px to sit in, and a button clips its overflow.
                             .padding(Gaps::new_all(0.)),
                     )
                     .on_press(move |_| {
-                        // Start where the box points, so browsing from a set path opens there
-                        // rather than wherever the OS last left the panel. A file field starts
-                        // at its file's *folder*: `set_directory` on a file path opens the
-                        // panel at whatever the OS makes of it, which is usually nowhere.
                         let start = match pick {
                             Pick::Folder => text.peek().clone(),
                             Pick::File(_) => std::path::Path::new(&*text.peek())
@@ -503,8 +457,6 @@ impl Component for PathField {
                             if !start.is_empty() {
                                 dialog = dialog.set_directory(&start);
                             }
-                            // Dismissing the dialog is a decision, not a failure — the box
-                            // keeps what it had.
                             let picked = match pick {
                                 Pick::Folder => dialog.pick_folder().await,
                                 Pick::File(extensions) => {

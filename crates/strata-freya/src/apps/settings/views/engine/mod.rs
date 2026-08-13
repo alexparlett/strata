@@ -57,9 +57,6 @@ impl Component for EnginePane {
         let ctx = use_consume::<SettingsCtx>();
         let mut rows = ctx.engine;
 
-        // The rows are the editing model; the draft is what Apply commits. Projecting on every
-        // edit is what keeps the window's single commit path honest — no second write path, and
-        // `dirty()` keeps answering the only question it knows how to.
         use_side_effect(move || {
             let next = rows.read().to_map();
             if ctx.draft.peek().engine != next {
@@ -67,8 +64,6 @@ impl Component for EnginePane {
             }
         });
 
-        // Revert is offered only when there is something to revert *to* or *from*: the seed's
-        // overrides, against the rows as they stand.
         let saved = ctx.seed_engine();
         let revertable = rows.read().to_map() != saved || !rows.read().is_empty();
         let selected = rows.read().selected.is_some();

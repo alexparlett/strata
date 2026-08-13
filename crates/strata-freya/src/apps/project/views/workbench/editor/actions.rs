@@ -48,12 +48,6 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
             run: RunId::new(),
             sql,
             mode,
-            // NOT `Settings::row_limit`: that setting is the `LIMIT` clause *generated*
-            // queries carry ("Default row limit … so a stray SELECT * can't pull a whole
-            // file into memory. Set to 0 for no limit" — `Settings.dc.html`), which P3-06's
-            // View-table action will emit. The page size is per-run and user-changeable
-            // from the status-bar pager; seeding it from that setting would silently
-            // reinterpret a persisted field and turn "0 = no limit" into a broken page.
             page_size: DEFAULT_PAGE_SIZE,
         },
     );
@@ -91,8 +85,6 @@ pub fn run_query(engine: &EngineCtx, session: Radio<SessionState, Chan>, id: Tab
 /// the tab keeps its name, its origin and its save target, because a past run is a string, not
 /// an artifact to bind to.
 pub fn load_sql(mut session: Radio<SessionState, Chan>, id: TabId, sql: &str) {
-    // Read before writing (like `format`): re-loading the query already in the buffer must not
-    // take a write guard, whose drop would wake the editor and re-arm validation for nothing.
     let changed = session
         .read()
         .tabs
@@ -157,9 +149,6 @@ pub fn format(mut session: Radio<SessionState, Chan>, id: TabId) {
     let Some(sql) = session.read().tabs.get(&id).map(QueryTab::text) else {
         return;
     };
-    // Uppercased keywords; indent matched to the editor's own Tab width (4), so a
-    // Format pass and hand-typed indentation agree. (A formatting setting later can
-    // drive both from one place.)
     let formatted = sqlformat::format(
         &sql,
         &sqlformat::QueryParams::None,
@@ -252,9 +241,6 @@ fn read_tab(session: Radio<SessionState, Chan>, id: TabId) -> Option<(String, St
 /// mutation point), bind the tab, then `CREATE OR REPLACE VIEW` on the engine with
 /// the answer landing on the row exactly like load-time registration (Ready with
 /// columns/deps, or Failed with the planner's error).
-// Five of the nine are the window's handles (`session`, `project`, `engine`, `catalog`, `report`)
-// — this funnel writes through every one of them, and bundling them into a struct here would put
-// a second name on a set every other entry point already threads individually.
 #[allow(clippy::too_many_arguments)]
 fn save_view(
     mut session: Radio<SessionState, Chan>,
@@ -267,9 +253,6 @@ fn save_view(
     sql: String,
     rename: bool,
 ) {
-    // Whether the def actually reached `project.json`. A failure here used to be a `tracing`
-    // line and nothing else, which the event log would then contradict: the engine goes on to
-    // create the view, so "Saved view" would be logged for a view the next open loses.
     let persisted = {
         let mut p = project.write_channel(ProjChan::Views);
         p.upsert_view(ViewDef {
@@ -286,8 +269,6 @@ fn save_view(
     spawn(async move {
         match engine.create_view(name.clone(), sql).await {
             Ok(meta) => {
-                // Only when it is really saved — the write failure above has already said so,
-                // and claiming both would be two rows arguing about one action.
                 if persisted {
                     log_event(report.log, LogLevel::Ok, format!("Saved view '{name}'"));
                 }
@@ -305,11 +286,6 @@ fn save_view(
                 project.write_channel(ProjChan::Views).view_failed(&name, e);
             }
         }
-        // The engine's catalog moved, so every tab's verdict was resolved against a catalog
-        // that no longer exists — a tab reading this view was reporting "not found" until
-        // now. Bumped **after** the answer lands, not at the def upsert: validation resolves
-        // against the engine, not the project file. Either arm counts; a view that failed to
-        // create is as much a change as one that succeeded.
         catalog_settled(catalog);
     });
 }
@@ -328,9 +304,6 @@ fn save_query(
     if name.is_empty() {
         return;
     }
-    // **After** the write, and only if it landed. A saved query is nothing but a stored string,
-    // so a failed `project.json` write means nothing was saved at all — logging the success first
-    // would have the log promising a query that the next open cannot find.
     let saved = {
         let mut p = project.write_channel(ProjChan::Queries);
         let meta = p

@@ -20,12 +20,6 @@ use crate::engine::plan::{
 /// logical and physical trees into `PlanNode`s, reading each node's name,
 /// one-line detail, and metrics directly from the DataFusion types.
 pub async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, String> {
-    // All-false, and deliberately **not** widened for `EXECUTE` the way the read path is (ED-08).
-    // Widening only moves where this fails: the walk below unwraps to the explained plan and asks
-    // for a *physical* one, and a `Statement(Execute)` has none — the bound plan exists only inside
-    // DataFusion's `execute_prepared`. So an `EXPLAIN EXECUTE p` gets DataFusion's own refusal
-    // either way, and the Run path (which returns DataFusion's textual explain rows rather than
-    // walking a plan tree) is the one that can serve it. Spec §6.5.
     let opts = SQLOptions::new()
         .with_allow_dml(false)
         .with_allow_ddl(false)
@@ -36,7 +30,6 @@ pub async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, S
         .await
         .map_err(|e| e.to_string())?;
 
-    // Unwrap `EXPLAIN`/`EXPLAIN ANALYZE` to the plan being explained.
     let (inner, analyze) = match df.logical_plan() {
         LogicalPlan::Explain(e) => (e.plan.as_ref(), false),
         LogicalPlan::Analyze(a) => (a.input.as_ref(), true),
@@ -50,15 +43,12 @@ pub async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, S
         ..Default::default()
     };
 
-    // Re-plan the inner logical plan to physical. `SessionState` has an inherent
-    // `create_physical_plan` in DataFusion (no `Session` trait import needed).
     let state = ctx.state();
     let physical = state
         .create_physical_plan(inner)
         .await
         .map_err(|e| e.to_string())?;
 
-    // ANALYZE: run the query so live metrics land on the plan's operators.
     if analyze {
         let _ = collect(physical.clone(), ctx.task_ctx())
             .await
@@ -112,8 +102,6 @@ fn walk_physical(root: &dyn ExecutionPlan) -> Vec<PlanNode> {
         let (name, detail) = split_name_detail(line.trim());
         let kind = PlanKind::classify(&name);
         let (rows, metrics) = node_metrics(p);
-        // Derive the one comparable per-node time (EXPLAIN_PLAN_SPEC §3) from the
-        // typed metrics — logic lives in `crate::plan`, pure over `Metric`.
         let self_ms = self_time_ms(kind, &metrics);
         let self_label = self_ms.map(fmt_ms).unwrap_or_default();
         out.push(PlanNode {
@@ -149,15 +137,11 @@ fn node_metrics(p: &dyn ExecutionPlan) -> (Option<u64>, Vec<Metric>) {
     let mut metrics = Vec::new();
     for m in ms.iter() {
         let mv = m.value();
-        // `output_rows` is *also* kept in the list (tier-3 "Output" group) — it just
-        // additionally surfaces as the headline `rows`. Timestamps aren't metrics.
         if mv.is_timestamp() {
             continue;
         }
         let kind = metric_kind(mv);
         let value = mv.as_usize() as u64;
-        // Ratio/pruning have no single scalar unit → keep DataFusion's own display
-        // string; everything else gets our unit-aware label.
         let label = match kind {
             MetricKind::Ratio => mv.to_string(),
             k => k.format(value),

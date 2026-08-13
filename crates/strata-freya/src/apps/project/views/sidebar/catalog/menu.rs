@@ -3,33 +3,20 @@
 //! two triggers can't drift apart (the Dioxus sidebar had exactly this pair, sharing one
 //! `catalog_menu_items`).
 //!
-//! ## The actions are direct calls, not cache invalidations
+//! **The actions are direct calls, not cache invalidations.** The store *is* the catalog, so there
+//! is no `FetchCatalog` query to invalidate: every item calls the engine and/or mutates
+//! [`ProjectState`] on the matching [`ProjChan`], and the rows subscribed to it re-render.
 //!
-//! **The store is the catalog** (P3-02): there is no `FetchCatalog` query to invalidate. Every
-//! item here calls the engine and/or mutates [`ProjectState`] on the matching [`ProjChan`], and
-//! the rows subscribed to that channel re-render. Nothing refetches.
+//! **Drop opens the confirm; it does not drop.** The item sets the [`DropTarget`] slot the dialog
+//! watches, and that is all it does — there is deliberately no second drop path.
 //!
-//! ## Drop opens the confirm; it does not drop
+//! **Profile asks the same question the inspector's card does**, through
+//! [`ProfileActions::ask`], so a first scan raises the cost confirm and a re-scan does not. The
+//! item leaves a request on the row and nothing else.
 //!
-//! P3-05 landed the whole drop flow — the dialog, its "N views will be left invalid" consequence
-//! line, and the drop itself (store + persist + engine + tab unbinding). The item here sets the
-//! [`DropTarget`] slot that dialog watches, and that is *all* it does. There is deliberately no
-//! second drop path.
-//!
-//! ## Profile asks the same question the inspector's card does
-//!
-//! `Profile table` / `Profile view` route through [`ProfileActions::ask`] — the *one* entry point
-//! the inspector's scan card also uses — so a first scan raises the cost confirm (P3-10) and a
-//! re-scan doesn't. The item leaves a request on the row and nothing else: the scan itself is the
-//! freya-query entry that request keys, and the row's own spinner is what says it is running.
-//!
-//! ## A menu is a snapshot
-//!
-//! These builders run inside an event handler, which has no reactive context — every read is a
-//! `peek`. That is the same trade the tab strip's menu makes: a transient menu's contents are
-//! whatever was true when it opened, and acting on it dismisses it. The rows themselves stay
-//! live (a row re-answering swaps its own status glyph while the menu is up); only the labels in
-//! the open card are frozen.
+//! **A menu is a snapshot.** These builders run inside an event handler, which has no reactive
+//! context, so every read is a `peek` — the same trade the tab strip's menu makes. The rows
+//! themselves stay live; only the labels in the open card are frozen.
 
 use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
@@ -201,8 +188,6 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
         .child(Prose::new(label))
 }
 
-// ---- the menus -------------------------------------------------------------------------------
-
 /// A **table** row's menu: open it in a tab · profile it · re-scan it · configure it · drop it.
 ///
 /// **Configure is absent on an internal table** (ED-04), not parked. It is the only item here
@@ -219,13 +204,7 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
 /// post-save transition on a *New* table, which is external by construction — so with the item
 /// gone the window cannot receive an internal def at all.
 pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
-    // Snapshotted at open (see the module doc). `loading` is this row's own state, which is what
-    // makes "Refreshing…" mean *this* table rather than "some pass is running": the row's status
-    // glyph says the same thing from the other side.
     let scanning = actions.catalog.peek().is_scanning();
-    // The origin travels with the drop gesture (`DropTarget::Table`) as well as gating Configure:
-    // it is what decides whether the confirm says the data goes, and this is the last place the
-    // def is in hand.
     let (loading, origin) = {
         let p = actions.project.peek();
         let row = p.tables.iter().find(|t| t.def.name == name);
@@ -253,9 +232,6 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                     ProfileTarget::verb(CatalogKind::Table),
                     move |a| a.profile.ask(CatalogKind::Table, &name),
                 )
-                // There is nothing to scan until the engine has answered for this row: a table it
-                // refused has no provider, so a scan of it can only fail — and it would fail out
-                // of sight, since the inspector has no column of a failed row to show it on.
                 .enabled(registered)
         })
         .child(actions.ask(
@@ -315,9 +291,6 @@ pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
                 view_row(a, &name);
             })
         })
-        // A view has no footer facts of its own, so a scan is the only way it learns anything —
-        // worth more here than on a table. Offered only once the view has actually planned: a view
-        // whose SQL didn't plan has nothing to scan (see `registered`).
         .child({
             let name = name.clone();
             actions
@@ -373,9 +346,6 @@ pub fn query_menu(
                 name: name.clone(),
             },
         ))
-        // The pencil is Strata's "edit the name or the definition", which is what makes it the
-        // right glyph here and on a view's Edit query — the canvas spends it on Open in new tab,
-        // which it can afford only because it has no Rename.
         .child(
             MenuButton::new()
                 .on_press(move |_| {
@@ -393,8 +363,6 @@ pub fn query_menu(
             }));
         }))
 }
-
-// ---- the actions -----------------------------------------------------------------------------
 
 /// **View table / View view** — put `SELECT * FROM <row>` in a tab, ready to run but not run:
 /// the row was clicked to look at the data, and pressing Run is the user's call (a full-width

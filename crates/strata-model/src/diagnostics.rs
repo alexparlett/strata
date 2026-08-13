@@ -1,13 +1,10 @@
-//! Diagnostics **vocabulary** — what the SQL validator asserts about a tab's text, and what
-//! the Problems view reasons in. Framework-agnostic, so the `sql` validator (which produces
-//! them) can depend *down* onto vocabulary; the per-tab store that holds them is app-side
-//! (`QueryTab::diagnostics` in `strata-freya`).
+//! Diagnostics **vocabulary** — what the SQL validator asserts about a tab's text, and what the
+//! Problems view reasons in. The per-tab store that holds them is app-side
+//! (`QueryTab::diagnostics`).
 //!
-//! A diagnostic is a **live fact about text**, not a log entry: every validation pass replaces
-//! a tab's slice wholesale, so fixing the SQL retracts the problem on the next pass. Query
-//! *execution* failures are deliberately not modelled here — they belong to a run, and the
-//! results pane renders one in full (banner, code frame, caret, hint) from
-//! [`QueryError`](crate::QueryError).
+//! A diagnostic is a **live fact about text**, not a log entry: every validation pass replaces a
+//! tab's slice wholesale, so fixing the SQL retracts the problem. Query *execution* failures belong
+//! to a run and are [`QueryError`](crate::QueryError) instead.
 
 use std::ops::Range;
 
@@ -22,22 +19,17 @@ pub enum Severity {
 
 /// One problem with a tab's SQL: a severity, a message, and where it is.
 ///
-/// No class/rule code: the design's Problems row is icon · message · line, and a code chip was
-/// a third thing competing with the message for a single line.
-///
-/// No owning tab either. A diagnostic is *stored on* the tab it belongs to, so carrying a
-/// `TabId` as well would be the same fact under two names — and this crate is leaf vocabulary
-/// that knows nothing about tabs. The Problems view gets the owner from the group it renders
-/// the row in.
+/// No class/rule code — the Problems row is icon · message · line, and a chip would compete with
+/// the message for it. No owning tab either: a diagnostic is *stored on* the tab it belongs to, and
+/// the Problems view gets the owner from the group it renders the row in.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     /// `line L:C` — the Problems-row display label.
     pub loc: Option<String>,
-    /// Byte range into the tab's SQL — drives the editor squiggle, and the click-to-jump when
-    /// it lands. Interpreted against the text the pass ran on, which the tab's validation
-    /// stamp records.
+    /// Byte range into the tab's SQL, driving the editor squiggle. Interpreted against the text
+    /// the pass ran on, which the tab's validation stamp records.
     pub span: Option<Range<usize>>,
 }
 

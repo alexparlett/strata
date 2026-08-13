@@ -7,29 +7,19 @@
 //! view is indistinguishable by origin: one store row, one `project.json` entry, one set of deps,
 //! and either gesture edits the row the other made.
 //!
-//! # Why the statement is never run natively
+//! **The statement never runs natively**, for two disqualifying reasons. DataFusion's
+//! `CREATE OR REPLACE VIEW` over a *table* name silently replaces the table — it deregisters
+//! whatever is there and registers a `ViewTable` without asking `table_type` — so a typo would turn
+//! a registered parquet table into a view while its def went on naming files nothing reads;
+//! [`create_statement`] refuses a name that resolves to a base table. And the store write-back
+//! needs a [`ViewMeta`], which introspecting for after the fact is the refetch the catalog
+//! invariant forbids; [`create`] reads it off the freshly-registered view's own `DataFrame`.
 //!
-//! Two reasons, both disqualifying:
-//!
-//! - **DataFusion's `CREATE OR REPLACE VIEW` over a *table* name silently replaces the table**
-//!   (`context/mod.rs`, the `(true, Ok(_))` arm — it deregisters whatever is there and registers a
-//!   `ViewTable`, without ever asking `table_type`). A typo would turn a registered parquet table
-//!   into a view, and the def in `project.json` would go on naming files nothing reads. [`create_statement`]
-//!   fences it: a name that resolves to a base table is refused before anything runs.
-//! - **The store write-back needs a [`ViewMeta`]** — columns and what the plan reads — and
-//!   introspecting for it after the fact is the refetch the catalog invariant forbids. [`create`]
-//!   reads it off the freshly-registered view's own `DataFrame`, where the planner has already
-//!   resolved everything.
-//!
-//! # What the def stores
-//!
-//! `ViewDef { name, sql }` and nothing else, so a typed statement has to arrive at exactly that
-//! pair: the folded target name, and the **definition query's canonical rendering** — the query
-//! node alone, not the statement around it. That is what makes the row round-trip, because it is
-//! the same string ⌘S would have saved from a tab holding that query. It is also why the clauses
-//! `CREATE VIEW` can carry are refused by name ([`definition`]) rather than left to DataFusion:
-//! the statement is rebuilt around the query, so a clause we did not read is a clause silently
-//! dropped.
+//! **The def stores `ViewDef { name, sql }` and nothing else**, so a typed statement has to arrive
+//! at exactly that pair: the folded target name, and the definition **query's** canonical rendering
+//! rather than the statement around it. That is what makes the row round-trip, and it is why every
+//! clause `CREATE VIEW` can carry is refused by name ([`definition`]) — the statement is rebuilt
+//! around the query, so a clause we did not read is a clause silently dropped.
 
 use datafusion::logical_expr::{DdlStatement, LogicalPlan, TableType};
 use datafusion::prelude::SessionContext;
@@ -56,30 +46,12 @@ const WHAT: &str = "Views";
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
 pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewMeta, String> {
-    // **The reserved namespace, backstopped at the funnel**, exactly as `register_external` does
-    // it for tables (`docs/STATEMENTS_SPEC.md` §4). The router refuses a `__snap_` target in a
-    // *typed* `CREATE VIEW`, but this body is also what ⌘S and the project-load replay run, so a
-    // name reaches here from two directions the router never sees. A view registered into that
-    // namespace is invisible to every catalog reader (the schema provider hides the prefix) and
-    // costs a **Run** the first time a snapshot wants the same name.
     if is_snapshot_name(name) {
         return Err(Blocked::ReservedName.editor_message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    // [`readable`], the same unwrapping a refused *table* gets: a view's failure lands in the
-    // same Problems list, one row below its cause, so a view carrying DataFusion's wrapper stack
-    // beside a table that has had it peeled would read as two faults worded by two apps. It is a
-    // no-op on a message with no wrappers, which is most of them.
     let df = ctx.sql(&stmt).await.map_err(|e| readable(&e.to_string()))?;
-    // The DDL only takes effect when its (empty) result is driven.
     let _ = df.collect().await;
-    // The freshly-registered view's own `DataFrame` gives both the columns and what it reads —
-    // the planner has already resolved it, so we never parse the SQL ourselves.
-    //
-    // `bare(fold_ident(…))`, not the raw `&str`: `impl Into<TableReference> for &str` parses, and
-    // a *quoted* name (`Sales 2024`, `say "hi"`) does not survive a parse — it would be looked up
-    // under a name the DDL never created. `fold_ident` is exactly what the DDL registered, and
-    // `bare` then takes it verbatim instead of parsing it a second time.
     let t = ctx
         .table(TableReference::bare(fold_ident(name)))
         .await
@@ -120,9 +92,6 @@ pub async fn create_statement(
     };
     let (name, sql) = definition(view)?;
 
-    // The one namespace, asked of the engine that owns it — and the fence in front of
-    // DataFusion's own replace-a-table arm. `OR REPLACE` does not soften it: a table under this
-    // name is not a view the user is redefining, it is a table they would lose.
     let replacing = match existing(ctx, &name).await {
         Some(TableType::View) if !view.or_replace => {
             return Err(format!(
@@ -141,7 +110,6 @@ pub async fn create_statement(
     };
     Ok(StatementOutcome {
         message: format!("View '{name}' {verb}"),
-        // Not a count of zero: creating a view moves no rows, which is a different fact.
         count: None,
         effect: Some(StoreEffect::ViewUpserted {
             def: ViewDef {
@@ -177,11 +145,7 @@ pub async fn drop_statement(
     let name = bare_name(&dropping.name, WHAT)?;
     match existing(ctx, &name).await {
         Some(TableType::View) => {}
-        // The other half of `DROP TABLE`'s type check, in the same words from the other side.
         Some(_) => return Err(format!("'{name}' is a table. Use DROP TABLE")),
-        // Resolved before anything is touched, because `DROP VIEW IF EXISTS` below cannot tell
-        // "there was nothing here" from "it is gone now" — and `IF EXISTS` is the difference
-        // between a statement that reports a no-op and one that failed.
         None if dropping.if_exists => {
             return Ok(StatementOutcome {
                 message: format!("View '{name}' does not exist"),
@@ -191,7 +155,6 @@ pub async fn drop_statement(
         }
         None => return Err(format!("View '{name}' does not exist")),
     }
-    // While there are still plans to walk.
     let dependents = dependents_of_view(ctx, &name).await;
 
     drop(ctx, &name).await?;
@@ -215,13 +178,10 @@ pub async fn drop_statement(
 fn definition(view: &CreateView) -> Result<(String, String), String> {
     let CreateView {
         or_alter,
-        // The only two the funnel carries: `OR REPLACE` is the caller's, since it decides an
-        // existing name rather than the statement's shape, and the query is the def.
         or_replace: _,
         materialized,
         secure,
         name,
-        // Only says which side of the name `IF NOT EXISTS` was written on, and that is refused.
         name_before_not_exists: _,
         columns,
         query,
@@ -236,7 +196,6 @@ fn definition(view: &CreateView) -> Result<(String, String), String> {
         params,
     } = view;
 
-    // The two with somewhere to point the user, in their own words.
     if *if_not_exists {
         return Err(
             "CREATE VIEW IF NOT EXISTS is not supported. Use CREATE OR REPLACE VIEW".into(),
@@ -263,17 +222,6 @@ fn definition(view: &CreateView) -> Result<(String, String), String> {
         }
     }
 
-    // Through `TableReference::parse_str`, which is the identifier normalization DataFusion would
-    // have applied itself — unquoted parts folded, quoted parts verbatim — so a typed name lands
-    // on exactly the row `ctx.sql` would have registered.
-    //
-    // **The part count is checked first, because `parse_str` is lossy above three.** Its
-    // `from_vec` answers `None` for four parts and the fallback is a *bare* reference holding the
-    // whole dotted string, which `bare_name` then accepts: `CREATE VIEW a.b.c.d` would create a
-    // view literally named `a.b.c.d` instead of refusing a qualifier that names nowhere — the one
-    // thing `bare_name` exists to stop, and a divergence from `DROP VIEW a.b.c.d`, which
-    // DataFusion's own planner refuses. The refusal is `bare_name`'s own, so both spellings of the
-    // fault read alike.
     if name.0.len() > 3 {
         return Err(elsewhere(WHAT));
     }
@@ -378,7 +326,6 @@ mod tests {
         assert_eq!(meta.tables, vec!["t".to_string()], "and what it reads");
         assert_eq!(read(&eng, "SELECT n FROM v ORDER BY n").await.len(), 2);
 
-        // The other gesture, over the def the first one produced: same call, same answer.
         let saved = eng
             .create_view(def.name.clone(), def.sql.clone())
             .await
@@ -388,7 +335,6 @@ mod tests {
             "⌘S over the typed def is the same registration"
         );
 
-        // And Save's own artifact is editable by the typed gesture — the same row, redefined.
         let replaced = statement(&eng, "CREATE OR REPLACE VIEW v AS SELECT 1 AS other")
             .await
             .expect("replaced");
@@ -567,7 +513,6 @@ mod tests {
         statement(&eng, "CREATE VIEW v AS SELECT n FROM t")
             .await
             .expect("created");
-        // A real reader, and a view whose only connection to `v` is a local alias spelled alike.
         statement(&eng, "CREATE VIEW reader AS SELECT n FROM v")
             .await
             .expect("created");
@@ -662,8 +607,6 @@ mod tests {
                 .expect("created");
             ProjectDefs {
                 tables: vec![def],
-                // Deliberately the wrong order — the dependent first. Defs order is not the
-                // registration order, and a chain that only replayed by luck would pass here.
                 views: vec![upserted(&over).0, upserted(&base).0],
                 ..Default::default()
             }

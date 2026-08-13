@@ -37,10 +37,6 @@ impl EditorMetrics {
         font_weight: i32,
         rope: &Rope,
     ) {
-        // We assume the font used is monospaced.
-
-        // Calculate character width by measuring a reference character. The probe carries the
-        // same weight the lines paint with, so the measured advance matches the glyphs.
         let font_collection = consume_root_context::<FontCollection>();
         let mut paragraph_style = ParagraphStyle::default();
         let mut text_style = TextStyle::default();
@@ -54,13 +50,11 @@ impl EditorMetrics {
         paragraph_style.set_text_style(&text_style);
         let mut paragraph_builder = ParagraphBuilder::new(&paragraph_style, font_collection);
 
-        // Measure a single character to get the monospace character width
         paragraph_builder.add_text("W");
         let mut paragraph = paragraph_builder.build();
         paragraph.layout(f32::MAX);
         let char_width = paragraph.longest_line();
 
-        // Find the line with the maximum character count
         let max_chars = rope.lines().map(|line| line.len_chars()).max().unwrap_or(0);
 
         self.char_width = char_width;

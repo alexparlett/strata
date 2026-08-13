@@ -1,17 +1,14 @@
 //! A [`Host`] over plain values and a real [`Engine`] — the vocabulary's test rig, and the
 //! executable statement of what a host owes it.
 //!
-//! Public rather than `#[cfg(test)]` for two reasons. The integration test speaks real MCP
-//! over the real transport and lives in `tests/`, where a `cfg(test)` item is invisible; and
-//! the two hosts that follow (AA-03's bridge, AA-05's headless) are written against this
-//! contract, so having one worked example beside it is cheaper than reading the trait twice.
+//! Public rather than `#[cfg(test)]` because the integration test speaks real MCP over the real
+//! transport from `tests/`, where a `cfg(test)` item is invisible.
 //!
-//! The engine is **real**: a mock project registers actual tables and `run` actually
-//! executes, so the happy path a test asserts is the one the engine produces. What is faked
-//! is only what a host is: which projects exist, what the catalog says, and which query
-//! sessions are open for whom. [`MockProject::settling`] is the one deliberate lever — it
-//! makes the next run settle with an engine string of the test's choosing, which is how "the
-//! user cancelled this" becomes assertable without racing a real cancel.
+//! The engine is **real**: a mock project registers actual tables and `run` actually executes, so
+//! the happy path a test asserts is the one the engine produces. What is faked is only what a host
+//! is — which projects exist, what the catalog says, and which query sessions are open for whom.
+//! [`MockProject::settling`] is the one deliberate lever, making the next run settle with an engine
+//! string of the test's choosing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -241,8 +238,6 @@ impl Host for MockHost {
         mode: RunMode,
         page_size: usize,
     ) -> Result<RunSettle, AgentError> {
-        // Everything that needs the lock, taken before the await — a host answers its own
-        // questions and then waits on the engine, never the other way round.
         let (engine, settle) = self.with(project, |p| {
             if !p
                 .sessions
@@ -264,16 +259,11 @@ impl Host for MockHost {
                 .query(ws, run, sql, page_size)
                 .await
                 .map(|(output, _)| Settled::Rows(output)),
-            // The host wraps, exactly as the app's Run capability does: `RunMode::Explain`
-            // means "plan this statement", not "the caller already wrote EXPLAIN".
             RunMode::Explain => engine
                 .explain(ws, run, as_explain(&sql, false))
                 .await
                 .map(Settled::Plan),
         };
-        // Settled either way. A run that failed is still a run that finished — the dispatch
-        // happened and the previous snapshot went with it. Reporting it as `Empty` would tell
-        // an agent nothing had ever run there.
         self.with(project, |p| {
             if let Some(s) = p
                 .sessions

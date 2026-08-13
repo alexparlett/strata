@@ -55,9 +55,6 @@ pub enum OpenPref {
 /// acts on it) is distributed: each feature listens for its own command through
 /// `crate::keymap::resolve`; this is just the stable, serializable id a binding points at.
 /// Serialized by variant name.
-// `CommandPalette` repeats the enum's name, and stays that way: the variant name *is* the wire
-// format for a saved binding (the line above), so renaming it silently drops every user's
-// override of that chord — and "command palette" is the surface's own name, not a stutter.
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum Command {
@@ -301,9 +298,6 @@ macro_rules! settings_merge {
             /// the top, silently undoing a change the user did make. A per-field diff against
             /// the seed only ever commits what this draft actually changed.
             pub fn merge_onto(&self, base: &Settings, live: &mut Settings) {
-                // The draft's fields, destructured rather than read through `self` — the
-                // pattern is what makes the list exhaustive (see the macro's docs), and
-                // binding each field means a missing one is reported by name.
                 let Settings { $( $field ),* } = self;
                 $(
                     if $field != &base.$field {
@@ -424,7 +418,6 @@ pub struct AppConfig {
 impl AppConfig {
     /// Add or promote a project in the recents list (most-recent first, cap 12).
     pub fn push_recent(&mut self, name: &str, path: &str) {
-        // Preserve the pin across a re-open (retain-then-insert would drop it).
         let pinned = self
             .recent_projects
             .iter()
@@ -626,8 +619,6 @@ fn corrupt_config_path(path: &Path) -> PathBuf {
 /// [`load`]'s three-way read, split out so the outcome is a value rather than a control-flow
 /// comment. `Err` is only ever the unreadable case; the other two return a config.
 fn read_config() -> Result<AppConfig, String> {
-    // No config dir at all: nothing to read and nowhere to write. Left writable — `save` will
-    // report its own failure, which is the honest place for it.
     let path = config_path()?;
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
@@ -645,13 +636,6 @@ fn read_config() -> Result<AppConfig, String> {
         Ok(cfg) => Ok(cfg),
         Err(e) => {
             let aside = corrupt_config_path(&path);
-            // **Writing is only safe once the bytes are somewhere else.** A rename that fails
-            // leaves the unparseable file as the user's only copy of their settings — and a
-            // truncated config usually holds most of them verbatim — sitting at the path the
-            // first window mount is about to write. So the latch goes off exactly as it does for
-            // an unreadable file: this session runs on defaults and does not replace what it
-            // could not preserve. `keep_corrupt_session` takes the same position for
-            // `session.json`, where it can afford to fail the open outright.
             if fs::rename(&path, &aside).is_ok() {
                 tracing::error!(
                     "config '{}' did not parse: {e}. Kept aside as '{}'",
@@ -772,8 +756,6 @@ mod tests {
             version: CONFIG_VERSION,
             recent_projects: vec![
                 recent("alive", alive.to_str().unwrap()),
-                // Deleted outright, and replaced by a plain file — neither can open, and a
-                // pin doesn't save an entry whose folder is gone.
                 recent("gone", gone.to_str().unwrap()),
                 recent("file", file.to_str().unwrap()),
             ],
@@ -785,7 +767,6 @@ mod tests {
 
         let names: Vec<&str> = cfg.recent_projects.iter().map(|r| &*r.name).collect();
         assert_eq!(names, ["alive"]);
-        // The reopen set is the startup filter's to validate (and report) — not pruned here.
         assert_eq!(cfg.open_projects.len(), 1);
     }
 
@@ -809,7 +790,6 @@ mod tests {
     #[test]
     fn legacy_strata_dir_paths_migrate_to_project_folders() {
         let mut cfg = AppConfig {
-            // A pre-versioning file: no `version` key, so it reads as 0 and the v1 gate fires.
             version: 0,
             recent_projects: vec![
                 recent("sample", "/data/sample/.strata"),
@@ -821,7 +801,6 @@ mod tests {
         cfg.migrate();
 
         let paths: Vec<&str> = cfg.recent_projects.iter().map(|r| &*r.path).collect();
-        // The legacy entry loses its `.strata`; the already-migrated one is untouched.
         assert_eq!(paths, ["/data/sample", "/data/sample/events"]);
         assert_eq!(cfg.open_projects, ["/data/sample"]);
         assert_eq!(cfg.version, CONFIG_VERSION, "migrating stamps the version");
@@ -848,8 +827,6 @@ mod tests {
     fn migration_collapses_both_spellings_of_one_project() {
         let mut cfg = AppConfig {
             version: 0,
-            // The same project under both spellings — the newer (first) entry wins, so a
-            // re-open through the new path doesn't resurrect the stale row behind it.
             recent_projects: vec![
                 recent("sample", "/data/sample"),
                 recent("sample", "/data/sample/.strata"),
@@ -870,11 +847,8 @@ mod tests {
     #[test]
     fn applying_a_draft_keeps_what_another_window_committed_meanwhile() {
         let seed = Settings::default();
-        // The Settings window's draft: the user picks a theme.
         let mut draft = seed.clone();
         draft.theme = "daylight".to_string();
-        // Meanwhile, the close confirm's "Don't ask again" writes this from a window that
-        // never showed the setting — so the draft still holds the old value.
         let mut live = seed.clone();
         live.confirm_close_running = false;
 

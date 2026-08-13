@@ -114,8 +114,6 @@ impl Component for EditorLineUI {
                         },
                     )
                 });
-                // Diagnostics hover: which glyph the pointer sits on plus the pointer's
-                // x (the popup's anchor). Unchanged positions are a free `write_if`.
                 let location = e.element_location();
                 let local = holder.read().0.borrow().as_ref().map(|inner| {
                     let glyph = inner
@@ -190,9 +188,6 @@ impl Component for EditorLineUI {
                     .max_lines(1)
                     .color(theme.text)
                     .spans_iter(line.iter().flat_map(|span| {
-                        // A syntax run splits where a diagnostic decoration starts or
-                        // ends — the decorated pieces get their wavy underline, the
-                        // rest render exactly as before.
                         let mut spans: SmallVec<[Span<'static>; 2]> = SmallVec::new();
                         match &span.1 {
                             TextNode::Range(word_pos) => {
@@ -264,8 +259,6 @@ fn decorate_range(
     cuts.dedup();
     for pair in cuts.windows(2) {
         let (a, b) = (pair[0], pair[1]);
-        // Boundaries all sit on cut points, so a decoration either covers the whole
-        // sub-range or none of it; overlaps resolve to the highest severity.
         let severity = overlapping
             .iter()
             .filter(|d| d.range.start <= a && b <= d.range.end)
@@ -309,7 +302,6 @@ mod tests {
 
     #[test]
     fn decoration_spanning_past_the_run_clamps_to_it() {
-        // e.g. a multi-line squiggle: this line's runs only see their own slice.
         let out = decorate_range(5..10, &[deco(0..8, DecorationSeverity::Warning)]);
         assert_eq!(
             out.as_slice(),

@@ -73,8 +73,6 @@ fn here() -> ProjectParams {
 async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
     let (root, tools) = project("vocabulary").await;
 
-    // --- the catalog plane -------------------------------------------------
-
     let projects = tools.list_projects().await.projects;
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].name, "sales");
@@ -130,10 +128,6 @@ async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
         "{checked:?}"
     );
 
-    // --- open → run → read_page → close ------------------------------------
-
-    // The identity is the caller's own, because there is no peer to read one off. The
-    // assistant's is `AgentIdentity::assistant()`; a test says what it is.
     let session = tools
         .open_query_session(
             AgentIdentity {
@@ -163,7 +157,6 @@ async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
     let RunResult::Ok { rows, total, .. } = ran else {
         panic!("{ran:?}");
     };
-    // Bounded by the page, exact in the total — no `LIMIT` was injected here either.
     assert_eq!(rows, vec![vec![Some("1".into())], vec![Some("2".into())]]);
     assert_eq!(total, 5);
 
@@ -176,7 +169,6 @@ async fn the_whole_vocabulary_answers_with_no_mcp_peer() {
         })
         .await
         .unwrap();
-    // The page size follows the run that settled it, so paging is consistent.
     assert_eq!(page.page_size, 2);
     assert_eq!(page.rows, vec![vec![Some("5".into())]]);
 
@@ -273,9 +265,6 @@ fn the_manifest_offers_exactly_what_the_wire_advertises() {
         );
     }
 
-    // The arguments a tool takes are the ones it advertises. A wrapper that lost its
-    // `Parameters<T>` would still list, still describe itself, and quietly tell every model
-    // it takes none — so the properties are named rather than counted.
     let properties = |name: &str| -> Vec<String> {
         let tool = manifest.iter().find(|t| t.name == name).expect(name);
         let mut keys: Vec<String> = tool.input_schema["properties"]

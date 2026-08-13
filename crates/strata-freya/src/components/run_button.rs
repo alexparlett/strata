@@ -79,7 +79,6 @@ impl Component for RunButton {
             focus_border_fill,
         } = get_theme!(&self.theme, RunButtonThemePreference, "run_button");
 
-        // (resting, hover, foreground) for the current state.
         let (base, hover, fg) = match self.state {
             RunState::Idle => (background, hover_background, color),
             RunState::Disabled => (
@@ -91,13 +90,11 @@ impl Component for RunButton {
         };
 
         let mut hovered = use_state(|| false);
-        // Disabled is inert — no hover response.
         let bg = if hovered() && self.state != RunState::Disabled {
             hover
         } else {
             base
         };
-        // Running shows a stop glyph (click to cancel); idle/disabled show play.
         let icon = if self.state == RunState::Running {
             IconName::Stop
         } else {
@@ -109,8 +106,6 @@ impl Component for RunButton {
 
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
-        // Only the keyboard gets a ring: a press focuses the button too, so an any-focus ring
-        // would sit on Run for the rest of the session after the first click.
         let focus_ring = (focus() == Focus::Keyboard).then(|| {
             Border::new()
                 .fill(focus_border_fill)
@@ -118,8 +113,6 @@ impl Component for RunButton {
                 .alignment(BorderAlignment::Inner)
         });
 
-        // The comp's state-dependent `runTitle`. Both hints resolve unconditionally (hooks),
-        // then the state picks.
         let run_title = use_hint_title("Run", Command::RunQuery);
         let cancel_title = use_hint_title("Cancel query", Command::Cancel);
         let title = match self.state {
@@ -141,16 +134,9 @@ impl Component for RunButton {
                     .a11y_id(a11y_id)
                     .a11y_focusable(!disabled)
                     .a11y_role(AccessibilityRole::Button)
-                    // The tooltip names the button for the pointer; the same string names it
-                    // for the keyboard, which is now a tab stop and would otherwise announce
-                    // as an unlabelled button (the child is a raw-SVG `Icon`). It lands on
-                    // *this* rect because this is the focusable node.
                     .a11y_alt(title)
                     .on_pointer_enter(move |_| hovered.set(true))
                     .on_pointer_leave(move |_| hovered.set(false))
-                    // `on_press` covers the OS activation keys as well as the pointer, so
-                    // focusing on press is all a keyboard operator needs (Freya's own `Button`
-                    // does the same).
                     .map(on_press, move |el, on_press| {
                         el.on_press(move |e| {
                             if !disabled {

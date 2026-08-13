@@ -6,46 +6,30 @@
 //! exactly one reader (the pane, when it is mounted), so nothing here needs surgical per-channel
 //! updates.
 //!
-//! ## Why it is not `SessionState`, and where it does persist
+//! **Nothing here reaches `session.json`** — a transcript is not part of the arrangement of the
+//! window. It does reach `.strata/chats/` through [`chat_store`](super::chat_store), which owns the
+//! document, and what is stored is **both** lists: the turns below *and* the [`Conversation`] the
+//! model reads back, because a restored conversation has to be continuable and neither list
+//! reconstructs the other. Restoring only the transcript restores the *appearance* of a
+//! conversation. The writes hang off the three places a conversation is known to have stopped
+//! changing: [`Chats::settle`], the stop press, and this subtree's teardown.
 //!
-//! [`Agents`](super::agents::Agents)' reasoning, applied to the other agent. **Nothing here
-//! reaches `session.json`** — a transcript is not part of the arrangement of the window.
-//!
-//! It does reach `.strata/chats/` (AS-07), as a satellite on `history.jsonl`'s terms and through
-//! [`chat_store`](super::chat_store), which owns the document. What is stored is **both** lists:
-//! the turns below *and* the [`Conversation`] the model reads back, because a restored
-//! conversation has to be continuable and neither list reconstructs the other. Restoring only the
-//! transcript would restore the *appearance* of a conversation, which is what this module's first
-//! version refused to ship.
-//!
-//! The writes hang off the three places a conversation is known to have changed and stopped
-//! changing: [`Chats::settle`] (through the fold task, which is where the model's own memory is
-//! already committed), the stop press, and this subtree's teardown.
-//!
-//! **Nothing here reaches `.strata/history.jsonl` either.** The assistant's own runs are not the
+//! **Nothing here reaches `.strata/history.jsonl` either.** The assistant's runs are not the
 //! user's; a run enters history the ordinary way, when the user promotes a card into a tab and
-//! presses Run. That is the *adoption* rule, and it is why an [`Offer`](Block::Offer)'s Run press
-//! goes through the editor's own funnel rather than dispatching anything here.
+//! presses Run — which is why an [`Offer`](Block::Offer)'s Run press goes through the editor's own
+//! funnel.
 //!
-//! ## Recorded by its observer
+//! **Recorded by its observer**, for the log's reason: a turn's events describe things already
+//! finished and cannot be re-derived. [`send`] spawns the one task that folds every [`TurnEvent`]
+//! into its conversation, and that task is the only writer of a [`Reply`].
 //!
-//! No producer hook, for the log's reason: a turn's events describe things already finished and
-//! cannot be re-derived. [`send`] spawns the one task that watches a turn and folds every
-//! [`TurnEvent`] into the conversation it belongs to, and that task is the only writer of a
-//! [`Reply`].
+//! **A turn's cancel is dropping the task.** `Running` holds `tokio_util`'s own drop guard, so the
+//! future going away *is* the cancel and the engine's abort. What the fold still owes the
+//! transcript is the truth: a cancelled turn stays, marked stopped, because a conversation that
+//! erases what it was doing when you stopped it cannot be audited.
 //!
-//! ## What a turn's cancel is
-//!
-//! Dropping the task. `Running` holds `tokio_util`'s own drop guard, so the future going away
-//! *is* the turn's cancel and the engine's abort — there is no second stop path to keep in step
-//! with this one. What the fold still owes the transcript is the truth: a cancelled turn stays,
-//! marked as stopped, because a conversation that erases what it was doing when you stopped it
-//! is a conversation you cannot audit.
-//!
-//! ## Everything here is bounded
-//!
-//! A conversation has no natural end and neither does a list of them, so both are capped, oldest
-//! first — a transcript is a scrollback, the way the event log is.
+//! **Everything here is bounded.** A conversation has no natural end and neither does a list of
+//! them, so both are capped oldest-first — a transcript is a scrollback, like the event log.
 
 use std::cmp::Reverse;
 use std::path::PathBuf;
@@ -464,7 +448,6 @@ impl Chats {
     /// only ever this window's key.
     pub fn hydrate(&mut self, doc: ChatDoc, memory: Conversation) -> ChatId {
         if let Some(live) = self.chats.iter().find(|chat| chat.uuid == doc.id) {
-            // Already open: pressing its row is a switch, not a second copy of it.
             let id = live.id;
             self.active = id;
             return id;
@@ -483,7 +466,6 @@ impl Chats {
             running: None,
             created_ms: Some(doc.created_ms),
             updated_ms: doc.updated_ms,
-            // What was just read is what is on disk.
             dirty: false,
         });
         self.shed = self.evict();
@@ -616,9 +598,6 @@ impl Chats {
     /// the pane with nothing to show — the canvas's rule, and the reason `active` can be a plain
     /// id rather than an `Option`.
     pub fn delete(&mut self, id: ChatId, fresh: Pick) {
-        // **Stop before dropping.** Dropping the `Chat` drops a `Copy` id and nothing else, so a
-        // conversation deleted mid-turn would keep streaming — spending the user's tokens and
-        // holding this project's engine — with the only handle that could stop it now gone.
         self.stop(id);
         if let Some(chat) = self.get(id) {
             let uuid = chat.uuid;
@@ -645,7 +624,6 @@ impl Chats {
         if chat.turns.is_empty() {
             chat.title = strata_core::util::collapse_sql(&text);
         }
-        // The first question is what makes this a conversation worth storing (AS-07).
         chat.created_ms.get_or_insert_with(now_ms);
         chat.updated_ms = now_ms();
         chat.dirty = true;
@@ -674,8 +652,6 @@ impl Chats {
             return;
         };
         match event {
-            // The send is on its way. Nothing to record: the empty reply is already on screen,
-            // which is what says the turn started.
             TurnEvent::Started => {}
             TurnEvent::Delta(text) => reply.say(&text),
             TurnEvent::Runnable(sql) => reply.blocks.push(Block::Offer { sql, stale: false }),
@@ -719,11 +695,6 @@ impl Chats {
         if let Some(reply) = chat.reply_mut() {
             reply.note = settle.note();
             reply.settled = true;
-            // **A step whose answer will never come is closed here.** Cancelling the task is
-            // exactly what guarantees the matching `ToolSettled` never arrives, so a card opened
-            // by `ToolCall` would sit at `failed: None` — which the transcript draws as
-            // "running…" — under a reply headed "Stopped." for the life of the window. The
-            // wording is the engine's own, the same one a stopped run carries everywhere else.
             for block in &mut reply.blocks {
                 if let Block::Step(step) = block {
                     if step.failed.is_none() {
@@ -765,11 +736,6 @@ impl Chats {
             return;
         };
         task.cancel();
-        // **A turn that already settled is not cancelled by this.** Since the handle is held
-        // until the record is written ([`finish`](Chats::finish)), a stop can land on a turn that
-        // has already answered — and settling again would relabel it "Stopped." and re-mark its
-        // finished steps with the engine's cancel wording. What is cancelled there is the write,
-        // which the teardown's own pass then does.
         let settled = self
             .get(id)
             .and_then(Chat::reply)
@@ -845,16 +811,6 @@ pub fn use_init_chats(seed: Pick, root: PathBuf, cap: usize, report: ReportCtx) 
             State::create(Chats::restored(seed, shelf))
         }
     });
-    // **Every turn is stopped when this subtree goes, and what it leaves is written.**
-    //
-    // Two obligations in one place because they are ordered: [`Chats::stop_all`] settles the
-    // turns in flight (their tasks are root-scoped and would otherwise outlive the state they
-    // write), and only then is there a final state worth storing. The write is **synchronous on
-    // the render thread**, exactly as the session autosave's own `use_drop` is: a task spawned
-    // here dies with the scope, and "the conversation survives a quit" is the whole feature.
-    //
-    // Only the dirty ones write. A conversation that settled an hour ago is already on disk, and
-    // this pass is on the path of every window close.
     use_drop(move || {
         let mut chats = chats;
         chats.write().stop_all();
@@ -1001,8 +957,6 @@ mod tests {
         chats.fold(id, TurnEvent::Runnable("SELECT 1".into()));
 
         chats.stale_offer(id, 1, 0, "SELECT 1");
-        // A statement that is not the one that was checked is left alone: the indices are a
-        // position, and a send landing between the check and its answer moves them.
         chats.stale_offer(id, 1, 0, "SELECT 2");
         let Some(Turn::Reply(reply)) = chats.active().turns.get(1) else {
             panic!("a reply");

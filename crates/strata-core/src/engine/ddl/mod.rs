@@ -202,31 +202,19 @@ pub async fn execute(
         baseline,
     } = engine;
     let start = Instant::now();
-    // Exhaustive on `StmtKind` with no wildcard, so a kind the router learns to intercept is a
-    // compile error here rather than a statement that classifies and then falls through.
-    // The arms are grouped by the task that owns each capability, which is also how they will
-    // stop being stubs — one task, one arm, one funnel behind it.
     let outcome: StatementOutcome = match kind {
-        // ED-04 — internal tables: spool the inner query to `.strata/tables/<slug>/`, register
-        // the resulting Arrow def through `register_external`.
         StmtKind::CreateTable | StmtKind::Ctas => tables::create(ctx, kind, stmt, root).await,
-        // ED-05 — writes and removal over the internal-name set.
         StmtKind::Insert => tables::insert(ctx, stmt, &internal).await,
         StmtKind::DropTable => tables::drop_statement(ctx, &root, &internal, stmt).await,
-        // ED-06 — typed view DDL onto the body the save-view funnel already runs.
         StmtKind::CreateView => views::create_statement(ctx, stmt).await,
         StmtKind::DropView => views::drop_statement(ctx, stmt).await,
-        // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
         StmtKind::Copy => copy::copy_to(ctx, stmt, &root).await,
-        // ED-08 — the session overlay and prepared statements.
         StmtKind::Set => session::set(ctx, stmt, &scope).await,
         StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,
         StmtKind::Prepare => session::prepare(ctx, stmt, &scope).await,
         StmtKind::Deallocate => session::deallocate(ctx, stmt, &scope).await,
-        // ED-09 — SQL-bodied scalar functions, over the factory `build_context` installed.
         StmtKind::CreateFunction => functions::create(ctx, stmt, &registry).await,
         StmtKind::DropFunction => functions::drop(ctx, stmt, &registry).await,
-        // ED-10 — the typed form of Table Config's registration.
         StmtKind::CreateExternalTable => {
             external::create(ctx, stmt, &root, &internal, &connections).await
         }

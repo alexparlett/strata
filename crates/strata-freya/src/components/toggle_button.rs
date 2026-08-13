@@ -128,7 +128,6 @@ impl Component for ToggleButton {
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
 
-        // The `on` dress wins over hover.
         let (background, color) = if on() {
             (theme.active_background, theme.active_color)
         } else if hovered() {
@@ -136,8 +135,6 @@ impl Component for ToggleButton {
         } else {
             (theme.background, theme.color)
         };
-        // Only the keyboard gets a ring: a press focuses the button too, so an any-focus ring
-        // would leave the last-pressed toggle outlined for the rest of the session.
         let focus_ring = (focus() == Focus::Keyboard).then(|| {
             Border::new()
                 .fill(theme.focus_border_fill)
@@ -145,10 +142,6 @@ impl Component for ToggleButton {
                 .alignment(BorderAlignment::Inner)
         });
         let on_change = self.on_change.clone();
-        // Default: 28px tall, at least square, hugging wider content — the caller's children
-        // inherit the state's colour ambiently (icons via `currentColor`, labels via the
-        // parent). An explicit `.width`/`.height` fixes the box (rail buttons), in which case
-        // the content just centres — no hug min-width or horizontal padding.
         let button = rect()
             .height(self.height.clone().unwrap_or(Size::px(28.)))
             .corner_radius(R_2)
@@ -159,14 +152,9 @@ impl Component for ToggleButton {
             .a11y_id(a11y_id)
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::Button)
-            // The tooltip names the button for the pointer; the same string names it for the
-            // keyboard, which is now a tab stop and whose children are icons carrying no text
-            // to be named from. It lands here because this is the focusable node.
             .map(self.title.clone(), AccessibilityExt::a11y_alt)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
-            // `on_press` covers the OS activation keys as well as the pointer, so focusing on
-            // press is all a keyboard operator needs (Freya's own `Button` does the same).
             .on_press(move |e: Event<PressEventData>| {
                 a11y_id.request_focus();
                 let v = !*on.peek();

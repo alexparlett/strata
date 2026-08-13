@@ -87,8 +87,6 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
         app,
         (620., 900.).into(),
         move |r| {
-            // A real engine, asked nothing: there is no scan *driver* here — that lives at the
-            // project window's root — so Save raises a request and the row stays `Loading`.
             r.provide_root_context(EngineCtx::default);
             r.provide_root_context(|| State::create(CatalogState::Settled(0)));
             r.provide_root_context(|| State::create(ScanRequest::default()));
@@ -97,7 +95,6 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
             let project = r.provide_root_context(|| {
                 RadioStation::<ProjectState, ProjChan>::create(project(&root, connected))
             });
-            // The project window's connection-editor slot: this window sets it and stops.
             let connections: ConnectionRequest =
                 r.provide_root_context(|| State::create(None::<ConnectionTarget>));
             let ctx = r.provide_root_context(|| ConfigureCtx {
@@ -185,7 +182,6 @@ fn remote_with_no_connection_explains_itself_and_blocks_save() {
         texts(&runner)
     );
 
-    // The other providers are reachable from here, and each answers for itself.
     click_lowest(&mut runner, "GCS");
     assert!(shows(
         &runner,
@@ -301,8 +297,6 @@ fn a_forgotten_connection_is_named_and_blocks_save() {
     );
 }
 
-// ---- LOCATION ▸ Internal (IT-01) -------------------------------------------------------------
-
 /// An **internal** draft: one column row, ready to be typed into, as `set_location` leaves it.
 fn internal_draft() -> ConfigureDraft {
     let mut draft = ConfigureDraft {
@@ -323,7 +317,6 @@ fn internal_shows_columns_and_hides_everything_about_files() {
 
     assert!(shows(&runner, "Internal"), "the segment is offered");
     assert!(shows(&runner, "COLUMNS"), "{:?}", texts(&runner));
-    // Nothing about files: no path list, no format picker, no partitions.
     for absent in ["SOURCE PATHS", "SOURCE PATH", "FORMAT", "HIVE PARTITIONING"] {
         assert!(!shows(&runner, absent), "{absent} is still on screen");
     }
@@ -354,7 +347,6 @@ fn internal_is_offered_on_a_new_table_and_refused_on_an_edit() {
         "…and the form is unchanged"
     );
 
-    // The same press on a *new* table takes.
     draft.name = "fresh".into();
     let (mut fresh, (ctx, _, _)) = runner("internal-new", false, draft);
     settle(&mut fresh);
@@ -378,7 +370,6 @@ fn an_internal_table_blocks_save_until_its_columns_are_whole() {
         texts(&runner)
     );
 
-    // A type the planner refuses reaches the row and the note as written.
     ctx.edit(|draft| draft.set_column_type(0, "FLOAT64".into()));
     for _ in 0..200 {
         runner.sync_and_update();
@@ -435,14 +426,11 @@ fn configure_internal_preview() {
 /// collects. Cancel and Esc both read [`Status::holds_window`], so they cannot disagree.
 #[test]
 fn only_a_create_in_flight_holds_the_window() {
-    // A registration is the project window's work and must never trap this window; a create is
-    // this window's and must.
     assert!(!Status::Idle.holds_window());
     assert!(!Status::Registering("daily".into()).holds_window());
     assert!(!Status::Failed("nope".into()).holds_window());
     assert!(Status::Creating("daily".into()).holds_window());
 
-    // Both are busy, which is the separate question Save and `edit` ask.
     assert!(!Status::Idle.busy());
     assert!(Status::Registering("daily".into()).busy());
     assert!(Status::Creating("daily".into()).busy());
@@ -460,8 +448,6 @@ fn a_create_in_flight_freezes_the_form_and_names_itself() {
     settle(&mut runner);
 
     assert!(shows(&runner, "Creating 'daily'…"), "{:?}", texts(&runner));
-    // `edit` is refused, so nothing the user does can change the draft the statement was
-    // composed from while it runs.
     ctx.edit(|draft| draft.name = "something else".into());
     assert_eq!(ctx.draft.peek().name, "daily");
 }

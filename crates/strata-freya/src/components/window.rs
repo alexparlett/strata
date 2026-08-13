@@ -22,8 +22,6 @@
 
 use freya::prelude::*;
 
-// `%[no_ext]`: window chrome is read by a window's *views* rather than by one component, so
-// there is no type for the generated `…ThemePartialExt` builder to hang off.
 define_theme!(
     %[no_ext]
     %[component]

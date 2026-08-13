@@ -71,22 +71,13 @@ impl Component for Modal {
         let backdrop_close = self.on_close_request.clone();
 
         rect()
-            // The overlay layer + global position lift the whole surface above the window
-            // content (the same wrapper `Popup` puts around `PopupBackground`).
             .layer(Layer::Overlay)
             .position(Position::new_global())
-            // The barrier only: Esc and Enter pass this ancestor untouched — each is
-            // answered *after* the card in document order (Esc by the trailing listener
-            // below, Enter by the surface's own), so a control inside the card that
-            // consumed the key first wins. An open `Select` closing its list on Esc is the
-            // case this ordering exists for: consumed there, the close request never fires
-            // and the surface keeps its state.
             .on_global_key_down({
                 let barrier = self.barrier;
                 move |e: Event<KeyboardEventData>| {
                     if !matches!(&e.key, Key::Named(NamedKey::Escape | NamedKey::Enter)) && barrier
                     {
-                        // Consumed — that is what makes a modal surface modal.
                         e.prevent_default();
                     }
                 }
@@ -100,8 +91,6 @@ impl Component for Modal {
                 },
                 roles.get(Role::Backdrop),
             ))
-            // The close request, after the whole card subtree in pre-order — see the
-            // barrier's note. Consumed in both barrier modes: Esc is the modal's own.
             .child(
                 rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
                     if matches!(&e.key, Key::Named(NamedKey::Escape)) {

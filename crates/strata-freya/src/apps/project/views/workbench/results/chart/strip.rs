@@ -16,24 +16,20 @@
 //! series row at all, and no menu ever lists a column the read would refuse. The residual
 //! cases — nothing valid left to offer — are the canvas's notice, not an inline error.
 //!
-//! Nine mark tiles, three to a row, each a glyph over a name — a tile, not a segment, for the
-//! same reason the Export window's format cards aren't segments: a `SegmentedToggle` holding
-//! nine labelled options in 232px would give each one 22px.
+//! Nine mark tiles, three to a row, each a glyph over a name — a tile and not a segment, because a
+//! `SegmentedToggle` holding nine labelled options in 232px would give each one 22px.
 //!
-//! **The legend lives here rather than on the canvas**, and it is also the control that hides
-//! a series — which is a deliberate divergence from
-//! the design (whose canvas draws a key inside the plot, for the pie). A plot-overlay legend
-//! has nowhere to go when it outgrows its box: plotters sizes the box to its entries and draws
-//! it inside the plotting area, so four long column names push it over the edge of the pane,
-//! and a 24-slice pie has no honest layout at all. The strip already scrolls, so the legend
-//! grows down instead of over — and the plot keeps its whole width for data.
+//! **The legend lives here rather than on the canvas**, and is also the control that hides a
+//! series — a deliberate divergence from the design, whose canvas draws a key inside the plot. A
+//! plot-overlay legend has nowhere to go when it outgrows its box: plotters sizes the box to its
+//! entries and draws it inside the plotting area, so four long column names push it over the edge
+//! and a 24-slice pie has no honest layout at all. The strip already scrolls.
 //!
-//! The design's **Aggregate** toggle and its function menu are deliberately absent, and nothing
-//! stands in their place: the chart computes nothing SQL can say (spec §1.2, §1.3), so every
-//! control here changes what is *drawn* and none of them changes the data. Aggregating is the
-//! user's own `GROUP BY`, which the refusal overlays name in prose. A press that wrote that
-//! query into a new tab was built and cut — spec §8 records why — and the surface that
-//! replaced it is the **Shape panel** (Chart 09), off the results toolbar, never this strip.
+//! The design's **Aggregate** toggle and its function menu are deliberately absent with nothing in
+//! their place: the chart computes nothing SQL can say, so every control here changes what is
+//! *drawn*. Aggregating is the user's own `GROUP BY`, which the refusal overlays name in prose. A
+//! press that wrote that query into a new tab was built and cut; the surface that replaced it is
+//! the **Shape panel**, off the results toolbar, never this strip.
 
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
@@ -291,7 +287,6 @@ impl ControlStrip {
             .iter()
             .all(|other| other == name || self.config.hidden.contains(other));
         self.with(|c| {
-            // Only the names this result can show are touched; everything else stays put.
             c.hidden.retain(|held| !here.contains(held));
             if !alone {
                 c.hidden
@@ -425,9 +420,6 @@ impl Component for ControlStrip {
             tiles = tiles.child(line);
         }
 
-        // Each encoder appears only where its channel means something for this mark: a
-        // histogram has no category axis, a scatter and a pie have no series, and a result
-        // with no numeric column has nothing to offer on Y.
         let x_choices = self.x_choices(mark);
         let x = (!x_choices.is_empty()).then(|| {
             Encoder {
@@ -448,15 +440,11 @@ impl Component for ControlStrip {
         let y = (!y_choices.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                // The channel is the same one everywhere; what it *means* is the mark's — a
-                // heatmap's measure is its colour and a box plot's is its median, and an
-                // eyebrow saying "Y AXIS" over either would name the wrong thing.
                 label: match mark {
                     ChartMark::Heatmap => "VALUE (COLOR)",
                     ChartMark::Box => "MEDIAN",
                     _ => "Y AXIS",
                 },
-                // Every plotted column, in the order the legend keys them.
                 current: if self.encoding.ys.is_empty() {
                     NO_SERIES.to_string()
                 } else {
@@ -472,9 +460,6 @@ impl Component for ControlStrip {
         let series = (!series_options.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                // A heatmap's series channel is its second category axis, and the strip
-                // says so — "SERIES (COLOR)" would promise the categorical ramp over a
-                // mark whose colour is the value.
                 label: if mark == ChartMark::Heatmap {
                     "Y AXIS"
                 } else {
@@ -491,50 +476,37 @@ impl Component for ControlStrip {
             .key("series")
         });
 
-        // A heatmap reads X then its second category then the value, so the sections come
-        // in that order — for every other mark the value axis stays second.
         let (second, third) = if mark == ChartMark::Heatmap {
             (series, y)
         } else {
             (y, series)
         };
 
-        // The band roles (Chart 10): a band's bounds, a box plot's quartiles and whiskers.
         let [q1, q3, lower, upper] = self.band_encoders(mark);
 
-        // The engine does the binning, so this one is part of the read — a new count is a new
-        // entry rather than a repaint. Only a histogram has bins to count.
         let bins = (mark == ChartMark::Histogram).then_some(BinsField {
             tab: self.tab,
             current: self.encoding.bins,
         });
 
-        // The sort is a view transform over the settled rows (spec §6) — offered only for the
-        // marks whose data has an order to permute.
         let sort = sortable(mark).then(|| SortToggle {
             tab: self.tab,
             current: self.encoding.sort,
             config: self.config.clone(),
         });
 
-        // As is the value axis's scale, offered only where the mark plots position rather than
-        // extent (`config::log_axis`).
         let scale = log_axis(mark).then(|| ScaleToggle {
             tab: self.tab,
             log: self.encoding.log_y,
             config: self.config.clone(),
         });
 
-        // The trendline is a scatter's own overlay (Chart 11) — its fit is a separate read
-        // keyed by the encoded columns, so this toggle repaints and never re-reads the points.
         let trend = trendable(mark).then(|| TrendToggle {
             tab: self.tab,
             on: self.encoding.trend,
             config: self.config.clone(),
         });
 
-        // ⌥ isolates a series, and a pointer event carries no modifiers (AGENTS.md §3) — so
-        // the strip mirrors the key state and each row reads it at press time.
         let mut alt = use_state(|| false);
         let legend = (!self.legend.is_empty()).then(|| {
             let mut section = rect()
@@ -561,19 +533,11 @@ impl Component for ControlStrip {
             section
         });
 
-        // `ScrollView` takes no padding of its own, so the inset lives on a wrapper inside it
-        // — which also keeps the scrollbar flush to the strip's edge. The right border is
-        // painted rather than laid out, so the padding covers it (AGENTS.md §3). The scroll is
-        // also what lets the encoders and the legend be as long as the result has columns.
         rect()
             .width(Size::px(STRIP_WIDTH))
             .height(Size::fill())
             .background(theme.panel_background)
             .border(Border::new().width(strip_rule()).fill(theme.border_fill))
-            // **Mirroring ⌥, and re-reading it from every event.** A key-up lost while the
-            // window is unfocused would otherwise leave the modifier stuck on, so the flag is
-            // taken from each event's own `modifiers` rather than only toggled by the ⌥ key —
-            // any keystroke at all resynchronizes it (FREYA_UI.md, "reset defensively").
             .on_global_key_down(move |e: Event<KeyboardEventData>| {
                 let held = matches!(e.key, Key::Named(NamedKey::Alt))
                     || e.modifiers.contains(Modifiers::ALT);
@@ -650,8 +614,6 @@ impl Component for Encoder {
             .child(Eyebrow::new(self.label).color(theme.label_color))
             .child(
                 Select::new()
-                    // The strip's controls run its full inset width; the component's own
-                    // default hugs its content, which would leave four ragged triggers.
                     .theme(SelectThemePartial::new().width(Size::px(CONTROL_WIDTH)))
                     .selected_item(
                         MonoValue::new(self.current.clone())
@@ -798,8 +760,6 @@ impl Component for TrendToggle {
         let tab = self.tab;
 
         let mut pill = SegmentedToggle::new();
-        // "On", not "Linear": the scale pill beside this one already has a segment of that
-        // name, and two controls answering to one word is a mispress waiting to happen.
         for (label, title, on) in [
             ("Off", "No trendline", false),
             ("On", "Least-squares trendline", true),
@@ -863,26 +823,16 @@ impl Component for BinsField {
             let seed = self.current.map(|n| n.to_string()).unwrap_or_default();
             move || seed
         });
-        // What was last committed. In state rather than captured, because a
-        // `use_side_effect` closure is built once and a captured comparison would freeze at
-        // the first render — the field could then never be typed back to where it started
-        // (`NumberField`'s own note).
         let mut reported = use_state({
             let seed = self.current;
             move || seed
         });
-        // The box's id is ours, so the effect below can see it lose focus.
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
 
         let tab = self.tab;
         use_side_effect(move || {
             let raw = text.read().trim().to_string();
-            // An empty box **and** an unparseable one are both Auto: the box is cleared on the
-            // way to typing a new number, and a keystroke that has not settled on a count yet
-            // must not leave the chart on the old one. Parsed wide and *then* clamped — a
-            // `u16` parse would answer `None` for anything over 65 535, so a fat-fingered
-            // count would read as Auto instead of as the cap.
             let bins = raw
                 .parse::<u64>()
                 .ok()
@@ -892,15 +842,9 @@ impl Component for BinsField {
                 return;
             }
             reported.set(bins);
-            // Through `edit`, not `commit`: this closure is built once, so a captured config
-            // would be the one from the first render and typing a bin count would undo every
-            // encoder change made since the histogram was picked.
             edit(session, tab, |config| config.bins = bins);
         });
 
-        // Leaving the box is when it is made to agree with what it reported. `reported` is
-        // peeked, not read: this must wake on focus alone, or the echo would land mid-keystroke
-        // and overwrite what is being typed.
         use_side_effect(move || {
             if focus() == Focus::Not {
                 let echo = (*reported.peek()).map_or_else(String::new, |n| n.to_string());
@@ -975,7 +919,6 @@ impl Component for LegendRow {
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .spacing(SP_3)
-            // A row that does nothing must not light up under the pointer.
             .maybe(pressable && hovered(), |el| {
                 el.background(theme.tile_active_background)
             })
@@ -999,8 +942,6 @@ impl Component for LegendRow {
                     .background(dim(self.entry.swatch)),
             )
             .child(
-                // Flexing and ellipsizing, so a long column name gives up its own width
-                // rather than pushing the share off the strip (AGENTS.md §3).
                 Caption::new(self.entry.label.clone())
                     .color(dim(theme.legend_color))
                     .width(Size::flex(1.))
@@ -1139,9 +1080,6 @@ mod tests {
             let config = store.read().chart(tab);
             let roles = Roles::of(&columns());
             let encoding = resolve(&config, &roles);
-            // The legend the body would hand over, off a stand-in result whose series are the
-            // encoding's own Y columns — built through `legend` rather than by hand, so what
-            // a row does here is what a row does in the app.
             let data = ChartData::Table {
                 axis: Axis {
                     labels: vec!["a".into()],
@@ -1248,13 +1186,11 @@ mod tests {
         click_text(&mut runner, "revenue, cost");
         assert!(shows(&runner, "cost"), "the list opened");
 
-        // Untick the second measure…
         click_text(&mut runner, "cost");
         assert_eq!(
             config(&session).ys.as_deref(),
             Some(["revenue".to_string()].as_ref())
         );
-        // …and the list is still there to tick it back, without reopening it.
         assert!(
             shows(&runner, "cost"),
             "the multi-pick list closed on the first tick: {:?}",
@@ -1340,12 +1276,9 @@ mod tests {
         type_into_bins(&mut runner, "40");
         assert_eq!(config(&session).bins, Some(40));
 
-        // Emptying the box is Auto, not zero and not the last number typed.
         type_into_bins(&mut runner, "");
         assert_eq!(config(&session).bins, None);
 
-        // Past the read's own cap the box commits the cap, so what it accepts and what the
-        // engine counts are the same number.
         type_into_bins(&mut runner, "5000");
         assert_eq!(config(&session).bins, Some(MAX_BINS as u16));
     }
@@ -1360,8 +1293,6 @@ mod tests {
         settle(&mut runner);
         click_text(&mut runner, "Histogram");
 
-        // An edit on another channel *after* the field mounted — a histogram takes one Y, so
-        // its trigger reads the single column and the pick replaces it.
         click_text(&mut runner, "revenue");
         click_text(&mut runner, "cost");
         assert_eq!(
@@ -1369,7 +1300,6 @@ mod tests {
             Some(["cost".to_string()].as_ref())
         );
 
-        // …survives a bin count typed afterwards.
         type_into_bins(&mut runner, "12");
         let stored = config(&session);
         assert_eq!(stored.bins, Some(12));
@@ -1400,8 +1330,6 @@ mod tests {
         runner.move_cursor(point);
         runner.click_cursor(point);
         settle(runner);
-        // Cleared a character at a time — the box holds at most the cap's three digits, and a
-        // select-all chord would be testing the fork's editable rather than this control.
         for _ in 0..6 {
             runner.press_key(Key::Named(NamedKey::Backspace));
         }
@@ -1417,15 +1345,12 @@ mod tests {
     fn the_scale_toggle_follows_the_mark_and_writes_a_repaint() {
         let (mut runner, session) = runner();
         settle(&mut runner);
-        // The derived mark over this schema is a line, which plots position.
         assert!(shows(&runner, "SCALE"), "{:?}", texts(&runner));
         click_text(&mut runner, "Log");
         assert!(config(&session).log_y);
         click_text(&mut runner, "Linear");
         assert!(!config(&session).log_y);
 
-        // A bar is read as area from a baseline, so the control goes — and the preference is
-        // kept, so it comes back with the mark that can draw it.
         click_text(&mut runner, "Log");
         click_text(&mut runner, "Bar");
         assert!(!shows(&runner, "SCALE"), "{:?}", texts(&runner));
@@ -1457,7 +1382,6 @@ mod tests {
             "the derived second category: {seen:?}"
         );
 
-        // Open the second-category picker: no "None" row to press.
         click_text(&mut runner, "country");
         assert!(
             !shows(&runner, NO_SERIES),
@@ -1494,8 +1418,6 @@ mod tests {
             );
         }
 
-        // A pick writes the config's own field. The first unset trigger reads "None" and is
-        // LOWER's; its menu offers the measures minus the Y, which leaves `cost`.
         click_text(&mut runner, NO_SERIES);
         click_text(&mut runner, "cost");
         assert_eq!(config(&session).y_lo.as_deref(), Some("cost"));
@@ -1519,7 +1441,6 @@ mod tests {
         click_text(&mut runner, "On");
         assert!(config(&session).trend);
 
-        // Another mark drops the control and keeps the choice, so it comes back.
         click_text(&mut runner, "Bar");
         assert!(!shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
         assert!(config(&session).trend, "the config still holds it");
@@ -1535,7 +1456,6 @@ mod tests {
     fn a_legend_press_hides_a_series_and_alt_press_isolates_it() {
         let (mut runner, session) = runner();
         settle(&mut runner);
-        // The default encoding plots both measures, so the legend has two rows.
         assert!(shows(&runner, "LEGEND"), "{:?}", texts(&runner));
 
         click_legend(&mut runner, "cost");
@@ -1546,17 +1466,14 @@ mod tests {
             "the press is its own undo"
         );
 
-        // ⌥ down: isolate `revenue`, so everything else goes.
         runner.send_event(alt(KeyboardEventName::KeyDown));
         settle(&mut runner);
         click_legend(&mut runner, "revenue");
         assert_eq!(config(&session).hidden, ["cost"]);
 
-        // ⌥-pressing the sole visible series restores them all rather than emptying the chart.
         click_legend(&mut runner, "revenue");
         assert!(config(&session).hidden.is_empty());
 
-        // ⌥ up: the ordinary toggle is back.
         runner.send_event(alt(KeyboardEventName::KeyUp));
         settle(&mut runner);
         click_legend(&mut runner, "revenue");
@@ -1571,7 +1488,6 @@ mod tests {
     fn alt_press_keeps_hidden_names_this_result_has_no_series_for() {
         let (mut runner, session) = runner();
         settle(&mut runner);
-        // A name from an earlier result, which this one cannot answer.
         {
             let tab = *session.peek().order.first().expect("the one tab");
             let mut station = session;
@@ -1591,7 +1507,6 @@ mod tests {
             "the stale name survived the isolate"
         );
 
-        // …and the ⌥-press that restores everything leaves it alone too.
         click_legend(&mut runner, "revenue");
         assert_eq!(config(&session).hidden, ["margin"]);
     }

@@ -114,20 +114,12 @@ impl OpenCtx {
     /// Carry out a decision with a window's [`Platform`] handle — the in-window executor.
     pub fn apply(self, platform: Platform, app: AppCtx, target: OpenTarget) {
         match target {
-            // Already showing it — except on the fault arm, where "open the project this
-            // window shows" is a retry: the user fixed the file and asked again, and a
-            // silent no-op reads as a broken menu item.
             OpenTarget::Nothing => {
                 if *self.faulted.peek() {
                     self.restart.restart();
                 }
             }
             OpenTarget::Focus(id) => platform.focus_window(Some(id)),
-            // `spawn_forever` rather than `spawn`: the surfaces that reach here unmount
-            // themselves on the same press (the switcher closes its menu, the prompt closes
-            // itself), and a scope-bound task is dropped with its scope before it is ever
-            // polled — the window would simply never open. Forever is this *window's* root
-            // scope, not the app's, so the open still dies with the window that asked.
             OpenTarget::NewWindow(root) => {
                 spawn_forever(windows::open_project(platform, app, root));
             }
@@ -157,8 +149,6 @@ impl OpenCtx {
     /// Answer the prompt — its two actions. `remember` writes the answer back as the pref,
     /// so the question isn't asked again.
     pub fn choose(self, platform: Platform, app: AppCtx, new: bool, remember: bool) {
-        // Read the pending path out before clearing the slot: a `peek()` temporary held
-        // across a `set` on the same `State` is a runtime borrow panic.
         let target = self.prompt.peek().clone();
         self.dismiss();
         let Some(root) = target else {
@@ -198,9 +188,6 @@ impl OpenCtx {
     /// being the one destructive action that doesn't — [`CloseTarget::Reroot`] carries the
     /// folder, and answering it calls [`reroot_confirmed`](Self::reroot_confirmed).
     pub fn reroot(self, app: &AppCtx, root: PathBuf) {
-        // The same predicate as the `on_close` hook and `TabCloser::close`: the engine's own
-        // in-flight answer (a background tab's run has no mounted view to derive from), and
-        // the user's pref about being asked.
         let running = self.guard.peek().running.load(Ordering::Relaxed);
         if running && app.config.peek().settings.confirm_close_running {
             let mut confirm = self.confirm;
@@ -231,9 +218,6 @@ fn decide_target(
     pref: OpenPref,
     root: PathBuf,
 ) -> OpenTarget {
-    // Already looking at it. The switcher's own row is inert for this reason, but ⌘O and
-    // Open Recent can name it too — and re-rooting a window onto its own project would tear
-    // the project down and build it again for nothing.
     if root == current {
         return OpenTarget::Nothing;
     }

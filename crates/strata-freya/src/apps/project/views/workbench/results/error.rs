@@ -37,7 +37,6 @@ impl ErrorState {
 impl Component for ErrorState {
     fn render(&self) -> impl IntoElement {
         let roles = use_roles();
-        // Subscribed for the tab's *name*, and a station for the write — one reads, one writes.
         let session = use_radio::<SessionState, Chan>(Chan::Tabs);
         let station = use_radio_station::<SessionState, Chan>();
         let chats = use_consume::<ChatsCtx>();
@@ -84,7 +83,6 @@ impl Component for ErrorState {
                     .max_width(Size::px(560.))
                     .wrap(),
             )
-            // One press into the chat pane, with the query and this message already attached.
             .child(
                 Button::new()
                     .outline()

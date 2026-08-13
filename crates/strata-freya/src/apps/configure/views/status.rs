@@ -35,9 +35,6 @@ impl Component for StatusBlock {
         let ctx = use_consume::<ConfigureCtx>();
         let status = ctx.status.read().clone();
 
-        // One block for both busy states, with the **verb** varying: they look the same and mean
-        // different things — a registration is the project window's pass answering on the row, a
-        // create is the statement this window is running (IT-01).
         let busy = match &status {
             Status::Creating(name) => Some(format!("Creating '{name}'…")),
             Status::Registering(name) => Some(format!("Registering '{name}'…")),
@@ -57,8 +54,6 @@ impl Component for StatusBlock {
                 .border(Border::new().width(1.).fill(win.border_fill))
                 .child(CircularLoader::new().size(STATUS_GLYPH))
                 .child(Path::new(busy.unwrap_or_default()).color(text)),
-            // A failure is a *sentence the engine wrote*, so it gets room to wrap rather than a
-            // single clipped line — several of P3-07's messages are two clauses long.
             Status::Failed(why) => rect()
                 .width(Size::fill())
                 .horizontal()

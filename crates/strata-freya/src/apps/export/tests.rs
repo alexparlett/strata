@@ -103,7 +103,6 @@ fn the_default_draft_writes_a_plain_csv() {
     let lines = lines(&out);
     assert_eq!(lines[0], "id,name,region,tier", "header on by default");
     assert_eq!(lines.len(), 6);
-    // The default null text is empty, and a value containing the delimiter gets quoted.
     assert!(lines.iter().any(|l| l == "2,bravo,,silver"), "{lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("\"echo, jr\"")),
@@ -120,14 +119,12 @@ fn editing_the_delimiter_in_the_window_reaches_the_file() {
     let engine = Arc::new(Engine::new(Default::default()));
     let target = open_on_a_result(&engine, None);
 
-    // Exactly what typing in the DELIMITER field does.
     let mut draft = ExportDraft::default();
     draft.apply(Edit::CsvDelimiter("|".into()));
 
     export_to(&engine, &draft, &target, &out);
     let lines = lines(&out);
     assert_eq!(lines[0], "id|name|region|tier");
-    // The comma in 'echo, jr' is no longer special, so it is no longer quoted.
     assert!(
         lines.iter().any(|l| l == "5|echo, jr|amer|gold"),
         "{lines:?}"
@@ -207,7 +204,6 @@ fn the_grids_sort_is_the_order_in_the_file() {
     let dir = scratch("sorted");
     let out = dir.join("out.csv");
     let engine = Arc::new(Engine::new(Default::default()));
-    // The window is opened while the grid is sorted descending on `id`.
     let target = open_on_a_result(&engine, Some(("id".into(), false)));
 
     export_to(&engine, &ExportDraft::default(), &target, &out);
@@ -227,7 +223,6 @@ fn this_page_writes_only_the_page_the_grid_is_showing() {
     let out = dir.join("page2.csv");
     let engine = Arc::new(Engine::new(Default::default()));
     let mut target = open_on_a_result(&engine, Some(("id".into(), true)));
-    // The grid is on page 2 of a 2-row page size.
     target.page = 2;
     target.page_size = 2;
 
@@ -252,7 +247,6 @@ fn switching_the_format_card_changes_what_is_written() {
     let engine = Arc::new(Engine::new(Default::default()));
     let target = open_on_a_result(&engine, None);
 
-    // JSON → NDJSON, one object per line.
     let json = dir.join("out.json");
     let mut draft = ExportDraft {
         format: FormatId::Json,
@@ -263,7 +257,6 @@ fn switching_the_format_card_changes_what_is_written() {
     assert_eq!(text.lines().count(), 5);
     assert!(text.starts_with('{'), "not an array: {text}");
 
-    // Parquet → a real parquet file (magic at both ends means the footer was written).
     let parquet = dir.join("out.parquet");
     draft.format = FormatId::Parquet;
     export_to(&engine, &draft, &target, &parquet);
@@ -271,7 +264,6 @@ fn switching_the_format_card_changes_what_is_written() {
     assert_eq!(&bytes[..4], b"PAR1");
     assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
 
-    // Arrow → written, with no options to get wrong.
     let arrow = dir.join("out.arrow");
     draft.format = FormatId::Arrow;
     export_to(&engine, &draft, &target, &arrow);
@@ -317,14 +309,12 @@ fn a_compressed_csv_lands_under_the_suffix_the_window_suggested() {
 
     let mut draft = ExportDraft::default();
     draft.apply(Edit::CsvCompression(Compression::Gzip));
-    // The name the save dialog is pre-filled with.
     let suggested = draft.suggested_name(&target);
     assert_eq!(suggested, "cross-file_join.csv.gz");
 
     let out = dir.join(&suggested);
     export_to(&engine, &draft, &target, &out);
     assert!(out.exists(), "written under the name the user was offered");
-    // Gzip, not plain text under a .gz name.
     let bytes = fs::read(&out).expect("read");
     assert_eq!(&bytes[..2], &[0x1f, 0x8b], "gzip magic");
 
@@ -337,14 +327,12 @@ fn the_partition_toggle_is_what_decides_between_a_file_and_a_tree() {
     let engine = Arc::new(Engine::new(Default::default()));
     let target = open_on_a_result(&engine, None);
 
-    // Columns chosen but the toggle off: still one flat file.
     let flat = dir.join("flat.csv");
     let mut draft = ExportDraft::default();
     draft.partition.columns = vec!["tier".into()];
     export_to(&engine, &draft, &target, &flat);
     assert!(flat.is_file(), "toggle off → a file, not a directory");
 
-    // Toggle on: a Hive tree, one level per column.
     let tree = dir.join("tree");
     draft.partition.enabled = true;
     export_to(&engine, &draft, &target, &tree);
@@ -372,13 +360,11 @@ fn the_selected_order_is_the_directory_nesting_order() {
 
     let mut draft = ExportDraft::default();
     draft.partition.enabled = true;
-    // The order the SELECTED pane shows: tier outermost, then id.
     draft.partition.columns = vec!["tier".into(), "id".into()];
 
     let tree = dir.join("tree");
     export_to(&engine, &draft, &target, &tree);
 
-    // The outer level is tier and the inner one is id — the order the SELECTED pane showed.
     let mut inner: Vec<String> = fs::read_dir(tree.join("tier=gold"))
         .expect("outer level is tier")
         .filter_map(Result::ok)
@@ -467,7 +453,6 @@ fn a_draft_the_engine_would_choke_on_is_refused_before_any_file_is_made() {
     let engine = Arc::new(Engine::new(Default::default()));
     let target = open_on_a_result(&engine, None);
 
-    // Two characters in a single-character field — the footer reports this and writes nothing.
     let mut draft = ExportDraft::default();
     draft.apply(Edit::CsvDelimiter("||".into()));
     let err = draft
@@ -486,8 +471,6 @@ fn the_preview_matches_the_file_the_same_draft_writes() {
     let engine = Arc::new(Engine::new(Default::default()));
     let target = open_on_a_result(&engine, None);
 
-    // The preview's whole job is to be believed, so this is the test that matters most: the
-    // pane's text and the file's first rows have to agree, option for option.
     let mut draft = ExportDraft::default();
     draft.apply(Edit::CsvDelimiter(";".into()));
     draft.apply(Edit::CsvNull(NullChoice::Null));
@@ -511,10 +494,8 @@ fn a_rerun_behind_the_window_does_not_change_what_it_writes() {
     let engine = Arc::new(Engine::new(Default::default()));
     let target = open_on_a_result(&engine, None);
 
-    // The window pins its snapshot on mount (`ExportApp::render`).
     let pin = engine.pin_snapshot(target.snapshot);
 
-    // Meanwhile the user goes back to the tab and runs something completely different.
     block_on(engine.query(
         WsId(1),
         RunTag(2),
@@ -523,7 +504,6 @@ fn a_rerun_behind_the_window_does_not_change_what_it_writes() {
     ))
     .expect("re-run");
 
-    // Export still writes the original five rows.
     let rows = export_to(&engine, &ExportDraft::default(), &target, &out);
     assert_eq!(rows, 5);
     let written = lines(&out);

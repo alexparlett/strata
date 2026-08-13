@@ -289,7 +289,6 @@ mod tests {
 
     #[test]
     fn placement_prefers_below() {
-        // Anchor line at y 100..120 in an 800-tall window; 200-tall popup fits below.
         let (top, _) = flip_and_clamp(100.0, 120.0, 200.0, 300.0, 50.0, (1200.0, 800.0));
         assert_eq!(top, 123.0);
     }
@@ -302,7 +301,6 @@ mod tests {
 
     #[test]
     fn placement_stays_below_when_above_cannot_fit_either() {
-        // Tiny window: below overflows but above would be off-screen — stay below.
         let (top, _) = flip_and_clamp(10.0, 30.0, 200.0, 300.0, 50.0, (1200.0, 180.0));
         assert_eq!(top, 33.0);
     }

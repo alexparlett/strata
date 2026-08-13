@@ -9,27 +9,22 @@
 //!   Engine pane's grid;
 //! - a **page** that is its own answer, having no named settings yet (Keymap, until P4-08).
 //!
-//! **The category is never spelled out here.** A hit resolves its page's name through
-//! [`category`] — the same nav tree the rail draws and the breadcrumb reads — so a setting cannot
-//! be filed under one name in the results list and another over its own pane. That is the whole
-//! reason [`super::model`] is data rather than a component.
+//! **The category is never spelled out here.** A hit resolves its page's name through [`category`],
+//! the same nav tree the rail draws, so a setting cannot be filed under one name in the results
+//! list and another over its own pane. That is why [`super::model`] is data rather than a component.
 //!
-//! **An [`Anchor`] is a variant, not a string.** The index and the pane that draws the row have to
-//! agree on the name search jumps to, and a typo in either would be a jump that navigates and then
-//! singles nothing out — silent, and only visible by trying it. So the table below generates the
-//! enum, the list of all of them, and each one's label, subtext and keywords together, and the pane
-//! builds its row from the same entry ([`Anchor::row`]): there is one spelling of a setting's name
-//! in the app, and the compiler holds the panes to it.
+//! **An [`Anchor`] is a variant, not a string.** A typo in either the index or the pane would be a
+//! jump that navigates and then singles nothing out — silent, and only visible by trying it. So the
+//! table below generates the enum, the list of all of them and each one's label, subtext and
+//! keywords together, and the pane builds its row from the same entry ([`Anchor::row`]).
 //!
-//! **The engine's properties are the catalogue, not a chosen few.** They are indexed straight off
-//! `ENGINE_KEYS` with their descriptions as the search terms, so every documented `datafusion.*`
-//! key is findable by what it does ("memory", "parallelism", "spill") — the tunables that were
-//! otherwise reachable only by typing into a grid on a page you had to know to visit.
+//! **The engine's properties are the catalogue, not a chosen few**, indexed straight off
+//! `ENGINE_KEYS` with their descriptions as search terms — so every documented `datafusion.*` key
+//! is findable by what it does, rather than only by typing into a grid you had to know to visit.
 //!
 //! **Following a hit is navigation and nothing else.** It routes, and singles the setting out where
 //! there is something to single out — a row of a pane, or a property's row in the grid *if it is
-//! overridden*. It never writes: a property nobody has set gets no row made for it, because a row in
-//! that grid is an override (see [`PropRows::reveal`](super::views::PropRows::reveal)).
+//! overridden*. It never writes: a row in that grid is an override.
 
 use strata_core::engine::config::{EngineKey, ENGINE_KEYS};
 
@@ -235,9 +230,6 @@ const PAGES: &[Page] = &[
         label: "Keyboard shortcuts",
         keywords: "keymap keybinding rebind shortcut keys chord",
     },
-    // A page rather than an `Anchor`, because its rows are **providers**, not named settings:
-    // there is nothing on it a `Reveal` could single out, and an anchor no row carries is a hit
-    // that navigates and then silently does nothing — unlike every other setting hit.
     Page {
         route: Route::Providers,
         label: "Providers",
@@ -301,8 +293,6 @@ impl Hit {
         if let Hit::Property(entry) = self {
             return namespace(entry.key).to_string();
         }
-        // Every route has a category (`model`'s test pins that), so the fallback is unreachable
-        // rather than a case worth dressing.
         let Some(category) = category(&self.route()) else {
             return String::new();
         };
@@ -320,7 +310,6 @@ impl Hit {
             Hit::Setting(anchor) => {
                 format!("{} {} {}", anchor.label(), anchor.hint(), anchor.keywords())
             }
-            // The key in full as well as the label, so both `batch_size` and "batch size" match.
             Hit::Property(entry) => format!("{} {}", entry.key, entry.desc),
             Hit::Page(page) => format!("{} {}", page.label, page.keywords),
         };
@@ -442,7 +431,6 @@ mod tests {
         assert!(hits.contains(&Hit::Setting(Anchor::AgentEnabled)));
         assert!(hits.contains(&Hit::Setting(Anchor::AgentPort)));
         assert!(hits.contains(&Hit::Setting(Anchor::AgentToken)));
-        // …and by the page they are on, like every other pane's settings.
         assert!(finds(
             "agent access token",
             Hit::Setting(Anchor::AgentToken)

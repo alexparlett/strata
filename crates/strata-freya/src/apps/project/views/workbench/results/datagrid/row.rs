@@ -79,14 +79,8 @@ impl Component for Row {
         let sel_ctl = self.sel;
         let record_view = self.record_view;
         let theme = &self.theme;
-        // The shared type palette — the cell tint for booleans comes from it, so a `true` reads
-        // in the same hue its column header does.
         let palette = type_palette();
 
-        // Right-click → the copy context menu over the selection (P2-11). A press on a
-        // cell *outside* the current selection retargets it first (Excel semantics: the
-        // gutter takes the whole row, a body cell a single-cell rectangle — both focus
-        // the grid via SelCtl); the menu's actions then read the live selection.
         let open_copy_menu = {
             let data = self.data.clone();
             let row_nums = self.row_nums.clone();
@@ -109,10 +103,6 @@ impl Component for Row {
             }
         }));
 
-        // The resolved column window: only these columns get a real cell; the off-window
-        // extent on either side is a fixed spacer (the window carries both sums), so the
-        // visible cells land at their true x and the row keeps its full width. Both reads
-        // subscribe — a pan or a resize reflows the row.
         let win = *self.col_window.read();
         let widths = self.widths.read();
         let col_w = |ci: usize| widths.get(ci).copied().unwrap_or(self.seed_w);
@@ -124,8 +114,6 @@ impl Component for Row {
             .content(Content::Flex)
             .child(Cell {
                 width: Size::px(GUTTER_W),
-                // A filtered page numbers by the survivors' original positions; otherwise
-                // by position from the page base.
                 text: self
                     .row_nums
                     .as_ref()
@@ -143,8 +131,6 @@ impl Component for Row {
                 sel_border: theme.selection_border_fill,
                 active_color: Some(theme.gutter_active_color),
                 active_background: Some(theme.gutter_active_background),
-                // Double-click on the gutter opens the whole row in the record view
-                // (P2-10) — a live page-row pointer, so no snapshot is taken here.
                 on_open: Some(EventHandler::new(move |_: Event<PointerEventData>| {
                     let mut record_view = record_view;
                     record_view.set(Some(index));
@@ -153,8 +139,6 @@ impl Component for Row {
                 key: DiffKey::None,
             });
 
-        // Leading spacer: the extent of the columns before the window (0px when none — kept
-        // mounted so the sibling list's shape is stable for the differ).
         cells = cells.child(rect().width(Size::px(win.lead)).height(Size::fill()));
         for (ci, col) in self
             .data
@@ -166,12 +150,6 @@ impl Component for Row {
         {
             let w = col_w(ci);
             let cell = &self.data.rows[index][ci];
-            // Nested non-null value → double-click opens the cell view (P2-12). The
-            // handler snapshots the **batch** at press time (the canvas semantics — a later
-            // filter/page shift can't retarget an open modal, because the arrays the modal reads
-            // are the ones it opened with), mapping a filtered page back through `row_nums`.
-            // Nothing is rendered here: the modal's tree reads what it opens (P2-25), so a press
-            // costs an `Arc` bump per column rather than serializing the value.
             let nested = matches!(col.kind, Kind::Struct | Kind::List | Kind::Map) && !cell.null;
             let on_nested = nested.then(|| {
                 let data = self.data.clone();
@@ -203,8 +181,6 @@ impl Component for Row {
                 Cell {
                     width: Size::px(w),
                     text: cell.text.clone(),
-                    // Nulls render dimmed (the model keeps the flag exactly for this), in the
-                    // gutter's muted tone; everything else takes its type colour.
                     color: if cell.null {
                         theme.gutter_color
                     } else {
@@ -224,16 +200,9 @@ impl Component for Row {
                     on_secondary: on_menu_cell,
                     key: DiffKey::None,
                 }
-                // Keyed by the column, so a window shift matches the surviving cells' scopes
-                // across positions — hover and focus state stay put, and only the entering
-                // columns mount. (The survivors still re-render: their handler props carry
-                // `EventHandler`s, whose equality is always false in the fork — the key buys
-                // scope continuity, not a props-equal skip.)
                 .key(ci),
             );
         }
-        // Trailing spacer: the extent of the columns past the window, then the dead space
-        // (matches the header) so the row extends past the last column.
         cells = cells.child(rect().width(Size::px(win.tail)).height(Size::fill()));
         cells = cells.child(
             rect()
@@ -245,7 +214,6 @@ impl Component for Row {
         rect()
             .width(Size::fill())
             .height(Size::px(self.row_h))
-            // Alternating fill, unless the user turned striping off (`Settings::zebra`).
             .background(if self.zebra && index % 2 == 1 {
                 theme.zebra_row_background
             } else {

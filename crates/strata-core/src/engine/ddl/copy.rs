@@ -1,31 +1,26 @@
 //! **Typed `COPY … TO`** (ED-07) — dispatched natively, behind the two checks only the Export
 //! window used to provide. `docs/STATEMENTS_SPEC.md` §6.4.
 //!
-//! Nothing about the *write* is ours: `COPY` is DataFusion's own statement, its options are
-//! DataFusion's, and every format Strata can read it can write. What the editor adds is the pair
-//! of refusals the managed Export surface had been standing in for, both of which are about a
-//! statement that would otherwise succeed and produce something wrong:
+//! Nothing about the *write* is ours. What the editor adds is the pair of refusals the managed
+//! Export surface had been standing in for, both about a statement that would otherwise succeed
+//! and produce something wrong:
 //!
-//! - **A partition identifier has to be one bare word.** DataFusion 54's COPY parser renders each
-//!   one with `Ident::to_string()` and the planner then looks it up by that string, so a quoted
-//!   `PARTITIONED BY ("order date")` reaches `field_with_name` still carrying its quotes and fails
-//!   about a column the user never named. Refused first, in the Export window's own words
-//!   ([`partition_columns_are_bare_words`]).
-//! - **A NULL in a partition column is silent corruption.** DataFusion 54 has no
-//!   `__HIVE_DEFAULT_PARTITION__`: it files the row under a *neighbouring* value's directory, so
-//!   the output reads back claiming a value it never had. The Export window answers this from the
-//!   snapshot write pass's free counts; a typed COPY has no snapshot behind it, so it pays for one
-//!   extra scan ([`no_null_partition_values`]) — the honest price of the same guarantee over an
-//!   arbitrary source.
+//! - **A partition identifier has to be one bare word.** DataFusion's COPY parser renders each with
+//!   `Ident::to_string()` and the planner looks it up by that string, so a quoted
+//!   `PARTITIONED BY ("order date")` fails about a column the user never named. Refused first, in
+//!   the Export window's own words ([`partition_columns_are_bare_words`]).
+//! - **A NULL in a partition column is silent corruption.** There is no
+//!   `__HIVE_DEFAULT_PARTITION__`: the row is filed under a *neighbouring* value's directory, so
+//!   the output reads back claiming a value it never had. Export answers this from the snapshot
+//!   write pass's free counts; a typed COPY has no snapshot, so it pays for one extra scan
+//!   ([`no_null_partition_values`]).
 //!
-//! The reserved-name half is the router's ([`classify`](crate::engine::sql::classify)): a
-//! `__snap_` relation anywhere in the source refuses with `Blocked::ReservedName`, which is what
-//! keeps `COPY (SELECT * FROM __snap_3) TO …` from writing `__strata_ord` into a user's file.
+//! The reserved-name half is the router's: a `__snap_` relation anywhere in the source refuses with
+//! `Blocked::ReservedName`, which keeps `COPY (SELECT * FROM __snap_3) TO …` from writing
+//! `__strata_ord` into a user's file.
 //!
-//! The Export window is **unchanged** and remains the snapshot-backed, race-free path: it writes
-//! the immutable table the grid is paging, so the file matches what was on screen. A typed COPY
-//! reads live tables, and reads them twice when it is partitioned — the gate is a pre-flight, not
-//! a lock, and it says so here rather than pretending otherwise.
+//! The Export window is **unchanged** and remains the snapshot-backed, race-free path. A typed COPY
+//! reads live tables, twice when it is partitioned — the gate is a pre-flight, not a lock.
 
 use std::borrow::Cow;
 use std::env;
@@ -64,15 +59,11 @@ pub async fn copy_to(
     root: &DataRoot,
 ) -> Result<StatementOutcome, String> {
     let DFStatement::CopyTo(copy) = &stmt else {
-        // The router classified this as a `COPY` off the parsed statement. Anything else is the
-        // two disagreeing.
         return Err(format!(
             "{} did not parse as a copy",
             StmtKind::Copy.label()
         ));
     };
-    // Before planning, so the refusal is ours: the planner's own failure for a quoted identifier
-    // names a column the user never wrote, which is the message this check exists to replace.
     partition_columns_are_bare_words(&copy.partitioned_by, ctx)?;
 
     let plan = ctx
@@ -83,28 +74,12 @@ pub async fn copy_to(
     let LogicalPlan::Copy(copying) = &plan else {
         return Err(format!("{} did not plan as a copy", StmtKind::Copy.label()));
     };
-    // Copied out before the plan is driven, since driving it consumes the plan. `partition_by` is
-    // the planner's *resolved* set — the names as the input schema spells them, not as the
-    // statement did — which is what the gate below has to count.
     let target = copying.output_url.clone();
     let partition_by = copying.partition_by.clone();
     let input = Arc::clone(&copying.input);
 
-    // **A write only ever leaves Strata's own storage alone.** The reserved-name half of this
-    // statement is the router's and covers the *source*; nothing until here has looked at where
-    // the write lands. A `COPY … TO '<project>/.strata/tables/sales/extra.arrow'` drops a file
-    // inside an internal table's directory, which the next scan of that table lists: schema-matched
-    // it is phantom rows, mismatched it is a table that has started failing — silent corruption
-    // either way, and the rule is that silent corruption is refused rather than warned about.
-    //
-    // The *parsed* target, resolved, exactly as `INSERT` gates the target its plan names: a
-    // relative `output_url` is the process's cwd away from an absolute one, and comparing the two
-    // as text would let `.strata/../.strata/tables` through.
     refuse_owned_target(&target, root)?;
 
-    // Defense in depth behind the router's classification, per spec §4: a write and nothing else.
-    // `verify_plan` visits subqueries, so DDL smuggled into the source query dies here even though
-    // the classification in front of `Engine::run` already refused it.
     SQLOptions::new()
         .with_allow_dml(true)
         .with_allow_ddl(false)
@@ -118,15 +93,11 @@ pub async fn copy_to(
         .collect()
         .await
         .map_err(|e| e.to_string())?;
-    // The sink reports what it wrote in the same single `count` column the export and the CTAS
-    // spool read.
     let rows = copy_row_count(&batches);
 
     Ok(StatementOutcome {
         message: format!("Exported {} to '{target}'", plural(rows, "row")),
         count: Some(rows as u64),
-        // A `COPY` writes a file and changes nothing the catalog holds. History and the event log
-        // still record it, exactly as they record any successful run.
         effect: None,
     })
 }
@@ -146,13 +117,6 @@ pub async fn copy_to(
 /// anchored on the deepest ancestor that *does* exist — which is what makes a symlinked project
 /// folder compare equal to the path the fence was built from.
 fn refuse_owned_target(target: &str, root: &DataRoot) -> Result<(), String> {
-    // A target with a scheme belongs to an object store, not to this machine's filesystem.
-    // `file:` is the one scheme that *is* a local path, so it is stripped rather than skipped.
-    //
-    // The scheme has to be **shaped** like one (RFC 3986: a letter, then letters, digits, `+`,
-    // `-` or `.`), not merely be whatever precedes the first `://`. Splitting alone read the
-    // whole of `<project>/.strata/tables/sales/x://y` as a scheme and waved the target through —
-    // a local path with those three characters in a file name skipped this fence entirely.
     let local = match target.split_once("://") {
         Some((scheme, rest)) if is_url_scheme(scheme) => {
             match scheme.eq_ignore_ascii_case("file") {
@@ -202,7 +166,6 @@ fn resolve(path: &Path) -> PathBuf {
     for part in absolute.components() {
         match part {
             Component::CurDir => {}
-            // At the root this is a no-op, which is what a filesystem does with it too.
             Component::ParentDir => {
                 folded.pop();
             }
@@ -245,19 +208,12 @@ async fn no_null_partition_values(
     if partition_by.is_empty() {
         return Ok(());
     }
-    // **Once per distinct name.** `PARTITIONED BY (region, region)` is a statement DataFusion
-    // plans without complaint, and two identical `count` expressions collide in the aggregate's
-    // own output schema — so counting per *entry* would refuse it with a schema error naming a
-    // query the user never wrote. It is also the same question twice.
     let mut names: Vec<&str> = Vec::with_capacity(partition_by.len());
     for name in partition_by {
         if !names.contains(&name.as_str()) {
             names.push(name);
         }
     }
-    // `ident`, not `col`: `col` parses its argument and lower-cases it, and a partition column's
-    // name came out of the user's own data. The names resolved during planning, so an unqualified
-    // reference to each is unambiguous here by construction.
     let mut exprs = vec![count_all()];
     exprs.extend(names.iter().map(|name| count(ident(*name))));
 
@@ -314,12 +270,12 @@ mod tests {
         }
         for no in [
             "",
-            "3s",     // must start with a letter
-            "/tmp/a", // a path is not a scheme
+            "3s",
+            "/tmp/a",
             "sales/eu",
-            "/proj/.strata/tables/sales/x", // the shape that skipped the fence
+            "/proj/.strata/tables/sales/x",
             "a b",
-            "a_b", // `_` is not in the scheme charset
+            "a_b",
         ] {
             assert!(!is_url_scheme(no), "{no}");
         }
@@ -336,10 +292,8 @@ mod tests {
 
         super::refuse_owned_target(&owned.to_string_lossy(), &data_root)
             .expect_err("a local path inside .strata is refused whatever is in its name");
-        // A genuine remote target is an object store's, and not this check's business.
         super::refuse_owned_target("s3://acme-lake/out.parquet", &data_root)
             .expect("a remote target is not local storage");
-        // And an ordinary local target outside the project is the user's own.
         super::refuse_owned_target(
             &root.join("out.parquet").to_string_lossy(),
             &Some(root.join("elsewhere")),
@@ -468,7 +422,6 @@ mod tests {
         assert!(err.contains("NULL"), "{err}");
         assert!(!out.exists(), "the refusal comes before the COPY");
 
-        // The same statement over the same table, once the NULL is filtered out of the source.
         let report = statement(
             &eng,
             &format!(
@@ -547,7 +500,6 @@ mod tests {
         .await
         .expect("the same question twice is still one question");
 
-        // And the gate still answers about a repeated column that does contain a NULL.
         let err = statement(
             &eng,
             &format!(

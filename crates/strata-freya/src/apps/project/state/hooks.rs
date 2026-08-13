@@ -47,27 +47,20 @@ pub fn use_init_session(loaded: Rc<Loaded>) -> RadioStation<SessionState, Chan> 
 /// ([`ProjectLoadFailed`](crate::apps::project::views::ProjectLoadFailed)), never opening a
 /// blank session whose autosave would destroy the real one.
 ///
-/// The two arms of [`SessionLoadError`] are the whole point of the type, and they are not
+/// The two arms of [`SessionLoadError`] are the whole point of the type and are not
 /// interchangeable:
 ///
-/// * [`Corrupt`](SessionLoadError::Corrupt) — the bytes were read and are not a session.
-///   Re-reading can only say the same, so this is *recoverable*, and it is the state a kill
-///   mid-autosave produces: refusing to open would brick the project permanently. The tabs
-///   still aren't thrown away — the file is moved aside **before** the first autosave can
-///   overwrite it, and if it can't be moved we fail rather than overwrite it (see
-///   [`keep_corrupt_session`]).
-/// * [`Unreadable`](SessionLoadError::Unreadable) — the read itself failed (permission
-///   denied, EIO, a network mount that went away). The contents are unknown and very
-///   probably *intact*, so nothing here may touch the file — and opening blank isn't a
-///   harmless middle ground either, because the autosave that follows would flatten a
-///   perfectly good session into one empty tab a few hundred milliseconds later. That is
-///   the silent-destruction case the project's standing rule exists to prevent, so this arm
-///   takes the other half of that rule: **fail loud on unrecoverable**, like a project root
-///   that won't canonicalize
-///   ([`resolve_project_folder`](crate::platform::resolve_project_folder)) or defs that
-///   won't load ([`open_project`]).
+/// * [`Corrupt`](SessionLoadError::Corrupt) — the bytes were read and are not a session, which a
+///   kill mid-autosave produces. Re-reading can only say the same, so this is *recoverable* and
+///   refusing to open would brick the project permanently. The tabs are still not thrown away: the
+///   file is moved aside **before** the first autosave can overwrite it, and a move that fails
+///   fails the load (see [`keep_corrupt_session`]).
+/// * [`Unreadable`](SessionLoadError::Unreadable) — the read itself failed, so the contents are
+///   unknown and probably *intact*. Nothing here may touch the file, and opening blank is not a
+///   harmless middle ground either: the autosave that follows would flatten a good session into
+///   one empty tab a few hundred milliseconds later. So this arm takes the other half of the
+///   standing rule — **fail loud on unrecoverable**.
 fn restore_session(root: &Path) -> Result<Option<SessionSnapshot>, String> {
-    // Missing is the expected case (`Ok(None)`): a fresh project with no session yet.
     match project_io::load_session(root) {
         Ok(snapshot) => Ok(snapshot),
         Err(e @ SessionLoadError::Corrupt(_)) => {
@@ -157,38 +150,22 @@ pub fn use_init_project(
     root: PathBuf,
     loaded: Rc<Loaded>,
 ) -> RadioStation<ProjectState, ProjChan> {
-    // The defs are cloned inside the initializer — once, at mount — so a re-render of the
-    // caller costs an `Rc` bump, not a copy of the whole catalog.
     let station = use_init_radio_station::<ProjectState, ProjChan>(move || {
         ProjectState::from_defs(loaded.defs.clone(), root)
     });
     let catalog = use_init_catalog();
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
-    // The window's first event, once per open — including the open a re-root performs, which
-    // mounts this hook again with a fresh log.
     use_hook(move || {
         let name = station.peek().name.clone();
         log_event(log, LogLevel::Info, format!("Opened project '{name}'"));
     });
     use_side_effect(move || {
         let request = rescan.read().clone();
-        // Claimed synchronously here, before anything is spawned, so two requests in one
-        // executor tick can't both get through (see `claim_scan`). The guard released by
-        // `Drop` — not by the pass's last statement — is what keeps a cancelled pass from
-        // latching the flag (see `ScanGuard`).
         let Some(guard) = claim_scan(catalog) else {
             return;
         };
-        // The work list is read **before** any row is reset, because resetting is what discards
-        // the information it is derived from: a `Loading` view has no `view_deps` to order by,
-        // and none to say which table it reads.
-        // The read guard is a temporary of this statement, so it is released before `reset_rows`
-        // takes the write guard below.
         let work = plan_scan(&station.peek(), &request.scope);
-        // Rows drop to `Loading` so the pane reads as re-scanning rather than as settled
-        // data. Only for a real request: at mount every row is already `Loading`, and writing
-        // them again would wake the catalog's subscribers for nothing.
         if request.seq > 0 {
             reset_rows(station, &request.scope, &work.views);
         }
@@ -246,16 +223,6 @@ fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
             tables: p.tables.iter().map(|t| t.def.name.clone()).collect(),
             views: p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect()),
         },
-        // A name with no row left is planned as an empty pass rather than a whole-catalog one:
-        // the table went between the request and the driver serving it.
-        //
-        // **Matched case-insensitively, and the pass then carries the def's own spelling.** Every
-        // caller today names a def (the row menu, the `TableUpserted` fold), so this is the rule
-        // every other catalog lookup already uses rather than a fix for a live bug — the one
-        // request that arrives under the *planner's* spelling is an `INSERT`'s, and that lands
-        // through `refresh_table_rows` instead. An exact match here would plan an empty pass for
-        // a name that folds, which is a silent no-op; and the pass registers from defs, so what
-        // it carries has to be the def name whatever it was asked under.
         ScanScope::Table(name) => match p
             .tables
             .iter()
@@ -289,8 +256,6 @@ fn reset_rows(
         }
         ScanScope::Table(name) => {
             station.write_channel(ProjChan::Tables).reload_table(name);
-            // Guarded: a write notifies whether or not it changed anything, and there is no
-            // reason to wake the VIEWS section for a table nothing reads.
             if !views.is_empty() {
                 let mut p = station.write_channel(ProjChan::Views);
                 for view in views {
@@ -313,27 +278,21 @@ pub fn refresh_table(rescan: CatalogRescan, name: String) {
 /// Re-read one table's own facts and land them on its row — **not** a scan pass (ED-05).
 ///
 /// What an `INSERT` needs, and deliberately much less than [`refresh_table`]. A re-scan
-/// re-*registers*, which deregisters the table and builds a fresh provider; that is what leaves
-/// every view above it holding a stale `Arc` (D10/D11), and why a re-scan re-creates them
-/// afterwards. An append cannot make a view stale — the sink schema-checks before it writes, so
-/// the shape a view captured is the shape still there, and the old provider re-LISTs per scan
-/// anyway (this engine runs no `ListFilesCache`), so it already sees the new file. Going through
-/// the pass would break the views and repair them again for nothing, re-infer a schema that
-/// could not have moved, and flash every affected row through `Loading` on the way.
-///
-/// So: ask the engine what the row says now, and land it. No epoch bump either — the count moved,
-/// not what any name resolves to, and diagnostics resolve against the engine.
+/// re-*registers*, which builds a fresh provider and leaves every view above it holding a stale
+/// `Arc`. An append cannot make a view stale — the sink schema-checks before it writes, and the old
+/// provider re-LISTs per scan anyway — so going through the pass would break the views and repair
+/// them for nothing, re-infer a schema that could not have moved, and flash every affected row
+/// through `Loading`. So: ask the engine what the row says now, and land it. No epoch bump either,
+/// because the count moved rather than what any name resolves to.
 ///
 /// `spawn_forever`, for [`drop_confirm`]'s reason: the answer belongs to the window's store, and
 /// the tab whose statement asked for it may be closed before it arrives.
 ///
 /// **And so the store is asked whether it is still there before it is written.** Root-scoped means
-/// this task outlives the *project subtree* too, not just the tab — and that subtree is remounted
-/// wholesale by a re-root and by an engine restart (which is what a `runtime.*` Settings apply
-/// is). The `EngineCtx` clone keeps the outgoing engine alive, so the call completes and comes
-/// back to a station whose owner has been dropped; writing it then panics, and the release panic
-/// hook ends the process. Nothing bookkeeps this call either, so no close confirm stands between
-/// the two. A row count nobody is left to show is simply dropped.
+/// this task outlives the *project subtree*, which a re-root or an engine restart remounts
+/// wholesale — the `EngineCtx` clone keeps the outgoing engine alive, so the call comes back to a
+/// station whose owner has been dropped, and writing it then panics. A row count nobody is left to
+/// show is simply dropped.
 ///
 /// [`drop_confirm`]: crate::apps::project::views::DropConfirm
 pub fn refresh_table_rows(
@@ -347,14 +306,9 @@ pub fn refresh_table_rows(
             return;
         }
         match meta {
-            // `table_reread`, not `table_registered`: this answer may have been overtaken by a
-            // scan pass while the read was in flight, and that pass's is the fresher one.
             Ok(meta) => project
                 .write_channel(ProjChan::Tables)
                 .table_reread(&name, meta),
-            // The row keeps the count it last read, which is what a row's count always is. The
-            // table itself is fine — only this re-read failed — so flagging the row would be
-            // the worse lie of the two.
             Err(e) => tracing::error!("table meta '{name}': {e}"),
         }
     });
@@ -449,9 +403,6 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
             tracing::error!("open project {}: {e}", named.display());
             Err(e)
         }
-        // The worker never answered (see [`offload`]). Nothing here knows anything about the
-        // project, so the message says only what is true — and it is still a fault, because the
-        // one thing we do know is that this window has no session to mount.
         None => {
             let e = format!(
                 "open project {}: the load did not complete",
@@ -490,8 +441,6 @@ async fn register_defs(
     log: LogCtx,
     work: ScanWork,
 ) {
-    // Snapshot the work up front (peek — a task has no reactive context): results land
-    // by name, so concurrent def edits can't be clobbered by a stale row write.
     let (connections, tables, views) = {
         let p = station.peek();
         let root = p.root.clone();
@@ -560,8 +509,6 @@ async fn register_defs(
                         format!(
                             "Registered table '{name}' · {}{}",
                             plural(meta.columns.len(), "column"),
-                            // Only if the source reported one (P3-08's rule) — a CSV table has no
-                            // row count until something counts it.
                             meta.rows
                                 .map(|rows| format!(" · {} rows", fmt_int(rows)))
                                 .unwrap_or_default()
@@ -639,43 +586,31 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (+ geometry) and writes it. The mount pass is skipped (the just-loaded session already
 /// matches disk).
 ///
-/// `restored` is the geometry **the loaded session remembers** — the seed for the "last normal
-/// geometry" the save persists, see below. It comes from the session this project actually
-/// loaded rather than from the read that placed the window
-/// ([`window_geometry`](crate::apps::project::window_geometry)), because that read has a
-/// deadline and may have come back empty: seeding `None` there would let the first save replace
-/// a perfectly good remembered size with the default the window opened at.
+/// `restored` is the geometry **the loaded session remembers**, taken from the session this project
+/// actually loaded rather than from the read that placed the window — that read has a deadline and
+/// may come back empty, and seeding `None` would let the first save replace a good remembered size
+/// with the default the window opened at.
 ///
-/// **Our fill, and fullscreen, are not remembered.** A window we filled (the header's
-/// double-press) or that is in native fullscreen has the *screen's* geometry, not a size the user
-/// picked; persisting it would reopen every later launch at screen size and quietly lose their
-/// real one. So while the window is in either state the save keeps rewriting the last geometry it
-/// had in neither — normal IDE behaviour.
+/// **Our fill, and fullscreen, are not remembered.** Either has the *screen's* geometry rather than
+/// a size the user picked, so persisting it would reopen every later launch at screen size. While
+/// the window is in either state the save keeps rewriting the last geometry it had in neither.
 ///
-/// A window the **user** sized to fill the screen is the opposite case and does persist, which is
-/// why the test is `filled_by_app` and not `Platform::is_maximized` alone: that mirrors macOS's
-/// `isZoomed`, a *frame comparison*, so a hand-tiled window reads as zoomed too (see
-/// `views::header::title_bar_press`). The `&& is_filled` keeps the pair self-healing — a stale
-/// mark can never freeze the geometry, because leaving fill drops the guard either way.
+/// A window the **user** sized to fill the screen does persist, which is why the test is
+/// `filled_by_app` and not `Platform::is_maximized` alone — that mirrors macOS's `isZoomed`, a
+/// frame comparison, so a hand-tiled window reads as zoomed too. The `&& is_filled` keeps the pair
+/// self-healing: leaving fill drops the guard either way.
 ///
-/// The subscription is inside the effect's reactive scope, not the caller's render, so a
-/// keystroke re-runs only this effect — the root render is untouched.
+/// The subscription is inside the effect's reactive scope, not the caller's render, so a keystroke
+/// re-runs only this effect.
 ///
-/// **And one last save on the way down.** The debounce is a task, and a task dies with its
-/// scope, so a project that goes away inside the debounce window would lose whatever was
-/// typed in it. Both ways it can go are ordinary — the window closing, and the window opening
-/// another project in place — so the settled session is written once more from `use_drop`.
+/// **And one last save on the way down.** The debounce is a task and a task dies with its scope, so
+/// a project that goes away inside the debounce window would lose whatever was typed in it — both
+/// ways it can go are ordinary, so the settled session is written once more from `use_drop`.
 pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
-    // One handle to subscribe the effect (Persist), one to peek the value at fire time.
     let subscribe = use_radio::<SessionState, Chan>(Chan::Persist);
     let session = use_radio_station::<SessionState, Chan>();
     let project = use_radio_station::<ProjectState, ProjChan>();
-    // Both writes below report a failure rather than only `tracing` it (P4-15): an event when it
-    // starts, and a Problems row for as long as it holds. See `persisted_session` for what the
-    // *final* save can and can't make visible on the way down.
     let report = use_report();
-    // The window's live geometry + window state (logical units). All `Copy` State signals —
-    // reading them in the effect also makes a resize / move / fill trigger a save.
     let platform = Platform::get();
     let root_size = platform.root_size;
     let window_position = platform.window_position;
@@ -683,40 +618,21 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
     let is_fullscreen = platform.is_fullscreen;
     let mut pending = use_state(|| None::<TaskHandle>);
     let mut armed = use_state(|| false);
-    // Whether anything has actually changed since the load — what the final save on the way
-    // down tests. `armed` can't answer it: it goes true on the mount pass itself, which is
-    // exactly the pass that means "nothing has changed yet".
     let mut dirty = use_state(|| false);
-    // The last snapshot actually written, so a wake that moved nothing *reaching disk* writes
-    // nothing. `Chan::Tab(id)` is the tab's whole editor state — text, caret, selection, scroll,
-    // squiggle decorations, hover — and it derives `Persist` because it *can* carry a text
-    // change; this is what decides whether it *did*. Without it, hovering a squiggle or moving
-    // the caret rewrites `session.json` byte-for-byte, and the validation driver's decoration
-    // writes across every open tab multiply that by the tab count.
     let mut written = use_state(|| None::<SessionSnapshot>);
-    // The last geometry the window had while neither filled nor fullscreen — what a restart
-    // restores to. Seeded with what the window opened at, so filling before ever resizing still
-    // persists the real size rather than dropping it.
     let normal_geom = use_state(move || restored);
 
     use_side_effect(move || {
-        // These reads bind the effect to session edits (`Chan::Persist`) and to window
-        // resize / move / fill; the values themselves are captured at fire time in the task, so
-        // the debounce always writes the settled state.
         let _ = subscribe.read().active;
         let _ = root_size.read();
         let _ = window_position.read();
         let _ = is_filled.read();
         let _ = is_fullscreen.read();
         let _ = filled_by_app.read();
-        // Skip the mount pass: nothing has changed since load, and the loaded session is
-        // already on disk — only real edits should rewrite the file.
         if !*armed.peek() {
             armed.set(true);
             return;
         }
-        // Nothing subscribes to this, so the guard is only to keep a keystroke stream from
-        // notifying an audience of nobody on every character.
         if !*dirty.peek() {
             dirty.set(true);
         }
@@ -725,11 +641,8 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
         }
         let task = spawn(async move {
             Timer::after(AUTOSAVE_DEBOUNCE).await;
-            // Any newer change would have cancelled this task before now.
             let root = project.peek().root.clone();
             let mut snapshot = session.peek().snapshot();
-            // Geometry from *our* fill, or from fullscreen, is the screen's rather than the
-            // user's — remember only the normal one, and keep writing it while either holds.
             let mut normal_geom = normal_geom;
             let transient = (*filled_by_app.peek() && *is_filled.peek()) || *is_fullscreen.peek();
             if !transient {
@@ -753,19 +666,7 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
         pending.set(Some(task));
     });
 
-    // The debounce is a *task*, and a task dies with its scope — so a project that goes away
-    // inside the debounce window loses whatever was typed in it. Both ways it can go away are
-    // ordinary: closing the window, and re-rooting it to another project
-    // (`OpenCtx::reroot`), which unmounts this project's whole subtree. So the settled state
-    // is written once more on the way down.
-    //
-    // Geometry comes from the last recorded *normal* geometry rather than a live read:
-    // `Platform`'s signals belong to a window that may already be tearing down, while
-    // `normal_geom` is this scope's own. Nothing is lost by it — a resize is not the edit at
-    // risk here, and the timer would have written the same value.
     use_drop(move || {
-        // Nothing changed means the loaded session is still exactly what is on disk, so
-        // writing would only rewrite it with itself.
         if !*dirty.peek() {
             return;
         }
@@ -1003,8 +904,6 @@ mod tests {
                 }],
                 ..Default::default()
             },
-            // No filesystem: `plan_scan` reads the store's rows and `from_defs` only keeps the
-            // root, so a real scratch folder would be created and left behind for nothing.
             PathBuf::from("/strata-plan-scan"),
         );
         p.table_registered(

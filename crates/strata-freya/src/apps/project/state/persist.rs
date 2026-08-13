@@ -222,11 +222,6 @@ pub fn persisted(
 /// while the write itself need not.
 pub fn settled(report: ReportCtx, file: ProjectFile, outcome: Result<(), String>) -> bool {
     let mut faults = report.faults;
-    // Both arms **peek before writing**, and both bind the answer to a `let` before touching the
-    // store. Peeking first is what keeps a repeating writer from waking every subscriber on every
-    // attempt (this is the hot path — the autosave lands here every 500ms of activity). Binding
-    // first is what keeps the read guard from living across the write on the same
-    // `GenerationalBox`, which CLAUDE.md records as a runtime borrow panic.
     match outcome {
         Ok(()) => {
             let was_behind = faults.peek().holds(file);
@@ -242,10 +237,6 @@ pub fn settled(report: ReportCtx, file: ProjectFile, outcome: Result<(), String>
         }
         Err(e) => {
             tracing::error!("{}: {e}", file.tag());
-            // The **transition** is the event; the condition is the row. A repeating writer that
-            // logged every attempt would bury every other event in the log, and one that
-            // re-recorded an identical fault would re-render the drawer just as often (see
-            // `PersistFaults::unchanged`).
             let same_as_held = faults.peek().unchanged(file, &e);
             if !same_as_held {
                 faults.write().fault(file, e.clone());
@@ -447,8 +438,6 @@ mod tests {
             "unexpected message: {}",
             p.events[0].1
         );
-        // And the condition is *held* — the half an event can't carry, and the whole reason the
-        // Problems drawer's Project tab can show it for as long as it lasts.
         assert_eq!(files(&p), [ProjectFile::Session]);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -554,7 +543,6 @@ mod tests {
             while_read_only(&root, || {
                 persisted_session(&root, &Default::default(), report)
             });
-            // The directory is writable again by here.
             persisted_session(&root, &Default::default(), report)
         });
 

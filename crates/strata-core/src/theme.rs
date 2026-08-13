@@ -91,7 +91,6 @@ macro_rules! roles {
 }
 
 roles! {
-    // ---- Surfaces: elevation tiers, not widget names --------------------------------------
     /// The app base coat: the window body, the active tab's well behind everything.
     Background => "background",
     /// The standard panel surface: tab bar, status bar, grid body, input wells, cards.
@@ -112,7 +111,6 @@ roles! {
     /// Drop shadow of floating chrome.
     Shadow => "shadow",
 
-    // ---- Location refinements: a place, not a widget, that may leave its tier --------------
     /// Drawer / inspector body, when a theme wants panels off the raised tier.
     PanelBackground => "panel.background" (or SurfaceRaised),
     /// The editor tab strip's container.
@@ -122,7 +120,6 @@ roles! {
     /// The header bar.
     TitleBarBackground => "title_bar.background" (or SurfaceRaised),
 
-    // ---- Interactive elements: filled controls, flush controls, and the odd fills ----------
     /// Filled-control rest fill: buttons, select triggers, segmented containers, grid headers.
     ElementBackground => "element.background",
     /// Filled-control hover fill (also the strong hover of icon flat-buttons).
@@ -155,7 +152,6 @@ roles! {
     /// The light control knob: switch thumbs, the checkbox check mark.
     Knob => "knob",
 
-    // ---- Borders ---------------------------------------------------------------------------
     /// Standard hairline: panel dividers, pane rules.
     Border => "border",
     /// Fainter hairline: in-list row rules, grid row dividers, tree guides.
@@ -173,8 +169,6 @@ roles! {
     /// Edge of floating chrome; also checkbox/radio rest outline and the switch track.
     BorderOverlay => "border.overlay",
 
-    // ---- Text (icons read these too; an `icon.*` family is the named escape if one ever
-    //      needs to differ) ------------------------------------------------------------------
     /// Primary content and headings.
     Text => "text",
     /// Secondary body: labels, values, legends, row text.
@@ -194,7 +188,6 @@ roles! {
     /// Text and glyphs on an accent or status fill.
     TextOnAccent => "text.on_accent",
 
-    // ---- Accent ----------------------------------------------------------------------------
     /// The brand accent: filled buttons, selection marks, links, cursors.
     Accent => "accent",
     /// Filled-accent hover.
@@ -208,8 +201,6 @@ roles! {
     /// The ~12% badge/icon-chip fill.
     AccentBadge => "accent.badge",
 
-    // ---- Status: one global triad per semantic (error also carries a hover, for the two
-    //      live controls dressed in it) -------------------------------------------------------
     /// The error tone.
     Error => "error",
     /// The tinted error fill.
@@ -237,7 +228,6 @@ roles! {
     /// The tinted info outline.
     InfoBorder => "info.border",
 
-    // ---- Editor chrome (syntax is the separate `syntax` section) ---------------------------
     /// The code editor well — its own role because the built-ins genuinely put it on
     /// different tiers.
     EditorBackground => "editor.background",
@@ -250,7 +240,6 @@ roles! {
     /// The caret.
     EditorCursor => "editor.cursor" (or Accent),
 
-    // ---- Scrollbar -------------------------------------------------------------------------
     /// The track.
     ScrollbarTrack => "scrollbar.track",
     /// The thumb at rest.
@@ -260,7 +249,6 @@ roles! {
     /// The thumb, grabbed.
     ScrollbarThumbActive => "scrollbar.thumb.active",
 
-    // ---- The categorical data-type ramp (Strata's display taxonomy — see `Kind`) -----------
     /// Strings.
     DataTypeString => "data_type.string",
     /// Numbers.
@@ -276,7 +264,6 @@ roles! {
     /// Maps.
     DataTypeMap => "data_type.map",
 
-    // ---- The ordered chart series ramp ------------------------------------------------------
     /// Series 1.
     Chart1 => "chart.1",
     /// Series 2.
@@ -303,7 +290,6 @@ roles! {
     /// The heatmap ramp's high end.
     ChartHeatHigh => "chart.heat.high",
 
-    // ---- Entity kinds: catalog icons + completion kinds, one reconciled set -----------------
     /// A table.
     EntityTable => "entity.table",
     /// A table whose data **Strata owns** — one created by `CREATE TABLE` into the project
@@ -328,8 +314,6 @@ roles! {
     /// A keyword (completion), aligned with the syntax keyword hue.
     EntityKeyword => "entity.keyword",
 
-    // ---- Source-format badges: a closed set, deliberately NOT the data-type ramp —
-    //      retinting strings must not repaint file badges ------------------------------------
     /// Parquet.
     FormatParquet => "format.parquet",
     /// CSV.
@@ -528,9 +512,6 @@ impl ThemeRegistry {
             for path in paths {
                 match parse_theme_file(&path) {
                     Ok(theme) => {
-                        // Warn, never reject: every one of these still renders (magenta where a
-                        // value is missing), and a loud wrong colour beats a theme that
-                        // silently vanished from the list.
                         for r in theme.unknown_roles() {
                             tracing::warn!("theme {}: unknown role '{r}'", path.display());
                         }
@@ -577,8 +558,6 @@ impl ThemeRegistry {
 fn parse_theme_file(path: &Path) -> Result<StrataTheme, String> {
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     from_str(&raw).map_err(|e| {
-        // A pre-roles file fails on the missing `roles` field; name the real problem instead of
-        // handing the author a bare serde error.
         if raw.contains("\"sheet\"") {
             "pre-roles theme format (has a 'sheet' section); see docs/FREYA_THEME_SPEC.md"
                 .to_string()
@@ -740,7 +719,6 @@ pub fn resolve_typography(t: &StrataTheme) -> Typography {
 pub fn generate_schema(syntax_scopes: &[&str]) -> serde_json::Value {
     use serde_json::{json, Map, Value};
 
-    // The type scale — one `typeRole` per named role; mirrors `Typography`'s fields.
     const TYPE_ROLES: &[&str] = &[
         "title",
         "strong_body",
@@ -880,18 +858,13 @@ mod tests {
     #[test]
     fn registry_user_dir_adds_overrides_and_skips_broken() {
         let dir = scratch_dir("user");
-        // A new user theme: the midnight file under a fresh id.
         let custom = MIDNIGHT_JSON.replace(r#""id": "midnight""#, r#""id": "custom""#);
         assert_ne!(custom, MIDNIGHT_JSON, "id marker must match the fixture");
         fs::write(dir.join("custom.json"), custom).unwrap();
-        // An override: a user file reusing the built-in id replaces it in place.
         let renamed = MIDNIGHT_JSON.replace(r#""name": "Midnight""#, r#""name": "My Midnight""#);
         assert_ne!(renamed, MIDNIGHT_JSON, "name marker must match the fixture");
         fs::write(dir.join("midnight-tweak.json"), renamed).unwrap();
-        // Broken files are skipped, never fatal.
         fs::write(dir.join("broken.json"), "{ not json").unwrap();
-        // A pre-roles file (the old sheet/components format) is skipped the same way — it
-        // fails on the missing `roles` field, and `parse_theme_file` names the real problem.
         fs::write(
             dir.join("legacy.json"),
             r#"{ "id": "legacy", "name": "Legacy", "mode": "dark", "sheet": {}, "components": {} }"#,

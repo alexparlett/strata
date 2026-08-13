@@ -86,9 +86,6 @@ impl Affordance {
                     page_url: page_url.clone(),
                 },
             },
-            // Regardless of the site: a `Ready` can only have come from a `Get`, which needed a
-            // writable one, and a site that changed under a running app is `install`'s own
-            // failure to report rather than a state to hide here.
             Update::Ready {
                 version, page_url, ..
             } => Affordance::Restart {
@@ -108,8 +105,6 @@ impl Affordance {
         match self {
             Affordance::Inert | Affordance::Check | Affordance::Downloading { .. } => None,
             Affordance::Get { .. } => Some("Update now"),
-            // Not "Update …": this press installs nothing, and a label that promised it would
-            // be answered by a browser window.
             Affordance::Page { .. } => Some("Open the release page"),
             Affordance::Restart { .. } => Some("Restart to update"),
         }
@@ -157,14 +152,8 @@ impl Affordance {
 /// Freya's current context. The menubar item is the one surface with no scope of its own, which
 /// is what [`UpdateRequest`] is for.
 pub fn press(status: UpdateStatus, ask: AskSlot) {
-    // Resolved into a value first: a `match` over `status.peek()` keeps the read borrow alive
-    // for the whole match, and the `set` inside `check` or `download` then panics (the trap
-    // `close_confirm` documents).
     let offer = Affordance::of(&status.peek(), install_site());
     match offer {
-        // A press with nothing to ask for. `Downloading` is here rather than absent because
-        // the menubar item is pressable whatever the status: re-pressing it mid-download must
-        // not start a second job or replace the one in flight with a check.
         Affordance::Inert | Affordance::Downloading { .. } => {}
         Affordance::Check => check(status),
         Affordance::Get { .. } => download(status),
@@ -239,14 +228,8 @@ impl Component for UpdateConfirm {
         let roles = use_roles();
         let info = tones().info;
 
-        // Shared by the button and the Enter key, so it holds only `Copy` handles and shadows
-        // `ask` inside — a closure capturing the outer `mut` binding would be `FnMut`, and the
-        // two handlers cannot both take it.
         let restart = move |()| {
             let mut ask = ask;
-            // Dismissed **before** the install, which is a quit: a close confirm may cancel it
-            // (`end_quit` then forgets the intent), and a slot left armed would be a question
-            // already answered, sitting over the window that answered it.
             ask.set(None);
             install(status);
         };
@@ -257,8 +240,6 @@ impl Component for UpdateConfirm {
 
         let page_url = asked.page_url.clone();
 
-        // The action over its subject — the other confirms' shape: what pressing does, over
-        // what it will leave you running.
         let header = DialogHeader::new(
             IconName::Download,
             info,
@@ -289,9 +270,6 @@ impl Component for UpdateConfirm {
                         .color(roles.get(Role::TextMuted))
                         .wrap(),
                     )
-                    // The link-out for what changed. A ghost action rather than prose the user
-                    // cannot press: the release page is the only place the notes exist, and it
-                    // is also the fallback this app offers when it cannot install for itself.
                     .child(
                         rect().horizontal().child(
                             Button::new()
@@ -449,7 +427,6 @@ mod tests {
         };
         let offer = Affordance::of(&status, &writable());
         assert_eq!(offer.action(), Some("Restart to update"));
-        // "downloaded", not "available": the press below is a restart, not a network job.
         assert_eq!(offer.note().as_deref(), Some("Strata 0.4.0 is downloaded"));
         assert!(matches!(offer, Affordance::Restart { .. }));
     }
@@ -496,8 +473,6 @@ mod tests {
             (900., 700.).into(),
             |r| {
                 let ask = r.provide_root_context(|| State::create(None::<UpdateAsk>));
-                // Idle, and it stays that way: every path this test takes is a dismissal, so a
-                // status that moved would mean the dialog had done something to the mechanism.
                 let status = r.provide_root_context(create_global_updates);
                 (ask, status)
             },

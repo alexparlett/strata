@@ -1,15 +1,11 @@
-//! Strata — the Freya (Skia / native) frontend. The Freya-port target; rides the
-//! shared `strata-core` alongside the transitional `strata-dioxus` app. See
-//! `docs/FREYA_PORT_PLAN.md` (§3 for this crate's internal layout).
+//! Strata — the Freya (Skia / native) frontend, over the shared `strata-core`.
 //!
-//! Layout grows per phase: `apps/<window>/` holds one self-contained OS window each
-//! (the project window and the launcher today), `platform/` the window model that spawns
-//! and focuses between them. Top-level `state/` (global singletons), `components/` (DS
-//! widgets) and `theme.rs` are shared by every window.
+//! `apps/<window>/` holds one self-contained OS window each, `platform/` the window model that
+//! spawns and focuses between them. Top-level `state/` (global singletons), `components/` (design
+//! system) and `theme.rs` are shared by every window.
 //!
-//! No Tokio runtime here on purpose: the engine facade owns a private runtime, and the
-//! UI just awaits its methods (`JoinHandle`s are executor-agnostic) — see
-//! `strata_core::engine` and `docs/SNAPSHOT_SPEC.md` §7.
+//! No Tokio runtime here on purpose: the engine facade owns a private one and the UI just awaits
+//! its methods, `JoinHandle`s being executor-agnostic.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -47,10 +43,6 @@ mod theme;
 mod updater;
 
 fn main() {
-    // **Before anything app-global.** `strata mcp <project>` is a headless MCP server, not a
-    // window: it must not build the theme registry, read app config, touch the windows
-    // registry or embed fonts, none of which exist for it — so the branch is taken here,
-    // ahead of all of them, rather than after a launch config has been assembled.
     let folder = match cli(env::args().skip(1)) {
         Cli::Mcp(folder) => return headless(&folder),
         Cli::Usage => {
@@ -59,90 +51,23 @@ fn main() {
         }
         Cli::Gui(folder) => folder,
     };
-    // First thing: nothing logged before this exists. Every `tracing::*` call in the app
-    // and in `strata-core` is a no-op until a subscriber is installed.
-    //
-    // The guard is bound for the whole of `main` — it owns the file writer's worker thread,
-    // and dropping it flushes and stops that thread. Bound to `_guard` rather than `_`, which
-    // would drop it on this line and leave an installed subscriber writing to nothing.
     let _guard = init_logging(Log::Stdout);
-    // Open the OS keystore for the process (AS-05). One call, here, because the default
-    // store is process-wide and a module that installed itself on first touch could never
-    // be handed a different one. A failure is not fatal and not silent: nothing needs a
-    // secret to start, and every read that does then answers `SecretError::Unavailable` at
-    // the surface asking for it. Headless (`strata mcp`) never opens it — the agent
-    // vocabulary is read-only and holds no keys.
     if let Err(err) = open_keystore() {
         tracing::error!("{err}");
     }
-    // Clear snapshot leftovers from a previous crashed run (each live engine only ever
-    // cleans its own subdirectory — safe only here, before any engine exists).
     purge_snapshot_root();
-    // Discover the theme registry once (built-ins + the user themes dir) — every window
-    // shares this one handle via context.
     let themes = ThemesCtx::discover();
-    // The app-global **reactive config**: the whole `AppConfig` — settings, recents, and
-    // the open-project set — loaded from disk once here and shared by every window. Disk
-    // is a startup input, never a live source: from now on this store is the truth and
-    // `write_config` is the only thing that writes the file. Writes are per-channel, so a
-    // project opening wakes the recents readers without touching the theme.
-    //
-    // The theme itself is pure *derived* state: each window's `use_strata_theme` resolves
-    // the settings selection (+ OS appearance while Sync-with-OS is on, via Freya's
-    // per-window `Platform.preferred_theme`) through the shared registry — no stored
-    // applied-theme id to keep coherent.
     let (config, reopen) = create_global_config();
-    // …and the app-global **live** window registry: which windows exist right now, so a
-    // project that already has one is focused rather than opened twice.
     let windows = create_global_windows();
-    // The Settings window's live theme preview — the one half of its uncommitted draft every
-    // *other* window reads, which is what makes picking a theme repaint them all at once
-    // while the choice is still uncommitted. Empty except while that window is open.
     let preview = create_global_theme_preview();
-    // The menubar. Its builder runs at `resumed`, on this very thread, and hands back the
-    // File menu's handles — which land in a third app-global so the focused window can keep
-    // Open Recent and Close Project pointed at itself (`menu::use_file_menu`). The builder
-    // captures the resolved chords rather than the config handle, since accelerators are
-    // read once; the event *handler* holds the live handles, so dispatch resolves current
-    // bindings and can open a recent straight from the renderer.
     let menu_chords = menu::menu_chords(&config.peek().settings);
     let menu_state = menu::create_global_menu();
-    // …and beside the menu handles, the slot the focused window parks its open path in, so
-    // File ▸ Open Recent honours that window's "Opening a project" preference (this window /
-    // a new one / ask) instead of always launching a window. Open… needs no slot: it reaches
-    // the focused window as a synthesized chord, like every other menu command.
     let focused_open = create_global_open();
-    // Agent access (AA-03): the cross-thread service directory a project window lends its
-    // engine and its ask channel to, plus the slot holding whatever MCP server is listening.
-    // Nothing listens yet — a workspace window's `use_agent_server` starts one only if the
-    // `agent_access` setting is on, which it is not by default.
     let agent = create_global_agent();
-    // The model listings satellite (AS-06): what each provider last reported serving, read
-    // from its own file beside the config — the same "disk is a startup input" rule, and the
-    // reason a model picker has something in it before any network call is made. **No dial-out
-    // here**: refreshing every configured provider at launch would spend a round trip and put a
-    // key on the wire per provider, on every start, for a session that mostly never opens a
-    // model picker at all. The refresh happens where the list is shown.
     let listings = create_global_listings();
-    // The outcome half of the same question — see `state::listings::Probes`.
     let probes = create_global_probes();
-    // What the updater last learned (UP-02). **No dial-out here either**: the startup check
-    // runs from a workspace window's root, where the setting that gates it can be read and
-    // where a task has a scope to live in. Not persisted — a check result is a fact about a
-    // request made minutes ago.
     let updates = create_global_updates();
-    // …and beside it, the slot App ▸ Check for Updates… records its press in (UP-03), for the
-    // same reason `focused_open` exists: that item carries no chord to synthesize. It cannot
-    // act from the menu handler either — the renderer thread has no Freya context to spawn in —
-    // so the focused window drains this.
     let update_request = create_global_update_request();
-    // The assistant's runtime (AS-02/AS-04): **one per app**, because a runtime is threads and
-    // several conversations streaming at once are several tasks on the same two. Deliberately
-    // *not* the MCP server's runtime, whose lifetime is a setting — the chat pane must not stop
-    // working because agent access was switched off.
-    //
-    // A runtime that will not build is reported by the chat pane rather than taken as fatal: the
-    // rest of the app has no use for it, so the honest degradation is a composer that says so.
     let assistant = match Assistant::new() {
         Ok(assistant) => Some(Rc::new(assistant)),
         Err(e) => {
@@ -150,7 +75,6 @@ fn main() {
             None
         }
     };
-    // Everything a window — or the menubar handler — is handed, in one value.
     let app = AppCtx {
         themes,
         config,
@@ -166,43 +90,23 @@ fn main() {
         update_request,
     };
     let menu_app = app.clone();
-    let launch_config = with_embedded_fonts(LaunchConfig::new())
-        // The muda menubar replaces winit's default menu at resume. Crucially its
-        // Quit is a *custom* item routed through the close-request path (red-button
-        // semantics, T2 confirm keeps its say) — winit's own Quit sent Cocoa's
-        // `terminate:` directly, swallowing ⌘Q before the keymap AND bypassing the
-        // `on_close` veto. (Known gap: a Dock-icon "Quit" still `terminate:`s
-        // un-vetoed — winit 0.30 exposes no `applicationShouldTerminate`; its 0.31
-        // "bring your own app delegate" closes this, see P6-02.)
-        .with_menu(
-            move || {
-                let (menu, handles) = menu::app_menu(menu_chords);
-                let mut menu_state = menu_state;
-                menu_state.set(Some(handles));
-                menu
-            },
-            move |event, ctx| menu::handle_menu_event(event, ctx, menu_app.clone()),
-        );
-    // One window per project to restore, or the launcher. `with_window` may be called any
-    // number of times, so the whole restore set opens as the app's initial windows — no
-    // first-window-spawns-the-rest dance.
+    let launch_config = with_embedded_fonts(LaunchConfig::new()).with_menu(
+        move || {
+            let (menu, handles) = menu::app_menu(menu_chords);
+            let mut menu_state = menu_state;
+            menu_state.set(Some(handles));
+            menu
+        },
+        move |event, ctx| menu::handle_menu_event(event, ctx, menu_app.clone()),
+    );
     let launch_config = match startup(&config.peek(), reopen, folder) {
         Startup::Projects(roots) => roots.into_iter().fold(launch_config, |cfg, root| {
-            // Geometry is a launch input, resolved before the window exists. Blocking for it is
-            // free here — there is no event loop yet to hold up — and it is bounded either way
-            // (`GEOMETRY_DEADLINE`), so a project on a mount that stopped answering no longer
-            // keeps the app from starting at all.
             let geometry = window_geometry_blocking(root.clone());
             cfg.with_window(ProjectApp::window(app.clone(), root, geometry))
         }),
         Startup::Launcher => launch_config.with_window(LauncherApp::window(app)),
     };
     launch(launch_config);
-    // **After the event loop.** `launch` returns once the last window has closed (winit 0.30's
-    // `run_app` is `run_on_demand` on macOS, and Freya's renderer calls `event_loop.exit()`
-    // rather than ending the process), which is the one moment an update can be installed: no
-    // window is open, and the bundle being replaced is not being read. A quit nobody asked to
-    // install through leaves nothing here to do.
     install_pending();
 }
 
@@ -290,8 +194,6 @@ fn cli<A: IntoIterator<Item = String>>(args: A) -> Cli {
             (Some(folder), None) => Cli::Mcp(folder),
             _ => Cli::Usage,
         },
-        // Extra arguments after a folder are ignored exactly as they always were: the GUI
-        // opens the first one, and macOS hands a launched app arguments of its own.
         folder => Cli::Gui(folder),
     }
 }
@@ -304,19 +206,8 @@ fn cli<A: IntoIterator<Item = String>>(args: A) -> Cli {
 /// process cannot see the app's `datafusion.*` overrides, so the engine runs the defaults
 /// (the spec's "The headless host"; a `--config` flag can arrive when somebody wants one).
 fn headless(folder: &str) {
-    // **stderr, always.** stdout is the MCP transport's, and one stray log line on it is a
-    // parse error at the client — so the subscriber is pointed away from it before anything
-    // this process does can log, `strata-core` included. The file half is the same one the GUI
-    // writes, which is what makes a headless run diagnosable at all: its stderr belongs to
-    // whichever client spawned it, and that is usually nowhere the user can see.
     let _guard = init_logging(Log::Stderr);
-    // The same sweep the GUI does, in the same place and for the same reason: once at
-    // startup, before this process has an engine of its own. A live engine's snapshot
-    // directory is lock-claimed, so an app running beside this one is untouched.
     purge_snapshot_root();
-    // Through the shared normalisation, like every other open path: naming a project's own
-    // `.strata` directory serves the project rather than a fresh one inside it. A path that
-    // will not resolve is reported by `resolve_project_folder` itself.
     let Some(root) = platform::resolve_project_folder(Path::new(folder)) else {
         process::exit(1);
     };
@@ -350,8 +241,6 @@ enum Startup {
 /// perfectly good place to land.
 fn startup(config: &AppConfig, reopen: Vec<String>, folder: Option<String>) -> Startup {
     if let Some(arg) = folder {
-        // Through the shared normalisation, like every other open path: naming a project's
-        // own `.strata` directory opens the project, not a fresh one scaffolded inside it.
         return match platform::resolve_project_folder(Path::new(&arg)) {
             Some(root) => Startup::Projects(vec![root]),
             None => Startup::Launcher,
@@ -361,8 +250,6 @@ fn startup(config: &AppConfig, reopen: Vec<String>, folder: Option<String>) -> S
         let roots: Vec<PathBuf> = reopen
             .iter()
             .filter_map(|path| match fs::canonicalize(path) {
-                // A folder that no longer holds a project isn't reopened — restoring a
-                // window would silently scaffold a fresh `.strata/` into it.
                 Ok(root) if project_io::exists_at(&root) => Some(root),
                 Ok(root) => {
                     tracing::warn!("not reopening `{}`: no project there", root.display());
@@ -458,8 +345,6 @@ fn init_logging(to: Log) -> Option<WorkerGuard> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,strata=info"));
 
-    // Built before the subscriber so a failure here is just "no file half" rather than "no
-    // logging": the console writer is installed in either branch below.
     let file = log_dir().and_then(|dir| {
         if let Err(e) = fs::create_dir_all(&dir) {
             eprintln!("no log file ({}): {e}", dir.display());
@@ -467,7 +352,6 @@ fn init_logging(to: Log) -> Option<WorkerGuard> {
         }
         let appender = tracing_appender::rolling::Builder::new()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
-            // Per-process, not per-app — see [`Log::stem`].
             .filename_prefix(to.stem())
             .filename_suffix("log")
             .max_log_files(LOG_RETENTION)
@@ -477,10 +361,6 @@ fn init_logging(to: Log) -> Option<WorkerGuard> {
         Some(tracing_appender::non_blocking(appender))
     });
 
-    // **ANSI off, for both.** One `fmt` layer means one set of writers and one escape-code
-    // decision; colouring for the terminal would write the same escapes into the file, where
-    // they are noise in whatever the user opens it with. A readable file beats a coloured
-    // console for a log that exists to be sent to someone.
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(false);

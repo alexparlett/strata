@@ -41,10 +41,6 @@ use strata_model::SourceFormat;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// The stub model
-// ---------------------------------------------------------------------------
-
 /// How long the stub waits between stream chunks. Long enough that a cancel can land in the
 /// middle of a reply, short enough that a whole test is still under a second.
 const CHUNK: Duration = Duration::from_millis(40);
@@ -136,10 +132,6 @@ async fn serving(scripts: Vec<Vec<String>>, fault: Option<(u16, &'static str)>) 
                         let at = next.fetch_add(1, Ordering::SeqCst);
                         Ok::<_, Infallible>(match fault {
                             Some((status, body)) => broken(status, body),
-                            // **An unscripted request is a failure, not an empty reply.**
-                            // Defaulting it answered `[DONE]` with no content, which the loop
-                            // read as an answered turn — so a regression that made the loop ask
-                            // one extra time passed every assertion in this file silently.
                             None => match scripts.get(at) {
                                 Some(script) => reply(script.clone()),
                                 None => {
@@ -214,10 +206,6 @@ fn ends(reason: &str) -> String {
     json!({"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]}).to_string()
 }
 
-// ---------------------------------------------------------------------------
-// The project under it
-// ---------------------------------------------------------------------------
-
 /// A project with a real engine holding a five-row `people` table, and the tools over it.
 async fn project(tag: &str) -> (Arc<Engine>, StrataTools<MockHost>) {
     let root = env::temp_dir().join(format!("strata_assistant_it_{}_{tag}", process::id()));
@@ -268,10 +256,6 @@ fn deltas(events: &[TurnEvent]) -> String {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// The turn
-// ---------------------------------------------------------------------------
-
 /// **The whole loop**: a question, a tool round the model drives, and a prose answer built on
 /// its result — with the events arriving in the order the transcript renders them.
 #[tokio::test]
@@ -308,9 +292,6 @@ async fn a_turn_runs_a_tool_and_answers_from_its_result() {
     );
     let events = drain(&mut running).await;
 
-    // The order the transcript is built in: started, prose, the tool, its settle, more prose,
-    // the settle. A delta after the turn settled would mean the pane could render text under
-    // a finished turn.
     let shape: Vec<&str> = events
         .iter()
         .map(|e| match e {
@@ -335,7 +316,6 @@ async fn a_turn_runs_a_tool_and_answers_from_its_result() {
 
     assert_eq!(deltas(&events), "Let me count them.There are 5 people.");
 
-    // The step card carries the run's own facts.
     let Some(TurnEvent::ToolSettled { facts, failed, .. }) = events.get(settled).cloned() else {
         unreachable!()
     };
@@ -349,9 +329,6 @@ async fn a_turn_runs_a_tool_and_answers_from_its_result() {
 
     assert_eq!(running.settle().await, Settle::Answered);
 
-    // Two round trips, and the second carried the first's result back to the model. The
-    // assertion is on the tool message specifically: a `contains("5")` over the whole body
-    // would match the session uuid, the schemas and the prompt, and so could never fail.
     assert_eq!(stub.requests(), 2);
     let second = stub.request(1);
     let messages = second["messages"].as_array().expect("messages");
@@ -359,18 +336,14 @@ async fn a_turn_runs_a_tool_and_answers_from_its_result() {
         .iter()
         .find(|m| m["role"] == "tool")
         .unwrap_or_else(|| panic!("the tool result never reached the model: {second}"));
-    // Parsed as the model receives it — the tool's own JSON, not a Rust type: `RunResult` is
-    // a wire *result* and serializes only, which is the honest shape to assert against here.
     let answered: Value = serde_json::from_str(tool["content"].as_str().expect("content"))
         .expect("the tool message carries the run's own JSON");
     assert_eq!(answered["status"], "ok");
     assert_eq!(answered["total"], 1);
     assert_eq!(answered["rows"][0][0], "5");
 
-    // And the path and auth the endpoint resolver produced reached the wire.
     let sent = stub.sent(0);
     assert_eq!(sent.path, "/v1/chat/completions");
-    // The empty bearer of the anonymous kind; http trims the trailing space.
     assert_eq!(sent.authorization.as_deref(), Some("Bearer"));
 }
 
@@ -412,7 +385,6 @@ async fn the_model_is_offered_the_manifest_and_offer_sql() {
     assert!(names.contains(&"offer_sql".to_string()), "{names:?}");
     assert_eq!(names.len(), tools.manifest().len() + 1);
 
-    // And the system prompt went with it, byte for byte.
     assert_eq!(
         stub.request(0)["messages"][0]["content"].as_str(),
         Some(strata_agent::assistant::turn::SYSTEM)
@@ -554,7 +526,6 @@ async fn a_policy_refusal_reaches_the_model_and_the_turn_still_answers() {
     assert!(failed);
     assert_eq!(facts.sql.as_deref(), Some("create table t as select 1"));
 
-    // The editor's own words went back to the model.
     let told = stub.request(1).to_string();
     assert!(
         told.contains(&Blocked::CreateTable.editor_message()),
@@ -587,7 +558,6 @@ async fn a_cancel_mid_stream_settles_as_cancelled() {
         Arc::clone(&conversation),
         Ask::new("Take your time."),
     );
-    // Stop as soon as the reply has started arriving.
     while let Some(event) = running.next().await {
         if matches!(event, TurnEvent::Delta(_)) {
             running.stop();
@@ -598,10 +568,6 @@ async fn a_cancel_mid_stream_settles_as_cancelled() {
     assert_eq!(rest.last(), Some(&TurnEvent::Settled(Settle::Cancelled)));
     assert_eq!(running.settle().await, Settle::Cancelled);
 
-    // **The half-answer the user read is what the model remembers.** A stop never reaches the
-    // stream's `End`, so the captured content the turn normally commits from does not exist —
-    // and without the deltas being kept, a stopped turn committed nothing and the next send
-    // carried on from before a question the user can still see the answer to.
     let mut second = assistant.send(
         tools.clone(),
         pointed_at(&stub),
@@ -641,7 +607,6 @@ async fn a_cancel_mid_run_leaves_no_run_in_flight() {
         Uuid::parse_str(&session).unwrap(),
     ));
 
-    // Long enough to still be executing when the stop lands.
     let slow = "select count(*) as n from generate_series(1, 400000000)";
     let stub = stub(vec![
         vec![
@@ -667,9 +632,6 @@ async fn a_cancel_mid_run_leaves_no_run_in_flight() {
     );
     while let Some(event) = running.next().await {
         if matches!(event, TurnEvent::ToolCall { .. }) {
-            // `ToolCall` is emitted *before* the dispatch, so wait for the engine's own state
-            // rather than for a fixed interval — a wall-clock budget is a race on a loaded
-            // machine, and the thing being waited for is observable.
             let deadline = Instant::now() + Duration::from_secs(10);
             while !engine.is_running(ws) {
                 assert!(
@@ -689,7 +651,6 @@ async fn a_cancel_mid_run_leaves_no_run_in_flight() {
         !engine.is_running(ws),
         "a cancelled turn must not leave a run on the engine"
     );
-    // The second request was never made: the turn stopped before it could ask again.
     assert_eq!(stub.requests(), 1);
 }
 
@@ -701,7 +662,6 @@ async fn an_unconfigured_selection_names_its_field_and_never_dials() {
     let stub = stub(vec![vec![says("never asked"), ends("stop")]]).await;
 
     let assistant = Assistant::new().unwrap();
-    // The compatible kind with no base URL: there is no address to call.
     let mut running = assistant.send(
         tools.clone(),
         Selection::new(ProviderKind::OpenAiCompatible, "stub-model"),
@@ -718,14 +678,9 @@ async fn an_unconfigured_selection_names_its_field_and_never_dials() {
         why,
         "OpenAI-compatible needs a base URL. Set one in Settings > AI > Providers."
     );
-    // Nothing was sent, and no partial turn was reported either.
     assert_eq!(stub.requests(), 0);
     assert!(!events.iter().any(|e| matches!(e, TurnEvent::Delta(_))));
 }
-
-// ---------------------------------------------------------------------------
-// The shapes the loop puts on the wire
-// ---------------------------------------------------------------------------
 
 /// How much conversation a send carries. The conversation is opaque on purpose, so what a turn
 /// left in it is observed the way it matters: through the next request. The system prompt is
@@ -773,10 +728,6 @@ async fn a_round_of_parallel_calls_answers_in_one_message() {
 
     let second = stub.request(1);
     let listed = second["messages"].as_array().expect("messages");
-    // **Both calls really arrived**, checked before the property under test: every assertion
-    // below is satisfied trivially by one call, so a fixture that merged the two into one
-    // would report this test passing while proving nothing. It did, once — both chunks shared
-    // a `tool_calls` index, which is the accumulator's identity for a call.
     let called: Vec<String> = listed
         .iter()
         .filter_map(|m| m["tool_calls"].as_array())
@@ -798,8 +749,6 @@ async fn a_round_of_parallel_calls_answers_in_one_message() {
         answered, called,
         "each call is answered once, in order: {second}"
     );
-    // Nothing between the assistant turn and its answers. A round whose results are separated
-    // from their calls is the shape every provider rejects, whatever the framing.
     let calling = listed
         .iter()
         .position(|m| m["tool_calls"].is_array())
@@ -871,7 +820,6 @@ async fn an_empty_reply_fails_the_turn_and_records_nothing() {
         Settle::Failed("The model returned an empty reply.".into())
     );
 
-    // The next send builds on a clean conversation: its own question and nothing else.
     let mut again = assistant.send(
         tools.clone(),
         pointed_at(&stub),
@@ -1020,8 +968,6 @@ async fn a_cancel_retires_the_card_it_opened() {
         panic!("the card opened for the cancelled call was never retired: {seen:?}");
     };
     assert!(!failed, "a stop is not a fault");
-    // The engine's own word for a user cancel — the same vocabulary a stopped `run` reports
-    // through, rather than a sentence typed at this one call site.
     assert_eq!(facts.stopped.as_deref(), Some("cancelled"));
     assert_eq!(running.settle().await, Settle::Cancelled);
 }
@@ -1042,14 +988,11 @@ async fn a_cancel_retires_the_card_it_opened() {
 async fn a_turn_that_stopped_mid_round_is_closed_off() {
     let (_engine, tools) = project("half_round").await;
     let stub = stub(vec![
-        // The first send asks for a tool...
         vec![
             asks(0, "call_1", "list_tables", json!({})),
             ends("tool_calls"),
         ],
-        // ...and the follow-up, carrying its results, dies before saying anything.
         vec![],
-        // The second send.
         vec![says("Fresh."), ends("stop")],
     ])
     .await;
@@ -1078,7 +1021,6 @@ async fn a_turn_that_stopped_mid_round_is_closed_off() {
     );
     drain(&mut second).await;
 
-    // The half round is still there — the user can see it, so the model keeps it...
     let carried = stub.request(2);
     let listed = carried["messages"].as_array().expect("messages");
     let roles: Vec<&str> = listed
@@ -1091,8 +1033,6 @@ async fn a_turn_that_stopped_mid_round_is_closed_off() {
         "the stopped round is kept, not discarded: {roles:?}"
     );
 
-    // ...and the message immediately before the new question is an **assistant** one, never a
-    // tool result. That is the whole invariant: a conversation never ends mid-round.
     let before_question = roles[roles.len() - 2];
     assert_eq!(
         before_question, "assistant",

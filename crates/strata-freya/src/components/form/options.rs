@@ -48,9 +48,6 @@ const SELECT_HEIGHT: f32 = 32.;
 #[derive(Debug)]
 pub struct Make<T, E>(pub fn(T) -> E);
 
-// Hand-written, all three: `derive` would bound them on `T: Clone`/`T: Copy`, and `T` here is
-// the *argument* type — a `Make` is a bare function pointer and copies regardless of what it
-// takes.
 impl<T, E> Clone for Make<T, E> {
     fn clone(&self) -> Self {
         *self
@@ -189,11 +186,8 @@ impl<E: Clone + PartialEq + 'static> OptionList<E> {
 
 impl<E: Clone + PartialEq + 'static> Component for OptionList<E> {
     fn render(&self) -> impl IntoElement {
-        // The shared form list, so the rhythm between rows is the app's and not one window's.
         let mut list = Form::new();
         for group in &self.groups {
-            // Keyed by **scope and** label — see [`OptionList::new`]. The scope is what keeps a
-            // row from being paired with a same-named row belonging to another format.
             let key = format!("{}·{}", self.scope, group.label);
             list = list.child(
                 OptionGroup {
@@ -225,7 +219,6 @@ impl<E: Clone + PartialEq + 'static> KeyExt for OptionGroup<E> {
 impl<E: Clone + PartialEq + 'static> Component for OptionGroup<E> {
     fn render(&self) -> impl IntoElement {
         let on_edit = self.on_edit.clone();
-        // One component per shape — see the module doc on why this isn't a helper fn.
         let control: Element = match self.group.control.clone() {
             Control::Seg { options, custom } => SegControl {
                 options,
@@ -273,8 +266,6 @@ impl<E: Clone + PartialEq + 'static> Component for OptionGroup<E> {
             Control::Note(text) => Note::new(text).into(),
         };
 
-        // The label, its hint and the gap under them are the shared form row's — a surface
-        // contributes only which control goes in it.
         Row::new(self.group.label.clone())
             .map(self.group.hint, Row::hint)
             .child(control)
@@ -295,8 +286,6 @@ struct SegControl<E: Clone + PartialEq + 'static> {
 
 impl<E: Clone + PartialEq + 'static> Component for SegControl<E> {
     fn render(&self) -> impl IntoElement {
-        // The canvas's form control, not the compact toolbar one: roomier segments, gaps
-        // instead of dividers, on the recessed surface.
         let mut pill = SegmentedToggle::new().form();
         for choice in &self.options {
             let edit = choice.edit.clone();
@@ -313,10 +302,6 @@ impl<E: Clone + PartialEq + 'static> Component for SegControl<E> {
             .cross_align(Alignment::Center)
             .spacing(SP_3)
             .child(pill)
-            // The box beside a segmented control is built to the **buttons'** height, not the
-            // 30px every other field uses: they sit side by side in one row, so a box that is
-            // short of its neighbours reads as a mistake whatever the canvas says. Narrow and
-            // centred with them — it holds a token like `\N` or a delimiter, not a sentence.
             .maybe_child(self.custom.clone().map(|field| FieldControl {
                 field,
                 width: CUSTOM_WIDTH,
@@ -345,8 +330,6 @@ impl<E: Clone + PartialEq + 'static> Component for ToggleControl<E> {
             .toggled(self.on)
             .on_toggle(move |()| on_edit.call(edit.clone()));
 
-        // Bare when there is nothing to say, so a caller's own layout lands on the switch
-        // itself rather than on a wrapper that hugs it.
         match self.hint.clone() {
             None => switch.into_element(),
             Some(hint) => rect()
@@ -354,11 +337,6 @@ impl<E: Clone + PartialEq + 'static> Component for ToggleControl<E> {
                 .cross_align(Alignment::Center)
                 .spacing(SP_4)
                 .child(switch)
-                // `Prose` at the ambient colour, which is how the export window sets the
-                // sentence beside its own switch. Not the hint tone: that is the eyebrow's
-                // register, pitched to recede under a control, and this is a sentence the reader
-                // is meant to read — set in it, the row's own explanation is dimmer than the
-                // label above it.
                 .child(Prose::new(hint))
                 .into_element(),
         }
@@ -382,36 +360,14 @@ struct FieldControl<E: Clone + PartialEq + 'static> {
 
 impl<E: Clone + PartialEq + 'static> Component for FieldControl<E> {
     fn render(&self) -> impl IntoElement {
-        // `Input` writes its bound state directly (there is no on-change prop), so the buffer
-        // is the field's and this effect carries it out. No sync-back effect is needed: the
-        // group list is keyed by label, so a format switch unmounts these controls outright and
-        // the next mount re-seeds.
         let text = use_state({
             let initial = self.field.value.clone();
             move || initial
         });
 
         let make = self.field.make;
-        // `use_reactive`, not a capture: `use_side_effect` builds its closure once and an
-        // `EventHandler` has no write-through, so a captured one is the first render's for the
-        // life of the scope. The group list is keyed by label, so a *format* switch remounts this
-        // and hides the problem — but that is the keying being lucky, not the handler being
-        // right. Same rule as `NumberField`'s.
-        //
-        // **Peeked, and here that is load-bearing rather than tidy.** `EventHandler`'s
-        // `PartialEq` is unconditionally `false`, so `use_reactive` writes on every render; a
-        // `read` would subscribe this effect to that write, and this body calls `on_edit`
-        // *unconditionally*. The effect would then fire the surface's edit funnel once per
-        // render, each call writing the draft that causes the next render — a loop where before
-        // there was one call per text change.
         let on_edit = use_reactive(&self.on_edit);
         use_side_effect(move || {
-            // Reported unconditionally: a surface's edit path is idempotent, so a no-op costs
-            // nothing — and comparing here against a captured value is precisely the bug this
-            // shape replaced (`use_side_effect` builds its closure once, so the capture froze
-            // at the first render and typing a field back to its original value wrote nothing).
-            // `ValueField` has already trimmed the state to `max_len`, so this reads what the
-            // box shows.
             on_edit.peek().call(make.edit(text.read().clone()));
         });
 

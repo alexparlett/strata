@@ -5,35 +5,24 @@
 //! nothing needs surgical per-channel updates, because one append wakes exactly one reader (the
 //! Events body, when it is mounted).
 //!
-//! ## Appended by whoever observed the fact
+//! **Appended by whoever observed the fact.** There is no producer hook and there must not be one:
+//! an event is not derivable from anything, so the only layer that can honestly record it is the
+//! one that watched it happen — the catalog scan for each def, Save and the drop confirm for their
+//! own mutations, the tab's request keeper for a Run's outcome (or, for an intercepted statement,
+//! the fold that applies its effect, since only that knows whether the def was written). The
+//! opposite of the diagnostics driver, for the opposite reason: diagnostics are a pure function of
+//! the buffer and the catalog, while a log is a history of things that no longer exist to be
+//! re-read.
 //!
-//! There is no producer hook here and there must not be one — an event is not derivable from
-//! anything, so the only layer that can honestly record it is the one that watched it happen: the
-//! catalog scan records what the engine answered for each def (`state::hooks`), Save and the drop
-//! confirm record their own mutations, and a Run's outcome is recorded by the tab's request keeper
-//! ([`use_run_logging`] — or, for an intercepted statement, by the fold that applies its effect,
-//! `state::statement`, since only that knows whether the def was written), which is already
-//! mounted for the press's whole life. That is the opposite
-//! of the diagnostics driver (AGENTS.md §2) and for the opposite reason: diagnostics are a pure
-//! function of the buffer and the catalog, so a reconciliation can re-derive them; a log is a
-//! history of things that no longer exist to be re-read.
+//! **Ephemeral, and never a second copy.** Nothing here is persisted and nothing here is the *only*
+//! copy of anything — a registration failure lives on its catalog row, a run failure in that run's
+//! own query entry. The log is the **record that they happened**, in one place and in order, which
+//! is what no surface showing live state can give.
 //!
-//! ## Ephemeral, and never a second copy
-//!
-//! Nothing here is persisted (unlike history's `history.jsonl`) and nothing here is the *only*
-//! copy of anything: a registration failure lives on its catalog row, a run failure lives in the
-//! run's own freya-query entry and is rendered in full by the results pane. The log is the
-//! **record that they happened**, in one place and in order, which is the one thing no surface
-//! showing live state can give.
-//!
-//! ## No `origin` field
-//!
-//! state-arch §8 sketched a level *and an origin* per entry. The level is real — it is the dot's
-//! colour and an error's message tone. The origin is not: every message already names what it is
-//! about ("Registered table 'users'", "Dropped view 'daily'"), so a structured copy of the same
-//! thing would be a second copy that can disagree with the sentence beside it — the reason a
-//! `Diagnostic` carries no `TabId` (P3-12) — and nothing filters the list today. A filter, or a
-//! toast host that wants "recent warn+", can add the field when it is the thing being built.
+//! **No `origin` field.** The level is real: the dot's colour and an error's message tone. An
+//! origin is not, because every message already names what it is about, so a structured copy could
+//! disagree with the sentence beside it — the reason a `Diagnostic` carries no `TabId`. A filter,
+//! or a toast host wanting "recent warn+", can add the field when it is the thing being built.
 
 use std::collections::VecDeque;
 
@@ -156,10 +145,6 @@ pub fn use_run_logging(query: UseQuery<RunQuery>) {
         if *logged.peek() {
             return;
         }
-        // Resolved while the query's borrow is held, released before the append (the same shape
-        // `use_history_recording` uses). Two `Option`s deep on purpose: the outer says whether it
-        // settled, the inner whether this settle is *this* observer's to record — collapsing them
-        // would leave a statement's settle re-asking on every later render.
         let settled = match &*query.read().state() {
             QueryStateData::Settled { res, .. } => Some(run_event(res)),
             _ => None,
@@ -201,9 +186,6 @@ fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
                 page.output.elapsed_ms
             ),
         ),
-        // The plan says whether it was an `EXPLAIN ANALYZE`, so nothing has to be threaded from
-        // the press to tell the two apart — and they are worth telling apart: analyze runs the
-        // query, plain explain does not.
         Ok(QueryOutcome::Plan(plan)) => (
             LogLevel::Ok,
             match plan.analyze {
@@ -215,7 +197,6 @@ fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
             LogLevel::Warning,
             match e.as_str() {
                 CANCELLED => "Query cancelled".into(),
-                // Sentence-cased rather than restated, so the engine keeps owning the wording.
                 stopped => format!("Query {stopped}"),
             },
         ),
@@ -266,8 +247,6 @@ mod tests {
         assert_eq!(log.len(), 1);
         log.clear();
         assert_eq!(log.len(), 0);
-        // …and the next event still gets a fresh key: sequence numbers count appends, not rows,
-        // so an event added after a Clear can't collide with a cleared row's scope.
         log.push(LogLevel::Ok, "again");
         assert_eq!(log.events().next().unwrap().seq, 2);
     }

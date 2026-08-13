@@ -37,11 +37,12 @@ impl Component for ConnectionBody {
             ScrollView::new()
                 .width(Size::fill())
                 .height(Size::fill())
-                .child(rect().width(Size::fill()).padding(BODY_PADDING).child(
-                    // The fields are a `Form` of their own, so the status block below them
-                    // is separated by the same rhythm as any two rows.
-                    Form::new().child(Fields).child(StatusBlock),
-                )),
+                .child(
+                    rect()
+                        .width(Size::fill())
+                        .padding(BODY_PADDING)
+                        .child(Form::new().child(Fields).child(StatusBlock)),
+                ),
         )
     }
 }
@@ -58,7 +59,6 @@ impl Component for ConnectionBody {
 /// is already settled when the window opens, and without the gate that would close the window at
 /// mount.
 pub fn use_watch_connection(mut ctx: ConnectionCtx) {
-    // Subscribes to the connections channel — the only thing this window watches over there.
     let project = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
     let platform = use_hook(Platform::get);
 
@@ -74,8 +74,6 @@ pub fn use_watch_connection(mut ctx: ConnectionCtx) {
             })
         });
         match answer.flatten() {
-            // Still connecting, or the row went while we waited (a Forget from the pane) —
-            // either way there is nothing for this window to say.
             None => {}
             Some(Ok(())) => platform.close_current_window(),
             Some(Err(why)) => ctx.status.set(Status::Failed(why)),

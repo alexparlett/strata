@@ -134,7 +134,6 @@ impl ProfileActions {
             .request_profile(kind, name)
             .is_none()
         {
-            // The row went between the press and here — nothing to scan.
             return;
         }
         self.reveal(kind, name);
@@ -178,8 +177,6 @@ impl ProfileActions {
                 path: vec![first],
             }));
         }
-        // Guarded: a write notifies whether or not it changed anything, and there is no reason
-        // to re-render the shell for a panel that is already open.
         let mut session = self.session;
         if session.peek().layout.right != Some(RightPane::Inspector) {
             session
@@ -225,9 +222,6 @@ impl Component for ProfileConfirm {
         let roles = use_roles();
         let warning = tones().warning;
 
-        // Shared by the button and the Enter key, so it holds only `Copy` handles and shadows
-        // `slot` inside — a closure that captured the outer `mut` binding would be `FnMut`, and
-        // the two handlers can't both take it.
         let confirm = move |()| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
@@ -240,8 +234,6 @@ impl Component for ProfileConfirm {
             return rect().into_element();
         };
 
-        // The action over its subject — the close and drop confirms' shape exactly: the name is
-        // mono on its own line, where it reads as the identifier it is.
         let title = rect()
             .width(Size::fill())
             .vertical()
@@ -255,8 +247,6 @@ impl Component for ProfileConfirm {
         Dialog::new()
             .on_dismiss(move |()| slot.set(None))
             .on_confirm(confirm)
-            // Warning-toned, like the canvas: this is a question about work the user is about to
-            // pay for, not a destructive one.
             .header(DialogHeader::new(IconName::Warning, warning, title))
             .body(
                 Prose::new(target.body())
@@ -270,19 +260,14 @@ impl Component for ProfileConfirm {
                     .child(Control::new("Cancel")),
             )
             .action(
-                Button::new()
-                    // The stock filled dress — accent over inverse text, like the scan card's
-                    // own button and the Run control.
-                    .filled()
-                    .on_press(move |_| confirm(()))
-                    .child(
-                        rect()
-                            .horizontal()
-                            .cross_align(Alignment::Center)
-                            .spacing(SP_3)
-                            .child(Icon::new(IconName::Chart).size(13.))
-                            .child(Control::new("Run scan")),
-                    ),
+                Button::new().filled().on_press(move |_| confirm(())).child(
+                    rect()
+                        .horizontal()
+                        .cross_align(Alignment::Center)
+                        .spacing(SP_3)
+                        .child(Icon::new(IconName::Chart).size(13.))
+                        .child(Control::new("Run scan")),
+                ),
             )
             .into_element()
     }
@@ -457,8 +442,6 @@ mod tests {
         p.request_profile(CatalogKind::Table, "events");
         assert!(!needs_confirm(&p, CatalogKind::Table, "events"));
 
-        // Invalidation puts the question back: the numbers are gone, so this is a first scan
-        // again.
         p.table_registered(
             "events",
             TableMeta {
@@ -492,8 +475,6 @@ mod tests {
     #[test]
     fn running_the_scan_records_the_request_and_reveals_the_entry() {
         let (mut runner, (mut slot, project, mut session, selection)) = runner();
-        // The layout starts with the inspector open, so close it — a scan asked for from a
-        // catalog row has to be able to *reveal* the panel, not merely find it up.
         session.write_channel(Chan::Layout).close_right_pane();
         open(&mut runner, &mut slot, CatalogKind::Table, "events");
 

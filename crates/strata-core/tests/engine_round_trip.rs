@@ -37,21 +37,17 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
     assert_eq!(output.columns.len(), 3);
     assert_eq!(batch.num_rows(), 2);
 
-    // Page reads target the snapshot: bounded windows, exact tail.
     let (rows, _) = eng.fetch_page(snapshot, 2, 2, None).await.expect("page 2");
     assert_eq!(rows.len(), 2);
     let (rows, _) = eng.fetch_page(snapshot, 3, 2, None).await.expect("page 3");
     assert_eq!(rows.len(), 1);
 
-    // Same read again — the snapshot is immutable, so the same key yields the same rows
-    // (this is what makes the UI-side cache keyed by (snapshot, page, …) sound).
     let (again, _) = eng
         .fetch_page(snapshot, 3, 2, None)
         .await
         .expect("page 3 again");
     assert_eq!(rows[0][0].text, again[0][0].text);
 
-    // A sorted read orders over the WHOLE snapshot before the page window.
     let (sorted, _) = eng
         .fetch_page(snapshot, 1, 2, Some(("column1".into(), false)))
         .await
@@ -97,7 +93,6 @@ async fn workspaces_are_independent_and_cleanup_retires() {
     let (snap_a, snap_b) = (a.snapshot.unwrap(), b.snapshot.unwrap());
     assert_ne!(snap_a, snap_b);
 
-    // Closing one tab retires only its snapshot.
     eng.cleanup_ws(ws(1));
     eng.fetch_page(snap_a, 1, 2, None)
         .await
@@ -128,7 +123,6 @@ async fn a_failed_run_errors_and_keeps_nothing() {
     eng.query(ws(1), tag(1), "SELECT * FROM no_such_table".into(), 2)
         .await
         .expect_err("unknown table fails");
-    // DDL/DML are blocked by policy at the engine boundary.
     eng.query(ws(1), tag(2), "CREATE TABLE t (a INT)".into(), 2)
         .await
         .expect_err("DDL is blocked");
@@ -137,11 +131,9 @@ async fn a_failed_run_errors_and_keeps_nothing() {
 #[tokio::test]
 async fn cancel_is_scoped_to_the_dispatched_run() {
     let eng = engine();
-    // Nothing in flight → a stale cancel is a no-op.
     assert!(eng.cancel(ws(1), tag(99)).is_none());
 
     let (output, _) = eng.query(ws(1), tag(1), SQL.into(), 2).await.expect("run");
     assert!(output.snapshot.is_some());
-    // The run settled, so its tag no longer cancels anything.
     assert!(eng.cancel(ws(1), tag(1)).is_none());
 }

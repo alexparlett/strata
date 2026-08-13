@@ -198,7 +198,6 @@ fn run_width(
             slots += 1;
         }
     }
-    // The trigger is a control like any other in this row, so it costs what they cost.
     if overflowing {
         total += control;
         slots += 1;
@@ -223,7 +222,6 @@ fn fold_plan(items: &[ToolbarItem], available: f32, spacing: f32, control: f32) 
         return keep;
     }
 
-    // Something has to go, so the trigger is part of the bill from here on.
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|&i| (items[i].fold_rank(), Reverse(i)));
 
@@ -353,8 +351,6 @@ impl Toolbar {
 
 impl Component for Toolbar {
     fn render(&self) -> impl IntoElement {
-        // The row's measured width. Local, per-mount and derived -- see the module docs on why it
-        // is deliberately nowhere near the session store.
         let mut measured = use_state(|| f32::INFINITY);
         let roles = use_roles();
         let (border, danger, accent) = (
@@ -363,10 +359,6 @@ impl Component for Toolbar {
             roles.get(Role::Accent),
         );
 
-        // Every action's tooltip, with its live chord appended. Resolved here rather than per
-        // action because `use_hint_title` is a hook and the item list is a variable length —
-        // one config read, then the pure `hint_title` per item. Reactive, so a rebind repaints
-        // every tooltip in the row. The guard drops before any element is built.
         let config = use_config(ConfigChan::Settings);
         let titles: Vec<String> = {
             let settings = &config.read().settings;
@@ -382,12 +374,6 @@ impl Component for Toolbar {
                 .collect()
         };
 
-        // What the items may spend: the row, less its padding, its pinned tail and the floor the
-        // leading run keeps.
-        //
-        // The head's gap is charged unconditionally, because the row always *has* a head — the
-        // caller's leading run, or the flex spacer that stands in for it below. Charging it only
-        // for a stated `leading` left a spacer-headed row one gap short of what it lays out.
         let tail_gap = if self.pinned.is_some() {
             self.spacing
         } else {
@@ -408,7 +394,6 @@ impl Component for Toolbar {
             .map(|(item, _)| item.inner().clone())
             .collect();
 
-        // Kept items render in their declared order, whatever order they would have folded in.
         let inline = self
             .items
             .iter()
@@ -432,8 +417,6 @@ impl Component for Toolbar {
             .width(Size::fill())
             .height(Size::px(self.height))
             .horizontal()
-            // Flex, so the leading run is what absorbs the slack rather than the row hugging its
-            // content and pushing the tail off the panel.
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .spacing(self.spacing)
@@ -445,8 +428,6 @@ impl Component for Toolbar {
                 measured.set_if_modified(e.area.width());
             })
             .maybe_child(self.leading.clone())
-            // With no leading run the items still have to be pushed to the tail, or a flex row
-            // spreads them across the whole width.
             .maybe(self.leading.is_none(), |el| {
                 el.child(rect().width(Size::flex(1.)))
             })
@@ -484,7 +465,6 @@ fn action_button(
                 .hover_border_fill(danger.with_a(115))
                 .hover_color(danger)
         })
-        // The comp's `on` dress: accent icon over accent-tinted fill and border (13% / 55%).
         .maybe(action.active, |b| {
             b.background(accent.with_a(33))
                 .border_fill(accent.with_a(140))
@@ -493,8 +473,6 @@ fn action_button(
         .map(action.on_press.clone(), Button::on_press)
         .child(Icon::new(action.icon).size(15.));
 
-    // `title`, not `label`: it carries the action's live chord (see `Toolbar::render`), which is
-    // what `ToolbarAction::hint` promises the tooltip shows.
     TooltipContainer::new(Tooltip::new_text(title.to_string()))
         .position(AttachedPosition::Bottom)
         .child(button)
@@ -520,8 +498,6 @@ impl Component for OverflowMenu {
                     MenuButton::new()
                         .enabled(action.enabled)
                         .on_press(move |e: Event<PressEventData>| {
-                            // The toolbar closes its own menu: a press lands *inside* it, so
-                            // nothing else would.
                             open.set(false);
                             if let Some(on_press) = &on_press {
                                 on_press.call(e);
@@ -641,7 +617,6 @@ mod tests {
     #[test]
     fn items_fold_from_the_tail_as_the_row_narrows() {
         let items = actions(6);
-        // What `n` inline items cost once the `⋯` trigger is on the bill beside them.
         let with_trigger = |n: usize| run(n) + SPACING + OVERFLOW_W;
 
         assert_eq!(kept_indices(&items, run(6)), vec![0, 1, 2, 3, 4, 5]);
@@ -744,8 +719,6 @@ mod tests {
             "and the default binding is appended: {bound}"
         );
 
-        // The menu row renders the bare label beside a `KeyHint` for the same command, so what a
-        // call site hands in must be the bare label — never one that already carries the chord.
         let action = ToolbarAction::new(IconName::Save, "Save query").hint(Command::SaveQuery);
         assert_eq!(
             action.label, "Save query",
@@ -762,7 +735,6 @@ mod tests {
     #[test]
     fn a_header_row_folds_against_its_own_control_size() {
         let items = actions(4);
-        // Four 24px controls with 8px gaps: 4*24 + 3*8 = 120.
         let header_run = HEADER_CONTROL * 4. + SPACING * 3.;
 
         assert_eq!(
@@ -788,8 +760,6 @@ mod tests {
     #[test]
     fn a_higher_rank_outlives_the_items_ahead_of_it() {
         let action = || ToolbarItem::Action(ToolbarAction::new(IconName::Save, "Save"));
-        // Ranked at 1 and 4, so the survivors are neither at the head nor at the tail -- position
-        // cannot be what keeps them.
         let items = vec![
             action(),
             action().rank(1),

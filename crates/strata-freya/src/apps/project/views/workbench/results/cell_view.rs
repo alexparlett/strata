@@ -93,11 +93,6 @@ impl Component for ValueTreeBody {
         );
         let palette = type_palette();
         let mut open = self.open;
-        // Derived on every render rather than memoized. `use_memo` settles *asynchronously*, so a
-        // toggle would paint the previous rows for a frame — the trap `record_view`'s `PreviewMemo`
-        // and `find`'s `PageMemo` both exist to avoid. The walk visits only what is open, so it is
-        // proportional to what is on screen; a synchronous cache is the way to trim it if the
-        // re-walk on an unrelated render (the ✕'s hover lives on `CellView`) ever shows up.
         let rows = Rc::new(self.model.rows());
 
         Tree::new_with_data(rows.clone(), move |index, rows: &Rc<Vec<TreeRow>>| {
@@ -120,8 +115,6 @@ impl Component for ValueTreeBody {
                                 .horizontal()
                                 .cross_align(Alignment::Center)
                                 .spacing(SP_3)
-                                // A list item has no name, so it is titled by its index — the
-                                // subscript a reader would write to reach it.
                                 .child(MonoValue::new(match &node.key {
                                     Some(key) => key.clone(),
                                     None => format!("[{}]", node.index),
@@ -142,10 +135,7 @@ impl Component for ValueTreeBody {
                         )
                         .into()
                 }
-                // The tail of a paged container. A leaf as far as the tree is concerned — it opens
-                // nothing, it reveals more of its owner.
                 RowKind::More { label, .. } => {
-                    // The tail sits at its container's path, so that is what widens.
                     let owner = row.path.clone();
                     TreeItem::new()
                         .depth(row.depth)
@@ -198,7 +188,6 @@ impl Component for CellView {
         let mut open = self.open;
         let close = move |_: Event<PressEventData>| open.set(None);
 
-        // Header: cell name (mono 12.5) + the cyan dtype badge + ghost close.
         let header = rect()
             .width(Size::fill())
             .horizontal()
@@ -235,9 +224,6 @@ impl Component for CellView {
                     ),
             );
 
-        // Body: the value tree. Its height is stated rather than hugged — a `VirtualScrollView`
-        // needs a viewport to virtualize against, and this is the surface that has to stay cheap
-        // with 19,311 siblings in one node.
         let (card_w, card_h) = CARD_SIZE;
         let body = rect()
             .width(Size::fill())
@@ -265,10 +251,6 @@ impl Component for CellView {
             .child(Divider::horizontal().color(theme.divider_fill))
             .child(body);
 
-        // The overlay layer + global position lift the modal above the window content
-        // (the `CloseConfirm` / `PopupBackground` wrapper), hand-rolled here for the
-        // canvas's backdrop blur. The backdrop press closes; presses on the card land on
-        // its own nodes and never reach the backdrop.
         rect()
             .layer(Layer::Overlay)
             .position(Position::new_global())
@@ -352,22 +334,18 @@ mod interaction {
             1.,
         );
         runner.sync_and_update();
-        runner.click_cursor((450., 350.)); // centre of the centred card
+        runner.click_cursor((450., 350.));
         runner.sync_and_update();
         assert!(
             open.peek().is_some(),
             "a press inside the card must not dismiss"
         );
-        runner.click_cursor((30., 30.)); // the backdrop
+        runner.click_cursor((30., 30.));
         runner.sync_and_update();
         assert!(open.peek().is_none(), "a backdrop press dismisses");
-        // Reopen and dismiss via the ✕ (top-right of the header).
         let mut open = open;
         open.set(Some(value()));
         runner.sync_and_update();
-        // The ✕, top-right of the header — derived from the card's size rather than written down,
-        // because the card is resizable now and a hardcoded corner has broken twice already.
-        // Header: 12px padding over a 28px button, so its middle is 26px below the card's top.
         let (w, h) = CARD_SIZE;
         let (left, top) = ((WINDOW.0 - w) / 2., (WINDOW.1 - h) / 2.);
         runner.click_cursor(((left + w - 16. - 14.) as f64, (top + 26.) as f64));
@@ -402,12 +380,11 @@ mod tests {
     #[test]
     fn unfiltered_rows_map_straight_through() {
         assert_eq!(page_batch_row(None, 0, 3), 3);
-        assert_eq!(page_batch_row(None, 200, 3), 3); // row_base only matters when filtered
+        assert_eq!(page_batch_row(None, 200, 3), 3);
     }
 
     #[test]
     fn filtered_rows_map_back_through_their_gutter_numbers() {
-        // Page 2 of 100/page: survivors kept absolute numbers 101 and 103 → batch rows 0 and 2.
         let nums = vec![101, 103];
         assert_eq!(page_batch_row(Some(&nums), 100, 0), 0);
         assert_eq!(page_batch_row(Some(&nums), 100, 1), 2);

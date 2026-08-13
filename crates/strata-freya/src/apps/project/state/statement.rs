@@ -76,16 +76,12 @@ pub fn use_settle() -> Settle {
 /// `RequestPin` (`views::keeper`).
 pub fn use_statement_settle(query: UseQuery<RunQuery>) {
     let to = use_settle();
-    // Not on `Settle`: an `Arc` handle would cost that struct its `Copy` for the sake of one arm.
     let engine = use_consume::<EngineCtx>();
     let mut applied = use_state(|| false);
     use_side_effect(move || {
         if *applied.peek() {
             return;
         }
-        // Cloned out while the query's borrow is held and released before anything writes — the
-        // shape `use_history_recording` uses, and here it is load-bearing: the fold takes write
-        // guards on stores this component's own render read from.
         let settled = match &*query.read().state() {
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Statement(report)),
@@ -97,8 +93,6 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
             return;
         };
         applied.set(true);
-        // Ignored here: this pane has nothing to close on the answer, and a failed write has
-        // already reported itself through the faults funnel.
         let _ = settle(to, &engine, &report);
     });
 }
@@ -119,9 +113,6 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
 /// results pane has nothing to close and `persisted_defs` has already reported the cause — but
 /// the Configure window's Save does not (`configure::views::footer`).
 pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool {
-    // No effect is not a failure: a `SET` and a `COPY` change the session and the disk
-    // respectively and nothing the catalog holds, so there is nothing to persist and the report
-    // stands on its own.
     let landed = match &report.effect {
         None => true,
         Some(effect) => apply(to, engine, effect),
@@ -142,37 +133,16 @@ pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool 
 /// arm added by a later ED task cannot forget either half, because it never writes either half.
 fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
     match effect {
-        // A registered table: the def and the answer land together, so the sidebar row goes
-        // straight to `Reg::Ready` rather than flashing `Loading` for a registration that is
-        // already done.
-        //
-        // **The views over it are a second question, and it is the scan driver's.** Re-creating
-        // a table does not re-plan the views above it — their plans captured the old provider by
-        // `Arc` (D10/D11) — so a `CREATE OR REPLACE TABLE` that changes the schema leaves every
-        // view over it executing the old one against the new files, and the user gets a raw
-        // Arrow "column types must match schema types" from a view they did not touch. The same
-        // request also serves the other direction: a `CREATE TABLE` that finally provides the
-        // name a failing view was missing brings that view back, which is exactly what
-        // `views_to_refresh` widens to. Asked through `refresh_table` rather than re-derived
-        // here — one funnel decides which views a table's arrival disturbs, and the row Refresh
-        // already is it.
         StoreEffect::TableUpserted { def, meta } => {
             let landed = mutated(to, ProjChan::Tables, |p| {
                 p.upsert_table(def.clone());
                 p.table_registered(&def.name, meta.clone());
             });
-            // Only when there is something to re-create: the pass would otherwise flip this
-            // table's own row back to `Loading` for a registration that just answered, on the
-            // ordinary CTAS into a project with no views at all.
             if !to.project.peek().views_to_refresh(&def.name).is_empty() {
                 refresh_table(to.rescan, def.name.clone());
             }
             landed
         }
-        // `dependents` are named in the report's own sentence and deliberately **not** cascaded:
-        // a `ViewTable`'s inlined plan goes on executing until reload, so nothing here is stale
-        // yet — and the epoch bump makes every tab's diagnostics re-derive at once, which is the
-        // surface that actually tells the user.
         StoreEffect::TableRemoved { name, .. } => mutated(to, ProjChan::Tables, |p| {
             p.remove_table(name);
         }),
@@ -183,19 +153,10 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
         StoreEffect::ViewRemoved { name } => mutated(to, ProjChan::Views, |p| {
             p.remove_view(name);
         }),
-        // The data moved, the def did not — and **only** the data. Still read from the files,
-        // never added up from what the statement claimed, but read without re-registering: a
-        // re-scan replaces the provider, which is the one thing that makes the views above it
-        // stale (D10/D11) and the only reason a table Refresh re-creates them. An append cannot
-        // change the shape they captured, so `refresh_table_rows` asks the engine for this row's
-        // count and lands it, and every view is left alone.
         StoreEffect::RescanTable { name } => {
             refresh_table_rows(engine.clone(), to.project, name.clone());
             true
         }
-        // Nothing persists (functions and prepared statements are both session-scoped) and no row
-        // changes, but names that did not resolve a moment ago now do — and diagnostics and
-        // completion both resolve against the engine.
         StoreEffect::FunctionsChanged | StoreEffect::PreparedChanged => {
             catalog_settled(to.catalog);
             true
@@ -301,8 +262,6 @@ mod tests {
         let Some(StoreEffect::TableUpserted { def, .. }) = created.effect.clone() else {
             panic!("{:?}", created.effect);
         };
-        // The files now hold two rows; the store still says one, exactly as the sidebar does
-        // between the press and the answer.
         let inserted = statement(&engine, "INSERT INTO t VALUES (2)");
         assert_eq!(inserted.count, Some(1), "the statement itself landed");
 
@@ -354,8 +313,6 @@ mod tests {
         };
         assert_eq!(rows(&project), Some(1), "the row before the fold answers");
 
-        // The engine round trip lands a wake later, so this waits for it rather than assuming
-        // one tick is enough.
         for _ in 0..200 {
             runner.sync_and_update();
             if rows(&project) == Some(2) {

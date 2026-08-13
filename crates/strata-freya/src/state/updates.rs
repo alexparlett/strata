@@ -12,28 +12,19 @@
 //! nothing had checked. The thing that does outlive the run is the *staged bundle*, which is a
 //! file on disk rather than a value in here.
 //!
-//! # A worker outlives the window that started it
+//! **A worker outlives the window that started it.** The blocking calls run on a thread of their
+//! own ([`crate::task::offload`]), but a task is bound to its window's root scope and a workspace
+//! window can go away mid-job — the launcher closes the moment a project opens. So the worker parks
+//! the settled status in [`SETTLED`] and whoever reaches it first takes it, either the awaiting
+//! task or the next window to mount ([`use_updates`]). Nothing polls, because there is always a
+//! workspace window and its mount is the second wake. That matters most for a download, which ends
+//! in a verified bundle on disk that losing the answer would orphan.
 //!
-//! The blocking calls run on a thread of their own ([`crate::task::offload`]), like every other
-//! network call in this app. But a task is bound to its window's root scope, and a workspace
-//! window can go away mid-job — the launcher closes the moment a project opens. So the answer
-//! is not sent only to the task that is waiting for it: the worker parks the settled status in
-//! [`SETTLED`], and whoever reaches it first takes it, either the awaiting task or the next
-//! window to mount ([`use_updates`]). Nothing polls, because there is always a workspace window
-//! and its mount is the second wake.
-//!
-//! That matters most for a download: it is a third of a gigabyte and it ends in a verified
-//! bundle on disk, so losing the answer would orphan the whole thing.
-//!
-//! # The install is a quit
-//!
-//! A running app's bundle is never mutated. The press records the swap in [`PENDING`] — a
-//! process-global, because it has to outlive every window and every scope — and calls the
-//! ordinary [`quit`](crate::platform::quit). Every close confirm keeps its say and the open set
-//! persists exactly as on any quit; a quit that is then cancelled clears the intent through
-//! [`abandon_install`], which `end_quit` calls, so the staged bundle is still there and the
-//! status is still `Ready`. The swap itself happens in `main`, after `launch` has returned and
-//! no window is left ([`install_pending`]).
+//! **The install is a quit.** A running app's bundle is never mutated: the press records the swap
+//! in [`PENDING`] — a process-global, because it outlives every window and scope — and calls the
+//! ordinary [`quit`](crate::platform::quit), so every close confirm keeps its say. A cancelled quit
+//! clears the intent through [`abandon_install`], leaving the staged bundle and a `Ready` status.
+//! The swap happens in `main`, after `launch` returns and no window is left.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -184,8 +175,6 @@ pub fn download(status: UpdateStatus) {
     let job = offload(move || {
         let mut reported = 0u64;
         let settled = match update::download_blocking(&asset, |got, total| {
-            // Throttled on the worker, which is the cheap side of the wire. The last report
-            // always goes through, so the bar finishes.
             if got == 0 || got - reported >= PROGRESS_STEP || Some(got) == total {
                 reported = got;
                 let _ = progress.unbounded_send((got, total));
@@ -233,8 +222,6 @@ pub fn install(status: UpdateStatus) {
         _ => return,
     };
     let Site::Writable(target) = install_site() else {
-        // UP-03's surfaces offer the release page rather than this press when the site is not
-        // writable, so arriving here means the site changed under a running app.
         status.set(failed(
             "Strata cannot be replaced where it is installed. Open the release page to install \
              the update by hand.",
@@ -293,21 +280,12 @@ pub fn install_pending() {
 pub fn use_updates(status: UpdateStatus, config: ConfigStation) {
     use_side_effect(move || {
         reconcile(status);
-        // **Inert outside a bundle.** A `cargo run` build is not an installation, so it neither
-        // nags nor offers — and the site is what says so, not a debug assertion.
         if install_site().bundle().is_none() {
             return;
         }
-        // Peeked, not read: this is a decision made once at startup, and a window that
-        // re-derived it every time the setting moved would check again mid-session. The
-        // setting gates only the automatic check — UP-03's menubar item calls [`check`]
-        // whatever it says, which is why its row is titled "on startup".
         if !config.peek().settings.check_updates {
             return;
         }
-        // One check per process launch, not per window. No timer: a long-running app not
-        // learning of a release until the next launch is the accepted cost (the workstream's
-        // "check at startup + on demand, no timer").
         if CHECKED.swap(true, Ordering::SeqCst) {
             return;
         }

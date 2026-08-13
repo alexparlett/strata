@@ -40,7 +40,6 @@ pub fn export_chat(chat: &Chat, log: LogCtx) {
             .save_file()
             .await
             .map(|handle| handle.path().to_path_buf());
-        // Dismissing the dialog is a decision, not a failure — nothing to report.
         let Some(path) = picked else {
             return;
         };
@@ -52,8 +51,6 @@ pub fn export_chat(chat: &Chat, log: LogCtx) {
                 format!("Exported chat to {}", path.display()),
             ),
             Some(Err(why)) => log_event(log, LogLevel::Error, format!("Chat export failed: {why}")),
-            // The window went away with the write in flight. The file still landed; there is no
-            // log left to say so in.
             None => {}
         }
     });
@@ -87,8 +84,6 @@ pub fn markdown(chat: &Chat) -> String {
                 for block in &reply.blocks {
                     out.push('\n');
                     match block {
-                        // Already markdown, and the assistant's own — passed through rather than
-                        // re-wrapped.
                         Block::Prose(text) => {
                             out.push_str(text);
                             out.push('\n');
@@ -99,9 +94,6 @@ pub fn markdown(chat: &Chat) -> String {
                         }
                     }
                 }
-                // **A stopped turn exports as stopped.** The settle's own sentence, so a
-                // conversation read months later says what happened to it rather than trailing
-                // off mid-answer with no explanation.
                 if let Some(note) = &reply.note {
                     out.push_str(&format!("\n_{note}_\n"));
                 }
@@ -123,8 +115,6 @@ fn step_line(step: &Step) -> String {
     if let Some(ms) = step.facts.elapsed_ms {
         facts.push(format!("{ms} ms"));
     }
-    // A stop is not a failure and must not be dressed as one — the engine's own wording, the
-    // same one the card carries.
     if let Some(stopped) = &step.facts.stopped {
         facts.push(stopped.clone());
     } else if step.failed == Some(true) {

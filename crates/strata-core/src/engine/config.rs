@@ -51,14 +51,6 @@ pub struct EngineKey {
 /// The curated catalog — the DataFusion `ConfigOptions` + `runtime.*` keys we document,
 /// in display order (grouped by namespace).
 pub const ENGINE_KEYS: &[EngineKey] = &[
-    // catalog — `default_catalog` / `default_schema` are deliberately absent: the app
-    // owns those names, see `is_owned_key`.
-    // `information_schema` is the one key whose default is **Strata's** rather than
-    // DataFusion's (which is `false`): `build_context` turns it on so `SHOW TABLES` works on a
-    // fresh project (it rewrites to `SELECT * FROM information_schema.tables` and errors when
-    // the key is off), and `engine::providers` is what makes that safe by hiding the result
-    // snapshots from every enumeration. Named `true` here so a *removed* override lands back
-    // on what the engine was built with rather than on DataFusion's.
     EngineKey {
         key: "datafusion.catalog.information_schema",
         default: "true",
@@ -71,7 +63,6 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Bool,
         desc: "Allow newlines inside quoted CSV values (may reduce scan performance).",
     },
-    // execution
     EngineKey {
         key: "datafusion.execution.batch_size",
         default: "8192",
@@ -193,7 +184,6 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Enum(&["none", "chunk", "page"]),
         desc: "(writing) Statistics level: none, chunk, or page.",
     },
-    // optimizer
     EngineKey {
         key: "datafusion.optimizer.prefer_hash_join",
         default: "true",
@@ -272,7 +262,6 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Int { min: 0 },
         desc: "Max bytes of one HashJoin side collected into a single partition.",
     },
-    // explain
     EngineKey {
         key: "datafusion.explain.logical_plan_only",
         default: "false",
@@ -303,7 +292,6 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Enum(&["indent", "tree"]),
         desc: "EXPLAIN display format: indent or tree.",
     },
-    // sql_parser
     EngineKey {
         key: DIALECT_KEY,
         default: "generic",
@@ -347,7 +335,6 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Int { min: 1 },
         desc: "Recursion depth limit when parsing complex SQL.",
     },
-    // format
     EngineKey {
         key: "datafusion.format.null",
         default: "NULL",
@@ -384,7 +371,6 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Enum(&["pretty", "iso8601"]),
         desc: "Duration rendering: pretty or ISO8601.",
     },
-    // runtime (restart-required — configure the RuntimeEnv, fixed at engine start)
     EngineKey {
         key: "datafusion.runtime.memory_limit",
         default: "",
@@ -410,24 +396,12 @@ pub const ENGINE_KEYS: &[EngineKey] = &[
         kind: Kind::Bytes,
         desc: "Memory for the file-metadata cache (e.g. Parquet metadata).",
     },
-    // **Off, which is Strata's default and not DataFusion's** (whose is 1M with no TTL). A
-    // table's file set is live here: a re-scan is defined as re-listing the sources, and the
-    // catalog's Refresh, the Configure window's re-inference and an internal table's own
-    // `CREATE OR REPLACE` all depend on the next listing seeing what is on disk now. A cache
-    // that never expires makes every one of those return the previous answer, silently. It stays
-    // a *default* rather than an owned key — a project over a slow bucket with a fixed file set
-    // is exactly what it is for — and `build_runtime` reads this entry, so a removed override
-    // lands back on off rather than on DataFusion's 1M.
     EngineKey {
         key: "datafusion.runtime.list_files_cache_limit",
         default: "0",
         kind: Kind::Bytes,
         desc: "Memory for the list-files cache. 0 re-lists sources on every scan. Suffixes K/M/G.",
     },
-    // The condition is stated in the description because it is real: `CacheManager::try_new`
-    // builds no cache at all while the limit above is `0`, so a TTL set on its own configures
-    // nothing. Saying so is what keeps a catalogue entry a promise — the alternative, having a
-    // TTL silently switch the cache on, would make one key change another's meaning.
     EngineKey {
         key: "datafusion.runtime.list_files_cache_ttl",
         default: "",
@@ -469,7 +443,6 @@ pub fn is_owned_key(name: &str) -> bool {
         name.trim(),
         "datafusion.catalog.default_catalog"
             | "datafusion.catalog.default_schema"
-            // Planner source spans feed the editor's diagnostics (P2-18).
             | "datafusion.sql_parser.collect_spans"
     )
 }
@@ -515,7 +488,6 @@ pub fn effective(overrides: &BTreeMap<String, String>, key: &str) -> Option<Stri
 /// means "unset / use the default") and any custom (non-catalog) key. Lenient by design:
 /// DataFusion does the final validation when the value is applied.
 pub fn value_error(key: &str, value: &str) -> Option<String> {
-    // Reserved regardless of value — better to say so than to accept it and ignore it.
     if is_owned_key(key) {
         return Some("Reserved — Strata names the catalog and schema itself.".to_string());
     }

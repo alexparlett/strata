@@ -21,24 +21,13 @@ use crate::platform::windows::{register, WindowKind};
 /// `platform` is taken from the caller's component scope, which is both how the callback learns
 /// *which* window asked and why this can be called from an event handler with no scope of its own.
 pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
-    // The receiver is dropped: the work happens inside the callback and nothing waits on it.
     drop(platform.post_callback(move |owner, ctx| {
-        // Focus-if-open, on this window's own target. Peeked inside the callback rather than at
-        // the call site, so the answer is the registry as it is *now* — the press that opened the
-        // menu and the press that chose the item are different moments. Checked against the
-        // renderer's own window map as well, so a dangling entry (a window that went before its
-        // `use_register_window` drop resolved its id) reads as "not open" rather than swallowing
-        // the press.
         let open = launch
             .app
             .windows
             .peek()
             .by_id()
             .iter()
-            // **Keyed by owner *and* target.** A target names a def, and a def belongs to one
-            // project — two windows on different projects can both hold a connection to
-            // `s3://lake`, and matching on the URL alone would hand the second one the first
-            // project's def and then write to its store.
             .find(|(_, kind)| {
                 matches!(kind, WindowKind::Connection { owner: o, target }
                     if *o == owner && *target == launch.target)
@@ -63,9 +52,6 @@ pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
             launch.report,
             owner,
         ));
-        // Registered here rather than left to the window's own `use_register_window`, which can
-        // only learn its id a render and a round trip later — until then the window would be
-        // invisible to the focus-if-open check above, so two quick presses would open two.
         register(
             launch.app.windows,
             id,

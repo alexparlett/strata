@@ -103,10 +103,6 @@ impl TypedKeys {
 /// secret somewhere else — the whole point of `strata_core::secret`.
 pub fn commit(keys: &TypedKeys, ai: &mut Ai) -> Result<(), SecretError> {
     for (kind, typed) in keys.iter() {
-        // **Looking up the existing marker must not create anything.** `entry().or_default()`
-        // reads *and* inserts, so a provider the user typed into and then cleared again would
-        // gain an empty `ProviderSetup` in the committed config purely by being asked about.
-        // The insert belongs below, where a marker is actually being stored.
         let slot = ai.setup(*kind).and_then(|setup| setup.key.clone());
         let had_marker = slot.is_some();
 
@@ -127,8 +123,6 @@ pub fn commit(keys: &TypedKeys, ai: &mut Ai) -> Result<(), SecretError> {
             (None, None) => None,
         };
 
-        // Typed into and cleared again, with nothing stored to begin with: no marker to record,
-        // so nothing to make a row for either.
         if marker.is_none() && !had_marker {
             continue;
         }
@@ -203,8 +197,6 @@ mod tests {
         keys.forget(kind);
         assert!(!keys.touched(kind), "on takes it back");
 
-        // And `commit` then has nothing to say about this provider at all, so the stored key is
-        // untouched rather than deleted.
         let mut ai = Ai {
             providers: [(
                 kind,
@@ -231,7 +223,6 @@ mod tests {
         let mut keys = TypedKeys::default();
         keys.set(kind, "sk-pasted".into());
 
-        // What `toggle` inspects before dropping anything.
         assert!(!keys.get(kind).trim().is_empty(), "not a removal");
         assert_eq!(keys.get(kind), "sk-pasted");
     }
@@ -250,8 +241,6 @@ mod tests {
         keys.set(ProviderKind::Anthropic, "sk-pasted".into());
         assert!(!keys.is_empty(), "a pasted key is an edit");
 
-        // Pressing Replace and leaving the box alone: a pending *removal*, and every bit as much
-        // an edit as a pending key — `commit` turns it into a delete.
         let mut removal = TypedKeys::default();
         removal.set(ProviderKind::Anthropic, String::new());
         assert!(!removal.is_empty(), "a pending removal is an edit too");
@@ -270,7 +259,6 @@ mod tests {
         keys.set(kind, "sk-typed-once".into());
         assert!(keys.touched(kind));
 
-        // What `apply` does once `commit` returns `Ok`: the snapshot it handed the worker.
         let committed = keys.clone();
         keys.forget_committed(&committed);
 
@@ -291,10 +279,8 @@ mod tests {
         let mut keys = TypedKeys::default();
         keys.set(ProviderKind::Anthropic, "sk-first".into());
 
-        // What the worker was given.
         let committed = keys.clone();
 
-        // …and what the user typed while it was away.
         keys.set(ProviderKind::Groq, "sk-typed-mid-flight".into());
 
         keys.forget_committed(&committed);

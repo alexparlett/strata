@@ -47,14 +47,8 @@ impl Component for ProvidersPane {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
         let theme = settings_theme();
-        // Which provider's dialog is open, if any. Pane-local: a dialog is a question being
-        // asked right now, not a setting.
         let mut configuring = use_state(Configuring::default);
 
-        // **Read guards, not clones** — held across the `map` below and dropped before anything
-        // takes a `write`. Cloning instead duplicated the roster and every model name a Test had
-        // returned (an OpenAI list alone is ~80 strings) on every render. Subscribing is the
-        // point: the pane *should* rebuild when either changes.
         let draft = ctx.draft.read();
         let ai = &draft.ai;
         let keys = ctx.ai_keys.read();
@@ -119,11 +113,6 @@ fn note(theme: &SettingsTheme) -> Element {
         .corner_radius(R_2)
         .background(theme.item_active_background)
         .border(Border::new().width(1.).fill(theme.card_border_fill))
-        // **Both halves are needed for the sentence to wrap**, and each fails silently on its
-        // own: `Size::flex` is only divided by a parent whose `content` is `Flex` (AGENTS.md §3),
-        // so without this the run keeps hugging its text and rides off the edge — and the
-        // typography roles cap at one line by default, so even a correctly-sized box would
-        // truncate rather than wrap without `.wrap()` below.
         .content(Content::Flex)
         .child(
             Icon::new(IconName::Info)
@@ -229,10 +218,6 @@ fn subline(
     if let Some(listing) = listings.get(kind) {
         return Some(models_line(listing.models.len()));
     }
-    // **What is missing outranks what is present.** A kind whose address has no default cannot
-    // work without one, so a closed row says that before it says anything about a key it does
-    // have — reporting "A key is stored" while `blocker` refuses Apply over the empty URL names
-    // the one fact that is fine and hides the one that is not.
     let unaddressed = matches!(info(kind).base_url, BaseUrl::Required)
         && setup
             .map(|s| s.base_url.trim())
@@ -245,12 +230,8 @@ fn subline(
         return Some("A key is stored".to_string());
     }
     match info(kind).key {
-        // Nothing is stored, so what it *will* use is the whole answer.
         KeyUse::Env(var) => Some(format!("Falls back to {var}")),
         KeyUse::Unused => Some(format!("Runs locally at {}", default_url(kind))),
-        // The compatible kind has no default address, so the one it was given is the only thing
-        // worth saying about it — and the empty case was answered above, since it is what stops
-        // the row working at all.
         KeyUse::Anonymous => setup.map(|s| s.base_url.trim().to_string()),
     }
 }
@@ -266,8 +247,6 @@ fn models_line(count: usize) -> String {
 /// Turn a provider on or off. Creating the entry on first touch is what makes "absent from the
 /// map" mean "never enabled" rather than a state the pane has to pre-seed.
 fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuring>) {
-    // One edit, not two: the flip and the re-point are adjacent writes to the same `settings.ai`,
-    // and two would wake the pane twice — which is two full rebuilds of the row list per press.
     ctx.edit(|settings| {
         let setup = settings.ai.providers.entry(kind).or_default();
         setup.enabled = !setup.enabled;
@@ -276,40 +255,16 @@ fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuri
 
     let mut keys = ctx.ai_keys;
 
-    // **Switching a provider off takes its key with it — at Apply, not here.**
-    //
-    // Enabled and configured are one state: a provider you have turned off is one you are not
-    // using, and leaving its credential in the OS keystore keeps a secret alive for something
-    // nothing will ask again. What happens now is only that the intent is *recorded* — Apply is
-    // still the one commit point, and Cancel still discards it with the rest of the window's
-    // editing state.
-    //
-    // And the models it reported go with the key, for the same reason they go when a URL
-    // changes: the answer described a request made with a credential that is on its way out.
     if !ctx.draft.peek().ai.is_enabled(kind) {
         keys.write().set(kind, String::new());
         ctx.forget_provider(kind);
         return;
     }
 
-    // **And switching back on takes it back.** The removal is pending, not done, so changing your
-    // mind before Apply has to be able to change it back — otherwise a stray toggle silently
-    // queues the deletion of a key that is still perfectly good, leaves the provider enabled and
-    // credential-less, and blocks Apply on a state the user never asked for.
-    //
-    // Only an *empty* pending entry is dropped: one carrying a key is a paste, and a paste
-    // survives being toggled around.
     if keys.peek().touched(kind) && keys.peek().get(kind).trim().is_empty() {
         keys.write().forget(kind);
     }
 
-    // **Switching on something that cannot answer asks for what it needs.** A provider that is
-    // enabled and useless is otherwise announced only by a subline the user has no reason to read,
-    // so the question comes to them rather than waiting to be found.
-    //
-    // `missing` is the same judgement the footer blocks Apply on, asked one gesture earlier —
-    // which is what stops the dialog appearing for a provider Apply is perfectly happy with, or
-    // failing to appear for one it is not.
     let draft = ctx.draft.peek();
     if missing(&draft.ai, &keys.peek(), kind).is_some() {
         drop(draft);
@@ -318,11 +273,6 @@ fn toggle(ctx: SettingsCtx, kind: ProviderKind, mut configuring: State<Configuri
     }
     drop(draft);
 
-    // **Switching on something that *can* answer asks it what it serves.** Enabling a provider
-    // is the moment a person is setting it up and expecting it to reach out, so it is the right
-    // point of use for the fetch — the alternative is a picker that is empty until they happen
-    // to open it. `needs_refresh` is the same staleness question the pickers ask, so a provider
-    // toggled off and on again with a fresh listing costs no round trip.
     if ctx.listings.peek().needs_refresh(kind) {
         probe::refresh(ctx, Ask::from_draft(ctx, kind));
     }

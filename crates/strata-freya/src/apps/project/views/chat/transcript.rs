@@ -37,8 +37,6 @@ pub struct Transcript {
 
 impl Component for Transcript {
     fn render(&self) -> impl IntoElement {
-        // On `Chan::Tabs` because that is the channel a promote press writes, and this subtree's
-        // cards hold the handle rather than consuming it once each.
         let session = use_radio::<SessionState, Chan>(Chan::Tabs);
         let chats = self.chats;
         let theme = self.theme.clone();
@@ -109,12 +107,6 @@ impl Component for TurnRow {
             .width(Size::fill())
             .vertical()
             .spacing(BLOCK_GAP)
-            // **`over`/`out`, not `enter`/`leave`.** The enter pair is *exclusive*: it fires only
-            // for the node actually under the pointer, so moving onto the copy button — a child
-            // of this very row — read as leaving the turn, and the row hid itself under the
-            // cursor. `PointerOver`/`PointerOut` are the non-exclusive pair (`is_emitted_once` is
-            // false for them), so every node in the hit path is told, and a turn stays hovered
-            // while the pointer is anywhere inside it, its own controls included.
             .on_pointer_over(move |_| hovered.set(true))
             .on_pointer_out(move |_| hovered.set(false))
             .child(match &self.turn {
@@ -127,21 +119,6 @@ impl Component for TurnRow {
                 Turn::User { text, chips, .. } => user(&text, &chips, &theme),
                 Turn::Reply(reply) => self::reply(reply, self.session, &theme),
             })
-            // **Always mounted, revealed by opacity** — never added and removed under the pointer.
-            //
-            // Building the children on `hovered` made them *appear where the cursor already was*:
-            // approach the strip directly (rather than down from the message) and the button
-            // materialises under the pointer, takes it, the turn reads as no longer hovered, the
-            // button unmounts, the turn is hovered again — a loop, which is why it flickered and
-            // could never be pressed. Nothing here mounts on hover now, so there is nothing to
-            // oscillate.
-            //
-            // Invisible is not unreachable, and here that is exactly right: the only way to press
-            // this is to have the pointer on it, which is the same condition that shows it.
-            //
-            // Copy first, then the time: the press is what the row is *for*, so it sits where the
-            // eye lands and at the same offset under every message; the stamp is a fact about the
-            // message and reads as its caption.
             .child(
                 rect()
                     .width(Size::fill())
@@ -187,16 +164,12 @@ impl Component for CodeCard {
             .background(self.theme.card_background)
             .border(Border::new().width(1.).fill(self.theme.card_border_fill))
             .child(
-                rect()
-                    .width(Size::fill())
-                    // A painted border is not laid out, so the inset carries it (AGENTS.md §3).
-                    .padding(CARD_PAD)
-                    .child(
-                        Readout::new(self.code.clone())
-                            .color(self.theme.sql_color)
-                            .width(Size::fill())
-                            .wrap(),
-                    ),
+                rect().width(Size::fill()).padding(CARD_PAD).child(
+                    Readout::new(self.code.clone())
+                        .color(self.theme.sql_color)
+                        .width(Size::fill())
+                        .wrap(),
+                ),
             )
             .child(Divider::horizontal().color(self.theme.card_border_fill))
             .child(
@@ -229,8 +202,6 @@ fn plain(turn: &Turn) -> String {
             for block in &reply.blocks {
                 match block {
                     Block::Prose(text) => said.push(text),
-                    // An offer is a statement the user asked for, so it copies with the answer
-                    // it came in.
                     Block::Offer { sql, .. } => said.push(sql),
                     Block::Step(_) => {}
                 }
@@ -253,25 +224,14 @@ impl Component for CopyMessage {
         let text = self.text.clone();
         let color = self.theme.meta_color;
 
-        // Nothing said yet, nothing to copy: a streaming turn's first frame has no prose.
         if text.trim().is_empty() {
             return rect().into_element();
         }
 
-        // **The glyph alone, and no tooltip.** A `TooltipContainer` is an `Attached` overlay: it
-        // renders outside this subtree, so the pointer crossing onto it leaves the turn, which
-        // hides the row, which removes the overlay, which re-enters the turn — an oscillation,
-        // and worst approaching from below where the row is the first thing met. A control that
-        // only exists while its own message is hovered has little use for a hover label anyway;
-        // the name it is still owed is an accessible one, which belongs on `Button` in the fork
-        // (see `components::tool_button`).
         Button::new()
             .flat()
             .height(Size::px(ACTIONS_H))
             .on_press(move |_| {
-                // The app's one clipboard stack, the same handle the grid's copy and the chart's
-                // Copy Image use. Fire and forget: a failed write is a warning, not a dialog
-                // about something the user will simply press again.
                 if let Err(err) = Clipboard::set(text.clone()) {
                     tracing::warn!("chat copy failed: {err:?}");
                 }
@@ -349,8 +309,6 @@ fn reply(
     session: freya::radio::Radio<SessionState, Chan>,
     theme: &ChatTheme,
 ) -> Element {
-    // Nothing said and nothing settled: the turn is out there, and saying so is the difference
-    // between "working" and "the send went nowhere".
     if reply.blocks.is_empty() && !reply.settled {
         return Thinking {
             theme: theme.clone(),
@@ -362,13 +320,6 @@ fn reply(
         rect().width(Size::fill()).vertical().spacing(BLOCK_GAP),
         |body, (at, block)| {
             body.child(match block {
-                // The fork's own viewer (AGENTS.md §3), keyed on its position so a streaming
-                // delta re-parses one block rather than the whole turn.
-                // **A fenced block is a card with a copy press** — the offer card's dress, minus
-                // its Run: this is SQL the assistant is *explaining*, and the whole point of
-                // `offer_sql` is that an executable statement arrives as its own card instead.
-                // The renderer is the fork's `code_block` hook, so the markdown viewer still owns
-                // the parse and this owns only the dress.
                 Block::Prose(text) => MarkdownViewer::new(text)
                     .key(at)
                     .width(Size::fill())
@@ -382,8 +333,6 @@ fn reply(
                         }
                     })
                     .into_element(),
-                // The cards are keyed through a wrapper rather than by growing a `DiffKey`
-                // field: their position in the turn is the key, which is the wrapper's to know.
                 Block::Step(step) => rect()
                     .key(at)
                     .width(Size::fill())
@@ -393,11 +342,6 @@ fn reply(
                         theme: theme.clone(),
                     })
                     .into_element(),
-                // **A restored offer the catalog has moved out from under loses its press and
-                // says nothing** (AS-07): it renders as the ordinary code block the assistant's
-                // explanatory SQL already renders as. An error against a statement the user
-                // never ran would be a complaint that the catalog changed, which is not a fault
-                // and not news.
                 Block::Offer { sql, stale } => rect()
                     .key(at)
                     .width(Size::fill())
@@ -415,8 +359,6 @@ fn reply(
         },
     );
 
-    // **The settle's own sentence.** A stop, a truncation and a provider fault each say what they
-    // are in AS-02's words rather than this pane's, so one outcome cannot be described two ways.
     match reply.note {
         None => body.into_element(),
         Some(note) => body

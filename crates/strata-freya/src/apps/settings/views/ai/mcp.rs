@@ -49,17 +49,8 @@ pub struct McpPane;
 impl Component for McpPane {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
-        // Whether the secret is on screen. Pane-local: a reveal is a glance, not a setting —
-        // nothing outside this page reads it and nothing should persist it.
         let mut revealed = use_state(|| false);
 
-        // Read in a block: the guard has to be gone before anything below takes a write one on
-        // the same `State`.
-        //
-        // `minted` is the one thing the pane has to branch on. The token is empty until agent
-        // access is first enabled — `agent::server::reconcile` returns on `!enabled` *before*
-        // its minting branch — so on a fresh install this page is reached with nothing to show
-        // and nothing to copy.
         let (enabled, port, minted) = {
             let draft = ctx.draft.read();
             (
@@ -69,10 +60,6 @@ impl Component for McpPane {
             )
         };
 
-        // The token box is a **read-only display** of a value that lives in the draft, and
-        // `ValueField` binds a `State<String>`. So it is mirrored in an effect rather than
-        // seeded once: a `use_state` initializer runs on the first render only, and Regenerate
-        // would leave the box showing the token it had just replaced.
         let mut token_box = use_state(String::new);
         use_side_effect(move || {
             let token = ctx.draft.read().agent_access.token.clone();
@@ -102,8 +89,6 @@ impl Component for McpPane {
                 Anchor::AgentPort.row().child(
                     NumberField::new(port as u32, AGENT_PORT_MIN as u32, AGENT_PORT_MAX as u32)
                         .width(Size::px(PORT_WIDTH))
-                        // In range by construction: the field clamps before it reports, and the
-                        // range is the port number's own.
                         .on_change(move |port: u32| {
                             ctx.edit(|s| s.agent_access.port = port as u16);
                         }),
@@ -121,25 +106,9 @@ impl Component for McpPane {
                             ValueField::new(token_box)
                                 .width(Size::flex(1.))
                                 .masked(masked)
-                                // Said out loud, because a masked box and an empty one look
-                                // identical: before the first enable there is no token, and a
-                                // blank field with a Copy button beside it reads as a token
-                                // that simply isn't being shown.
                                 .placeholder("Not minted yet")
-                                // A minted credential, not a field: it is displayed and copied,
-                                // never typed. The actions beside it are the whole of what can
-                                // be done to it.
                                 .enabled(false),
                         )
-                        // Named divergence from the canvas, which sets the reveal *inside* the
-                        // box. An icon button in this app is a 28×28 square (`ToolButton`) and a
-                        // value box stands at 30, so the canvas's in-box 24 would be a
-                        // hand-rolled lookalike of the one control the app already has. Reveal
-                        // and copy read as one cluster of actions on the value instead.
-                        // Both gated on there being a token: revealing nothing is a no-op, and a
-                        // Copy that puts an empty string on the clipboard is worse than one that
-                        // is unavailable — it looks like it worked, and the `Authorization:
-                        // Bearer ` it produces fails silently in the client days later.
                         .child(
                             ToolButton::new(IconName::Eye, reveal_label)
                                 .outlined()

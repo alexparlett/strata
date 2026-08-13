@@ -40,8 +40,6 @@ use datafusion::sql::sqlparser::tokenizer::{Location, Token, Tokenizer};
 /// rather than going blank alongside it.
 pub(crate) fn dialect(name: &str) -> Box<dyn Dialect> {
     let name = EngineDialect::from_str(name).unwrap_or_default();
-    // Every name DataFusion accepts is one sqlparser accepts, so this arm is unreachable —
-    // it is here so there is exactly one fallback in the function rather than two answers.
     dialect_from_str(name.as_ref()).unwrap_or_else(|| Box::new(GenericDialect {}))
 }
 
@@ -79,11 +77,11 @@ pub fn caret_in_string_or_comment(sql: &str, caret: usize) -> bool {
             b'\'' => {
                 let start = i;
                 i += 1;
-                let mut end = None; // byte after the closing quote
+                let mut end = None;
                 while i < b.len() {
                     if b[i] == b'\'' {
                         if b.get(i + 1) == Some(&b'\'') {
-                            i += 2; // '' escape
+                            i += 2;
                         } else {
                             i += 1;
                             end = Some(i);
@@ -96,20 +94,20 @@ pub fn caret_in_string_or_comment(sql: &str, caret: usize) -> bool {
                 match end {
                     Some(e) if caret < e => return caret > start,
                     Some(_) => {}
-                    None => return caret > start, // unterminated → inside to EOF
+                    None => return caret > start,
                 }
             }
             b'-' if b.get(i + 1) == Some(&b'-') => {
                 let start = i;
                 match sql[i..].find('\n') {
                     Some(n) => {
-                        let end = i + n + 1; // first byte of the next line
+                        let end = i + n + 1;
                         if caret > start && caret < end {
                             return true;
                         }
                         i = end;
                     }
-                    None => return caret > start, // comment runs to EOF
+                    None => return caret > start,
                 }
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
@@ -118,16 +116,15 @@ pub fn caret_in_string_or_comment(sql: &str, caret: usize) -> bool {
                 match end {
                     Some(e) if caret < e => return caret > start,
                     Some(e) => i = e,
-                    None => return caret > start, // unterminated → inside to EOF
+                    None => return caret > start,
                 }
             }
             b'"' => {
-                // Opaque quoted-identifier region; skip (not a suppression zone).
                 i += 1;
                 while i < b.len() && b[i] != b'"' {
                     i += 1;
                 }
-                i += 1; // past the closing quote (or EOF)
+                i += 1;
             }
             _ => i += 1,
         }
@@ -152,7 +149,7 @@ pub(crate) fn literal_at(sql: &str, caret: usize) -> Option<(usize, Option<usize
                 while i < b.len() {
                     if b[i] == b'\'' {
                         if b.get(i + 1) == Some(&b'\'') {
-                            i += 2; // '' escape
+                            i += 2;
                         } else {
                             close = Some(i);
                             i += 1;
@@ -163,8 +160,6 @@ pub(crate) fn literal_at(sql: &str, caret: usize) -> Option<(usize, Option<usize
                     }
                 }
                 match close {
-                    // Inside means strictly after the opening quote and no later than the
-                    // closing one — the caret right before the closing quote included.
                     Some(c) if caret <= c => return (caret > start).then_some((start, Some(c))),
                     Some(_) => {}
                     None => return (caret > start).then_some((start, None)),
@@ -174,13 +169,13 @@ pub(crate) fn literal_at(sql: &str, caret: usize) -> Option<(usize, Option<usize
                 let start = i;
                 let end = i + sql[i..].find('\n')? + 1;
                 if caret > start && caret < end {
-                    return None; // a comment, not a literal
+                    return None;
                 }
                 i = end;
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 match sql[i + 2..].find("*/").map(|n| i + 2 + n + 2) {
-                    Some(e) if caret < e => return None, // a comment, not a literal
+                    Some(e) if caret < e => return None,
                     Some(e) => i = e,
                     None => return None,
                 }
@@ -250,8 +245,6 @@ pub struct LexError {
     pub span: Range<usize>,
 }
 
-// ---- statement split -------------------------------------------------------
-
 /// Byte ranges partitioning `0..sql_len` on top-level `;` tokens — the one splitter
 /// shared by validation (all statements) and the context analyzer (statement under
 /// the caret). Token-level, so `;` inside strings never splits. Untrimmed: segments
@@ -275,7 +268,7 @@ pub(crate) fn statement_at(toks: &[Tok], sql_len: usize, caret: usize) -> Range<
     split_statements(toks, sql_len)
         .into_iter()
         .find(|r| caret <= r.end)
-        .unwrap_or(0..sql_len) // unreachable: the final segment ends at sql_len
+        .unwrap_or(0..sql_len)
 }
 
 /// Byte offset of 1-based (`line`, `column`) within `slice` (clamped to its end).
@@ -316,9 +309,6 @@ pub fn lex(sql: &str, dialect: &str) -> (Vec<Tok>, Option<LexError>) {
             None,
         ),
         Err(e) => {
-            // sqlparser's TokenizerError carries a message + a location — which
-            // can sit one past the end (unterminated string/comment at EOF), so
-            // clamp the one-byte span inside the buffer.
             let end = offset(&starts, e.location).saturating_add(1).min(sql.len());
             (
                 Vec::new(),
@@ -358,7 +348,6 @@ fn convert(_starts: &[usize], _sql: &str, token: Token, start: usize, end: usize
         Token::Colon => (TokKind::Punct, ":".into()),
         Token::DoubleColon => (TokKind::Op, "::".into()),
         Token::EOF => return None,
-        // Everything else (operators, brackets, etc.) — keep its source rendering.
         other => (TokKind::Op, other.to_string()),
     };
     Some(Tok { kind, text, span })
@@ -455,9 +444,9 @@ mod tests {
     #[test]
     fn inside_a_closed_string() {
         assert!(at("SELECT 'ab|c' FROM t"));
-        assert!(at("SELECT 'abc|' FROM t")); // before the closing quote
-        assert!(!at("SELECT 'abc'| FROM t")); // after the closing quote
-        assert!(!at("SELECT |'abc' FROM t")); // before the opening quote
+        assert!(at("SELECT 'abc|' FROM t"));
+        assert!(!at("SELECT 'abc'| FROM t"));
+        assert!(!at("SELECT |'abc' FROM t"));
     }
 
     #[test]
@@ -478,7 +467,6 @@ mod tests {
         assert!(at("SELECT a -- note|"));
         assert!(at("SELECT a --|"));
         assert!(!at("SELECT a |-- note"));
-        // The next line is code again.
         assert!(!at("SELECT a -- note\n|FROM t"));
         assert!(!at("SELECT a -- note\nFROM |t"));
     }
@@ -492,13 +480,9 @@ mod tests {
 
     #[test]
     fn quoted_idents_are_opaque_but_not_suppressing() {
-        // A `--` inside a quoted identifier is not a comment.
         assert!(!at("SELECT \"a -- b\", |c FROM t"));
-        // And the caret inside a quoted identifier is a legit completion position.
         assert!(!at("SELECT \"my col|umn\" FROM t"));
     }
-
-    // ---- literal_at: which literal, not merely whether (ED-11) ----
 
     /// `literal_at` with the caret at the `|` marker.
     fn lit(sql_with_caret: &str) -> Option<(usize, Option<usize>)> {
@@ -509,16 +493,11 @@ mod tests {
 
     #[test]
     fn literal_at_answers_the_containing_quotes() {
-        // Inside a closed literal: the open quote and the close, caret right before
-        // the closing quote included.
         assert_eq!(lit("OPTIONS ('for|mat')"), Some((9, Some(16))));
         assert_eq!(lit("OPTIONS ('format|')"), Some((9, Some(16))));
-        // On or before the opening quote, and after the closing one: not inside.
         assert_eq!(lit("OPTIONS (|'format')"), None);
         assert_eq!(lit("OPTIONS ('format')|"), None);
-        // The caret's own literal, not the first one.
         assert_eq!(lit("OPTIONS ('a' 'b|')"), Some((13, Some(15))));
-        // A doubled-quote escape stays one literal.
         assert_eq!(lit("SELECT 'ab''c|d'"), Some((7, Some(14))));
     }
 
@@ -530,10 +509,8 @@ mod tests {
 
     #[test]
     fn literal_at_is_none_inside_comments_and_quoted_idents() {
-        // A comment is not a literal, quotes in it or not.
         assert_eq!(lit("SELECT a -- 'no|te'"), None);
         assert_eq!(lit("SELECT /* 'no|te' */ a"), None);
-        // A quoted identifier is opaque, exactly as the sibling scanner treats it.
         assert_eq!(lit("SELECT \"my 'col|umn'\" FROM t"), None);
     }
 }

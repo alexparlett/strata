@@ -1,29 +1,23 @@
 //! The DataFusion engine — a **direct-call async facade** over a runtime it owns.
 //!
-//! [`Engine`] holds the `SessionContext` plus a private multi-thread Tokio runtime:
-//! every call spawns its work onto that runtime and awaits the `JoinHandle`, which is
-//! executor-agnostic — so a non-Tokio UI executor (Freya's) awaits engine calls
-//! directly, the way a freya-query capability expects, while DataFusion's own
-//! parallelism runs on the engine's threads and never on the render thread.
+//! [`Engine`] holds the `SessionContext` plus a private multi-thread Tokio runtime: every call
+//! spawns its work onto that runtime and awaits the `JoinHandle`, which is executor-agnostic — so
+//! Freya's non-Tokio UI executor awaits engine calls directly while DataFusion's own parallelism
+//! runs on the engine's threads and never on the render thread.
 //!
-//! Pagination model (bounded memory): each query is executed **once** and its full
-//! result is spooled to an immutable on-disk parquet **snapshot**, keyed by
-//! [`SnapshotId`] (`docs/SNAPSHOT_SPEC.md`). Every page is a bounded `LIMIT/OFFSET`
-//! read of that snapshot — RAM only ever holds one page, and no query is recomputed
-//! per page. The engine also owns the snapshot **lifecycle**: a re-run for the same
-//! workspace retires the previous snapshot at dispatch, cancel/cleanup retire
-//! partials, and dropping the engine clears its whole snapshot directory.
+//! **Pagination is bounded memory.** Each query executes **once** and its full result spools to an
+//! immutable on-disk **Arrow IPC snapshot** keyed by [`SnapshotId`] (`docs/SNAPSHOT_SPEC.md`); every
+//! page is a bounded `LIMIT/OFFSET` read of it, so RAM holds one page and no query is recomputed.
+//! The engine owns the snapshot **lifecycle** too: a re-run for the same workspace retires the
+//! previous snapshot at dispatch, cancel and cleanup retire partials, and dropping the engine
+//! clears its whole snapshot directory.
 //!
-//! Profiling ([`Engine::profile`]) is the third thing the engine tracks, beside runs and
-//! snapshots: one full scan per catalog entry, keyed by the entry rather than by a
-//! workspace, because a profile is a property of the *data* and not of any tab.
+//! Profiling ([`Engine::profile`]) is the third thing tracked beside runs and snapshots: one full
+//! scan per catalog entry, keyed by the entry rather than by a workspace, because a profile is a
+//! property of the *data* and not of any tab.
 //!
-//! The facade grows one method per feature that lands in the Freya app; the
-//! underlying logic lives in the sibling modules (`query`, `explain`, `catalog`,
-//! `export`, `profile`) as plain async functions over `&SessionContext`.
-//!
-//! (The retired `Command`/`Event` channel protocol this replaces lives on only in
-//! `crates/strata-dioxus`, which is reference code and no longer builds.)
+//! The underlying logic lives in the sibling modules (`query`, `explain`, `catalog`, `export`,
+//! `profile`) as plain async functions over `&SessionContext`.
 
 mod arrow_stats;
 mod catalog;
@@ -112,7 +106,6 @@ use std::time::Instant;
 
 use datafusion::common::TableReference;
 use datafusion::execution::runtime_env::RuntimeEnv;
-// `register_udf` is `FunctionRegistry`'s, not an inherent method on `SessionState`.
 use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
 use datafusion::logical_expr::ScalarUDF;
 use datafusion::prelude::*;
@@ -250,8 +243,6 @@ impl Drop for DispatchGuard<'_> {
         if !self.armed {
             return;
         }
-        // `lock()` rather than `unwrap()` on the guard: this runs during a drop, which may
-        // itself be an unwind, and a panic there aborts the process.
         let Ok(mut lc) = self.engine.lifecycle.lock() else {
             return;
         };
@@ -259,8 +250,6 @@ impl Drop for DispatchGuard<'_> {
             return;
         }
         if let Some(f) = lc.inflight.remove(&self.ws) {
-            // Aborts the detached task and retires whatever it managed to materialize —
-            // the same teardown `cleanup_ws` performs, for the same reason.
             self.engine.abort_inflight(f);
         }
         self.engine.publish_inflight(&lc);
@@ -385,8 +374,6 @@ impl InternalTables {
         let mut set = self.0.lock().unwrap();
         match internal {
             true => set.insert(fold_ident(name)),
-            // Not `if internal` — a def that *was* internal and is now registered over the same
-            // name as an external one has to stop being one.
             false => set.remove(&fold_ident(name)),
         };
     }
@@ -457,10 +444,6 @@ impl Engine {
             .expect("tokio runtime");
         let ctx = build_context(&overrides);
         let functions = Functions::new(&ctx);
-        // Claim the snapshot directory before anything can write to it. Failing is
-        // survivable (the directory is created on demand anyway) but means another
-        // instance's startup purge can't see that we're alive — worth saying out loud,
-        // with the reason, since that purge is then the thing that deletes live results.
         let snapshot_lock = match claim_snapshot_dir(engine_id) {
             Ok(lock) => Some(lock),
             Err(why) => {
@@ -531,8 +514,6 @@ impl Engine {
     /// Publishing happens inside every lifecycle mutation, under the same lock, so the flag
     /// cannot drift from `inflight`.
     pub fn watch_inflight(&self, flag: Arc<AtomicBool>) {
-        // Take the lock first: installing and seeding must be atomic against a concurrent
-        // dispatch/settle, or the seed below could overwrite a fresher publish.
         let lc = self.lifecycle.lock().unwrap();
         if self.inflight_flag.set(flag).is_err() {
             tracing::error!(
@@ -643,7 +624,6 @@ impl Engine {
                     Some(value) => value.as_str(),
                     None => match config::key_def(key) {
                         Some(def) => def.default,
-                        // Never applied, so there is nothing to put back.
                         None => continue,
                     },
                 };
@@ -651,7 +631,6 @@ impl Engine {
                     tracing::warn!("engine config: skipping {key}={value}: {e}");
                 }
             }
-            // Once, after the batch rather than per key — see the function.
             refresh_config_dependent_udfs(&mut state);
             *current = overrides;
         }
@@ -685,9 +664,6 @@ impl Engine {
     /// hit. Total by design: faults come back as `Diagnostic`s, not an `Err`.
     pub async fn validate(&self, sql: String) -> Vec<Diagnostic> {
         let ctx = self.ctx.clone();
-        // The catalog as it stands, taken here rather than inside the task: a pass validating a
-        // buffer answers about the function set it started with, and the `Arc` is what makes
-        // holding it across the dry-plan free.
         let functions = self.functions.catalog();
         self.rt()
             .spawn(async move { sql::validate(&ctx, &functions, &sql).await })
@@ -728,8 +704,6 @@ impl Engine {
         self.rt.as_ref().expect("engine runtime")
     }
 
-    // --- run / read -------------------------------------------------------
-
     /// **The editor's Run** (ED-02): classify `sql`, then route it.
     ///
     /// One classification in front of dispatch, and it is the same one the squiggles came from
@@ -760,8 +734,6 @@ impl Engine {
         sql: String,
         page_size: usize,
     ) -> Result<RunOutcome, String> {
-        // On the engine runtime, like `policy_verdicts`: parsing is the caller's whole answer
-        // here, and the caller is a UI task on the render thread.
         let (stmt, verdict) = {
             let ctx = self.ctx.clone();
             let text = sql.clone();
@@ -777,10 +749,6 @@ impl Engine {
                 .map(|(output, batch)| RunOutcome::Rows(output, batch)),
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
-                // Taken before the struct literal, not inside it: a guard in a field expression
-                // lives until the end of the statement, which would hold the data-root lock across
-                // `overrides()`'s. Nothing takes those two the other way round today, and this is
-                // how it stays that way.
                 let root = self.data_root.lock().unwrap().clone();
                 let engine = ddl::Dispatch {
                     root,
@@ -819,29 +787,16 @@ impl Engine {
             StoreEffect::TableUpserted { def, .. } => {
                 self.note_origin(&def.name, def.origin.is_internal());
             }
-            // A dropped table is no longer a write target, and a profile still scanning it is
-            // now measuring files that may already be gone — cancelled here rather than inside
-            // the drop for the reason [`InternalTables`] gives: the drop runs in a task that
-            // cannot reach the lifecycle without holding the engine open.
             StoreEffect::TableRemoved { name, .. } => {
                 self.cancel_profile(name);
                 self.note_origin(name, false);
             }
-            // A redefined view measures something else now and a dropped one measures nothing,
-            // so a scan of either is already a lie — cancelled here for the reason
-            // `TableRemoved` gives, since the statement runs in a task that cannot reach the
-            // lifecycle. `Engine::create_view` / `drop_view` cancel for the gestures that call
-            // them directly (⌘S, the pane's drop confirm), which never produce an effect.
             StoreEffect::ViewUpserted { def, .. } => {
                 self.cancel_profile(&def.name);
             }
             StoreEffect::ViewRemoved { name } => {
                 self.cancel_profile(name);
             }
-            // Nothing for the engine to learn. An `INSERT` moves data under a registration that
-            // is unchanged; the function catalog and the prepared-statement mirror are both the
-            // session's, already re-walked and recorded by the arm that moved them, because that
-            // arm is the only thing that knows *which* name changed.
             StoreEffect::RescanTable { .. }
             | StoreEffect::FunctionsChanged
             | StoreEffect::PreparedChanged => {}
@@ -865,11 +820,6 @@ impl Engine {
         name: String,
         if_exists: bool,
     ) -> Result<StatementOutcome, String> {
-        // **Background work, so the close confirm asks about it.** An internal table's data is
-        // one file per `INSERT` with no compaction, so a heavily written table is a directory of
-        // thousands of files and deleting it is not instant — long enough that a window closing
-        // over it would take the runtime away mid-delete. The user gets the same question a
-        // running export gets, and can let it finish.
         let _deleting = BackgroundGuard::new(self);
         let ctx = self.ctx.clone();
         let root = self.data_root.lock().unwrap().clone();
@@ -925,9 +875,6 @@ impl Engine {
             task
         };
 
-        // Armed for the await, disarmed the moment it returns — see [`DispatchGuard`]. An
-        // agent reaches this through `mode: "explain"`, and a dropped MCP request future is
-        // exactly the caller that goes away mid-await.
         let mut guard = DispatchGuard::arm(self, ws, dispatch);
         let joined = task.await;
         guard.disarm();
@@ -939,7 +886,6 @@ impl Engine {
         self.publish_inflight(&lc);
         match joined {
             Ok(res) => res,
-            // The shared vocabulary, never the prose: a stopped call must not read as a fault.
             Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
             Err(join) => Err(format!("{what} task failed: {join}")),
         }
@@ -987,12 +933,7 @@ impl Engine {
             if let Some(prev) = lc.inflight.remove(&ws) {
                 self.abort_inflight(prev);
             }
-            // Retire-on-dispatch: the previous snapshot goes when the new run starts,
-            // keeping all lifecycle in this one lock (spec §4). Cached UI pages of it
-            // are unaffected; uncached reads of it now fail cleanly.
             if let Some(old) = lc.current.remove(&ws) {
-                // Deferred rather than immediate if something is holding it open — an export
-                // window opened on that result still owes the user those rows.
                 self.retire_or_defer(&mut lc, old);
             }
             let ctx = self.ctx.clone();
@@ -1014,15 +955,11 @@ impl Engine {
             task
         };
 
-        // Armed for the await, disarmed the moment it returns — see [`DispatchGuard`].
         let mut guard = DispatchGuard::arm(self, ws, dispatch);
         let joined = task.await;
         guard.disarm();
 
         let mut lc = self.lifecycle.lock().unwrap();
-        // Only the still-latest dispatch may settle workspace state; a newer one has
-        // already retired everything this one owned — and owns the `InFlight` entry now,
-        // so a superseded call must not remove it.
         let latest = lc.inflight.get(&ws).map(|f| f.dispatch) == Some(dispatch);
         if latest {
             lc.inflight.remove(&ws);
@@ -1037,20 +974,12 @@ impl Engine {
                     }
                     Ok((output, batch))
                 } else {
-                    // Finished after being superseded — its snapshot must not leak.
                     retire_snapshot(&self.ctx, self.engine_id, snapshot);
                     Err(SUPERSEDED_RUN.into())
                 }
             }
-            // `run_and_snapshot` cleaned its own partial on failure.
             Ok(Err(e)) => Err(e),
             Err(join) if join.is_cancelled() => {
-                // Aborted. The aborter retired the partial too, but `abort()` only lands
-                // at the task's next await — so the task may have gone on to finish
-                // `register_arrow` *after* that retire, leaving a table registered over
-                // a deleted file. Awaiting the handle is what makes this definitive: the
-                // task is finished by the time we see `is_cancelled`, so retiring again
-                // (idempotent, best-effort) sweeps whatever it managed to create.
                 retire_snapshot(&self.ctx, self.engine_id, snapshot);
                 Err(CANCELLED.into())
             }
@@ -1074,8 +1003,6 @@ impl Engine {
     ) -> Result<(Vec<Vec<Cell>>, RecordBatch), String> {
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
-        // The snapshot's ordinal column (`docs/SNAPSHOT_SPEC.md` §9), from the same register
-        // `snapshot_live` reads — present for exactly the snapshots that are alive to read.
         let ord = self.ordinal(snapshot);
         self.rt()
             .spawn(async move {
@@ -1120,15 +1047,6 @@ impl Engine {
         snapshot: SnapshotId,
         q: ChartQuery,
     ) -> Result<ChartData, String> {
-        // A histogram is **two** reads — a range pass, then the binning one — so the call
-        // holds the snapshot open across them. Without the pin a re-run in the owning tab
-        // between the passes deregisters the table mid-call, and a histogram would answer
-        // with the first pass's real edges and the second pass's zero counts: a chart of
-        // nothing, indistinguishable from a genuine empty range. Same rule as `export`'s
-        // in-call pin (AGENTS.md §2) — and the same limit: the pin lives in this future,
-        // so it holds only while the caller keeps awaiting. A dropped caller drops the pin
-        // while the spawned read runs on detached; the read may then fail against a retired
-        // table, but its answer has no listener, so nothing wrong is ever delivered.
         let _reading = self.pin_snapshot(snapshot);
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
@@ -1215,8 +1133,6 @@ impl Engine {
         }
     }
 
-    // --- profile ----------------------------------------------------------
-
     /// Profile the catalog entry `name` — **one full scan, one aggregate, every column at
     /// once** (D4, see [`profile`]). Works for a table or a view: a view has no footer at all,
     /// so a scan is the only way it learns anything beyond a column's type.
@@ -1263,7 +1179,6 @@ impl Engine {
         self.publish_inflight(&lc);
         match joined {
             Ok(res) if latest => res,
-            // Its numbers describe a scan the caller has already replaced.
             Ok(_) => Err(SUPERSEDED_SCAN.into()),
             Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
             Err(join) => Err(format!("profile task failed: {join}")),
@@ -1288,8 +1203,6 @@ impl Engine {
         self.publish_inflight(&lc);
         cancelled
     }
-
-    // --- snapshot pins ----------------------------------------------------
 
     /// Hold `snapshot` open for as long as the returned [`SnapshotPin`] lives: while a pin is
     /// out, retiring the snapshot is **deferred**, not skipped.
@@ -1329,8 +1242,6 @@ impl Engine {
                     self.retire_now(&mut lc, snapshot);
                 }
             }
-            // Unbalanced release — a bug in a caller, and the kind that would otherwise show
-            // up much later as a snapshot that never goes away.
             None => tracing::error!(
                 "engine {}: released a pin on snapshot {snapshot} that was never held",
                 self.engine_id
@@ -1361,8 +1272,6 @@ impl Engine {
         retire_snapshot(&self.ctx, self.engine_id, snapshot);
     }
 
-    // --- export -----------------------------------------------------------
-
     /// Write `snapshot` to disk per `spec` (D6) — one file, or a Hive directory when the
     /// spec carries partition columns. Returns `(path, rows_written)`.
     ///
@@ -1385,23 +1294,7 @@ impl Engine {
         snapshot: SnapshotId,
         spec: export::ExportSpec,
     ) -> Result<(String, usize), String> {
-        // **The holds ride on the write, not on the caller.** This method awaits, and the caller
-        // is a UI task dropped when its scope goes — so closing the export window mid-write drops
-        // this future at the await below while the spawned write carries on. A guard living here
-        // would release both holds at that drop and leave the write unprotected: a re-run in the
-        // owning tab would then retire the snapshot this `COPY` is still streaming (deregistering
-        // the table and unlinking the IPC file), and the user's file would end truncated, or its
-        // Hive tree half-built, with nothing to report it. The close-while-running flag would go
-        // false in the same breath, so quitting mid-write would not ask either.
-        //
-        // So the hold is **owned** and moves into the task below. It is released when the write
-        // ends, on every path the write can end by — which is the only reading of "in flight"
-        // that matches what is actually happening on disk.
         let holding = ExportHold::new(self, snapshot);
-        // Copied out under the lock: the partitioned-export gate reads what this snapshot's write
-        // pass counted, and the spawned task must not hold the lifecycle lock across an await.
-        // A snapshot with no recorded stats is one nothing counted, which the gate treats as
-        // "cannot vouch for" rather than as zero nulls.
         let stats = self
             .lifecycle
             .lock()
@@ -1413,28 +1306,19 @@ impl Engine {
         let task = {
             let ctx = self.ctx.clone();
             self.rt().spawn(async move {
-                // Moved in, so the pin and the in-flight count outlive a dropped caller by
-                // exactly as long as the write does. Dropped when this task ends, however it ends.
                 let _holding = holding;
                 export::run_export(&ctx, snapshot, spec, &stats).await
             })
         };
 
-        // Dropping this future does *not* stop the write: the spawned task detaches and the
-        // file still completes, which is the kinder outcome for a user who closed the window
-        // after committing to an export. What it does stop is anyone hearing how it ended.
         let joined = task.await;
 
         match joined {
             Ok(res) => res,
-            // The shared vocabulary, not the prose: a stopped call must never be presented as a
-            // fault, and every surface asks [`stopped_on_purpose`] rather than matching a string.
             Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
             Err(join) => Err(format!("export task failed: {join}")),
         }
     }
-
-    // --- catalog ----------------------------------------------------------
 
     /// Register what one [`ConnectionDef`] describes: an **object store**, so tables can be
     /// registered over its bucket (W7), or a **database catalog**, so its relations resolve as
@@ -1457,9 +1341,6 @@ impl Engine {
     /// machine does not have. See [`store::connect`] and [`db::connect`].
     pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
         let ctx = self.ctx.clone();
-        // Noted **whatever the outcome** — see [`Connections`]. A def that could not describe a
-        // store is still a connection this project has, and a typed statement over its bucket is
-        // one this engine should judge on the def rather than on today's credentials.
         let url = conn.url();
         self.connections.note(&url);
         let dbs = self.databases.clone();
@@ -1468,10 +1349,6 @@ impl Engine {
             .spawn(async move {
                 match conn.provider.clone() {
                     Provider::Postgres(pg) => {
-                        // The password seam is [`db::connect`]'s argument, and this is the only
-                        // caller that builds the keystore-backed one: the reference is derived
-                        // from the connection's URL, and the value is read per pool connection
-                        // and never held.
                         let passwords = match pg.password {
                             PgPassword::None => None,
                             PgPassword::Keystore => {
@@ -1486,14 +1363,6 @@ impl Engine {
             })
             .await
             .map_err(|e| format!("connect task failed: {e}"))?;
-        // **A Forget that landed while this was dialling wins.** `disconnect` is synchronous and
-        // this is a spawned task, so a confirm during a slow connect finds nothing registered yet
-        // and takes nothing back — and then this registers a store or a catalog for a def that no
-        // longer exists, which no later gesture can name because the gesture is given the def's
-        // URL. `Connections` is the record of membership and `disconnect` removes it, so its
-        // absence here is exactly "this connection was forgotten mid-flight"; taking the
-        // registration straight back out is the whole fix, and it is idempotent for the ordinary
-        // case where nothing was registered at all.
         if self.connections.resolve(&url).is_none() {
             self.disconnect(&url);
         }
@@ -1565,12 +1434,6 @@ impl Engine {
             .spawn(async move { catalog::register_external(&ctx, &spec).await })
             .await
             .map_err(|e| format!("register task failed: {e}"))?;
-        // On **both** arms. A def the engine refused has no provider at all — `register_external`
-        // deregisters before it re-infers — so the honest answer to "may a write statement target
-        // this" is no, whatever the def says. Recording only on success would leave a name that
-        // *used* to be internal claiming it still is: a table re-registered as external and then
-        // failing would keep answering `is_internal`, and ED-05's drop would take the origin from
-        // an entry the pass had already disproved.
         self.note_origin(&name, internal && meta.is_ok());
         meta
     }
@@ -1619,9 +1482,6 @@ impl Engine {
     /// typed `CREATE VIEW` enters through [`run`](Engine::run) instead. `CREATE OR REPLACE`:
     /// redefinition is the ⌘S-on-a-view path.
     pub async fn create_view(&self, name: String, sql: String) -> Result<ViewMeta, String> {
-        // Redefining the view changes what a scan of it would even mean — see `register`.
-        // The typed gesture cannot do this from inside its task, so `settle_effect` does it
-        // there, off the effect the statement returns.
         self.cancel_profile(&name);
         let ctx = self.ctx.clone();
         self.rt()
@@ -1640,8 +1500,6 @@ impl Engine {
             .await
             .map_err(|e| format!("drop view task failed: {e}"))?
     }
-
-    // --- lifecycle --------------------------------------------------------
 
     /// Tear down one workspace (tab close): abort its in-flight run and retire its
     /// current snapshot (spec §4).
@@ -1673,8 +1531,6 @@ impl Engine {
     fn abort_inflight(&self, f: InFlight) {
         f.abort.abort();
         if let Some(snap) = f.snapshot {
-            // No `stats` entry can exist for this one — it is only recorded on a settle the
-            // caller was handed — but the retire itself still has to happen.
             retire_snapshot(&self.ctx, self.engine_id, snap);
         }
     }
@@ -1749,8 +1605,6 @@ impl Drop for ExportHold {
         let Some(engine) = self.engine.upgrade() else {
             return;
         };
-        // `release_pin` takes the lifecycle lock itself, and this mutex is not reentrant — so the
-        // count's own critical section is a separate one, after it.
         engine.release_pin(self.snapshot);
         let mut lc = engine.lifecycle.lock().unwrap();
         lc.background = lc.background.saturating_sub(1);
@@ -1801,19 +1655,9 @@ impl Drop for Engine {
             p.abort.abort();
         }
         lc.current.clear();
-        // The window is going: whoever still holds the flag must not be told we're busy.
         self.publish_inflight(&lc);
         drop(lc);
-        // **The pools go before the runtime does.** A `bb8` connection's drop can reach
-        // `tokio::spawn` on its broken-or-expired branch, which panics once the runtime is
-        // shutting down — and field drops run *after* this body, in declaration order, with
-        // `ctx` (which reaches every pool through the registered catalog provider) ahead of
-        // `databases`. So neither field is the last strong reference on its own; clearing the
-        // registered catalogs here is what makes the pools drop while the runtime they ride is
-        // still up. A no-op for a project with no database connection.
         self.databases.shutdown(&self.ctx);
-        // Context-safe shutdown: don't block on worker threads (a plain `Runtime` drop
-        // panics inside another async context); aborted tasks are dropped in the background.
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }
@@ -1851,38 +1695,21 @@ pub fn fold_ident(name: &str) -> String {
 /// lowercase word that isn't reserved in a name position, double-quoted (any embedded `"`
 /// doubled) otherwise.
 ///
-/// **Fold-preserving is the contract**, and it is what makes this safe to add to a shipped
-/// app. DataFusion lower-cases an *unquoted* identifier and takes a quoted one verbatim
-/// (`datafusion-sql`'s `normalize_ident`), so a view a user named `DailySales` has been
-/// registering as `dailysales` all along — as have any sibling defs and saved queries that
-/// say `FROM dailysales`. Emitting `"DailySales"` would re-key it and break every one of
-/// them, with no migration in sight. So a name that already worked keeps its *exact* old
-/// identity: we quote nothing that can be said bare, and we fold the case ourselves rather
-/// than leaving it to the parser (which also makes the identity independent of
-/// `datafusion.sql_parser.enable_ident_normalization`, a key W2 lets the user set).
+/// **Fold-preserving is the contract**, and it is what makes this safe to add to a shipped app.
+/// DataFusion lower-cases an unquoted identifier and takes a quoted one verbatim, so a view named
+/// `DailySales` has been registering as `dailysales` all along; emitting `"DailySales"` would
+/// re-key it and break every sibling def that says `FROM dailysales`. So a name that already worked
+/// keeps its exact old identity — nothing sayable bare is quoted, and the fold runs here rather
+/// than in the parser, which also makes the identity independent of
+/// `datafusion.sql_parser.enable_ident_normalization`.
 ///
-/// Quoting is therefore never a re-keying, only ever a capability gain. It fires in two
-/// cases, and they are not the same:
+/// Quoting is therefore never a re-keying, only a capability gain, and it fires in two cases:
+/// names that were genuinely broken (`Sales 2024`, `2024`, `sales-eu`) where nothing was ever
+/// registered to preserve, and reserved words defensively — `Order` folds to `"order"` first, the
+/// same identity the unquoted spelling had.
 ///
-/// * **Names that were genuinely broken.** `Sales 2024`, `2024`, `sales-eu`, `say "hi"` each
-///   turned an interpolated name into malformed SQL, and the caller has already persisted
-///   the def by then, so the row stayed Failed forever. There is no prior identity to
-///   preserve here, because nothing was ever registered
-///   (`the_names_quoting_added_were_malformed_sql_before`).
-/// * **Reserved words, defensively.** `order` was *not* broken: under the `GenericDialect`
-///   DataFusion parses with, both `CREATE VIEW Order …` and a bare `FROM order` parse today,
-///   and the view registered as `order`. Quoting it is insurance against a name position or
-///   dialect where that stops being true — and it stays safe precisely because the fold runs
-///   **first**, so `Order` → `"order"`, the same identity the unquoted spelling had and the
-///   one `register_table` gives a table of that name. A generated `FROM` therefore resolves
-///   for tables and views alike ([`profile::profile_sql`]).
-///
-/// Both cases are pinned by `quoting_keeps_the_identity_the_unquoted_interpolation_gave_a_name`,
-/// which registers each name the old way and the new way and requires the two contexts to be
-/// reachable under exactly the same spellings.
-///
-/// The reserved-word authority is [`sql::lex::is_reserved_in_name_position`] — the same one
-/// the language service uses for completion's quoting.
+/// The reserved-word authority is [`sql::lex::is_reserved_in_name_position`], the same one
+/// completion's quoting uses.
 pub(crate) fn quote_ident(name: &str) -> String {
     let id = fold_ident(name);
     let mut rest = id.chars();
@@ -1901,114 +1728,40 @@ pub(crate) fn quote_ident(name: &str) -> String {
 /// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
 /// and skipped rather than failing the whole engine.
 fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
-    // `information_schema` on by default — Strata's default, not DataFusion's, which is why
-    // it is set *before* the override loop rather than in it: a user who turns it off in
-    // Settings still wins, and it is not an owned key. `SHOW TABLES` and every
-    // `information_schema` view need it, and they only became safe to expose with the
-    // snapshot filter in `providers` (`docs/STATEMENTS_SPEC.md` §5) — without that they would
-    // list every `__snap_N` spool table and its `__strata_ord` column. `ENGINE_KEYS` carries
-    // the same `true`, so a *removed* override lands back here rather than on DataFusion's.
     let mut config = SessionConfig::new().with_information_schema(true);
     for (key, value) in overrides {
         if key.starts_with("datafusion.runtime.") {
-            continue; // runtime.* live on the RuntimeEnv, not ConfigOptions
+            continue;
         }
         if config::is_owned_key(key) {
-            continue; // ours (see below) — a stale saved override must not apply
+            continue;
         }
         if let Err(e) = config.options_mut().set(key, value) {
             tracing::warn!("engine config: skipping {key}={value}: {e}");
         }
     }
-    // Name the catalog/schema ourselves (`strata`/`public`): DataFusion's defaults are
-    // renameable via `datafusion.catalog.default_*`, which would move our tables out
-    // from under name-based lookups; `is_owned_key` fences those keys out of the apply
-    // paths so the naming holds.
     let mut config = config.with_default_catalog_and_schema(CATALOG, SCHEMA);
-    // Source spans on planner errors power the validator's squiggles (P2-18) — owned,
-    // like the catalog names, so an override can't silently degrade diagnostics.
     config.options_mut().sql_parser.collect_spans = true;
     let rt = match build_runtime(overrides) {
         Ok(rt) => rt,
         Err(e) => {
             tracing::warn!("engine runtime config invalid ({e}); using defaults");
-            // Not DataFusion's own `RuntimeEnv::default()`: that would take its whole runtime,
-            // list-files cache included, and a bad *memory limit* must not quietly turn the file
-            // listings stale as well. Fall back to our own defaults with no overrides applied.
             build_runtime(&BTreeMap::new()).expect("default runtime")
         }
     };
-    // Built through `SessionStateBuilder` rather than `SessionContext::new_with_config_rt`,
-    // because the two federation slots (DB-01) exist only on the builder. The first three calls
-    // *are* `new_with_config_rt`'s body verbatim (DF 54 `context/mod.rs`), so nothing about the
-    // config, the runtime env or the default feature set moves — only the two lines below them.
     let state = SessionStateBuilder::new()
         .with_config(config)
         .with_runtime_env(rt)
         .with_default_features()
-        // **Our catalog list, because DataFusion's cannot remove a catalog** (DB-02):
-        // `CatalogProviderList` has `register_catalog` and no counterpart, so forgetting a
-        // database connection could not make its catalog stop resolving. Installed on the
-        // *builder* rather than after the fact, so the workspace catalog the builder registers
-        // below lands in this list rather than in one that is then thrown away. It refuses
-        // nothing — see `providers`.
         .with_catalog_list(Arc::new(StrataCatalogList::default()))
-        // Federation (DB workstream): DataFusion's own default rule list with
-        // `FederationOptimizerRule` inserted immediately after `scalar_subquery_to_join`, which
-        // is where it has to sit — scalar subqueries must be decorrelated before the rule walks
-        // the plan looking for a federatable subtree. Installed unconditionally: it *rewrites*
-        // only a plan containing a `FederatedTableProviderAdaptor`, so a project with nothing but
-        // files pays a walk that finds nothing.
-        //
-        // It is not, however, a **structural** no-op, which is worth knowing before diagnosing a
-        // report of "federation" in an error on a file-only project. The rule's expression walk
-        // refuses `Expr::InSubquery` (`not_impl_err`) before it consults any provider, and
-        // `datafusion.optimizer.skip_failed_rules` is `false`, so a surviving one fails the
-        // query naming this rule. `DecorrelatePredicateSubquery` runs immediately ahead of it and
-        // removes every filter-position shape; what is left — `SELECT a IN (SELECT …) FROM t`, an
-        // `InSubquery` in a projection — is one DataFusion's *physical* planner already refused
-        // ("Physical plan does not support logical expression InSubquery"), a few steps later.
-        // Measured both ways at DB-01: nothing that ran stopped running, only the wording moved.
         .with_optimizer_rules(default_optimizer_rules())
-        // **The query-planner slot is single-occupancy.** `FederatedQueryPlanner` is
-        // `DefaultPhysicalPlanner::with_extension_planners([FederatedPlanner])` — the default
-        // planner plus one extension planner for the `Federated` plan node — so this swap is a
-        // no-op for every plan that has no such node. A future custom `QueryPlanner` must
-        // therefore *include* `FederatedPlanner` among its extension planners rather than
-        // displace it, or federated subplans stop being physically plannable at all.
         .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
         .build();
     let mut ctx = SessionContext::new_with_state(state);
-    // Our own catalog + schema, in place of the `MemoryCatalogProvider` the session builder
-    // just registered under the same name, and **before** anything registers a table: identity
-    // (one schema, folded names) and visibility (result snapshots resolve but do not
-    // enumerate) — never lifecycle, which lives in `ddl` in front of `ctx.sql`. See
-    // `providers` for why the traits cannot carry more than this.
     ctx.register_catalog(CATALOG, Arc::new(StrataCatalogProvider::default()));
-    // The Postgres-style JSON accessors (`json_get`, `->`, `->>`) over a Utf8 column of JSON
-    // text. They belong to the **engine**, not to a table: `json_get('{"a":1}', 'a')` is valid
-    // with nothing registered, so this sits beside the catalog naming rather than in `catalog`.
-    //
-    // The crate also registers `?` as an alias for `json_contains`, and it is **unreachable from
-    // SQL under our default dialect**: `GenericDialect` omits `Token::Question` from
-    // `get_next_precedence`, so `doc ? 'a'` fails to parse before the operator is ever consulted.
-    // `json_contains` is the spelling that works everywhere, and it stays the one we name: WJ-04
-    // surveyed the move to `postgresql` and **declined** it — that dialect makes every operator
-    // character a custom-operator part, so `a>-1` tokenizes as `a >- 1`, and it cannot parse
-    // `SELECT * EXCEPT (a)`, `* EXCLUDE`, or a trailing comma in a projection. A user can still
-    // set the key; `sql::lex` follows it, so the whole language service moves with them.
-    //
-    // Warned rather than fatal because the failure cannot be silent — a registration that did
-    // not happen surfaces as "Invalid function 'json_get'" on the first query that needs one,
-    // which names itself better than a panic during engine construction would.
     if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
         tracing::warn!("engine: JSON functions unavailable: {e}");
     }
-    // DataFusion's seam for `CREATE FUNCTION` (ED-09): `execute_logical_plan` calls the factory
-    // and registers what it returns, and without one installed the statement fails with
-    // "Function factory has not been configured". Installed on every engine rather than only the
-    // app's, so the headless host runs the statement the same way — the factory is stateless and
-    // costs nothing on an engine that never creates a function.
     ctx.with_function_factory(Arc::new(StrataFunctionFactory))
 }
 
@@ -2116,8 +1869,6 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Arc<RuntimeEnv>
     let list_cache = val("datafusion.runtime.list_files_cache_limit");
     let list_ttl = val("datafusion.runtime.list_files_cache_ttl");
 
-    // Ours before any override, so a key the user *removed* lands back here — the same shape
-    // `information_schema` uses on the `SessionConfig` side.
     let mut b = RuntimeEnvBuilder::new().with_object_list_cache_limit(bytes(
         "datafusion.runtime.list_files_cache_limit",
         config::key_def("datafusion.runtime.list_files_cache_limit")
@@ -2225,7 +1976,6 @@ mod tests {
         let ws = WsId(1);
 
         let first = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
-        // A second dispatch supersedes it and now owns the workspace's entry.
         let _second = dispatched(engine.query(ws, RunTag(2), SLOW.into(), 10));
 
         drop(first);
@@ -2268,8 +2018,6 @@ mod tests {
         assert!(!engine.set_config(overrides(&[(BATCH, "1024")])));
         assert_eq!(live(&engine, BATCH), "1024", "applied without a restart");
 
-        // The half that is easy to get wrong: dropping a key must not leave the engine on the
-        // value that was just deleted.
         assert!(!engine.set_config(BTreeMap::new()));
         assert_eq!(
             live(&engine, BATCH),
@@ -2287,15 +2035,12 @@ mod tests {
             engine.set_config(overrides(&[(MEMORY, "2G")])),
             "the RuntimeEnv is fixed at build, so this is owed"
         );
-        // Declining the restart must not settle the debt: the map has moved on, the runtime has
-        // not, and the next config write has to offer it again.
         assert!(engine.restart_owed());
         assert!(
             engine.set_config(overrides(&[(MEMORY, "2G"), (BATCH, "1024")])),
             "a second write still owes the same restart"
         );
 
-        // Rebuilding is what settles it — which is exactly what the window's remount does.
         let restarted = Engine::new(engine.overrides());
         assert!(!restarted.restart_owed());
     }
@@ -2359,16 +2104,12 @@ mod tests {
         assert_eq!(
             row,
             vec![
-                r#""x""#.to_string(), // a string arm is JSON-quoted
-                "7".to_string(),      // int
-                "true".to_string(),   // bool
-                // The object and array arms are the source's own text, passed through
-                // **verbatim** — note the space after `k:`, which is how it was written. They
-                // are already raw JSON inside the union, so nothing re-serializes them and the
-                // user gets back exactly what the document held.
+                r#""x""#.to_string(),
+                "7".to_string(),
+                "true".to_string(),
                 r#"{"k": 1}"#.to_string(),
                 "[1,2]".to_string(),
-                "NULL".to_string(), // the JSON-null arm becomes a SQL null
+                "NULL".to_string(),
             ]
         );
         assert!(
@@ -2376,8 +2117,6 @@ mod tests {
             "the JSON null arm is a real null, not the text"
         );
 
-        // And the schema the grid is handed says text, not union — the projection is on the
-        // logical plan, so `ColumnInfo` and the snapshot cannot disagree.
         assert!(
             out.columns.iter().all(|c| !c.dtype.contains("Union")),
             "{:?}",
@@ -2449,7 +2188,6 @@ mod tests {
             .iter()
             .filter(|e| config::is_restart_key(e.key))
         {
-            // Blank means "unset" for several of these, so exercise a real value instead.
             let value = match entry.default {
                 "" => match entry.kind {
                     config::Kind::Bytes => "64M",
@@ -2461,8 +2199,6 @@ mod tests {
             build_runtime(&overrides(&[(entry.key, value)]))
                 .unwrap_or_else(|e| panic!("{} = {value} was rejected: {e}", entry.key));
 
-            // `temp_directory` is a path: every string is a legal value, so there is nothing a
-            // reader could refuse and no negative to assert.
             if entry.key == "datafusion.runtime.temp_directory" {
                 continue;
             }
@@ -2486,7 +2222,6 @@ mod tests {
             default.cache_manager.get_list_files_cache().is_none(),
             "a fresh engine caches no listing"
         );
-        // Still the user's to turn on — it is a default, not an owned key.
         let asked = build_runtime(&overrides(&[(
             "datafusion.runtime.list_files_cache_limit",
             "4M",
@@ -2497,8 +2232,6 @@ mod tests {
 
     #[test]
     fn a_runtime_ttl_is_read_the_way_the_field_validates_it() {
-        // The validator and the parser are one function (`util::parse_duration`), so a field that
-        // accepts `2m` cannot be read as two seconds.
         assert!(build_runtime(&overrides(&[(
             "datafusion.runtime.list_files_cache_ttl",
             "2m"
@@ -2518,8 +2251,6 @@ mod tests {
     #[test]
     fn set_config_leaves_the_catalog_names_alone() {
         let engine = Engine::new(BTreeMap::new());
-        // A stale saved override naming a key the app owns must not re-point name resolution at
-        // a catalog that was never created (`is_owned_key`).
         engine.set_config(overrides(&[(
             "datafusion.catalog.default_schema",
             "elsewhere",
@@ -2529,9 +2260,6 @@ mod tests {
 
     #[test]
     fn a_nameable_ident_is_emitted_bare_and_case_folded() {
-        // The fold-preserving contract: a name that could already be interpolated must
-        // come out with the *same* engine identity it has always had — bare, lowercased
-        // exactly the way DataFusion's own `normalize_ident` lowercased it.
         for name in ["daily_sales", "_scratch", "t9", "orders2024"] {
             assert_eq!(quote_ident(name), name, "already folded — untouched");
         }
@@ -2542,8 +2270,6 @@ mod tests {
 
     #[test]
     fn only_an_unsayable_name_is_quoted_and_it_is_escaped() {
-        // These four were malformed SQL before quoting existed, so there is no prior
-        // identity to preserve — quoting them is pure capability.
         assert_eq!(quote_ident("Sales 2024"), "\"Sales 2024\"");
         assert_eq!(quote_ident("2024"), "\"2024\"", "can't lead with a digit");
         assert_eq!(quote_ident("sales-eu"), "\"sales-eu\"");
@@ -2552,19 +2278,12 @@ mod tests {
             "\"say \"\"hi\"\"\"",
             "an embedded quote is doubled, not dropped"
         );
-        // A reserved word is the other case, and it is *not* one of the broken ones —
-        // `CREATE VIEW Order …` already parsed (see `quote_ident`'s doc). Quoting it is
-        // defensive, and safe only because the fold runs first: the identity stays the
-        // lowercase one, the same name `register_table("Order")` would give a table.
         assert_eq!(quote_ident("order"), "\"order\"");
         assert_eq!(quote_ident("Order"), "\"order\"");
     }
 
     #[test]
     fn the_folded_name_is_the_one_datafusion_resolves() {
-        // `fold_ident` must agree with `TableReference::parse_str` — the path a table
-        // registers through — or a generated `FROM` names a different object than the
-        // catalog row it came from.
         for name in ["daily_sales", "MyView", "Order", "Sales 2024", "2024"] {
             assert_eq!(
                 fold_ident(name),
@@ -2572,15 +2291,12 @@ mod tests {
                 "{name:?}"
             );
         }
-        // A dotted name is a label, not a qualification (the engine owns one schema).
         assert_eq!(fold_ident("a.b"), "a.b");
     }
 
     #[tokio::test]
     async fn a_view_round_trips_under_the_name_it_was_given() {
         let eng = Engine::new(Default::default());
-        // Names straight out of a shared `.strata/project.json`: the plain one must keep
-        // working exactly as before, the awkward ones must work at all.
         for (i, name) in ["daily_sales", "Sales 2024", "say \"hi\"", "Order"]
             .iter()
             .enumerate()
@@ -2618,15 +2334,12 @@ mod tests {
             .await
             .expect("create");
 
-        // A sibling def, written against the folded spelling, still resolves — this is
-        // the one that used to land Failed forever after an unmigrated re-key.
         let meta = eng
             .create_view("Derived".into(), "SELECT * FROM dailysales".into())
             .await
             .expect("a def referencing the folded name");
         assert_eq!(meta.columns.len(), 1, "…and planned against it");
 
-        // …and so does a saved query typed in any case, because bare names still fold.
         for sql in ["SELECT * FROM dailysales", "SELECT * FROM DailySales"] {
             let (out, _) = eng
                 .query(WsId(1), RunTag(1), sql.into(), 10)
@@ -2676,12 +2389,7 @@ mod tests {
     /// `myview`, never `"MyView"`) without either side asserting what the answer should be.
     #[tokio::test]
     async fn quoting_keeps_the_identity_the_unquoted_interpolation_gave_a_name() {
-        // Names the old, unquoted interpolation could already handle — the only ones with a
-        // prior identity to preserve. `Order` is in here deliberately: it is a reserved word,
-        // but `CREATE VIEW Order …` parsed and registered as `order` under DataFusion's
-        // dialect, so it has a prior identity like any other and quoting must not move it.
         const NAMES: &[&str] = &["MyView", "DailySales", "daily_sales", "ORDERS", "Order"];
-        // Every spelling worth asking about for those names, folded and unfolded alike.
         const PROBES: &[&str] = &[
             "myview",
             "MyView",
@@ -2698,7 +2406,6 @@ mod tests {
         let legacy = Engine::new(Default::default());
         let now = Engine::new(Default::default());
         for name in NAMES {
-            // Verbatim the statement the shipped code built.
             let df = legacy
                 .ctx
                 .sql(&format!("CREATE OR REPLACE VIEW {name} AS SELECT 1 AS n"))
@@ -2710,10 +2417,6 @@ mod tests {
                 .unwrap_or_else(|e| panic!("create_view {name:?}: {e}"));
         }
 
-        // Sanity, asked of the **identity** each view registered under rather than of what
-        // resolves. `StrataSchemaProvider` keys the namespace by `fold_ident` on both sides
-        // (ED-03), so every spelling of a name now resolves and a probe list can no longer
-        // show a fold happening; the stored key still can, and it is the stricter question.
         assert_eq!(
             registered(&legacy.ctx),
             ["daily_sales", "dailysales", "myview", "order", "orders"],
@@ -2871,8 +2574,6 @@ mod tests {
             !eng.cancel_profile("slow"),
             "nothing left in flight to cancel"
         );
-        // A tab's own probe is untouched: a profile is not a tab's work, so the *tab*-close
-        // confirm must not count it (D4).
         assert!(!eng.is_running(WsId(1)));
     }
 
@@ -2895,7 +2596,6 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             eng.profile("slow".into()).await
         };
-        // Dispatched with `first`, so both scans are in flight together.
         let other = eng.profile("regions".into());
         let stop = async {
             tokio::time::sleep(std::time::Duration::from_millis(75)).await;
@@ -2929,7 +2629,6 @@ mod tests {
         let scan = eng.profile("slow".into());
         let replace = async {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            // The view's own re-definition is the view-shaped half of the same rule.
             eng.create_view("slow".into(), "SELECT 1 AS n".into())
                 .await
                 .expect("re-create");
@@ -2985,9 +2684,6 @@ mod tests {
             let _first = BackgroundGuard::new(&eng);
             assert!(flag.load(Ordering::Relaxed), "the window would now ask");
             assert!(eng.has_background_work());
-            // Two at once — an export writing while a drop deletes — so the release is a
-            // decrement and not a reset. A `bool` here would have the first to finish tell the
-            // window the second was done too.
             let second = BackgroundGuard::new(&eng);
             drop(second);
             assert!(
@@ -3004,10 +2700,6 @@ mod tests {
     async fn a_repeat_dispatch_of_one_tag_leaves_the_newer_run_intact() {
         let eng = Engine::new(Default::default());
         let (ws, tag) = (WsId(1), RunTag(7));
-        // The UI can dispatch one logical run twice under the same tag (freya-query
-        // re-runs an entry when a subscriber remounts mid-flight). The second dispatch
-        // supersedes the first; while "latest" was decided by tag, the first's settle
-        // path adopted the second's `InFlight` entry and *both* calls failed.
         let first = eng.query(ws, tag, SLOW.into(), 10);
         let second = async {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -3028,8 +2720,6 @@ mod tests {
             "both settled — nothing left in flight"
         );
     }
-
-    // ---- the Run router (ED-02) -----------------------------------------------------
 
     /// **A query through `run` is a query through `query`.** The whole promise of routing is
     /// that the read path did not move: same snapshot handle, same page 1, same totals — so a
@@ -3054,7 +2744,6 @@ mod tests {
         assert_eq!(routed.total, direct.total);
         assert_eq!(routed.rows, direct.rows);
         assert_eq!(routed.columns.len(), direct.columns.len());
-        // And it really materialized: the handle pages, which is the half a report cannot fake.
         let snap = routed.snapshot.expect("a snapshot handle");
         let (page2, _) = eng.fetch_page(snap, 2, 2, None).await.expect("page 2");
         assert_eq!(page2.len(), 1);
@@ -3285,7 +2974,6 @@ mod read_options_tests {
             }
         };
 
-        // The writer's option: accepted, and read exactly as if it were absent.
         let with = read("OPTIONS('format.null_value' 'NAN')")
             .await
             .expect("scan");
@@ -3296,7 +2984,6 @@ mod read_options_tests {
             "NULL_VALUE changes nothing a reader can see"
         );
 
-        // The reader's option: inference types the column on it, then the scan cannot parse it.
         let err = read("OPTIONS('format.null_regex' 'NAN')")
             .await
             .expect_err("the scan cannot parse what inference called null");
@@ -3312,7 +2999,6 @@ mod read_options_tests {
         let path = write(&d, "s.csv", "a;b;c\n1;2;3\n");
         let eng = Engine::new(Default::default());
 
-        // Read with the default comma the whole line is one column, header and all.
         let meta = eng
             .register(spec(
                 "commas",
@@ -3363,8 +3049,6 @@ mod read_options_tests {
         let path = write(&d, "s.csv", "# generated\na,b\n1,2\n");
         let eng = Engine::new(Default::default());
 
-        // Without it the comment line is read as the header — a one-column table whose next
-        // row has two, which is a register that fails rather than a schema that is merely odd.
         let err = eng
             .register(spec(
                 "raw",
@@ -3510,7 +3194,6 @@ mod read_options_tests {
         let path = write_gz(&d, "s.csv.gz", "a,b\n1,2\n");
         let eng = Engine::new(Default::default());
 
-        // Uncompressed, the listing's `.csv` filter does not match `s.csv.gz` at all.
         let err = eng
             .register(spec(
                 "plain",
@@ -3577,8 +3260,6 @@ mod read_options_tests {
             .expect("content column");
         assert_eq!(content.dtype, "Utf8", "the conflicted field is text");
 
-        // The values are each record's own JSON, which is what makes the column worth having —
-        // `json_get` reads straight into it.
         let (out, _) = eng
             .query(
                 WsId(1),
@@ -3592,9 +3273,6 @@ mod read_options_tests {
         assert_eq!(
             cells,
             vec![
-                // Quoted: the column holds JSON, so every row of it parses — which is what lets
-                // `json_get` read all of them and stops a string containing JSON from reading
-                // back as the object it resembles.
                 r#""plain""#.to_string(),
                 r#"{"kind":"block"}"#.to_string(),
                 r#"["a",true]"#.to_string(),
@@ -3634,7 +3312,6 @@ mod read_options_tests {
             tags.dtype
         );
 
-        // And it survives the snapshot, which is the half parquet could not do.
         let (out, _) = eng
             .query(WsId(1), RunTag(1), "SELECT * FROM t".into(), 10)
             .await
@@ -3810,8 +3487,6 @@ mod read_options_tests {
             .expect_err("not a byte");
         assert!(err.contains("single-byte character"), "{err}");
 
-        // The half of the range that used to pass: 'é' is U+00E9, so `c as u32` fits a byte —
-        // but the file holds 0xC3 0xA9, and 0xE9 is a UTF-8 lead byte the reader would split on.
         let err = eng
             .register(spec(
                 "latin1",

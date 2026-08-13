@@ -72,35 +72,16 @@ pub fn hold(previous: Option<Stamp>, revision: u64, introduces_new: bool) -> Opt
 /// project (which provides the catalog) and the session are in place.
 pub fn use_diagnostics() {
     let engine = use_consume::<EngineCtx>();
-    // Any tab's buffer. `Chan::Text` is the fan-in that makes this one subscription rather than
-    // one per tab — see the module note. Doubles as this driver's handle onto the store: the
-    // channel is named explicitly at every write, so which one it was created with only decides
-    // what wakes the effect.
     let session = use_radio::<SessionState, Chan>(Chan::Text);
-    // A tab opened, closed, reopened, switched, or renamed.
     let strip = use_radio::<SessionState, Chan>(Chan::Tabs);
     let catalog = use_catalog();
-    // Whether a drain is already going. Held by a guard so a task that is *cancelled* — the
-    // window closing mid-pass — clears it too, the same reasoning (and shape) as the catalog's
-    // `ScanGuard`; a latched flag here would mean nothing ever validated again.
     let draining = use_state(|| false);
 
     use_side_effect(move || {
-        // The three subscriptions. Read for the side effect of subscribing — what to do is
-        // decided from the peeked store below, so a wake that changed nothing costs a
-        // `stale_tabs` walk and returns.
         let (_, _) = (session.read(), strip.read());
         let Some(epoch) = catalog.read().epoch() else {
-            // Mid-scan: the gate. The drain checks it too, on every iteration and again before
-            // it applies anything, so there is nothing to tear down here.
             return;
         };
-        // Already draining: **leave it alone.** The drain re-derives its own work each
-        // iteration, so anything that just went stale is picked up by the pass in flight. This
-        // is the whole reason it is a loop rather than a cancel-and-rearm batch — applying
-        // decorations notifies `Chan::Tab(id)`, which derives `Chan::Text`, which wakes *this*
-        // effect, so a batch would cancel and re-debounce itself once per tab that gained a
-        // squiggle.
         if *draining.peek() || session.read().stale_tabs(epoch).is_empty() {
             return;
         }
@@ -111,9 +92,6 @@ pub fn use_diagnostics() {
         spawn(async move {
             let _guard = Draining(draining);
             loop {
-                // Re-derived every time: the work list is a projection, not a snapshot, so a
-                // tab edited mid-drain is simply stale again, and the active tab — which
-                // `stale_tabs` puts first — keeps its priority as the user types.
                 let Some(epoch) = catalog.peek().epoch() else {
                     break;
                 };
@@ -121,9 +99,6 @@ pub fn use_diagnostics() {
                     break;
                 };
                 settle(session, id).await;
-                // One at a time: at project open with twenty restored tabs everything is stale
-                // at once, and twenty concurrent dry plans would queue on the engine's two
-                // workers ahead of the user's first Run.
                 pass(session, catalog, &engine, id, epoch).await;
             }
         });
@@ -142,8 +117,6 @@ async fn settle(session: Radio<SessionState, Chan>, id: TabId) {
     loop {
         let before = {
             let s = session.read();
-            // Not the active tab (or gone): its text can't be moving, so there is nothing to
-            // wait out.
             if s.active != Some(id) {
                 return;
             }
@@ -153,8 +126,6 @@ async fn settle(session: Radio<SessionState, Chan>, id: TabId) {
             }
         };
         Timer::after(DEBOUNCE).await;
-        // Unchanged across the whole window → the user has stopped. Anything else means they
-        // are still typing, so wait again from here.
         let quiet = session
             .read()
             .tabs
@@ -185,11 +156,6 @@ async fn pass(
     id: TabId,
     epoch: u64,
 ) {
-    // Text, revision and prior verdict read together, so the stamp written below names exactly
-    // the text that was validated. Taken *after* the debounce, which is why a burst validates
-    // its settled text rather than the text that armed it.
-    // `read` outside a reactive context is peek-equivalent — a task has none, so this
-    // subscribes nothing.
     let Some((sql, revision, previous, shown)) = session.read().tabs.get(&id).map(|t| {
         (
             t.text(),
@@ -208,16 +174,6 @@ async fn pass(
         Timer::after(wait).await;
     }
 
-    // Both of this verdict's inputs can have moved across the two awaits above, and applying it
-    // then would stamp the tab with an answer about a world that no longer exists:
-    //
-    // - the **catalog** — mid-scan `Engine::register` has deregistered every table it is
-    //   rebuilding, so the verdict reads "not found" for tables sitting right there. Dropping it
-    //   is what makes the gate *never produce* rather than produce and retract.
-    // - the **text** — a keystroke during the surface hold is exactly what that hold exists to
-    //   wait out, so its half-written verdict must not land.
-    //
-    // Either way the tab simply stays stale, and the drain's next iteration re-derives it.
     let moved_on = session
         .read()
         .tabs
@@ -227,10 +183,6 @@ async fn pass(
         return;
     }
 
-    // The squiggles, into the tab's own buffer — including a tab with no editor mounted, so
-    // switching to it shows them immediately instead of a beat later. Silenced when the
-    // decorations are unchanged: `Chan::Tab(id)` wakes the editor, autosave *and* this driver,
-    // and a repeat pass has nothing for any of them.
     session.write_with_channel_selection(|state| {
         let changed = state
             .tabs

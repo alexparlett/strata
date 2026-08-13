@@ -56,8 +56,6 @@ struct TextOverrides {
     overflow: Option<TextOverflow>,
 }
 
-// Fully qualified: `CursorIcon::Default` is imported into scope above, so name `Default` on its own
-// is ambiguous here.
 impl Default for TextOverrides {
     fn default() -> Self {
         Self {

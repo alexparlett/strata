@@ -11,37 +11,22 @@
 //! against [`mock::MockHost`](crate::mock::MockHost) and a stub endpoint with no window, no
 //! renderer and no vendor account (`tests/assistant.rs`).
 //!
-//! ## The four pieces
+//! The four pieces: [`provider`] is the model of a pick (the provider kinds in one table, and the
+//! single place a `genai` client is built from a [`Selection`]); [`turn`] is the loop, its event
+//! stream and cancel; [`dispatch`] binds a tool name to a method; [`offer`] is `offer_sql`, the
+//! assistant's own eleventh tool, checked before the card appears and never on the MCP router.
 //!
-//! - [`provider`] — **the model of a pick**: the five provider kinds in one table, what each
-//!   does with a base URL, a key and a reasoning effort, and the single place a `genai` client
-//!   is built from a [`Selection`]. Settings (AS-03) and the composer footer (AS-04) both read
-//!   that table; neither restates it.
-//! - [`turn`] — the loop, the event stream the pane renders from, and cancel.
-//! - [`dispatch`] — name to method: what the model answers with, bound to the ten tools.
-//! - [`offer`] — `offer_sql`, the assistant's own eleventh tool: how it hands the user a
-//!   statement to execute, checked before the card appears, and never on the MCP router.
+//! **The runtime is this module's own.** `genai` needs a Tokio reactor and the render thread is not
+//! one, so [`Assistant`] owns a small private runtime — the Engine pattern, for the Engine's
+//! reason. Deliberately **not** [`AgentServer`](crate::AgentServer)'s: that one exists only while
+//! agent access is switched on in Settings, and the chat pane must not stop working because the
+//! user turned the MCP server off.
 //!
-//! ## The runtime is this module's own
-//!
-//! `genai` needs a Tokio reactor and the render thread is not one, so [`Assistant`] owns a
-//! small private runtime and the caller holds a handle — the Engine pattern, for the Engine's
-//! reason. **Not** [`AgentServer`](crate::AgentServer)'s runtime, which was the obvious
-//! economy and is the wrong one: that runtime exists only while agent access is switched on in
-//! Settings, and the chat pane must not stop working because the user turned the MCP server
-//! off. Two small runtimes with independent lifetimes beat one whose lifetime is a setting.
-//!
-//! ## It is one more agent below, and not one in the pane above
-//!
-//! Everything under the loop treats the assistant as an agent like any other: its own
-//! `AgentId`, its own query sessions, the same gate. What it is **not** is a row in the Agents
-//! pane — that pane answers "which external clients are connected to my project right now",
-//! and the assistant is not connected to anything, it is part of the app. The discriminator is
-//! [`Agent::in_app`](crate::host::Agent::in_app) — minted by
-//! [`StrataTools::in_app`](crate::StrataTools::in_app) and carried to the host on the call
-//! that opens a session — rather than the identity's name: a name is a claim any MCP client
-//! can make, and a client that could make itself invisible by claiming it is the worst
-//! version of this rule.
+//! **It is one more agent below, and not one in the pane above.** Everything under the loop treats
+//! the assistant as an agent like any other — its own `AgentId`, its own query sessions, the same
+//! gate. The discriminator is [`Agent::in_app`](crate::host::Agent::in_app), minted by
+//! [`StrataTools::in_app`](crate::StrataTools::in_app), rather than the identity's name: a name is
+//! a claim any MCP client could make to render itself invisible.
 
 pub mod dispatch;
 pub mod offer;
@@ -95,11 +80,6 @@ impl Assistant {
             .thread_name("strata-assistant")
             .build()
             .map_err(|e| format!("assistant runtime: {e}"))?;
-        // genai's own defaults for a long-lived client (`webc::web_client`), restated in full
-        // because this one now outlives the `genai::Client`s that borrow it and would
-        // otherwise get reqwest's bare defaults. **In full** is the point: three of the five
-        // were copied once and two were not, which is not "genai's defaults" — it is a
-        // different client that looks like them.
         let pool = reqwest::Client::builder()
             .pool_max_idle_per_host(4)
             .http2_keep_alive_interval(Some(Duration::from_secs(20)))

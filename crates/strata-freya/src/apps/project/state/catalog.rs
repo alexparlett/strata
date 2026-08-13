@@ -92,9 +92,6 @@ pub fn use_init_catalog() -> Catalog {
 /// A no-op while `Scanning`: the pass in flight will bump on its way out, and bumping twice
 /// would only re-validate everything twice.
 pub fn catalog_settled(mut catalog: Catalog) {
-    // `let … else`, not `if let`: an `if let` keeps the read borrow alive across its whole body,
-    // so the `set` below would panic on the same `GenerationalBox` (AGENTS.md §2's theme gotcha,
-    // same shape). Copying the epoch out ends the borrow at the end of this statement.
     let CatalogState::Settled(epoch) = *catalog.peek() else {
         return;
     };
@@ -211,8 +208,6 @@ mod tests {
     /// A signal without a component around it — `create_global` is the one constructor that
     /// needs no scope, which is what lets the claim be tested as the plain state machine it is.
     fn catalog() -> Catalog {
-        // One pass in: the steady state these tests are about. `Settled(0)` is the pre-first-scan
-        // seed and has its own test above.
         State::create_global(CatalogState::Settled(1))
     }
 
@@ -289,8 +284,6 @@ mod tests {
     fn a_cancelled_pass_still_releases_the_claim() {
         let scan = catalog();
         let guard = claim_scan(scan).expect("the first claim wins");
-        // The shape `scan_catalog` has: the guard rides in the future's own state, and the
-        // work never gets to run.
         let pass = async move {
             let _scan = guard;
             std::future::pending::<()>().await;

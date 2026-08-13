@@ -96,25 +96,15 @@ impl Component for Tab {
         let id = self.id;
         let mut areas = self.areas;
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
-        // This tab's own inline-rename state — local, never shared: whether it's being renamed and the
-        // draft name. The context menu / double-click flip `renaming`; the input binds `draft`.
         let mut renaming = use_state(|| false);
         let draft = use_state(String::new);
         let a11y = use_a11y();
         let config = use_config_station();
         let closer = use_consume::<TabCloser>();
-        // Hover state for the close slot — a dirty tab's unsaved dot swaps to the × while hovered.
         let mut hovered = use_state(|| false);
 
         let active = use_reactive(&self.active);
 
-        // Reveal the active tab in the strip: on activation and on our *first* area measurement (a
-        // freshly mounted / reopened active tab's area lands a frame after activation), but not on
-        // every later area change — torin re-emits `Sized` for every tab on scroll, and re-revealing
-        // then would snap the active tab back. So the effect subscribes to `active` and to a memo of
-        // *whether* we have an area: a `Memo<bool>` only notifies when `is_some()` flips (None -> Some),
-        // never when the `Area` value changes, so scrolling never wakes us. We then peek the area for
-        // the reveal. (`scroll_to_item` peeks internally, so its scroll write can't loop us.)
         let mut area = use_state(|| None::<Area>);
         let has_area = use_memo(move || area.read().is_some());
         let controller = self.controller;
@@ -129,7 +119,6 @@ impl Component for Tab {
             }
         });
 
-        // `hover_background` is themed for the (coming) hover state but not painted in this slice.
         let TabTheme {
             background,
             active_background,
@@ -139,9 +128,6 @@ impl Component for Tab {
             ..
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
-        // The unsaved dot is a semantic tone; the close × is a flat `Button`, so its icon
-        // inherits that button's colour. (The context menu's separators are `Divider::menu`'s
-        // own business — nothing to read here for them.)
         let dot_color = tones().warning;
 
         let (bg, fg, accent_fill) = if self.active {
@@ -150,10 +136,6 @@ impl Component for Tab {
             (background, color, Color::TRANSPARENT)
         };
 
-        // The close affordance: a flat 16×16 icon button (its icon inherits the flat-button colour +
-        // hover tint). `stop_propagation` so pressing it closes the tab without also bubbling up to
-        // the tab-body switch. Closes through the shared gate — the T2 confirm when this
-        // tab's query is in flight. Its tooltip is the comp's dirty-aware `closeTitle`.
         let close_button = TooltipContainer::new(Tooltip::new_text(if self.dirty {
             "Unsaved changes — click to close"
         } else {
@@ -172,9 +154,6 @@ impl Component for Tab {
                 .child(Icon::new(IconName::Close).size(11.)),
         );
 
-        // Trailing 16×16 close slot. A clean tab shows the × button outright; a dirty tab shows its
-        // unsaved dot, which swaps to the × button while the slot is hovered so it stays one click to
-        // close. The slot wrapper is always mounted, so it's what detects the hover.
         let show_x = !self.dirty || hovered();
         let close = rect()
             .width(Size::px(16.))
@@ -186,23 +165,16 @@ impl Component for Tab {
             .maybe(!show_x, |el| el.child(Dot::new(dot_color)))
             .maybe(show_x, |el| el.child(close_button));
 
-        // The tab's visual + interactions; wrapped in the tab's own `DragZone` below.
         let content = rect()
-            // Width unset → the tab hugs its content (name + close + padding). Fixed height (not
-            // `fill`) so it survives the hug-content DragZone. Vertical: accent + row.
             .height(Size::px(TAB_HEIGHT))
             .width(Size::auto())
             .vertical()
             .content(Content::Fit)
             .background(bg)
-            // Measure ourselves: locally for the reveal (above) + into the shared strip map for drag
-            // hit-testing.
             .on_sized(move |e: Event<SizedEventData>| {
                 area.set(Some(e.area));
                 areas.write().insert(id, e.area);
             })
-            // A single click switches; a double-click (left mouse) renames. Right-click = context menu
-            // (below). While already editing, the input owns clicks.
             .on_press(move |e: Event<PressEventData>| {
                 if *renaming.read() {
                     return;
@@ -218,14 +190,10 @@ impl Component for Tab {
                 }
                 radio.write().switch(id);
             })
-            // Right-click → this tab's context menu at the cursor, scoped to this tab.
             .on_secondary_down(move |e: Event<PressEventData>| {
                 e.stop_propagation();
                 ContextMenu::open_from_down(tab_context_menu(id, radio, renaming, closer, config));
             })
-            // While renaming: Escape cancels (consumed — an Esc that ends a rename must
-            // not also cancel a running query further down the dismiss chain); a press
-            // anywhere outside the tab commits (like a blur).
             .maybe(*renaming.read(), |el| {
                 el.on_global_key_down(on_command(config, Command::Cancel, move || {
                     renaming.set(false);
@@ -246,7 +214,6 @@ impl Component for Tab {
                     }
                 })
             })
-            // 2px top accent bar (active only) — the pinned-child idiom for a single edge.
             .child(
                 rect()
                     .width(Size::fill_minimum())
@@ -254,8 +221,6 @@ impl Component for Tab {
                     .min_height(Size::px(2.))
                     .background(accent_fill),
             )
-            // The label row fills the rest and centres vertically (padding 0 sp-4 · gap sp-3): the
-            // inline rename input while editing, else the name + close slot.
             .child({
                 let row = rect()
                     .height(Size::flex(1.))
@@ -277,8 +242,6 @@ impl Component for Tab {
                 }
             });
 
-        // The tab owns its own drag: the ghost is a matching `TabChrome`, the tab collapses out of the
-        // strip while dragging (`show_while_dragging(false)`), and dragging is disabled while renaming.
         DragZone::new(id, content)
             .drag_element(rect().height(Size::px(TAB_HEIGHT)).child(TabChrome::new(
                 self.name.clone(),
@@ -330,7 +293,6 @@ impl Component for TabRename {
                 .flat()
                 .compact()
                 .auto_focus(true)
-                // The name arrives selected, so typing replaces it rather than prepending.
                 .select_all_on_init(true)
                 .width(Size::px(118.))
                 .on_submit(move |value: String| {
@@ -375,8 +337,6 @@ impl Component for TabChrome {
             ..
         } = get_theme!(&self.theme, TabThemePreference, "tab");
 
-        // The dot stays a semantic tone — that is the sanctioned exception, and "unsaved" is a
-        // meaning rather than this component's dress.
         let (dot_color, x_color) = (tones().warning, close);
 
         let (bg, fg, accent_fill) = if self.active {
@@ -385,7 +345,6 @@ impl Component for TabChrome {
             (background, color, Color::TRANSPARENT)
         };
 
-        // Static close glyph — the tab's resting look: unsaved dot when dirty, else ×.
         let close = rect()
             .width(Size::px(16.))
             .height(Size::px(16.))

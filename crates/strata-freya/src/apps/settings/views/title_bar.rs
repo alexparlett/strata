@@ -25,8 +25,6 @@ impl Component for TitleBar {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
 
-        // The window's mark: the gear in an accent-tinted tile, then its name in the scale's
-        // Title role (ui 600 14.5, the comp's).
         let mark = rect()
             .width(Size::px(COMPACT_BUTTON))
             .height(Size::px(COMPACT_BUTTON))

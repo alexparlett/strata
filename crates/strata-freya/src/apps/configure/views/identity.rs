@@ -28,16 +28,6 @@ pub struct Identity;
 impl Component for Identity {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // **An internal table has no reader to pick.** Strata writes its data itself, in its own
-        // format, so FORMAT is a question about files this table does not have — and the picker's
-        // answer is kept in the draft for a flip back to Local, exactly as a connection is. The
-        // name keeps the whole row, which is also what stops the box narrowing under the user
-        // when LOCATION moves.
-        //
-        // Read through a `Memo` on the one field that decides it: this row is above the name box,
-        // and a plain `ctx.draft.read()` here would re-render the FORMAT picker on every
-        // keystroke in that box for a value only LOCATION moves (`PathList` avoids the same trap
-        // by resolving shared values once).
         let internal = use_memo(move || ctx.draft.read().internal());
         let internal = internal();
 
@@ -60,9 +50,6 @@ struct NameField;
 impl Component for NameField {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // The box owns its buffer and this carries it into the draft, exactly as the shared
-        // option fields do — reported per keystroke, because the thing that commits this window
-        // is a `Button`, which moves focus and calls its handler in the same breath.
         let text = use_state({
             let initial = ctx.draft.peek().name.clone();
             move || initial

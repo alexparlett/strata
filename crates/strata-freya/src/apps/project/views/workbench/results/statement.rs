@@ -56,8 +56,6 @@ impl Component for StatementState {
                     .center()
                     .child(Icon::new(IconName::Check).color(icon_color).size(22.)),
             )
-            // The statement's own SQL name, off `StmtKind::label` — the same table the status
-            // bar reads, so the title and the footer cannot call one statement two things.
             .child(Title::new(self.kind.label()).color(title_color))
             .child(
                 Readout::new(self.message.clone())

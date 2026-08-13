@@ -101,31 +101,15 @@ pub struct Nav;
 impl Component for Nav {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        // Which headings are folded away. Collapsed-by-exception, so a group added later
-        // shows up rather than hiding.
         let collapsed = use_state(HashSet::<NavGroup>::new);
-        // What is typed in the search box. Local: the tree it stands over is this component's, and
-        // a hit clears it on the way out, so nothing else ever reads it.
         let query = use_state(String::new);
         let config = use_config_station();
-        // What a hit is followed *with*, taken here in the render scope: both are context reads,
-        // and a handler has no scope left to take one from.
         let reveal = use_consume::<Reveal>();
         let engine = use_consume::<SettingsCtx>().engine;
 
-        // The tree, or what the query found instead of it.
-        //
-        // Each body is **keyed**, so switching between them replaces the subtree rather than pairing
-        // the tree's unkeyed rows against the results' keyed ones — the mixed-keying shape that
-        // panicked Freya's differ once already (`components::form`'s row-count test).
         let hits = search(&query.read());
         let searching = !query.read().trim().is_empty();
         let body = match (searching, hits.is_empty()) {
-            // Walk the categories in order, opening a heading whenever the group changes. The
-            // list is contiguous by group (`model`'s test pins that), so one pass draws the whole
-            // tree without grouping it first. Built in this arm and not above it: while there is a
-            // query the tree isn't on screen, and building it anyway would allocate every heading
-            // and row per keystroke to throw them away.
             (false, _) => {
                 let mut tree = rect().key("tree").width(Size::fill()).vertical();
                 let mut heading: Option<NavGroup> = None;
@@ -177,10 +161,6 @@ impl Component for Nav {
             .height(Size::fill())
             .horizontal()
             .content(Content::Flex)
-            // Esc empties the box, and only then — declined while it is already empty, so the
-            // press falls through to the window's own Cancel and closes it. This listener sits
-            // inside the router's subtree, which is *before* the root's in document order, which
-            // is what lets it take the press at all.
             .on_global_key_down(on_command(config, Command::Cancel, move || {
                 let mut query = query;
                 match query.peek().trim().is_empty() {
@@ -196,9 +176,6 @@ impl Component for Nav {
                     .width(Size::flex(1.))
                     .height(Size::fill())
                     .vertical()
-                    // For the body's `flex(1.)` below: the search box keeps its height and the
-                    // list takes what is left, rather than the column hugging both and running
-                    // the last result off the bottom of a short window.
                     .content(Content::Flex)
                     .background(theme.nav_background)
                     .padding(Gaps::new(SP_4, SP_4, SP_4, SP_4))
@@ -206,18 +183,11 @@ impl Component for Nav {
                         InputTypography::body(
                             Input::new(query)
                                 .placeholder("Search settings")
-                                // The glyph's tone is the rail's own recessive one, off the
-                                // `settings` theme — not a direct `text.placeholder` read, which
-                                // is the same colour today and the wrong source (AGENTS.md §3: a
-                                // surface with a component theme reads its colours from it).
                                 .leading(
                                     Icon::new(IconName::Search)
                                         .color(theme.chevron_color)
                                         .size(13.),
                                 )
-                                // Enter takes the first hit. Read from the box rather than from a
-                                // captured list, so the handler can't answer for a query that has
-                                // moved on.
                                 .on_submit(move |_: String| {
                                     if let Some(hit) = search(&query.peek()).first() {
                                         follow(*hit, reveal, engine, query);
@@ -228,8 +198,6 @@ impl Component for Nav {
                         .width(Size::fill()),
                     )
                     .child(rect().height(Size::px(SEARCH_GAP)))
-                    // Scrolling, which shows nothing while the content fits — the tree always
-                    // does, and eight results do at every height but the window's smallest.
                     .child(
                         ScrollView::new()
                             .width(Size::fill())
@@ -250,21 +218,13 @@ impl Component for Nav {
 /// Every handle is a parameter because this runs from an event handler, where there is no scope left
 /// to consume a context from.
 fn follow(hit: Hit, reveal: Reveal, engine: State<PropRows>, query: State<String>) {
-    // `replace`, not `push`: same as a category row — these pages are peers, not a trail.
     let _ = RouterContext::get().replace(hit.route());
     match hit {
-        // The row on that page reveals itself when it mounts; see `components::form::reveal`.
         Hit::Setting(anchor) => reveal.ask(anchor.id()),
-        // A property's row is the one the user set, so the jump takes you to the grid and picks it
-        // out if it is there — and adds nothing if it isn't. Following a result is navigation; a row
-        // in that grid is an override, and search must not write one (`PropRows::reveal`). The
-        // selection fill is why this hit doesn't flash: it marks the row for as long as it is being
-        // looked at, with the inspector under it saying what the key does.
         Hit::Property(entry) => {
             let mut engine = engine;
             engine.write().reveal(entry.key);
         }
-        // Nothing on the page to single out — being there is the whole answer.
         Hit::Page(_) => {}
     }
     let mut query = query;
@@ -300,8 +260,6 @@ impl Component for ResultRow {
         let hit = self.hit;
         let (reveal, engine, query) = (self.reveal, self.engine, self.query);
 
-        // A property's location is its key's namespace, which is a path and set as one; every other
-        // hit's is a breadcrumb of prose.
         let location = match hit {
             Hit::Property(_) => Path::new(hit.location())
                 .color(theme.hint_color)
@@ -349,8 +307,6 @@ impl Component for GroupHeading {
         let mut collapsed = self.collapsed;
         let open = !collapsed.read().contains(&group);
 
-        // A heading is not a destination, so it has no `ActivableRoute` and never lights up —
-        // only the hover fill its `sidebar_item` theme already carries.
         SideBarItem::new()
             .theme(row_theme(HEADING_PADDING, None))
             .on_press(move |_: Event<PressEventData>| {
@@ -398,9 +354,6 @@ impl Component for CategoryRow {
 
         let row = SideBarItem::new()
             .theme(row_theme(padding, Some(theme.item_active_background)))
-            // `replace`, not `push`: the categories are peers, not a trail, so the window has
-            // no back stack to grow (and nothing offers to walk one). The discarded `Result`
-            // only ever reports a failed *external* navigation, which a `Route` cannot be.
             .on_press(move |_: Event<PressEventData>| {
                 let _ = RouterContext::get().replace(route.clone());
             })

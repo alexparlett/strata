@@ -60,8 +60,6 @@ impl Component for TabBar {
             divider_fill,
         } = get_theme!(&self.theme, TabBarThemePreference, "tab_bar");
 
-        // Read the strip structure once, into owned tuples, so the read guard drops before we build
-        // elements. Structural / active changes on `Chan::Tabs` re-render us.
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
         let tabs: Vec<(TabId, String, bool, bool)> = {
             let s = radio.read();
@@ -75,23 +73,14 @@ impl Component for TabBar {
                 .collect()
         };
 
-        // One `ScrollController` both drives the horizontal scroll and lets the *active* tab reveal
-        // itself (`scroll_to_item`): it's handed to the ScrollView (`new_controlled`) and to each tab.
         let controller = use_scroll_controller(ScrollConfig::default);
-        // Each tab reports its measured area here (drag hit-testing); the strip viewport is measured
-        // on the shell (edge-scroll). Both are peeked from the pointer handler, never read in render.
         let areas = use_state(HashMap::<TabId, Area>::new);
         let mut viewport = use_state(Area::default);
 
-        // Drag-reorder state. `use_drag` says whether a tab is being dragged (and which); `insert` is
-        // the slot the drop placeholder sits in, in *dragged-excluded* strip order (so it feeds
-        // `move_tab` directly). Reading `dragging`/`insert` here re-renders the strip as the drag
-        // progresses, so the placeholder tracks the pointer and the dragged tab collapses out.
         let dragging = use_drag::<TabId>();
         let dragged = dragging();
         let mut insert = use_state(|| None::<usize>);
         let insert_at = dragged.and(insert());
-        // The dragged tab's name sizes the placeholder (rendered invisibly); its inverse surface fills.
         let dragged_name = dragged
             .and_then(|d| {
                 tabs.iter()
@@ -101,10 +90,6 @@ impl Component for TabBar {
             .unwrap_or_default();
         let slot_bg = use_roles().get(Role::DropTarget);
 
-        // While a drag is live, one global pointer handler drives both the placeholder slot and
-        // edge-scroll. It hit-tests the *remaining* tabs (dragged excluded, matching how the strip
-        // renders and what `move_tab` expects) via `drag::insert_slot`, and scrolls when the pointer
-        // nears a strip edge via `drag::edge_scroll`. All maths live in `super::drag`; this only wires.
         let order_h: Vec<TabId> = tabs.iter().map(|(id, ..)| *id).collect();
         let pointer_move = move |e: Event<PointerEventData>| {
             let Some(drag_id) = *dragging.peek() else {
@@ -131,9 +116,6 @@ impl Component for TabBar {
             }
         };
 
-        // Build the track's children in strip order, interleaving the placeholder at `insert_at`
-        // (counted over the tabs that stay put). The dragged tab still renders — `show_while_dragging`
-        // collapses it to nothing while its ghost follows the cursor — so it keeps hosting the drag.
         let mut children: Vec<Element> = Vec::new();
         let mut rem_idx = 0usize;
         for (id, name, active, dirty) in tabs.iter().cloned() {
@@ -141,8 +123,6 @@ impl Component for TabBar {
             if !is_dragged && insert_at == Some(rem_idx) {
                 children.push(drop_slot(dragged_name.clone(), slot_bg).into());
             }
-            // Each tab is a self-contained `Tab` — it owns its own `DragZone` (ghost, collapse-while-
-            // dragging, drag-disabled-while-renaming). The strip only places the drop placeholder.
             children.push(Tab::new(id, name, active, dirty, controller, areas).into());
             if !is_dragged {
                 rem_idx += 1;
@@ -158,8 +138,6 @@ impl Component for TabBar {
             .drag_scrolling(false)
             .children(children);
 
-        // The drop target = the whole strip. Releasing over it commits to the placeholder slot
-        // (`insert`, dragged-excluded order); `move_tab` no-ops a drop back onto the tab's own gap.
         let drop_zone = DropZone::new(track, move |dragged: TabId| {
             if let Some(ins) = *insert.peek() {
                 radio.write().move_tab(dragged, ins);
@@ -167,9 +145,6 @@ impl Component for TabBar {
             insert.set(None);
         });
 
-        // The shell takes the flex(1) space (so the right cluster stays pinned) and gives the auto
-        // DropZone / fill ScrollView their bounds. It carries the viewport measurement + the drag
-        // pointer handler, both on this stationary box (not inside the scrolling content).
         let tabs_area = rect()
             .width(Size::flex(1.))
             .height(Size::fill())
@@ -177,7 +152,6 @@ impl Component for TabBar {
             .on_global_pointer_move(pointer_move)
             .child(drop_zone);
 
-        // The strip row: tabs (flex) + the pinned right cluster (new / navigate / overflow).
         let row = rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
@@ -185,8 +159,6 @@ impl Component for TabBar {
             .content(Content::Flex)
             .child(tabs_area)
             .child(Divider::vertical().color(divider_fill))
-            // The controller carries the strip's overflow verdict, so the cluster's quick-navigate
-            // button can show only when the tabs actually need scrolling.
             .child(TabControls::new(controller));
 
         rect()

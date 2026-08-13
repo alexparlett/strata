@@ -77,8 +77,6 @@ async fn fixture() -> SessionContext {
     .unwrap();
     ctx.register_batch("orders", orders).unwrap();
 
-    // sqlparser lexes `event` and `day` as (non-reserved) keywords — a real-world
-    // table shape that must stay fully addressable.
     let event = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("day", DataType::Int64, false),
@@ -197,10 +195,7 @@ fn assert_spans_wellformed(sql: &str, out: &[Diagnostic]) {
     }
 }
 
-// ---- 1. valid queries: zero diagnostics ------------------------------------
-
 const VALID: &[&str] = &[
-    // Plain selection shapes
     "SELECT id, name FROM t",
     "SELECT * FROM t",
     "SELECT t.id, t.name FROM t",
@@ -211,7 +206,6 @@ const VALID: &[&str] = &[
     "SELECT u.\"name\" FROM users u",
     "SELECT day, kind FROM event",
     "SELECT event.day FROM event",
-    // Expressions
     "SELECT id + 1, -id, id * 2 FROM t",
     "SELECT name || '!' FROM t",
     "SELECT CAST(id AS VARCHAR) AS c1, TRY_CAST(name AS INT) AS c2, id::text AS c3 FROM t",
@@ -230,7 +224,6 @@ const VALID: &[&str] = &[
     "SELECT date_part('month', created_at) FROM users",
     "SELECT now(), current_date",
     "SELECT created_at + INTERVAL '1 day' FROM users",
-    // Aggregates / grouping
     "SELECT count(*) FROM t",
     "SELECT count(DISTINCT status) FROM orders",
     "SELECT status, sum(amount), avg(amount), min(amount), max(amount) FROM orders GROUP BY status",
@@ -240,12 +233,10 @@ const VALID: &[&str] = &[
     "SELECT upper(status), count(*) FROM orders GROUP BY upper(status)",
     "SELECT status, user_id, sum(amount) FROM orders GROUP BY ROLLUP (status, user_id)",
     "SELECT count(*) FILTER (WHERE amount > 10) FROM orders",
-    // Window functions
     "SELECT id, row_number() OVER (ORDER BY id) FROM t",
     "SELECT user_id, sum(amount) OVER (PARTITION BY user_id ORDER BY order_id) FROM orders",
     "SELECT rank() OVER (PARTITION BY status ORDER BY amount DESC) FROM orders",
     "SELECT sum(amount) OVER (ORDER BY order_id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM orders",
-    // Joins
     "SELECT u.name, o.amount FROM users u JOIN orders o ON u.user_id = o.user_id",
     "SELECT u.name FROM users u LEFT JOIN orders o ON u.user_id = o.user_id AND o.amount > 0",
     "SELECT u.name FROM users u RIGHT OUTER JOIN orders o ON u.user_id = o.user_id",
@@ -256,7 +247,6 @@ const VALID: &[&str] = &[
     "SELECT a.name, b.name FROM users a JOIN users b ON a.user_id = b.user_id",
     "SELECT u.name, o.amount, t.id FROM users u, orders o, t WHERE u.user_id = o.user_id AND t.id = u.user_id",
     "SELECT od.amount FROM orders od WHERE od.status = 'open'",
-    // Subqueries
     "SELECT id FROM t WHERE id IN (SELECT user_id FROM orders)",
     "SELECT id FROM t WHERE id NOT IN (SELECT user_id FROM orders WHERE amount > 100)",
     "SELECT id FROM t WHERE EXISTS (SELECT 1 FROM users u WHERE u.user_id = t.id)",
@@ -268,7 +258,6 @@ const VALID: &[&str] = &[
     "SELECT * FROM (SELECT * FROM (SELECT id FROM t) a) b",
     "SELECT a + b FROM (VALUES (1, 2), (3, 4)) v(a, b)",
     "SELECT big.total FROM (SELECT user_id, sum(amount) AS total FROM orders GROUP BY user_id) big",
-    // CTEs
     "WITH c AS (SELECT id, name FROM t) SELECT c.id, c.name FROM c",
     "WITH c AS (SELECT id FROM t), d AS (SELECT id FROM c) SELECT id FROM d",
     "WITH c(x, y) AS (SELECT id, name FROM t) SELECT x, y FROM c",
@@ -276,25 +265,20 @@ const VALID: &[&str] = &[
     "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT n FROM r",
     "SELECT * FROM (WITH inner_c AS (SELECT id FROM t) SELECT id FROM inner_c) outer_q",
     "WITH c AS (SELECT user_id FROM orders) SELECT name FROM users WHERE user_id IN (SELECT user_id FROM c)",
-    // Set operations
     "SELECT id FROM t UNION SELECT user_id FROM users",
     "SELECT id FROM t UNION ALL SELECT user_id FROM users ORDER BY id LIMIT 3",
     "SELECT id FROM t EXCEPT SELECT user_id FROM users",
     "SELECT id FROM t INTERSECT SELECT user_id FROM users",
     "SELECT id FROM t UNION ALL (SELECT user_id FROM users UNION ALL SELECT order_id FROM orders)",
-    // Views
     "SELECT user_id, name FROM v_users",
     "SELECT v.name FROM v_users v JOIN orders o ON v.user_id = o.user_id",
-    // Nested / semi-structured data
     "SELECT address['city'] FROM customers",
     "SELECT tags[1] FROM customers",
     "SELECT c.id FROM customers c WHERE c.address['zip'] = '10115'",
-    // Introspection + EXPLAIN
     "EXPLAIN SELECT id FROM t",
     "EXPLAIN SELECT u.name FROM users u JOIN orders o ON u.user_id = o.user_id",
     "DESCRIBE t",
     "SHOW TABLES",
-    // Comments and formatting
     "SELECT id -- trailing note\nFROM t\nWHERE id > 0 /* block */ ORDER BY id",
     "SELECT ';' FROM t",
 ];
@@ -303,8 +287,6 @@ const VALID: &[&str] = &[
 async fn valid_queries_stay_clean() {
     let ctx = fixture().await;
     for sql in VALID {
-        // Corpus guard: the entry must genuinely plan, or the assertion below
-        // proves nothing.
         if let Err(e) = engine_accepts(&ctx, sql).await {
             panic!("corpus entry does not plan — fix the corpus: {sql:?}: {e}");
         }
@@ -316,8 +298,6 @@ async fn valid_queries_stay_clean() {
         );
     }
 }
-
-// ---- 2. bad names: all reported, engine agrees -----------------------------
 
 /// `(sql, expected spanned texts, in order)` — the diagnostic count must match
 /// exactly (no extra noise) and each span slices to the expected text.
@@ -410,7 +390,6 @@ async fn bad_names_all_reported_and_engine_agrees() {
             out.iter().all(Diagnostic::is_error),
             "non-error fault in {sql:?}"
         );
-        // The resolver must never invent an error the engine wouldn't hit.
         assert!(
             engine_accepts(&ctx, sql).await.is_err(),
             "resolver flagged {sql:?} but the engine accepts it"
@@ -420,15 +399,11 @@ async fn bad_names_all_reported_and_engine_agrees() {
 
 #[tokio::test]
 async fn exact_case_quoted_misses_stay_engine_authoritative() {
-    // `"Name"` (quoted, wrong case) is beyond the resolver's case-insensitive
-    // proof — the planner's own case-sensitivity error surfaces instead.
     let ctx = fixture().await;
     let out = run(&ctx, "SELECT \"Name\" FROM t").await;
     assert!(!out.is_empty(), "quoted case miss must error");
     assert!(out.iter().all(Diagnostic::is_error));
 }
-
-// ---- 3. mid-edit drafts: quiet ---------------------------------------------
 
 const DRAFTS: &[&str] = &[
     "SELECT",
@@ -466,8 +441,6 @@ async fn mid_edit_drafts_stay_quiet() {
     }
 }
 
-// ---- 4. prefix torture ------------------------------------------------------
-
 #[tokio::test]
 async fn every_prefix_of_every_valid_query_validates() {
     let ctx = fixture().await;
@@ -482,8 +455,6 @@ async fn every_prefix_of_every_valid_query_validates() {
 
 #[tokio::test]
 async fn non_ascii_text_never_panics() {
-    // Spans under non-ASCII are approximate (chars ≈ bytes, the documented lex
-    // convention) — the contract here is only totality: no panic, no bail.
     let ctx = fixture().await;
     let queries = [
         "SELECT 'héllo wörld' FROM t",

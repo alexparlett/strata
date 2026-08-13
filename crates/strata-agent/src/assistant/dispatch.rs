@@ -12,21 +12,17 @@
 //! caller does not have, and it answers in content blocks rather than typed values. The AS-01
 //! file records that survey.
 //!
-//! ## Two things happen here that do not happen on the MCP path
+//! Two things happen here that do not happen on the MCP path:
 //!
-//! - **Every call is bound to the window's project.** The assistant is *in* a window; an MCP
-//!   client is not. With two projects open the vocabulary's own rule is to refuse rather than
-//!   guess, which is right for a caller with no context and wrong for a pane looking at one of
-//!   them. This was first written as a *default* — filled in only where the model named none —
-//!   and that was a hole: the vocabulary resolves any project the host lists, so a model that
-//!   named a different open project was served against it, and the step card carries no project
-//!   to say which. So the scope **overwrites**, and `list_projects` answers with that project
-//!   alone. Applied to the arguments object before it is deserialized, so it is one rule rather
-//!   than one per tool.
+//! - **Every call is bound to the window's project.** The vocabulary's own rule is to refuse rather
+//!   than guess with two projects open, which is right for a caller with no context and wrong for a
+//!   pane looking at one. Written first as a *default* and that was a hole — a model naming a
+//!   different open project was served against it — so the scope **overwrites**, applied to the
+//!   arguments object before it is deserialized, and `list_projects` answers with that project
+//!   alone.
 //! - **A call yields a card as well as an answer.** The model gets the tool's full JSON; the
-//!   transcript gets [`Facts`] — the SQL, the session, the row count and the engine's own
-//!   elapsed. Never a second measurement: `elapsed_ms` is the run's, not a stopwatch wrapped
-//!   around the call.
+//!   transcript gets [`Facts`]. Never a second measurement: `elapsed_ms` is the run's, not a
+//!   stopwatch wrapped around the call.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -111,9 +107,6 @@ pub async fn call<H: Host>(
     name: &str,
     arguments: Value,
 ) -> Called {
-    // The assistant's own presentation tool, which is not one of the ten and never reaches a
-    // `Host` — it checks a statement and hands it to the transcript. Ahead of the match below
-    // because it is the only arm with an answer that is not a tool result.
     if offer::is_offer(name) {
         let offered = offer::offer(tools, scope, arguments).await;
         return Called {
@@ -190,8 +183,6 @@ async fn dispatch<H: Host>(
         "open_query_session" => match params::<ProjectParams>(name, arguments) {
             Err(e) => (Err(e), plain),
             Ok(p) => {
-                // The in-process caller's constant identity, owned by `strata-agent` because
-                // there is no protocol for the assistant to introduce itself over.
                 let opened = tools
                     .open_query_session(AgentIdentity::assistant(), p)
                     .await;
@@ -215,12 +206,7 @@ async fn dispatch<H: Host>(
         "run" => match params::<RunParams>(name, arguments) {
             Err(e) => (Err(e), plain),
             Ok(mut p) => {
-                // The assistant asks for less than the wire's cap ([`MAX_RUN_ROWS`]) — over
-                // the tool's own resolution, so a host row-limit of 0 lands at the ceiling
-                // too. The response echoes the size actually used, so the clamp is visible.
                 p.page_size = Some(tools.resolved_page_size(p.page_size).min(MAX_RUN_ROWS));
-                // Kept before the call so a refused statement still shows on its card: the
-                // whole point of the card is to say what was attempted.
                 let sql = Some(p.sql.clone());
                 let session = p.query_session.clone();
                 let settled = tools.run(p).await;
@@ -295,32 +281,24 @@ async fn dispatch<H: Host>(
 
 /// Bind every call to the window's project.
 ///
-/// **A boundary, not a default.** This filled the project in only where the model had named
-/// none, which meant a model that named a *different* open project was served against it: the
-/// vocabulary resolves any project the host lists, so a pane scoped to one window could list,
-/// open sessions in and run SQL against every other window's data, and the step card — which
-/// carries no project — could not tell the user which. The pane belongs to one project, so the
-/// scope overwrites rather than defaults, and `list_projects` answers with that one project
-/// alone ([`only`]).
+/// **A boundary, not a default.** Filling the project in only where the model named none meant a
+/// model that named a *different* open project was served against it, and the step card carries no
+/// project to say which. The pane belongs to one project, so the scope overwrites, and
+/// `list_projects` answers with that one alone ([`only`]).
 ///
-/// Applied to the arguments object rather than to each params struct, so it is one rule for
-/// every tool that takes a `project` and a no-op for the one that does not. Where there is no
-/// scope (a caller that is not a window — the tests), nothing is invented and the vocabulary's
-/// own ambiguity rule answers instead.
+/// Applied to the arguments object rather than to each params struct, so it is one rule for every
+/// tool taking a `project` and a no-op for the one that does not. Where there is no scope, nothing
+/// is invented and the vocabulary's own ambiguity rule answers.
 ///
-/// **A fixed point**, deliberately: it overwrites rather than fills in, so applying it twice
-/// says exactly what applying it once says. That is what lets the turn scope the arguments for
-/// the step card *before* the call without the card and the call becoming two normalizations
-/// to keep in step — the card shows what ran because it is the same value.
+/// **A fixed point**, deliberately, so applying it twice says what applying it once says — which is
+/// what lets the turn scope the arguments for the step card *before* the call without the card and
+/// the call becoming two normalizations to keep in step.
 pub(super) fn scoped(arguments: Value, scope: &Scope) -> Value {
     let Some(project) = scope.project.as_deref() else {
         return arguments;
     };
     let mut object = match arguments {
         Value::Object(object) => object,
-        // A model that sent no arguments object at all still gets the scope, because every
-        // argument the tools take beyond `project` is either optional or about to be reported
-        // missing by name.
         Value::Null => Map::new(),
         other => return other,
     };
@@ -474,8 +452,6 @@ mod tests {
             scoped(json!({"project": "/w/ops"}), &scope),
             json!({"project": "/w/sales"})
         );
-        // No window scope: nothing is invented, and the vocabulary's own ambiguity rule
-        // answers instead.
         assert_eq!(scoped(json!({}), &Scope::default()), json!({}));
     }
 
@@ -494,8 +470,6 @@ mod tests {
         assert!(listed.answer.contains("/w/sales"), "{}", listed.answer);
         assert!(!listed.answer.contains("/w/ops"), "{}", listed.answer);
 
-        // A run the model tried to aim elsewhere lands here, and says so by resolving at all:
-        // with two projects open an unscoped call would be refused as ambiguous.
         let unscoped = call(&tools, &Scope::default(), "list_tables", json!({})).await;
         assert!(unscoped.failed, "{}", unscoped.answer);
         let bound = call(&tools, &scope, "list_tables", json!({"project": "/w/ops"})).await;

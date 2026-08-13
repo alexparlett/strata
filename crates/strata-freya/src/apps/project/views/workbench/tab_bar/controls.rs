@@ -52,13 +52,8 @@ impl TabControls {
 
 impl Component for TabControls {
     fn render(&self) -> impl IntoElement {
-        // The quick-navigate switcher earns its place only once the strip overflows and the far
-        // tabs need scrolling into view; while every tab is visible it would be redundant with the
-        // strip itself. Reading the controller here re-renders the cluster as the verdict flips.
         let overflowing = self.controller.is_scrollable(Direction::Horizontal);
 
-        // New-query lives inside the overflow menu (with its ⌘T chord), so the resting cluster is
-        // just the ⋯ actions menu — plus the ⌄ switcher only while the strip overflows.
         rect()
             .horizontal()
             .cross_align(Alignment::Center)
@@ -132,8 +127,6 @@ impl Component for NavMenu {
         let closer = use_consume::<TabCloser>();
         let config = use_config_station();
 
-        // Open tabs + status, filtered by the search box. Read once; the guard drops before we build.
-        // The filter runs over *all* tabs, in strip order.
         let needle = query.read().to_lowercase();
         let matches: Vec<(TabId, String, bool, bool)> = {
             let s = radio.read();
@@ -148,10 +141,6 @@ impl Component for NavMenu {
                 .collect()
         };
         let is_empty = matches.is_empty();
-        // Always cap the visible list at 10; when more than 10 match you narrow with a more specific
-        // name. The filter runs over *all* tabs (not just the first 10), so any tab — including ones
-        // past the first 10 in the strip — is reachable by name. (Dioxus sorts by last-viewed, which
-        // the Freya session doesn't track yet.)
         let overflow = matches.len().saturating_sub(10);
 
         let rows = matches.into_iter().take(10).fold(
@@ -207,9 +196,6 @@ fn nav_search(query: State<String>, faint: Color) -> impl IntoElement {
 
 /// One switcher row: status dot + name (flex) + close ×. The row press switches to the tab and
 /// closes the menu; the × closes the tab (and stops the press so it doesn't also switch).
-// Four of the nine describe the tab (`id`, `name`, `active`, `dirty`) and the rest are the
-// handles its two presses need. A builder function rather than a `Component` on purpose: it is
-// private to the switcher menu, so it needs neither a diff key nor a theme of its own.
 #[allow(clippy::too_many_arguments)]
 fn tab_row(
     id: TabId,
@@ -224,8 +210,6 @@ fn tab_row(
 ) -> impl IntoElement {
     let fg = palette.name_fg(active);
     let close_fg = palette.faint;
-    // `MenuItem` supplies the row background from the `menu_item` theme: transparent → hover_background
-    // on hover → select_background when `.selected()` (the blue active highlight).
     MenuItem::new()
         .selected(active)
         .padding((SP_3, SP_3))
@@ -257,8 +241,6 @@ fn tab_row(
                         .cross_align(Alignment::Center)
                         .on_press(move |e: Event<PressEventData>| {
                             e.stop_propagation();
-                            // Through the shared gate — the T2 confirm when this tab's
-                            // query is in flight.
                             closer.close(radio, config, id);
                         })
                         .child(Icon::new(IconName::Close).color(close_fg).size(12.)),
@@ -285,19 +267,12 @@ impl Component for OverflowMenu {
     fn render(&self) -> impl IntoElement {
         let mut open = use_state(|| false);
         let mut radio = use_radio::<SessionState, Chan>(Chan::Tabs);
-        // Close-all / Reopen are each only actionable with something to act on: Close-all needs an
-        // open tab, Reopen needs something parked on the stack. Read on `Chan::Tabs` (the channel
-        // every open/close/reopen writes), so the rows track the strip live — even with the menu
-        // open. New query is always available.
         let (can_close_all, can_reopen) = {
             let s = radio.read();
             (!s.order.is_empty(), !s.closed.is_empty())
         };
 
         let menu = Menu::new()
-            // Room for the hint row's chord (see `HINT_MENU_WIDTH`) — the Attached
-            // overlay's available width is the trigger's, so without a floor the row
-            // squeezes and the chord clips.
             .min_width(Size::px(super::menu::HINT_MENU_WIDTH))
             .on_close(move |()| open.set(false))
             .child(

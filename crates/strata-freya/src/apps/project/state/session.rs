@@ -88,10 +88,6 @@ impl QueryTab {
     /// so a freshly-opened bound tab reads as *not* dirty until edited.
     pub fn new(name: String, sql: String, origin: Origin) -> Self {
         let mut editor = CodeEditorData::new(Rope::from_str(&sql), Some(sql_language()));
-        // Populate the line blocks so the editor renders its content immediately. Measurement is
-        // the mounted `CodeEditor`'s job — it measures with its theme-resolved type on mount
-        // (the session doesn't know the editor's font). `mark_as_saved` then snapshots the
-        // opening text as the dirty baseline so a freshly-opened tab isn't "edited".
         editor.parse();
         editor.mark_as_saved();
         Self {
@@ -181,9 +177,9 @@ fn park(tab: &mut QueryTab) {
 #[derive(Default)]
 pub struct SessionState {
     pub tabs: HashMap<TabId, QueryTab>,
-    pub order: Vec<TabId>, // strip order (drag-reorder)
+    pub order: Vec<TabId>,
     pub active: Option<TabId>,
-    pub closed: Vec<(usize, QueryTab)>, // reopen stack — parked tab + its strip index at close
+    pub closed: Vec<(usize, QueryTab)>,
     /// A throwaway editor buffer the `EditorTab` slice
     /// falls back to when its tab was closed mid-event. Closing the active tab (nav-dropdown ×)
     /// fires the editor's commit-on-click-outside *after* the close removed the tab, so its
@@ -198,8 +194,6 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    // --- reads ------------------------------------------------------------
-
     /// The tab's current run request, if any.
     pub fn request(&self, id: TabId) -> Option<&QuerySpec> {
         self.tabs.get(&id).and_then(|t| t.request.as_ref())
@@ -330,9 +324,6 @@ impl SessionState {
         }
     }
 
-    // --- layout (P3-01) ---------------------------------------------------
-    // Structure toggles write on `Chan::Layout`; the size setters on `Chan::LayoutSize`.
-
     /// The rail's top-group toggle (design `onRailPane`): open the sidebar on `pane`, or —
     /// if it's already showing `pane` — collapse it.
     pub fn toggle_pane(&mut self, pane: SidebarPane) {
@@ -439,8 +430,6 @@ impl SessionState {
     pub fn set_drawer_h(&mut self, h: f32) {
         self.layout.drawer_h = h;
     }
-
-    // --- structural mutations (each leaves a valid `active`) --------------
 
     /// Append a new blank scratch tab (⌘T) and focus it.
     pub fn open_blank(&mut self) -> TabId {
@@ -602,8 +591,6 @@ impl SessionState {
         let was_active = self.active == Some(id);
 
         if let Some(mut tab) = self.tabs.remove(&id) {
-            // Parked without its request or its verdict — reopen starts with no results and
-            // unvalidated, like a fresh tab (see `park`; SNAPSHOT_SPEC §4 for the engine half).
             park(&mut tab);
             let at = pos.unwrap_or(self.order.len());
             self.closed.push((at, tab));
@@ -710,12 +697,9 @@ impl SessionState {
             self.tabs.insert(id, tab);
             let at = at.min(self.order.len());
             self.order.insert(at, id);
-            // Reopen focuses the restored tab (⇧⌘T), matching the Dioxus behaviour and browsers.
             self.active = Some(id);
         }
     }
-
-    // --- internals --------------------------------------------------------
 
     fn push_active(&mut self, tab: QueryTab) -> TabId {
         let id = tab.id;
@@ -753,8 +737,6 @@ impl SessionState {
         self.tabs.values().any(|t| t.name == name)
             || self.closed.iter().any(|(_, t)| t.name == name)
     }
-
-    // --- persistence (project.rs mirrors this for the Project store) -------
 
     /// Project the live session to its serde [`SessionSnapshot`] (state-arch §5), walking
     /// tabs in strip order so the file preserves the visible arrangement. Window geometry
@@ -838,7 +820,6 @@ mod tests {
         assert!(matches!(&t.origin, Origin::View(v) if v == "saved_view_1"));
         assert!(!t.is_dirty(), "a save resets the dirty baseline");
 
-        // The next divergence reads dirty again — the baseline moved, not froze.
         s.tabs.get_mut(&id).unwrap().editor.set_text("SELECT 3");
         assert!(s.tabs[&id].is_dirty());
     }
@@ -854,7 +835,6 @@ mod tests {
         assert_eq!(s.tabs[&id1].name, "query 1");
 
         s.close_one(id1);
-        // The freed name is still parked, so the new tab must not reuse it.
         let id2 = s.open_blank();
         assert_eq!(s.tabs[&id2].name, "query 2");
 
@@ -988,8 +968,6 @@ mod tests {
         );
         assert_eq!(rb.chart.series.as_deref(), Some("region"));
         assert_eq!(rb.chart.sort, ChartSort::ByYDesc);
-        // The bin count and the two display preferences travel with the rest of it — a tab
-        // reopened on a histogram must come back binned the way it was left.
         assert_eq!(rb.chart.bins, Some(24));
         assert_eq!(rb.chart.hidden, ["cost"]);
         assert!(rb.chart.log_y);
@@ -1001,13 +979,10 @@ mod tests {
     #[test]
     fn layout_toggles_follow_design_semantics() {
         let mut s = SessionState::default();
-        // Defaults: sidebar open on Catalog, the right side and the drawer collapsed.
         assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
         assert_eq!(s.layout.right, None);
         assert_eq!(s.layout.drawer, None);
 
-        // The right rail is the sidebar's rule on the other edge: naming a pane opens it,
-        // toggling the open one collapses, toggling the other switches.
         s.open_right_pane(RightPane::Inspector);
         assert_eq!(s.layout.right, Some(RightPane::Inspector));
         s.open_right_pane(RightPane::Inspector);
@@ -1021,8 +996,6 @@ mod tests {
         s.toggle_right_pane(RightPane::Chat);
         assert_eq!(s.layout.right, None);
 
-        // Toggling the *active* pane collapses the sidebar; toggling while collapsed reopens
-        // it on that pane; toggling a *different* pane switches without collapsing.
         s.toggle_pane(SidebarPane::Catalog);
         assert_eq!(s.layout.sidebar, None);
         s.toggle_pane(SidebarPane::Connections);
@@ -1032,7 +1005,6 @@ mod tests {
         s.close_sidebar();
         assert_eq!(s.layout.sidebar, None);
 
-        // Drawer: open on a tab, switch tabs, then toggle the active tab off.
         s.toggle_drawer(DrawerTab::Problems);
         assert_eq!(s.layout.drawer, Some(DrawerTab::Problems));
         s.toggle_drawer(DrawerTab::History);
@@ -1128,7 +1100,7 @@ mod tests {
         let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
         let _b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
         let mut snap = s.snapshot();
-        snap.active = Some(TabId::new()); // a tab that's no longer in the list
+        snap.active = Some(TabId::new());
 
         let restored = SessionState::from_snapshot(snap).unwrap();
         assert_eq!(restored.active, Some(a), "falls back to the first tab");
@@ -1139,8 +1111,6 @@ mod tests {
     fn empty_snapshot_is_none() {
         assert!(SessionState::from_snapshot(SessionSnapshot::default()).is_none());
     }
-
-    // --- diagnostics: the stamp, and the projections over it --------------
 
     use strata_model::Severity;
 
@@ -1174,7 +1144,6 @@ mod tests {
         let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
         let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
 
-        // Nothing has looked at either yet.
         assert_eq!(s.stale_tabs(1).len(), 2, "unvalidated tabs are stale");
 
         mark(&mut s, a, 1, vec![]);
@@ -1184,11 +1153,9 @@ mod tests {
             "both describe the world as it is"
         );
 
-        // The user types in one of them.
         s.tabs.get_mut(&a).unwrap().editor.set_text("SELECT 3");
         assert_eq!(s.stale_tabs(1), vec![a], "a moved its text, b did not");
 
-        // The catalog is fixed: every tab's verdict was resolved against the old one.
         mark(&mut s, a, 1, vec![]);
         let stale = s.stale_tabs(2);
         assert_eq!(stale.len(), 2, "a catalog epoch bump stales everything");
@@ -1224,12 +1191,10 @@ mod tests {
         assert_eq!(t.diagnostics.len(), 1);
         assert_eq!(t.validated.unwrap().epoch, 3);
 
-        // A later clean pass retracts wholesale — nothing accumulates.
         mark(&mut s, a, 3, vec![]);
         assert!(s.tabs[&a].diagnostics.is_empty());
         assert!(s.tabs[&a].validated.is_some(), "clean, not unchecked");
 
-        // A tab closed mid-pass simply doesn't take the answer.
         let gone = TabId::new();
         s.set_diagnostics(
             gone,
@@ -1252,15 +1217,13 @@ mod tests {
         let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
 
         mark(&mut s, a, 1, vec![problem("bad a")]);
-        mark(&mut s, b, 1, vec![]); // clean
-                                    // c is left unvalidated
+        mark(&mut s, b, 1, vec![]);
 
         let groups = s.problem_groups();
         assert_eq!(groups.len(), 1, "only the tab with something to report");
         assert_eq!(groups[0].tab, a);
         assert_eq!(groups[0].rows.len(), 1);
 
-        // Give c a verdict and it joins, in strip order behind a.
         mark(&mut s, c, 1, vec![problem("bad c")]);
         assert_eq!(
             s.problem_groups().iter().map(|g| g.tab).collect::<Vec<_>>(),

@@ -172,7 +172,6 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
     };
     let mut out = Vec::new();
 
-    // Non-zero error counters, each surfaced loudly.
     for m in metrics {
         if (m.name.ends_with("error") || m.name.ends_with("errors")) && m.value > 0 {
             out.push(Insight {
@@ -181,7 +180,6 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
             });
         }
     }
-    // Spills (memory pressure).
     if val("spilled_bytes") > 0 {
         out.push(Insight {
             text: format!("spilled {}", label("spilled_bytes").unwrap_or_default()),
@@ -194,7 +192,6 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
             tone: InsightTone::Warn,
         });
     }
-    // Row-group pruning / matching (statistics + bloom filter).
     let pv = val("row_groups_pruned_statistics") + val("row_groups_pruned_bloom_filter");
     let mv = val("row_groups_matched_statistics") + val("row_groups_matched_bloom_filter");
     if pv > 0 {
@@ -208,7 +205,6 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
             tone: InsightTone::Info,
         });
     }
-    // Pushdown filter removed rows.
     if val("pushdown_rows_pruned") > 0 {
         out.push(Insight {
             text: format!(
@@ -218,7 +214,6 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
             tone: InsightTone::Ok,
         });
     }
-    // Memory high-water marks.
     if val("peak_mem_used") > 0 {
         out.push(Insight {
             text: format!("peak {}", label("peak_mem_used").unwrap_or_default()),
@@ -231,7 +226,6 @@ pub fn insights(metrics: &[Metric]) -> Vec<Insight> {
             tone: InsightTone::Info,
         });
     }
-    // Filter selectivity (shown whenever present).
     if let Some(l) = label("selectivity") {
         out.push(Insight {
             text: format!("selectivity {l}"),
@@ -283,35 +277,29 @@ mod tests {
 
     #[test]
     fn self_time_picks_per_kind() {
-        // Source prefers time_elapsed_processing over the misleading elapsed_compute.
         let src = vec![
             m("elapsed_compute", 1, MetricKind::Time),
             m("time_elapsed_processing", 15_594_334, MetricKind::Time),
         ];
         assert!((self_time_ms(PlanKind::Source, &src).unwrap() - 15.594334).abs() < 1e-6);
-        // Join sums build + probe.
         let join = vec![
             m("build_time", 216_000, MetricKind::Time),
             m("join_time", 146_000, MetricKind::Time),
         ];
         assert!((self_time_ms(PlanKind::Join, &join).unwrap() - 0.362).abs() < 1e-6);
-        // Exchange uses repartition_time, never fetch/send wait.
         let ex = vec![
             m("repartition_time", 29_000, MetricKind::Time),
             m("fetch_time", 337_000_000, MetricKind::Time),
         ];
         assert!((self_time_ms(PlanKind::Exchange, &ex).unwrap() - 0.029).abs() < 1e-6);
-        // A compute op falls back to elapsed_compute.
         let agg = vec![m("elapsed_compute", 4_790_000, MetricKind::Time)];
         assert!((self_time_ms(PlanKind::Agg, &agg).unwrap() - 4.79).abs() < 1e-6);
-        // No metrics (plain EXPLAIN) → None.
         let empty: Vec<Metric> = Vec::new();
         assert_eq!(self_time_ms(PlanKind::Source, &empty), None);
     }
 
     #[test]
     fn groups_metrics_by_bucket() {
-        // Mirrors the v19 design's `metricGroup`.
         assert_eq!(metric_group("output_rows"), "Output");
         assert_eq!(metric_group("output_batches"), "Output");
         assert_eq!(metric_group("bytes_scanned"), "I/O");
@@ -337,7 +325,6 @@ mod tests {
             m("bytes_scanned", 605, MetricKind::Bytes),
         ];
         let got = insights(&metrics);
-        // matched + peak surface; the zeros (pruned/errors) and plain bytes don't.
         assert_eq!(got.len(), 2);
         assert!(got
             .iter()

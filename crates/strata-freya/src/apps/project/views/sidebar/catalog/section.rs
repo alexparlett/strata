@@ -61,15 +61,9 @@ impl Component for CatalogSection {
         let mut open = use_state(|| true);
         let top = if self.first { 4. } else { 12. };
 
-        // The pressable part is the label block, and the action sits beside it — so pressing the
-        // action cannot also collapse the section.
         let title = rect()
             .width(Size::flex(1.))
             .horizontal()
-            // Flex sizes this wrapper, but its children still hug — and `Overflow` defaults to
-            // painting *outside* the box, so without these two the label drew straight over the
-            // `+` beside it once the sidebar narrowed (P5-06). The name gives up its width and
-            // ellipsizes; the clip is the backstop for the chevron.
             .content(Content::Flex)
             .overflow(Overflow::Clip)
             .cross_align(Alignment::Center)

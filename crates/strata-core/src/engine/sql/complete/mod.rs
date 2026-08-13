@@ -13,8 +13,6 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-// The full keyword set DataFusion's parser recognises (sqlparser's own table, via the
-// datafusion re-export) — the authoritative list, not a hand-picked subset.
 use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
 
 use crate::engine::config::{key_def, Kind as KeyKind, ENGINE_KEYS};
@@ -64,32 +62,18 @@ pub struct Completion {
 /// gate (an explicit ask deserves the full vocabulary).
 pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec<Completion> {
     if caret_in_string_or_comment(sql, caret) {
-        // The one exception to the string guard (ED-11): the `OPTIONS ('…')` key —
-        // or the value of one — of a typed `CREATE EXTERNAL TABLE` completes inside
-        // its quotes. Every other string and comment position stays quiet.
         return options_literal_completions(sql, caret, catalog, manual).unwrap_or_default();
     }
     let (toks, lex_err) = lex(sql, &catalog.dialect);
-    // A tokenizer error empties the token stream (lex.rs) — every position would
-    // masquerade as a blank statement and mis-offer. An un-tokenizable buffer is
-    // mid-edit by definition: stay quiet everywhere until it lexes again. (The one
-    // recovery — an `OPTIONS` key literal left unterminated — is the arm above:
-    // an unterminated string contains the caret to end-of-input, so it never gets
-    // this far.)
     if lex_err.is_some() {
         return Vec::new();
     }
-    // Mid-literal (`1.` — the dot absorbed into the number token) is not a
-    // qualifier: quiet, the same stance as the string/comment guard.
     if caret_extends_numeric_literal(&toks, caret) {
         return Vec::new();
     }
     let ca = analyze_caret(sql, caret, &toks);
     let replace = ca.replace.clone();
     let partial = ca.partial.clone();
-    // Keywords are always followed by something, so accepting one inserts a
-    // trailing space (the identifier kinds never do — `,`/`.`/`)` may follow) —
-    // unless the buffer already provides whitespace right after the word.
     let kw_space = sql[replace.end.min(sql.len())..]
         .chars()
         .next()
@@ -99,9 +83,6 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
 
     match &ca.context {
         Context::Dot(rel) => push_dot_columns(&mut pool, &ca, catalog, rel, &replace),
-        // An item is complete — the grammar wants operators / the onward ladder,
-        // never a fresh column or function (that's what makes `SELECT * f` offer
-        // `FROM` above `floor`).
         Context::At(clause, Role::Continuation) => {
             for (i, k) in continuation_keywords(*clause).into_iter().enumerate() {
                 pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
@@ -109,29 +90,20 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             push_keywords(&mut pool, &replace, true, kw_space);
         }
         Context::At(Clause::Start, Role::Operand) => {
-            // Query leads first — a blank tab is usually a query — then the statement
-            // leads, the curated ord continuing across the two tables.
             for (i, &k) in QUERY_LEADS.iter().chain(STATEMENT_LEADS).enumerate() {
                 pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
             }
             push_keywords(&mut pool, &replace, false, kw_space);
         }
-        // A restart is a fresh *query* (`EXPLAIN |`, after a set op, `FROM (|`,
-        // `COPY (|`, `CREATE TABLE t AS |`): the statement leads would promise
-        // something Run refuses there.
         Context::At(Clause::Restart, Role::Operand) => {
             for (i, &k) in QUERY_LEADS.iter().enumerate() {
                 pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
             }
             push_keywords(&mut pool, &replace, false, kw_space);
         }
-        // `SET |` / `RESET |` — the config keys dispatch would accept, and the value
-        // vocabulary a key's kind names at `SET k = |`. A closed pool.
         Context::At(Clause::SetOption, Role::Operand) => {
             push_set_option_items(&mut pool, ca.set_key.as_deref(), &replace);
         }
-        // `DROP TABLE |` offers tables and **not** views — `DROP VIEW` is the other
-        // statement, and `ddl::tables` says so by name; `DROP VIEW |` the mirror.
         Context::At(Clause::DropTable, Role::Operand) => {
             for t in catalog.tables.iter().filter(|t| !t.is_view) {
                 pool.push(&t.name, T_PRIMARY, || table_item(t, &replace));
@@ -142,12 +114,6 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
                 pool.push(&t.name, T_PRIMARY, || table_item(t, &replace));
             }
         }
-        // `INSERT INTO |` — only tables whose data Strata owns: the same answer
-        // `Engine::is_internal` gives dispatch, read from the store that built the
-        // snapshot. Inside the target's **column list**, the target's own columns —
-        // and only for a target an INSERT may reach, because offering columns of a
-        // statement dispatch refuses would be dishonest. (VALUES tuples are the
-        // Binding arm: the content is the user's data.)
         Context::At(Clause::Insert, Role::Operand) => match &ca.column_list {
             Some(list) => push_list_columns(&mut pool, catalog, list, &replace, true),
             None => {
@@ -156,20 +122,15 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
                 }
             }
         },
-        // `STORED AS |` — exactly the formats `read_format` parses, as keyword items
-        // (uppercase + trailing space is right here).
         Context::At(Clause::CreateExternal, Role::Operand) => {
             for (i, &f) in STORED_AS_FORMATS.iter().enumerate() {
                 pool.ordered(f, T_PRIMARY, i, || keyword(f, &replace, kw_space));
             }
         }
-        // `DROP FUNCTION |` — only what this session created: a built-in is refused to
-        // the statement, because nothing can put one back.
         Context::At(Clause::DropFunction, Role::Operand) => {
             for f in catalog.functions.all().filter(|f| f.created) {
                 pool.push(&f.name, T_PRIMARY, || Completion {
                     label: f.name.clone(),
-                    // The bare name — a DROP takes the name, never a call.
                     insert: ident_insert(&f.name),
                     kind: CompletionKind::Function,
                     detail: Some("session function".into()),
@@ -177,10 +138,6 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
                 });
             }
         }
-        // The body of a `CREATE FUNCTION`, after its `RETURN`: the declared argument
-        // names, then functions. **Never catalog columns or relations** — the body may
-        // reference only its arguments (`ddl/functions.rs`), so offering scope columns
-        // would offer exactly what `Definition::check` refuses.
         Context::At(Clause::CreateFunction, Role::Operand) => {
             for name in function_arguments(&toks, sql.len(), caret) {
                 pool.push(&name, T_PRIMARY, || {
@@ -191,10 +148,6 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
                 pool.push(&f.name, T_FUNCTION, || function_item(f, &replace));
             }
         }
-        // `COPY |` reads a relation like a FROM target (CTEs vacuously absent, the
-        // projection boost a no-op). Inside its `PARTITIONED BY (…)` group, the
-        // **source's** columns — the catalog's when the source is a named table, the
-        // scraped projection when it is a query.
         Context::At(Clause::Copy, Role::Operand) => match &ca.column_list {
             Some(list) => push_list_columns(&mut pool, catalog, list, &replace, false),
             None => push_relation_targets(&mut pool, &ca, catalog, &replace),
@@ -202,27 +155,15 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         Context::At(Clause::From | Clause::Describe, Role::Operand) => {
             push_relation_targets(&mut pool, &ca, catalog, &replace);
         }
-        // `EXECUTE |` / `DEALLOCATE |` — the session's prepared statements and nothing else.
-        // Empty until something has been prepared, which is the correct offer: no table,
-        // column or keyword can stand in the operand of either statement.
         Context::At(Clause::Execute, Role::Operand) => {
             for p in &catalog.prepared {
                 pool.push(&p.name, T_PRIMARY, || prepared_item(p, &replace));
             }
         }
-        // LIMIT / OFFSET take numbers — nothing sensible to offer.
         Context::At(Clause::Limit | Clause::Offset, Role::Operand) => {}
-        // A name is being invented (`AS |`) or an unmodeled statement noun typed
-        // (`SHOW |`) — the empty offer is the correct one.
         Context::At(_, Role::Binding) => {}
-        // Every expression clause's operand position: columns first, then
-        // aliases / functions / qualifiers / keywords.
         Context::At(clause, Role::Operand) => {
             push_scope_columns(&mut pool, &ca, catalog, &replace);
-            // SELECT-list column aliases (e.g. `SUM(x) AS spend`) — referenceable
-            // exactly where SQL allows them: GROUP BY / ORDER BY / HAVING /
-            // QUALIFY, never back inside the SELECT list or WHERE (the validator
-            // would immediately squiggle the offer).
             if matches!(
                 clause,
                 Clause::GroupBy | Clause::OrderBy | Clause::Having | Clause::Qualify
@@ -234,7 +175,6 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             for f in catalog.functions.all() {
                 pool.push(&f.name, T_FUNCTION, || function_item(f, &replace));
             }
-            // Relation names as qualifiers (`orders.` → columns) — never above columns.
             for cte in &ca.ctes {
                 pool.push(&cte.name, T_KEYWORD, || cte_item(&cte.name, &replace));
             }
@@ -263,8 +203,6 @@ fn push_list_columns(
     replace: &Range<usize>,
     internal_only: bool,
 ) {
-    // A set, not a linear scan: a wide table with a mostly-written list would make
-    // the per-candidate membership test quadratic in the table's width.
     let listed: HashSet<String> = list.listed.iter().map(|w| w.to_ascii_lowercase()).collect();
     let written = |name: &str| listed.contains(&name.to_ascii_lowercase());
     match &list.source {
@@ -311,7 +249,6 @@ fn push_relation_targets(
 ) {
     let refs = &ca.projection;
     let coverage = |have: usize| refs.len().saturating_sub(have).min(60);
-    // Already-joined relations sink (a self-join is legal, rarely next).
     let written_rel =
         |name: &str| ca.in_scope.iter().any(|s| s.eq_ignore_ascii_case(name)) as usize;
     for cte in &ca.ctes {
@@ -323,9 +260,6 @@ fn push_relation_targets(
         pool.ordered(&cte.name, T_PRIMARY, ord, || cte_item(&cte.name, replace));
     }
     for t in &catalog.tables {
-        // The coverage count walks this table's columns, so it is skipped outright when
-        // there is no projection to cover — the common case, and the one that would
-        // otherwise pay the whole catalog's width per keystroke.
         let have = match refs.is_empty() {
             true => 0,
             false => refs.iter().filter(|r| t.column(r).is_some()).count(),
@@ -395,9 +329,6 @@ fn push_scope_columns(
 ) {
     let affinity = comparand_kind(ca, catalog);
     let on_clause = ca.governing == Clause::On;
-    // A set, not a scan: this is asked once per candidate column, and a clause region
-    // grows with the query — a long WHERE over wide relations made the demotion test
-    // quadratic (120 refs x 2000 columns per keystroke).
     let refs = folded_set(&ca.clause_refs);
     let written = |name: &str| refs.contains(&name.to_ascii_lowercase());
     let mut any = false;
@@ -431,20 +362,12 @@ fn push_scope_columns(
         }
     }
     if !any {
-        // The symmetric twin of the FROM-target boost: a column ranks by how well
-        // its owning table covers the columns already written — `SELECT name, |`
-        // clusters the next suggestions toward the tables that could supply
-        // `name` too (the candidate FROM set, inferred as you compose). Rank
-        // only, never filter; and tables iterate best-covered first so the cap
-        // keeps the most consistent columns, not the first-registered ones.
         let projected = &ca.projection;
         let mut order: Vec<(usize, usize)> = catalog
             .tables
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                // Skipped outright with nothing projected — otherwise this walks every
-                // table's full width on every keystroke to compute a uniform zero.
                 let have = match projected.is_empty() {
                     true => 0,
                     false => projected.iter().filter(|r| t.column(r).is_some()).count(),
@@ -460,9 +383,6 @@ fn push_scope_columns(
                 if pushed >= FALLBACK_COLUMN_CAP {
                     return;
                 }
-                // The pool's own gate, asked ahead of the push because the cap counts
-                // what is *offered* — one partial, one answer, rather than a second copy
-                // of it threaded in to agree by hand.
                 if !pool.admits(&c.name) {
                     continue;
                 }
@@ -488,12 +408,6 @@ fn push_keywords(pool: &mut Pool, replace: &Range<usize>, gate_all: bool, kw_spa
         let ctx = if gate_all { T_TAIL } else { T_KEYWORD };
         pool.keyword(k, ctx, gate_all, || keyword(k, replace, kw_space));
     }
-    // With the tail gate closed (no ≥2-char prefix, no manual ask) a tail candidate
-    // cannot appear however it ranks — and at a continuation position `gate_all` forces
-    // every entry here to be tail, so the whole vocabulary below is unreachable. Asking
-    // once is what makes that cheap: `ALL_KEYWORDS` is ~1200 entries and the two tables
-    // are 32 and 48, so walking it regardless cost ~96k comparisons per keystroke to
-    // build a set the gate then discarded whole.
     let tail_possible = pool.tail_possible();
     if gate_all && !tail_possible {
         return;
@@ -535,7 +449,6 @@ fn push_set_option_items(pool: &mut Pool, set_key: Option<&str>, replace: &Range
                 pool.ordered(k.key, T_PRIMARY, i, || Completion {
                     label: k.key.to_string(),
                     insert: k.key.to_string(),
-                    // The kind is a glyph, not a taxonomy (`prepared_item`).
                     kind: CompletionKind::Column,
                     detail: Some(k.default.to_string()),
                     replace: replace.clone(),
@@ -543,8 +456,6 @@ fn push_set_option_items(pool: &mut Pool, set_key: Option<&str>, replace: &Range
             }
         }
         Some(key) => {
-            // Lowercased the way the planner folds a `SET` key, so an uppercase
-            // spelling dispatch accepts still gets its vocabulary.
             let values: &[&str] = match key_def(&key.to_ascii_lowercase()).map(|k| k.kind) {
                 Some(KeyKind::Bool) => &["true", "false"],
                 Some(KeyKind::Enum(options)) => options,
@@ -588,9 +499,6 @@ fn options_literal_completions(
     manual: bool,
 ) -> Option<Vec<Completion>> {
     let (open, close) = literal_at(sql, caret)?;
-    // The overwhelmingly common literal is plain data (`WHERE name = 'foo|`), and
-    // this path used to be free — bail before paying a full lex unless an OPTIONS
-    // keyword precedes the quote (it must: the group's `(` sits between the two).
     if !sql.as_bytes()[..open]
         .windows(7)
         .any(|w| w.eq_ignore_ascii_case(b"OPTIONS"))
@@ -598,20 +506,16 @@ fn options_literal_completions(
         return None;
     }
     let toks = match close {
-        // Terminated: the whole buffer must lex — an error elsewhere is not ours to recover.
         Some(_) => {
             let (toks, err) = lex(sql, &catalog.dialect);
             err.is_none().then_some(toks)?
         }
-        // Unterminated to end-of-input: the literal itself is the lex error, so the prefix
-        // before its quote lexing clean proves the error is exactly this literal.
         None => {
             let (toks, err) = lex(&sql[..open], &catalog.dialect);
             err.is_none().then_some(toks)?
         }
     };
 
-    // The literal's statement must refine to `CREATE EXTERNAL TABLE` …
     let stmt = statement_tokens(&toks, sql.len(), open);
     let head = stmt.first()?;
     if !(head.kind == TokKind::Keyword && head.eq_ci("CREATE")) {
@@ -620,8 +524,6 @@ fn options_literal_completions(
     if refine_statement_clause(stmt, Clause::Create) != Clause::CreateExternal {
         return None;
     }
-    // … and the literal must sit inside its `OPTIONS ( … )` group: the innermost paren
-    // still open at the literal, with the OPTIONS keyword in front of it.
     let mut stack: Vec<usize> = Vec::new();
     for (i, t) in stmt.iter().enumerate() {
         if t.span.start >= open {
@@ -640,12 +542,6 @@ fn options_literal_completions(
         return None;
     }
 
-    // Which format's keys ride the offer: `STORED AS <word>` scanned from the statement's
-    // tokens, mapped through the dispatch module's own projection (`option_keys_for` —
-    // it owns the NDJSON drop and the empty answer for the no-option formats), so the
-    // offer cannot drift from what `read_format`/`apply` accept. (Store-namespace keys
-    // and the client options are never offered for the same reason: the arm refuses
-    // them toward Connections, and absence from the offer is the same policy.)
     let format_word = stmt
         .iter()
         .enumerate()
@@ -663,17 +559,11 @@ fn options_literal_completions(
         return None;
     }
     let partial = sql.get(content..caret)?.to_string();
-    // The whole content span in both cases: an unterminated literal runs to
-    // end-of-input, so text after the caret is still the literal's — a replace that
-    // stopped at the caret would splice that tail onto the accepted key.
     let replace = match close {
         Some(c) => content..c,
         None => content..sql.len(),
     };
 
-    // Key vs value inside the group: a literal whose predecessor is `(` or `,` is a key;
-    // one whose predecessor is another string is a value (DataFusion's `'key' 'value'`
-    // pairs, comma between pairs). Anything else is not a position this carve-out serves.
     let pred = stmt.iter().rev().find(|t| t.span.end <= open)?;
     let mut pool = Pool::new(&partial, manual);
     if pred.kind == TokKind::Punct && (pred.text == "(" || pred.text == ",") {
@@ -687,9 +577,6 @@ fn options_literal_completions(
             });
         }
     } else if pred.kind == TokKind::Str {
-        // The value offer is the preceding key's own vocabulary — `Bool` and `Enum`
-        // kinds only; everything else is the user's data and stays silent. The
-        // case-insensitive lookup matches dispatch, which lowercases every key.
         let kind = keys
             .iter()
             .find(|(k, ..)| k.eq_ignore_ascii_case(&pred.text))
@@ -795,8 +682,6 @@ fn function_item(f: &FunctionSym, replace: &Range<usize>) -> Completion {
         label: f.name.clone(),
         insert: format!("{}(", f.name),
         kind: CompletionKind::Function,
-        // The arity form (`(Float64[, Int64])`) when we rendered one; the flat
-        // "function" only for a name-only symbol (no signatures resolved).
         detail: Some(if f.signatures.is_empty() {
             "function".into()
         } else {

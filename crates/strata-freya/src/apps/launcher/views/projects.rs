@@ -37,20 +37,12 @@ impl Component for ProjectsPane {
         let roles = use_roles();
         let query = use_state(String::new);
 
-        // Two subscriptions, one read: the recents move when a project is opened, pinned or
-        // removed, and the open-set moves when any window opens or closes — both change what
-        // this list paints. Both handles must be **read**, not merely taken: a radio
-        // subscribes in `read()`, so an unread handle is inert and its channel never wakes
-        // this pane (the launcher would keep painting a just-closed project as open).
         let config = use_config(ConfigChan::Recents);
         let open_set = use_config(ConfigChan::Open);
         let list = ProjectList::build(&open_set.read(), &query.read());
         let _ = config.read();
 
         let app = self.app.clone();
-        // Keyed by path: pinning or removing re-groups the list, and unkeyed children are
-        // paired by index, which would leave per-row hover state on whichever project slid
-        // into that position.
         let row = |row: &ProjectRow| {
             ProjectRowView {
                 row: row.clone(),
@@ -60,8 +52,6 @@ impl Component for ProjectsPane {
             .key(row.path.as_str())
         };
 
-        // PINNED first (only when something is pinned), then RECENT — which heads the
-        // recents whether or not anything is pinned above it (V26).
         let groups = rect().width(Size::fill()).vertical();
         let groups = if list.pinned.is_empty() {
             groups
@@ -72,7 +62,6 @@ impl Component for ProjectsPane {
                     groups.child(group_label("PINNED", theme.label_color)),
                     |el, r| el.child(row(r)),
                 )
-                // The canvas's 10px gap between the groups.
                 .child(rect().width(Size::fill()).height(Size::px(10.)))
         };
         let groups = if list.recent.is_empty() {
@@ -84,8 +73,6 @@ impl Component for ProjectsPane {
             )
         };
 
-        // Two empty states, because they mean different things: nothing matched what you
-        // typed, versus you have no projects yet.
         let empty = list.is_empty().then(|| {
             let q = query.read().trim().to_string();
             let copy = if q.is_empty() {
@@ -129,15 +116,10 @@ impl Component for ProjectsPane {
                         .width(Size::fill()),
                     ),
             )
-            // The canvas's second flex child: the filter stops growing at its cap, so this
-            // absorbs the rest and pins OPEN to the right edge.
             .child(rect().height(Size::px(1.)).width(Size::flex(1.)))
             .child(
                 Button::new()
                     .flat()
-                    // The canvas's ghost action: the whole control is one tone at rest and
-                    // one on hover. Colouring only the label would leave the glyph on the
-                    // flat-button ramp, so they'd disagree at rest *and* diverge on hover.
                     .theme_colors(
                         ButtonColorsThemePartial::default()
                             .color(theme.title_color)
@@ -150,8 +132,6 @@ impl Component for ProjectsPane {
                             .cross_align(Alignment::Center)
                             .spacing(SP_3)
                             .child(Icon::new(IconName::Folder).size(15.))
-                            // The canvas's 12.5px UI text — the Control role. (`Eyebrow` is
-                            // the 10px mono group label the PINNED / RECENT headings wear.)
                             .child(Control::new("OPEN")),
                     ),
             );

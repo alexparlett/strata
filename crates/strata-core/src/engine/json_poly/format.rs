@@ -88,9 +88,6 @@ pub fn record_iter(
             let doc: Value = serde_json::from_slice(&bytes).map_err(syntax_error)?;
             match doc {
                 Value::Array(items) => Ok(Box::new(items.into_iter().map(Ok))),
-                // Kept as an error rather than wrapped into a one-element array: reading a
-                // document as `Array` when it is an object means the shape setting is wrong, and
-                // `json_shape_error` explains that far better than a silent single row would.
                 other => Err(json_error(format!(
                     "Expected JSON record to be an object, found {}",
                     kind_word(&other)
@@ -126,10 +123,6 @@ async fn object_bytes(
 ) -> Result<Vec<u8>> {
     let stream = store.get(&meta.location).await?.into_stream();
     let mut decoded = compression.convert_stream(stream.map_err(DataFusionError::from).boxed())?;
-    // Deliberately no `with_capacity(meta.size)`: a failed allocation calls `handle_alloc_error`,
-    // which **aborts the process** rather than failing the query — so a wrong or huge declared
-    // size would take the whole window down instead of landing the table in Failed. For a
-    // compressed object the hint is wrong anyway (it is the compressed length).
     let mut out = Vec::new();
     while let Some(chunk) = decoded.next().await {
         out.extend_from_slice(&chunk?);
@@ -174,10 +167,6 @@ impl FileFormat for PolyJsonFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        // Zero is not a sample size, it is a schema with no columns. Left to run it would push no
-        // tree, and an empty schema registers **successfully** with no columns — a green catalog
-        // row whose every query fails with "No field named". The Configure window floors this at
-        // 1, but a hand-edited `project.json` reaches the engine directly.
         if self.opts.infer_rows == Some(0) {
             return Err(json_error(
                 "Rows scanned to infer must be at least 1. Set a higher value in Table Config.",
@@ -283,9 +272,6 @@ impl FileSource for PolyJsonSource {
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         let file_schema = self.table_schema.file_schema();
-        // Decode only the columns the query asked for. The saving is not incidental here: a
-        // config document infers six figures of nested fields, and building every one of them for
-        // a `SELECT metadata` would dwarf the read.
         let projected = Arc::new(file_schema.project(&self.projection.file_indices)?);
 
         let opener = Arc::new(PolyJsonOpener {
@@ -296,8 +282,6 @@ impl FileSource for PolyJsonSource {
             shape: self.shape,
         }) as Arc<dyn FileOpener>;
 
-        // The remainder — expressions over those columns, plus any partition columns, which are
-        // literals per file rather than anything the reader can see.
         ProjectionOpener::try_new(self.projection.clone(), opener, file_schema)
     }
 
@@ -390,26 +374,20 @@ impl Decode {
             while !self.pending.is_empty() {
                 let n = self.decoder.decode(&self.pending)?;
                 if n == 0 {
-                    break; // the decoder is full — flush before feeding it more
+                    break;
                 }
                 self.pending.drain(..n);
             }
             if !self.pending.is_empty() {
-                // Full decoder: a batch is ready and the tail waits for the next call.
                 return self.decoder.flush().map_err(Into::into);
             }
             match self.records.next() {
                 Some(rec) => {
                     let mut rec = rec?;
                     fit_record(&mut rec, self.schema.fields());
-                    // Bytes, not `Decoder::serialize` — see the module docs on `json_poly`:
-                    // `arbitrary_precision` encodes every Number as a magic map that arrow
-                    // rejects as a non-primitive.
                     self.pending = serde_json::to_vec(&rec)
                         .map_err(|e| DataFusionError::External(e.into()))?;
                 }
-                // End of file: whatever is buffered is the last batch, and `flush` answers
-                // `None` once it is drained.
                 None => return self.decoder.flush().map_err(Into::into),
             }
         }
@@ -418,10 +396,6 @@ impl Decode {
 
 impl FileOpener for PolyJsonOpener {
     fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
-        // `supports_repartitioning` is false, so DataFusion never splits a file for us today.
-        // Refused rather than ignored anyway: a range that did arrive would make each range
-        // re-read the *whole* file, duplicating every row once per range with nothing to show
-        // for it. DataFusion's own JSON opener refuses the same way.
         if file.range.is_some() {
             return not_impl_err!(
                 "The JSON reader does not support range-based file scanning. \
@@ -446,9 +420,6 @@ impl FileOpener for PolyJsonOpener {
                 pending: Vec::new(),
             };
             Ok(futures::stream::try_unfold(state, |mut st| async move {
-                // `yield_now` is the cancellation point the first version had nowhere: without an
-                // await between batches the whole decode ran as one uninterruptible step, so
-                // Cancel did nothing and one of the engine runtime's two workers stayed pinned.
                 tokio::task::yield_now().await;
                 Ok(st.next_batch()?.map(|batch| (batch, st)))
             })

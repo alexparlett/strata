@@ -40,9 +40,6 @@ impl FromDraft for Ask {
             kind,
             base_url: ctx.base_url_of(kind),
             typed: Secret::new(keys.get(kind)),
-            // An entry that is *touched* and empty is a pending removal, so falling back to the
-            // stored marker there would authenticate with a key on its way out — the same trap
-            // the dialog's Test names.
             stored: (!pending)
                 .then(|| {
                     ctx.draft

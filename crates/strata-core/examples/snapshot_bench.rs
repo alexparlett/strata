@@ -32,7 +32,6 @@ use datafusion::prelude::*;
 
 /// The shapes a result actually takes, chosen so each format's best case is represented.
 const DATASETS: &[(&str, &str, usize)] = &[
-    // Dictionary encoding's best case: a low-cardinality string repeated millions of times.
     (
         "lowcard",
         "SELECT 'country_' || (value % 20)::text AS country, \
@@ -41,14 +40,12 @@ const DATASETS: &[(&str, &str, usize)] = &[
          FROM generate_series(1, {N})",
         2_000_000,
     ),
-    // Parquet's numeric encodings (delta, bit-packing) at their best: sorted and narrow-range.
     (
         "numeric",
         "SELECT value AS id, value * 1.5 AS amount, value % 1000 AS bucket \
          FROM generate_series(1, {N})",
         2_000_000,
     ),
-    // The ordinary case: mixed types, high-cardinality text, nulls.
     (
         "mixed",
         "SELECT value AS id, \
@@ -72,9 +69,6 @@ struct Row {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Row counts scale by argv[1] (default 1). Running the same shapes at 1x and 10x is what
-    // separates "IPC reads are slower" from "IPC reads *scale* worse" — if a late page costs
-    // 10x more at 10x the rows, the reader is scanning to the offset rather than skipping to it.
     let scale: usize = std::env::args()
         .nth(1)
         .and_then(|a| a.parse().ok())
@@ -155,8 +149,6 @@ fn write_parquet(
     batches: &[RecordBatch],
     compression: Option<Compression>,
 ) -> Result<(u64, Duration), Box<dyn std::error::Error>> {
-    // `EnabledStatistics::Chunk` mirrors `snapshot_writer_props` — the export null-gate reads
-    // those, so a fair comparison writes them.
     let mut props = WriterProperties::builder().set_statistics_enabled(EnabledStatistics::Chunk);
     if let Some(c) = compression {
         props = props.set_compression(c);

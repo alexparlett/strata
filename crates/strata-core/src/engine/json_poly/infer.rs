@@ -4,31 +4,19 @@
 //! arrow errors on a key whose value disagrees across occurrences, we record `Text` and the
 //! column becomes `Utf8` holding that value's raw JSON.
 //!
-//! Arrow's own merge (`InferredType::merge`, arrow-json/src/reader/schema.rs) admits exactly
-//! five combinations — Scalar∪Scalar, Array∪Array, Object∪Object, anything∪Any, and the
-//! scalar↔array promotion — and returns `Err` for every other pair. So `{"c": ["x", true]}`
-//! followed by `{"c": {...}}` fails the whole registration with
-//! `Expected object json type, found: Array(Scalar({Utf8, Boolean}))`, naming neither the key
-//! nor the file.
+//! Arrow's own merge admits exactly five combinations and returns `Err` for every other pair, so
+//! `{"c": ["x", true]}` followed by `{"c": {...}}` fails the whole registration with
+//! `Expected object json type, found: Array(Scalar({Utf8, Boolean}))`, naming neither the key nor
+//! the file.
 //!
-//! # The rule is deliberately narrow
+//! **The rule is deliberately narrow.** `Text` is produced only where arrow would have errored, so
+//! this reader is a superset of the stock one rather than a behaviour change to every JSON table.
 //!
-//! `Text` is produced **only** where arrow would have errored. Every combination arrow can
-//! already infer is inferred identically here, which is what makes this reader a superset of
-//! the stock one rather than a behaviour change to every JSON table in every project.
-//!
-//! # Why `Utf8` and not a union
-//!
-//! A conflicted path has no single arrow type by definition, and the candidates are worse than
-//! text. A struct-of-variants cannot hold the array arm at all. An Arrow union could now be
-//! *stored* (the snapshot is IPC), but it would be a union whose arms are "whatever this file
-//! happened to contain" — unstable across re-scans, and unreadable by the `json_get` family,
-//! which takes JSON text. `Utf8` costs nothing downstream: the grid, inspector, profiler and
-//! export handle it unchanged, and the accessors read straight into it.
-//!
-//! Note this is a decision about **representing a conflict**, not a storage workaround. Where the
-//! source has an unambiguous type — including an empty object — inference says so and the
-//! snapshot stores it.
+//! **`Utf8` and not a union**, because a struct-of-variants cannot hold the array arm at all and an
+//! Arrow union's arms would be "whatever this file happened to contain" — unstable across re-scans,
+//! and unreadable by the `json_get` family, which takes JSON text. `Utf8` costs nothing downstream.
+//! This is a decision about **representing a conflict**, not a storage workaround: an unambiguous
+//! type is still inferred and stored as itself.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -60,14 +48,10 @@ impl Inferred {
     /// Fold `other` into `self`, collapsing to [`Text`](Inferred::Text) where arrow would have
     /// failed instead.
     pub fn merge(&mut self, other: Inferred) {
-        // Take ownership so the match arms can move out of `self` without cloning the (possibly
-        // very deep) subtree — 65MB of config produced 236k paths, so this runs a lot.
         let this = std::mem::replace(self, Inferred::Any);
         *self = match (this, other) {
-            // Absorbing in both directions.
             (Inferred::Text, _) | (_, Inferred::Text) => Inferred::Text,
 
-            // Any is the identity.
             (Inferred::Any, v) | (v, Inferred::Any) => v,
 
             (Inferred::Scalar(mut a), Inferred::Scalar(b)) => {
@@ -85,8 +69,6 @@ impl Inferred {
                 Inferred::Object(a)
             }
 
-            // Arrow's scalar↔array promotion: `1` and `[2]` in the same key is a list of ints,
-            // not a conflict. Kept so the narrow rule holds.
             (Inferred::Array(mut inner), s @ Inferred::Scalar(_)) => {
                 inner.merge(s);
                 Inferred::Array(inner)
@@ -96,7 +78,6 @@ impl Inferred {
                 Inferred::Array(inner)
             }
 
-            // Object vs Array, Object vs Scalar — the arms arrow has no answer for.
             _ => Inferred::Text,
         };
     }
@@ -107,11 +88,6 @@ fn of_value(v: &Value) -> Inferred {
     match v {
         Value::Null => Inferred::Any,
         Value::Bool(_) => Inferred::Scalar(one(DataType::Boolean)),
-        // Arrow's exact rule (arrow-json reader/schema.rs:381): `is_i64` or nothing. Adding
-        // `is_u64` here looks like a widening and is a bug — a u64 above `i64::MAX` would infer
-        // `Int64`, registration would succeed, and arrow's `Int64` decoder would then fail to
-        // parse the value on every scan. Diverging from arrow's *inference* is only safe where we
-        // also own the *decode*, and the scalar arms are exactly where we do not.
         Value::Number(n) => Inferred::Scalar(one(if n.is_i64() {
             DataType::Int64
         } else {
@@ -397,7 +373,6 @@ mod tests {
         let s = schema(&[json!({"c": null}), json!({"c": {"k": 1}})]);
         assert!(matches!(field(&s, "c").data_type(), DataType::Struct(_)));
 
-        // ...and a key that is only ever null keeps arrow's answer for it.
         let s = schema(&[json!({"c": null})]);
         assert_eq!(field(&s, "c").data_type(), &DataType::Null);
     }
@@ -408,7 +383,6 @@ mod tests {
     fn a_top_level_non_record_is_still_an_error() {
         let arr = json!([1, 2, 3]);
         let err = infer(std::iter::once(&arr)).expect_err("not a record");
-        // Arrow's exact wording, because `catalog::json_shape_error` parses it — see `kind_word`.
         assert_eq!(err, "Expected JSON record to be an object, found Array");
         assert!(
             !err.contains('1'),

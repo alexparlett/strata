@@ -110,8 +110,6 @@ impl Component for ExplainPlan {
         };
 
         let mut tab = self.tab;
-        // The Raw/Tree flag: the ToggleButton owns the flip; this per-press mirror (the
-        // results body is keyed on the press's nonce) picks which body renders.
         let mut raw = use_state(|| false);
         let raw_on = *raw.read();
         let eff = effective_tab(&self.plan, *tab.read());
@@ -123,7 +121,6 @@ impl Component for ExplainPlan {
         };
         let max_ms = self.plan.max_ms();
 
-        // ── toolbar (38px, aligned with the results toolbar) ──────────────────────────────
         let tabs = show_tabs.then(|| {
             SegmentedToggle::new()
                 .child(
@@ -137,8 +134,6 @@ impl Component for ExplainPlan {
                         .on_press(move |_| tab.set(PlanTab::Logical)),
                 )
         });
-        // Amber ANALYZE badge (physical tab only — the metrics live there): the shared badge, in
-        // the toolbar's taller pill dress. Its fill is the standard tint of its own colour.
         let badge = (self.plan.analyze && physical).then(|| {
             Badge::tag("ANALYZE", palette.types.map_color)
                 .height(22.)
@@ -150,17 +145,11 @@ impl Component for ExplainPlan {
         } else {
             "Show the raw plan text"
         };
-        // The standard toggle button (`toggle_button` theme): it flips, we echo the value
-        // back through `toggle` (the Button-`enabled` recipe) — never computing the flip.
         let raw_toggle = ToggleButton::new()
             .toggle(raw_on)
             .title(raw_title)
             .on_change(move |e: Event<ChangeEventData>| raw.set(e.value))
             .child(Icon::new(IconName::Lines).size(15.));
-        // A `Toolbar` (P5-06), so a narrow pane folds this row instead of spilling it. The
-        // Physical/Logical pill and the ANALYZE badge form the leading run — the pill is what says
-        // which tree is below, and the badge qualifies it, so neither belongs in an overflow menu.
-        // The raw/tree toggle is the one item, and it folds last by being the only one.
         let leading = rect()
             .width(Size::flex(1.))
             .horizontal()
@@ -170,9 +159,6 @@ impl Component for ExplainPlan {
             .spacing(SP_3)
             .maybe_child(tabs)
             .maybe_child(badge);
-        // What that run cannot shrink below: the pill's two text segments when both trees exist,
-        // plus the badge when it is shown. Both are stated boxes, so the floor is arithmetic
-        // rather than a guess.
         let leading_min = if show_tabs { PLAN_TABS_WIDTH } else { 0. }
             + if self.plan.analyze && physical {
                 ANALYZE_BADGE_WIDTH + 8.
@@ -198,9 +184,6 @@ impl Component for ExplainPlan {
             )
             .child(Divider::horizontal().color(theme.border_fill));
 
-        // ── body: the indented card tree, or the raw indent text ──────────────────────────
-        // Keyed by the shown tree so a tab switch remounts the cards (their expand state
-        // belongs to *that* tree's nodes, not to list positions).
         let body: Element = if raw_on {
             ScrollView::new()
                 .child(

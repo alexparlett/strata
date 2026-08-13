@@ -41,15 +41,10 @@ impl Component for ImportOptions {
         };
         let has_options = !options.is_empty();
 
-        // **One `rect()` whatever the format**, with the block as optional children rather than
-        // an early return of a different node. A section that comes and goes is a child; a
-        // render that returns a different *kind* of node for the same position is what crashed
-        // this window once already (`Hive`, and Freya's differ unwrapping a missing scope).
         rect()
             .width(Size::fill())
             .vertical()
             .spacing(BLOCK_GAP)
-            // The canvas rules this block off from the paths above it.
             .maybe_child(has_options.then(|| Divider::horizontal().color(win.border_fill)))
             .maybe_child(has_options.then(|| Eyebrow::new(label).color(form.label_color)))
             .maybe_child(has_options.then(|| {

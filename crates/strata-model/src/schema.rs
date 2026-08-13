@@ -102,32 +102,19 @@ impl Kind {
 
 /// What a column may be **encoded** as on a chart (`docs/CHART_SPEC.md` §3).
 ///
-/// Sibling to [`Kind`], and deliberately a second taxonomy rather than a reading of that one:
-/// `Kind` is what a column *looks* like (dot and cell colours) and is coarser on purpose — it
-/// folds a union in with the strings, which is harmless for a swatch and wrong for an axis.
-///
-/// Resolved from the Arrow `DataType` itself, in the one place that still has it
-/// (`strata_core::engine::catalog::chart_role`, called by `column_info`) — never from a name
-/// and never from a type's *spelling*, which is a rendering of a type and not the type.
+/// A second taxonomy rather than a reading of [`Kind`], which is coarser on purpose. Resolved from
+/// the Arrow `DataType` itself (`strata_core::engine::catalog::chart_role`) — never from a name and
+/// never from a type's *spelling*.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ChartRole {
-    /// A number: a Y, either scatter axis, a histogram's value. Exactly the set the engine's
-    /// own read will accept as a measure.
+    /// A number: a Y, either scatter axis, a histogram's value.
     Measure,
-    /// A point on the calendar (a date or a timestamp): the default X, the reason a default
-    /// mark is a line, and the only role a **stride** means anything to — which is why it is
-    /// not the same variant as [`Clock`](Self::Clock). `date_bin(interval '1 day', …)` over a
-    /// time of day is not a coarser reading of it, it is one bucket; DataFusion says so
-    /// outright ("`DATE_BIN` stride for TIME input must be less than 1 day").
-    ///
-    /// **Nothing reads the distinction today.** It was split for a scaffold that wrote that
-    /// SQL, and the scaffold was cut (`docs/CHART_SPEC.md` §8); the split was kept because
-    /// chart-side bucketing needs it (§3) and the only way to recover it later is a type's
-    /// *spelling*, which this taxonomy exists to rule out.
+    /// A point on the calendar (a date or a timestamp): the default X, and the only role a
+    /// **stride** means anything to — which is why it is not the same variant as
+    /// [`Clock`](Self::Clock). A day-wide `date_bin` over a time of day is refused outright.
     Instant,
     /// A time of day, with no calendar under it. An axis and a series split like
-    /// [`Instant`](Self::Instant) — it is ordered, and a line across it reads — but nothing a
-    /// date stride can bin.
+    /// [`Instant`](Self::Instant), but nothing a date stride can bin.
     Clock,
     /// A category: an X, or the column a series splits on.
     Dimension,
@@ -135,10 +122,8 @@ pub enum ChartRole {
     Other,
 }
 
-/// Which fact a [`Stat`] carries.
-///
-/// Keyed rather than positional so the two tiers can interlock: D4's profile surfaces
-/// only what the source didn't already answer for free, by key.
+/// Which fact a [`Stat`] carries. Keyed rather than positional so the two tiers interlock: the
+/// profile surfaces only what the source did not already answer for free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatKey {
     Nulls,
@@ -151,17 +136,12 @@ pub enum StatKey {
 
 /// One fact about a column, ready to display.
 ///
-/// Deliberately a **list**, not a fixed set of fields: which facts exist depends
-/// entirely on where they came from. A Parquet footer yields nulls/min/max for nothing;
-/// CSV and JSON yield literally none; D4's profile computes whatever the source didn't,
-/// and adds distinct/mean/median besides. Fixed `Option` fields would bake the Parquet
-/// shape into every source and leave the profile nowhere to put the same facts. Both
-/// tiers emit this one shape, so the inspector renders a row per fact that genuinely
-/// exists rather than a grid of blanks.
+/// A **list**, not a fixed set of fields: which facts exist depends on where they came from, and
+/// fixed `Option` fields would bake the Parquet shape into every source. Both tiers emit this one
+/// shape, so the inspector renders a row per fact that exists rather than a grid of blanks.
 ///
-/// `exact` is false when the source truncated the value (Parquet does this to long
-/// strings / binary routinely), making it a bound rather than the value — the inspector
-/// marks those `~`. Computed facts are always exact.
+/// `exact` is false when the source truncated the value, making it a bound rather than the value —
+/// the inspector marks those `~`. Computed facts are always exact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stat {
     pub key: StatKey,
@@ -176,13 +156,12 @@ pub struct ColumnInfo {
     pub name: String,
     pub dtype: String,
     pub kind: Kind,
-    /// What a chart may encode this column as — see [`ChartRole`]. Carried here because it is
-    /// a fact about the column's Arrow type, and this struct is what survives the boundary
-    /// the type itself does not cross.
+    /// What a chart may encode this column as — see [`ChartRole`]. Carried here because this
+    /// struct is what survives the boundary the Arrow type itself does not cross.
     pub role: ChartRole,
     pub nullable: bool,
     pub children: Vec<ColumnInfo>,
-    /// Facts the source reports **for free** — read, never computed. Empty for any
-    /// format without metadata to read, which is every format but Parquet (and Arrow).
+    /// Facts the source reports **for free** — read, never computed. Empty for every format but
+    /// Parquet and Arrow.
     pub stats: Vec<Stat>,
 }

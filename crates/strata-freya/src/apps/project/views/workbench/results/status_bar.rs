@@ -168,8 +168,6 @@ impl Component for StatusBar {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, StatusBarThemePreference, "status_bar");
 
-        // Dot + label tone come off the shared semantic ramp; the empty dot and the aggregate's
-        // accent are role reads, independent of the `status_bar` token.
         let tones = tones();
         let roles = use_roles();
         let dot_color = match self.state {
@@ -181,10 +179,6 @@ impl Component for StatusBar {
         };
         let accent = roles.get(Role::Accent);
 
-        // Label + sub-label per state (comp `_statusVals`): the grid state leads with the real
-        // row count and trails the engine elapsed; the plan state counts operators. The empty
-        // state's run hint derives from the effective keymap (rebinds repaint it; unbound
-        // drops the sub-label).
         let run_hint = use_hint(Command::RunQuery);
         let (label, sub): (String, Option<String>) = match self.state {
             ResultsState::Empty => (
@@ -199,8 +193,6 @@ impl Component for StatusBar {
                 ),
                 None => ("Results".into(), None),
             },
-            // Chart mode (P2-07): same rows lead, but the sub names the source honestly —
-            // the chart draws the materialized snapshot, not live files (comp `_statusVals`).
             ResultsState::Chart => match &self.info {
                 Some(info) => (
                     format!("{} rows", count(info.total)),
@@ -218,9 +210,6 @@ impl Component for StatusBar {
                     format!("{n} operator{} · {tree}", if n == 1 { "" } else { "s" })
                 }),
             ),
-            // The statement names itself — "CREATE TABLE · 12 ms" — because unlike a query
-            // there is no row count to lead with, and the sentence in the body already says
-            // what it did.
             ResultsState::Statement => match self.statement {
                 Some((kind, elapsed_ms)) => {
                     (kind.label().into(), Some(format!("· {elapsed_ms} ms")))
@@ -230,8 +219,6 @@ impl Component for StatusBar {
             ResultsState::Error => ("Query failed".into(), None),
         };
 
-        // The live aggregate over the current selection's real cells (Rz3) — only when the
-        // shown page has settled (a page in flight has no cells to sum).
         let sel = consume_context::<State<Selection>>();
         let agg = self
             .view
@@ -240,9 +227,6 @@ impl Component for StatusBar {
             .and_then(|data| selection_agg(&sel.read(), data))
             .map(|a| a.label());
 
-        // The info cluster: the run's readouts, owning all the slack and clipping at its own
-        // edge, so a narrow pane never paints them under the pager. The aggregate ellipsizes
-        // first, since it takes the cluster's remaining width via `flex`.
         let info_cluster = rect()
             .width(Size::flex(1.))
             .height(Size::fill())
@@ -273,15 +257,6 @@ impl Component for StatusBar {
                     .text_overflow(TextOverflow::Ellipsis)
             }));
 
-        // The bar is a `Toolbar` (P5-06): the info cluster is its leading run, and the pager is a
-        // list of items that fold in a **stated ladder** rather than tail-first, because the tail
-        // is where the navigation lives.
-        //
-        // Ranks, lowest folding first:
-        //   0  the page-size dropdown and its rule — a preference, not navigation
-        //   1  the jump box and its "of N" — the page is still readable in the chevrons
-        //   2  First / Last — nice, but Prev / Next reach the same places
-        //   3  Prev / Next — the last thing standing, because a pager that cannot page is furniture
         let bar = Toolbar::new()
             .height(BAR_HEIGHT - 1.)
             .padding(SP_4)
@@ -350,14 +325,10 @@ impl Component for StatusBar {
             .min_height(Size::px(BAR_HEIGHT))
             .content(Content::Flex)
             .background(theme.background)
-            // 1px top divider (Freya's `Border` is all-sides; a pinned 1px child is the local idiom
-            // for a single edge), then the bar row fills the rest.
             .child(Divider::horizontal().color(theme.border_fill))
             .child(bar)
     }
 }
-
-// ── snapshot chip ──────────────────────────────────────────────────────────────────────────────
 
 /// Clock + "snapshot 2m ago": how stale the grid's materialized snapshot is. The age re-derives
 /// on a slow tick so it stays honest while the tab sits open; the tooltip spells the semantics
@@ -370,8 +341,6 @@ struct SnapshotChip {
 
 impl Component for SnapshotChip {
     fn render(&self) -> impl IntoElement {
-        // Ticks the age label along (10s ≪ the 45s "just now" window, so no visible jump is
-        // missed). Scope-bound: leaving the grid state unmounts it.
         let mut now = use_state(Instant::now);
         use_hook(move || {
             spawn(async move {
@@ -398,8 +367,6 @@ impl Component for SnapshotChip {
         )
     }
 }
-
-// ── selection aggregate (Rz3) ─────────────────────────────────────────────────────────────────
 
 /// Live aggregate over the current grid selection: cell count, plus Σ / avg / min / max over the
 /// selected **numeric** cells. Page-local — the selection indexes into the shown page.
@@ -472,8 +439,6 @@ fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
         min: f64::INFINITY,
         max: f64::NEG_INFINITY,
     };
-    // Each shape is visited in the same order the coordinate list this replaced held it —
-    // floating-point addition isn't associative, so the order is part of the answer.
     match sel {
         Selection::None => return None,
         Selection::Cell { .. } => {
@@ -501,8 +466,6 @@ fn selection_agg(sel: &Selection, data: &GridData) -> Option<AggView> {
     }
     (agg.cells > 0).then_some(agg)
 }
-
-// ── pager ─────────────────────────────────────────────────────────────────────────────────────
 
 /// Jump to `target` (already clamped): clear the page-local selection, then bump the page.
 ///
@@ -576,8 +539,6 @@ impl Component for JumpBox {
         let current = *page.read();
         let sel = consume_context::<State<Selection>>();
 
-        // The box follows its parent: the chevrons and a size pick move the page, and the text
-        // syncs back.
         let mut text = use_state(move || current.to_string());
         use_side_effect(move || {
             let p = *page.read();
@@ -597,7 +558,6 @@ impl Component for JumpBox {
                         Ok(n) => {
                             let target = n.clamp(1, pages);
                             jump(sel, page, target);
-                            // Re-echo even when the page didn't move (e.g. "999" at the end).
                             text.set(target.to_string());
                         }
                         Err(_) => text.set((*page.peek()).to_string()),
@@ -606,8 +566,6 @@ impl Component for JumpBox {
             .child(Path::new(format!("of {}", count(pages))).color(self.color))
     }
 }
-
-// ── formatting ────────────────────────────────────────────────────────────────────────────────
 
 /// Thousands-separated count ("12847" → "12,847") — [`strata_core::util::fmt_int`] over a
 /// `usize`, so the footer's counts read exactly like the plan view's metrics and the column
@@ -664,7 +622,6 @@ mod tests {
             many > one,
             "a five-digit count costs more than a one-digit one: {many} vs {one}"
         );
-        // "of 12,345" is six rendered characters against one, and the separator counts.
         assert!(
             many - one >= 5. * 6.,
             "and by roughly the characters it added: {}",
@@ -723,7 +680,6 @@ mod tests {
     #[test]
     fn cell_rectangle_aggregates_numeric_cells_only() {
         let data = grid();
-        // Whole grid: 6 cells, numeric column has 1,000 and 2.5 (one null skipped).
         let sel = Selection::Cell {
             ar: 0,
             ac: 0,

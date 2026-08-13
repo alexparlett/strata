@@ -124,19 +124,12 @@ pub fn close_bridge(
         last: AtomicBool::new(false),
     });
     let hook_guard = guard.clone();
-    // The parameter annotations keep the closure generic over `RendererContext`'s
-    // lifetime (plain inference would pin it and fail the `for<'a> FnMut` bound).
     let hook = move |_ctx: RendererContext<'_>, _id: WindowId| {
         let veto = if hook_guard.running.load(Ordering::Relaxed)
             && hook_guard.confirm.load(Ordering::Relaxed)
         {
-            // A query is in flight and the user wants the confirm: hold the close and wake
-            // the UI to show the dialog.
             Some(Veto::Confirm)
         } else if hook_guard.last.load(Ordering::Relaxed) && !platform::is_quitting() {
-            // Last window out, and this is a close rather than a quit: the launcher has to
-            // be up before this window goes, or there'd be no windows left and the app
-            // would exit. Quitting is the case where that's the point.
             Some(Veto::Launcher)
         } else {
             None
@@ -164,35 +157,24 @@ pub fn close_bridge(
 /// ([`ProjectLoadFailed`](crate::apps::project::views::ProjectLoadFailed)). Returns the window's
 /// close and whether it is already under way; call once in such an arm.
 ///
-/// Two halves that always travel together, which is why they are one hook rather than a copy in
-/// each arm.
+/// The close is **once-only**: it is several async hops and neither arm can dismiss itself in the
+/// gap, so without the flag a second press closes a second window. `spawn_forever`, not `spawn`,
+/// because the close unmounts the very scope the handler belongs to.
 ///
-/// The close is **once-only**. It is several async hops — it may have to stand the launcher up
-/// before this window goes — and neither arm can dismiss itself in the gap, so without the flag
-/// a second press closes a second window. `spawn_forever`, not `spawn`: the close unmounts the
-/// very scope the handler belongs to, and scope teardown drops that scope's tasks before they
-/// are ever polled.
+/// The window's **close-confirm slot is drained rather than rendered.** Neither arm mounts
+/// [`CloseConfirm`](crate::apps::project::views::CloseConfirm) — there is no project to name — yet
+/// the slot's writers still fire, because a run in flight when the window re-rooted keeps the
+/// *outgoing* engine alive until it settles. Left alone, that would sit in a slot nothing renders
+/// and read as a dead control.
 ///
-/// And the window's **close-confirm slot is drained rather than rendered**. Neither arm mounts
-/// [`CloseConfirm`](crate::apps::project::views::CloseConfirm) — there is no project to name in
-/// the question — yet the slot's writers still fire: `guard.running` can be true on either arm,
-/// because a run in flight when the window re-rooted or restarted keeps the *outgoing* engine
-/// alive until it settles. Left alone, a red-button close (vetoed into
-/// [`CloseTarget::Window`]) or a parked re-root would sit in a slot nothing renders, and read as
-/// a dead control.
-///
-/// Draining **acts** rather than re-asks, and that is a boundary review settled (AGENTS.md §2):
-/// `guard.running` can only be true here for runs orphaned by a stop the user already agreed to
-/// — the re-root or restart that replaced the subtree asked the T2 question and got its answer,
-/// or the pref that gates every writer of this slot asked never to ask — so a second confirm
-/// would re-ask about work already condemned. [`CloseTarget::Tab`] and [`CloseTarget::Restart`]
-/// have no writer on either arm; clearing them keeps the slot from carrying a stale question
-/// into the next mount.
+/// Draining **acts** rather than re-asks: `guard.running` can only be true here for runs orphaned
+/// by a stop the user already agreed to, so a second confirm would re-ask about work already
+/// condemned. [`CloseTarget::Tab`] and [`CloseTarget::Restart`] have no writer on either arm;
+/// clearing them keeps a stale question out of the next mount.
 pub fn use_engineless_close(
     app: AppCtx,
     confirm: State<Option<CloseTarget>>,
 ) -> (impl Fn() + Clone, State<bool>) {
-    // Taken in the render scope so the handlers can run from a task.
     let platform = use_hook(Platform::get);
     let open = use_consume::<OpenCtx>();
     let closing = use_state(|| false);
@@ -209,8 +191,6 @@ pub fn use_engineless_close(
     {
         let close = close.clone();
         use_side_effect(move || {
-            // Read into a value first — a match on the guard's temporary would hold the read
-            // borrow across the `set` on the same `State`.
             let target = confirm.read().clone();
             let Some(target) = target else {
                 return;
@@ -274,9 +254,6 @@ pub struct TabCloser {
 impl TabCloser {
     /// Close `id` — via the confirm when its query is in flight and the pref is on.
     pub fn close(&self, mut radio: Radio<SessionState, Chan>, config: ConfigStation, id: TabId) {
-        // Ask the engine, not the UI: a tab *is* a workspace, and a background tab's run
-        // has no mounted results pane to derive from. `peek()` because close() runs in
-        // event handlers, which have no reactive scope to subscribe.
         let in_flight = self.engine.peek().is_running(id.into());
         if in_flight && config.peek().settings.confirm_close_running {
             let mut confirm = self.confirm;

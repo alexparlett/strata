@@ -44,9 +44,6 @@ use crate::theme::{peek_selection, use_roles, use_strata_theme, window_backgroun
 
 pub use model::{ExportDraft, ExportTarget, FormatId, ScopeChoice};
 
-// `%[no_ext]`: the window's dress is read by its sibling views (title bar · formats · options ·
-// partition · preview · footer) rather than by one `Export` component, so there is no type for
-// the generated `…ThemePartialExt` builder to hang off.
 define_theme!(
     %[no_ext]
     %[component]
@@ -212,8 +209,6 @@ impl ExportApp {
         log: LogCtx,
         owner: WindowId,
     ) -> WindowConfig {
-        // Match the theme's window body so a resize doesn't flash the default white — through
-        // `peek_selection`, since Settings may be previewing a theme right now.
         let background = {
             let sel = peek_selection(app.config, app.preview);
             let id = sel.effective(strata_core::theme::os_is_dark());
@@ -229,12 +224,8 @@ impl ExportApp {
         })
         .with_title("Export results")
         .with_size(780., 640.)
-        // The canvas's own floor: below this the four format cards stop fitting on one row and
-        // the transfer panes lose their column names.
         .with_min_size(560., 420.)
         .with_background(background)
-        // The 50px strip centres macOS's 16px buttons at y = 17; AppKit's default origin is
-        // (7, 6), so the inset is the difference.
         .with_traffic_light_inset(9., 11.)
         .with_window_attributes(move |attrs, _| {
             attrs
@@ -247,37 +238,22 @@ impl ExportApp {
 
 impl App for ExportApp {
     fn render(&self) -> impl IntoElement {
-        // The window-root steps every app takes: this window's theme derived from the shared
-        // settings, and the app-globals into context.
         use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();
             move || app
         });
-        // The engine, so the footer's Export can call the facade directly, and the opener's
-        // log, so it can record the outcome there.
         use_provide_context({
             let engine = self.engine.clone();
             move || engine
         });
         let log = self.log;
         use_provide_context(move || log);
-        // Join the live window registry, so the app knows which window this panel belongs to,
-        // and point the menubar here as a **panel** while this window is focused. Without that
-        // the menubar kept the owner project window's File menu, and Close Project (and its
-        // ⇧⌘W) closed *this* window while naming the project. Esc is how an export closes.
         let owner = self.owner;
         use_register_window(&self.app, || WindowKind::Export, MenuScope::Panel);
-        // …and close with the *subtree* the log above belongs to, not merely with the window that
-        // owns it: a re-root and an engine restart both drop it while leaving that window open
-        // under the same id.
         use_owner_pin(self.app.clone(), owner, self.subtree.clone());
 
-        // **Hold the snapshot open for this window's life.** This is what makes the target's
-        // facts stay true: a re-run in the tab behind defers its retire until this drops
-        // (SNAPSHOT_SPEC §4). `use_hook` so it is taken once at mount and dropped with the
-        // scope — the RAII guard *is* the lifetime, so there is nothing to release by hand.
         let snapshot = self.target.snapshot;
         let engine = self.engine.clone();
         use_hook(move || SnapshotHold(Rc::new(engine.pin_snapshot(snapshot))));
@@ -300,19 +276,12 @@ impl App for ExportApp {
             .vertical()
             .content(Content::Flex)
             .background(theme.background)
-            // The window's ambient text colour, like the launcher's: runs that don't name one
-            // inherit it rather than Freya's base-theme default.
             .color(use_roles().get(Role::Text))
             .child(TitleBar)
             .child(ExportBody)
             .child(Footer)
-            // Esc and ⌘Q. Deliberately the LAST child — same-name global listeners fire in
-            // document order, so anything a view mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc closes — nothing was committed, so there is nothing to undo. A write
-                    // in flight is the exception: the file is half-written and the window is
-                    // the only thing that will report how it ends.
                     Command::Cancel => {
                         if *ctx.status.peek() != Status::Writing {
                             platform.close_current_window();

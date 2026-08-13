@@ -46,27 +46,19 @@ pub struct Queries {
 
 impl Component for Queries {
     fn render(&self) -> impl IntoElement {
-        // The rows themselves…
         let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
-        // …and the group labels: a tab's name is written on `Chan::Tabs`, so a rename relabels
-        // its group without anything re-validating.
         let strip = use_radio::<SessionState, Chan>(Chan::Tabs);
         let tones = tones();
 
         let _ = strip.read();
         let groups = session.read().problem_groups();
 
-        // No `DrawerCount` write here: the tally belongs to the scope **strip** above this body
-        // (`super::Problems`), which has to know both scopes' counts to label its tabs and so is
-        // the only place that can total them without a second walk of either store.
         let el: Element = match groups.is_empty() {
             true => DrawerEmpty::new(IconName::Check, "No problems found")
                 .icon_color(tones.ok)
                 .into_element(),
             false => DrawerBody::new()
                 .children(groups.into_iter().map(|group| {
-                    // Keyed by the tab, so a group appearing or clearing above another doesn't
-                    // shuffle the rest through each other's scopes.
                     let tab = group.tab;
                     Group {
                         group,
@@ -164,30 +156,17 @@ impl Component for ProblemRow {
 
         rect()
             .width(Size::fill())
-            // A floor rather than the height, like the Project row's: a validator message can be
-            // long, and clipping one mid-clause keeps the symptom while throwing away the part
-            // that says what to do about it.
             .min_height(Size::px(ROW_HEIGHT))
             .horizontal()
             .content(Content::Flex)
-            // `Start`, so the glyph and the `line L:C` sit on the message's first line rather
-            // than the middle of a wrapped paragraph.
             .cross_align(Alignment::Start)
             .spacing(SP_3)
             .padding(Gaps::new(ROW_INSET, PAD, ROW_INSET, ROW_INDENT))
-            // Switching to the tab, not jumping to the span: the span is a byte range into the
-            // text the pass validated, and moving the caret is the editor's delicate half
-            // (AGENTS.md §8) — its own change.
             .on_press(move |_| {
                 session.write_channel(Chan::Tabs).switch(tab);
             })
             .child(Icon::new(glyph).color(tone).size(15.))
             .child(
-                // **Wraps, but carries no copy button**, unlike the Project row next door. This
-                // row is pressable — it switches to the tab that owns the diagnostic — and a
-                // `Button` inside a pressable parent fires both (AGENTS.md §3). A diagnostic is
-                // also the one refusal that already has somewhere to go: the press puts you in
-                // front of the SQL that caused it.
                 Body::new(self.diagnostic.message.clone())
                     .color(self.theme.message_color)
                     .width(Size::flex(1.))

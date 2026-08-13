@@ -10,24 +10,17 @@
 //! Two shapes here earn their oddness:
 //!
 //! - The trait's methods are declared `-> impl Future<Output = …> + Send` rather than as
-//!   `async fn`, because rmcp polls a handler's future on its own runtime and so requires
-//!   `Send` — which an `async fn` in a trait does not promise. Implementors still write
-//!   plain `async fn`.
-//! - [`Host::run`] returns a `Result` inside a `Result` ([`RunSettle`]), and the nesting is
-//!   the point: the outer arm is "the run never dispatched" (no such query session, the
-//!   window went), the inner one is the engine's own settle. Only the inner one may be a
-//!   *stop* rather than a fault, and the tool layer is the single place that judges which
-//!   (`strata_core::engine::stopped_on_purpose`) — a host that folded the two would be a
-//!   second copy of that rule.
+//!   `async fn`, because rmcp polls a handler's future on its own runtime and so requires `Send`,
+//!   which an `async fn` in a trait does not promise. Implementors still write plain `async fn`.
+//! - [`Host::run`] returns a `Result` inside a `Result` ([`RunSettle`]): the outer arm is "the run
+//!   never dispatched", the inner one is the engine's own settle. Only the inner one may be a
+//!   *stop* rather than a fault, and the tool layer is the single place that judges which.
 //!
-//! ## Every session-scoped question names the agent asking it (AA-03b)
-//!
-//! An agent addresses **its own** query sessions and nothing else. That is not defensive
-//! bookkeeping: AA-03 landed agent runs in the user's own tabs, which meant `list_tabs`
-//! handed an agent every open tab — the one the user was typing in included — and a `run`
-//! on it replaced their buffer. Passing an [`Agent`] to every session-scoped method makes
-//! the ownership check the host's *only* way to answer, so there is no listing that could
-//! include somebody else's work and no handle that could be guessed into.
+//! **Every session-scoped question names the agent asking it.** An agent addresses its own query
+//! sessions and nothing else — AA-03 landed agent runs in the user's tabs, so `list_tabs` handed an
+//! agent the one the user was typing in and a `run` on it replaced their buffer. Passing an
+//! [`Agent`] to every session-scoped method makes the ownership check the host's *only* way to
+//! answer.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

@@ -63,15 +63,8 @@ fn builtin<T: Clone + 'static>(th: &mut Theme, key: &'static str, retune: impl F
 /// Register every component theme the app dresses — Freya built-ins Strata retunes, then
 /// Strata's own components. Called once per theme build; `typo` feeds the two components
 /// whose type is themed (tooltip, editor).
-// Long because it is the table, and the table is the point: AGENTS.md §3 fixes every component's
-// dress onto roles in **one** static mapping, so splitting this into `register_buttons` /
-// `register_inputs` / … would scatter the one place you go to ask what dresses a component. It has
-// no control flow at all — a flat sequence of `builtin::<T>` / `custom` registrations, cognitive
-// complexity zero — so length here measures the component count, not tangle.
 #[allow(clippy::too_many_lines)]
 pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
-    // ---- Freya built-ins: partial retunes ---------------------------------------------------
-
     builtin::<ButtonColorsThemePreference>(th, "button", |p| {
         p.hover_background = role(Role::ElementHover);
         p.border_fill = role(Role::BorderControl);
@@ -80,8 +73,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.color = role(Role::TextControl);
         p.hover_color = role(Role::Accent);
     });
-    // `filled_button` needs no retune at all: the fork's accent dress resolves through the
-    // bridge (primary → accent, tertiary → accent.hover, secondary → accent.ring).
     builtin::<ButtonColorsThemePreference>(th, "outline_button", |p| {
         p.background = role(Role::GhostElementBackground);
         p.hover_background = role(Role::GhostElementHover);
@@ -104,9 +95,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.background = role(Role::SurfaceBackground);
         p.shadow = clear();
     });
-    // A field's four states, on all three variants: the box never changes fill (the canvas's
-    // field keeps `--c-panel` throughout), hover brightens the outline, focus takes it to the
-    // accent, and the keyboard adds the accent wash ring outside it.
     builtin::<InputColorsThemePreference>(th, "input", |p| {
         p.background = role(Role::SurfaceBackground);
         p.hover_background = role(Role::SurfaceBackground);
@@ -128,9 +116,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.focus_border_fill = role(Role::BorderFocused);
         p.focus_ring_fill = role(Role::AccentMuted);
     });
-    // The flat field carries no outline, and every one in Strata sits inside a box that does
-    // (the palette's search row, a rename slot, the composer's bar) — so the hover belongs to
-    // that box and this field declines it rather than growing a fill the canvas never draws.
     builtin::<InputColorsThemePreference>(th, "flat_input", |p| {
         p.background = role(Role::SurfaceBackground);
         p.hover_background = role(Role::SurfaceBackground);
@@ -191,7 +176,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.background = role(Role::ElevatedSurface);
         p.color = role(Role::TextMuted);
         p.border_fill = role(Role::BorderOverlay);
-        // The tooltip's type is the scale's `body` role, never its own font.
         p.font_family = Preference::Specific(typo.body.family.clone());
         p.font_size = Preference::Specific(typo.body.size);
         p.font_weight = Preference::Specific(typo.body.weight);
@@ -278,10 +262,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.guide_fill = role(Role::BorderVariant);
     });
 
-    // ---- Strata's own components: whole-cloth ----------------------------------------------
-
-    // The shared categorical type ramp every dtype-showing surface reads (see
-    // `components::type_palette`).
     th.set(
         "type_palette",
         TypePaletteThemePreference {
@@ -294,7 +274,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             map_color: role(Role::DataTypeMap),
         },
     );
-    // A key cap looks like a cap on both windows that draw one (see `components::keycap`).
     th.set(
         "keycap",
         KeyCapColorsThemePreference {
@@ -386,9 +365,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             corner_radius: Preference::Specific(CornerRadius::new_all(R_1)),
         },
     );
-    // The editor's chrome; its type is the scale's `code_block` role, resolved here so the
-    // scale stays the single source. Syntax colours register separately, from the theme
-    // file's own `syntax` section (see `strata_theme`).
     th.set(
         "code_editor",
         EditorThemePreference {
@@ -433,14 +409,9 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             running_background: role(Role::ErrorBackground),
             running_hover_background: role(Role::ErrorBackgroundHover),
             running_color: role(Role::Error),
-            // `AccentRing`, not `BorderFocused`, because this button is accent-*filled*: both
-            // built-ins author `border.focused` at the same value as `accent`, so the ring
-            // would paint in the idle button's own fill and show nothing. Same answer the
-            // bridge already gives `filled_button` (`secondary` -> `AccentRing`).
             focus_border_fill: role(Role::AccentRing),
         },
     );
-    // Tracks `run_button`'s running dress — the same cancel meaning, one set of roles.
     th.set(
         "cancel_button",
         CancelButtonThemePreference {
@@ -483,8 +454,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             border_fill: role(Role::BorderControl),
             divider_fill: role(Role::BorderControl),
             item_color: role(Role::TextControl),
-            // Translucent by authorship, which is what a wash painted over a toolbar pill, a
-            // form pill and a raised strip alike has to be.
             item_hover_background: role(Role::ElevatedElementHover),
             item_active_background: role(Role::AccentSelection),
             item_active_color: role(Role::Accent),
@@ -496,8 +465,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         ToggleButtonThemePreference {
             background: role(Role::GhostElementBackground),
             color: role(Role::TextDim),
-            // As above: a toggle sits on the rail, a toolbar and a header, so its wash is the
-            // translucent one rather than a fill authored for one tier.
             hover_background: role(Role::ElevatedElementHover),
             hover_color: role(Role::Text),
             active_background: role(Role::AccentMuted),
@@ -517,7 +484,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         TabThemePreference {
             background: role(Role::GhostElementBackground),
             hover_background: role(Role::GhostElementHover),
-            // The active tab reveals the app base coat, seating it over the editor pane.
             active_background: role(Role::Background),
             color: role(Role::TextDim),
             active_color: role(Role::Text),
@@ -549,7 +515,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             muted_color: role(Role::TextPlaceholder),
             raw_color: role(Role::TextMuted),
             hot_color: role(Role::Warning),
-            // "Warm" borrows the timestamp hue — value-exact with the old accent_tan.
             warm_color: role(Role::DataTypeTimestamp),
         },
     );
@@ -621,11 +586,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             row_hover_fill: role(Role::GhostElementHover),
         },
     );
-    // The fork's own markdown viewer, tuned to the transcript's scale (AGENTS.md §3 — a
-    // built-in is a partial retune, never a lookalike). Its defaults reference the sheet slots
-    // `bridge_sheet` already fills, so what is set here is what the chat needs differently: the
-    // pane's own prose size, and a code block that reads as the app's code rather than as a
-    // generic grey box.
     th.set(
         "markdown_viewer",
         MarkdownViewerThemePreference {
@@ -733,8 +693,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             tick_color: role(Role::TextPlaceholder),
             legend_color: role(Role::TextMuted),
             note_color: role(Role::TextDim),
-            // The high-cardinality banner's box, on the same two roles the Export window's
-            // banner takes — one warning tone app-wide, not a second.
             warning_background: role(Role::WarningBackground),
             warning_border_fill: role(Role::WarningBorder),
             series_1: role(Role::Chart1),

@@ -5,46 +5,27 @@
 //! The app-side half is `strata_freya::state::updates`, which runs these on a worker thread and
 //! keeps a status slot; the surfaces are UP-03.
 //!
-//! ## Blocking, on `list_models_blocking`'s shape
+//! **Blocking**, on `list_models_blocking`'s shape: every entry point owns a current-thread runtime
+//! and a one-off client for the length of one call, which is what keeps `reqwest` and Tokio out of
+//! `strata-freya` entirely — the frontend runs these through `task::offload`.
 //!
-//! Every entry point is a plain blocking function that owns a current-thread runtime and a
-//! one-off client for the length of one call. That is what keeps `reqwest` and a Tokio runtime
-//! out of `strata-freya` entirely — the frontend runs these through `task::offload`, a thread
-//! per call, exactly as the model-listings refresh already does.
+//! **The version is an argument, never `env!`.** This crate is versioned independently of the app,
+//! so a check reading its own `CARGO_PKG_VERSION` would compare the release against the wrong
+//! number; [`check_blocking`] takes the running app's version and refuses one it cannot parse.
 //!
-//! ## The version is an argument, never `env!`
+//! **What makes a download safe to install** is the content layer, not the transport: [`verify`]
+//! refuses anything whose signature does not verify strictly, does not name [`TEAM_ID`], or does
+//! not claim [`APP_ID`]. A MITM or a compromised CDN can withhold an update, never substitute one,
+//! and the offer requires a strictly newer semver so a replayed listing cannot downgrade. There is
+//! no system check behind ours: quarantine is opt-in and set by browsers, so a file the app
+//! downloads never carries one and Gatekeeper never assesses the bundle that gets swapped in.
 //!
-//! This crate is versioned independently of the app: `scripts/version.sh` bumps
-//! `strata-freya`'s number, and that is what the tag, the DMG and the plist are all derived
-//! from. A check compiled into the core reading its *own* `CARGO_PKG_VERSION` would compare the
-//! release against the wrong number, so [`check_blocking`] takes the running app's version and
-//! refuses one it cannot parse rather than guessing.
+//! **The staging layout is a contract.** A download lands in `<temp>/strata-update-<uuid>/` and the
+//! archive unpacks *into that folder*, so a staged bundle's parent **is** its staging folder —
+//! which is what lets [`discard`] sweep one from the path alone.
 //!
-//! ## What makes a download safe to install
-//!
-//! The network is untrusted by construction. TLS covers the transport (with a redirect policy
-//! that refuses to leave `https`), but authenticity rests entirely on the content layer:
-//! [`verify`] refuses anything whose signature does not verify strictly, does not name
-//! [`TEAM_ID`], or does not claim [`APP_ID`]. A MITM or a compromised CDN can withhold an
-//! update, never substitute one, and the offer requires a strictly newer semver so a replayed
-//! listing cannot downgrade a running app.
-//!
-//! There is no system check behind ours. The quarantine attribute is opt-in and browsers are
-//! what set it, so a file the app downloads itself never carries one and Gatekeeper never
-//! assesses the bundle that gets swapped in.
-//!
-//! ## The staging layout is a contract
-//!
-//! A download lands in `<temp>/strata-update-<uuid>/`, the archive is unpacked *into that
-//! folder*, and the answer is the `.app` inside it. So a staged bundle's parent **is** its
-//! staging folder, which is what lets [`discard`] sweep one from the path alone rather than
-//! from a second value the caller has to carry.
-//!
-//! ## macOS
-//!
-//! `codesign`, `ditto` and `PlistBuddy` are macOS tools and a `.app` is a macOS bundle. This is
-//! not `cfg`-gated because it does not need to be: [`site`] finds no bundle anywhere else, and
-//! an updater with no install site is inert.
+//! **macOS.** Not `cfg`-gated because it does not need to be: [`site`] finds no bundle anywhere
+//! else, and an updater with no install site is inert.
 
 use std::env;
 use std::ffi::OsStr;
@@ -277,8 +258,6 @@ pub fn install(staged: &Path, target: &Path) -> Result<(), String> {
         return Err(format!("The installed app could not be moved aside: {e}."));
     }
     if let Err(e) = fs::rename(&incoming, target) {
-        // Back to exactly where we started. If even this fails there is nothing left to try,
-        // and the message has to name where the app went.
         if let Err(back) = fs::rename(&outgoing, target) {
             return Err(format!(
                 "The update could not be installed ({e}) and '{}' could not be put back ({back}). It is at '{}'.",
@@ -290,8 +269,6 @@ pub fn install(staged: &Path, target: &Path) -> Result<(), String> {
         return Err(format!("The update could not be installed: {e}."));
     }
 
-    // Housekeeping, not part of the operation: the swap is done and a folder left behind is a
-    // sweep, never a failed install.
     sweep(&outgoing);
     Ok(())
 }
@@ -467,7 +444,6 @@ fn stage_update(
             said(&unpacked.stderr)
         ));
     }
-    // Its work is done and it is the largest thing in the folder.
     if let Err(e) = fs::remove_file(&archive) {
         tracing::warn!("could not clear {}: {e}", archive.display());
     }
@@ -568,12 +544,8 @@ fn verify(app: &Path) -> Result<(), String> {
             said(&described.stderr)
         ));
     }
-    // `codesign -dvv` writes its report to stderr.
     let report = String::from_utf8_lossy(&described.stderr);
     match field(&report, "TeamIdentifier") {
-        // An ad-hoc signature has no team, and reports the absence as a value. Both readings
-        // mean the same thing: this is not something Apple's chain vouches for, so a locally
-        // built app can never be offered as an update.
         None | Some("not set") => return Err(
             "The downloaded update carries no Apple team signature, so it is not a release build."
                 .into(),
@@ -605,7 +577,6 @@ fn bundle_id(app: &Path) -> Result<String, String> {
         .output()
         .map_err(|e| format!("Could not run '{PLIST_BUDDY}': {e}."))?;
     if !read.status.success() {
-        // PlistBuddy reports a missing key on stdout.
         return Err(format!(
             "The downloaded update does not name a bundle identifier. {}",
             said(&read.stdout)
@@ -913,7 +884,6 @@ mod tests {
         let staged = bundle(root.join("staged").join("Strata.app"), "new");
         let apps = root.join("Applications");
         fs::create_dir_all(&apps).unwrap();
-        // Nothing to move aside: the second step fails after the first has already copied.
         let target = apps.join("Strata.app");
 
         let why = install(&staged, &target).expect_err("refused");

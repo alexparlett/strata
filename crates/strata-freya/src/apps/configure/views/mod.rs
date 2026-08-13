@@ -46,10 +46,6 @@ pub struct ConfigureBody;
 
 impl Component for ConfigureBody {
     fn render(&self) -> impl IntoElement {
-        // The per-row type probe behind an internal table's COLUMNS list (IT-01). Here rather
-        // than at the window root because it is this form's own reconciliation — over the whole
-        // draft, not a hook per row — and because a driver the body owns is one the body's tests
-        // get for nothing.
         use_probes(&use_consume::<EngineCtx>(), use_consume::<ConfigureCtx>());
 
         rect().width(Size::fill()).height(Size::flex(1.)).child(
@@ -57,30 +53,11 @@ impl Component for ConfigureBody {
                 .width(Size::fill())
                 .height(Size::fill())
                 .child(
-                    // **A `Form`.** Every section here is a `Row` (or a pair of them), so the
-                    // rhythm between them is the shared form's, and the register is set once at
-                    // the top rather than assumed by each section. A `rect()` with a spacing of
-                    // its own would be this window quietly keeping its own copy of both.
                     rect().width(Size::fill()).padding(BODY_PADDING).child(
                         Form::new()
-                            // The canvas's order: where the files are, then what the table is
-                            // called, then — on a remote table — which store.
-                            //
-                            // `ObjectStore` and the two below it are **always mounted** and draw
-                            // nothing when they have nothing to say (`views::hive`'s rule, for
-                            // the differ). The cost is that an invisible row still takes a
-                            // `Form` gap either side, so the local layout carries a doubled gap
-                            // where the store row would be. Removing it means keying every child
-                            // here — the shape `apps::connection::views::form` uses — which is a
-                            // change to five components that have no key today.
                             .child(Location)
                             .child(Identity)
                             .child(ObjectStore)
-                            // A internal table's own section, on the same terms as the three
-                            // below it: always mounted, drawing nothing when LOCATION is not on
-                            // Internal. It sits where SOURCE PATHS does because it answers the
-                            // same question — what is in this table — and the two are never
-                            // both shown.
                             .child(Columns)
                             .child(SourcePaths)
                             .child(ImportOptions)
@@ -104,7 +81,6 @@ impl Component for ConfigureBody {
 /// already `Ready` when the window opens, and without the gate that would close the window at
 /// mount.
 pub fn use_watch_registration(mut ctx: ConfigureCtx) {
-    // Subscribes to the tables channel — the only thing this window watches over there.
     let project = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
     let platform = use_hook(Platform::get);
 
@@ -120,8 +96,6 @@ pub fn use_watch_registration(mut ctx: ConfigureCtx) {
             })
         });
         match answer.flatten() {
-            // Still registering, or the row went while we waited (a drop from the catalog) —
-            // either way there is nothing for this window to say.
             None => {}
             Some(Ok(())) => platform.close_current_window(),
             Some(Err(why)) => ctx.status.set(Status::Failed(why)),
@@ -150,11 +124,6 @@ fn use_probes(engine: &EngineCtx, ctx: ConfigureCtx) {
     let engine = engine.clone();
 
     use_side_effect(move || {
-        // Subscribes to both, which is what re-arms the driver when a box is typed into or an
-        // answer lands — and it has to happen **before** any early return, because
-        // `ReactiveContext::run` drains this effect's subscriptions on every pass and only the
-        // reads it actually performs put them back. Guarding on `probing` first would leave a
-        // wake during a pass with no subscriptions at all, and the driver would never run again.
         if ctx.draft.read().unprobed(&ctx.probes.read()).is_empty() || *probing.peek() {
             return;
         }
@@ -168,14 +137,9 @@ fn use_probes(engine: &EngineCtx, ctx: ConfigureCtx) {
                     break;
                 }
                 Timer::after(PROBE_DEBOUNCE).await;
-                // Still moving: wait it out from here rather than asking about a half-typed
-                // spelling that is about to be replaced.
                 if ctx.draft.peek().unprobed(&ctx.probes.peek()) != before {
                     continue;
                 }
-                // One at a time, like the validation drain: each is a plan on the engine's own
-                // runtime, and a settled form with a dozen rows should not queue a dozen of them
-                // ahead of whatever the user runs next.
                 for typed in before {
                     let answer = engine.column_type(typed.clone()).await;
                     let mut probes = ctx.probes;

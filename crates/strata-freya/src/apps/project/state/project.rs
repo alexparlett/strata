@@ -346,8 +346,6 @@ impl ProjectState {
         project_io::save_defs(&self.root, &self.defs())
     }
 
-    // --- identity ------------------------------------------------------------------
-
     /// The one name-equality rule for user-entered catalog names: case-insensitive
     /// (DataFusion folds unquoted identifiers).
     pub fn same_name(a: &str, b: &str) -> bool {
@@ -399,8 +397,6 @@ impl ProjectState {
             }
         ))
     }
-
-    // --- registration landing (the engine's answers, folded onto the rows) ----------
 
     /// Land a connected object store on its row (W7).
     ///
@@ -538,21 +534,6 @@ impl ProjectState {
                 deps: meta.tables,
                 view_deps,
             });
-            // Re-created means re-planned, against whatever the tables underneath it now hold —
-            // so a scan of the old plan describes nothing that is still true.
-            //
-            // **Its own row, and deliberately no cascade to the views that read it** — unlike
-            // [`table_registered`](Self::table_registered), which has [`invalidate_readers`]. The
-            // asymmetry is not an oversight. `CREATE OR REPLACE VIEW` inlines the body of every
-            // view it reads *at that moment* (see [`refresh_order`](Self::refresh_order)), so a
-            // view B over this view holds an inlined copy of the **old** body and goes on
-            // answering with it — B's scanned numbers still describe exactly what B returns, and
-            // dropping them would put the scan card over a view whose data has not moved.
-            //
-            // The invariant that makes this self-maintaining: a profile dies when its view's plan
-            // is *re-created*, and this method is that event. So if a later task does start
-            // re-creating dependent views on a single-view edit, their profiles are already
-            // handled — by their own landing answer, on their own channel.
             v.profile = None;
         }
     }
@@ -564,14 +545,6 @@ impl ProjectState {
             v.profile = None;
         }
     }
-
-    // --- validity (P3-04) ----------------------------------------------------------
-    //
-    // The catalog is *definitions*, not a mirror of DataFusion: a row can exist and not
-    // work. So validity is **derived on read**, never stored — a table's straight off the
-    // answer the engine already gave, a view's against the live table rows its `deps`
-    // name. There is no flag to invalidate, which is what makes it self-heal: put the
-    // file back, re-scan, and the triangle is gone on the next render.
 
     /// A table's problem, if any — the engine refused its def (missing file, bad path).
     ///
@@ -603,15 +576,10 @@ impl ProjectState {
     pub fn view_problem(&self, row: &ViewRow) -> Option<String> {
         let info = match &row.reg {
             Reg::Failed(e) => return Some(e.clone()),
-            // Unanswered: not broken — and there are no deps to check yet either.
             Reg::Loading => return None,
             Reg::Ready(info) => info,
         };
         info.deps.iter().find_map(|dep| {
-            // `deps` are engine-landed names, but DataFusion folds unquoted identifiers, so
-            // match them the way the catalog's own name rule does — `name_in_use` already
-            // stops two rows that fold together from coexisting, so this can't widen onto
-            // the wrong row, while an exact compare could miss the right one and cry wolf.
             match self
                 .tables
                 .iter()
@@ -621,18 +589,10 @@ impl ProjectState {
                 Some(t) if matches!(t.reg, Reg::Failed(_)) => {
                     Some(format!("Reads {dep}, which failed to load."))
                 }
-                // Ready, or still loading — a dep mid-re-scan is not a problem.
                 Some(_) => None,
             }
         })
     }
-
-    // --- profile requests (P3-09) --------------------------------------------------
-    //
-    // A scan is asked for by the user (the inspector's card, a row's menu) and answered by the
-    // freya-query cache under the request's own id. So the store's whole part in profiling is
-    // this one field per row: whether a scan has been asked for, and which one. There is no
-    // result here, nothing to keep in step, and invalidation is a `None`.
 
     /// The scan asked for on `name`, if any — what the inspector subscribes to and what the
     /// sidebar row spins about. `None` is the un-profiled state (the zone's scan card).
@@ -643,7 +603,6 @@ impl ProjectState {
                 .iter()
                 .find(|v| Self::same_name(&v.def.name, name))
                 .and_then(|v| v.profile),
-            // A saved query is a stored string — nothing to scan, so nothing to find.
             CatalogKind::Query => None,
             CatalogKind::Table => self
                 .tables
@@ -703,36 +662,26 @@ impl ProjectState {
         }
     }
 
-    // --- dependents (P3-05) --------------------------------------------------------
-
     /// The views a drop of `name` would leave **invalid**, alphabetically (rows are kept
     /// sorted) — the other direction of the same deps [`view_problem`](Self::view_problem)
     /// reads (D10). The drop confirm's consequence line and its name chips.
     ///
-    /// Which list answers depends on what is being dropped, and the two are not
-    /// interchangeable. [`ViewInfo::deps`] is the *base tables* a view reads — transitive,
-    /// because the planner inlines nested views at creation — so it reaches a view-of-a-view
-    /// over the dropped table. [`ViewInfo::view_deps`] is the *views* it reads, which is the
-    /// only thing that can answer the view case at all. A saved query is not a SQL object:
-    /// nothing can read it, so it has no dependents.
+    /// Which list answers depends on what is being dropped. [`ViewInfo::deps`] is the *base tables*
+    /// a view reads — transitive, because the planner inlines nested views at creation — so it
+    /// reaches a view-of-a-view over the dropped table; [`ViewInfo::view_deps`] is the *views* it
+    /// reads, the only thing that can answer the view case. A saved query is not a SQL object, so
+    /// it has no dependents. Names fold case, because deps come back from the planner and the
+    /// dropped name comes from a def.
     ///
-    /// Names fold case for the same reason `view_problem`'s lookup does — deps come back
-    /// from the planner, the dropped name comes from a def.
+    /// **Left invalid, not broken.** A dependent view's live plan captured its sources by `Arc` at
+    /// creation and never re-resolves their names, so it keeps answering after the drop and fails
+    /// only on the next reload. The confirm says exactly what the row's triangle will say.
     ///
-    /// **Left invalid, not broken.** Verified against DataFusion 54: a dependent view's live
-    /// plan captured its sources by `Arc` at creation and never re-resolves their names, so
-    /// it keeps answering after the drop and only fails on the next reload, when its SQL
-    /// re-plans against something that is gone. The confirm says exactly what the row's
-    /// triangle will say (P3-04) — *left invalid* — not "will stop working".
-    ///
-    /// A view with no landed answer is **not** listed: there is no dependency information to
-    /// read off it, and a row that never registered is already flagged on its own account —
-    /// this drop is not what would invalidate it.
+    /// A view with no landed answer is **not** listed: there is no dependency information to read
+    /// off it, and a row that never registered is already flagged on its own account.
     pub fn dependent_views(&self, kind: CatalogKind, name: &str) -> Vec<String> {
         self.views
             .iter()
-            // Tables and views share one namespace, but a view can't read itself — and a
-            // view being dropped is not left invalid by its own drop.
             .filter(|v| !Self::same_name(&v.def.name, name))
             .filter(|v| {
                 let Some(info) = v.reg.ready() else {
@@ -782,16 +731,12 @@ impl ProjectState {
             .iter()
             .flat_map(|table| self.dependent_views(CatalogKind::Table, table))
             .collect();
-        // Filtered back through the rows rather than handed over as the set, so the names come
-        // out in the catalog's own order — the chips read as the section they came from.
         self.views
             .iter()
             .map(|v| v.def.name.clone())
             .filter(|name| broken.contains(name))
             .collect()
     }
-
-    // --- re-scan (P3-03) -----------------------------------------------------------
 
     /// Reset every connection row to `Loading` — the start of a whole-catalog re-scan
     /// (W7). Same reasoning as [`reload_tables`](Self::reload_tables): mid-pass the store
@@ -906,8 +851,6 @@ impl ProjectState {
                 .unwrap_or_default()
         })
     }
-
-    // --- def mutations (the caller persists via `save_defs`) ------------------------
 
     /// Insert-or-replace a view def by name, at its alphabetical slot. The row resets
     /// to `Loading` — a (re)written def is unanswered until the engine speaks.
@@ -1153,7 +1096,6 @@ mod tests {
             after.tables[0].partition_cols
         );
         assert_eq!(before.views[0].sql, after.views[0].sql);
-        // Saved queries aren't engine-registered at all, so a re-scan can't reach them.
         assert_eq!(before.saved_queries.len(), after.saved_queries.len());
         assert_eq!(before.saved_queries[0].id, after.saved_queries[0].id);
     }
@@ -1182,7 +1124,6 @@ mod tests {
             "replaced in place, still sorted"
         );
 
-        // And a drop names the same row a save would have replaced.
         p.remove_view("orders_daily");
         p.remove_table("orders");
         assert!(p.views.is_empty());
@@ -1206,7 +1147,6 @@ mod tests {
 
         assert_eq!(p.tables[1].def.name, "users");
         assert_eq!(p.tables[1].reg.ready().and_then(|m| m.rows), Some(3));
-        // Its neighbour is still awaiting its own answer — rows land one at a time.
         assert!(matches!(p.tables[0].reg, Reg::Loading));
     }
 
@@ -1224,11 +1164,9 @@ mod tests {
             rows: Some(n),
         };
 
-        // Nothing has claimed it: the re-read lands, exactly as a registration would.
         p.table_reread("users", meta(9));
         assert_eq!(rows(&p, 1), Some(9));
 
-        // A pass claims the row, and now the re-read that was already in flight must not.
         p.reload_table("users");
         p.table_reread("users", meta(1));
         assert!(
@@ -1236,12 +1174,9 @@ mod tests {
             "the row is still the pass's to answer"
         );
 
-        // …and the pass's own answer lands normally.
         p.table_registered("users", meta(12));
         assert_eq!(rows(&p, 1), Some(12));
     }
-
-    // --- validity (P3-04) --------------------------------------------------------------
 
     fn view_meta(deps: &[&str]) -> ViewMeta {
         ViewMeta {
@@ -1356,7 +1291,6 @@ mod tests {
             name: "orders_weekly".into(),
             sql: "SELECT * FROM orders_daily".into(),
         });
-        // What the planner lands for a view over a view: the *base* tables, inlined.
         p.view_registered("orders_weekly", view_meta(&["orders"]));
 
         p.remove_table("orders");
@@ -1371,8 +1305,6 @@ mod tests {
             Some("Reads orders, which is no longer in the catalog.")
         );
     }
-
-    // --- dependents (P3-05) ------------------------------------------------------------
 
     /// A view meta that reads views as well as tables — what the planner lands for a view over
     /// a view (the base tables inlined, plus the view names among its raw aliases).
@@ -1424,7 +1356,6 @@ mod tests {
             name: "orders_weekly".into(),
             sql: "SELECT * FROM orders_daily".into(),
         });
-        // The planner inlines the inner view: base tables in `tables`, the view in `aliases`.
         p.view_registered(
             "orders_weekly",
             view_meta_over(&["orders"], &["orders_daily"]),
@@ -1510,7 +1441,6 @@ mod tests {
             ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-viewdeps-fold-test"));
-        // What the planner lands: the alias folded to lower case.
         p.view_registered("orders_weekly", view_meta_over(&[], &["orders_daily"]));
 
         assert_eq!(
@@ -1556,8 +1486,6 @@ mod tests {
             vec!["orders_daily".to_string()]
         );
     }
-
-    // --- single-row refresh (P3-06) ----------------------------------------------------
 
     /// A row's Refresh touches **that row**, and the whole point is that nothing else moves:
     /// its neighbour keeps the verdict it already had, so the pane doesn't read as a full
@@ -1617,8 +1545,6 @@ mod tests {
             view_meta_over(&["orders"], &["orders_daily"]),
         );
 
-        // Deliberately named so that *alphabetical* order is the wrong order: the outer view
-        // sorts first, and re-creating it first would inline the stale inner plan.
         assert_eq!(
             p.views_to_refresh("orders"),
             vec!["orders_daily".to_string(), "a_orders_weekly".to_string()],
@@ -1660,7 +1586,6 @@ mod tests {
                 sql: "SELECT 1".into(),
             });
         }
-        // `mid` reads `orders_daily`; `outer` reads both (the planner inlines transitively).
         p.view_registered("mid", view_meta_over(&["orders"], &["orders_daily"]));
         p.view_registered(
             "outer",
@@ -1691,8 +1616,6 @@ mod tests {
         assert_eq!(p.refresh_order(names.clone()), names);
     }
 
-    // --- profile requests (P3-09) ------------------------------------------------------
-
     /// Asking for a scan records the request and nothing else, and a re-scan is a **new**
     /// request: the id is the cache key, so re-using it would read the old numbers back.
     #[test]
@@ -1715,11 +1638,8 @@ mod tests {
             None,
             "cancelling puts the row back to offering the scan"
         );
-        // Names fold like every other def-identity decision, and a name with no row is simply
-        // not a request — never a panic and never a row invented for it.
         assert!(p.request_profile(CatalogKind::Table, "ORDERS").is_some());
         assert!(p.request_profile(CatalogKind::Table, "nope").is_none());
-        // A saved query is a stored string: there is nothing to scan.
         assert!(p
             .request_profile(CatalogKind::Query, "orders by region")
             .is_none());
@@ -1755,13 +1675,10 @@ mod tests {
             "an unrelated table's scan is untouched"
         );
 
-        // The refusal arm.
         p.request_profile(CatalogKind::Table, "orders");
         p.table_failed("orders", "no such file".into());
         assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
 
-        // And a view being re-created drops its own, on the views channel where the inspector
-        // is listening.
         p.request_profile(CatalogKind::View, "orders_daily");
         p.view_registered("orders_daily", view_meta(&["orders"]));
         assert_eq!(p.profile_scan(CatalogKind::View, "orders_daily"), None);
@@ -1779,8 +1696,6 @@ mod tests {
         p.remove_table("orders");
         assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
     }
-
-    // --- saved-query rename (P3-06) ----------------------------------------------------
 
     /// A rename is a **label** change: the id is untouched (so any tab bound to it stays bound)
     /// and the row moves to its new alphabetical slot, because the section renders in store
@@ -1885,9 +1800,6 @@ mod tests {
             "the S3 connection over the same bucket is untouched"
         );
 
-        // And a failed write puts it back exactly where it was (P4-15 item 4). The section's
-        // order is the load's own — `load_defs` sorts on the bucket, which these two share, so
-        // the tie-break is the file's order and restoring by *index* is what preserves it.
         p.restore_connection(at, row);
         assert_eq!(
             p.connections
@@ -1934,14 +1846,12 @@ mod tests {
             }),
             "…and it carries what was saved"
         );
-        // The neighbour sharing its bucket keeps both its def and the verdict it had earned.
         let s3 = p
             .connections
             .iter()
             .find(|c| c.def.url() == "s3://lake")
             .expect("the S3 connection over the same bucket");
         assert!(matches!(s3.reg, Reg::Ready(())));
-        // A new bucket lands at its sorted slot rather than at the end.
         p.upsert_connection(ConnectionDef {
             address: "acme".into(),
             provider: Provider::S3(S3Store::default()),

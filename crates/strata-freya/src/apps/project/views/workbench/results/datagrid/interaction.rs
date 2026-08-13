@@ -39,9 +39,6 @@ fn page() -> Rc<GridData> {
 /// as root contexts from the runner.
 fn app() -> impl IntoElement {
     use_init_theme(|| strata_theme(&load("midnight")));
-    // The grid only needs a session with one open tab — build it directly rather than
-    // routing through `use_init_session` (the window's restore path, which wants the
-    // snapshot a real project open loaded off disk).
     freya::radio::use_init_radio_station::<SessionState, Chan>(|| {
         let mut s = SessionState::default();
         s.open_blank();
@@ -79,18 +76,15 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
         (900., 700.).into(),
         |r| {
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
-            // A failed page read renders the error surface, which offers the assistant.
             r.provide_root_context(|| State::create(Chats::new(Pick::default())));
             r.provide_root_context(|| State::create(None::<ShapeTarget>));
             r.provide_root_context(|| State::create(Selection::None))
         },
         1.,
     );
-    // Two passes: the virtual scroller builds its visible rows off the first layout.
     runner.sync_and_update();
     runner.sync_and_update();
 
-    // Unfocused grid: the chord routes by a11y focus, so nothing happens.
     runner.send_event(primary_a());
     runner.sync_and_update();
     assert_eq!(
@@ -99,8 +93,6 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
         "⌘A must not reach an unfocused grid"
     );
 
-    // Press the first body cell (toolbar 38 + header 46, first data column past the
-    // 52px gutter): a single-cell rectangle, and the grid takes a11y focus.
     runner.move_cursor((100., 100.));
     runner.click_cursor((100., 100.));
     runner.sync_and_update();
@@ -114,7 +106,6 @@ fn cell_press_focuses_the_grid_and_cmd_a_selects_all() {
         }
     );
 
-    // Focused grid: ⌘A selects the whole page.
     runner.send_event(primary_a());
     runner.sync_and_update();
     assert_eq!(
@@ -139,7 +130,6 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         (900., 700.).into(),
         |r| {
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
-            // A failed page read renders the error surface, which offers the assistant.
             r.provide_root_context(|| State::create(Chats::new(Pick::default())));
             r.provide_root_context(|| State::create(None::<ShapeTarget>));
             r.provide_root_context(|| State::create(Selection::None))
@@ -155,8 +145,6 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         button: Some(MouseButton::Right),
     };
 
-    // Select cell (0, 0), then right-click row 1 in the second column: outside the
-    // selection → it retargets to that single cell.
     runner.click_cursor((100., 100.));
     runner.sync_and_update();
     runner.send_event(right_down((260., 130.)));
@@ -171,7 +159,6 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         }
     );
 
-    // The copy menu is open: its TSV row exists in the tree.
     runner
         .find(|node, element| {
             Label::try_downcast(element)
@@ -180,7 +167,6 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
         })
         .expect("the copy menu is open with its TSV row");
 
-    // Right-click *inside* the selection keeps it.
     runner.send_event(right_down((260., 130.)));
     runner.sync_and_update();
     assert_eq!(

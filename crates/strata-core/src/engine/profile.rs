@@ -1,27 +1,19 @@
 //! Catalog **profiling** (D4) — the scan-derived facts behind the column inspector.
 //!
-//! Facts reach the inspector from two places, matched by [`StatKey`] so neither repeats
-//! the other. The source's *free* metadata ([`crate::model::ColumnInfo::stats`]) is
-//! read from a Parquet footer at registration and costs nothing; this computes what the
-//! source didn't say. For CSV, JSON, and **any view**, that's everything — a view has
-//! no footer at all, so a scan is the only way it learns more than a column's type.
+//! Facts reach the inspector from two places, matched by [`StatKey`] so neither repeats the other.
+//! The source's *free* metadata is read from a Parquet footer at registration and costs nothing;
+//! this computes what the source did not say — for CSV, JSON and **any view**, that is everything.
 //!
-//! **One full scan per entry, one aggregate, all columns at once.** Distinct counts
-//! can't be merged across files, so there is no cheaper form and no partial version —
-//! which is exactly why profiling is opt-in rather than automatic. For a view the cost
-//! isn't a file scan but its whole query: joins, aggregates and all.
+//! **One full scan per entry, one aggregate, all columns at once.** Distinct counts cannot be
+//! merged across files, so there is no cheaper form and no partial version, which is why profiling
+//! is opt-in. For a view the cost is its whole query, joins and aggregates included.
 //!
-//! Built with the `DataFrame` API, not generated SQL: internal logic doesn't write SQL,
-//! only the user does.
+//! Built with the `DataFrame` API, not generated SQL: internal logic does not write SQL. Leaf
+//! scalars only — a nested column gets its null count and is never descended into.
 //!
-//! Leaf scalars only: a nested column gets its null count and nothing else, and is
-//! never descended into. Profiling a struct's elements would mean traversing
-//! arbitrarily deep data on a scan we already told the user was expensive.
-//!
-//! Results cache on the UI project store's catalog rows. A table's dies with its row when the
-//! engine re-registers it; a view's dies when its SQL is rewritten. ⚠️ A view is also
-//! only as fresh as the tables beneath it, and nothing currently propagates that — see
-//! the view-dependency task in `DEV_TASKS`.
+//! Results cache on the project store's catalog rows: a table's dies with its row when the engine
+//! re-registers it, a view's when its SQL is rewritten. ⚠️ A view is only as fresh as the tables
+//! beneath it, and nothing currently propagates that.
 
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -41,8 +33,6 @@ use strata_model::Kind;
 use super::quote_ident;
 use strata_model::{ColumnInfo, Stat, StatKey};
 
-// The profile *result* type is shared vocabulary — it lives in `strata-model`. This module
-// is the scan *logic* (DataFusion aggregate exprs + result decode) that fills it.
 pub use strata_model::CatalogProfile;
 
 /// What one output column of the aggregate means.
@@ -80,20 +70,6 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
         slots.push(Slot::NonNull {
             name: c.name.clone(),
         });
-        // What's worth computing depends entirely on the type — a mean of a timestamp
-        // is nonsense, `min`/`max` of a boolean says nothing, and distinct of a boolean
-        // can only ever be 1 or 2. Ask each kind what it can answer rather than running
-        // the same six aggregates at everything:
-        //
-        // | Num    | Distinct · Min · Max · Mean · Median            |
-        // | Ts     | Distinct · Min · Max — the range is the point   |
-        // | Str    | Distinct · Min · Max (lexicographic)            |
-        // | Bool   | nothing beyond nulls                            |
-        // | nested | nothing beyond nulls                            |
-        //
-        // Everything gets Nulls, above. `avg()` on a timestamp isn't merely useless —
-        // it's a type error that would fail the *entire* aggregate, taking every other
-        // column's facts with it.
         let wants = match c.kind {
             Kind::Num => &[
                 StatKey::Distinct,
@@ -103,11 +79,7 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
                 StatKey::Median,
             ][..],
             Kind::Ts | Kind::Str => &[StatKey::Distinct, StatKey::Min, StatKey::Max][..],
-            // A boolean's distinct count is 1 or 2 and its min/max are `false`/`true`.
-            // Its one real fact would be the share that are true, which needs a FILTER
-            // builder — worth adding if anyone misses it, not worth faking.
             Kind::Bool => &[][..],
-            // You can't distinct or order a struct, and we never descend into one.
             Kind::Struct | Kind::List | Kind::Map => &[][..],
         };
         for key in wants {
@@ -116,12 +88,8 @@ pub fn aggregates(columns: &[ColumnInfo]) -> (Vec<Expr>, Vec<Slot>) {
                 StatKey::Min => min(e()),
                 StatKey::Max => max(e()),
                 StatKey::Mean => avg(e()),
-                // The `WITHIN GROUP (ORDER BY x)` migration reached into this signature:
-                // the value column comes first, as a `Sort`, then the percentile, then
-                // centroids. Approximate on purpose — `median()` is exact and would hold
-                // the whole column in memory, on a scan already warned about.
                 StatKey::Median => approx_percentile_cont(e().sort(true, false), lit(0.5), None),
-                StatKey::Nulls => continue, // derived from the non-null count
+                StatKey::Nulls => continue,
             };
             exprs.push(expr);
             slots.push(Slot::Stat {
@@ -206,7 +174,6 @@ pub fn decode(
             Slot::Stat { name, key } => stats.entry(name.clone()).or_default().push(Stat {
                 key: *key,
                 text,
-                // Computed, not read from a truncatable footer — always the value.
                 exact: true,
             }),
         }
@@ -214,7 +181,6 @@ pub fn decode(
 
     let mut cols = BTreeMap::new();
     for c in columns {
-        // Nulls lead: they're the one fact every column has, nested included.
         let mut facts = Vec::new();
         if let Some(n) = non_null.get(&c.name) {
             facts.push(Stat {
@@ -231,7 +197,6 @@ pub fn decode(
     Ok(CatalogProfile {
         at: SystemTime::now(),
         rows,
-        // The caller fills this from the plan it ran — decode only sees results.
         sql: String::new(),
         cols,
     })

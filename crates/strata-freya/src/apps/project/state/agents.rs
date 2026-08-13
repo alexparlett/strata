@@ -8,43 +8,28 @@
 //! A context signal rather than a store, on the same terms as [`Log`](super::log::Log) and
 //! [`History`](super::history::History): nothing needs surgical per-channel updates.
 //!
-//! ## Why it is not `SessionState`
+//! **Why it is not `SessionState`.** AA-03 put an agent's runs in the user's own `QueryTab`s, on
+//! the premise that the tab strip *is* the investigation trail. That holds for someone watching the
+//! window and fails for an MCP client in a terminal on another desktop: twenty agent queries moved
+//! the editor out from under whoever was typing and cost a diagnostics pass each. The rule it
+//! settled is worth keeping in view — **a surface's state belongs to whoever is looking at it.**
+//! "Shared, last-writer-wins" is fine for *content* and bad for *attention*.
 //!
-//! AA-03 put an agent's runs in the user's own `QueryTab`s, on the premise that the tab strip
-//! *is* the investigation trail. That premise holds for someone watching the window and fails
-//! for an MCP client, which is in a terminal on another desktop: twenty agent queries then
-//! moved the editor out from under whoever was typing, left twenty tabs to close, and cost a
-//! diagnostics pass each on the engine the user's own press was waiting for. So the runs
-//! moved here, and the general rule they settled is worth keeping in view — **a surface's
-//! state belongs to whoever is looking at that surface.** "Shared, last-writer-wins" is a
-//! fine rule for *content* and a bad one for *attention*.
+//! Two consequences follow from being a satellite, and both are the point:
 //!
-//! Two consequences follow from being a satellite rather than the session, and both are the
-//! point rather than a side effect:
+//! - **Nothing here reaches `session.json`**, so reopening a project cannot restore work the user
+//!   never asked for. Under AA-03 that was only half true — `QueryTab::agent` was kept out of
+//!   `TabSnapshot`, but the *tab* persisted anyway.
+//! - **Nothing here reaches `.strata/history.jsonl`.** History is capped and deduped before the
+//!   cap, so exploratory agent queries would evict runs the user actually made. History records
+//!   what *the user* ran.
 //!
-//! - **Nothing here reaches `session.json`.** `SessionSnapshot` is tabs, layout and geometry,
-//!   and an agent owns no tabs — so reopening a project cannot restore work the user never
-//!   asked for. Under AA-03 this was only half true: `QueryTab::agent` was kept out of
-//!   `TabSnapshot` deliberately, but the *tab* persisted anyway.
-//! - **Nothing here reaches `.strata/history.jsonl`.** History is capped at `max_history` and
-//!   deduped before the cap (P3-14), so twenty exploratory agent queries would take twenty
-//!   slots of the user's hundred and evict runs they actually made. History records what
-//!   *the user* ran; promoting a row into a tab and pressing Run is what puts an agent's
-//!   query in it, the ordinary way.
+//! **Recorded by its observer**, for [`Log`](super::log::Log)'s reason: a run's outcome describes
+//! something already finished and cannot be re-derived, and the window's agent driver watched every
+//! one of these facts.
 //!
-//! ## Recorded by its observer
-//!
-//! No producer hook, for [`Log`](super::log::Log)'s reason: a run's outcome describes
-//! something already finished and cannot be re-derived. The window's agent driver
-//! (`state::agent`) watched every one of these facts — it took the ask that opened the
-//! session and the notice that settled the run — so the driver is what appends.
-//!
-//! ## Everything here is bounded
-//!
-//! An agent is retracted when its connection ends, and a query session when it is closed or
-//! its agent goes; a *run trail* has no such natural end, and neither does an agent that
-//! opens sessions in a loop. So both are capped, oldest first — a trail is a scrollback, the
-//! way the event log is.
+//! **Everything here is bounded.** An agent is retracted when its connection ends and a session
+//! when it closes, but a *run trail* has no natural end — so both are capped oldest-first.
 
 use std::collections::VecDeque;
 
@@ -199,14 +184,6 @@ impl Agents {
             closing: false,
             runs: VecDeque::new(),
         });
-        // Evict the oldest session that is **not working**, never the one just opened. The
-        // caller tears the evicted workspace down, so taking a session with a run in flight
-        // would abort it — and the engine settles an abort as `cancelled`, which the
-        // vocabulary reports to the agent as "you stopped this" for a cancellation the app's
-        // *display* cap performed. Handing back a handle that is already dead would be the
-        // same trick played on the caller of this very call. If there is no idle older
-        // session the list simply runs over: a bound on how much is shown must not be a
-        // reason to destroy work.
         let mut evicted = Vec::new();
         while held.len() > SESSIONS_PER_AGENT {
             let older = held.len() - 1;
@@ -250,7 +227,6 @@ impl Agents {
         let Some(at) = held.sessions.iter().position(|s| s.id == session) else {
             return Closed::NoSuchSession;
         };
-        // Already a tombstone: closed once, so this is the stale handle again.
         if held.sessions[at].closing {
             return Closed::NoSuchSession;
         }
@@ -310,8 +286,6 @@ impl Agents {
         if let Some(run) = held.runs.iter_mut().find(|r| r.seq == seq) {
             run.outcome = outcome;
         }
-        // A tombstone with a second run still open keeps waiting: the workspace belongs to
-        // whichever settles last, not to whichever settles first.
         if !held.closing || held.is_running() {
             return None;
         }
@@ -485,8 +459,6 @@ mod tests {
             RunOutcome::Stopped("superseded by a newer run".into()),
         );
 
-        // Newest first, so the second run is the head — and it wears the outcome its own
-        // `seq` was settled with, not the one that landed after it.
         let runs = &agents.held().next().unwrap().sessions[0].runs;
         assert_eq!(runs[0].seq, second);
         assert_eq!(
@@ -514,7 +486,6 @@ mod tests {
         assert!(!agents.holds(mine.id, not_ours));
         assert_eq!(agents.closed(mine.id, not_ours), Closed::NoSuchSession);
 
-        // And a write against a session the agent does not hold records nothing.
         agents.run_started(mine.id, not_ours);
         let listed: Vec<usize> = agents.held().map(|a| a.sessions[0].runs.len()).collect();
         assert_eq!(listed, vec![0, 0]);
@@ -552,14 +523,10 @@ mod tests {
         agents.run_started(who.id, session);
 
         assert_eq!(agents.closed(who.id, session), Closed::WhenItSettles);
-        // Closed to the agent from this moment: nothing more can be dispatched into it, and
-        // a second close is the same stale handle every other one is.
         assert!(!agents.holds(who.id, session));
         assert_eq!(agents.closed(who.id, session), Closed::NoSuchSession);
-        // But the confirm still counts it, because the engine may still be executing it.
         assert_eq!(agents.sessions_of(false), vec![session]);
 
-        // The settle is what retires it, and it names the session so the caller can.
         let retire = agents.run_settled(
             who.id,
             session,
@@ -622,12 +589,10 @@ mod tests {
         agents.opened(&dialled, theirs);
         agents.opened(&assistant, mine);
 
-        // Held: both — so the assistant owns its session and can be retracted.
         assert_eq!(agents.held().count(), 2);
         assert!(agents.holds(assistant.id, mine));
         assert!(agents.knows(assistant.id));
 
-        // Told apart: each side answers with its own sessions and nobody else's.
         assert_eq!(agents.sessions_of(false), vec![theirs]);
         assert_eq!(agents.sessions_of(true), vec![mine]);
 
@@ -732,7 +697,6 @@ mod tests {
 
         assert_eq!(agents.held().count(), 1);
         assert_eq!(agents.sessions_of(false), vec![kept]);
-        // Retracting twice is a no-op, not a panic — a `Drop` can race a close.
         assert!(agents.gone(going.id).is_empty());
     }
 
@@ -750,16 +714,9 @@ mod tests {
         }
         let runs = &agents.held().next().unwrap().sessions[0].runs;
         assert_eq!(runs.len(), RUNS_PER_SESSION);
-        // Oldest first out, and the trail is newest-first: the head is the last run
-        // dispatched, and the three over the cap are the ones missing from the tail.
         assert_eq!(runs[0].seq, *dispatched.last().unwrap());
         assert_eq!(runs[RUNS_PER_SESSION - 1].seq, dispatched[3]);
 
-        // Settle the **whole** trail first: eviction deliberately skips a session that is
-        // still working (see `the_session_cap_skips_a_session_that_is_working`), and this
-        // test is about the cap rather than that rule. Every row, not just the newest —
-        // `is_running` is any run in flight, so one unsettled row would keep the session
-        // working and it would never be evicted.
         for seq in 1..=agents.next_seq {
             agents.run_settled(who.id, session, seq, RunOutcome::Plan { analyze: false });
         }
@@ -853,8 +810,6 @@ mod tests {
         );
 
         let names: Vec<&str> = agents.held().map(ConnectedAgent::name).collect();
-        // Agents stay **newest connection first**, while the sessions inside one run the
-        // other way.
         assert_eq!(names, vec!["Agent", "claude-code"]);
     }
 }

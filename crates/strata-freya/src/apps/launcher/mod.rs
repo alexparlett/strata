@@ -29,9 +29,6 @@ use crate::state::{use_share_config, use_updates, AppCtx};
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 use crate::updater::{UpdateAsk, UpdateConfirm};
 
-// `%[no_ext]`: the window's dress is read by four sibling views (title bar · rail · pane ·
-// row) rather than by one `Launcher` component, so there's no type for the generated
-// `…ThemePartialExt` builder to hang off.
 define_theme!(
     %[no_ext]
     %[component]
@@ -66,8 +63,6 @@ pub struct LauncherApp {
 
 impl LauncherApp {
     pub fn window(app: AppCtx) -> WindowConfig {
-        // Match the theme's card body so a resize doesn't flash the default white. Pre-launch
-        // there's no `Platform`, so the one-shot OS probe stands in for Sync-with-OS.
         let background = {
             let id = peek_selection(app.config, app.preview).effective(os_is_dark());
             window_background(app.themes.get_or_default(&id))
@@ -75,12 +70,8 @@ impl LauncherApp {
         WindowConfig::new_app(LauncherApp { app })
             .with_title("Welcome to Strata")
             .with_size(760., 560.)
-            // The canvas's card is the minimum too: the rail is fixed at 200px and the rows
-            // need room for a full path.
             .with_min_size(640., 460.)
             .with_background(background)
-            // The 38px strip centres macOS's 16px buttons at y = 11; AppKit's default origin is
-            // (7, 6), so the inset is the difference (the canvas's x = 14).
             .with_traffic_light_inset(7., 5.)
             .with_window_attributes(move |attrs, _| {
                 attrs
@@ -93,37 +84,19 @@ impl LauncherApp {
 
 impl App for LauncherApp {
     fn render(&self) -> impl IntoElement {
-        // The same two window-root steps every app takes: this window's theme derived from
-        // the shared settings, and the app-global config into context for the views below.
         use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();
             move || app
         });
-        // The restart-to-update question's slot (UP-03), before the registration below so it
-        // can be handed over with the scope: the menubar's Check for Updates… carries no chord
-        // to synthesize, so the focused window has to point it at the dialog it mounts.
         let update_ask = use_provide_context(|| State::create(None::<UpdateAsk>));
-        // Join the live window registry, so "open the launcher" finds this one instead of
-        // opening a second, and a project window can tell whether it is the last one.
-        //
-        // The same call points the menubar here while this window is focused: the recents it
-        // lists and Open…, but neither Close Project nor an open path — there is no project
-        // here to close, and nothing to open *into*, so a recent opens a window and this one
-        // stands down.
         platform::use_register_window(
             &self.app,
             || WindowKind::Launcher,
             MenuScope::Launcher(update_ask),
         );
-        // The agent-access server's other reconciler. There is always at least one *workspace*
-        // window alive — the launcher takes the last project's place — so mounting it on both
-        // kinds is what makes the setting still live when every project is closed. Idempotent,
-        // so the second window to run it does nothing (see `agent::server`).
         use_agent_server(self.app.agent.clone(), self.app.config);
-        // The updater's one startup check, mounted on both workspace kinds for the same reason
-        // as the line above (`state::updates`).
         use_updates(self.app.updates, self.app.config);
 
         let theme = get_theme!(
@@ -132,8 +105,6 @@ impl App for LauncherApp {
             "launcher"
         );
         let config = self.app.config;
-        // Taken in the render scope so the key handler below can open a window from an event
-        // handler, where there is no scope left to read it from.
         let platform = use_hook(Platform::get);
 
         rect()
@@ -141,13 +112,7 @@ impl App for LauncherApp {
             .vertical()
             .content(Content::Flex)
             .background(theme.background)
-            // The window's ambient text colour. Every run that doesn't name one — the
-            // wordmark, the nav pill's label and its glyph — inherits it; without it they
-            // fall back to Freya's base-theme default rather than this theme's ramp.
             .color(use_roles().get(Role::Text))
-            // The restart confirm (UP-03), first on purpose: while it is up, its barrier
-            // consumes keys before every listener below it in document order — including the
-            // ⌘Q catch-all at the foot of this root.
             .child(UpdateConfirm {
                 ask: update_ask,
                 status: self.app.updates,
@@ -164,24 +129,13 @@ impl App for LauncherApp {
                         app: self.app.clone(),
                     }),
             )
-            // The launcher's three window-level chords: ⌘O, ⌘, and ⌘Q. Deliberately the LAST
-            // child — same-name global listeners fire in document order, so every real consumer
-            // above outranks this catch-all.
-            //
-            // Nothing is consumed as a stub here. ⌘K and cycle-windows used to be, which was
-            // dead code for targets this window will never have: it has no catalog and no
-            // command set to search, and no project windows of its own to cycle.
             .child(rect().on_global_key_down(on_commands(config, {
                 let app = self.app.clone();
                 move |cmd| match cmd {
-                    // ⌘O / File ▸ Open… — the same picker the OPEN action runs, which is
-                    // why the menu item synthesizes this chord rather than acting itself.
                     Command::OpenProject => {
                         pick_and_open(app.clone());
                         true
                     }
-                    // ⌘, — the same window the rail's Settings row opens, pinned above this
-                    // one (or re-pinned here, if another window has it).
                     Command::OpenSettings => {
                         platform::open_settings(platform.clone(), app.clone());
                         true

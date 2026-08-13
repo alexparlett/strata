@@ -143,8 +143,6 @@ impl StatusMark {
     /// the row above it in a dense list.
     fn glyph(&self, theme: &CatalogTheme) -> Element {
         match self {
-            // Named, not bare: P3-09 puts a *profiling* spinner in this same slot, and two
-            // spinners meaning different things need to be tellable apart.
             StatusMark::Loading => tip(LOADING)
                 .child(CircularLoader::new().size(STATUS_DOT).a11y_alt(LOADING))
                 .into_element(),
@@ -229,8 +227,6 @@ pub(super) fn fold_plan(row_width: f32, name_width: f32, internal: bool) -> Fold
             + if f.icon { ICON_SLOT } else { 0. }
             + if f.status { STATUS_SLOT } else { 0. }
     };
-    // Unrolled rather than looped over the fields: the *order* is the policy here, and three
-    // named steps say it where an iterator over `&mut bool` would hide it.
     let mut folds = Folds {
         badge: internal,
         icon: true,
@@ -308,34 +304,21 @@ impl EntryRow {
 }
 
 impl Component for EntryRow {
-    // A catalog row is its own section subscription, its hover/press state and the whole
-    // nested-column tree under it. The hooks cannot move into a helper without changing this
-    // component's hook order, and what is left is one declarative tree.
     #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
-        // Subscribe on this entry's own section channel, so the row flips `Loading → Ready`
-        // in place as its registration answer lands.
         let channel = match self.kind {
             CatalogKind::View => ProjChan::Views,
             _ => ProjChan::Tables,
         };
         let radio = use_radio::<ProjectState, ProjChan>(channel);
         let actions = use_catalog_actions();
-        // A view's validity is derived against the **live table rows**, and a table failing — or
-        // being dropped — never touches the views channel. So a view row listens on TABLES too:
-        // one store, two antennas, and this read *is* the subscription (the value itself is read
-        // once, below, through `radio`).
         let tables_radio = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         if self.kind == CatalogKind::View {
             drop(tables_radio.read());
         }
 
-        // Whether this row has a scan in flight to spin about (P3-09) — read on the same channel
-        // as everything else here, since asking for one writes the row.
         let scan = radio.read().profile_scan(self.kind, &self.name);
 
-        // Resolve this row's state and its validity out of the store, cloning what we render, so
-        // the read guard drops before any element is built.
         let resolved = {
             let p = radio.read();
             match self.kind {
@@ -345,11 +328,9 @@ impl Component for EntryRow {
                         Reg::Failed(_) => EntryState::Failed,
                         Reg::Ready(info) => EntryState::Ready {
                             columns: info.columns.clone(),
-                            // A view has no partition columns.
                             partitions: Vec::new(),
                         },
                     };
-                    // A view has no origin: its data is whatever its query reads.
                     (state, p.view_problem(v), false)
                 }),
                 _ => p.tables.iter().find(|t| t.def.name == self.name).map(|t| {
@@ -361,9 +342,6 @@ impl Component for EntryRow {
                             partitions: t.def.partition_cols.clone(),
                         },
                     };
-                    // Off the **def**, so the marker is there whatever registration answered —
-                    // a `Reg::Failed` internal row is exactly the one whose origin the reader
-                    // most needs (its data is not in this copy of the project).
                     (
                         state,
                         ProjectState::table_problem(t),
@@ -372,25 +350,9 @@ impl Component for EntryRow {
                 }),
             }
         };
-        // **The status slot holds still.** A *settled* answer always applies at once: a row that
-        // comes back clean drops its triangle the moment the answer lands, and one that comes back
-        // broken says why. What is deliberately not immediate is the gap in between — while a row
-        // is unanswered the slot keeps whatever it last showed, for `SPINNER_DELAY`. Registering is
-        // metadata-only (`register_external`: infer the schema, list the files), so the usual pass
-        // is far inside that window and nothing in the pane moves at all; without the hold, ↻ on a
-        // broken row would blink its triangle off and back on, and the empty slot in between would
-        // read as "fine" — a claim the row cannot make while it has no answer. Past the hold the
-        // wait is news in its own right (a partitioned tree of thousands of files, or an object
-        // store) and the spinner takes the slot.
-        //
-        // Both bits of state are armed here, above the early return, so hook order can't depend on
-        // the row still being in the store.
         let waiting = matches!(resolved, Some((EntryState::Loading, ..)));
         let problem = resolved.as_ref().and_then(|(_, p, _)| p.clone());
 
-        // Whether the wait has outlasted the hold. Re-armed from zero on every entry into (and exit
-        // from) the wait — but *not* on a re-scan of a row that was already waiting, whose wait
-        // never stopped and whose spinner therefore shouldn't blink.
         let waited = use_state(|| false);
         let pending = use_state(|| None::<TaskHandle>);
         use_side_effect_with_deps(&waiting, move |waiting| {
@@ -408,7 +370,6 @@ impl Component for EntryRow {
             }
         });
 
-        // The verdict to keep showing through the gap: the last one that actually settled.
         let held = use_state(|| None::<String>);
         use_side_effect_with_deps(&(waiting, problem.clone()), move |(waiting, problem)| {
             if !waiting {
@@ -417,28 +378,9 @@ impl Component for EntryRow {
             }
         });
 
-        // **The row's fold plan** — `components::toolbar`'s policy, ranked here (see [`fold_plan`]).
-        //
-        // What is in state is the **measured width**, never the verdict — `Toolbar` keeps its
-        // `measured` the same way, and for the reason AGENTS.md §2 gives: a value that must stay
-        // live is a second *input* to the derivation, never a stored result. The fold depends on
-        // the row's width *and* on what the name would take, and the second of those moves with
-        // the theme's type scale and with the name itself; caching the verdict and refreshing it
-        // only from `on_sized` left it computed under the old font whenever a theme switch
-        // changed the mono size without changing the row's area (the row is `Size::fill()` over a
-        // fixed height, so nothing about it resizes). Deriving it here costs one comparison and
-        // cannot go stale.
-        //
-        // Seeded infinite, like `Toolbar`'s: the first paint assumes it fits, and the frame after
-        // the measurement corrects it. That way round because a marker that flashes away beats a
-        // name that arrives clipped.
         let mut measured = use_state(|| f32::INFINITY);
-        // What this name would take unconstrained. Mono, so it is arithmetic — see
-        // [`MONO_ADVANCE`] — and read from the live scale, so retuning the type scale retunes the
-        // fold with it.
         let name_width = self.name.chars().count() as f32 * scale().data_value.size * MONO_ADVANCE;
 
-        // The row was dropped from the store between the section's read and ours.
         let Some((state, _, internal)) = resolved else {
             return rect();
         };
@@ -448,10 +390,6 @@ impl Component for EntryRow {
         let mut open_entries = self.open_entries;
         let toggle_key = entry_key;
 
-        // The glyph is the shared mapping (the palette lists the same things); the tint is this
-        // surface's own — and a table Strata owns takes its own entity colour, because the
-        // catalog shows both origins in one section under one glyph and the icon is the mark
-        // that never folds when the pane narrows.
         let icon = IconName::for_catalog(self.kind);
         let icon_color = match self.kind {
             CatalogKind::View => self.theme.view_color,
@@ -460,9 +398,6 @@ impl Component for EntryRow {
             CatalogKind::Table => self.theme.table_color,
         };
 
-        // What the row's one status column is saying, with the words only on hover. A settled row
-        // is clean, per the design. No status *text*: "failed" said strictly less than the reason
-        // the triangle carries, and it cost the name half the row.
         let status = match (
             waiting && waited(),
             if waiting {
@@ -471,17 +406,13 @@ impl Component for EntryRow {
                 problem
             },
         ) {
-            // The wait has outlasted the hold, so it is now the thing worth saying.
             (true, _) => Some(StatusMark::Loading),
-            // The settled verdict, or — mid-gap — the one still being held.
             (false, Some(reason)) => Some(StatusMark::Problem(reason)),
             (false, None) => None,
         };
 
         let folds = fold_plan(measured(), name_width, internal);
 
-        // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
-        // time it is opened.
         let build_menu = {
             let kind = self.kind;
             let name = self.name.clone();
@@ -509,14 +440,11 @@ impl Component for EntryRow {
                 .color(self.theme.chevron_color)
                 .size(11.),
             )
-            // Folds second of the three: once the badge has gone, the glyph is decoration —
-            // the section header above already says what kind of thing this row is.
             .maybe_child(
                 folds
                     .icon
                     .then(|| Icon::new(icon).color(icon_color).size(14.).into_element()),
             )
-            // The leading run: it takes all the slack, and it is the last thing to give any up.
             .child(
                 MonoValue::new(self.name.clone())
                     .color(self.theme.name_color)
@@ -526,10 +454,6 @@ impl Component for EntryRow {
             .on_context_menu(move |_: Event<PressEventData>| {
                 ContextMenu::open(menu_for_row());
             })
-            // After the name and before the status column, so it reads as part of what the
-            // row *is* rather than as something that happened to it — and the **first** thing
-            // the row gives up under pressure, because it is the only item that is pure
-            // reinforcement: the icon's own tint says the same thing.
             .maybe_child(folds.badge.then(|| {
                 tip(INTERNAL_TIP)
                     .child(rect().a11y_alt(INTERNAL_TIP).child(
@@ -537,23 +461,11 @@ impl Component for EntryRow {
                     ))
                     .into_element()
             }))
-            // **One** trailing status column, holding at most one glyph: the profiling spinner
-            // while a scan runs, otherwise the validity triangle, otherwise nothing. They were
-            // two children before this, and a row that had ever been profiled kept a mounted,
-            // idle one in the run — a zero-width child still costs a full `spacing`, so
-            // everything left of it sat 20px further in than on a row that had not.
-            //
-            // It folds last of the three, because it is the only one carrying information rather
-            // than repeating something. Folding it takes the *glyph* only: the subscription that
-            // makes the scan run is [`ProfileWatch`], mounted in the vertical wrapper below.
             .maybe_child(folds.status.then(|| {
                 rect()
                     .width(Size::px(STATUS_DOT))
                     .cross_align(Alignment::Center)
                     .maybe_child(match scan {
-                        // Subscribes *and* draws — see [`ProfileStatus`]. It renders `status`
-                        // whenever no scan is running, so the slot never holds two things and
-                        // never holds none it could have filled.
                         Some(scan) => Some(
                             ProfileStatus {
                                 owner: self.name.clone(),
@@ -571,8 +483,6 @@ impl Component for EntryRow {
             }))
             .child(actions_button(build_menu));
 
-        // The column block: an indented run hung off a hairline rail, exactly the canvas's
-        // `border-left` treatment.
         let body = (is_open)
             .then(|| match &state {
                 EntryState::Ready {
@@ -591,10 +501,6 @@ impl Component for EntryRow {
                         &mut rows,
                     );
                     drop(expanded);
-                    // The rail is a 1px sibling column, drawn to the exact stack height — every
-                    // column row is `COLUMN_HEIGHT`, so the rule ends where the rows do.
-                    // Not `Size::fill()`: the wrapper hugs its content, so `fill` would resolve
-                    // against the scroll viewport and stretch the whole block to its height.
                     let rail_height = rows.len() as f32 * COLUMN_HEIGHT;
                     Some(
                         rect()
@@ -625,7 +531,6 @@ impl Component for EntryRow {
                             .into_element(),
                     )
                 }
-                // Nothing to list yet (or ever): the row's own status label already says why.
                 _ => None,
             })
             .flatten();
@@ -634,22 +539,10 @@ impl Component for EntryRow {
             .width(Size::fill())
             .vertical()
             .margin(Gaps::new(0., 0., SP_1, 0.))
-            // The measurement the fold plan reads. `set_if_modified` dedupes on the raw width, so
-            // a drag writes once per distinct width Freya reports — the same trade `Toolbar`
-            // makes with its own `measured`, and the price of the verdict being derived rather
-            // than stored (see above): the fold has two inputs, and only one of them is this one.
             .on_sized(move |e: Event<SizedEventData>| {
                 measured.set_if_modified(e.area.width());
             })
             .child(row)
-            // **The subscription outlives the glyph.** Folding the status column takes the
-            // spinner away, and the spinner's component is what *dispatches* the scan — so
-            // without this, a Profile asked for while the sidebar is narrow would mount nothing,
-            // start nothing, and say nothing. When the slot is folded the row keeps a
-            // subscriber-only twin here instead, in the **vertical** wrapper where a zero-size
-            // child costs no layout (the horizontal row charges every child a `spacing`, which
-            // is what made an idle slot shift its neighbours). Exactly one of the two is ever
-            // mounted, so this is never a second execution.
             .maybe_child(watched_scan(folds, scan).map(|scan| {
                 ProfileWatch {
                     owner: self.name.clone(),
@@ -691,10 +584,6 @@ impl KeyExt for ProfileStatus {
 impl Component for ProfileStatus {
     fn render(&self) -> impl IntoElement {
         match scan_running(&self.owner, self.scan) {
-            // No delay hold, unlike the registration spinner: a scan is *known* to be slow — it
-            // is the thing the user was warned about — so there is nothing to avoid flickering
-            // over, and starting one has to look like it started. It outranks the settled mark
-            // while it runs, because "this is being recomputed" is the newer fact about the row.
             true => tip(PROFILING)
                 .child(CircularLoader::new().size(STATUS_DOT).a11y_alt(PROFILING))
                 .into_element(),
@@ -795,8 +684,6 @@ impl Component for ColumnRow {
             owner: self.owner.clone(),
             path: self.row.path.clone(),
         };
-        // Compare the whole path, not the leaf name: by name alone, selecting `city` lit up every
-        // `city` at any depth in the entry.
         let selected = selection
             .read()
             .as_ref()
@@ -806,8 +693,6 @@ impl Component for ColumnRow {
 
         let mut expanded_cols = self.expanded_cols;
         let expand_key = self.row.key.clone();
-        // The chevron sits inside the pressable row, so its own press must stop there — otherwise
-        // expanding a struct would also select it.
         let chevron = self.row.has_children.then(|| {
             rect()
                 .on_press(move |e: Event<PressEventData>| {
@@ -841,13 +726,10 @@ impl Component for ColumnRow {
             .selected(selected)
             .on_press(move |_| {
                 selection.set(Some(col.clone()));
-                // Selecting a column is also how the inspector is reopened once collapsed.
                 layout
                     .write_channel(Chan::Layout)
                     .open_right_pane(RightPane::Inspector);
             })
-            // Indent by depth, then a fixed chevron gutter so names align whether or not the
-            // column is expandable.
             .child(rect().width(Size::px(self.row.depth as f32 * DEPTH_INDENT)))
             .child(
                 rect()
@@ -856,8 +738,6 @@ impl Component for ColumnRow {
                     .maybe_child(chevron),
             )
             .child(Dot::new(swatch).size(6.).square())
-            // The name takes the slack and truncates; the PART chip and the dtype keep their
-            // intrinsic width, so the type is always readable at the right edge.
             .child(
                 MonoValue::new(self.row.name.clone())
                     .color(self.theme.column_color)
@@ -893,8 +773,6 @@ impl Component for SavedQueryRow {
     fn render(&self) -> impl IntoElement {
         let actions = use_catalog_actions();
         let id = self.id;
-        // This row's own inline-rename state — local, never shared. Flipped by the menu item;
-        // the rename shell below owns everything that follows from it.
         let renaming = use_state(|| false);
 
         if *renaming.read() {
@@ -916,8 +794,6 @@ impl Component for SavedQueryRow {
 
         SidebarRow::new()
             .height(ENTRY_HEIGHT)
-            // Pressing the row opens it — the canvas's own `title="Open in a new tab"` — through
-            // the same action the menu's item runs, not a second copy of it.
             .on_press(move |_| open_saved_query(&actions, id))
             .on_context_menu(move |_: Event<PressEventData>| {
                 ContextMenu::open(menu_for_row());
@@ -964,9 +840,6 @@ impl Component for QueryRename {
         let config = use_config_station();
         let actions = use_catalog_actions();
 
-        // Seed the draft with the name being replaced. `use_hook`, not an effect: this component
-        // only exists while the row is being renamed, so mounting *is* the moment to seed — and
-        // re-seeding on any later render would fight the typing.
         let seed = self.name.clone();
         use_hook(move || draft.set(seed.clone()));
 
@@ -979,7 +852,6 @@ impl Component for QueryRename {
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .spacing(SP_3)
-            // The row's own geometry (see `SidebarRow`), so committing doesn't shift the list.
             .padding(Gaps::new(0., SP_2, 0., SP_3))
             .margin(Gaps::new(0., 0., SP_1, 0.))
             .on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
@@ -1013,8 +885,6 @@ impl Component for QueryRename {
                     .flat()
                     .compact()
                     .auto_focus(true)
-                    // The name arrives selected, so the first keystroke replaces it — a rename
-                    // opens over the old label, it doesn't invite you to type in front of it.
                     .select_all_on_init(true)
                     .width(Size::flex(1.))
                     .on_submit(move |value: String| {

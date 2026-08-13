@@ -33,10 +33,6 @@ async fn fixture_project_registers_and_queries() {
 
     let eng = Engine::new(Default::default());
 
-    // The registration pass itself — the same `register_project` a headless host
-    // replays, and the same `register_pass` the window root drives. A failed
-    // registration is a landed per-entry outcome, not an abort (a row flips to
-    // `Failed`, the rest of the project lives).
     let mut outcomes = Vec::new();
     register_project(&eng, root, &defs, |o| outcomes.push(o)).await;
     assert_eq!(
@@ -45,18 +41,8 @@ async fn fixture_project_registers_and_queries() {
         "one outcome per def: {outcomes:?}"
     );
 
-    // Connections first (a table's bucket has to be registered before its source path can
-    // resolve). The fixture is all local files, so this is an empty phase here — counted
-    // rather than assumed away, so the offsets below stay right if it ever gains one.
     let after_connections = defs.connections.len();
 
-    // Then tables (views read them), relative sources resolved against the folder.
-    //
-    // **The phase is ordered; the tables inside it are not.** `register_pass` registers tables
-    // concurrently, so which of them answers first is a race — one wide remote table must not be
-    // able to hold up every table listed after it. What is still guaranteed, and asserted here, is
-    // that the whole table phase lands between the connections and the views: a view's `CREATE`
-    // has to plan against tables that already exist.
     let mut failed = Vec::new();
     let mut settled = Vec::new();
     for outcome in &outcomes[after_connections..after_connections + defs.tables.len()] {
@@ -73,19 +59,13 @@ async fn fixture_project_registers_and_queries() {
             other => panic!("expected every table before any view: {other:?}"),
         }
     }
-    // Every table the defs name settled exactly once, whatever order they arrived in.
     settled.sort();
     let mut expected: Vec<String> = defs.tables.iter().map(|t| t.name.clone()).collect();
     expected.sort();
     assert_eq!(settled, expected, "one outcome per table def");
     failed.sort();
-    // The fixture's one deliberate dud: `signups.json` has a record missing its closing brace,
-    // so no reader can take it — a useful Failed-state fixture. (It was pretty-printed JSON until
-    // `engine::json_poly` replaced arrow's line-based reader and started reading that correctly;
-    // see the fixture README.)
     assert_eq!(failed, ["signups"]);
 
-    // The hive-partitioned table carries its partition columns in the schema.
     let events = defs
         .tables
         .iter()
@@ -93,7 +73,6 @@ async fn fixture_project_registers_and_queries() {
         .expect("events table");
     assert_eq!(events.partition_cols.len(), 2);
 
-    // Views: created over the registered tables, deps resolved by the planner.
     for outcome in &outcomes[after_connections + defs.tables.len()..] {
         let RegOutcome::View { name, result } = outcome else {
             panic!("a table settled after a view: {outcome:?}");
@@ -105,14 +84,12 @@ async fn fixture_project_registers_and_queries() {
         assert!(!meta.tables.is_empty(), "'{name}' reads base tables");
     }
 
-    // The whole point: a query through a view over the registered catalog answers.
     let (output, _) = eng
         .query(WsId(1), RunTag(1), "SELECT * FROM active_users".into(), 50)
         .await
         .expect("query the view");
     assert!(output.total > 0, "the view yields rows");
 
-    // Dropping a view is idempotent and removes it.
     eng.drop_view("active_users".into()).await.expect("drop");
     eng.drop_view("active_users".into())
         .await

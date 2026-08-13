@@ -32,8 +32,6 @@ pub const RAW_CAP: usize = 6_000;
 /// result unreadable; the encoder strip is how you ask for more.
 const DEFAULT_YS: usize = 4;
 
-// ---- column roles (spec §3) ----
-
 /// A result's columns, each with the role its Arrow type resolved to, in result order.
 ///
 /// The role is read off the column, not derived here: it was resolved where the engine still
@@ -132,20 +130,13 @@ fn default_mark(x: Option<&str>, roles: &Roles) -> ChartMark {
     }
 }
 
-// ---- what each mark will take (spec §4) ----
-
 /// Which columns this mark's **X** will take. Empty means the mark has no category axis at
 /// all (a histogram bins one column and puts the counts on Y), so the strip shows no X row.
 pub fn x_options(mark: ChartMark, roles: &Roles) -> Vec<String> {
     match mark {
-        // Both scatter axes are measures — it plots one against another.
         ChartMark::Scatter => roles.measures(),
-        // A pie slices a category, a heatmap crosses two, a box plot groups by one.
-        // `categories` rather than the dimensions alone: it is the app's one answer to what
-        // can carry a category axis, and a month is as sliceable as a country.
         ChartMark::Pie | ChartMark::Heatmap | ChartMark::Box => roles.categories(),
         ChartMark::Histogram => Vec::new(),
-        // Numeric columns are valid on X too (spec §3).
         ChartMark::Bar | ChartMark::Line | ChartMark::Area | ChartMark::Band => roles.all(),
     }
 }
@@ -223,9 +214,6 @@ pub fn reads_quartiles(mark: ChartMark) -> bool {
 ///
 /// [`ChartData::Table`]: strata_model::ChartData::Table
 pub fn sortable(mark: ChartMark) -> bool {
-    // A positive list like its peers, so a new mark must answer rather than being enrolled
-    // by default. The heatmap is deliberately in: `ByX` reorders a matrix's columns
-    // meaningfully, and `ByYDesc` reads its first row — coarse, but the user's own toggle.
     matches!(
         mark,
         ChartMark::Bar
@@ -271,8 +259,6 @@ pub fn hideable(mark: ChartMark) -> bool {
     takes_many_ys(mark)
 }
 
-// ---- intent + schema → the read ----
-
 /// What the chart is drawing: the config resolved against the result actually in hand. Every
 /// column here exists in that result, which is the whole point — nothing downstream has to
 /// re-check.
@@ -315,19 +301,11 @@ pub struct Encoding {
 /// mark switched to one whose axes the old choice cannot sit on, and a re-run whose result
 /// simply dropped a column.
 pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
-    // **X first, then the mark it implies.** The default mark is a fact about the *charted
-    // axis* (spec §6), so it cannot be read before X is known — and X cannot wait for it,
-    // because a mark decides which columns its axis will take. The cycle is only apparent:
-    // an unset mark resolves to a bar or a line, and those two offer exactly the same X
-    // ([`x_options`], [`allows_row_index`], [`default_x`]), so resolving the axis against
-    // either gives the answer both would.
     let probe = config.mark.unwrap_or(ChartMark::Bar);
     let offered = x_options(probe, roles);
     let x = match &config.x {
         ChartX::Column(name) if offered.contains(name) => Some(name.clone()),
         ChartX::RowIndex if allows_row_index(probe) => None,
-        // `Auto`, a column this mark's axis cannot take, and a column the result no longer
-        // has are one case: nothing the user chose applies, so the default does.
         _ => default_x(probe, roles),
     };
     let mark = config
@@ -336,12 +314,8 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
 
     let measures = roles.measures();
     let ys = match &config.ys {
-        // Deliberately nothing — the user unpicked them all, which is a real state and says
-        // so on the canvas rather than quietly re-deriving under them.
         Some(chosen) if chosen.is_empty() => Vec::new(),
         Some(chosen) => {
-            // Kept in **result order**, not pick order: a series' colour comes from its
-            // position, and a legend that reshuffles on every tick is unreadable.
             let kept: Vec<String> = measures
                 .iter()
                 .filter(|name| chosen.contains(name))
@@ -355,8 +329,6 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         }
         None => default_ys(mark, &measures, x.as_deref()),
     };
-    // A mark that draws one Y keeps the first of the choice rather than dropping it: flipping
-    // to a pie and back must not cost the other Ys, so the *config* still holds them all.
     let ys = if takes_many_ys(mark) {
         ys
     } else {
@@ -368,19 +340,12 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         .series
         .clone()
         .filter(|name| offered_series.contains(name))
-        // A heatmap's second category is required, so an unset (or stale) choice takes the
-        // first remaining category the way an unset X takes its default — the matrix has no
-        // shape without one.
         .or_else(|| {
             series_required(mark)
                 .then(|| offered_series.first().cloned())
                 .flatten()
         });
 
-    // The band roles resolve like every other reference — kept only where this result still
-    // answers them — plus a distinctness rule the option sets already enforce at offer time:
-    // a bound that collides with the Y or an earlier band role is a stale config, and it
-    // falls back to unset rather than plotting one column as two edges.
     let mut spoken: Vec<String> = ys.clone();
     let mut band_ref = |choice: &Option<String>, wanted: bool| -> Option<String> {
         let name = choice
@@ -406,27 +371,13 @@ pub fn resolve(config: &ChartConfig, roles: &Roles) -> Encoding {
         y_hi,
         q1,
         q3,
-        // Only a histogram has bins, so the value is dropped for every other mark the way a
-        // series column is — the config keeps it, and switching back to a histogram brings it
-        // with you.
         bins: config.bins.filter(|_| mark == ChartMark::Histogram),
-        // Dropped for a mark whose legend cannot **un**-hide, exactly as `bins` is dropped for
-        // a mark with nothing to bin. A pie's Y is an ordinary measure a bar may well have
-        // hidden earlier, and a pie's rows are inert — honouring the set there would blank the
-        // chart with no control on screen to bring it back. The config keeps it, so the bar
-        // comes back as the user left it.
         hidden: if hideable(mark) {
             config.hidden.clone()
         } else {
             Vec::new()
         },
-        // A mark whose value axis cannot be logarithmic never draws one, even if the config
-        // remembers a mark that could. The gate lives here rather than only in the strip
-        // because the strip is where a control is *offered* and this is where the read and
-        // the paint agree on what is actually being drawn.
         log_y: config.log_y && log_axis(mark),
-        // The same gate as `log_y`, for the same reason: the config keeps the choice for
-        // every mark, and only a mark that can draw the fit resolves it.
         trend: config.trend && trendable(mark),
         sort: config.sort,
     }
@@ -460,8 +411,6 @@ fn default_ys(mark: ChartMark, measures: &[String], x: Option<&str>) -> Vec<Stri
         .collect()
 }
 
-// ---- the read ----
-
 /// The read this encoding asks for, or why the columns cannot answer it. The message is the
 /// whole answer at this stage — Chart 04 adds the scaffold CTA beneath it.
 ///
@@ -485,8 +434,6 @@ pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'stati
         ChartMark::Histogram => match encoding.ys.first() {
             Some(col) => Ok(ChartQuery::Histogram {
                 col: col.clone(),
-                // Clamped to the read's own cap here as well as in the engine, so what the
-                // control accepts and what the engine counts are the same number.
                 bins: encoding
                     .bins
                     .map(|bins| usize::from(bins).clamp(1, MAX_BINS)),
@@ -507,8 +454,6 @@ pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'stati
             )),
             (_, None) => Err(no_y(roles)),
         },
-        // The matrix is the pivot: X and series are the two categories, the one Y is the
-        // cell colour, and a duplicate cell is the engine's own refusal.
         ChartMark::Heatmap => match (&encoding.x, &encoding.series, encoding.ys.first()) {
             (Some(x), Some(series), Some(y)) => Ok(ChartQuery::Rows {
                 x: Some(x.clone()),
@@ -522,7 +467,6 @@ pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'stati
                 "A heatmap crosses two category columns, and the result has fewer than two.".into(),
             )),
         },
-        // Fixed order — centre, lower, upper — the renderer reads the answer by position.
         ChartMark::Band => match (encoding.ys.first(), &encoding.y_lo, &encoding.y_hi) {
             (Some(y), Some(lo), Some(hi)) => Ok(ChartQuery::Rows {
                 x: encoding.x.clone(),
@@ -530,8 +474,6 @@ pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'stati
                 series: None,
                 cap: ROWS_CAP,
             }),
-            // The shortage before the picks: instructing picks that cannot all be made is
-            // a dead end, and the count is the honest fact.
             _ if roles.measures().len() < BAND_YS => Err((
                 "Not enough numeric columns",
                 format!(
@@ -551,9 +493,6 @@ pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'stati
                     .into(),
             )),
         },
-        // Fixed order — median, low whisker, high whisker, q1, q3 — and the median first on
-        // purpose: the sort's `ByYDesc` reads the first series, so a box plot sorts by its
-        // median.
         ChartMark::Box => match (
             &encoding.x,
             encoding.ys.first(),
@@ -582,8 +521,6 @@ pub fn encode(encoding: &Encoding, roles: &Roles) -> Result<ChartQuery, (&'stati
                  group by."
                     .into(),
             )),
-            // The shortage before the picks — with fewer than five distinct measures the
-            // mark is unreachable, and the strip's role encoders have nothing to offer.
             _ if roles.measures().len() < BOX_YS => Err((
                 "Not enough numeric columns",
                 format!(
@@ -727,7 +664,6 @@ mod tests {
                 cap: ROWS_CAP,
             })
         );
-        // A pie is the same columns under a much smaller cap (spec §7).
         let pie = ChartConfig {
             mark: Some(ChartMark::Pie),
             ..ChartConfig::default()
@@ -770,8 +706,6 @@ mod tests {
             assert_eq!(read(&config, &text).unwrap_err().0, "Pick a numeric column");
         }
 
-        // A scatter needs two, and neither none nor one is two — it says what it needs
-        // rather than falling back to the one-measure message.
         let one = Roles::of(&[column("n", DataType::Int64)]);
         let scatter = ChartConfig {
             mark: Some(ChartMark::Scatter),
@@ -795,14 +729,12 @@ mod tests {
             })
         );
 
-        // And a pie needs a category to slice by.
         let pie = ChartConfig {
             mark: Some(ChartMark::Pie),
             ..ChartConfig::default()
         };
         assert_eq!(read(&pie, &one).unwrap_err().0, "Pick a category column");
 
-        // Two measures are two scatter axes, and the second is not the first.
         let two = Roles::of(&[column("x", DataType::Int64), column("y", DataType::Float64)]);
         assert_eq!(
             read(&scatter, &two),
@@ -852,7 +784,6 @@ mod tests {
                 cap: PIE_CAP,
             })
         );
-        // …and the config the pie resolved from is untouched, so the bar comes back whole.
         assert_eq!(read(&config, &roles).unwrap(), {
             ChartQuery::Rows {
                 x: Some("month".into()),
@@ -882,7 +813,6 @@ mod tests {
         assert_eq!(resolved.ys, ["cost"], "the surviving Y is kept, alone");
         assert_eq!(resolved.series, None, "a series that is gone is no series");
 
-        // Every reference dead → the whole channel derives rather than plotting nothing.
         let gone = ChartConfig {
             ys: Some(vec!["margin".into()]),
             ..config
@@ -914,7 +844,6 @@ mod tests {
         };
         assert_eq!(resolve(&config, &roles).x, None);
 
-        // A mark with no such thing as a row-index axis takes its default instead.
         let pie = ChartConfig {
             mark: Some(ChartMark::Pie),
             ..config
@@ -928,35 +857,28 @@ mod tests {
     fn each_mark_offers_only_the_columns_it_can_take() {
         let roles = sales();
 
-        // Bar / line / area: any column on X (numeric included), plus the row index.
         assert_eq!(
             x_options(ChartMark::Bar, &roles),
             ["month", "country", "revenue", "cost"]
         );
         assert!(allows_row_index(ChartMark::Bar));
 
-        // Scatter: measures on both axes, no row index, no series.
         assert_eq!(x_options(ChartMark::Scatter, &roles), ["revenue", "cost"]);
         assert!(!allows_row_index(ChartMark::Scatter));
         assert!(series_options(ChartMark::Scatter, &roles, Some("revenue")).is_empty());
 
-        // Pie: a category on X, one Y, no series.
         assert_eq!(x_options(ChartMark::Pie, &roles), ["month", "country"]);
         assert!(!takes_many_ys(ChartMark::Pie));
         assert!(series_options(ChartMark::Pie, &roles, Some("month")).is_empty());
 
-        // Histogram: no X at all.
         assert!(x_options(ChartMark::Histogram, &roles).is_empty());
 
-        // A series splits on a category, never on the column already carrying the axis, and
-        // never without one (the pivot has nothing to pivot around).
         assert_eq!(
             series_options(ChartMark::Bar, &roles, Some("month")),
             ["country"]
         );
         assert!(series_options(ChartMark::Bar, &roles, None).is_empty());
 
-        // Y is the measures under every mark — the read's own gate.
         assert_eq!(y_options(&roles), ["revenue", "cost"]);
     }
 
@@ -986,7 +908,6 @@ mod tests {
             assert_eq!(resolve(&config, &roles).mark, expected, "{x:?}");
         }
 
-        // A mark the user chose is never re-derived from anything.
         let chosen = ChartConfig {
             mark: Some(ChartMark::Area),
             x: ChartX::Column("country".into()),
@@ -1014,7 +935,6 @@ mod tests {
                 bins: Some(24),
             })
         );
-        // Auto is the absence of a count, not a number standing in for one.
         assert_eq!(
             read(&histogram(None), &roles),
             Ok(ChartQuery::Histogram {
@@ -1030,8 +950,6 @@ mod tests {
             })
         );
 
-        // Another mark has nothing to bin, and the config still holds the count for when the
-        // histogram comes back.
         let bar = ChartConfig {
             mark: Some(ChartMark::Bar),
             bins: Some(24),
@@ -1058,8 +976,6 @@ mod tests {
         };
         assert_eq!(read(&plain, &roles), read(&dressed, &roles));
 
-        // A hidden name is kept whole, however stale — pruning it would spend a choice the
-        // next result might be able to honour.
         let stale = ChartConfig {
             hidden: vec!["margin".into()],
             ..plain
@@ -1135,7 +1051,6 @@ mod tests {
         assert!(!allows_row_index(ChartMark::Heatmap));
         assert_eq!(x_options(ChartMark::Heatmap, &roles), ["month", "country"]);
 
-        // One category cannot cross itself — the message names the shape.
         let narrow = Roles::of(&[
             column("country", DataType::Utf8),
             column("revenue", DataType::Int64),
@@ -1175,8 +1090,6 @@ mod tests {
         assert_eq!(resolved.q1, None, "a band has no quartiles");
         assert_eq!(resolved.q3, None);
 
-        // A bound that collides with the Y is a stale config, not a band with one column
-        // as two edges — it falls back to unset and the message names the fix.
         let collided = ChartConfig {
             y_lo: Some("med".into()),
             ..config.clone()
@@ -1186,7 +1099,6 @@ mod tests {
         assert_eq!(title, "Pick the band's bounds");
         assert!(body.contains("LOWER"), "{body}");
 
-        // A bar drops all four the way it drops a histogram's bins.
         let bar = ChartConfig {
             mark: Some(ChartMark::Bar),
             ..config
@@ -1230,7 +1142,6 @@ mod tests {
             })
         );
 
-        // Missing quartiles name the roles to fill.
         let partial = ChartConfig {
             q1: None,
             ..config.clone()
@@ -1239,7 +1150,6 @@ mod tests {
         assert_eq!(title, "Pick the box's measures");
         assert!(body.contains("percentile_cont"), "{body}");
 
-        // No category at all is the axis's problem, named first.
         let no_cats = Roles::of(&[
             column("med", DataType::Float64),
             column("lo", DataType::Float64),

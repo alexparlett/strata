@@ -240,28 +240,21 @@ pub fn is_quitting() -> bool {
 /// Declare this window to the app for as long as it lives: the registry, under whatever `kind`
 /// reports, and the **menubar**, under `menu`. Call once in a window root.
 ///
-/// The two are one call because they are one obligation — "say what this window is" — and
-/// because the menubar half is easy to forget and expensive to get wrong. Configure and Export
-/// were both added without it, which left the app-global menubar pointed at the project window
-/// underneath: File ▸ Close Project (and its ⇧⌘W) then closed the focused *panel* while naming
-/// the project, and Open… sat there enabled with no listener to reach. Requiring a
-/// [`MenuScope`] here means a new kind of window cannot ship without answering the question.
+/// The two are one call because they are one obligation — "say what this window is" — and because
+/// the menubar half is easy to forget and expensive to get wrong. Configure and Export were both
+/// added without it, which left the menubar pointed at the project window underneath: ⇧⌘W closed
+/// the focused *panel* while naming the project, and Open… sat enabled with no listener to reach.
 ///
-/// A window learns its own id from the renderer (there is no context that carries it), so
-/// the first insert lands a beat after mount; the task is scope-bound, so a window that dies
-/// before its id arrives never registers one. The removal is a plain [`use_drop`].
+/// A window learns its own id from the renderer, so the first insert lands a beat after mount; the
+/// task is scope-bound, so a window that dies before its id arrives never registers one.
 ///
-/// `kind` is read **reactively**, not taken once: a project window can be re-rooted to
-/// another project in place ([`OpenCtx::reroot`](crate::platform::OpenCtx::reroot)), and an
-/// entry left naming the old project would answer both of the registry's questions wrongly —
-/// opening the old one would focus a window that no longer shows it, and opening the new one
-/// would spawn a second window onto a project this one already has. The `MenuScope` is *not*
-/// reactive for the same reason it doesn't need to be: a re-root swaps which project an
-/// `OpenCtx` points at, never whether there is one.
-/// Returns this window's id once the renderer has answered — `None` until then. Handed back
-/// rather than kept private because a window that must name *itself* among the others has no
-/// other way to: `Command::CycleWindow` asks [`Windows::cycle_from`] for the window after this
-/// one, and "this one" is exactly the value this hook already waits for.
+/// `kind` is read **reactively**, because a project window can be re-rooted in place and an entry
+/// naming the old project would answer both of the registry's questions wrongly. The `MenuScope` is
+/// not, for the same reason it need not be: a re-root swaps which project an `OpenCtx` points at,
+/// never whether there is one.
+///
+/// Returns this window's id once the renderer has answered. Handed back rather than kept private
+/// because `Command::CycleWindow` asks [`Windows::cycle_from`] for the window after *this* one.
 pub fn use_register_window(
     app: &AppCtx,
     kind: impl Fn() -> WindowKind + 'static,
@@ -279,14 +272,7 @@ pub fn use_register_window(
         });
     });
     use_side_effect(move || {
-        // Called before the early return so the effect subscribes to what `kind` reads even
-        // on the passes where the id hasn't landed yet.
         let kind = kind();
-        // The workspace/panel split is one fact this call states twice — once for the registry,
-        // once for the menubar — and the two must not drift. Asserted here because this is the
-        // only place both answers exist; a window kind added as a panel that passes
-        // `MenuScope::Launcher` would otherwise enable Open… and Close Project against a window
-        // with no listener for either, which is silent at runtime and loud here.
         debug_assert_eq!(
             kind.is_workspace(),
             menu.is_workspace(),
@@ -295,8 +281,6 @@ pub fn use_register_window(
         let Some(window_id) = *id.read() else {
             return;
         };
-        // Idempotent: a window we opened ourselves was already registered from the id
-        // `launch_window` handed back, which is a frame or two earlier than this.
         windows.write().by_id.insert(window_id, kind);
     });
     use_drop(move || {
@@ -333,13 +317,6 @@ pub(super) fn register(mut windows: WindowRegistry, id: WindowId, kind: WindowKi
 pub async fn open_project(platform: Platform, app: AppCtx, root: PathBuf) {
     let path = root.to_string_lossy().into_owned();
     let windows = app.windows;
-    // **Asked twice, either side of the geometry read.** The read can park for up to
-    // `GEOMETRY_DEADLINE`, and until it answers there is nothing on screen — which is precisely
-    // when a user opens the same project again, from the switcher or Open Recent. Both calls
-    // would pass a check made only before the await, and two windows on one project would then
-    // autosave over the same `session.json`: the loss this rule outranks the open preference to
-    // prevent (AGENTS.md §2). `register` below closes the rest of the gap — the `launch_window`
-    // round trip — as it always has.
     let focus_if_open = || match windows.peek().project(&path) {
         Some(id) => {
             platform.focus_window(Some(id));
@@ -350,10 +327,6 @@ pub async fn open_project(platform: Platform, app: AppCtx, root: PathBuf) {
     if focus_if_open() {
         return;
     }
-    // The window's geometry, read off the render thread before it exists — the one launch input
-    // besides the folder, since Freya can only place a window as it creates it. Awaited rather
-    // than read here: this runs on the thread that draws every other window, and the file is on
-    // whatever mount the project lives on.
     let geometry = window_geometry(root.clone()).await;
     if focus_if_open() {
         return;
@@ -501,9 +474,7 @@ mod tests {
             WindowKind::Project("/b".into()),
             WindowKind::Export,
         ]);
-        // Settings and Export are panels over a project window, never somewhere to be sent.
         assert_eq!(windows.workspace_count(), 2);
-        // …so the ring is the two project windows, and it wraps.
         assert_eq!(windows.cycle_from(id(0)), Some(id(2)));
         assert_eq!(windows.cycle_from(id(2)), Some(id(0)));
     }
@@ -516,11 +487,7 @@ mod tests {
             WindowKind::Export,
             WindowKind::Export,
         ]);
-        // One workspace window and three panels: the command declines rather than focusing
-        // this window again, which is what greys Window ▸ Cycle Windows.
         assert_eq!(lone.cycle_from(id(0)), None);
-        // A window not in the registry — the beat after mount, before its id lands — names
-        // nothing in the ring, so there is no "next" to guess at.
         assert_eq!(lone.cycle_from(id(9)), None);
     }
 
@@ -530,12 +497,10 @@ mod tests {
             project_folder(Path::new("/data/sales/.strata")),
             PathBuf::from("/data/sales")
         );
-        // Any other folder is already a project folder.
         assert_eq!(
             project_folder(Path::new("/data/sales")),
             PathBuf::from("/data/sales")
         );
-        // …including one that merely *contains* a project.
         assert_eq!(
             project_folder(Path::new("/data/.strata/nested")),
             PathBuf::from("/data/.strata/nested")

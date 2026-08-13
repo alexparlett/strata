@@ -44,8 +44,6 @@ pub struct Hive;
 impl Component for Hive {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // The project folder every relative source is measured from. A station, not a radio:
-        // the root does not change under an open window.
         let project = use_radio_station::<ProjectState, ProjChan>();
         let root = project.peek().root.clone();
         let engine = use_consume::<EngineCtx>();
@@ -58,12 +56,6 @@ impl Component for Hive {
                 draft.partitions_are_text(),
             )
         };
-        // The switch is a **sibling** of its sentence, never wrapped in a pressable row: a
-        // built-in's `on_press` does not stop propagation, so an ancestor would take the same
-        // click and toggle twice, back to where it started.
-        //
-        // `Prose`, with no colour of its own, is the export window's treatment of the very same
-        // control — a sentence to read, not a label to skim past.
         let toggle = rect()
             .horizontal()
             .cross_align(Alignment::Center)
@@ -78,11 +70,6 @@ impl Component for Hive {
                 false => "Ignoring the folder tree, reading the files as one flat table",
             }));
 
-        // **One `rect()` either way, with the section as an optional child.** Returning a bare
-        // `rect()` in one branch and a `Row` — a *component* — in the other swaps the kind of
-        // node at this position, and Freya's differ then finds no `scope_id` where it expects a
-        // component's and unwraps a `None` (`runner.rs`). A conditional section is a child that
-        // comes and goes, never a return type that does.
         rect()
             .width(Size::fill())
             .maybe_child(may_partition.then(|| {
@@ -131,12 +118,9 @@ fn toggle(ctx: ConfigureCtx, engine: EngineCtx, root: &std::path::Path) {
     spawn(async move {
         let found = engine.detect_partitions(paths).await;
         ctx.edit(move |draft| {
-            // Still on, and still empty: a flip back while this ran means the answer is stale.
             if draft.hive_on && draft.partitions.is_empty() {
                 draft.partitions = found
                     .into_iter()
-                    // Text is what DataFusion infers on its own, so it is what an undecided
-                    // column starts as, and what the warning below is about.
                     .map(|name| (name, "Utf8".to_string()))
                     .collect();
             }
@@ -219,8 +203,6 @@ struct Warning;
 
 impl Component for Warning {
     fn render(&self) -> impl IntoElement {
-        // The shared ramp directly, not this window's theme: `warning` is one of the four
-        // semantic tones and has to follow the app-wide ramp wherever it appears.
         let warning = tones().warning;
         rect()
             .width(Size::fill())

@@ -2,28 +2,19 @@
 //! path behind the results Chart surface, answered as a small [`ChartData`] the renderer
 //! draws without touching a row of the result again.
 //!
-//! **The chart computes nothing SQL can say** (spec §1.2). [`ChartQuery::Rows`] is a
-//! *projection*: the referenced columns, `ORDER BY` the snapshot ordinal
-//! (`docs/SNAPSHOT_SPEC.md` §9), `LIMIT cap + 1` — then a long→wide pivot in Rust when a
-//! series column splits the rows. No aggregation, no bucketing, no imposed order: the rows
-//! draw in the order the user's query produced them, and everything analytical is the
-//! user's own SQL, written by the user. The engine-side aggregation pipeline that
-//! used to live here was built, adversarially reviewed twice, and withdrawn —
-//! `docs/reference/INVARIANTS.md` (the chart entry) records the evidence; do not
-//! resurrect it.
+//! **The chart computes nothing SQL can say.** [`ChartQuery::Rows`] is a *projection*: the
+//! referenced columns, `ORDER BY` the snapshot ordinal, `LIMIT cap + 1`, then a long→wide pivot in
+//! Rust when a series column splits the rows. No aggregation, no bucketing, no imposed order. The
+//! engine-side aggregation pipeline that used to live here was built, adversarially reviewed twice
+//! and withdrawn — `docs/reference/INVARIANTS.md` records the evidence; do not resurrect it.
 //!
-//! Two exceptions, both deliberate and bounded:
+//! Two exceptions, both bounded:
 //!
-//! - **The histogram computes** (spec §1.2's one exception): binning a raw column needs a
-//!   min/max pass, and DataFusion 54 has no `width_bucket`, so hand-writing it is genuinely
-//!   tedious. It is an aggregate over the whole column with a bins-count answer — the cap
-//!   is the bin count, not a row count.
-//! - **Refusals are answers, not errors.** Over a cap ([`ChartData::OverCap`]) or two rows
-//!   in one pivot cell ([`ChartData::Duplicates`]) the read succeeds and carries nothing to
-//!   draw — the surface renders the refusal, which names the user's own `GROUP BY` as the
-//!   fix and puts no control behind it (spec §7, §8). An *encoding*
-//!   mistake (a text column as Y, a column that doesn't exist) is an `Err`, in this
-//!   module's words rather than DataFusion's.
+//! - **The histogram computes**, because binning a raw column needs a min/max pass and DataFusion
+//!   has no `width_bucket`. Its cap is the bin count, not a row count.
+//! - **Refusals are answers, not errors.** Over a cap ([`ChartData::OverCap`]) or two rows in one
+//!   pivot cell ([`ChartData::Duplicates`]) the read succeeds carrying nothing to draw, and the
+//!   surface renders the refusal. An *encoding* mistake is an `Err`, in this module's words.
 
 use std::collections::{HashMap, HashSet};
 
@@ -74,8 +65,6 @@ pub async fn run_chart(
     }
 }
 
-// ---- the renderer-first read (bar / line / area / pie) ----
-
 async fn rows(
     df: DataFrame,
     x: Option<&str>,
@@ -96,24 +85,16 @@ async fn rows(
     }
     if let Some(series) = series {
         field_type(&df, series)?;
-        // The pivot needs a row identity to pivot *around*; without an X every row is its
-        // own category and the split would produce one lonely cell per series value.
         if x.is_none() {
             return Err("a series split needs an X column".into());
         }
         if x == Some(series) {
-            // DataFusion answers this itself with "Schema contains duplicate qualified
-            // field name" — an internal message for an encoding mistake this module names
-            // in its own words everywhere else.
             return Err(format!(
                 "'{series}' cannot be both the category and the series"
             ));
         }
     }
 
-    // One projection, each referenced column once — a duplicate name in a `select` is a
-    // schema error, and `x` may legitimately also be a Y. The projection makes every name
-    // unique and exact, so columns are read back by name below.
     let mut names: Vec<&str> = Vec::new();
     for name in x
         .iter()
@@ -126,9 +107,6 @@ async fn rows(
         }
     }
 
-    // Result order is the ordinal's (`SNAPSHOT_SPEC.md` §9) — sort + fetch plans as a TopK,
-    // so memory is O(cap) however large the snapshot. The ordinal is `None` only for a
-    // snapshot that is gone, whose read fails on its own terms below.
     let mut plan = df;
     if let Some(ord) = ord {
         plan = plan
@@ -166,8 +144,6 @@ async fn rows(
             fmt,
         ),
         _ => {
-            // No pivot: each row is its own mark, in result order. Duplicate X labels draw
-            // as duplicate marks — the chart shows what the result holds (spec §4).
             let axis = match &x_col {
                 Some(col) => Axis {
                     labels: strings(col, fmt)?,
@@ -213,8 +189,6 @@ fn pivot(
     let mut label_positions = Vec::new();
     let mut slots: HashMap<ScalarValue, usize> = HashMap::new();
     let mut slot_labels = Vec::new();
-    // The fill below assigns, and an assignment is only sound while every row has a cell
-    // of its own — so a (category, slot) pair seen twice refuses right here.
     let mut cells: HashSet<(usize, usize)> = HashSet::new();
     let mut of_row = Vec::with_capacity(keys.len());
     for row in 0..keys.len() {
@@ -276,17 +250,9 @@ fn row_index_axis(rows: usize) -> Axis {
     }
 }
 
-// ---- the raw read (scatter) ----
-
 async fn raw(df: DataFrame, x: &str, y: &str, cap: usize) -> Result<ChartData, String> {
-    // Checked before the cast rather than after: the cast DataFusion plans is the strict
-    // one, so a text column would fail the read with an Arrow message about a string it
-    // could not parse — where `Rows` names the column's type. One module, one answer.
     plottable(&df, x)?;
     plottable(&df, y)?;
-    // Finite, not merely non-NULL: Arrow's null bitmap is unset for a NaN, so filtering
-    // NULLs alone let a mark with no position through — counted against a cap that is
-    // documented as counting drawable points.
     let plan = df
         .filter(finite(ident(x)).and(finite(ident(y))))
         .map_err(|e| e.to_string())?
@@ -313,8 +279,6 @@ async fn raw(df: DataFrame, x: &str, y: &str, cap: usize) -> Result<ChartData, S
             .collect(),
     ))
 }
-
-// ---- the fitted overlay (scatter trendline — the one computed *overlay*, Chart 11) ----
 
 /// The least-squares fit over the finite `(x, y)` pairs of `snapshot` — one aggregation
 /// (`regr_slope` / `regr_intercept` / `regr_r2` plus a count), filtered to finite pairs the
@@ -360,9 +324,6 @@ pub async fn run_trend(
     else {
         return Ok(None);
     };
-    // A NULL answer is degeneracy DataFusion named; a non-finite one is degeneracy it did the
-    // arithmetic through (a column of near-`f64::MAX` values overflows the fit). Either way
-    // there is no line to draw.
     if !(slope.is_finite() && intercept.is_finite() && r2.is_finite()) {
         return Ok(None);
     }
@@ -374,14 +335,9 @@ pub async fn run_trend(
     }))
 }
 
-// ---- the binned read (histogram — the one mark that computes) ----
-
 async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<ChartData, String> {
     plottable(&df, column)?;
     let value = cast(ident(column), DataType::Float64);
-    // Non-finite values are filtered out of **both** passes: arrow's `max` reports a NaN as
-    // greater than every real value, so one NaN row would make the width NaN and the strict
-    // cast fail the whole read — for a column pandas and Spark write NaN into routinely.
     let df = df
         .filter(finite(value.clone()))
         .map_err(|e| e.to_string())?;
@@ -398,14 +354,11 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
     let rows = integers(batch.column(2))?;
     let (Some(Some(lo)), Some(Some(hi)), Some(Some(rows))) = (lo.first(), hi.first(), rows.first())
     else {
-        // Nothing to bin: every value is NULL or non-finite, which is a histogram of
-        // nothing rather than a histogram of zeroes.
         return Ok(ChartData::Bins(Vec::new()));
     };
     let (lo, hi, rows) = (*lo, *hi, *rows);
     let bins = bins.unwrap_or_else(|| auto_bins(rows)).clamp(1, MAX_BINS);
     if hi <= lo {
-        // One value, however many rows carry it — a width of zero has no bins to divide.
         return Ok(ChartData::Bins(vec![ChartBin {
             lo,
             hi,
@@ -414,9 +367,6 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
     }
 
     let width = (hi - lo) / bins as f64;
-    // `hi - lo` overflows to infinity when the column spans more than f64 can hold — the
-    // values are each finite, so the filter above cannot catch it, and an infinite width
-    // would put every row in bin 0 under edges that are not numbers.
     if !width.is_finite() {
         return Err(format!(
             "'{column}' spans a wider range than a chart can bin"
@@ -434,9 +384,6 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
 
     let mut binned = vec![0u64; bins];
     for (at, n) in index.into_iter().zip(counts) {
-        // A NULL index is a NULL value — not a number, so not in any bin. The maximum
-        // value divides out to exactly `bins`, which belongs in the last one: bins are
-        // half-open but the range's top edge has to land somewhere.
         let (Some(at), Some(n)) = (at, n) else {
             continue;
         };
@@ -449,8 +396,6 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
             .enumerate()
             .map(|(i, count)| ChartBin {
                 lo: lo + i as f64 * width,
-                // The last edge is the measured maximum, not `lo + bins * width`, which
-                // floating-point accumulation would leave a hair off it.
                 hi: if i + 1 == bins {
                     hi
                 } else {
@@ -477,8 +422,6 @@ fn auto_bins(rows: i64) -> usize {
     let root = (rows as f64).sqrt().ceil() as usize;
     root.clamp(6, 24)
 }
-
-// ---- shared plan pieces ----
 
 /// Keeps only values with a position on a number line. `x > -inf AND x < inf` is exactly
 /// the finite predicate: a NaN fails both comparisons and each infinity fails one, and a
@@ -528,8 +471,6 @@ async fn one_batch(plan: DataFrame) -> Result<RecordBatch, String> {
     let batches = plan.collect().await.map_err(|e| e.to_string())?;
     concat_batches(&schema, &batches).map_err(|e| e.to_string())
 }
-
-// ---- decoding ----
 
 /// One column as `f64`s. Cast rather than matched per type, so every numeric width decodes
 /// the same way. A non-numeric column is **refused, not cast**: Arrow's array-level cast is

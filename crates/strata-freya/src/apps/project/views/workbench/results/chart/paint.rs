@@ -196,8 +196,6 @@ impl Hit {
                 if dx.hypot(dy) > f64::from(*radius) {
                     return false;
                 }
-                // Measure the pointer *from the wedge's own start* and wrap once, so an arc
-                // that crosses zero is the same test as one that does not.
                 let angle = dy.atan2(dx).rem_euclid(TAU);
                 (angle - *from).rem_euclid(TAU) < *sweep
             }
@@ -344,10 +342,6 @@ impl ChartCanvas {
 impl Component for ChartCanvas {
     fn render(&self) -> impl IntoElement {
         let platform = use_hook(Platform::get);
-        // Seeded rather than left empty: an empty slot filled by the effect below would leave
-        // the first paint with nothing to draw, and the paint is what records the hit regions
-        // the pointer reads, so a chart would not answer a hover until something else asked it
-        // to repaint. The seed is a handle, so it costs a refcount and not a copy of the read.
         let mut slot = use_state({
             let seed = Rc::clone(&self.frame);
             move || seed
@@ -358,14 +352,8 @@ impl Component for ChartCanvas {
         let mut size = use_state(Size2D::default);
         let mut readout_size = use_state(Size2D::default);
 
-        // `use_reactive` under the hood, because a `use_side_effect` closure is built once and
-        // would capture the *first* frame forever (AGENTS.md §3).
         use_side_effect_with_deps(&self.frame, move |frame| {
             slot.set(Rc::clone(frame));
-            // The repaint this asks for rebuilds every hit region and re-lays the plot frame,
-            // so whatever the readout was naming is gone: keeping it would leave a label
-            // pinned over a mark that has moved or is no longer drawn, and a crosshair
-            // ruling through an axis that has changed underneath it.
             hover.set(None);
             platform.send(UserEvent::RequestRedraw);
         });
@@ -374,9 +362,6 @@ impl Component for ChartCanvas {
             let plotted = Rc::clone(&plotted);
             move |context| {
                 let frame = Rc::clone(&slot.peek());
-                // Replaced wholesale, never appended: what the pointer can be over — and
-                // where the plot frame the crosshair rides in sits — is exactly what this
-                // paint drew.
                 *plotted.borrow_mut() = marks::draw(
                     context.canvas,
                     context.font_collection,
@@ -388,9 +373,6 @@ impl Component for ChartCanvas {
         .width(Size::fill())
         .height(Size::fill())
         .on_sized(move |e: Event<SizedEventData>| {
-            // A resize re-lays the plot and so rebuilds every hit region — same staleness as a
-            // new frame. `set_if_modified` because a re-measure that found the same size must
-            // not wake a render of its own.
             if *size.peek() != e.area.size {
                 hover.set(None);
             }
@@ -401,10 +383,6 @@ impl Component for ChartCanvas {
             move |e: Event<PointerEventData>| {
                 let at = e.element_location();
                 let (x, y) = (at.x as f32, at.y as f32);
-                // The **nearest** mark whose region contains the pointer, not the first one
-                // pushed: hit regions are a fixed reach around a point, so two series that
-                // pass within that reach overlap, and taking the first would make the later
-                // series unnameable anywhere in the band.
                 let found = plotted
                     .borrow()
                     .0
@@ -427,40 +405,14 @@ impl Component for ChartCanvas {
             }
         });
 
-        // The crosshair: two hairlines across the plot frame through the **hovered mark**, and
-        // the value its row sits at, read back through the axis's own mapping. Placed from the
-        // recorded frame rather than the pane, so the rules line up with the gridlines whatever
-        // the plot's insets are.
-        //
-        // **Through the mark, not under the pointer** — and that is the whole cost model, not a
-        // simplification. Freya has no incremental rendering (`render_pipeline.rs`: every node
-        // repaints every frame) and `CanvasElement::render` calls its `on_render` each pass, so
-        // *any* reactive write here re-runs `marks::draw` — a full plotters replot plus a
-        // rebuild of every hit region, on the render thread. A crosshair that followed the
-        // pointer would do that on every mouse sample. Riding on `hover` instead costs nothing
-        // beyond what the readout already costs, for the same reason `Hit::anchor` exists: the
-        // state changes when the hovered *mark* changes, so a slow drag across one bar is
-        // zero renders. The price is that the value axis can only be read at a mark, which is
-        // where the numbers are.
         let label_height = self.frame.dress.label.1 as f32;
-        // **Absolute siblings of the plot, not children of a wrapper.** An absolutely
-        // positioned node resolves its offsets against its parent's area — and a wrapper here
-        // would be a *stacked* sibling of a fill-height plot, so its own area starts below the
-        // canvas and every hairline inside it lands off screen. Measured: the horizontal rule
-        // came out 600px (one pane) below where the pointer was.
         let crosshair: Vec<Element> = hover
             .read()
             .as_ref()
-            // A wedge answers no cross and a pie records no plot frame — either way there is
-            // no axis here to rule through.
             .and_then(|hover| hover.cross)
             .zip(plotted.borrow().1)
             .map(|(Cross { at: (x, y), value }, frame)| {
                 let dress = self.frame.dress.clone();
-                // In front of the plot for the same reason the readout is: two siblings on one
-                // layer have no paint order (AGENTS.md §3). Never a pointer target either — a
-                // hit-testable hairline under the pointer would take the pointer off the
-                // canvas and unmount the crosshair that drew it.
                 let hair = |el: Rect| el.layer(Layer::Relative(1)).interactive(false);
                 vec![
                     hair(rect())
@@ -490,11 +442,6 @@ impl Component for ChartCanvas {
 
         let readout = hover.read().clone().map(|hover| {
             let (pane, card) = (*size.read(), *readout_size.read());
-            // Flip to the other side of the anchor rather than running off the pane — the
-            // failure the plot's own overlay legend had. `card` is last frame's measurement,
-            // which is a frame behind on the very first hover; `Tooltip` keeps itself
-            // transparent until it has measured its own text, so that frame is not one
-            // anybody sees.
             let flip = |at: f32, card: f32, pane: f32| {
                 if at + READOUT_OFFSET + card > pane {
                     (at - READOUT_OFFSET - card).max(0.)
@@ -503,13 +450,6 @@ impl Component for ChartCanvas {
                 }
             };
             rect()
-                // **In front of the plot, explicitly.** Freya paints by layer and holds the
-                // nodes of one layer in a hash set, so two siblings on the same layer paint in
-                // whatever order that set iterates — the readout came out *behind* the marks,
-                // showing through only where one was semi-transparent. A relative layer is the
-                // whole fix; `Overlay` is a jump for things that must clear the window, and a
-                // readout only has to clear its own siblings. `2` rather than `1` because the
-                // crosshair is one of those siblings and the card names a mark, so it wins.
                 .layer(Layer::Relative(2))
                 .position(
                     Position::new_absolute()
@@ -517,14 +457,7 @@ impl Component for ChartCanvas {
                         .left(flip(hover.at.0, card.width, pane.width)),
                 )
                 .on_sized(move |e: Event<SizedEventData>| readout_size.set_if_modified(e.area.size))
-                // Never a pointer target. The clamp below can put the card under the pointer on
-                // a narrow pane, and a hit-testable card there would take the pointer off the
-                // canvas, fire `pointer_leave`, clear the hover and unmount itself — a readout
-                // that vanishes the instant it appears.
                 .interactive(false)
-                // The card itself is the standard `Tooltip` — it carries the app's tooltip
-                // dress and wraps at its own width cap, so this wrapper does nothing but place
-                // it.
                 .child(Tooltip::new_text(hover.label))
         });
 
@@ -588,17 +521,11 @@ mod tests {
         };
         let (mut runner, ()) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
         runner.sync_and_update();
-        // The hit regions and the plot frame are recorded *by* the paint, and headless only
-        // paints on demand.
         runner.render();
-        // Inside the second bin, low enough to be over the bar rather than above it.
         runner.move_cursor((400., 500.));
         runner.sync_and_update();
         runner.sync_and_update();
 
-        // The two hairlines: one column the height of the plot, one row its width. Found by
-        // their geometry, which is the thing under test — they are placed from the frame the
-        // paint recorded, not from the pane.
         let hairlines: Vec<Area> = runner.find_many(|node, _| {
             let area = node.layout().area;
             (area.width() == HAIRLINE || area.height() == HAIRLINE).then_some(area)
@@ -618,16 +545,11 @@ mod tests {
 
         let labels: Vec<String> =
             runner.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()));
-        // The readout is the *mark's* value — bin 2 of 4, counted 11 — because that is where
-        // the row is ruled. A crosshair that followed the pointer would say something else.
         assert!(
             labels.iter().any(|text| text == "11"),
             "the readout does not name the hovered mark's value: {labels:?}"
         );
 
-        // **The rules track the mark, not the pointer.** Moving within the same bar changes
-        // neither — which is the property that makes this free, so it is asserted rather than
-        // described.
         runner.move_cursor((410., 470.));
         runner.sync_and_update();
         let settled: Vec<Area> = runner.find_many(|node, _| {
@@ -639,7 +561,6 @@ mod tests {
             "the crosshair moved with the pointer inside one mark: {settled:?}"
         );
 
-        // Off every mark: no crosshair at all.
         runner.move_cursor((5., 5.));
         runner.sync_and_update();
         let after: Vec<Area> = runner.find_many(|node, _| {
@@ -688,7 +609,6 @@ mod tests {
             (1..=13).map(f64::from).collect(),
         ] {
             let hits = wedges(&shares);
-            // Walk the rim at a radius inside every wedge and collect which one answers.
             let mut named = std::collections::HashSet::new();
             for step in 0..720 {
                 let theta = f64::from(step) / 720. * TAU;
@@ -716,8 +636,6 @@ mod tests {
     /// one mark a reader reaches for first.
     #[test]
     fn the_crosshair_label_flips_below_its_rule_rather_than_off_the_top_of_the_plot() {
-        // The unit the placement turns on, checked directly — the layout assertion below can
-        // only fail once, and this says which way it failed.
         let frame = PlotArea {
             left: 56.,
             top: 12.,
@@ -728,8 +646,6 @@ mod tests {
         assert_eq!(label_top(12., 10., &frame), 16., "on the top edge: below");
         assert_eq!(label_top(20., 10., &frame), 24., "not quite room: below");
 
-        // …and over a real layout, hovering the tallest bin of a histogram whose counts top
-        // out at exactly 20.
         let app = || {
             use_init_theme(|| strata_theme(&load("midnight")));
             let theme = get_theme!(
@@ -761,7 +677,6 @@ mod tests {
         let (mut runner, ()) = TestingRunner::new(app, (800., 600.).into(), |_| {}, 1.);
         runner.sync_and_update();
         runner.render();
-        // Inside the second bin — the tallest, whose top edge *is* the axis top.
         runner.move_cursor((300., 400.));
         runner.sync_and_update();
         runner.sync_and_update();

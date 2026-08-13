@@ -176,9 +176,6 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     let inner = statement_text(sql);
 
     let mut select: Vec<String> = Vec::new();
-    // Every output name emitted so far — what a later alias must stay distinct from.
-    // DataFusion refuses duplicate projection names, and a query this panel hands over has
-    // to run.
     let mut named: Vec<String> = Vec::new();
     let mut group_count = 0usize;
     for group in &form.groups {
@@ -191,11 +188,6 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
                 group_count += 1;
             }
             GroupBy::Binned(stride) => {
-                // `date_bin` takes a timestamp: `Date32` coerces but `Date64` does not
-                // (measured, Chart 04), so an instant is cast — a no-op where it already is
-                // one. A clock is handed over as itself: casting a time of day to a
-                // timestamp is the operation DataFusion refuses, and its sub-day strides
-                // are valid directly.
                 let value = if group.role == ChartRole::Clock {
                     col.clone()
                 } else {
@@ -235,8 +227,6 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     if group_count > 0 {
         out.push_str(&format!("\nGROUP BY {}", ordinals(group_count)));
     }
-    // Always emitted: a `GROUP BY` has no output order. Each arm falls back to the columns
-    // the form actually produced, so the clause always names a real ordinal.
     let order = match form.order {
         ShapeOrder::ByGroup if group_count > 0 => ordinals(group_count),
         ShapeOrder::ByMeasureDesc if measure_count > 0 => format!("{} DESC", group_count + 1),
@@ -280,13 +270,10 @@ fn unique(name: String, named: &mut Vec<String>) -> String {
 /// (`SELECT '-- not a comment'`).
 fn statement_text(sql: &str) -> &str {
     let bytes = sql.as_bytes();
-    // One past the last byte that belongs to the statement itself.
     let mut end = 0usize;
     let mut i = 0usize;
     while i < bytes.len() {
         match bytes[i] {
-            // A string literal or a quoted identifier, its doubled-quote escape included.
-            // Everything inside belongs to the statement, an unterminated one to the end.
             quote @ (b'\'' | b'"' | b'`') => {
                 i += 1;
                 while i < bytes.len() {
@@ -307,7 +294,6 @@ fn statement_text(sql: &str) -> &str {
                     i += 1;
                 }
             }
-            // Block comments nest, per sqlparser's own tokenizer.
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
                 let mut depth = 1usize;
                 i += 2;
@@ -463,7 +449,6 @@ mod tests {
             );
         }
 
-        // A quoted name with an embedded quote survives the round trip doubled.
         let quoted = ShapeForm {
             groups: vec![group("a\"b", ChartRole::Dimension, GroupBy::Exact)],
             measures: vec![],

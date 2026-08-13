@@ -17,22 +17,14 @@
 //! picked while the choice is still uncommitted (`crate::state::theme_preview` has the why).
 //! Dropping that slot on the way out is what makes Cancel a revert.
 //!
-//! P4-03 built the **shell**: the window, the nav, the draft/save/preview machinery and the
-//! entry points. P4-04 added the first pane ([`views::ThemePane`], the theme picker) and P4-05
-//! the second ([`views::DataDisplayPane`]), and moved the row vocabulary every pane is built
-//! from into [`crate::components::form`] — a pane is a `Form::preferences` of `Row`s, and
-//! nothing about the rhythm between them lives here. P4-06 added the third
-//! ([`views::SystemPane`]), P4-07 the fourth ([`views::EnginePane`]) — which is the one category
-//! to take both of [`views::Pane`]'s opt-outs, being a surface that manages its own height — and
-//! P4-08 the last ([`views::KeymapPane`]).
+//! **A pane is a `Form::preferences` of `Row`s** ([`crate::components::form`]), so nothing about
+//! the rhythm between rows lives here. [`views::EnginePane`] is the one category to take both of
+//! [`views::Pane`]'s opt-outs, being a surface that manages its own height.
 //!
-//! AA-04 added a sixth — the control for the MCP server AA-03 ships dark, and an ordinary
-//! preferences list again: the switch, the port and the token, committed by the same Apply as
-//! everything else. AS-03 gave it two siblings and a group heading to sit under
-//! ([`views::ProvidersPane`], [`views::ChatPane`]) and renamed it [`views::McpPane`], because
-//! outbound model credentials and inbound MCP hosting are different capabilities that were
-//! sharing a screen — and because a page called "Agent access" beside a Providers page that
-//! also serves agents named the wrong axis.
+//! [`views::McpPane`] sits under an AI heading beside [`views::ProvidersPane`] and
+//! [`views::ChatPane`] rather than alone as "Agent access": outbound model credentials and inbound
+//! MCP hosting are different capabilities, and a page called "Agent access" beside a Providers page
+//! that also serves agents named the wrong axis.
 
 mod model;
 mod search;
@@ -65,9 +57,6 @@ use crate::theme::{peek_selection, use_roles, use_strata_theme, window_backgroun
 pub use model::{category, Category, NavGroup, CATEGORIES};
 pub use search::{search, Anchor, Hit};
 
-// `%[no_ext]`: the window's dress is read by its sibling views (chrome · nav · footer · pane)
-// rather than by one `Settings` component, so there is no type for the generated
-// `…ThemePartialExt` builder to hang off.
 define_theme!(
     %[no_ext]
     %[component]
@@ -120,10 +109,6 @@ define_theme!(
         /// landed too light, and daylight hid it because both resolve to white there.
         table_head_background: Color,
         table_selection_background: Color,
-        // A key cap's own three colours used to sit here, when the Keymap pane was the only
-        // surface drawing one. The command palette draws them too, so they moved to the shared
-        // `keycap` token group — a component's dress is the component's
-        // (`components::keycap`).
         /// The **dashed** edge of a slot with nothing in it yet — the Add-shortcut button on an
         /// unbound row. Its own field rather than the table's `border_fill`, because it has to
         /// stand a step out from the grid's own hairlines to read as an invitation at all; a
@@ -178,8 +163,6 @@ pub enum Route {
         Providers,
         #[route("/ai/chat", ChatPane)]
         Chat,
-        // Was `/agent-access` (AA-04). The path moved with the pane into the AI group; nothing
-        // persists a route, so there is no old URL to keep resolving.
         #[route("/ai/mcp", McpPane)]
         Mcp,
         #[route("/engine", EnginePane)]
@@ -307,10 +290,6 @@ impl SettingsCtx {
     pub fn forget_provider(self, kind: ProviderKind) {
         let mut probes = self.probes;
         probes.write().forget(kind);
-        // **The satellite is written even though the draft is not committed.** It is a cache of
-        // a remote fact rather than a setting, so the cost of dropping it for an edit the user
-        // then cancels is one refetch — and the cost of keeping it is a picker offering names
-        // from an endpoint that is gone.
         write_listings(self.listings, |listings| listings.forget(kind));
     }
 
@@ -332,18 +311,6 @@ impl SettingsCtx {
             1 => Some("1 engine property is invalid".to_string()),
             n => Some(format!("{n} engine properties are invalid")),
         };
-        // **A second surface that can block adds a branch here rather than a second gate** — the
-        // note this method was written with, taken up by AS-03.
-        //
-        // **A provider that is on and cannot answer is the one broken state this pane can reach.**
-        // The chat pane would offer it, and every send would fail — `Brain::resolve` refuses
-        // exactly these before a socket opens (`NoKey`, `NoBaseUrl`), so this is the same
-        // judgement made early enough to act on, and named the way the engine's faults are.
-        //
-        // `views::ai::missing` is the one copy of what "cannot answer" means, so this cannot
-        // disagree with the row that draws the same provider — and it is precise about which
-        // kinds need what: Ollama sends no key, a compatible endpoint may send an empty bearer,
-        // and a keyed provider with its environment variable set is not short of one either.
         blocked.or_else(|| {
             let draft = self.draft.read();
             let keys = self.ai_keys.read();
@@ -437,71 +404,33 @@ impl SettingsCtx {
     /// the same breath — the committed settings now resolve to the identical theme, so the
     /// derivation's id guard means nothing repaints twice.
     ///
-    /// A **per-field merge** against the seed, not a whole-struct write: this window's draft
-    /// is a snapshot of the settings as they were when it opened, and another window can
-    /// commit one of its own in the meantime (the close confirm's "Don't ask again" writes
-    /// `confirm_close_running` from a window that never shows it). Writing the draft wholesale
-    /// would carry its stale copy of that field back over the top. `Settings::merge_onto`
-    /// commits only the fields this draft actually changed.
-    /// On a commit that lands, the seed advances to what was just committed, so the diff is
-    /// always measured against the last commit rather than against mount. Today the footer
-    /// closes the window straight after, but an Apply that *didn't* close would otherwise
-    /// re-commit this same diff on the next press — over whatever another window had written
-    /// in between.
+    /// A **per-field merge** against the seed, not a whole-struct write: this draft is a snapshot
+    /// of the settings as they were when the window opened, and another window can commit one of
+    /// its own in the meantime, so writing the draft wholesale would carry a stale field back over
+    /// the top. On a commit that lands the seed advances, so the diff is measured against the last
+    /// commit rather than against mount.
     ///
     /// Returns whether it reached disk. `false` leaves the window **open** with
-    /// [`failed`](Self::failed) set, which is the whole reason this reports at all: the commit
-    /// still applied to every live window, so closing would look exactly like success and the
-    /// setting would be gone at the next launch with nothing having said so.
-    ///
-    /// The in-memory half is kept either way — the draft is published to every window — because
-    /// the settings *are* now what the user asked for everywhere except on disk. Rolling the
-    /// live windows back would be answering a durability failure by undoing a change that
-    /// worked.
+    /// [`failed`](Self::failed) set: the commit still applied to every live window, so closing
+    /// would look exactly like success and the setting would be gone at the next launch. The
+    /// in-memory half is kept either way, because rolling live windows back would answer a
+    /// durability failure by undoing a change that worked.
     ///
     /// **The seed does not advance on a failure, and that is what makes the retry possible.**
-    /// `dirty()` is `draft != seed`, and the footer gates Apply on it — so advancing the seed
-    /// here would disable the button the moment the failure it reports appeared, leaving the
-    /// user looking at "could not be saved" with no way to try again once they had fixed the
-    /// disk. It would not even recover by reopening the window: `new` seeds both draft and seed
-    /// from the config store, which `write_config` has already merged into, so a fresh Settings
-    /// window would come up equally undirty and the setting could never reach disk again this
-    /// session. Holding the seed keeps the same diff pending, and re-applying it is harmless —
-    /// `merge_onto` writes the identical fields over values that already hold them.
-    /// **Async because the keystore blocks.** `strata_core::secret` states it plainly — every
-    /// call is a synchronous platform call that can wait on a lock, a daemon, or a *user prompt*,
-    /// and a caller on the render thread goes through [`offload`]. That last case is not
-    /// hypothetical here: Keychain access is per code signature, so the first Apply from a newly
-    /// signed bundle is exactly when macOS raises an authorisation prompt — and on the render
-    /// thread that prompt appears over a frozen window.
+    /// `dirty()` is `draft != seed` and the footer gates Apply on it, so advancing here would
+    /// disable the button the moment the failure appeared — and reopening would not recover it
+    /// either, since `new` seeds from the config store that `write_config` has already merged into.
     ///
-    /// So the blocking half runs on a worker and the window stays live while it does, which is
-    /// the other half of the same invariant: a read the user waits for is an **arm**, not a
-    /// freeze. [`applying`](Self::applying) is that arm, and the footer gates Apply on it —
-    /// without it a responsive window lets a second press run a concurrent `commit` over the same
-    /// typed keys, and the two would race to mint a marker for one secret.
+    /// **Async because the keystore blocks**, and not hypothetically: Keychain access is per code
+    /// signature, so the first Apply from a newly signed bundle is when macOS raises an
+    /// authorisation prompt, which on the render thread appears over a frozen window.
+    /// [`applying`](Self::applying) is the arm that keeps the window live meanwhile, and the footer
+    /// gates Apply on it — without it a second press runs a concurrent `commit` over the same typed
+    /// keys, racing to mint a marker for one secret.
     pub async fn apply(&self) -> bool {
         let mut draft = self.draft.peek().clone();
         let seed = self.seed.peek().clone();
 
-        // **The keys go to the keystore before the config is written, not after.**
-        //
-        // `commit` mints, overwrites and deletes keystore entries and puts the resulting
-        // *markers* into this draft — so what `write_config` then merges already carries them.
-        // Doing it the other way round would persist a marker for a secret that had not landed
-        // yet, and a keystore refusal would leave config pointing at nothing.
-        //
-        // A refusal stops the whole Apply. It is reported in the keystore's own words and never
-        // answered by writing the secret somewhere else, which is the failure
-        // `strata_core::secret` exists to make impossible.
-        //
-        // **The markers are kept whether or not every key landed.** `commit` writes each marker
-        // into the `Ai` as it stores that key, so a failure partway leaves earlier secrets
-        // already in the keystore — and discarding them would strand those under ids nothing
-        // references, with a retry minting fresh ones and orphaning another each time.
-        // Publishing first means a retry sees the markers, takes the overwrite-in-place branch,
-        // and reuses the entries rather than growing new ones. That is why the worker hands the
-        // `Ai` **back** rather than reporting only success or failure.
         let mut applying = self.applying;
         applying.set(true);
         let keys = self.ai_keys.peek().clone();
@@ -509,16 +438,11 @@ impl SettingsCtx {
         let answer = offload(move || {
             let mut ai = ai;
             let outcome = views::commit(&keys, &mut ai);
-            // The snapshot comes back too — see the clear below. Returned rather than kept alive
-            // beside the worker so there is one copy of the typed secrets, not two.
             (outcome, ai, keys)
         })
         .await;
         applying.set(false);
 
-        // The worker never answered — it could not start, or it panicked. That is not a fact
-        // about the keystore, so it must not be reported as one, and the draft's `ai` has to come
-        // back from somewhere: the copy that was moved in is gone, so this re-reads the live one.
         let Some((landed_keys, ai, committed)) = answer else {
             let mut failed = self.failed;
             failed.set(Some(
@@ -535,20 +459,6 @@ impl SettingsCtx {
             failed.set(Some(e.to_string()));
             return false;
         }
-        // **A key that has landed is no longer typed — but only the ones that landed.**
-        //
-        // The keystore holds them and their markers are in the draft, so the pasted text has no
-        // further job, and leaving it would make the *next* Apply in this window re-`put` every
-        // key it already stored (a repeat Keychain prompt for a key entered once). The reachable
-        // second Apply is the retry a failed `write_config` leaves the window open for.
-        //
-        // **Scoped to the snapshot, because this is no longer instantaneous.** `commit` ran on a
-        // worker and the window stayed live throughout — that is the point — so the user can type
-        // a key into another provider while it is in flight, and that keystroke lands in
-        // `ai_keys` immediately. A blanket `clear()` was right only while Apply was synchronous
-        // and nothing could arrive mid-flight; now it would wipe a key that was never in the
-        // snapshot, never stored, and never asked about — silently, with the box emptying itself
-        // as the user watched. So each entry goes only if it is still exactly what was committed.
         let mut typed = self.ai_keys;
         typed.write().forget_committed(&committed);
         let landed = write_config(self.config, &[ConfigChan::Settings], {
@@ -599,9 +509,6 @@ pub struct SettingsApp {
 
 impl SettingsApp {
     pub fn window(app: AppCtx) -> WindowConfig {
-        // Match the theme's window body so a resize doesn't flash the default white. Through
-        // `peek_selection`, not the raw settings: this window is opened *while* another one
-        // may already be previewing a theme.
         let background = {
             let sel = peek_selection(app.config, app.preview);
             let id = sel.effective(strata_core::theme::os_is_dark());
@@ -610,12 +517,8 @@ impl SettingsApp {
         WindowConfig::new_app(SettingsApp { app })
             .with_title("Settings")
             .with_size(940., 660.)
-            // Below this the nav rail crowds the pane and the footer's two buttons collide
-            // with the engine table's toolbar.
             .with_min_size(740., 480.)
             .with_background(background)
-            // The 50px strip centres macOS's 16px buttons at y = 17; AppKit's default origin
-            // is (7, 6), so the inset is the difference (the canvas's x = 16).
             .with_traffic_light_inset(9., 11.)
             .with_window_attributes(move |attrs, _| {
                 attrs
@@ -628,10 +531,6 @@ impl SettingsApp {
 
 impl App for SettingsApp {
     fn render(&self) -> impl IntoElement {
-        // The same window-root steps every app takes. The shared theme **registry** into
-        // context first — the Appearance pane's theme list reads it, and a route component
-        // takes no props, so context is the only way in — then this window's theme derived
-        // from the shared settings and its own preview.
         let themes = use_provide_context({
             let themes = self.app.themes.clone();
             move || themes
@@ -642,20 +541,6 @@ impl App for SettingsApp {
             let app = self.app.clone();
             move || app
         });
-        // Join the live window registry, so a second ⌘, focuses this window rather than
-        // opening another — and keep the registry's Settings pin true for this window's life,
-        // handing focus back to its owner on the way out.
-        //
-        // The same call points the menubar here as a **panel**: none of the File or Window
-        // commands has a listener in this window, so every item that would reach it through
-        // the keyboard pipeline greys, Settings… included.
-        //
-        // Greying Settings… does not change what ⌘, does here, whichever way AppKit resolves a
-        // disabled item's key equivalent — **unverified, and deliberately not relied on**. If
-        // it skips the item the press falls through to this window's consuming listener below;
-        // if it claims it, the press stops at the menubar. Both end in "nothing happens", which
-        // is the right answer for a window that is already open, so the listener stays as the
-        // one that does *not* depend on the question.
         platform::use_register_window(&self.app, || WindowKind::Settings, MenuScope::Panel);
         platform::use_settings_pin(self.app.clone());
 
@@ -666,34 +551,21 @@ impl App for SettingsApp {
             let probes = self.app.probes;
             move || SettingsCtx::new(config, preview, listings, probes)
         });
-        // The search's pointer at one row of one pane (P4-09). Provided **above** the router,
-        // because the nav writes it before the page holding the row has mounted — see
-        // `components::form::reveal`.
         use_provide_context(Reveal::empty);
-        // Every edit to the draft's theme half previews across all windows…
         use_side_effect(move || ctx.sync_preview());
-        // …and the preview never outlives this window, whichever way it goes.
         use_drop(move || ctx.discard());
 
-        // Taken in the render scope so the key handler below can close this window from an
-        // event handler, where there is no scope left to read it from.
         let platform = use_hook(Platform::get);
 
         rect()
             .expanded()
             .vertical()
-            // The window's ambient text colour, like the launcher's: runs that don't name one
-            // inherit it rather than Freya's base-theme default.
             .color(use_roles().get(Role::Text))
             .child(Router::<Route>::new(|| {
                 RouterConfig::default().with_initial_path(Route::Theme)
             }))
-            // Esc and ⌘Q. Deliberately the LAST child — same-name global listeners fire in
-            // document order, so anything a pane later mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc is Cancel: close without committing. The draft goes with the
-                    // window and the preview is dropped by the `use_drop` above.
                     Command::Cancel => {
                         platform.close_current_window();
                         true
@@ -702,16 +574,9 @@ impl App for SettingsApp {
                         platform::quit();
                         true
                     }
-                    // Already here. Consumed so the press can't fall through to the window
-                    // underneath and re-pin this one above itself.
                     Command::OpenSettings => true,
                     _ => false,
                 }
             })))
     }
 }
-
-// Every category now has its page, so the `panes!` macro that generated a `Pane::not_built`
-// placeholder per unbuilt category is gone, and so is that constructor (see `views::pane`). A
-// sixth route — Connections (W7) is the candidate — brings its own page rather than inheriting a
-// placeholder nobody is using.

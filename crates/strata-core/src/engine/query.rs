@@ -48,8 +48,6 @@ use super::config::effective;
 use crate::util::{clip, DISPLAY_CHARS};
 use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 
-// ---- query → snapshot → page ----
-
 /// The prefix every result snapshot is registered under. Named here, next to the
 /// only thing that mints one, because two other rules key off it: the statement
 /// router refuses an intercepted statement that names a table with this prefix
@@ -141,15 +139,10 @@ pub fn claim_snapshot_dir(engine_id: u64) -> Result<File, String> {
     let path = lock_path(&root, &name);
     let lock = match claim_lock(&path) {
         Claim::Taken(lock) => lock,
-        // Contention on our *own* pid + engine-id name means some other handle holds it.
-        // Two engines in one process can't (ids are unique), so this is an anomaly worth
-        // reporting rather than papering over.
         Claim::Held => return Err(format!("{} is held by another handle", path.display())),
         Claim::Unknown(e) => return Err(format!("{}: {e}", path.display())),
     };
     let dir = root.join(&name);
-    // Holding the lock proves no live engine owns this name, so anything already under
-    // it belongs to a dead process that our pid was recycled from — start clean.
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(lock)
@@ -196,7 +189,6 @@ pub fn purge_snapshot_root() {
 fn purge_root(root: &Path) {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
-        // Nothing has ever run here — the ordinary first-start case.
         Err(e) if e.kind() == io::ErrorKind::NotFound => return,
         Err(e) => {
             tracing::warn!(
@@ -217,24 +209,18 @@ fn purge_root(root: &Path) {
         } else if !is_dir && name.starts_with(DIR_PREFIX) && name.ends_with(LOCK_SUFFIX) {
             locks.push(name);
         } else {
-            // Nothing we recognise, so nothing can be holding it: an interrupted write,
-            // a directory from a naming scheme we no longer use, a stray file.
             remove_any(&entry.path());
         }
     }
     for name in &dirs {
         let dir = root.join(name);
         let lock = lock_path(root, name);
-        // Taking the lock IS the liveness test — a live engine holds it for its whole
-        // lifetime, and a dead one's was released by the OS.
         match claim_lock(&lock) {
             Claim::Taken(held) => {
                 remove_any(&dir);
                 let _ = fs::remove_file(&lock);
                 drop(held);
             }
-            // A live engine: this app's other instance, a parallel test binary. Skipping
-            // it is the whole point of the lock.
             Claim::Held => {}
             Claim::Unknown(e) => tracing::warn!(
                 "snapshot purge: cannot tell whether {} is live ({e}); leaving it. If this \
@@ -245,16 +231,11 @@ fn purge_root(root: &Path) {
         }
     }
     for name in &locks {
-        // A lock whose directory is gone: its engine died between claiming the name and
-        // creating anything, or a previous sweep removed the pair non-atomically.
         let dir = name.strip_suffix(LOCK_SUFFIX).unwrap_or(name);
         if dirs.iter().any(|d| d == dir) {
             continue;
         }
         let path = root.join(name);
-        // Held / indeterminate both skip, as above — but an orphan lock is an empty file,
-        // so it is not worth a warning of its own; the directory arm covers the leak that
-        // matters.
         if let Claim::Taken(held) = claim_lock(&path) {
             let _ = fs::remove_file(&path);
             drop(held);
@@ -286,8 +267,6 @@ enum Claim {
 fn claim_lock(path: &Path) -> Claim {
     let file = match fs::OpenOptions::new()
         .create(true)
-        // The file is a rendezvous point, not storage — never written to, never
-        // truncated; only the lock the OS attaches to the open handle matters.
         .truncate(false)
         .read(true)
         .write(true)
@@ -298,8 +277,6 @@ fn claim_lock(path: &Path) -> Claim {
     };
     match file.try_lock() {
         Ok(()) => Claim::Taken(file),
-        // std guarantees `WouldBlock` is *only* "another handle holds it" and never
-        // arrives inside `Error`, so this split is exact.
         Err(TryLockError::WouldBlock) => Claim::Held,
         Err(TryLockError::Error(e)) => Claim::Unknown(e),
     }
@@ -309,8 +286,6 @@ fn claim_lock(path: &Path) -> Claim {
 /// purge that fails to purge is exactly the invisible failure this sweep exists to close,
 /// so anything but "it was already gone" is logged.
 fn remove_any(path: &Path) {
-    // `symlink_metadata`, not `is_dir`: a symlink to a directory must be unlinked, not
-    // recursed into.
     let is_dir = fs::symlink_metadata(path)
         .map(|m| m.is_dir())
         .unwrap_or(false);
@@ -328,28 +303,17 @@ fn remove_any(path: &Path) {
 
 /// How a snapshot's Arrow IPC file is written.
 ///
-/// **LZ4, not uncompressed.** Measured over 1M–20M-row results in three shapes, raw IPC is
-/// 1.4–4.4x the size of the parquet snapshots this replaced; with LZ4 it is **0.46–0.73x** — i.e.
-/// roughly half, and level with a compressed parquet file. That is the whole reason the format
-/// swap is affordable: uncompressed IPC would have traded a real amount of disk for the type
-/// fidelity, and compressed IPC trades none.
+/// **LZ4, not uncompressed.** Measured over 1M–20M-row results in three shapes, raw IPC is 1.4–4.4x
+/// the size of the parquet snapshots this replaced; with LZ4 it is **0.46–0.73x**. That is what
+/// makes the format swap affordable — uncompressed IPC would have traded real disk for the type
+/// fidelity. LZ4 rather than ZSTD because a snapshot is written on the query's critical path and
+/// read back immediately, where ZSTD's smaller file costs again on every page read.
 ///
-/// LZ4 rather than ZSTD because a snapshot is written on the query's critical path and read back
-/// immediately — LZ4 is fast in both directions, where ZSTD buys a smaller file at a cost paid
-/// again on every page read. The codec is a dial: it can change without touching the format, and
-/// nothing outside this function knows which one was used.
-///
-/// Both codecs are already available — `arrow-ipc`'s `lz4` and `zstd` features are enabled
-/// transitively by DataFusion — so this needs no dependency or feature change.
-///
-/// **Named for the format, not for the snapshot**, because it is no longer only the snapshot's:
-/// an internal table's spool writes IPC too (`ddl::tables`, ED-04), and the two must not drift
-/// into two codecs. Note the one place this function does *not* reach: DataFusion's own
-/// `ArrowFileSink`, which a CTAS drives, hardcodes `LZ4_FRAME` internally
-/// (`datafusion-datasource-arrow/src/file_format.rs`) — so the sink and this agree today by
-/// coincidence rather than by construction, and moving this dial would leave a CTAS's own files
-/// behind. That is the cost of using the sink, and it is written down here so the next person to
-/// turn the dial finds it.
+/// **Named for the format, not for the snapshot**, because an internal table's spool writes IPC too
+/// and the two must not drift into two codecs. The one place it does not reach is DataFusion's own
+/// `ArrowFileSink`, which a CTAS drives and which hardcodes `LZ4_FRAME` — so the sink and this
+/// agree by coincidence rather than construction, and turning this dial would leave a CTAS's files
+/// behind.
 pub(super) fn ipc_write_options() -> Result<IpcWriteOptions, String> {
     IpcWriteOptions::default()
         .try_with_compression(Some(CompressionType::LZ4_FRAME))
@@ -418,8 +382,6 @@ pub async fn run_and_snapshot(
 ) -> Result<(QueryOutput, RecordBatch, SnapshotStats), String> {
     let result = materialize(ctx, engine_id, snapshot, sql, page_size, fmt, policy).await;
     if result.is_err() {
-        // The stream may have died mid-spool — drop the partial file (no table was
-        // registered yet, so the id is simply never a readable snapshot).
         let _ = fs::remove_file(snapshot_file(engine_id, snapshot));
     }
     result
@@ -541,50 +503,14 @@ async fn materialize(
         .await
         .map_err(|e| e.to_string())?;
     let df = json_unions_as_text(df)?;
-    // capture columns before the DataFrame is consumed by the stream
     let columns: Vec<ColumnInfo> = df
         .schema()
         .fields()
         .iter()
         .map(|f| column_info(f))
         .collect();
-    // Arrow schema of the result — captured before the DataFrame is consumed by the stream,
-    // for concatenating page 1 into its `RecordBatch`.
     let arrow_schema = df.schema().inner().clone();
 
-    // The ordinal column (`docs/SNAPSHOT_SPEC.md` §9) is **written, not planned**: the writer
-    // numbers each batch as it spools it, from the running row count. It is therefore the
-    // literal index of the row in the file, which is exactly what every reader's
-    // `ORDER BY __strata_ord` means — the property holds by construction rather than by
-    // measurement. `tests/snapshot_order.rs` still pins it, now as confirmation.
-    //
-    // **It used to be `row_number() OVER ()` in the plan, and that was wrong twice over.**
-    // Wrong in principle: a plan-level window is the *query's* to evaluate, so a query over a
-    // federated database (DB-02) had our snapshot bookkeeping pushed across the wire for
-    // Postgres to compute — numbering the remote result rather than the stream this loop
-    // consumes, which is the one thing the ordinal is defined as. Wrong in practice: it also
-    // took the scan into DataFusion 54's unparser along a derived-table path that forgets to
-    // rebase the outer column qualifiers, so the remote statement named a relation its own
-    // `FROM` had aliased away and **every** federated read failed with Postgres's
-    // `42P01`. Numbering at write time cannot reach a plan, an optimizer rule or an unparser
-    // at all, for this database arm or any later one. (A user's *own* window over a remote
-    // table still meets that unparser defect; `tests/postgres_federation.rs` pins it as a
-    // known gap, the way DB-01 pinned `IN (subquery)`.)
-    //
-    // Appended *after* `columns` and `arrow_schema` were captured, so the user-visible schema
-    // never contains it — the file does, and every reader orders by it and projects it away.
-    //
-    // Two results still spool **without** one (`ord: None`) — the pre-ordinal read behavior,
-    // which every reader handles:
-    // - An `EXPLAIN` / `EXPLAIN ANALYZE`. The planning constraint that forced this is **gone**
-    //   with the window (nothing sits on the plan root any more); the exclusion stays because
-    //   the ordinal would buy such a result nothing — a handful of plan rows, nowhere near the
-    //   scan-split threshold where read order goes nondeterministic.
-    // - A result with duplicate column names (`SELECT a.i, b.i FROM … JOIN …`). The
-    //   registered table resolves columns by name, so a typed column appended after two
-    //   same-named ones makes every later read mis-map the second onto the ordinal's slot
-    //   and fail with an Arrow error. Ordinal-less, such a result reads exactly as it did
-    //   at base: degraded by the duplicate, but readable.
     let plain = !matches!(
         df.logical_plan(),
         LogicalPlan::Explain(_) | LogicalPlan::Analyze(_)
@@ -595,18 +521,6 @@ async fn materialize(
     };
     let ord = (plain && unique).then(|| ordinal_name(&arrow_schema));
     let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
-    // The spool file's schema, when there is an ordinal: the result's own plus the ordinal
-    // column. Built from the **first batch's** schema rather than from `arrow_schema` so the
-    // writer is handed exactly the schema its batches carry; `None` means this result spools
-    // without an ordinal, so the slot has one meaning and the write below needs no second
-    // condition to read it by.
-    //
-    // **This is where a schema disagreement now surfaces.** `RecordBatch::try_new` validates
-    // (exact types, and no nulls under a non-nullable field) where `FileWriter::write` validates
-    // nothing at all, so a stream whose later batch contradicts its own declared schema fails
-    // the run here rather than spooling a file whose schema lies about its contents. That is a
-    // deliberate change of behaviour and the repo's own bar for it — fail loud on an
-    // unrecoverable fault — but it is genuinely new, so it is stated rather than implied.
     let mut ord_schema: Option<SchemaRef> = None;
 
     let mut writer: Option<FileWriter<File>> = None;
@@ -616,10 +530,6 @@ async fn materialize(
     let mut page1_batches: Vec<RecordBatch> = Vec::new();
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| e.to_string())?;
-        // The stream's own width, which everything user-facing below indexes by. It is the
-        // declared schema's in every plan DataFusion can produce; taking the minimum is what
-        // keeps a disagreement an odd result rather than an index-out-of-bounds panic on the
-        // engine task — the guard the deleted `batch.project(&user_columns)` used to provide.
         let width = batch.num_columns().min(nulls.len());
         if writer.is_none() {
             let schema = match &ord {
@@ -637,16 +547,12 @@ async fn materialize(
             );
         }
         if let Some(w) = writer.as_mut() {
-            // Numbered from the rows already written, so the ordinal is the row's index in
-            // the file — see the `ord` comment above.
             let spooled = match &ord_schema {
                 Some(schema) => &with_ordinal(&batch, schema, total as u64)?,
                 None => &batch,
             };
             w.write(spooled).map_err(|e| e.to_string())?;
         }
-        // The stream carries the user's columns and nothing else now, so everything
-        // user-facing reads the batch itself rather than a projection of it.
         total += batch.num_rows();
         for (i, col) in batch.columns().iter().take(width).enumerate() {
             nulls[i] += col.null_count() as u64;
@@ -654,20 +560,9 @@ async fn materialize(
         append_batch_capped(&batch, &mut page1, &mut page1_batches, page_size, fmt)?;
     }
 
-    // Only register a snapshot if the query produced rows; an empty result has
-    // no pages to fetch (`QueryOutput::snapshot` stays `None`).
     let materialized = writer.is_some();
     if let Some(mut w) = writer {
         w.finish().map_err(|e| e.to_string())?;
-        // The same listing registration `register_arrow` performs, with one addition: the
-        // file's own write order is **declared** (`with_file_sort_order` on the ordinal),
-        // so an ordered read plans as a stream instead of a sort. Measured on a 3M-row /
-        // 157 MB snapshot: a page at offset 2.9M is 543 ms as a TopK over an undeclared
-        // scan — holding every candidate row in memory with no spill — and 97 ms with the
-        // order declared, where a shallow page plans as scan-level limit pushdown with the
-        // sort gone entirely, and an export streams into its COPY instead of buffering the
-        // result first. The declaration is a promise about the file, and it is exactly the
-        // property `materialize` constructs and `tests/snapshot_order.rs` pins.
         let listing = ArrowReadOptions::default()
             .to_listing_options(&ctx.copied_config(), ctx.copied_table_options());
         let listing = match &ord {
@@ -781,10 +676,6 @@ pub async fn fetch_page(
     fmt: &CellFormat,
 ) -> Result<Page, String> {
     let snap = snapshot_name(snapshot);
-    // Saturating, not plain: `page` reaches here straight off an agent's JSON with no upper
-    // bound (`read_page` floors it at 1 and never caps it), so a huge page overflows the
-    // multiply — a panic in debug, and in release a wrap to some arbitrary small offset that
-    // returns real rows under the page number the caller asked for.
     let offset = page.saturating_sub(1).saturating_mul(page_size);
     read_page(ctx, &snap, offset, page_size, sort, ord, fmt).await
 }
@@ -799,13 +690,6 @@ async fn read_page(
     fmt: &CellFormat,
 ) -> Result<Page, String> {
     let mut df = ctx.table(snap).await.map_err(|e| e.to_string())?;
-    // Every read is ordered (`docs/SNAPSHOT_SPEC.md` §9): a bare `LIMIT/OFFSET` over the
-    // registered table has no order of its own, and above the scan-split threshold the same
-    // page re-read returned *different rows* — measured, and frozen into the page cache. An
-    // unsorted read orders by the ordinal entire; a user sort takes it as the tie-break, so
-    // a sort with duplicate keys is stable across page windows too. `Column::from_name`
-    // avoids identifier parsing on odd column names; `nulls_first = false` ⇒ nulls always
-    // sort last, both directions (Rz6).
     let mut order = Vec::new();
     if let Some((name, asc)) = sort {
         order.push(col(Column::from_name(name)).sort(asc, false));
@@ -817,14 +701,11 @@ async fn read_page(
         df = df.sort(order).map_err(|e| e.to_string())?;
     }
     let mut df = df.limit(offset, Some(limit)).map_err(|e| e.to_string())?;
-    // The ordinal is bookkeeping, not a result column — no page batch, cell row, or schema
-    // ever carries it.
     if let Some(ord) = &ord {
         df = df
             .drop_columns(&[ord.as_str()])
             .map_err(|e| e.to_string())?;
     }
-    // Arrow schema of the page, captured after the projection so it matches the batches.
     let schema = df.schema().inner().clone();
     let batches = df.collect().await.map_err(|e| e.to_string())?;
     let batch = concat_batches(&schema, &batches).map_err(|e| e.to_string())?;
@@ -902,20 +783,14 @@ mod tests {
     fn purge_sweeps_dead_engines_and_spares_live_ones() {
         let root = scratch_root("mixed");
 
-        // A live engine: its directory plus the lock it holds for its whole lifetime.
         let live = engine_dir(&root, "e_1_0");
         let held = take(&lock_path(&root, "e_1_0"));
 
-        // A dead engine: same shape, but nothing holds the lock any more — which is
-        // exactly the state the OS leaves behind when a process exits or crashes.
         let dead = engine_dir(&root, "e_2_0");
         drop(take(&lock_path(&root, "e_2_0")));
 
-        // A directory with no lock file at all (a crash between mkdir and claim, or a
-        // leftover from before locks existed).
         let lockless = engine_dir(&root, "e_3_0");
 
-        // An orphan lock (its directory is gone) and something that isn't ours at all.
         let orphan = lock_path(&root, "e_4_0");
         drop(take(&orphan));
         let stray = root.join("garbage.txt");
@@ -953,8 +828,6 @@ mod tests {
         drop(held);
         assert!(matches!(claim_lock(&contested), Claim::Taken(_)));
 
-        // A lock path we cannot open as a file at all — the portable stand-in for the
-        // filesystems where locking simply doesn't work, or a root owned by another user.
         let opaque = root.join("e_2_0.lock");
         fs::create_dir_all(&opaque).expect("an unopenable lock path");
         assert!(matches!(claim_lock(&opaque), Claim::Unknown(_)));
@@ -964,8 +837,6 @@ mod tests {
 
     #[test]
     fn a_claimed_directory_cannot_be_claimed_twice() {
-        // A high, fixed id no `ENGINE_SEQ`-allocated engine in this test binary will use,
-        // so this touches the shared root without colliding with a real engine's.
         let engine_id = u64::MAX;
         let dir = PathBuf::from(snapshot_dir(engine_id));
         let claim = claim_snapshot_dir(engine_id).expect("first claim");

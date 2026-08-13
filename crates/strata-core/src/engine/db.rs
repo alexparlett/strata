@@ -1,39 +1,28 @@
 //! Databases: turning a [`ConnectionDef`] with a [`PgStore`] into a live connection pool and
 //! registering it on the session as a **catalog** (DB workstream, `docs/CONNECTIONS_SPEC.md`).
 //!
-//! The sibling of [`store`](super::store), and deliberately not a path through it. An object
-//! store is registered per bucket and answers about *files*; a database is registered as a
-//! catalog and answers about *relations* — different registry, different key, different
-//! failure. What the two share is the connection def, the `Reg` row it settles onto, the
-//! registration pass's first phase, and the all-or-nothing contract
-//! ([`connect::settle`](super::connect::settle)).
+//! The sibling of [`store`](super::store), deliberately not a path through it: an object store is
+//! registered per bucket and answers about *files*, a database is registered as a catalog and
+//! answers about *relations*. What the two share is the connection def, the `Reg` row it settles
+//! onto, the pass's first phase, and the all-or-nothing contract.
 //!
-//! **The whole database comes through, and nothing is declared per table.** Connect enumerates
-//! every schema the role can see and every relation in them, in one round trip, and registers a
-//! catalog whose providers are built lazily on first use. There are no per-table defs and no
-//! manual adds: *discovery gets catalogs, declaration gets defs*. A bucket cannot say what its
-//! tables are — somebody must declare globs, a format and its options, and that declaration can
-//! fail, which is what the `Reg` rows exist to show — while a database answers for itself. A
-//! def per remote table would restate configuration the server owns, go stale silently, cost an
-//! introspection per def per pass, and mint failure states for things whose only real failure is
-//! the connection's. Pinning one remote table into the workspace is a **view**
-//! (`CREATE VIEW orders AS SELECT * FROM pg.public.orders`), which needs no new machinery at
-//! all.
+//! **The whole database comes through, and nothing is declared per table** — *discovery gets
+//! catalogs, declaration gets defs*. A bucket cannot say what its tables are, so somebody must
+//! declare globs and a format, and that declaration can fail; a database answers for itself. A def
+//! per remote table would restate configuration the server owns, go stale silently, and mint
+//! failure states for things whose only real failure is the connection's. Pinning one remote
+//! relation into the workspace is a **view**, which needs no new machinery.
 //!
-//! **Ours rather than the provider crate's `DatabaseCatalogProvider`**, for three reasons all
-//! read out of its source: it snapshots the schema and table list at construction (so a ↻ could
-//! not refresh it), it builds plain `SqlTable`s with the default unparser dialect, and it skips
-//! the federation wrapper — so the generic path would silently forfeit exactly the pushdown this
-//! workstream exists for. Ours enumerates at connect, lists lazily, and builds every provider
-//! through `PostgresTableFactory`, dialect and federation included.
+//! **Ours rather than the provider crate's `DatabaseCatalogProvider`**, for three reasons read out
+//! of its source: it snapshots the listing at construction (so a ↻ could not refresh it), builds
+//! plain `SqlTable`s with the default unparser dialect, and skips the federation wrapper — so the
+//! generic path would forfeit exactly the pushdown this workstream exists for.
 //!
-//! **This module holds a password for the length of one login, and never stores one.** The
-//! def says only that a password is expected (`PgPassword::Keystore`); the value is read from
-//! the OS keystore per pool connection, inside [`KeystorePassword`], under a
-//! [reference derived](crate::secret::SecretRef::derived) from the connection's own identity. It
-//! is the seam, not a fact about this module: [`connect`] takes the provider as an argument, so
-//! passwordless authentication is `None` rather than a mode this module has to know about, and
-//! `Engine::connect` is the only caller that builds the keystore-backed one.
+//! **This module holds a password for the length of one login, and never stores one.** The def says
+//! only that one is expected; the value is read from the OS keystore per pool connection, under a
+//! [reference derived](crate::secret::SecretRef::derived) from the connection's own identity.
+//! [`connect`] takes the provider as an argument, so passwordless authentication is `None` rather
+//! than a mode this module has to know about.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
@@ -233,19 +222,6 @@ pub(crate) async fn connect(
     let url = conn.url();
     let registration = match prepare(dbs, conn, pg, passwords).await {
         Ok((prepared, live)) => {
-            // **Register first, then take back what this URL held before**, which is the
-            // opposite order to the obvious one and the reason is a window: `take_back`
-            // deregisters, so deregistering first leaves the catalog name unbound for as long as
-            // this thread takes to re-register it, and a plan resolving `pg.public.orders` on
-            // another runtime thread in that gap fails with "failed to resolve catalog" for a
-            // connection that was live before the refresh and live after it. The object-store
-            // arm has no such gap — `register_object_store` replaces under one key — so this is
-            // the arm that has to arrange it.
-            //
-            // Replacing the map entry hands back what it displaced, which is what makes the
-            // rename case fall out: a def whose catalog *name* moved while its URL stood still
-            // leaves an old name registered that today's def cannot name, and the displaced
-            // `Live` is the only thing that still knows it.
             let displaced = dbs.put(url.clone(), live);
             Ok((
                 Registration::Catalog(prepared.name.clone(), prepared.provider),
@@ -293,21 +269,12 @@ async fn prepare(
     passwords: Option<Arc<dyn PasswordProvider>>,
 ) -> Result<(Prepared, Live), String> {
     let url = conn.url();
-    // The def's own rules, from the def's own module — the same call the connection editor
-    // makes, so a name refused at the field is refused here in the same words.
     conn.provider.check_address(&conn.address)?;
-    // Folded against what is **registered**, not against what is stored: a connection that
-    // failed to connect reserves no catalog name, and the editor is where a stored clash is
-    // warned about before anything is dialled.
     check_catalog_name(&dbs.peers(&url), conn)?;
 
     let pool = build_pool(conn, pg, passwords).await?;
     let listing = Arc::new(enumerate(&pool).await?);
     let factory = Arc::new(PostgresTableFactory::new(Arc::clone(&pool)));
-    // The user's own spelling, not a folded one: this is what a message names the connection
-    // by and what a surface prints. Case-insensitive resolution is the *registry's* job —
-    // `StrataCatalogList` folds on the way in and on every lookup, exactly as
-    // `StrataSchemaProvider` does for table names.
     let catalog = pg.catalog.trim().to_string();
     let provider = Arc::new(DbCatalogProvider::new(
         catalog.clone(),
@@ -346,8 +313,6 @@ pub(crate) fn listing(
     pg: &PgStore,
 ) -> Option<(String, Vec<SchemaListingView>)> {
     let (catalog, listing) = dbs.listing(&conn.url())?;
-    // A `BTreeSet` rather than a `Vec`, so membership is a lookup rather than a scan per server
-    // schema, and so a def that names one schema twice cannot produce two rows for it.
     let enabled: BTreeSet<String> = pg.schemas.iter().map(|s| fold_ident(s)).collect();
     let mut views: Vec<SchemaListingView> = listing
         .schemas
@@ -361,22 +326,11 @@ pub(crate) fn listing(
             },
         })
         .collect();
-    // A schema the def shows and the server does not have is its own answer rather than a
-    // silent absence: it is what a dropped or renamed schema looks like, and the picker has to
-    // be able to show the entry the user is about to un-tick.
-    //
-    // Driven off the **folded set**, not off `pg.schemas` beside a parallel array of its folds:
-    // `fold_ident` answers a name it cannot read as one identifier verbatim, so a schema needing
-    // quotes (`Sales Ops`) folds differently from the def's own spelling of it and the two lists
-    // stop lining up — which emitted the same schema twice, once `NotEnabled` and once
-    // `EnabledButMissing`.
     views.extend(
         enabled
             .iter()
             .filter(|folded| !listing.schemas.contains_key(*folded))
             .map(|folded| SchemaListingView {
-                // The def's own spelling of the missing schema, which is the only one anyone
-                // has: the server never answered for it.
                 name: pg
                     .schemas
                     .iter()
@@ -391,40 +345,23 @@ pub(crate) fn listing(
     Some((catalog, views))
 }
 
-// --- the pool ----------------------------------------------------------------------------
-
 /// The pool itself, with every failure turned into a sentence naming what to fix.
 async fn build_pool(
     conn: &ConnectionDef,
     pg: &PgStore,
     passwords: Option<Arc<dyn PasswordProvider>>,
 ) -> Result<Arc<PostgresConnectionPool>, String> {
-    // **The def's own rules, from the def's own module, and its own parse.** All four values
-    // below are interpolated into a libpq connection string with no quoting, so each is refused
-    // by name here rather than mangled by the driver's parser (`parse_pg_address` and
-    // `check_user` share that rule). Splitting the address a second time in this crate would put
-    // one grammar in two places — the IPv6 bracket rule is exactly what lands in one copy and not
-    // the other — and its refusals would be unreachable prose, since `prepare` has already run
-    // `check_address` before this is called.
     let address = parse_pg_address(conn.address.trim())?;
     pg.check_user()?;
     let user = pg.user.trim();
-    // The crate's own parameter names. **No `pass` key, ever** — with a provider installed it
-    // is ignored, and without one the password would be in a connection string this process
-    // formats; the whole point of the provider seam is that neither happens.
     let mut params = HashMap::from([
         ("host".to_string(), address.host.to_string()),
         ("port".to_string(), address.port.to_string()),
         ("db".to_string(), address.database.to_string()),
         ("user".to_string(), user.to_string()),
         ("sslmode".to_string(), pg.sslmode.as_str().to_string()),
-        // What the server's own `pg_stat_activity` shows, so a DBA looking at a busy database
-        // can see which client is asking.
         ("application_name".to_string(), "Strata".to_string()),
     ]);
-    // Only for the modes that read it: the crate refuses a path that does not exist, and a
-    // stale one left on the def by switching modes must not fail a connection it has nothing
-    // to do with.
     let cert = pg.sslrootcert.trim();
     if pg.sslmode.verifies() && !cert.is_empty() {
         params.insert("sslrootcert".to_string(), cert.to_string());
@@ -438,11 +375,6 @@ async fn build_pool(
         None => PostgresConnectionPool::new(params).await,
     };
     built
-        // **`jsonb` and every other exotic type arrive as text rather than as a refusal.** The
-        // crate's default (`Error`) makes a table with one such column entirely unreadable;
-        // `String` hands it over as `Utf8` JSON text, which the app's own Postgres-style
-        // accessors (`json_get`, `->`, `->>`) already read. Representation honesty rather than
-        // silent corruption: the value is intact, only the type is wider.
         .map(|pool| Arc::new(pool.with_unsupported_type_action(UnsupportedTypeAction::String)))
         .map_err(|e| refused(conn, pg, e))
 }
@@ -464,7 +396,6 @@ fn refused(conn: &ConnectionDef, pg: &PgStore, e: pool::Error) -> String {
             "The server refused the user '{}'. Check the user and its password.",
             pg.user.trim()
         ),
-        // Ours already, and already a sentence about this machine — see [`KeystorePassword`].
         pool::Error::PasswordProviderError { source } => source.to_string(),
         other => format!("Cannot connect to '{}': {other}", conn.url()),
     }
@@ -518,8 +449,6 @@ impl PasswordProvider for KeystorePassword {
     }
 }
 
-// --- enumeration -------------------------------------------------------------------------
-
 /// **One round trip for the whole catalog shape.** `pg_class` joined to `pg_namespace`, filtered
 /// to the relation kinds a query can read and to what this role may actually use.
 ///
@@ -561,13 +490,6 @@ async fn enumerate(pool: &Arc<PostgresConnectionPool>) -> Result<Listing, String
         .await
         .map_err(|e| format!("Cannot read the database's schemas: {e}"))?;
 
-    // **A name that folds onto one already here is skipped, not merged.** The namespace is the
-    // *server's*, and Postgres identifiers are case-sensitive when quoted, so `Foo` and `foo`
-    // really are two schemas — while SQL folds an unquoted `pg.foo.t` to one of them and this
-    // map can only hold one. Merging is the actively wrong answer: it would keep the first
-    // schema's name and file the second's relations under it, so a scan would unparse to
-    // `FROM "Foo"."t"` and read a relation the query did not name. First wins (the query is
-    // ordered, so that is stable), and the loser is logged rather than silently absent.
     let mut schemas: BTreeMap<String, SchemaListing> = BTreeMap::new();
     for row in &rows {
         let schema: String = row.get(0);
@@ -594,7 +516,6 @@ async fn enumerate(pool: &Arc<PostgresConnectionPool>) -> Result<Listing, String
                 relkind,
             },
         ) {
-            // Put the first one back: same rule, one level down.
             tracing::warn!(
                 "database: relation '{schema}.{name}' is hidden by '{}', which folds to the \
                  same SQL name",
@@ -605,8 +526,6 @@ async fn enumerate(pool: &Arc<PostgresConnectionPool>) -> Result<Listing, String
     }
     Ok(Listing { schemas })
 }
-
-// --- the providers -----------------------------------------------------------------------
 
 /// One database, as DataFusion sees it: the schemas the connect-time enumeration found, each a
 /// [`DbSchemaProvider`].
@@ -728,10 +647,6 @@ impl SchemaProvider for DbSchemaProvider {
         if let Some(built) = self.built.lock().unwrap().get(&fold_ident(name)) {
             return Ok(Some(Arc::clone(built)));
         }
-        // Built outside the lock: this is a network round trip, and holding a `std` mutex
-        // across it would serialize every other relation in the schema behind it. Two callers
-        // racing build the same provider twice and the second insert wins, which costs one
-        // extra introspection and is correct either way.
         let provider = self
             .factory
             .table_provider(TableReference::partial(

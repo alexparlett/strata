@@ -70,8 +70,6 @@ impl Component for ProjectLoading {
         let roles = use_roles();
         let (close, _closing) = use_engineless_close(self.app.clone(), self.confirm);
 
-        // Say nothing about a load that finishes before anyone could read it. Scope-bound, so a
-        // load that lands first takes the timer with it when this arm goes.
         let mut slow = use_state(|| false);
         use_hook(move || {
             spawn(async move {
@@ -82,9 +80,6 @@ impl Component for ProjectLoading {
 
         let name = folder_name(&self.root);
 
-        // No spacing on this one: its only in-flow child is the card below (the drag strip is
-        // globally positioned, so torin leaves it out of the flow entirely), and a gap value that
-        // can never apply reads as a gap someone chose.
         rect()
             .expanded()
             .vertical()
@@ -104,10 +99,6 @@ impl Component for ProjectLoading {
                             .child(Control::new("Close window")),
                     )
             }))
-            // The window's drag strip, for the reason the fault arm keeps one: this arm replaces
-            // the whole subtree, HeaderBar included, but the OS traffic lights still sit in that
-            // corner and a window has to stay movable. An overlay at global position, so it
-            // hit-tests above the column above.
             .child(
                 rect()
                     .layer(Layer::Overlay)

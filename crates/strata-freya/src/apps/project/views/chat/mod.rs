@@ -5,44 +5,27 @@
 //! [`transcript`], and the [`composer`] with the conversation's provider · model · effort
 //! pick in its footer.
 //!
-//! ## What it is, next to an MCP client
+//! **Next to an MCP client**: that is an agent working in the project from somewhere else, and
+//! nothing it runs reaches the user's tabs. This one is *part of the app*, which is why "open this
+//! in a tab" is a wanted gesture here and an intrusion there. The two are told apart by
+//! construction through `StrataTools::in_app`, never by comparing a name.
 //!
-//! An MCP client is an agent working in the project from somewhere else, and nothing it runs
-//! reaches the user's tabs. This one is the agent that is *part of the app*: the user is
-//! looking at it, which is why "open this in a tab" is a wanted gesture here and an intrusion
-//! there. The app tells the two apart by construction, through `StrataTools::in_app`, never by
-//! comparing a name (AA-03c).
+//! **Two kinds of card, and the difference is the whole point.** A
+//! [`Step`](crate::apps::project::state::Step) card is a **citation** — no number in prose without
+//! a run behind it, every figure the engine's own. An **offer** card is executable, arriving only
+//! when the assistant calls `offer_sql`, and deliberately has no step card beside it. SQL the
+//! assistant is merely *explaining* stays in the prose as an ordinary code block with no Run press;
+//! that distinction is why the tool exists.
 //!
-//! ## Two kinds of card, and the difference is the whole point
+//! **Promotion is two presses, and never an edit.** *Open in tab* and *Run* both go through the
+//! editor's own `actions::open_sql`, so a promoted statement is an ordinary scratch tab.
+//! **Nothing here ever writes the user's buffer** — a fix arrives as a new tab, because the buffer
+//! is often the only record of how a number was reached.
 //!
-//! A [`Step`](crate::apps::project::state::Step) card is a **citation**: AS-02's prompt says no
-//! number in prose without a run behind it, and the card under the paragraph is what makes that
-//! auditable. Every figure on it is the engine's own.
-//!
-//! An **offer** card is executable. It arrives only when the assistant calls `offer_sql` — its
-//! own tool, checked against the catalog and the *editor's* policy before the card exists — and
-//! it deliberately has no step card beside it, because an offer is not a step. SQL the assistant
-//! is merely *explaining* never comes this way: it stays in the prose, as an ordinary markdown
-//! code block with no Run press. That distinction is the reason the tool exists.
-//!
-//! ## Promotion is two presses, and never an edit
-//!
-//! *Open in tab* and *Run* both go through the editor's own `actions::open_sql`, so a promoted
-//! statement is an ordinary scratch tab:
-//! editable, saveable, undoable. **Nothing here ever writes the user's buffer.** A fix arrives as
-//! a new tab, because the buffer is often the only record of how a number was reached.
-//!
-//! ## Prose is the fork's own markdown viewer
-//!
-//! `MarkdownViewer` (AGENTS.md §3 — standard components first, one level up), themed through the
-//! shared component table like every other built-in. It is **not** on the crate's
-//! `markdown-code-editor` feature, which would pull in freya's `code-editor` — this app has its
-//! own and deliberately does not use that one.
-//!
-//! A **fenced block is a card with a copy press**, through the fork's `code_block` hook: the
-//! offer card's dress minus its Run, because this is SQL the assistant is *explaining* and the
-//! whole point of `offer_sql` is that an executable statement arrives as its own card instead.
-//! The viewer still owns the parse; the pane owns only the dress.
+//! **Prose is the fork's own `MarkdownViewer`**, themed through the shared component table. Not on
+//! the crate's `markdown-code-editor` feature, which would pull in freya's `code-editor` — this app
+//! has its own. A **fenced block is a card with a copy press**, through the fork's `code_block`
+//! hook: the offer card's dress minus its Run. The viewer owns the parse; the pane owns the dress.
 
 mod card;
 mod composer;
@@ -70,9 +53,6 @@ use strata_model::RightPane;
 use crate::apps::export::ExportTarget;
 
 define_theme!(
-    // `%[no_ext]` like the command palette's: there is exactly one chat pane and nothing
-    // overrides its dress, so it does not need the per-instance `theme` field the default arm
-    // generates an extension trait for.
     %[no_ext]
     %[component]
     pub Chat {
@@ -121,26 +101,9 @@ impl Component for ChatPane {
         let mut session = use_radio::<SessionState, Chan>(Chan::Layout);
         let chats = use_consume::<ChatsCtx>();
         let border = use_roles().get(Role::Border);
-        // The pane's own height, so the composer's field can be bounded by a fraction of it —
-        // it is resizable, so a fixed ceiling would be wrong at most sizes. Written only on an
-        // actual change, since every layout pass reports one.
         let mut pane_height = use_state(|| 0.);
-        // **Follow the conversation, unless the reader has scrolled away from it.**
-        //
-        // A transcript that always jumped to the bottom would yank the view out from under
-        // someone reading back through it — and one that never did would leave a streaming
-        // answer writing off the bottom of the pane. So the rule is the reader's own position:
-        // stick while they are at the end, stop the moment they are not, and resume when they
-        // come back. `is_at_end` is the fork's, beside `is_scrollable`, because the viewport and
-        // the content size it compares are the scrollable's own and nothing here should measure
-        // them a second time.
         let mut scroll = use_scroll_controller(ScrollConfig::default);
         let mut following = use_state(|| true);
-        // **Re-asked on the scroll position and nothing else.** `is_at_end` peeks, so this
-        // decides only when the position moves — which is the reader or this very follower, and
-        // never the content growing. Keyed on the content size instead, the first answer too tall
-        // for the pane would read as the reader having scrolled away and following would stop
-        // before it ever started.
         let position = use_reactive(&<(i32, i32)>::from(scroll));
         use_side_effect(move || {
             let _ = position.read();
@@ -150,17 +113,12 @@ impl Component for ChatPane {
             }
         });
         use_side_effect(move || {
-            // Wake on anything the transcript shows — a new turn, a delta, a settled card.
             let _ = chats.read();
             if *following.peek() {
                 scroll.scroll_to(ScrollPosition::End, Direction::Vertical);
             }
         });
 
-        // `Content::Flex`, because the transcript between the header and the composer is the
-        // one thing here that takes the slack — and `Size::flex` is only divided by a parent
-        // whose content is `Flex` (AGENTS.md §3). Without it the transcript claims the column
-        // and the composer is laid out past the bottom edge.
         rect()
             .expanded()
             .min_width(Size::px(PANE_BODY_MIN_W))
@@ -179,8 +137,6 @@ impl Component for ChatPane {
                 }),
             })
             .child(Divider::horizontal().color(border))
-            // The transcript takes the slack; the composer is a fixed foot. A `ScrollView` here
-            // rather than on each turn, so a streaming delta grows one scrolling body.
             .child(
                 rect().width(Size::fill()).height(Size::flex(1.)).child(
                     ScrollView::new_controlled(scroll)
@@ -199,9 +155,6 @@ impl Component for ChatPane {
                         ),
                 ),
             )
-            // **No rule above the composer.** The field draws its own box, so a divider between
-            // it and the transcript is a second edge a few pixels from the first — the header
-            // keeps its rule because a title strip has no other boundary.
             .child(Composer { theme, pane_height })
     }
 }
@@ -263,7 +216,6 @@ pub fn result_anchor(target: &ExportTarget) -> Anchor {
         }
     }
     Anchor::Result {
-        // The bare name: `Anchor::label` is what puts the `@` on, for every arm.
         name: target.label.clone(),
         body,
     }
@@ -340,7 +292,6 @@ mod tests {
 
     fn app() -> impl IntoElement {
         use_init_theme(|| strata_theme(&load("midnight")));
-        // The pane's own two writes go through the station; everything else it reads.
         let _ = use_radio_station::<SessionState, Chan>();
         rect().expanded().child(ChatPane)
     }
@@ -369,20 +320,12 @@ mod tests {
                     ))
                 });
                 r.provide_root_context(EngineCtx::default);
-                // The header reports through both halves of the write funnel — an export says
-                // so in the log, a conversation the store could not write raises a condition.
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));
-                // The pane's destructive presses set this slot; the dialog that reads it is
-                // mounted at the window root, which this harness does not stand up.
                 r.provide_root_context(|| State::create(None::<ChatDrop>));
                 let listings: ModelListings =
                     r.provide_root_context(|| State::create_global(Listings::default()));
                 let probes = r.provide_root_context(|| State::create_global(Probes::default()));
-                // A **real** runtime, so the composer's refusal reads as a user's would: the
-                // runtime arm outranks the config arms, and a test that skipped it would only
-                // ever see "the assistant could not start". A directory with no window
-                // registered is enough beside it — the pane calls no tool while it renders.
                 r.provide_root_context(move || AssistantCtx {
                     assistant: Assistant::new().ok().map(Rc::new),
                     tools: StrataTools::in_app(Arc::new(AgentDirectory::default())),
@@ -400,10 +343,7 @@ mod tests {
                     listings,
                     probes,
                     assistant: None,
-                    // Idle and never asked: this pane makes no check, and a real one would
-                    // dial out from a test.
                     updates: create_global_updates(),
-                    // Nothing to drain: no menubar and no window registration here.
                     update_request: create_global_update_request(),
                 });
                 chats
@@ -553,8 +493,6 @@ mod tests {
     #[test]
     fn the_composer_is_laid_out_inside_the_pane() {
         let runner = runner(configured());
-        // The field's text is an `Input`'s `paragraph()`, not a `label()` — the placeholder is
-        // a span on it — so it is found the way the input actually renders.
         let box_ = runner
             .find(|node, element| {
                 Paragraph::try_downcast(element)
@@ -595,8 +533,6 @@ mod tests {
 
         type_lines(&mut runner, 4);
         let few = field_height(&runner);
-        // Not a multiple: the box is lines *plus* its own padding, and the padding does not
-        // grow with them. Three more lines is what is being asserted, not four times the height.
         assert!(
             few > one + 30.,
             "four lines is taller than one ({few} vs {one})"
@@ -671,8 +607,6 @@ mod tests {
         let (mut runner, mut chats) = runner_with_chats(configured());
         let id = chats.peek().active_id();
 
-        // Enough turns that the body is taller than the pane, so what is on screen is a choice
-        // rather than everything there is.
         for n in 0..24 {
             chats.write().ask(id, format!("question {n}"), vec![]);
             chats
@@ -682,8 +616,6 @@ mod tests {
         }
         settle(&mut runner);
 
-        // **Measured, not listed.** Every turn is in the tree whether or not it is on screen, so
-        // what says the transcript followed the conversation is where the messages sit.
         let newest = message_area(&runner, "question 23");
         let oldest = message_area(&runner, "question 0");
         assert!(
@@ -730,7 +662,6 @@ mod tests {
             "one row per message, mounted whether shown or not"
         );
 
-        // Every one of them is invisible until its own message is hovered.
         let hidden: Vec<f32> = runner.find_many(|node, element| {
             let area = node.layout().area;
             ((area.height() - ACTIONS_H).abs() < 0.5)

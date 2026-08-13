@@ -53,8 +53,6 @@ impl Component for Partition {
         let has_selection = !draft.partition.columns.is_empty();
         drop(draft);
 
-        // The toggle's own row, with the state named beside it — the canvas's copy, worded so
-        // on and off don't contradict each other.
         let state_label = if enabled {
             "Splitting output into a partitioned directory tree"
         } else {
@@ -71,8 +69,6 @@ impl Component for Partition {
             )
             .child(Prose::new(state_label));
 
-        // The same labelled row every option group uses — this section is one of them, with a
-        // toggle for its control and the panes beneath.
         Row::new("HIVE PARTITIONING")
             .child(toggle)
             .maybe_child(enabled.then_some(Panes))
@@ -109,9 +105,6 @@ impl Component for Panes {
 /// The pane frame both halves share — a bordered box with a header strip over a scroll body.
 fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
     let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
-    // The header carries the pane's own top corners, one border-width tighter because it sits
-    // inset by that much. Without them its square corners stop short of the pane's rounded clip
-    // and the strip's background reads as nicked at each end.
     let mut header_radius = CornerRadius::default();
     header_radius.fill_top(PANE_RADIUS - PANE_BORDER);
 
@@ -126,12 +119,6 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .width(PANE_BORDER)
                 .fill(theme.control_border_fill),
         )
-        // Inset every child by the border's own width. A Freya border is **painted, never laid
-        // out** — torin has no notion of one — so with the default `BorderAlignment::Inner` the
-        // stroke is drawn inside the bounds children already occupy, and a child with its own
-        // background paints straight over it. That is why the border enclosed the body (no
-        // background) but stopped short of the header strip (which has one). Padding by the
-        // stroke width is the border-box behaviour the canvas assumes.
         .padding(PANE_BORDER)
         .child(
             rect()
@@ -154,12 +141,6 @@ fn pane(header: impl IntoElement, body: impl IntoElement) -> impl IntoElement {
                 .child(
                     ScrollView::new()
                         .height(Size::fill())
-                        // This list sits inside the window's own scrolling body, so a wheel
-                        // gesture that starts over it (and can move it) stays latched to it —
-                        // no mid-gesture spill into the body scrolling underneath — while a
-                        // gesture starting at its end, or over a list too short to scroll,
-                        // passes through, so the pane is never a hover trap. The record view's
-                        // nested block does exactly this, for exactly this reason.
                         .latch_wheel()
                         .child(body),
                 ),
@@ -174,9 +155,6 @@ impl Component for Available {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
-        // Hooks first and unconditionally: the filter box comes and goes with the column
-        // count, and the row list is a loop — calling either of these inside one would make
-        // the hook count vary per render.
         let accent = use_roles().get(Role::Accent);
         let filter_text = use_state(String::new);
         let target = ctx.target.read();
@@ -198,10 +176,6 @@ impl Component for Available {
         drop(draft);
         drop(target);
 
-        // Past a handful of columns the eyebrow gives way to a filter — the canvas's rule, so
-        // the pane scales to a wide schema.
-        // `Input` writes its bound state directly, so the box is the buffer and this carries
-        // it into the draft (where the filtering above reads it).
         use_side_effect(move || {
             let typed = filter_text.read().clone();
             if typed != ctx.draft.peek().partition.filter {
@@ -209,10 +183,6 @@ impl Component for Available {
             }
         });
 
-        // The filter *is* this pane's header, always — not an eyebrow that becomes one past
-        // some column count. The canvas gates it at >8 unselected columns; Alex asked for it
-        // unconditionally, and a search box that appears only once a list is long is a control
-        // you have to discover twice.
         let header: Element = ValueField::new(filter_text)
             .placeholder("Filter…")
             .leading(
@@ -222,8 +192,6 @@ impl Component for Available {
             )
             .height(Size::px(FILTER_HEIGHT))
             .width(Size::flex(1.))
-            // The strip around it *is* the box — the canvas's filter is a chrome-less input
-            // inside the pane's header, not a bordered field sitting in one.
             .bare()
             .into_element();
 
@@ -257,12 +225,6 @@ impl Component for Available {
                         .spacing(SP_3)
                         .padding((0., SP_4))
                         .on_press(move |_| {
-                            // Adding clears the filter, so the next pick starts from the whole
-                            // list rather than a query matching nothing. The **box** is cleared
-                            // too, not just the draft: the box is the buffer the `Input`
-                            // renders, so clearing only the draft left a query on screen that
-                            // was no longer being applied — and put it back on the next
-                            // keystroke.
                             let mut filter_text = filter_text;
                             filter_text.set(String::new());
                             ctx.edit(|d| {
@@ -436,8 +398,6 @@ impl Component for KeepColumns {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
-        // Hoisted: the banner below is conditional, and `tones` inside it would make the
-        // hook count vary with the toggle.
         let warning = tones().warning;
         let keep = ctx.draft.read().partition.keep_columns;
 
@@ -457,10 +417,6 @@ impl Component for KeepColumns {
             .vertical()
             .spacing(SP_4)
             .child(row)
-            // A statement of what the export will do, shown exactly when it applies. (The
-            // canvas also warned about high-cardinality columns off a distinct count taken
-            // from an 80-row sample; that number is derived from what happens to be on screen,
-            // which is the kind of figure the inspector rejected, so it isn't here.)
             .maybe_child((!keep).then(|| {
                 rect()
                     .width(Size::fill())
@@ -492,9 +448,6 @@ fn empty(message: &str) -> impl IntoElement {
         .center()
         .padding((SP_4, SP_5))
         .child(
-            // `width(fill)` as well as the centred alignment: a hugging text box centred by its
-            // parent still sits off-centre once its padding is counted, which is what left this
-            // line visibly right of the middle.
             Caption::new(message)
                 .color(theme.empty_color)
                 .align(TextAlign::Center)

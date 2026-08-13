@@ -326,7 +326,6 @@ impl ExportDraft {
                 control: compression_select(self.json_compression, Edit::JsonCompression),
             }),
             FormatId::Parquet => groups.extend(self.parquet_groups()),
-            // Not an empty list: silence would read as "options are still loading".
             FormatId::Arrow => groups.push(Group {
                 label: "FORMAT".into(),
                 hint: None,
@@ -460,8 +459,6 @@ impl ExportDraft {
             },
         }];
 
-        // The level group exists only for the codecs that take one — the canvas's rule, and
-        // the honest one: a level on snappy is a control that changes nothing.
         if let Some((min, max)) = self.pq_codec.levels() {
             groups.push(Group {
                 label: format!("COMPRESSION LEVEL ({min}–{max})"),
@@ -562,7 +559,6 @@ impl ExportDraft {
             .collect();
         let stem = stem.trim_matches('_');
         let stem = if stem.is_empty() { "export" } else { stem };
-        // A partitioned export writes a *directory*, so it carries no extension at all.
         if self.partition.is_active() {
             return stem.to_string();
         }
@@ -913,7 +909,6 @@ mod tests {
 
     #[test]
     fn the_suggested_name_carries_the_format_and_its_compression_suffix() {
-        // The space becomes `_`; the hyphen is legal in a filename and survives.
         let mut draft = ExportDraft::default();
         assert_eq!(draft.suggested_name(&target()), "cross-file_join.csv");
         draft.csv_compression = Compression::Gzip;

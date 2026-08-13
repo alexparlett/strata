@@ -23,8 +23,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// instant, which has no such frame of reference, still prints UTC and says so.
 pub fn now_hms() -> String {
     let now = chrono::Local::now();
-    // Formatted by hand rather than through `strftime`: the same three fields, and it keeps this
-    // module's one timestamp shape in one recognisable place.
     format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
 }
 
@@ -64,19 +62,14 @@ pub fn iso8601(t: SystemTime) -> String {
 /// which is what ISO-8601 asks for — including the 400-year rule that makes 2000 a leap year and
 /// 2100 not one.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    // Days from 0000-03-01 rather than 1970-01-01.
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    // Day of era: [0, 146096].
     let doe = z - era * 146_097;
-    // Year of era: [0, 399].
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    // Day of the *March-based* year: [0, 365].
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    // January and February belong to the next calendar year.
     let year = yoe + era * 400 + i64::from(month <= 2);
     (year, month, day)
 }
@@ -120,7 +113,6 @@ pub const DISPLAY_CHARS: usize = 400;
 /// function — the grid's cells, the value tree's leaves and the preview's strings all clip here, so
 /// no two of them can disagree about where a value stops.
 pub fn clip(s: &str, max: usize) -> Cow<'_, str> {
-    // `take(max + 1)` distinguishes "exactly max" from "longer" without walking the whole string.
     if s.chars().take(max + 1).count() <= max {
         return Cow::Borrowed(s);
     }
@@ -137,30 +129,18 @@ pub fn clip(s: &str, max: usize) -> Cow<'_, str> {
 /// suggestions all ask the same question, and two implementations of it would let the same
 /// needle produce different sets on different surfaces.
 ///
-/// Lowercasing is Unicode-aware, so it is *not* a windowed byte compare: one char can lower
-/// to several ('İ' → "i̇") and to a different byte length ('K' U+212A → 'k'). This walks the
-/// haystack's **lowercased char stream** from each starting char instead, so expansions fall
-/// out naturally and nothing is allocated.
+/// Lowercasing is Unicode-aware, so this is *not* a windowed byte compare: one char can lower to
+/// several ('İ' → "i̇") and to a different byte length ('K' U+212A → 'k'). It walks the haystack's
+/// **lowercased char stream** from each starting char, and the starts tried are the positions
+/// *inside* each char's expansion — without that inner loop a needle beginning mid-expansion would
+/// be missed.
 ///
-/// The allocating form searches every position of the *lowered* string, and a char that lowers
-/// to several contributes several of them — so the starts tried here are the positions **inside**
-/// each char's expansion, not just its first. Without that inner loop a needle beginning
-/// mid-expansion (a bare combining dot against "İstanbul") would be missed, which is a genuine
-/// difference in result and not just in spelling.
-///
-/// One divergence from `str::to_lowercase` remains, which is the only context-sensitive case in
-/// it: word-final 'Σ' lowers to 'ς' there but to 'σ' char-wise, so the two sigma forms are folded
-/// together here. That makes the match a strict *superset* of the allocating form — a needle
-/// in either sigma form finds both — rather than silently dropping matches at word ends.
+/// One divergence from `str::to_lowercase` remains, its only context-sensitive case: word-final 'Σ'
+/// lowers to 'ς' there but to 'σ' char-wise, so the two sigma forms fold together here. That makes
+/// the match a strict *superset* of the allocating form rather than dropping matches at word ends.
 pub fn contains_lowercased(haystack: &str, needle: &str) -> bool {
-    // An empty needle matches everything, `str::contains`-style — including an empty haystack,
-    // which has no starting char to try. (A caller that trims its query first never hands one
-    // over, but the equivalence this function claims shouldn't have a hole in it.)
     needle.is_empty()
         || haystack.char_indices().any(|(i, c)| {
-            // `count()` is 1 for all but a handful of chars ('İ' is the only one Rust maps to
-            // more than one lowercase char without context), so this is a one-iteration loop
-            // on the hot path.
             (0..c.to_lowercase().count())
                 .any(|skip| starts_with_lowercased(&haystack[i..], skip, needle))
         })
@@ -385,12 +365,6 @@ pub fn parse_duration(v: &str) -> Option<Duration> {
         Some('h') => num * 3600.,
         Some(_) => return None,
     };
-    // `try_from_secs_f64`, not `from_secs_f64`: the latter **panics** on a value `Duration` can't
-    // hold, and this function is the Properties editor's per-keystroke validator — a number too
-    // big to be a duration is something a user types on the way to a smaller one, not a bug. It
-    // is also the only bound worth stating: it rejects negative, non-finite and overflowing
-    // values, so a hand-rolled guard beside it could only drift from it. That covers the
-    // multiplication above too, which is why `seconds` is what's checked rather than `num`.
     Duration::try_from_secs_f64(seconds).ok()
 }
 
@@ -478,9 +452,6 @@ fn temp_name(name: &str) -> String {
 /// dots of its own (`.session.json.4711.7.tmp` → `4711`).
 fn temp_pid(name: &str) -> Option<u32> {
     let inner = name.strip_prefix(TEMP_PREFIX)?.strip_suffix(TEMP_SUFFIX)?;
-    // What's left is `<file>.<pid>.<seq>`: peel the seq, then the pid. Both must parse as
-    // numbers and the wrapped file name must be non-empty, or this is not a name we wrote —
-    // some other tool's `.swap.tmp` is not ours to delete.
     let (inner, seq) = inner.rsplit_once('.')?;
     seq.parse::<u64>().ok()?;
     let (file, pid) = inner.rsplit_once('.')?;
@@ -631,8 +602,6 @@ fn sweep_temp_dirs_older_than(dir: &Path, min_age: Duration) {
 /// so a power loss immediately after a save can roll back to the previous version. That
 /// costs a save, never the file — which is the guarantee that matters here.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    // `parent()` is `Some("")` for a bare file name (write into the cwd) and `None` only for
-    // a root path — neither is a directory we can put a temp in, so fall back to the cwd.
     let dir = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
@@ -646,16 +615,12 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     let write = || -> io::Result<()> {
         let mut file = File::create(&temp)?;
         file.write_all(contents)?;
-        // The bytes must reach the disk *before* the rename publishes them; without this a
-        // crash can land the rename and lose the contents — a zero-length "new" file.
         file.sync_all()?;
-        // Closed before the rename: Windows won't rename a file that's still open.
         drop(file);
         fs::rename(&temp, path)
     };
     let res = write();
     if res.is_err() {
-        // Never strand a temp beside the real file (a failed rename leaves one behind).
         let _ = fs::remove_file(&temp);
     }
     res
@@ -750,7 +715,6 @@ mod tests {
         let path = dir.0.join("f.json");
         write_atomic(&path, b"first").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "first");
-        // Replacing is the common case (every autosave) — the rename must overwrite.
         write_atomic(&path, b"second").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "second");
         assert_eq!(dir.entries(), ["f.json"], "no temp files survive a save");
@@ -759,8 +723,6 @@ mod tests {
     #[test]
     fn write_atomic_failed_rename_strands_no_temp() {
         let dir = TempDir::new("fail-rename");
-        // A non-empty directory can't be renamed over: the temp is created and written, and
-        // the failure lands on the rename — the error path that has a temp to clean up.
         let path = dir.0.join("occupied");
         fs::create_dir(&path).unwrap();
         fs::write(path.join("inner"), "x").unwrap();
@@ -776,7 +738,6 @@ mod tests {
         let dir = TempDir::new("fail-readonly");
         let path = dir.0.join("f.json");
         write_atomic(&path, b"good").unwrap();
-        // A read-only directory fails the temp's `create` — nothing touches the target.
         fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o500)).unwrap();
         let res = write_atomic(&path, b"bad");
         fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
@@ -795,12 +756,9 @@ mod tests {
             format!("{TEMP_PREFIX}*{TEMP_SUFFIX}"),
             "the gitignore pattern must be exactly the writer's prefix/suffix"
         );
-        // A dotted target name is the normal case here (`session.json`), and the reason the
-        // pid is parsed from the right.
         let name = temp_name("session.json");
         assert!(name.starts_with(TEMP_PREFIX) && name.ends_with(TEMP_SUFFIX));
         assert_eq!(temp_pid(&name), Some(process::id()));
-        // Neither a plain file nor a foreign `.tmp` is ours to sweep.
         assert_eq!(temp_pid("session.json"), None);
         assert_eq!(temp_pid(".editor-swap.tmp"), None);
         assert_eq!(temp_pid(".session.json.notapid.0.tmp"), None);
@@ -815,11 +773,9 @@ mod tests {
         let foreign = own.wrapping_add(1);
         fs::write(dir.0.join(format!(".session.json.{foreign}.0.tmp")), b"x").unwrap();
         fs::write(dir.0.join(format!(".session.json.{own}.9.tmp")), b"x").unwrap();
-        // Neither a real file nor something else's `.tmp` is ours to delete.
         fs::write(dir.0.join("session.json"), b"{}").unwrap();
         fs::write(dir.0.join(".editor-swap.tmp"), b"x").unwrap();
 
-        // Age zero: every temp qualifies on age, so only the pid rule can spare one.
         sweep_temps_older_than(&dir.0, Duration::ZERO);
 
         assert_eq!(
@@ -862,7 +818,6 @@ mod tests {
         let foreign = own.wrapping_add(1);
         let mine = temp_dir_name();
         assert_eq!(temp_dir_pid(&mine), Some(own));
-        // Not ours to touch: a real internal table's directory, and something else's `.tmp-`.
         assert_eq!(temp_dir_pid("orders"), None);
         assert_eq!(temp_dir_pid(".tmp-notapid-0"), None);
 
@@ -875,10 +830,8 @@ mod tests {
             fs::create_dir_all(dir.0.join(name).join("nested")).unwrap();
         }
 
-        // Age zero: every spool qualifies on age, so only the pid rule can spare one.
         sweep_temp_dirs_older_than(&dir.0, Duration::ZERO);
 
-        // Sorted by `entries`: a numeric pid sorts before `notapid`, and both before `orders`.
         assert_eq!(dir.entries(), [mine.as_str(), ".tmp-notapid-0", "orders"]);
     }
 
@@ -915,7 +868,6 @@ mod tests {
             assert_eq!(parse_duration(huge), None, "{huge}");
             assert!(!is_duration(huge), "{huge}");
         }
-        // Negative and non-finite go the same way, through the same constructor.
         assert_eq!(parse_duration("-1"), None);
         assert_eq!(parse_duration("-5m"), None);
         assert_eq!(parse_duration("inf"), None);
@@ -927,24 +879,17 @@ mod tests {
     /// is exactly what a windowed byte compare would get wrong.
     #[test]
     fn matching_agrees_with_the_allocating_form_on_non_ascii() {
-        // (haystack, needle — already lowercased, as every caller hands it over).
         let cases: &[(&str, &str)] = &[
             ("CAFÉ au lait", "café"),
             ("Straße", "straße"),
             ("ÅNGSTRÖM", "ström"),
-            // U+212A KELVIN SIGN lowers to a 1-byte 'k' — three bytes become one.
             ("\u{212A}ELVIN", "kelvin"),
-            // 'İ' lowers to TWO chars ("i" + U+0307), so a needle can end mid-expansion —
-            // and a needle that skips the combining dot does *not* match, in either form.
             ("İstanbul", "i"),
             ("İstanbul", "istanbul"),
             ("İstanbul", "i\u{307}stanbul"),
-            // …and it can *begin* mid-expansion too: the allocating form searches every
-            // position of the lowered string, including the one the 'İ' expanded into.
             ("İstanbul", "\u{307}stanbul"),
             ("İ", "\u{307}"),
             ("日本語のテキスト", "本語"),
-            // Near-misses: an accent is not its bare letter, and a needle can outrun the text.
             ("cafe", "café"),
             ("é", "éé"),
             ("", "x"),
@@ -957,8 +902,6 @@ mod tests {
                 "{haystack:?} contains {needle:?}"
             );
         }
-        // The expansion cases are meant to *match* — pin that down too, so an agreeing pair
-        // of `false`s can't pass for equivalence.
         assert!(contains_lowercased("İstanbul", "i"));
         assert!(contains_lowercased("İstanbul", "i\u{307}stanbul"));
         assert!(contains_lowercased("\u{212A}ELVIN", "kelvin"));
@@ -974,8 +917,6 @@ mod tests {
     fn a_needle_can_begin_mid_expansion() {
         assert!(contains_lowercased("İ", "\u{307}"));
         assert!(contains_lowercased("İstanbul", "\u{307}stanbul"));
-        // Not a free-for-all: the dot is the *second* char of that expansion, so a needle
-        // that wants it first still has to match what follows.
         assert!(!contains_lowercased("İstanbul", "\u{307}i"));
     }
 
@@ -987,7 +928,6 @@ mod tests {
         assert!(contains_lowercased("ΟΔΟΣ", "σ"));
         assert!(contains_lowercased("ΟΔΟΣ", "ς"));
         assert!(contains_lowercased("οδος", "ς"));
-        // …which the form this replaced did not do.
         assert!(!"ΟΔΟΣ".to_lowercase().contains('σ'));
     }
 
@@ -1001,7 +941,6 @@ mod tests {
             clip("h\u{e9}llo", 3),
             Cow::Owned::<str>("h\u{e9}l\u{2026}".into())
         );
-        // Five multi-byte chars is ten bytes: a byte cap would have clipped this, chars do not.
         assert_eq!(
             clip("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}", 5),
             Cow::Borrowed("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}")

@@ -1,18 +1,9 @@
-//! The app's core **data vocabulary** — the shapes the whole app reasons in, below
-//! every layer that produces or consumes them.
+//! The app's core **data vocabulary** — the shapes the whole app reasons in, below every layer
+//! that produces or consumes them.
 //!
-//! These types used to be scattered: the schema/results types lived in `crate::engine`
-//! (which made the engine look like their owner — it isn't; a `Stat` is read from a
-//! Parquet footer *by the engine* and computed from a scan *by [`crate::profile`]*, a
-//! `ColumnInfo` is produced by the engine, stored by [`crate::project`] and rendered by
-//! the UI), the form/menu types lived in a grab-bag `state.rs`, `QueryError` was a
-//! top-level file, and `Kind` was in `util`. Consolidating them into one leaf module —
-//! depending on nothing app-specific — lets `engine`, `profile`, `project`, `runs` and
-//! the UI all depend *down* onto one vocabulary, and breaks the `engine ↔ profile`
-//! cycle the old ownership forced.
-//!
-//! The engine's *protocol* (`Command`, `Event`, `TableSpec`, `TableMeta`) deliberately
-//! stays in `crate::engine`: that's the engine's wire format, not shared vocabulary.
+//! A leaf module depending on nothing app-specific, so `engine`, `profile`, `project` and the UI
+//! all depend *down* onto one vocabulary. The engine's *protocol* (`TableSpec`, `TableMeta`) stays
+//! in `strata_core::engine`: that is the engine's wire format, not shared vocabulary.
 
 mod catalog;
 mod chart;

@@ -11,50 +11,28 @@
 //! }
 //! ```
 //!
-//! ## What it takes from rmcp, and what it deliberately doesn't
-//!
-//! The half worth copying is the **derivation**: an attribute macro on the impl block, each
-//! method's identity read off the method itself and its prose off the doc comment, so a
-//! command's id and its description are never typed twice and cannot drift from the body they
-//! describe.
-//!
-//! The half left behind is the dispatch. rmcp resolves `HashMap<name, Arc<dyn Fn>>` because an
-//! MCP client names a tool by an arbitrary string over a wire. A palette already *holds* the row
-//! the user picked, and a palette command takes no parameters at all — so this macro generates an
-//! **enum** instead, one variant per method. Two things follow, and both are the point:
-//!
-//! - **Dispatch is total by construction.** Every variant came from a method that has a body,
-//!   so there is no "registered but unrunnable" state to test for, and no way to add a command
-//!   that renders and does nothing. (rmcp's own footgun is the mirror image: a `#[tool]` outside
-//!   the `#[tool_router]` block is silently *not* registered.)
-//! - **A route is a function pointer, not a boxed closure.** Nothing is captured, so
-//!   [`ROUTES`](#the-generated-items) is a `const` slice — no allocation, no per-open build, and
-//!   none of rmcp's "hold the router or you rebuild it on every call" hazard.
+//! What it takes from rmcp is the **derivation**: identity read off the method, prose off the doc
+//! comment, so a command's id and description are never typed twice. What it leaves behind is the
+//! dispatch — rmcp resolves `HashMap<name, Arc<dyn Fn>>` because a client names a tool over a wire,
+//! while a palette already holds the row the user picked. So this generates an **enum**, which
+//! makes dispatch total by construction (no "registered but unrunnable" state) and lets a route be
+//! a function pointer in a `const` slice rather than a boxed closure.
 //!
 //! ## The contract
 //!
-//! - Every `#[command]` method is an associated fn taking **one** argument, the context every
-//!   command acts through (`fn(&Ctx)`); no receiver, since there is no service state — the
-//!   context *is* the state. Methods without `#[command]` are left alone, so helpers can share
-//!   the block.
+//! - Every `#[command]` method is an associated fn taking one argument, the context (`fn(&Ctx)`);
+//!   no receiver, since the context *is* the state. Methods without `#[command]` are left alone.
 //! - The invoking module must define a `CommandRoute` struct with exactly these fields:
 //!   `id` · `label` · `sub` · `icon` · `key` · `keywords` · `call`. Their types are the caller's
-//!   business — this crate only ever names the fields, which is what keeps it free of Strata's
-//!   vocabulary. `icon` and `key` are the two it never even inspects.
-//! - `#[command(…)]` accepts `label` (a string literal, required), `icon` (any expression,
-//!   required), `key` (any expression, optional — emitted as `Some(expr)`, else `None`) and
-//!   `keywords` (a string literal, optional — else `""`). It is **not** a macro of its own:
-//!   [`command_router`] consumes it before anything tries to resolve it, so there is nothing to
-//!   import and a `#[command]` written outside such a block is rustc's own "cannot find
-//!   attribute" — a better error than one this crate could raise, and one fewer moving part.
+//!   business — this crate only names the fields, which keeps it free of Strata's vocabulary.
+//! - `#[command(…)]` accepts `label` (string literal, required), `icon` (expression, required),
+//!   `key` (expression, optional) and `keywords` (string literal, optional). It is not a macro of
+//!   its own: [`command_router`] consumes it, so a `#[command]` outside such a block is rustc's own
+//!   "cannot find attribute".
 //!
-//! ## The generated items
-//!
-//! `Action` (one variant per command, in declaration order), with `ALL`, `route`, `id`, `label`,
-//! `sub`, `keywords` and `run`; and `ROUTES`, the `const` slice `route` indexes. `icon` and `key`
-//! are reached through `route()` rather than through accessors of their own — this crate cannot
-//! name their types, and inventing generics to carry them would be machinery in place of a field
-//! access.
+//! Generated: `Action` (one variant per command, in declaration order) with `ALL`, `route`, `id`,
+//! `label`, `sub`, `keywords` and `run`; and `ROUTES`, the `const` slice `route` indexes. `icon`
+//! and `key` are reached through `route()`, because this crate cannot name their types.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -100,9 +78,6 @@ struct Command {
 
 fn expand(block: &mut ItemImpl) -> Result<TokenStream2, Error> {
     let mut commands = Vec::new();
-    // The context type, taken from the first command's argument. The rest need no checking:
-    // every `call` field below is a `fn(&Ctx)` initializer, so a method that disagrees is a
-    // type error at the route it builds, pointing at the method that is actually wrong.
     let mut ctx: Option<Type> = None;
 
     for item in &mut block.items {
@@ -150,9 +125,6 @@ fn expand(block: &mut ItemImpl) -> Result<TokenStream2, Error> {
         quote!(Action::#variant)
     });
     let routes = commands.iter().map(|c| {
-        // No `action` field: a route already *is* its action's, since `route()` indexes `ROUTES`
-        // by the variant. Storing it back would be a second copy of the correspondence, and the
-        // only thing it could do is disagree.
         let Command {
             method,
             sub,
@@ -192,16 +164,16 @@ fn expand(block: &mut ItemImpl) -> Result<TokenStream2, Error> {
             #(#variants,)*
         }
 
-        /// Each command's metadata beside the function that performs it, in `Action`'s own
-        /// order — so `ROUTES[action as usize]` is that action's route, and there is no lookup.
+        /// Each command's metadata beside the function that performs it, in `Action`'s own order —
+        /// so `ROUTES[action as usize]` is that action's route, and there is no lookup.
         pub const ROUTES: &[CommandRoute] = &[ #(#routes,)* ];
 
         impl Action {
             /// Every command, in the order the palette offers them.
             pub const ALL: &'static [Action] = &[ #(#all,)* ];
 
-            /// This command's route — its metadata and its body. The way to reach the fields
-            /// this macro does not name accessors for (`icon`, `key`).
+            /// This command's route — and the way to reach the fields this macro names no
+            /// accessors for (`icon`, `key`).
             pub fn route(self) -> &'static CommandRoute {
                 &ROUTES[self as usize]
             }
@@ -266,10 +238,6 @@ fn parse_command(
             }
         }
     }
-    // `label` is required rather than derived from the ident, because a command's name is a
-    // human one and carries what an ident cannot ("Switch project…"). `sub` is the opposite
-    // case and *is* derived, from the doc comment, so the description of a command and the
-    // description of its body are the same string.
     let (Some(label), Some(icon)) = (label, icon) else {
         return Err(Error::new_spanned(
             attr,
@@ -300,9 +268,8 @@ fn string(value: &Expr, name: &str) -> Result<syn::LitStr, Error> {
     }
 }
 
-/// The doc comment as one line: each line trimmed, blanks dropped, joined with a space. A
-/// command's description is a row's subtext, which is a single run of text — a `\n` in it would
-/// be a line break nothing renders.
+/// The doc comment as one line: each line trimmed, blanks dropped, joined with a space. A row's
+/// subtext is a single run of text, so a `\n` in it would be a line break nothing renders.
 fn doc_line(attrs: &[Attribute]) -> String {
     let mut lines = Vec::new();
     for attr in attrs.iter().filter(|a| a.path().is_ident("doc")) {

@@ -10,35 +10,26 @@
 //! - **Header** — a tinted icon chip beside a title over its subject ([`DialogHeader`]). One chip
 //!   for every dialog; only the icon and the tone vary.
 //! - **Body** — whatever the caller passes, full width *under* the header rather than indented
-//!   beside the chip. That is the structural half of the fix: previously one dialog put its copy
-//!   in a column next to the icon and the other ran it across the card.
+//!   beside the chip.
 //! - **Action strip** — a `surface_secondary` band under a hairline, buttons end-aligned, **58px
-//!   tall**: `--sp-4` (12) above and below a [`ACTION_HEIGHT`] button row. The strip stamps that
-//!   height onto its own actions, so a dialog physically cannot ship a squashed button — and the
-//!   number itself belongs to the design system (`components::metrics::ACTION_HEIGHT`), not to this
-//!   component, because every committing button in the app wears it.
-//! - **Modal semantics** — Esc dismisses, Enter confirms, and every other key is consumed *at the
-//!   global layer*. The open/closed half — overlay, backdrop, Esc-as-close-request, the barrier —
-//!   is the shared [`Modal`] base (`components::modal`), which this component wraps its card in;
-//!   Enter is the *dialog's* semantic and lives on the card, in the slot the base deliberately
-//!   leaves open. A working panel with its own card (the Shape panel) takes the same base, so the
-//!   two cannot drift on how a modal behaves. The barrier is why dialogs mount early at the
-//!   window root: same-name global listeners fire in document order, so a dialog above the
-//!   features swallows keystrokes meant for it before ⌘W or Esc-to-cancel-the-query can act on
-//!   them.
+//!   tall**. The strip stamps [`ACTION_HEIGHT`] onto its own actions, so a dialog cannot ship a
+//!   squashed button — and that number belongs to the design system, because every committing
+//!   button in the app wears it.
+//! - **Modal semantics** — Esc dismisses, Enter confirms, every other key is consumed at the global
+//!   layer. The open/closed half is the shared [`Modal`] base, which this wraps its card in; Enter
+//!   is the *dialog's* semantic and lives on the card, in the slot the base leaves open. The
+//!   barrier is why dialogs mount early at the window root: same-name global listeners fire in
+//!   document order.
 //!
-//!   **It is not yet focus containment.** `KeyDown` (priority 4) outranks `GlobalKeyDown` (5) and
-//!   its cancel set includes `GlobalKeyDown`, so a *focused* element still sees the key first and
-//!   can cancel the dialog's handler outright — the SQL editor's `on_key_down` does exactly that
-//!   on several branches. Nothing here moves focus into the card. So with the editor focused,
-//!   keystrokes reach the buffer under the scrim. Fixing it properly means focusing the dialog on
-//!   open and restoring focus on dismiss (Freya's own `Popup` sets `a11y_role`/auto-focus); until
-//!   then, treat the barrier as covering global listeners only.
+//!   **It is not yet focus containment.** `KeyDown` outranks `GlobalKeyDown` and its cancel set
+//!   includes it, so a *focused* element sees the key first and can cancel the dialog's handler —
+//!   the SQL editor does exactly that on several branches, and nothing here moves focus into the
+//!   card. Fixing it properly means focusing the dialog on open and restoring focus on dismiss;
+//!   until then the barrier covers global listeners only.
 //!
-//! Dismiss and confirm are `EventHandler<()>` rather than the usual `Event<T>` props, because they
-//! are *outcomes*, not events: dismiss arrives from Esc **or** the backdrop, and confirm from Enter
-//! **or** the caller's own button. Freya types its own semantic actions the same way
-//! (`Popup::on_close_request`, `Menu::on_close`).
+//! Dismiss and confirm are `EventHandler<()>` rather than `Event<T>` because they are *outcomes*:
+//! dismiss arrives from Esc **or** the backdrop, confirm from Enter **or** the caller's button.
+//! Freya types its own semantic actions the same way.
 //!
 //! Mount it only while the dialog is open — it renders no "closed" state of its own.
 
@@ -199,8 +190,6 @@ impl Component for Dialog {
         let dismiss = self.on_dismiss.clone();
         let confirm = self.on_confirm.clone();
 
-        // A message-only dialog has no strip — and so no hairline either, otherwise the card ends
-        // in a rule under an empty 58px band.
         let strip = (!self.actions.is_empty()).then(|| {
             rect()
                 .width(Size::fill())
@@ -211,11 +200,6 @@ impl Component for Dialog {
                 .padding((SP_4, SP_6))
                 .background(roles.get(Role::SurfaceRaised))
                 .children(self.actions.iter().map(|action| {
-                    // The design system's action height, layered over whatever layout theme the
-                    // action arrived with, so a variant's padding and radius still apply. A
-                    // caller who set a height deliberately keeps it — the stamp is a default,
-                    // not an override, or `.compact()` would stop meaning what it means
-                    // everywhere else.
                     let layout = action.get_theme_layout().cloned().unwrap_or_default();
                     let layout = match layout.height {
                         Some(_) => layout,
@@ -227,11 +211,8 @@ impl Component for Dialog {
 
         let card = rect()
             .width(Size::px(DEFAULT_WIDTH))
-            // Never wider than the window on a small screen.
             .max_width(Size::window_percent(92.))
             .corner_radius(R_4)
-            // The modal card sits on the floating-chrome tier with every other modal
-            // (popup, palette, cell/record view) — not on the control fill.
             .background(roles.get(Role::ElevatedSurface))
             .border(Border::new().width(1.).fill(roles.get(Role::Border)))
             .shadow(
@@ -241,7 +222,6 @@ impl Component for Dialog {
                     .color(roles.get(Role::Shadow)),
             )
             .overflow(Overflow::Clip)
-            // Announced as a dialog rather than an anonymous group, like Freya's own `Popup`.
             .a11y_role(AccessibilityRole::Dialog)
             .vertical()
             .child(
@@ -259,11 +239,6 @@ impl Component for Dialog {
                     .into_element()
             }))
             .maybe_child(strip)
-            // Enter is the *dialog's* semantic, not the modal's — the base leaves the key to
-            // fall through exactly so this handler can own it. On a node **after** the body
-            // in pre-order, so a control inside it that consumed Enter first (a `Select`
-            // toggling its list) wins. Consumed either way: a dialog with no single obvious
-            // action still swallows Enter (see `on_confirm`).
             .child(
                 rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
                     if matches!(&e.key, Key::Named(NamedKey::Enter)) {
@@ -275,9 +250,6 @@ impl Component for Dialog {
                 }),
             );
 
-        // The modal semantics — overlay, key barrier, backdrop, Esc-as-close-request — are
-        // the shared base's (`components::modal`), so a confirm and a working panel cannot
-        // drift on how a modal behaves; this component keeps the confirm *card* and Enter.
         let mut modal = Modal::new(card).barrier(self.modal);
         if let Some(dismiss) = dismiss {
             modal = modal.on_close_request(dismiss);

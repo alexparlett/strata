@@ -6,47 +6,31 @@
 //! same value over stdio, and the assistant (AS-01) calls it in-process. One surface, three
 //! frontends.
 //!
-//! ## The vocabulary is methods; the tools are wrappers (AS-01)
+//! **The vocabulary is methods; the tools are wrappers.** The public methods on [`StrataTools`]
+//! *are* the ten tools — plain arguments, plain answers, no rmcp type in any signature — and the
+//! `#[tool_router]` block below them is one wrapper each, doing only what a semantic call cannot:
+//! resolving which agent the *request* is ([`Caller`]) and holding it against the idle sweep. So an
+//! in-process caller reaches the identical body, gate and messages included.
+//! [`StrataTools::manifest`] is the vocabulary as data, **derived from the router**, so there is no
+//! second list to keep in step.
 //!
-//! The file is in two halves. The public methods on [`StrataTools`] *are* the ten tools —
-//! plain arguments, plain answers, no rmcp type in any signature — and the `#[tool_router]`
-//! block below them is one wrapper each, doing only what a semantic call cannot: resolving
-//! which agent the *request* is ([`Caller`]) and holding that agent against the idle sweep.
-//! An in-process caller with no MCP peer anywhere therefore reaches the identical body, with
-//! the policy gate, the run cache, the scoping key and every message included.
+//! Three rules are enforced here and nowhere else:
 //!
-//! [`StrataTools::manifest`] is the other half of that: the vocabulary as data, **derived
-//! from the router**, so what an in-process loop offers its model is what `tools/list`
-//! advertises, with no second list to keep in step.
+//! - **The policy gate runs before dispatch.** `Engine::query` does not enforce the managed-DDL
+//!   policy — the editor simply never dispatches what validation flagged, and an agent cannot be
+//!   trusted with that discipline. `run` asks `Engine::policy_verdicts` and refuses on any
+//!   non-clean answer, an unjudgeable one included: the gate fails closed.
+//! - **A stop is not a fault.** `strata_core::engine::stopped_on_purpose` is asked once, here.
+//! - **`run` never rewrites SQL.** No injected `LIMIT`; the *response* is bounded by `page_size`
+//!   plus `read_page`.
 //!
-//! Three rules are enforced here and nowhere else, because here is the only place they can
-//! be kept honest:
-//!
-//! - **The policy gate runs before dispatch.** `Engine::query` does not enforce the
-//!   managed-DDL policy — the editor simply never dispatches what validation flagged, and
-//!   an agent cannot be trusted with that discipline. So `run` asks
-//!   `Engine::policy_verdicts` (AA-01's export of the editor's own predicate) and refuses on
-//!   any non-clean answer, including an unjudgeable one: the gate fails closed.
-//! - **A stop is not a fault.** `strata_core::engine::stopped_on_purpose` is asked once,
-//!   here, and its three strings become [`RunResult::Stopped`] rather than an error.
-//! - **`run` never rewrites SQL.** No injected `LIMIT`: the press materializes exactly what
-//!   a person's would, and the *response* is bounded by `page_size` plus `read_page`.
-//!
-//! ## One agent per client, and the request says which (AA-03b, corrected by AA-03c)
-//!
-//! A [`StrataTools`] *is* one agent: it carries a [`Connection`], which mints an [`AgentId`]
-//! and retracts it on drop, and every session-scoped answer is scoped by that id rather than
-//! by a check somebody has to remember — the AA-03 hole restated as a type, so an agent has
-//! no handle on another agent's work, nor on the user's tabs, because it never receives one.
-//!
-//! What AA-03c corrects is *where the id comes from*. A value's lifetime is the connection's
-//! on only some of the transport's paths — rmcp's stateless branch builds one service per
-//! **request** — so the id is resolved from the request through [`Caller`], and this value's
-//! own connection is used only where it has been earned. The scoping is unchanged; what
-//! changed is that it can no longer be silently wrong.
-//!
-//! `Clone` deliberately *shares* the connection (the transport clones one service across a
-//! session's requests); `connection()` is the only thing that starts a new agent.
+//! **One agent per client, and the request says which.** A [`StrataTools`] *is* one agent: it
+//! carries a [`Connection`] which mints an [`AgentId`] and retracts it on drop, and every
+//! session-scoped answer is scoped by that id rather than by a check somebody has to remember. The
+//! id is resolved from the *request* through [`Caller`], because a value's lifetime is the
+//! connection's on only some of the transport's paths — rmcp's stateless branch builds one service
+//! per request. `Clone` therefore *shares* the connection; `connection()` is the only thing that
+//! starts a new agent.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -166,21 +150,14 @@ pub const STATELESS_IDLE: Duration = Duration::from_secs(300);
 /// on the second branch: `open_query_session` mints a session under one agent and the next
 /// call cannot see it, so the feature is silently dead for that client.
 ///
-/// So the value's own agent is used only where it is *earned*, and the request says which:
+/// So the value's own agent is used only where it is *earned* — a call with no HTTP request behind
+/// it (stdio, or the in-process chat pane), and a call rmcp served on its **session** lifecycle.
+/// Anything else is stateless and falls back to the only durable thing such a client sends.
 ///
-/// - a call with no HTTP request behind it at all is stdio (AA-05) or the in-process chat
-///   pane (AA-06), where the value's lifetime genuinely **is** the connection;
-/// - a call rmcp served on its **session** lifecycle, where it is too;
-/// - anything else is stateless, and falls back to the only durable thing such a client
-///   sends.
-///
-/// **The branch is decided by rmcp's own predicate, not by `Mcp-Session-Id`.** That header
-/// looks like the discriminator and is not one: `use_session = legacy_session_mode &&
-/// is_legacy_request(…)` (`tower.rs`), and `is_legacy_request` reads the request's `_meta` and
-/// protocol version and never consults it. A client that still echoes a stale session id
-/// while sending per-request `_meta` takes the stateless branch, so keying on the header would
-/// call it `Owned` and hand it a fresh agent per request — the very bug this type exists to
-/// remove, reintroduced for exactly the client most likely to hit it.
+/// **The branch is decided by rmcp's own predicate, not by `Mcp-Session-Id`.** That header looks
+/// like the discriminator and is not one: `is_legacy_request` reads the request's `_meta` and
+/// protocol version and never consults it, so a client echoing a stale session id while sending
+/// per-request `_meta` would be called `Owned` and handed a fresh agent per request.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Caller {
     /// This value's own connection — [`Connection`], retracted by its drop.
@@ -230,16 +207,9 @@ fn peer_identity(peer: &Peer<RoleServer>) -> AgentIdentity {
 impl<C: AsRequestContext> FromContextPart<C> for Caller {
     fn from_context_part(context: &mut C) -> Result<Self, ErrorData> {
         let context = context.as_request_context();
-        // Read, never taken: `RequestMetaObject`'s own extractor swaps `_meta` out of the
-        // context, and a tool that wanted it after this one would find it emptied.
         if context.extensions.get::<Parts>().is_none() {
-            // No HTTP request behind this call at all — stdio, or in-process.
             return Ok(Caller::Owned);
         }
-        // rmcp's `uses_legacy_lifecycle`, restated over the two inputs it reads: the discover
-        // lifecycle is taken when `_meta` carries everything `2026-07-28` requires, or when
-        // the negotiated version is that new. Mirroring the predicate rather than sniffing a
-        // header is the whole point — see the type's note.
         let discover = context
             .meta
             .missing_required_keys(&ProtocolVersion::V_2026_07_28)
@@ -315,8 +285,6 @@ impl Drop for Busy {
         let Some(roster) = self.roster.take() else {
             return;
         };
-        // `lock()` rather than `unwrap()` on the guard: this runs during a drop, which may
-        // itself be an unwind, and a panic there aborts the process.
         let Ok(mut live) = roster.live.lock() else {
             return;
         };
@@ -375,9 +343,6 @@ pub struct StrataTools<H: Host> {
     connection: Arc<Connection<H>>,
 }
 
-// A manual `Clone`: the derive would demand `H: Clone`, and the whole point of the `Arc` is
-// that the host is shared, never copied. A clone is the **same** agent — see the module
-// note; `connection()` is what starts a new one.
 impl<H: Host> Clone for StrataTools<H> {
     fn clone(&self) -> Self {
         StrataTools {
@@ -433,7 +398,6 @@ impl<H: Host> StrataTools<H> {
             connection: Arc::new(Connection {
                 host: Arc::clone(&self.host),
                 agent: AgentId::new(),
-                // A connection is something that dialled in, always.
                 in_app: false,
             }),
         }
@@ -442,22 +406,17 @@ impl<H: Host> StrataTools<H> {
     /// Which [`AgentId`] this call is made under — the one place [`Caller`] is resolved — and
     /// the guard that keeps it alive for the call's duration.
     ///
-    /// A stateless caller's id is minted on first sight and kept, so the whole point of the
-    /// enum holds: the *same* client asking twice is the same agent. The [`Busy`] guard is
-    /// what stops [`retire_idle`](Self::retire_idle) reaping it out from under a call still
-    /// running — hold it for the body, and dropping it re-stamps the entry so the idle window
-    /// is measured from when the call *finished* rather than when it started.
+    /// A stateless caller's id is minted on first sight and kept, so the *same* client asking twice
+    /// is the same agent. The [`Busy`] guard stops [`retire_idle`](Self::retire_idle) reaping it
+    /// mid-call, and dropping it re-stamps the entry so the idle window is measured from when the
+    /// call finished.
     ///
-    /// **A blank stateless identity is refused the session-scoped tools.** `clientInfo` is
-    /// optional on the discover lifecycle, so pooling every un-introduced client under one
-    /// minted id would put two different processes behind one [`AgentId`] — and that id is
-    /// the whole of both isolation checks (`Agents::holds` and this value's run-cache key).
-    /// One would list, page and close the other's query sessions: the AA-03 hole, reopened by
-    /// a bucket meant for display. There is nothing to split them on, so the honest answer is
-    /// to say so and keep the project-scoped tools working. (Not "the read-only tools" —
-    /// every tool here is read-only, and two of the refused five carry `read_only_hint`. The
-    /// line is whether a tool has to know *whose* agent is asking: `list_query_sessions` and
-    /// `read_page` mean nothing without an identity, which is exactly what is missing.)
+    /// **A blank stateless identity is refused the session-scoped tools.** `clientInfo` is optional
+    /// on the discover lifecycle, and pooling every un-introduced client under one minted id would
+    /// put two processes behind one [`AgentId`] — the whole of both isolation checks — so one could
+    /// list, page and close the other's query sessions. There is nothing to split them on, so the
+    /// honest answer is to say so and keep the project-scoped tools working. The line is whether a
+    /// tool has to know *whose* agent is asking, not whether it is read-only.
     fn agent(&self, caller: &Caller) -> Result<(AgentId, Busy), AgentError> {
         let Caller::Stateless(identity) = caller else {
             return Ok((self.connection.agent, Busy::none()));
@@ -503,15 +462,6 @@ impl<H: Host> StrataTools<H> {
         let Caller::Stateless(identity) = caller else {
             return Busy::none();
         };
-        // **Held for the call, not just stamped at its start.** A stamp alone only protects the
-        // gap *between* calls: a `validate` or `list_functions` slower than the sweep interval
-        // would still look idle, because nothing re-stamps while it runs and `busy` stays zero
-        // for a tool that never resolves an `AgentId`. The sweeper would then retract the agent
-        // mid-request and tear its query sessions down under a connection that is still there.
-        //
-        // Deliberately does **not** mint. A client that has never opened a query session has no
-        // roster entry, and giving it one for a catalog read would mint an agent for a caller
-        // doing nothing an agent needs an identity for.
         let mut live = self.roster.live.lock().unwrap();
         let Some(entry) = live.get_mut(identity) else {
             return Busy::none();
@@ -540,7 +490,6 @@ impl<H: Host> StrataTools<H> {
     /// why it is called from there rather than started here.
     pub fn retire_idle(&self, ttl: Duration) {
         let now = Instant::now();
-        // Never a working agent, however long the call has taken: see [`Live::busy`].
         self.retire(|entry| entry.busy == 0 && now.duration_since(entry.seen) > ttl);
     }
 
@@ -573,8 +522,6 @@ impl<H: Host> StrataTools<H> {
                 !going
             });
         }
-        // Outside the lock: `agent_gone` reaches every window, and a host is not something to
-        // call with one of our mutexes held.
         for agent in retired {
             self.host.agent_gone(agent);
         }
@@ -620,11 +567,6 @@ impl<H: Host> StrataTools<H> {
                 seq: self.seq.fetch_add(1, Ordering::Relaxed),
             },
         );
-        // **Bounded per agent, not globally.** The map is shared by every connection, so a
-        // global cap would let one chatty client evict a peer's still-readable result — a
-        // cross-agent effect in a vocabulary whose whole point is that an agent cannot reach
-        // another's work, and one that reports itself as "run a query in it first" for a
-        // query that *was* run.
         while runs.keys().filter(|(a, _, _)| *a == agent).count() > MAX_REMEMBERED_RUNS {
             let Some(oldest) = runs
                 .iter()
@@ -660,8 +602,6 @@ impl<H: Host> StrataTools<H> {
 fn session_handle(text: &str) -> Result<QuerySessionId, AgentError> {
     Uuid::parse_str(text)
         .map(QuerySessionId)
-        // The wording is `AgentError::no_such_query_session`'s, but the handle never parsed,
-        // so there is no id to hand it — the text the caller sent is what has to be echoed.
         .map_err(|_| AgentError::NotFound(format!("No open query session '{text}'.")))
 }
 
@@ -669,41 +609,29 @@ fn session_handle(text: &str) -> Result<QuerySessionId, AgentError> {
 /// signature.
 ///
 /// Everything a tool *does* is here; the `#[tool_router]` block below is wrappers. A wrapper
-/// resolves [`Caller`] to an [`AgentId`] and a [`Busy`] guard, then delegates — so an MCP
-/// client and the in-process chat loop (AS-02) reach the same body, policy gate, run cache,
-/// scoping key and messages included, with nothing copied between them. The pattern is
-/// `open_query_session`'s, generalized: it was the one tool that already had the split,
-/// because it is the one tool with something to read off the peer.
+/// resolves [`Caller`] to an [`AgentId`] and a [`Busy`] guard, then delegates — so an MCP client
+/// and the in-process chat loop reach the same body, gate, run cache and messages.
 ///
-/// **The in-process caller is the owned case.** It holds this value's own [`Connection`], so
-/// its [`AgentId`] lives exactly as long as its mount and retracts by RAII — precisely
-/// [`Caller::Owned`]'s semantics. There is no roster entry to hold and nothing for the idle
-/// sweep to reap, which is why these bodies take no [`Busy`] guard at all, exactly as
-/// `Caller::Owned` short-circuits [`agent`](Self::agent) to [`Busy::none`].
+/// **The in-process caller is the owned case.** It holds this value's own [`Connection`], so its
+/// [`AgentId`] retracts by RAII: there is no roster entry to hold and nothing for the idle sweep to
+/// reap, which is why these bodies take no [`Busy`] guard.
 ///
-/// Answers are the wire types the tools answer with, unchanged: a facade that unwrapped them
-/// into tidier in-process shapes would be a second vocabulary, and the loop has to serialize
-/// them back for the model anyway.
+/// Answers are the wire types unchanged: a facade unwrapping them into tidier in-process shapes
+/// would be a second vocabulary, and the loop serializes them back for the model anyway.
 impl<H: Host> StrataTools<H> {
     /// **The vocabulary as data** — what a model is handed so it can ask for these tools by
     /// name.
     ///
-    /// Derived from `tool_router()`, the router that serves MCP, never a second list: a
-    /// tool added to the block below appears here with no further edit, carrying the same
-    /// name, the same doc comment and the same schemars-generated argument schema an MCP
-    /// client reads out of `tools/list`.
+    /// Derived from `tool_router()`, never a second list: a tool added to the block below appears
+    /// here with no further edit, carrying the name, doc comment and argument schema an MCP client
+    /// reads out of `tools/list`.
     ///
-    /// **Ordered by name here rather than trusted from the router**, and that is a promise
-    /// this list has to keep itself. `ToolRouter` is backed by a `HashMap`, whose iteration
-    /// order is randomized per process; `list_all` happens to sort on the way out
-    /// (rmcp 3.0.1, `handler/server/router/tool.rs`), but a manifest that inherited its order
-    /// from a dependency's listing would reorder on the day that changed — and a *model-facing*
-    /// list that reorders is not a cosmetic problem: the tool block sits at the head of every
-    /// request, so shuffling it invalidates the provider's prompt cache on every turn and
-    /// silently doubles what a conversation costs. Cheap to guarantee, expensive to discover.
+    /// **Ordered by name here rather than trusted from the router.** `ToolRouter` is a `HashMap`
+    /// and `list_all` only happens to sort on the way out, so inheriting that order would reorder
+    /// the list on the day it changed — and the tool block sits at the head of every request, so a
+    /// shuffle invalidates the provider's prompt cache every turn.
     ///
-    /// A method for the caller's sake — the answer is the same for every value of this type,
-    /// since the router *is* the vocabulary and not this value's state.
+    /// A method for the caller's sake: the router *is* the vocabulary, not this value's state.
     pub fn manifest(&self) -> Vec<ToolSpec> {
         let mut tools: Vec<ToolSpec> = Self::tool_router()
             .list_all()
@@ -849,18 +777,10 @@ impl<H: Host> StrataTools<H> {
         let session = session_handle(&params.query_session)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
 
-        // Nothing to run is refused before anything else, because the gate below cannot catch
-        // it: a blank statement parses to *zero* statements, so it draws zero refusals and
-        // reads as clean. Dispatching it would leave the user a failed run they did not make.
-        // The editor's own funnel says the same thing (`actions::press_query`: a blank buffer
-        // never runs); this is that rule where the agent path can reach it.
         if params.sql.trim().is_empty() {
             return Err(AgentError::Query("The query is empty.".into()));
         }
 
-        // The gate, before dispatch. `Err` is "could not judge" — unparseable input is never
-        // a policy pass, so it is refused here with the engine's own parse wording rather
-        // than sent on to fail downstream.
         match engine.policy_verdicts(params.sql.clone()).await {
             Err(e) => return Err(AgentError::Query(e)),
             Ok(refusals) if !refusals.is_empty() => return Err(AgentError::Policy(refusals)),
@@ -874,18 +794,12 @@ impl<H: Host> StrataTools<H> {
             .host
             .run(&project.root, agent, session, params.sql, mode, page_size)
             .await?;
-        // **After** the dispatch, never before: a run refused at the ownership gate (or lost
-        // to a window that went) never retired anything, so forgetting first would throw away
-        // the page of a result that is still there to read. An explain materializes nothing
-        // and leaves the previous result alone either way.
         if mode == RunMode::Run {
             self.forget(agent, &project.root, session);
         }
         let handle = params.query_session;
         match settled {
             Ok(Settled::Rows(output)) => {
-                // Converted once and shared: the response and every later page describe the
-                // same schema, so nothing re-walks it.
                 let cols = columns(&output.columns);
                 self.remember(
                     agent,
@@ -900,7 +814,6 @@ impl<H: Host> StrataTools<H> {
                 Ok(rows_result(handle, cols, output))
             }
             Ok(Settled::Plan(plan)) => Ok(plan_result(handle, plan)),
-            // The one place stopped-vs-failed is judged.
             Err(e) if stopped_on_purpose(&e) => Ok(RunResult::Stopped {
                 query_session: handle,
                 reason: e,
@@ -926,11 +839,6 @@ impl<H: Host> StrataTools<H> {
                 params.query_session
             )));
         };
-        // A snapshot id only means anything alongside the engine that minted it: the counter
-        // restarts at 1 on an engine restart, and the project remounts at the same root, so an
-        // id remembered across one would otherwise resolve against a *different* result — in
-        // practice whatever the user has run since. Checked before the empty-page arm too, so
-        // nothing is answered out of an entry the current engine never made.
         if last.engine != engine.id() {
             self.forget(agent, &project.root, session);
             return Err(AgentError::ResultMoved);
@@ -938,8 +846,6 @@ impl<H: Host> StrataTools<H> {
         let page = params.page.max(1);
 
         let Some(snapshot) = last.snapshot else {
-            // A run that produced no rows materialized nothing. Reporting an empty page is
-            // the truth; a "not found" would read as a lost result.
             return Ok(PageResult {
                 query_session: params.query_session,
                 columns: last.columns,
@@ -963,9 +869,6 @@ impl<H: Host> StrataTools<H> {
                 page,
                 page_size: last.page_size,
             }),
-            // Ask the engine, never its prose: a snapshot that is gone is a replaced result,
-            // anything else is a real read failure. Asked *after* the read, so the answer
-            // cannot race the dispatch that retired it.
             Err(e) => {
                 if engine.snapshot_live(snapshot) {
                     Err(AgentError::Query(e))
@@ -1013,12 +916,6 @@ impl<H: Host> StrataTools<H> {
 /// them as each tool's `description`, and [`StrataTools::manifest`] hands that same text to
 /// the assistant's model. Written for exactly that register already — terse, second person,
 /// naming the recovery — so they read the same either way.
-// `doc_markdown` is off for this block alone, and the paragraph above is the reason: these doc
-// comments are not documentation, they are the tool `description` rmcp advertises and `manifest`
-// hands to a model. A backtick clippy adds here is markup in a wire string, and it contradicts
-// both the register they are written in and AGENTS.md §3's "no backticks in user-facing text".
-// Everywhere else in this file `read_page` and friends are backticked, correctly, because there
-// they really are prose about code.
 #[allow(clippy::doc_markdown)]
 #[tool_router]
 impl<H: Host> StrataTools<H> {
@@ -1130,8 +1027,6 @@ impl<H: Host> StrataTools<H> {
         caller: Caller,
         Parameters(params): Parameters<RunParams>,
     ) -> Result<Json<RunResult>, AgentError> {
-        // Held for the whole call, dispatch included: the sweeper must not retire this agent
-        // while its query is on the engine — see `Live::busy`.
         let (agent, _busy) = self.agent(&caller)?;
         Ok(Json(self.run_as(agent, params).await?))
     }
@@ -1299,7 +1194,6 @@ mod tests {
             .await
             .unwrap();
 
-        // A client that copies the assistant's identity is still not in-app.
         let liar = dialled.connection();
         liar.open_query_session(AgentIdentity::assistant(), no_project())
             .await
@@ -1314,8 +1208,6 @@ mod tests {
         );
         assert!(opened[0].in_app, "the assistant opened first");
     }
-
-    // --- projects ---------------------------------------------------------
 
     #[tokio::test]
     async fn list_projects_names_the_open_windows() {
@@ -1344,7 +1236,6 @@ mod tests {
         assert!(text.contains("sales (/w/sales)"), "{text}");
         assert!(text.contains("ops (/w/ops)"), "{text}");
 
-        // Naming one resolves it.
         let named = tools
             .list_tables(ListTablesParams {
                 project: Some("ops".into()),
@@ -1354,8 +1245,6 @@ mod tests {
             .unwrap();
         assert!(named.entries.is_empty());
     }
-
-    // --- catalog ----------------------------------------------------------
 
     /// The catalog as the store shows it: a def the engine refused is a row with its error,
     /// not a missing row.
@@ -1430,8 +1319,6 @@ mod tests {
         assert!(functions.scalar.iter().any(|f| f.name == "json_get"));
         assert!(functions.aggregate.iter().any(|f| f.name == "count"));
         assert!(!functions.window.is_empty());
-        // The live registry is far past the detail rule, so the unfiltered answer is
-        // names-only with its total stated and the recovery named.
         assert_eq!(
             functions.total,
             functions.scalar.len() + functions.aggregate.len() + functions.window.len()
@@ -1470,8 +1357,6 @@ mod tests {
         );
     }
 
-    // --- query sessions ---------------------------------------------------
-
     #[tokio::test]
     async fn query_sessions_open_list_and_close() {
         let (_root, tools) = one_project("sessions").await;
@@ -1500,8 +1385,6 @@ mod tests {
             .query_sessions
             .is_empty());
 
-        // The handle is now stale, and the answer is the plain statement
-        // `list_query_sessions` recovers from — the same one a handle that never existed gets.
         let Err(AgentError::NotFound(_)) = tools
             .close_query_session(QuerySessionParams {
                 query_session: session,
@@ -1578,7 +1461,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Everything is stale by any measure, but the call has not finished.
         tools.retire_idle(Duration::ZERO);
         assert_eq!(
             tools.host.query_sessions(&root, agent).await.unwrap().len(),
@@ -1586,8 +1468,6 @@ mod tests {
             "a working agent survives the sweep however long it has taken"
         );
 
-        // The guard's drop re-stamps, so the window is measured from when the call finished —
-        // an immediate sweep at the real TTL must still spare it.
         drop(busy);
         tools.retire_idle(STATELESS_IDLE);
         assert_eq!(
@@ -1596,7 +1476,6 @@ mod tests {
             "and the idle window restarts when the call ends"
         );
 
-        // Only once it is genuinely idle.
         tools.retire_idle(Duration::ZERO);
         assert!(tools
             .host
@@ -1625,7 +1504,6 @@ mod tests {
             .await
             .unwrap();
 
-        // The guard is deliberately still held — this is the shutdown-mid-request case.
         tools.retire_all();
 
         assert!(
@@ -1687,8 +1565,6 @@ mod tests {
         assert!(message.contains("not-a-uuid"), "{message}");
     }
 
-    // --- run --------------------------------------------------------------
-
     #[tokio::test]
     async fn run_returns_page_one_and_the_exact_total() {
         let (_root, tools) = one_project("run").await;
@@ -1712,7 +1588,6 @@ mod tests {
             columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
             vec!["id", "name"]
         );
-        // Bounded by the page, exact in the total: no `LIMIT` was injected.
         assert_eq!(rows.len(), 2);
         assert_eq!(total, 5);
         assert_eq!((page, page_size), (1, 2));
@@ -1740,10 +1615,6 @@ mod tests {
         let engine = tools.host.engine(&root).await.unwrap();
         let ws = WsId::from(QuerySessionId(Uuid::parse_str(&session).unwrap()));
 
-        // **The claim under test**: the run landed on the *session's* workspace, not somewhere
-        // else. Proved by retiring that workspace's snapshot the way only its owner can — a
-        // newer dispatch on the same `WsId` — and watching the agent's page go with it. A run
-        // dispatched anywhere else would leave this readable.
         engine
             .query(ws, RunTag(4242), "SELECT name FROM people".into(), 10)
             .await
@@ -1802,8 +1673,6 @@ mod tests {
         }
         assert_eq!(tools.runs.lock().unwrap().len(), MAX_REMEMBERED_RUNS);
 
-        // The first session's result is gone, and reads exactly like a session that never
-        // ran; the newest is still there.
         let evicted = tools
             .read_page(ReadPageParams {
                 query_session: sessions[0].clone(),
@@ -1841,7 +1710,6 @@ mod tests {
             .await
             .unwrap();
 
-        // The other agent fills its own quota and then some.
         for _ in 0..MAX_REMEMBERED_RUNS + 4 {
             let session = open(&theirs).await;
             theirs
@@ -1894,8 +1762,6 @@ mod tests {
             .await
             .unwrap();
 
-        // The restart: the project keeps its root and gets a fresh engine, whose snapshot
-        // counter starts over at 1 — the very id the agent is holding.
         let replacement = MockProject::new("sales", &root);
         register(&replacement.engine, &root).await;
         tools.host.replace_engine(&root, replacement.engine.clone());
@@ -1982,7 +1848,6 @@ mod tests {
         assert!(logical.contains("people"), "{logical}");
         assert!(!physical.is_empty());
 
-        // Nothing was materialized, so there is nothing to page.
         let Err(AgentError::NotFound(_)) = tools
             .read_page(ReadPageParams {
                 query_session: session,
@@ -2025,8 +1890,6 @@ mod tests {
         ));
     }
 
-    // --- read_page --------------------------------------------------------
-
     #[tokio::test]
     async fn read_page_walks_the_settled_snapshot() {
         let (_root, tools) = one_project("read_page").await;
@@ -2044,7 +1907,6 @@ mod tests {
             })
             .await
             .unwrap();
-        // Page size follows the run that settled it, so paging is consistent.
         assert_eq!(page.page_size, 2);
         assert_eq!(page.total, 5);
         assert_eq!(page.rows, vec![vec![Some("5".to_string())]]);
@@ -2075,7 +1937,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Straight at the engine, on the session's own workspace — what the next run reaches.
         let engine = tools.host.engine(&root).await.unwrap();
         engine
             .query(
@@ -2124,8 +1985,6 @@ mod tests {
         assert!(page.rows.is_empty());
     }
 
-    // --- the manifest -----------------------------------------------------
-
     /// **The manifest is the router, not a copy of it.** Asserted here rather than only in
     /// `tests/facade.rs` because this is the only side of the crate boundary that can see the
     /// router at all — outside it, a manifest that had quietly become a hand-kept list would
@@ -2139,9 +1998,6 @@ mod tests {
         let mut router = StrataTools::<MockHost>::tool_router().list_all();
         let manifest = tools.manifest();
 
-        // Paired by name rather than by position, because `manifest` sorts for itself and
-        // the router's listing order is the router's business — the point of this test is
-        // that every tool crosses over intact, not that two iterators happen to agree.
         router.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(manifest.len(), router.len());
         for (spec, tool) in manifest.iter().zip(&router) {

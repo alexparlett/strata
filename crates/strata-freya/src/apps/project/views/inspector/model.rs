@@ -133,8 +133,6 @@ pub enum Inspected {
 /// a namespace, so searching both and hoping the name lands in one is how a view's column ends
 /// up wearing a table's facts.
 pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
-    // Which scan the *owner* has been asked for — a column-level question answered at the entry,
-    // because one scan covers every column at once.
     let scan = project.profile_scan(col.kind, &col.owner);
     match col.kind {
         CatalogKind::View => match project.views.iter().find(|v| v.def.name == col.owner) {
@@ -145,9 +143,6 @@ pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
                 Reg::Ready(info) => facts(col, &info.columns, FormatBadge::View, None, true, scan),
             },
         },
-        // A saved query is a stored string, not a schema — nothing can select a column of one,
-        // and the catalog never offers to. Treated as a table lookup, which finds nothing and
-        // says so, rather than as an unreachable panic.
         _ => match project.tables.iter().find(|t| t.def.name == col.owner) {
             None => Inspected::Gone(gone_owner(&col.owner)),
             Some(row) => match &row.reg {
@@ -206,23 +201,17 @@ fn facts(
 /// One list, so a fact can never appear twice and the display order stays [`FACT_ORDER`]'s.
 /// Three rules, each with a reason:
 ///
-/// - **The scan's row count wins**, and applies to a nested field too (a struct still holds one
-///   value per row). Not merely a fallback for the sources that report none — every CSV and every
-///   view — because the completeness bar *divides* the null count by it, and a bar built from a
-///   footer numerator over a scanned denominator is two reads pretending to be one. The scan
-///   counted both, in a single pass.
-/// - **So `Nulls` follows `rows`.** It is the one key where free does *not* win a tie: the
-///   scan's count is the one that pairs with the scan's row count. And where the scan described
-///   the column but reported no null count at all, a free one is dropped rather than divided by a
-///   denominator it never belonged to.
-/// - **A nested field takes nothing else.** Only top-level columns are profiled and the profile
-///   is keyed by their names, so a lookup by leaf name would hand `address.city` the facts of an
-///   unrelated top-level `city`. Refused outright rather than guessed at.
-/// - **Otherwise free wins a tie, unless the free value is a bound.** The footer's fact cost
-///   nothing and is what the source itself said; but a Parquet footer truncates long strings
-///   routinely, and showing `~Radia Perl` when the scan computed the whole value is exactly the
-///   bound-as-fact this panel exists to avoid — so an *inexact* free stat yields to the computed
-///   one.
+/// - **The scan's row count wins**, nested fields included. Not merely a fallback for the sources
+///   that report none, because the completeness bar *divides* the null count by it and a footer
+///   numerator over a scanned denominator is two reads pretending to be one.
+/// - **So `Nulls` follows `rows`** — the one key where free does not win a tie. Where the scan
+///   described the column but reported no null count, a free one is dropped rather than divided by
+///   a denominator it never belonged to.
+/// - **A nested field takes nothing else.** The profile is keyed by top-level names, so a lookup by
+///   leaf name would hand `address.city` the facts of an unrelated top-level `city`.
+/// - **Otherwise free wins a tie, unless the free value is a bound.** A Parquet footer truncates
+///   long strings routinely, and showing `~Radia Perl` when the scan computed the whole value is
+///   the bound-as-fact this panel exists to avoid.
 pub fn with_scan(mut facts: ColumnFacts, profile: &CatalogProfile) -> ColumnFacts {
     facts.rows = Some(profile.rows);
     if facts.child {
@@ -233,7 +222,6 @@ pub fn with_scan(mut facts: ColumnFacts, profile: &CatalogProfile) -> ColumnFact
     };
     for stat in scanned {
         match facts.stats.iter().position(|s| s.key == stat.key) {
-            // `Nulls` and any free *bound* yield to the computed value — see above.
             Some(i) if stat.key == StatKey::Nulls || !facts.stats[i].exact => {
                 facts.stats[i] = stat.clone();
             }
@@ -436,7 +424,6 @@ fn fill_label(filled: f64) -> String {
     } else if pct < 0.05 {
         "<0.1%".to_string()
     } else if !(10.0..99.5).contains(&pct) {
-        // Under 10%, and in the band `{:.0}` would round to 100.
         format!("{pct:.1}%")
     } else {
         format!("{pct:.0}%")
@@ -491,8 +478,6 @@ mod tests {
     /// As the inspector's own tests build one — through the engine's `column_info`, so a
     /// fixture's dtype, kind and chart role are one Arrow type's answers rather than three.
     fn col(name: &str, dtype: DataType, stats: Vec<Stat>) -> ColumnInfo {
-        // Derive the row, then attach the facts — the order production uses (`free_stats` fills
-        // `stats` on an already-derived column), rather than a struct update over a derived value.
         let mut column = column_info(&Field::new(name, dtype, true));
         column.stats = stats;
         column
@@ -825,8 +810,6 @@ mod tests {
         assert_eq!(completeness(&facts), None, "nothing to divide by");
     }
 
-    // --- the scan tier (P3-09) ---------------------------------------------------------
-
     /// A settled scan of an entry: `rows` scanned, and facts per **top-level** column name.
     fn scan(rows: u64, cols: &[(&str, Vec<Stat>)]) -> CatalogProfile {
         CatalogProfile {
@@ -1022,8 +1005,6 @@ mod tests {
         assert_eq!(facts.rows, Some(2_413_118));
         assert_eq!(completeness(&facts).map(|f| f.nulls), Some(147_200));
 
-        // The files were rewritten under the row: the scan counts a million rows and 100,000
-        // nulls, while the footer still remembers 147,200 of 2,413,118.
         let scanned = with_scan(
             facts.clone(),
             &scan(
@@ -1039,8 +1020,6 @@ mod tests {
         );
         assert_eq!(fill.label(), "90%");
 
-        // And a scan that describes the column without counting its nulls draws nothing: the
-        // footer's count belongs to a row count this one has replaced.
         let no_nulls = with_scan(
             facts,
             &scan(1_000_000, &[("amount", vec![stat(StatKey::Distinct, "7")])]),
@@ -1063,7 +1042,6 @@ mod tests {
         assert_eq!(ago(45 * 60), "scanned 45 min ago");
         assert_eq!(ago(3 * 3600), "scanned 3 h ago");
         assert_eq!(ago(50 * 3600), "scanned 2 d ago");
-        // A clock that has gone backwards reads as fresh, never as a negative age.
         assert_eq!(
             scan_age(SystemTime::now() + Duration::from_secs(600)),
             "scanned just now"
@@ -1091,9 +1069,6 @@ mod tests {
             ">99.9%",
             "a column with nulls can never read 100%"
         );
-        // **The band a plain `{:.0}` rounds straight into "100%".** One null in 500 rows is
-        // 99.8% full, and saying "100%" there is the panel's whole honesty rule broken by a
-        // format specifier — the `>99.9%` guard alone does not cover it.
         for (nulls, rows, expected) in [
             (1.0, 1000.0, "99.9%"),
             (1.0, 500.0, "99.8%"),

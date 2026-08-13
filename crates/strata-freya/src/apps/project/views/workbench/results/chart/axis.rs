@@ -61,15 +61,10 @@ impl Categories {
         if !at.iter().all(|v| v.is_finite()) || !at.windows(2).all(|w| w[0] < w[1]) {
             return None;
         }
-        // The tightest gap, so a mark drawn with a slot's width can never overlap its
-        // neighbour.
         let slot = at
             .windows(2)
             .map(|w| w[1] - w[0])
             .fold(f64::INFINITY, f64::min);
-        // The same half-slot of air `indexed` leaves, so a mark at either extreme is drawn
-        // whole — and so switching a settled table between bar (always indexed) and line
-        // (placed where the positions allow) does not visibly move the data.
         let span = (at[0] - slot / 2.)..(at[n - 1] + slot / 2.);
         Some(Self { at, slot, span })
     }
@@ -121,8 +116,6 @@ impl Ranged for Categories {
         self.span.clone()
     }
 }
-
-// ---- the value axis ----
 
 /// The value axis a cartesian mark is built on: linear, or logarithmic when the user asked for
 /// one and the data can carry it.
@@ -217,9 +210,6 @@ pub fn log_span(values: impl Iterator<Item = f64>) -> Option<Range<f64>> {
     let ceil = 10f64.powf(high.log10().ceil());
     let mut start = if floor < low { floor } else { floor / 10. };
     let mut end = if ceil > high { ceil } else { ceil * 10. };
-    // The same guard the linear axis needs, for the same reason: plotters derives key points by
-    // dividing a span down, and a non-finite or inverted one never terminates. A value near
-    // `f64::MAX` is what rounds a decade up to infinity, so it keeps the data's own bound.
     if !(start.is_finite() && start > 0.) {
         start = low;
     }
@@ -227,17 +217,8 @@ pub fn log_span(values: impl Iterator<Item = f64>) -> Option<Range<f64>> {
         end = high;
     }
     if end <= start {
-        // One decade at the very top of f64's range: there is no decade above the data to
-        // round out to, so the axis takes the one below it instead.
         start = (end / 10.).max(f64::MIN_POSITIVE);
     }
-    // **A log axis is bounded by its ratio, not its difference** — and an unbounded ratio is a
-    // hang, not a bad-looking axis. `LogCoord::key_points` takes `((end/start).ln()/ln(base))`
-    // as a bold-tick count and then loops `while max_points < count / cnt { cnt += 1 }`; a
-    // column holding both 1e-300 and 1e300 overflows that division to infinity, `as usize`
-    // saturates it to `usize::MAX`, and the loop runs ~3.7e18 times on the render thread. The
-    // caller falls back to a linear axis, which is the same non-blocking degradation a
-    // non-positive value takes.
     if !(end / start).is_finite() {
         return None;
     }
@@ -311,9 +292,6 @@ pub fn ticks(range: &Range<f64>) -> impl Fn(&f64) -> String {
     move |v| match unit {
         Some((unit, suffix)) => {
             let scaled = v / unit;
-            // A tick smaller than a tenth of the unit has no abbreviated form: `20 / 1000`
-            // rounds to `0.0`, which prints as `0k` — and `-20` as `-0k`, which is not a
-            // number at all. Below the unit's own resolution, write the tick out.
             if scaled.abs() < 0.1 {
                 return plain(*v);
             }
@@ -344,19 +322,14 @@ pub fn plain(v: f64) -> String {
         };
         return format!("{sign}{}", fmt_int(magnitude as u64));
     }
-    // Two places from the first significant digit down, so 1.239 is `1.24` and 0.0031 is
-    // `0.0031` rather than `0`.
     let places = if magnitude >= 1. {
         2
     } else {
-        // How many zeros sit between the point and the first significant digit.
         let leading_zeros = (-magnitude.log10().floor()) as usize;
         (leading_zeros + 1).min(MAX_TICK_PLACES)
     };
     let text = format!("{v:.places$}");
     let trimmed = text.trim_end_matches('0').trim_end_matches('.');
-    // A value too small for any fixed notation would round to a bare `0`, which is the very
-    // mislabelling this arm exists to avoid — say it in exponent form instead.
     if trimmed.trim_start_matches('-') == "0" {
         return format!("{v:e}");
     }
@@ -441,8 +414,6 @@ mod tests {
             "every gridline of an axis has to carry its own number"
         );
 
-        // A tick below a tenth of the unit has no abbreviated form — `20 / 1000` rounds to
-        // `0.0`, which printed as `0k`, and `-20` as `-0k`, which is not a number.
         let wide_span = ticks(&(-1_000.0..1_000.0));
         assert_eq!(wide_span(&20.), "20");
         assert_eq!(wide_span(&-20.), "-20");
@@ -476,7 +447,6 @@ mod tests {
         assert_eq!(plain(-0.0031), "-0.0031");
         assert_eq!(plain(0.000_08), "0.00008");
         assert_eq!(plain(1.239), "1.24");
-        // Past what fixed notation can hold, it says so rather than reading as zero.
         assert_eq!(plain(1e-20), "1e-20");
         for v in [0.5, 0.025, 0.0031, 0.000_08, 1e-20] {
             assert_ne!(plain(v), "0", "{v} must not caption a gridline as zero");
@@ -502,11 +472,9 @@ mod tests {
     fn a_log_span_covers_its_data_in_whole_decades() {
         assert_eq!(log_span([3., 40., 900.].into_iter()), Some(1.0..1000.0));
         assert_eq!(log_span([0.05, 0.4].into_iter()), Some(0.01..1.0));
-        // One value still gets a decade to sit in rather than a span of nothing.
         let one = log_span([7.].into_iter()).expect("a single value has a decade");
         assert!(one.start < 7. && one.end > 7., "{one:?}");
 
-        // Zero, the negatives and the non-finite have no logarithm and are simply not in it.
         assert_eq!(log_span([-4., 0., 25.].into_iter()), Some(10.0..100.0));
         assert_eq!(log_span([-4., 0.].into_iter()), None);
         assert_eq!(log_span([f64::NAN, f64::INFINITY].into_iter()), None);
@@ -554,7 +522,6 @@ mod tests {
     fn a_span_whose_ratio_overflows_is_no_log_axis_at_all() {
         assert_eq!(log_span([1e-300, 1e300].into_iter()), None);
         assert_eq!(log_span([f64::MIN_POSITIVE, f64::MAX].into_iter()), None);
-        // Wide, but a ratio f64 can still hold — that one is drawn.
         assert!(log_span([1e-150, 1e150].into_iter()).is_some());
     }
 
@@ -569,7 +536,6 @@ mod tests {
         assert_eq!(decade(1e9), "1B");
         assert_eq!(decade(0.01), "0.01");
 
-        // The same axis carries all of them, which is what a per-axis unit could not do.
         let span = log_span([1., 1e9].into_iter()).expect("a nine-decade span");
         let label = ValueCoord::log(span).tick_label();
         assert_eq!(

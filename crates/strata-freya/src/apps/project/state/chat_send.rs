@@ -4,35 +4,24 @@
 //! The window's half of AS-02: everything about *running* a turn is the assistant's, and
 //! everything about what this project's conversation is pointing at is here.
 //!
-//! ## What the funnel does, in order
+//! The funnel, in order: resolve the pinned anchors a store can answer **on the render thread**
+//! (one map lookup each); record the question in the transcript, so it is on screen before anything
+//! network-shaped happens; then spawn one task, which resolves the anchors needing a tool round,
+//! reads the API key **off** the render thread, starts the turn and drains its events into
+//! [`Chats::fold`].
 //!
-//! 1. Resolve the pinned anchors that can be read from a store — a tab's SQL now, a saved
-//!    query's text — **on the render thread**, because they are one map lookup each.
-//! 2. Record the question in the transcript, so the message is on screen before anything
-//!    network-shaped happens.
-//! 3. Spawn one task, which resolves the anchors that need a tool round (a table's schema),
-//!    reads the API key **off the render thread**, starts the turn, and drains its events into
-//!    [`Chats::fold`].
+//! **The key is read on a worker and lives as long as the request** — `strata_core::secret`'s own
+//! rule. The pane never holds a key at all: it hands the reference to the task, which resolves it
+//! on a thread and passes it straight into the [`Selection`].
 //!
-//! ## The key is read on a worker and lives as long as the request
+//! **Cancel is dropping the task.** `Running` carries `tokio_util`'s drop guard, so the future
+//! going away *is* the cancel and the in-flight tool's engine abort. [`Chats::stop`] cancels and
+//! marks the reply stopped, because the turn's own `Settled(Cancelled)` is what was just dropped.
 //!
-//! `strata_core::secret`'s own rule: config holds a [`SecretRef`], the keystore call blocks, and
-//! the value is read per use rather than cached. The pane never holds a key at all — it hands
-//! the reference to the task, which resolves it on a thread and passes it straight into the
-//! [`Selection`].
-//!
-//! ## Cancel is dropping the task
-//!
-//! `Running` carries `tokio_util`'s drop guard, so the future going away *is* the turn's cancel
-//! and the in-flight tool's engine abort. [`Chats::stop`] cancels the task and marks the reply
-//! stopped, because the turn's own `Settled(Cancelled)` is exactly what was just dropped.
-//!
-//! ## A second send is refused, not queued
-//!
-//! A conversation with a turn in flight has a **stop** where its send was, so the only way here
-//! is a race between the press and the settle. Refusing is the honest answer: replacing the
-//! running task would silently cancel a turn the user never stopped, and queueing would send a
-//! question against a conversation the model has not finished writing.
+//! **A second send is refused, not queued.** A conversation with a turn in flight shows a stop
+//! where its send was, so the only way here is a race with the settle — and replacing the running
+//! task would silently cancel a turn the user never stopped, while queueing would send a question
+//! against a conversation the model has not finished writing.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -97,7 +86,6 @@ pub fn seed_pick(ai: &Ai) -> Pick {
         provider,
         model: match provider {
             Some(_) => ai.default_model.trim().to_string(),
-            // A model without the provider that serves it is not a pick.
             None => String::new(),
         },
         effort: provider.and(ai.default_effort),
@@ -198,17 +186,12 @@ pub fn send(
         return false;
     }
 
-    // The two halves of the selection that come from config: where the provider is, and the
-    // reference to the key. The **reference**, never the secret — it is resolved on the worker
-    // below, and lives exactly as long as the request.
     let setup = pick.provider.and_then(|kind| ai.setup(kind));
     let base_url = setup
         .map(|setup| setup.base_url.trim().to_string())
         .filter(|url| !url.is_empty());
     let key: Option<SecretRef> = setup.and_then(|setup| setup.key.clone());
 
-    // Anchors a store can answer, read now: the tab's text as it stands at the press, and the
-    // saved query's own SQL.
     let (ready, wanted) = split_anchors(&pinned, stores);
 
     let chips = pinned.iter().map(Anchor::label).collect();
@@ -218,18 +201,11 @@ pub fn send(
     let scope = ctx.scope.clone();
     let root = stores.project.read().root.clone();
     let task: TaskHandle = spawn_forever(async move {
-        // The anchors that need a tool round. Asked through the assistant's own vocabulary, so
-        // a pinned table is described by exactly the tool the model would have called — and the
-        // round it saves is one the model would otherwise spend on a fact already on screen.
         let mut context = ready;
         for (name, kind) in wanted {
             let described = tools
                 .describe_table(DescribeTableParams {
                     name: name.clone(),
-                    // **Scoped, like the model's own calls.** Left unset, `describe_table`
-                    // resolves against every registered window, so with two projects open this
-                    // pre-round comes back `Ambiguous` and the pin attaches an error naming the
-                    // other project instead of the schema.
                     project: scope.project.clone(),
                     ..DescribeTableParams::default()
                 })
@@ -237,22 +213,14 @@ pub fn send(
             let body = match described {
                 Ok(result) => serde_json::to_string_pretty(&result)
                     .unwrap_or_else(|e| format!("This table could not be described: {e}")),
-                // The taxonomy's own words. A pin the catalog can no longer answer for is worth
-                // saying out loud: the alternative is a question that reads as if the schema
-                // were attached when it was not.
                 Err(e) => format!("This table could not be described: {e}"),
             };
             context.push(ContextBlock {
-                // Named as what it is: one tool answers for both, and telling the model a view
-                // is a table is telling it something untrue about the user's catalog.
                 label: format!("{} '{name}'", noun(kind)),
                 body,
             });
         }
 
-        // The keystore read, on a thread. A `SecretRef` that resolves to nothing is not an
-        // error — it means no key is set, which the provider table then answers for the kind in
-        // its own words (its environment variable, or a refusal naming it).
         let api_key = match key {
             Some(reference) => offload(move || reference.get().ok().flatten())
                 .await
@@ -275,25 +243,10 @@ pub fn send(
             settled |= matches!(event, TurnEvent::Settled(_));
             chats.write().fold(id, event);
         }
-        // **A stream that ends without settling still settles the conversation.** `Settled` is
-        // normally the last event, but it does not arrive if the turn's task is dropped by the
-        // assistant's own shutdown — and then `running` would stay set forever: the composer
-        // would show Stop instead of Send and refuse every later question in this conversation.
-        // `Running::settle` is the one that answers for a task that did not report.
         if !settled {
             let outcome = running.settle().await;
             chats.write().settle(id, outcome);
         }
-        // **The conversation is stored at the turn boundary** (AS-07), and this is the boundary:
-        // AS-02 commits the turn's messages to the model's memory *before* it emits `Settled`,
-        // so by the time that fold returned both lists were complete and agreed. A per-delta
-        // write would be a file rewrite several times a second for nothing.
-        //
-        // **Still inside the turn**, which is what makes it safe. This task is root-scoped so a
-        // backgrounded conversation keeps streaming, and the only thing that stops a root task
-        // writing state its subtree has since dropped is `Chats::stop_all` — which reaches it
-        // through `Chat::running`. So the handle is released *after* the write, by `finish`,
-        // rather than by the settle: a turn is not over until its record is on disk.
         store(&root, chats, report, id).await;
         chats.write().finish(id);
     });
@@ -311,17 +264,9 @@ pub async fn store(root: &Path, mut chats: ChatsCtx, report: ReportCtx, id: Chat
         return;
     };
     let root = root.to_path_buf();
-    // **The write is offloaded and the reporting is not.** `ReportCtx` holds this window's
-    // reactive handles, which are not `Send` — so the worker does the file and the outcome is
-    // reported back here, where the log and the fault store live. `offload` answers `None` only
-    // when the work never ran at all: the worker thread could not start, or it panicked.
     let Some(outcome) = offload(move || chat_store::write(&root, &doc)).await else {
         return;
     };
-    // **Cleared only once it has landed.** Clearing before the await loses the conversation
-    // outright when the write is cancelled — the teardown pass writes `dirty` ones, and a chat
-    // marked clean by a write that never finished is one it then skips. Safe on the far side
-    // because the turn holds `Chat::running` until this returns, so `stop_all` can still reach it.
     if persisted(report, ProjectFile::Chats, || outcome) {
         if let Some(chat) = chats.write().get_mut(id) {
             chat.dirty = false;
@@ -375,15 +320,10 @@ pub fn discard(mut chats: ChatsCtx, root: PathBuf, report: ReportCtx, key: RowKe
     let Some(uuid) = uuid else {
         return;
     };
-    // **Scope-bound**, like `clear_history`'s own writer: this task writes `report`'s satellites
-    // after an await, and a root-scoped one would still be holding them if the subtree went away
-    // in between (a re-root, an engine restart). `spawn` is dropped with the scope instead.
     spawn(async move {
         let Some(outcome) = offload(move || chat_store::forget_chat(&root, &uuid)).await else {
             return;
         };
-        // **Recorded after it landed**, on the catalog drop's own rule: a line written before the
-        // write says a thing happened that the store may then contradict.
         if persisted(report, ProjectFile::Chats, || outcome) {
             log_event(
                 report.log,
@@ -436,16 +376,12 @@ pub fn open_stored(
     let tools = ctx.tools.clone();
     let scope = ctx.scope.clone();
     let shed_root = root.clone();
-    // Scope-bound for `discard`'s reason: everything after the read writes this subtree's state.
     spawn(async move {
         let Some(read) = offload(move || chat_store::load(&root, &id)).await else {
             return;
         };
         let read = match read {
             Ok(Some(read)) => read,
-            // A row whose file has gone, or that this build cannot use, resolves to nothing —
-            // `load` has already said so in the log, and there is nothing the user can do about
-            // it from here.
             Ok(None) => return,
             Err(e) => {
                 tracing::error!("open conversation: {e}");
@@ -513,8 +449,6 @@ async fn recheck_offers(
                 .diagnostics
                 .iter()
                 .any(|d| matches!(d.severity, SeverityWire::Error)),
-            // The project could not be resolved at all. Not a fault of the statement, so the
-            // card is left as it is rather than retired on a question that was never answered.
             Err(_) => true,
         };
         if !holds {
@@ -553,8 +487,6 @@ fn split_anchors(
                 let Some(sql) = stores.session.read().tabs.get(id).map(QueryTab::text) else {
                     continue;
                 };
-                // The error is the surface's, captured when it pinned the tab: a run's failure
-                // lives in that run's own query entry, which no store here can read.
                 let body = match error {
                     Some(why) => format!("{sql}\n\nThis query failed with:\n{why}"),
                     None => sql,

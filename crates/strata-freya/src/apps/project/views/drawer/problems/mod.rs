@@ -118,8 +118,6 @@ impl Component for ScopeStrip {
         let tones = tones();
 
         let scope = layout.read().layout.problems_tab;
-        // Both counts every render, because the strip labels *both* tabs — the whole point of a
-        // scope strip is telling you there is something in the one you are not looking at.
         let queries = session.read().error_count();
         let _ = connections.read();
         let _ = views.read();
@@ -364,7 +362,6 @@ mod tests {
         let (mut runner, _) = runner(faults, Some("No files found"));
         settle(&mut runner);
 
-        // One write fault + one refused def, while the Queries scope has none.
         assert!(
             texts(&runner).iter().any(|t| t == "2"),
             "expected the Project tab to show 2: {:?}",

@@ -108,9 +108,6 @@ pub struct Project {
 
 impl Component for Project {
     fn render(&self) -> impl IntoElement {
-        // `ProjChan::Connections`, `Tables` and `Views` are the three channels a registration
-        // answer lands on; the pane and catalog rows already subscribe to exactly these, so a
-        // def flipping to `Failed` wakes this list at the same moment it wakes its row.
         let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
@@ -142,27 +139,17 @@ impl Component for Project {
 /// One project problem: the error glyph, `subject — why`, a button that copies it, and the tag
 /// that says which kind it is.
 ///
-/// **The message wraps**, and this is the surface that gets to. Everywhere else a refusal appears
-/// it is one line in something narrow — a catalog row's triangle, a connection row's tooltip — so
-/// each of those was clipping the engine's sentence at whatever the width allowed. That is not a
-/// smaller version of the message: `object_store` writes "Received redirect without LOCATION,
-/// this normally indicates an incorrectly configured region", and a cut at the comma keeps the
-/// symptom and throws away the diagnosis. One place has to render the whole thing, and a drawer
-/// that is already a list of faults is it. So this row has no fixed height and no ellipsis, and
-/// the two above it now point here rather than paraphrasing.
+/// **The message wraps**, and this is the surface that gets to. Everywhere else a refusal is one
+/// line in something narrow, clipping the engine's sentence — and a cut at the comma keeps the
+/// symptom while throwing away the diagnosis. One place has to render the whole thing, so this row
+/// has no fixed height and no ellipsis, and the narrow surfaces point here rather than paraphrase.
 ///
-/// **Copy, because a message worth reading is a message worth pasting** — into a search, an
-/// issue, a message to whoever administers the bucket. `Body` is not selectable text, so without
-/// a button the words are legible and still unreachable.
+/// **Copy, because a message worth reading is a message worth pasting.** `Body` is not selectable
+/// text, so without a button the words are legible and still unreachable.
 ///
-/// **Not pressable**, unlike a Queries row. That row jumps to the tab that owns it; these have no
-/// single place to go — a registration failure's fix is the Configure window *or* a re-scan
-/// depending on why it failed, and a write fault's fix is outside the app entirely. Offering a
-/// press that lands somewhere unhelpful is worse than not offering one (P4-15 leaves the retry
-/// action to its own pass, since the session writer's retry has to go through the autosave hook
-/// rather than around it, or it writes away the window geometry). It is also what lets the copy
-/// button exist at all: a `Button` inside a pressable parent fires both (AGENTS.md §3), which is
-/// why the Queries row wraps but has no button.
+/// **Not pressable**, unlike a Queries row, which jumps to the tab that owns it: these have no
+/// single place to go, and a press that lands somewhere unhelpful is worse than none. It is also
+/// what lets the copy button exist at all, since a `Button` inside a pressable parent fires both.
 #[derive(PartialEq)]
 struct ProjectRow {
     row: ProjectProblem,
@@ -176,14 +163,9 @@ impl Component for ProjectRow {
 
         rect()
             .width(Size::fill())
-            // **No fixed height.** `ROW_HEIGHT` is still every other row's, and still this row's
-            // when its message fits on one line — but it is a floor here rather than the answer,
-            // because the message is what decides how tall the row is.
             .min_height(Size::px(ROW_HEIGHT))
             .horizontal()
             .content(Content::Flex)
-            // `Start`, not `Center`: on a wrapped message the glyph, the button and the tag
-            // belong on the message's *first* line, not floated to the middle of a paragraph.
             .cross_align(Alignment::Start)
             .spacing(SP_3)
             .padding((ROW_INSET, PAD))
@@ -198,16 +180,6 @@ impl Component for ProjectRow {
                 text,
                 color: self.theme.meta_color,
             })
-            // A **badge**, not dim trailing text. The tag classifies the row — it is what tells a
-            // def the engine refused apart from a file that will not save — so it is a fact, not
-            // the incidental annotation `meta_color` dresses elsewhere in this drawer (an Events
-            // timestamp, a Queries `line L:C`). As plain `Path` on `meta_color` it resolved to
-            // `text.disabled` at **2.15:1** against the drawer, under the 3:1 floor at any
-            // size and illegible at mono 400 11.
-            //
-            // `Badge::value` is the role History's line-count pill already uses, and the tint it
-            // derives from its foreground is what makes a small marker read — the same reason
-            // that pill is legible on a tone this one could not carry as bare text.
             .child(Badge::value(self.row.tag.label(), self.theme.value_color))
     }
 }
@@ -243,9 +215,6 @@ impl Component for CopyProblem {
             .width(Size::px(COPY_EXTENT))
             .height(Size::px(COPY_EXTENT))
             .on_press(move |_: Event<PressEventData>| {
-                // The app's one clipboard stack. Fire and forget, like every other copy here: a
-                // failed write is a warning, not a dialog about something the user will press
-                // again.
                 if let Err(err) = Clipboard::set(text.clone()) {
                     tracing::warn!("problem copy failed: {err:?}");
                 }

@@ -8,44 +8,30 @@
 //!                      SegmentedToggle, …
 //! ```
 //!
-//! **One [`Row`], not one per window.** A row's three presentation choices — how the label is
-//! set, how its explanation is shown, how rows are separated — always move together, so they
-//! are a [`Variant`] on the *form*, provided through context and read by every row under it.
-//! A caller that had to restate the register on each row would eventually get one out of step,
-//! which is the same reasoning `SegmentedToggle` puts its variant on the pill.
+//! **One [`Row`], not one per window.** A row's three presentation choices — how the label is set,
+//! how its explanation is shown, how rows are separated — always move together, so they are a
+//! [`Variant`] on the *form*, read from context by every row under it. A caller restating the
+//! register per row would eventually get one out of step.
 //!
 //! - [`Form::new`] — the **fields** register: an uppercase eyebrow label, its explanation on a
 //!   hover ⓘ, rows separated by a gap. The export window and the config modal.
-//! - [`Form::preferences`] — the **preferences** register: a sentence-case title, its
-//!   explanation as inline subtext, rows separated by rules. The Settings window's panes.
+//! - [`Form::preferences`] — the **preferences** register: a sentence-case title, its explanation
+//!   as inline subtext, rows separated by rules. The Settings window's panes.
 //!
-//! A row can also be **addressed**: [`Row::anchor`] names it, and something outside the form —
-//! the Settings window's search (P4-09) — asks for it by that name through [`Reveal`], which is
-//! the row scrolling itself into view and flashing once. See [`reveal`].
+//! A row can also be **addressed**: [`Row::anchor`] names it, and the Settings search asks for it
+//! through [`Reveal`], which scrolls the row into view and flashes it once.
 //!
-//! The registers exist because the design settled them separately: it swept every inline
-//! explainer in the app into a hover tip, and then its **"Settings consistency pass"** swept
-//! that window's four back out — "settling on subtext everywhere, since every non-toggle
-//! setting already used it" — and made its panes uniform divider-separated rows. So the split
-//! is a decision to preserve, not a fork to merge; but it is *one* axis on one component, not
-//! two components.
+//! The two registers are a decision the design settled separately, not a fork to merge — but they
+//! are one axis on one component, not two components.
 //!
-//! ## Known divergences
+//! **Known divergences**, named here and reachable from a call site rather than averaged into a
+//! middle value:
 //!
-//! Where the canvases disagree and the difference is real, it is named here and reachable from
-//! a call site — never averaged into a middle value, and never hidden inside a type:
-//!
-//! - **Where a `Switch` sits.** A preferences row puts it at the row's trailing edge with the
-//!   label block as a second press target; a fields row stacks it under the label like any
-//!   other control. That is [`Row::trailing`] — an explicit per-row choice, because it is the
-//!   one presentation the two canvases genuinely disagree about *within* a register (nothing
-//!   says a fields row may never want it).
-//! - **The gap between a label and its control** — [`LABEL_GAP`] in the fields register,
-//!   [`CONTROL_GAP`] in preferences, because a title-plus-subtext block needs more air under
-//!   it than a single eyebrow line.
+//! - **Where a `Switch` sits** — [`Row::trailing`], an explicit per-row choice, because it is the
+//!   one presentation the canvases disagree about *within* a register.
+//! - **The gap between a label and its control** — [`LABEL_GAP`] against [`CONTROL_GAP`], because a
+//!   title-plus-subtext block needs more air under it than a single eyebrow line.
 //! - **The gap between rows** — [`ROW_GAP`] against [`RULE_GAP`] either side of a rule.
-//!
-//! Each is one constant here when the design settles it.
 
 mod field;
 mod options;
@@ -62,9 +48,6 @@ pub use options::{Choice, Control, Group, Make, OptionList, TextField};
 pub use reveal::{Reveal, RevealScroll};
 pub use row::{Note, Row};
 
-// `%[no_ext]`: the form's dress is read by its pieces (the form, its rows, its fields) rather
-// than by one component, so there is no type for the generated `…ThemePartialExt` builder to
-// hang off.
 define_theme!(
     %[no_ext]
     %[component]
@@ -98,11 +81,6 @@ define_theme!(
         reveal_background: Color,
     }
 );
-
-// The single-character field rule (`\t`, `\n`, a literal backslash, or one plain character) used
-// to live here, shared by the export and Configure windows. It is `strata_core::util::one_char`
-// now: a typed `CREATE EXTERNAL TABLE`'s `OPTIONS` resolves a delimiter the same way (ED-10), and
-// the engine cannot import from the forms layer. The two windows import it from there directly.
 
 /// Read the form dress. Every piece in this module resolves its colours through here, so a
 /// form's look is one theme rather than one per window (AGENTS.md §3).
@@ -178,13 +156,9 @@ impl Component for Form {
     fn render(&self) -> impl IntoElement {
         let theme = form_theme();
 
-        // Scoped to this form's subtree, so every row under it is set in the same register
-        // without the caller repeating itself.
         let variant = self.variant;
         use_provide_context(move || variant);
 
-        // Spelled out rather than set as `spacing`, because the preferences separator is three
-        // children (gap, rule, gap) and the two registers should read as one loop.
         let mut form = rect().width(Size::fill()).vertical();
         for (i, row) in self.children.iter().enumerate() {
             if i > 0 {
@@ -285,8 +259,6 @@ mod tests {
                 use_init_theme(|| strata_theme(&strata_core::theme::load("midnight")));
                 let csv = consume_context::<State<bool>>();
                 let csv = *csv.read();
-                // The scope is the format, exactly as both real windows pass it — which is the
-                // thing under test: without it the shared labels pair across the switch.
                 let scope = if csv { "CSV" } else { "JSON" };
                 OptionList::new(scope, groups(csv), move |_: Edit| {})
             },
@@ -295,7 +267,6 @@ mod tests {
             1.,
         );
 
-        // CSV, then JSON, then CSV — the switch the crash report named, both ways.
         for next in [true, false, true] {
             let mut csv = count;
             csv.set(next);

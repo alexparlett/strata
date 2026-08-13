@@ -138,8 +138,6 @@ impl Component for SegmentedToggle {
             "segmented_toggle"
         );
 
-        // Scoped to this pill's subtree, so every segment under it lays out the same way
-        // without the caller repeating itself.
         let variant = self.variant;
         use_provide_context(move || variant);
 
@@ -149,10 +147,7 @@ impl Component for SegmentedToggle {
             .corner_radius(PILL_RADIUS)
             .border(Border::new().width(1.).fill(theme.border_fill));
         pill = match self.variant {
-            // Flush segments, so the pill clips them to its own corners.
             Variant::Toolbar => pill.background(theme.background).overflow(Overflow::Clip),
-            // Inset segments carry their own corners, so the pill pads and spaces them
-            // instead of clipping — clipping would eat the 2px inset.
             Variant::Form => pill
                 .background(theme.form_background)
                 .padding(Gaps::new(INSET, INSET, INSET, INSET))
@@ -160,7 +155,6 @@ impl Component for SegmentedToggle {
         };
 
         for (i, segment) in self.children.iter().enumerate() {
-            // The divider is the toolbar layout's separator; the form layout's is the gap.
             if i > 0 && self.variant == Variant::Toolbar {
                 pill = pill.child(
                     rect()
@@ -280,22 +274,16 @@ impl Component for ToggleSegment {
         } else {
             theme.item_color
         };
-        // The disabled fade every control in the app wears, applied to the label rather than to
-        // a fill: an unselected segment has no fill to fade.
         let color = match enabled {
             true => color,
             false => color.with_a(DISABLED_ALPHA),
         };
-        // Only the keyboard gets a ring: a press focuses the segment too, so an any-focus ring
-        // would leave the last-pressed segment outlined alongside the selected one.
         let focus_ring = (focus() == Focus::Keyboard).then(|| {
             Border::new()
                 .fill(theme.item_focus_border_fill)
                 .width(2.)
                 .alignment(BorderAlignment::Inner)
         });
-        // Set once on the pill (see the module doc); a bare segment outside one lays out as the
-        // toolbar it was first written for.
         let variant = use_try_consume::<Variant>().unwrap_or_default();
 
         let segment = rect()
@@ -307,8 +295,6 @@ impl Component for ToggleSegment {
             .a11y_role(AccessibilityRole::Button)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
-            // `on_press` covers the OS activation keys as well as the pointer, so focusing on
-            // press is all a keyboard operator needs (Freya's own `ButtonSegment` does the same).
             .on_press(move |e| {
                 if !enabled {
                     return;
@@ -318,8 +304,6 @@ impl Component for ToggleSegment {
                     on_press.call(e);
                 }
             });
-        // A form segment is sized by its padding and carries its own corner; a toolbar segment
-        // is a fixed box clipped by the pill.
         let segment = match variant {
             Variant::Toolbar => segment.height(Size::px(TOOLBAR_SEGMENT_HEIGHT)),
             Variant::Form => segment
@@ -327,9 +311,6 @@ impl Component for ToggleSegment {
                 .corner_radius(FORM_SEGMENT_RADIUS),
         };
         let segment = match (&self.content, variant) {
-            // A text segment is named by the label it shows; a glyph one has no text in its
-            // subtree at all, so the tooltip string has to name it or the tab stop this
-            // segment now is announces as an unlabelled button.
             (SegmentContent::Icon(icon), _) => segment
                 .width(Size::px(TOOLBAR_ICON_WIDTH))
                 .map(self.title.clone(), AccessibilityExt::a11y_alt)

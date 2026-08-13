@@ -35,8 +35,6 @@ pub struct DataDisplayPane;
 impl Component for DataDisplayPane {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
-        // Read in a block: the guard has to be gone before anything below takes a write one on
-        // the same `State`.
         let (compact, zebra, col_width, row_limit) = {
             let draft = ctx.draft.read();
             (
@@ -72,8 +70,6 @@ impl Component for DataDisplayPane {
                 ),
             )
             .child(
-                // Saturating, not `as`: a hand-edited config holding more than a u32 should show
-                // the biggest number the field can offer, not wrap round to a small one.
                 Anchor::RowLimit.row().child(
                     NumberField::new(row_limit.try_into().unwrap_or(NO_ROW_CAP), 0, NO_ROW_CAP)
                         .width(Size::px(SETTINGS_FIELD_WIDTH))
@@ -100,12 +96,6 @@ impl Component for Density {
         let ctx = use_consume::<SettingsCtx>();
         let set = move |compact: bool| ctx.edit(|s| s.density_compact = compact);
 
-        // The **form** layout, not the compact toolbar one: inset rounded segments on the
-        // recessed surface, at the height the canvas draws a settings-form control. The
-        // toolbar pill is a different control that happens to share a component.
-        //
-        // The pill hugs its segments, so it needs a hug-content parent of its own — dropped
-        // straight into the setting's fill-width column it would stretch across the pane.
         rect().horizontal().child(
             SegmentedToggle::new()
                 .form()

@@ -8,34 +8,25 @@
 //! are for views: either can edit the row the other made, and `ConfigureDraft::of` opens on a
 //! typed def like any other.
 //!
-//! # Why DataFusion's own path is not used
+//! **DataFusion's own `ListingTableFactory` is not used**, for the reason the whole workstream
+//! gives: it registers a provider behind the store's back, and the **def** is the durable artifact.
+//! A table existing only in a `SessionContext` would vanish on restart and appear in no catalog
+//! row, no `project.json`, and no clone of the project. So the statement is read, not planned.
 //!
-//! `CREATE EXTERNAL TABLE` is the one DDL DataFusion 54 *does* implement for us, through
-//! `ListingTableFactory` — and it is unusable here for the reason the whole workstream gives:
-//! it registers a provider behind the store's back, and the **def** is the durable artifact, not
-//! the engine registration. A table that existed only in a `SessionContext` would vanish on
-//! restart and appear in no catalog row, no `project.json`, and no clone of the project. So the
-//! statement is read, not planned, and what it says is written down.
-//!
-//! # OPTIONS is two vocabularies wearing one syntax
-//!
-//! This is where the statement family and connections collide, and it is worth naming. In
-//! `datafusion-cli`, `OPTIONS` is where **both** the reader's settings (`format.has_header`) and
-//! the object store's (`aws.access_key_id`, `aws.region`, `aws.endpoint`, timeouts) are written —
-//! one list, two subjects. Strata keeps those two in different files on purpose: the reader's
-//! settings are the table def's ([`SourceFormat`] *is* its options), and the store's belong to a
-//! [`ConnectionDef`](strata_model::ConnectionDef), which holds a *reference* to credentials and
-//! never a credential. So the split is by namespace:
+//! **`OPTIONS` is two vocabularies wearing one syntax.** In `datafusion-cli` it carries both the
+//! reader's settings and the object store's; Strata keeps those in different files, because the
+//! reader's belong to the def ([`SourceFormat`] *is* its options) and the store's to a
+//! [`ConnectionDef`](strata_model::ConnectionDef), which holds a reference to credentials and never
+//! a credential. So the split is by namespace:
 //!
 //! - a `format.` key the def has a field for is **read** onto it;
-//! - a client option or a store namespace is **refused toward Connections**, on the key alone —
-//!   [`store_key`] never looks at the value, because that value may be a secret and a refusal is
-//!   a sentence the user then sees, copies and pastes;
-//! - anything else is refused **by name**, which is what keeps the mechanism total rather than a
-//!   list of the keys we thought of.
+//! - a client option or store namespace is **refused toward Connections** on the key alone —
+//!   [`store_key`] never looks at the value, because that value may be a secret and a refusal is a
+//!   sentence the user then copies and pastes;
+//! - anything else is refused **by name**, which keeps the mechanism total rather than a list of
+//!   the keys we thought of.
 //!
-//! A refused statement is not recorded: history keeps successful runs only, so a pasted key does
-//! not outlive the buffer it was typed into.
+//! A refused statement is not recorded, so a pasted key does not outlive its buffer.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -81,12 +72,8 @@ pub async fn create(
     connections: &Connections,
 ) -> Result<StatementOutcome, String> {
     let DFStatement::CreateExternalTable(create) = stmt else {
-        // The router classified this statement, so the two disagreeing is the only way here.
         return Err(format!("{LABEL} did not parse as a table"));
     };
-    // **Exhaustive, with no `..`** — the reason `views::definition` is: the def is built from what
-    // is read, so a field nobody read is a clause silently dropped, and a clause sqlparser learns
-    // later is a compile error rather than a promise Strata quietly breaks.
     let CreateExternalTable {
         name,
         columns,
@@ -103,16 +90,9 @@ pub async fn create(
     } = create;
 
     let Some(root) = root.as_deref() else {
-        // Only reachable on an engine with no project behind it. The statement is perfectly good;
-        // there is nowhere to write the def that makes it durable.
         return Err(format!("{LABEL} needs a project folder to store the table"));
     };
 
-    // The clauses with no field on a `TableDef`, each refused by name rather than accepted and
-    // dropped. `TEMPORARY` has no session-scoped table to be; `UNBOUNDED` is a streaming source
-    // this engine never builds; `WITH ORDER` states a sort the def cannot carry and no later pass
-    // could replay; constraints are refused for `CREATE TABLE`'s reason — DataFusion does not
-    // enforce one, so accepting it is a promise nothing keeps.
     if temporary {
         return Err(format!("{LABEL} does not support TEMPORARY"));
     }
@@ -126,11 +106,6 @@ pub async fn create(
         return Err("Table constraints are not supported".into());
     }
 
-    // Through `TableReference::parse_str`, the identifier normalization DataFusion would have
-    // applied itself — unquoted parts folded, quoted parts verbatim — with the part count checked
-    // first for the reason `views::definition` gives: `parse_str` is lossy above three and falls
-    // back to a *bare* reference holding the whole dotted string, which `bare_name` would then
-    // accept as a table literally named `a.b.c.d`.
     if name.0.len() > 3 {
         return Err(elsewhere(WHAT));
     }
@@ -139,15 +114,6 @@ pub async fn create(
     let (connection, source) = source_of(root, &location, connections)?;
     let partitions = partition_cols(ctx, &columns, &table_partition_cols)?;
 
-    // The one namespace, asked of the engine that owns it — CTAS's resolution, plus the one fence
-    // a *typed registration* needs and a spool does not: an internal table's files are Strata's
-    // own, and pointing its name at the user's directory would leave `.strata/tables/<slug>/` with
-    // no def naming it and nothing left that could ever delete it (`tidy_strata_dir` sweeps only
-    // `.tmp-…`). A drop is what discards that data, and it says so.
-    //
-    // That fence is **last**, because it guards a *replacement*: `IF NOT EXISTS` and a plain
-    // create never reach one, and refusing them here would answer a statement that asked to do
-    // nothing with advice to go and drop a table.
     let replacing = match existing(ctx, &name).await {
         Some(TableType::View) => return Err(format!("'{name}' is a view")),
         Some(_) if if_not_exists => {
@@ -163,7 +129,6 @@ pub async fn create(
                 "'{name}' is a table Strata stores in this project. Drop it first"
             ))
         }
-        // `OR REPLACE` over a name that is *free* creates; the report has to say which happened.
         taken => taken.is_some(),
     };
 
@@ -173,13 +138,8 @@ pub async fn create(
         connection,
         sources: vec![source],
         partition_cols: partitions,
-        // Structurally: this statement names the user's own files, which Strata reads and never
-        // writes. `CREATE TABLE` is the other origin and is a different statement.
         origin: TableOrigin::External,
     };
-    // **The registration pass's own def-to-spec mapping**, not a second copy of it: the def this
-    // statement writes has to compose exactly as it will when the next open replays it, so the
-    // sources go through the one `resolve_source` call `table_spec` already makes.
     let meta = register_external(ctx, &table_spec(root, &def)).await?;
 
     let verb = if replacing { "replaced" } else { "created" };
@@ -188,14 +148,10 @@ pub async fn create(
             "Table '{name}' {verb}, {}",
             plural(meta.columns.len(), "column")
         ),
-        // Nothing was moved. A registration reads a schema; the row count on the catalog row is
-        // the free statistic `register_external` already answered with, not a statement's product.
         count: None,
         effect: Some(StoreEffect::TableUpserted { def, meta }),
     })
 }
-
-// ---- STORED AS + OPTIONS ----------------------------------------------------
 
 /// The format words `STORED AS` takes — [`read_format`]'s own match arms as data, for
 /// completion's format-word pool (ED-11). One table, owned by the module whose arms it
@@ -323,8 +279,6 @@ pub(crate) const CSV_OPTION_KEYS: &[OptionKey<CsvRead>] = &[
         key: "format.schema_infer_max_rec",
         kind: OptionKind::Int,
         what: "rows read to infer the schema",
-        // `Some(0)` is DataFusion's own "disable inference" arm — every column as text —
-        // so it is a value, not a sentinel, exactly as the Configure window spends it.
         set: |o, k, v| {
             o.infer_rows = Some(count(k, v)?);
             Ok(())
@@ -361,9 +315,6 @@ pub(crate) const JSON_OPTION_KEYS: &[OptionKey<JsonRead>] = &[
         key: "format.schema_infer_max_rec",
         kind: OptionKind::Int,
         what: "rows read to infer the schema",
-        // **0 means scan every record here**, not "no rows" — the engine refuses `Some(0)`
-        // outright, since it would infer a schema with no columns. The Configure pane spends
-        // 0 the same way, and this has to land on the def that pane would have written.
         set: |o, k, v| {
             let rows = count(k, v)?;
             o.infer_rows = (rows > 0).then_some(rows);
@@ -396,7 +347,6 @@ fn read_format(
     name: &str,
     options: &[(String, Value)],
 ) -> Result<SourceFormat, String> {
-    // The parser upper-cases whatever word followed `STORED AS`.
     let (mut format, ndjson) = match file_type {
         "PARQUET" => (SourceFormat::Parquet, false),
         "ARROW" => (SourceFormat::Arrow, false),
@@ -416,8 +366,6 @@ fn read_format(
             return Err(format!("The option '{key}' is set twice"));
         }
         if let Some(surface) = store_key(&key) {
-            // **Before the value is read**, and the value never reaches the message: this is the
-            // arm a pasted `aws.secret_access_key` lands in.
             return Err(format!(
                 "'{key}' is an object store setting, not a table read option. {surface}"
             ));
@@ -468,10 +416,6 @@ fn apply(format: &mut SourceFormat, name: &str, key: &str, value: &Value) -> Res
             Some(k) => (k.set)(o, key, value),
             None => Err(unsupported(key, format, name)),
         },
-        // Both are self-describing (the parquet footer, the Arrow IPC schema), and every
-        // `ParquetFormat` knob DataFusion has is an engine-wide setting with a control in
-        // Settings ▸ Engine already — so there is nothing per-table to set, rather than a set
-        // that happens to be empty. Completion's offer there is empty for the same reason.
         SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Unknown(_) => Err(format!(
             "Table '{name}' is STORED AS {}, which takes no read options",
             format.name().to_uppercase()
@@ -542,8 +486,6 @@ fn compression(key: &str, value: &Value) -> Result<FileCompression, String> {
     })
 }
 
-// ---- LOCATION ---------------------------------------------------------------
-
 /// The def's `(connection, source)` for a `LOCATION`, which is the pair
 /// [`resolve_source`](crate::project::resolve_source) composes, arrived at from the composed
 /// string.
@@ -570,15 +512,9 @@ fn source_of(
     let Some((url, source)) = split_remote(location) else {
         return Ok((None, relativize(root, location)));
     };
-    // `file:` is the local rule wearing a URL, and decoding one back into a path is a trap
-    // (percent-encoding, the host part, the platform's own spelling) with nothing behind it:
-    // nothing in Strata ever writes one, and the plain path is both shorter and unambiguous.
     if url.starts_with("file:") {
         return Err("LOCATION takes a path, not a file:// URL".into());
     }
-    // Resolved rather than merely checked, so the def stores the **connection's** spelling of its
-    // URL: that string is what the Configure picker, `resolve_source` and the Forget confirm all
-    // match on, and the registry itself is case-insensitive about the scheme and the host.
     let Some(url) = connections.resolve(&url) else {
         return Err(format!(
             "'{url}' is not a connection in this project. Add it in Connections"
@@ -591,8 +527,6 @@ fn source_of(
     }
     Ok((Some(url), source))
 }
-
-// ---- PARTITIONED BY ---------------------------------------------------------
 
 /// The def's `(name, arrow type)` partition columns.
 ///
@@ -612,15 +546,8 @@ fn partition_cols(
     columns: &[ColumnDef],
     names: &[String],
 ) -> Result<Vec<(String, String)>, String> {
-    // The names are `Ident::to_string()`'s output, so a quoted one arrives *with its quotes* —
-    // and a stored name carrying quotes could never equal a `key=` folder segment. The same rule
-    // a typed `COPY`'s `PARTITIONED BY` keeps, asked through the same function.
     partition_columns_are_bare_words(names, ctx)?;
 
-    // Reproduced from `CREATE TABLE`'s duplicate-column rule rather than inherited, because
-    // nothing downstream enforces it: Arrow's `Schema` permits duplicate field names, so a repeat
-    // here registers a table carrying the column twice and every later read resolves the second
-    // onto the first — silently, and on every reload, since the def persists it.
     for (i, name) in names.iter().enumerate() {
         if names[..i].contains(name) {
             return Err(format!("Partition column '{name}' is listed twice"));
@@ -789,8 +716,6 @@ mod tests {
                     compression: FileCompression::None,
                 }),
                 connection: None,
-                // Under the project folder, so stored portable — `project::relativize`, the same
-                // rule Configure's `def(root)` applies.
                 sources: vec!["events.csv".into()],
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
@@ -899,8 +824,6 @@ mod tests {
             "aws.region",
             "aws.endpoint",
             "google.service_account",
-            // A client option is the connection's other half, and its list is the one
-            // `engine::store` already publishes rather than a second copy here.
             "timeout",
             "allow_invalid_certificates",
         ] {
@@ -966,8 +889,6 @@ mod tests {
                 "events/2024/**/*.parquet".to_string()
             ))
         );
-        // The bucket alone names no files, and an empty source is one `register_external` would
-        // filter away into "No source paths" — a sentence about nothing the user wrote.
         assert_eq!(
             source_of(root, "s3://acme-lake", &connections),
             Err(
@@ -976,15 +897,10 @@ mod tests {
                     .into()
             )
         );
-        // `file:` is the local rule wearing a URL. Refused rather than decoded.
         assert_eq!(
             source_of(root, "file:///data/events/", &connections),
             Err("LOCATION takes a path, not a file:// URL".into())
         );
-        // A path outside the project folder stays absolute; one inside it is stored portable —
-        // through `project::relativize`, which is what makes it Configure's answer exactly,
-        // trailing separator included (it drops one, and `catalog::listing_url` puts it back for
-        // a path that is a directory).
         assert_eq!(
             source_of(root, "/elsewhere/events/", &connections),
             Ok((None, "/elsewhere/events/".to_string()))
@@ -993,10 +909,6 @@ mod tests {
             source_of(root, "/proj/events/", &connections),
             Ok((None, "events".to_string()))
         );
-        // **The registry is case-insensitive about a scheme and a host, so this is too** — and it
-        // answers with the *connection's* spelling, because that string is what the def stores and
-        // what everything else addresses the connection by. A byte-for-byte membership test
-        // refused a bucket that reads perfectly well.
         assert_eq!(
             source_of(root, "S3://ACME-LAKE/events/", &connections),
             Ok((Some("s3://acme-lake".to_string()), "events/".to_string()))
@@ -1009,8 +921,6 @@ mod tests {
     #[tokio::test]
     async fn a_connection_that_failed_to_connect_is_still_one_a_statement_may_name() {
         let eng = Engine::new(BTreeMap::new());
-        // No region: `store::connect` refuses this one outright (`AmazonS3Builder` would
-        // otherwise silently assume `us-east-1`).
         let conn = ConnectionDef {
             address: "acme-lake".into(),
             provider: Provider::S3(S3Store {
@@ -1027,7 +937,6 @@ mod tests {
             eng.connections.resolve("s3://acme-lake").as_deref(),
             Some("s3://acme-lake")
         );
-        // …and Forget takes it back out, on the URL it went in under.
         eng.disconnect("s3://acme-lake");
         assert_eq!(eng.connections.resolve("s3://acme-lake"), None);
     }
@@ -1068,7 +977,6 @@ mod tests {
                 ("month".to_string(), "Utf8".to_string())
             ]
         );
-        // Declared types reach the read: the partition column is an Int32, not text.
         assert_eq!(
             read(&eng, "SELECT year FROM hits WHERE year = 2024").await,
             [["2024"]]
@@ -1118,10 +1026,6 @@ mod tests {
              INT, BIGINT or DATE"
         );
 
-        // **A repeat is refused rather than stored twice.** Arrow's `Schema` permits duplicate
-        // field names, so nothing downstream would have caught it: the table would register with
-        // the column twice, every read would resolve the second onto the first, and the def would
-        // persist it. `CREATE TABLE` reproduces the same rule for the same reason.
         let err = statement(
             &eng,
             &format!(
@@ -1159,10 +1063,6 @@ mod tests {
                 ),
             )
             .await;
-            // Only the uncompressed spelling can register over a plain `.csv`: the rest change the
-            // extension the listing filters on, which is the very coupling this asserts. So the
-            // def is read off the effect where there is one, and off the refusal's absence
-            // otherwise — either way the codec is what the option named.
             match report {
                 Ok(report) => assert_eq!(
                     def_of(&report).format,
@@ -1200,8 +1100,6 @@ mod tests {
                 "CREATE EXTERNAL TABLE t (id INT, PRIMARY KEY (id)) STORED AS CSV LOCATION 'd/'",
                 "Table constraints are not supported",
             ),
-            // DataFusion's parser takes the modifier *after* `EXTERNAL`, which is the only
-            // spelling that reaches the field at all.
             (
                 "CREATE EXTERNAL TEMPORARY TABLE t STORED AS CSV LOCATION 'd/'",
                 "CREATE EXTERNAL TABLE does not support TEMPORARY",
@@ -1244,11 +1142,6 @@ mod tests {
             .expect("replaced");
         assert_eq!(replaced.message, "Table 't' replaced, 1 column");
 
-        // **The internal fence guards a replacement and nothing else.** `OR REPLACE` over an
-        // internal name would strand its data directory, so it is refused by name; a plain create
-        // and an `IF NOT EXISTS` never replace anything, so they get the answers every other taken
-        // name gets. Refusing those would answer a statement that asked to do nothing with advice
-        // to go and drop a table.
         statement(&eng, "CREATE TABLE owned AS SELECT 1 AS n")
             .await
             .expect("internal table");
@@ -1343,8 +1236,6 @@ mod tests {
             def_of(&report).format,
             SourceFormat::Json(JsonRead {
                 shape: JsonShape::Array,
-                // 0 is the Configure pane's "scan everything" sentinel, and the engine refuses
-                // `Some(0)` outright — it would infer a schema with no columns.
                 infer_rows: None,
                 compression: FileCompression::None,
             })
@@ -1426,9 +1317,4 @@ mod tests {
             );
         }
     }
-
-    // The agent surface is untouched and is not re-asserted here: the parity matrix
-    // (`sql::validate`'s `the_capability_axis_keeps_the_agent_surfaces_answers`) already pins
-    // `Capability::Agent` to `Refuse(Blocked::CreateExternalTable)` for this very statement, and a
-    // second copy of that claim is a second thing to keep in step.
 }

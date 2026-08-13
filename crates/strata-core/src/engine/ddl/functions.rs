@@ -1,58 +1,34 @@
 //! **SQL functions** (ED-09) — `CREATE FUNCTION` for SQL-bodied scalar macros, and the
 //! `DROP FUNCTION` that takes one back. `docs/STATEMENTS_SPEC.md` §6.6.
 //!
-//! Both run **natively**: DataFusion owns `CREATE FUNCTION`'s dispatch, and its seam for it is a
-//! [`FunctionFactory`] — without one installed the statement fails with "Function factory has not
-//! been configured", and with one it is `execute_logical_plan` that calls it and registers what it
-//! returns. So the factory is the framework's own shape for "what a created function *is*", and
-//! [`StrataFunctionFactory`] is it: a `CreateFunction` in, a `ScalarUDF` out.
+//! Both run **natively** over DataFusion's own [`FunctionFactory`] seam, which is the framework's
+//! shape for "what a created function *is*": a `CreateFunction` in, a `ScalarUDF` out.
 //!
 //! What is ours is [`Definition::read`] — the one judgement of a `CREATE FUNCTION`, called by the
-//! arm for the sentence the user reads and by the factory to build from. One function, two
-//! consumers, no second list of rules: a form the arm accepts is a form the factory can build, by
-//! construction rather than by two lists staying in step. The two refusals that have to answer
-//! *before* planning are [`unsupported_clause`] (the clauses the planner drops) and
-//! [`supported_language`] (a body that is not SQL does not survive planning at all) — the second
-//! is one body asked from both sides rather than a rule written twice.
+//! arm for the sentence the user reads and by the factory to build from, so a form the arm accepts
+//! is one the factory can build by construction. The two refusals that must answer *before*
+//! planning are [`unsupported_clause`] and [`supported_language`].
 //!
-//! # The body is an expression over the arguments, and nothing else
+//! **The body is an expression over the arguments and nothing else.** DataFusion plans it against
+//! an empty schema with the arguments as *placeholder* types, so its planner accepts `RETURN $1 + 1`
+//! while the standard `RETURN x + 1` fails name resolution. [`bind_parameters`] rewrites that bare
+//! form before planning, so all three spellings land on one planned body and
+//! [`SqlMacro::simplify`] has one substitution to make. [`Definition::check`] then refuses a body
+//! that reached anywhere else — a bare column or a subquery is a hidden dependency on a table
+//! nothing persists. `AS '<string>'` is refused for a related reason: under the Postgres form `AS`
+//! takes a string literal, so `AS 'x + 1'` would create a function returning the *text* `x + 1`.
 //!
-//! DataFusion plans the body against an **empty schema**, with the argument list supplied as
-//! *placeholder* types — so what its planner accepts is `RETURN $1 + 1` or `RETURN $x + 1`, and
-//! the standard SQL `RETURN x + 1` fails name resolution outright. [`bind_parameters`] says that
-//! bare form in the planner's own vocabulary before planning, so all three spellings land on one
-//! planned body of positional placeholders, and [`SqlMacro::simplify`] has one substitution to
-//! make. [`Definition::check`] then refuses a body that reached anywhere else — a bare column or
-//! a subquery is a hidden dependency on a table that nothing persists and no `DROP TABLE` can
-//! name.
+//! **A built-in is fenced off** because DataFusion's registry cannot tell one from a session's own,
+//! and its `DROP FUNCTION` deregisters across **all five** registries at once — so
+//! `DROP FUNCTION abs` would take the built-in away with nothing able to put it back.
+//! [`Functions::created`] names the difference and both statements refuse toward it.
+//! `engine::registered_function` therefore asks all five: three are one method call away and two
+//! are not, and asking only those three left `array_filter` and its higher-order siblings reading
+//! as free names.
 //!
-//! `AS '<string>'` is refused for a related reason, and it is the one the parser makes easy to
-//! get wrong: under the Postgres form `AS` takes a **string literal**, which DataFusion plans as
-//! a `Utf8` literal — so `AS 'x + 1'` would create a function that returns the *text* `x + 1`.
-//! `RETURN` is the form that means what it looks like.
-//!
-//! # Why a built-in is fenced off
-//!
-//! DataFusion's registry cannot tell a built-in from a function a session created, and its
-//! `DROP FUNCTION` deregisters across **all five** registries at once (`context/mod.rs` — scalar,
-//! aggregate, window, table and higher-order) — so a `DROP FUNCTION abs` would take the built-in
-//! away for the rest of the session with nothing able to put it back, and a
-//! `CREATE OR REPLACE FUNCTION count(…)` would shadow the aggregate the same way.
-//! [`Functions::created`] is the set that makes the difference nameable, and both statements refuse
-//! toward it. It is the same shape as `CREATE OR REPLACE VIEW` over a table name (ED-06): a
-//! redefinition of a thing the user would not get back is not a redefinition, it is a loss.
-//!
-//! `engine::registered_function` therefore asks **all five**, and that has to stay true: three of
-//! them are one method call away and the other two are not, and asking only those three left
-//! `array_filter` and its two higher-order siblings reading as free names — takeable, and then
-//! destroyable by the matching drop.
-//!
-//! # Scope
-//!
-//! Nothing persists. A created function dies with the engine — the report says "for this session"
-//! (spec §8), and it is true by construction: a restart is a new [`Functions`], which walks a
-//! fresh registry. A `FunctionDef` list in `project.json`, replayed by the registration pass, is
-//! the noted extension; it is deliberately not scaffolded.
+//! **Nothing persists.** A created function dies with the engine, which is what makes the report's
+//! "for this session" true by construction. A `FunctionDef` list in `project.json` is the noted
+//! extension, deliberately not scaffolded.
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -130,9 +106,6 @@ pub async fn create(
     unsupported_clause(function)?;
     bind_parameters(function);
 
-    // Planning executes nothing: DataFusion's DDL — the factory call included — lives in
-    // `execute_logical_plan` (`context/mod.rs`), which is what this drives below. So the plan that
-    // is judged is the plan that runs, as it is for `INSERT` and `COPY`.
     let plan = ctx
         .state()
         .statement_to_plan(DFStatement::Statement(s))
@@ -147,9 +120,6 @@ pub async fn create(
     let name = Definition::read(creating)?.name;
     let or_replace = creating.or_replace;
 
-    // The fence. A name this session created is the user's to redefine, under the same
-    // `OR REPLACE` rule a view keeps; anything else registered under that name is a built-in,
-    // and `DROP FUNCTION` could not put it back.
     let replacing = match (functions.created(&name), registered_function(ctx, &name)) {
         (true, _) if !or_replace => {
             return Err(format!(
@@ -164,8 +134,6 @@ pub async fn create(
     ctx.execute_logical_plan(plan)
         .await
         .map_err(|e| e.to_string())?;
-    // After the dispatch, never before it: the catalog is walked from what DataFusion now holds,
-    // so a registration that failed leaves neither the pool nor the created set claiming it.
     functions.settle(ctx, &name, true);
 
     let verb = match replacing {
@@ -174,7 +142,6 @@ pub async fn create(
     };
     Ok(StatementOutcome {
         message: format!("Function '{name}' {verb} for this session"),
-        // Not a count of zero: creating a function moves no rows, which is a different fact.
         count: None,
         effect: Some(StoreEffect::FunctionsChanged),
     })
@@ -219,9 +186,6 @@ pub async fn drop(
     };
     let name = fold_ident(&dropping.name);
     if !functions.created(&name) {
-        // Resolved before anything is dropped, because DataFusion deregisters across every
-        // registry at once and cannot tell us which kind it took — so "there was nothing here"
-        // and "the built-in is gone now" would be the same answer after the fact.
         if registered_function(ctx, &name) {
             return Err(built_in(&name, "dropped"));
         }
@@ -262,20 +226,14 @@ pub async fn drop(
 fn unsupported_clause(function: &SqlCreateFunction) -> Result<(), String> {
     let SqlCreateFunction {
         or_alter,
-        // Read from the planned statement instead, where it decides an existing name rather than
-        // the statement's shape.
         or_replace: _,
-        // Accepted, and accurate: every created function is session-scoped, so `TEMPORARY` is
-        // what this statement does whether or not it is written.
         temporary: _,
         if_not_exists,
-        // What the planned form carries on to `Definition::read`, which judges it there.
         name: _,
         args: _,
         return_type: _,
         behavior: _,
         function_body,
-        // Judged here as well as there — see [`supported_language`].
         language,
         called_on_null,
         parallel,
@@ -287,19 +245,12 @@ fn unsupported_clause(function: &SqlCreateFunction) -> Result<(), String> {
         remote_connection,
     } = function;
 
-    // **First**, and before anything is planned. A body in another language is not SQL, so
-    // planning it reports whatever DataFusion makes of the text — "Invalid function 'np_abs'" for
-    // a Python body — and the sentence that names the actual problem would only ever be reached by
-    // a body that happened to be valid, fully resolvable SQL.
     supported_language(language.as_ref())?;
     if *if_not_exists {
         return Err(
             "CREATE FUNCTION IF NOT EXISTS is not supported. Use CREATE OR REPLACE FUNCTION".into(),
         );
     }
-    // `AS` takes a **string literal** in the Postgres form this dialect family parses, and
-    // DataFusion plans it as one — so `AS 'x + 1'` creates a function returning the text `x + 1`.
-    // The refusal names the form that means what it looks like.
     if matches!(
         function_body,
         Some(
@@ -359,13 +310,11 @@ fn supported_language(language: Option<&Ident>) -> Result<(), String> {
 /// signature, and DataFusion never looks at `FunctionDesc::args` either.
 fn unsupported_drop_clause(dropping: &SqlDropFunction) -> Result<(), String> {
     let SqlDropFunction {
-        // The plan carries it, and the arm reads it there.
         if_exists: _,
         func_desc,
         drop_behavior,
     } = dropping;
 
-    // Not `!= 1`: an empty list is DataFusion's own "Function name not provided".
     if func_desc.len() > 1 {
         return Err("DROP FUNCTION takes one function name".into());
     }
@@ -458,8 +407,6 @@ impl Definition {
             body: body.clone(),
             params,
             return_type: return_type.clone(),
-            // Postgres's own default, and the safe one: a body over `now()` or `random()` is
-            // volatile, and nothing in the statement says otherwise unless the user writes it.
             volatility: behavior.unwrap_or(Volatility::Volatile),
         })
     }
@@ -488,11 +435,6 @@ impl Definition {
             Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists(_) => Err(
                 plan_datafusion_err!("A function body cannot contain a subquery"),
             ),
-            // Planned happily — `sql_to_expr` builds an `AggregateFunction` with no
-            // aggregate-context requirement — and then unbuildable: nothing simplifies it away and
-            // the physical planner answers `not_impl_err!("… {other:?}")`, a `Debug` dump of the
-            // node in the results pane. Refused at the create, so the function that could never be
-            // called is never registered.
             Expr::AggregateFunction(_) | Expr::WindowFunction(_) => Err(plan_datafusion_err!(
                 "A function body cannot contain an aggregate or window function"
             )),
@@ -505,8 +447,6 @@ impl Definition {
             },
             _ => Ok(TreeNodeRecursion::Continue),
         })
-        // The error is ours in both arms above — DataFusion's `apply` only carries it — so the
-        // sentence the user reads is the one written here, minus the planner's prefix.
         .map(|_| ())
         .map_err(|e| e.message().to_string())
     }
@@ -614,15 +554,10 @@ impl SqlMacro {
         let types: Vec<DataType> = params.iter().map(|(_, t)| t.clone()).collect();
         let names: Option<Vec<String>> = params.iter().map(|(n, _)| n.clone()).collect();
         let signature = Signature::exact(types, volatility);
-        // Named parameters where the statement named them: it is what makes completion offer
-        // `add_one(x)` rather than `add_one(Int64)`, and DataFusion's own named-argument call
-        // notation (`add_one(x => 1)`) comes with it.
         let signature = match names {
             Some(names) if !names.is_empty() => signature.with_parameter_names(names)?,
             _ => signature,
         };
-        // The call form, from the declared arguments — the name where the statement gave one,
-        // the type otherwise, which is the same fallback the completion detail renders.
         let call = params
             .iter()
             .map(|(argument, data_type)| match argument {
@@ -638,10 +573,6 @@ impl SqlMacro {
         )
         .build();
         Ok(SqlMacro {
-            // The call's return type is the **declared** one, so the body is cast to it below:
-            // `RETURNS INT RETURN 1` says Int32 and plans as Int64, and a scalar function whose
-            // simplified expression disagrees with its own `return_type` is a schema fault deep
-            // in the optimizer rather than an answer.
             body: Expr::Cast(Cast::new(Box::new(body), return_type.clone())),
             name,
             signature,
@@ -670,8 +601,6 @@ impl ScalarUDFImpl for SqlMacro {
             Expr::Placeholder(ref holder) => {
                 match position_of(&holder.id).and_then(|p| args.get(p)) {
                     Some(arg) => Ok(Transformed::yes(arg.clone())),
-                    // Unreachable: `Definition::bind` checked every placeholder against the arity, and
-                    // the arity is the signature DataFusion matched the call against.
                     None => internal_err!("function '{}' has no argument {}", self.name, holder.id),
                 }
             }
@@ -785,11 +714,6 @@ mod tests {
             Some("add_one".to_string())
         );
 
-        // **`DROP FUNCTION |` offers exactly what this session created** (ED-11), through the
-        // real snapshot marking — `functions::snapshot` stamps the sym from the created-name
-        // set, so a spelling or folding mistake there would fail here where a hand-built sym
-        // cannot. Built-ins never appear: the statement would refuse them, and the offer says
-        // so by omission.
         let dropped = |eng: &Engine| {
             let catalog = Catalog::build([], [], eng.functions(), eng.prepared(), "generic".into());
             complete("DROP FUNCTION ", 14, &catalog, false)
@@ -831,8 +755,6 @@ mod tests {
             );
         }
 
-        // A quoted argument name, which only works because sqlparser's own function-argument
-        // parser leaves the quotes inside the value (`declared_name`).
         statement(
             &eng,
             r#"CREATE FUNCTION spaced("My Arg" BIGINT) RETURNS BIGINT RETURN "My Arg" + 1"#,
@@ -840,10 +762,6 @@ mod tests {
         .await
         .expect("created");
         assert_eq!(read(&eng, "SELECT spaced(41)").await, vec![vec!["42"]]);
-        // And it is spelled the way it was declared everywhere the signature is shown. The
-        // argument list and the body are read by **different** rules — sqlparser leaves a declared
-        // name's quotes inside the value and reports it unquoted — so a single normalization used
-        // for both rendered this `"my arg"`, quotes kept and case folded.
         assert_eq!(
             offered(&eng, "SELECT spac"),
             vec![("spaced".to_string(), "(My Arg)".to_string())]
@@ -947,7 +865,6 @@ mod tests {
             "Function 'addone' replaced for this session"
         );
         assert_eq!(read(&eng, "SELECT addone(40)").await, vec![vec!["42"]]);
-        // And the drop finds it under the spelling the create used, folded the same way.
         statement(&eng, "DROP FUNCTION AddOne")
             .await
             .expect("dropped");
@@ -1002,8 +919,6 @@ mod tests {
                 "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT LANGUAGE python RETURN x",
                 "LANGUAGE 'python' is not supported. Functions are SQL expressions",
             ),
-            // The one that matters: a body in another language is **not** valid SQL, so a check
-            // that ran after planning would answer about `np_abs` instead of about the language.
             (
                 "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT LANGUAGE python RETURN np_abs(x)",
                 "LANGUAGE 'python' is not supported. Functions are SQL expressions",
@@ -1032,8 +947,6 @@ mod tests {
                 "CREATE FUNCTION f() RETURNS BIGINT RETURN (SELECT max(a) FROM v)",
                 "A function body cannot contain a subquery",
             ),
-            // Plans happily and can never be called: nothing simplifies an aggregate away, so the
-            // physical planner answers with a `Debug` dump of the node.
             (
                 "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN sum(x)",
                 "A function body cannot contain an aggregate or window function",
@@ -1057,8 +970,6 @@ mod tests {
                 "{sql}"
             );
         }
-        // A body naming something that is not an argument at all stays DataFusion's error, which
-        // names the identifier — the one case where its own words are the better ones.
         assert!(statement(
             &eng,
             "CREATE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN y + 1"

@@ -5,31 +5,22 @@
 //! to fold into; the app's hook consumes [`register_pass`] and keeps only what is
 //! genuinely the store's (`Reg<T>` rows, epochs, log entries).
 //!
-//! Three things stay the caller's, and each is named because the headless replayer is
-//! the caller this module was cut for:
+//! Three things stay the caller's, each named because the headless replayer is the caller this
+//! module was cut for:
 //!
-//! - **Loading the defs** ([`load_defs`](crate::project::load_defs)) and acting on the
-//!   outcomes — the catalog-is-the-store rule is untouched: the pass reports outcomes,
-//!   it never introspects DataFusion, and nothing refetches.
-//! - **Removal.** The pass is additive: it registers and re-creates, it never
-//!   deregisters an engine object whose def is gone. The app's removals are their own
-//!   gestures (the drop confirm, through [`Engine::deregister`] / `Engine::drop_view`);
-//!   a host replaying a defs file that may have shrunk since its last pass diffs the
-//!   names it registered against the new defs and deregisters the difference first —
-//!   or a removed table stays silently queryable, the exact inverse of the
-//!   catalog-is-the-store rule above. A **connection** is the same case with a
-//!   different call, and it has its owner: [`Engine::disconnect`] is the pane's Forget
-//!   (W7 · Connections 02), and an edit that moves a connection's bucket or provider
-//!   owes it too, since that changes the `url()` the store went in under. A host
-//!   diffing a shrunken defs file must call it for every connection that has gone, on
-//!   the same terms as the tables above.
-//! - **The registration window.** [`Engine::register`] deregisters before it
-//!   re-infers, so for the duration of a pass every table being rebuilt is absent from
-//!   the catalog. The app gates validation behind its scan claim
-//!   (`CatalogState::Scanning`, the claim that is also the validation gate) so nothing
-//!   validates mid-scan; a host serving `Engine::validate`, `Engine::policy_verdicts`
-//!   or queries concurrently with a pass must hold them off the same way, or it
-//!   answers a false, transient "not found" for a table sitting right there.
+//! - **Loading the defs** ([`load_defs`](crate::project::load_defs)) and acting on the outcomes.
+//!   The pass reports outcomes, never introspects DataFusion, and nothing refetches.
+//! - **Removal.** The pass is additive: it registers and re-creates, and never deregisters an
+//!   engine object whose def is gone. A host replaying a defs file that may have shrunk must diff
+//!   the names it registered and deregister the difference first, or a removed table stays
+//!   silently queryable. A **connection** is the same case through [`Engine::disconnect`], which
+//!   an edit moving a connection's bucket or provider owes too, since that changes the `url()` the
+//!   store went in under.
+//! - **The registration window.** [`Engine::register`] deregisters before it re-infers, so for the
+//!   duration of a pass every table being rebuilt is absent from the catalog. The app gates
+//!   validation behind its scan claim; a host serving `validate`, `policy_verdicts` or queries
+//!   concurrently must hold them off the same way, or it answers a false, transient "not found"
+//!   for a table sitting right there.
 
 use std::path::Path;
 
@@ -150,20 +141,15 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// `CREATE OR REPLACE` succeeds round one) — hand `views` in dependency order
 /// ([`view_order`]) or an outer view inlines a stale inner plan.
 ///
-/// Connections need no ordering among themselves and are not retried: each registers one
-/// bucket or one catalog and reads nothing the pass provides, so a failure is final for this
-/// pass. What that failure *costs* differs by kind, and the difference is worth knowing when
-/// reading a project's rows. An object store that did not register takes the tables over its
-/// bucket with it, and each of those says so on its own row ("no object store found"). A
-/// **database** has no def rows at all — its relations are discovered, not declared — so a
-/// refused one leaves nothing failed except the connection's own row and whatever *views*
-/// read across it, which fail in the view phase naming a table that does not resolve.
+/// Connections need no ordering among themselves and are not retried: each registers one bucket or
+/// one catalog and reads nothing the pass provides. What a failure *costs* differs by kind — an
+/// object store takes the tables over its bucket with it, each saying so on its own row, while a
+/// **database** has no def rows at all and leaves nothing failed but its own row and whatever views
+/// read across it.
 ///
-/// `settled` is called with each outcome as the engine answers it — the app folds
-/// catalog rows and log entries per answer rather than after the whole pass, and a
-/// caller that wants the collected list writes `|o| out.push(o)`. A failed entry never
-/// aborts the pass, and a view retried across rounds settles **once**, on its final
-/// answer — never once per attempt, which would report failures that never happened.
+/// `settled` is called with each outcome as the engine answers it, so the app folds catalog rows
+/// and log entries per answer rather than after the whole pass. A failed entry never aborts the
+/// pass, and a view retried across rounds settles **once**, on its final answer.
 pub async fn register_pass(
     engine: &Engine,
     connections: Vec<ConnectionDef>,
@@ -177,17 +163,6 @@ pub async fn register_pass(
         settled(RegOutcome::Connection { url, result });
     }
 
-    // **Tables register concurrently, and settle as they answer.** Nothing orders one table
-    // against another: each reads its own sources and reaches the catalog only through
-    // `register_table`. The serial loop this replaces made the pass cost the *sum* of its
-    // tables, so one wide remote table — a Hive lake of thousands of parquet files, whose
-    // schema inference is a footer read per file over S3 — held every table behind it,
-    // including local ones that register in milliseconds. It also held the app's scan claim,
-    // and with it validation, for that whole time.
-    //
-    // Bounded, because the fan-out multiplies: each registration already runs
-    // `datafusion.execution.meta_fetch_concurrency` (32) footer fetches of its own, so this is
-    // a ceiling of ~256 requests in flight rather than one per table in the project.
     let mut registrations = stream::iter(tables)
         .map(|spec| {
             let name = spec.name.clone();
@@ -211,13 +186,10 @@ pub async fn register_pass(
                     name,
                     result: Ok(meta),
                 }),
-                // Not settled yet: a view whose dependency lands later succeeds on a
-                // following round.
                 Err(e) => failed.push((name, sql, e)),
             }
         }
         if failed.len() == before {
-            // A full round without progress — the rest are genuinely broken.
             for (name, _, e) in failed {
                 settled(RegOutcome::View {
                     name,
@@ -507,7 +479,6 @@ mod tests {
                     }),
                     client_config: Default::default(),
                 },
-                // The same authority under another provider: a different connection entirely.
                 ConnectionDef {
                     address: "lake".into(),
                     provider: Provider::Gcs(GcsStore {
@@ -517,7 +488,6 @@ mod tests {
                     }),
                     client_config: Default::default(),
                 },
-                // A def that cannot describe a store: refused, and the pass carries on.
                 ConnectionDef {
                     address: "no-region".into(),
                     provider: Provider::S3(S3Store {
@@ -567,7 +537,6 @@ mod tests {
             table_spec(Path::new("/proj"), &def).paths,
             ["s3://acme-lake/events/2024/**/*.parquet"]
         );
-        // …and the same def on the local disk still joins onto the project folder.
         let local = TableDef {
             connection: None,
             ..def
@@ -595,8 +564,6 @@ mod tests {
             vec!["base".to_string(), "middle".into(), "outer".into()],
             "dependencies first, and 'Middle' orders 'middle' despite the case"
         );
-        // A dependency outside the set can't order anything: alone, the outer view is
-        // simply ready.
         assert_eq!(
             view_order(vec!["outer".into()], deps),
             vec!["outer".to_string()]

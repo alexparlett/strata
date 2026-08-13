@@ -1,34 +1,27 @@
 //! The **service directory**: which project windows exist right now, from the server's
 //! thread — and the app's [`Host`] impl over them.
 //!
-//! This is the one registry in the app that AGENTS.md §4's no-registry rule does *not*
-//! govern, and the distinction is worth stating rather than assuming. That rule is about
-//! **reactive UI state**: a `State<HashMap<TabId, …>>` threading every tab's data through one
-//! value into every consumer, where context or a prop already expresses the relationship. This
-//! is a **DI seam between threads** — the server has no scope, no context and no render pass,
-//! so a directory is the only shape a lookup can take. It is the [`Windows`] registry's shape
-//! (`platform::windows`) for the same reason, one thread further out.
+//! This is the one registry AGENTS.md §4's no-registry rule does *not* govern, and the distinction
+//! is worth stating: that rule is about **reactive UI state**, where context or a prop already
+//! expresses the relationship. This is a **DI seam between threads** — the server has no scope, no
+//! context and no render pass, so a directory is the only shape a lookup can take. The [`Windows`]
+//! registry's shape, one thread further out.
 //!
-//! What a window lends it is exactly three things: its `Arc<Engine>` (the **data plane**) and
-//! two senders — [`AgentAsk`] for the questions that touch Radio state, [`AgentNotice`] for
-//! the facts that carry no answer. Registration is per *mount* of the project subtree, not
-//! per window, which is what makes a re-root and an engine restart deregister and re-register
-//! through the same mount/drop path rather than needing a cleanup route of their own.
+//! A window lends it exactly three things: its `Arc<Engine>` (the **data plane**) and two senders,
+//! [`AgentAsk`] for questions that touch Radio state and [`AgentNotice`] for facts that carry no
+//! answer. Registration is per *mount* of the project subtree rather than per window, so a re-root
+//! and an engine restart deregister and re-register through the same mount/drop path.
 //!
-//! ## The run is dispatched here, not in the window (AA-03b)
+//! **The run is dispatched here, not in the window.** An agent's query goes straight to the engine
+//! against its query session's own `WsId`, which makes AA-03's three costs disappear by
+//! construction: no tab is opened, nothing steals focus, and the diagnostics driver has nothing
+//! extra to validate. What the window still owns is the half only it can answer — does this agent
+//! hold this session, and record what it ran — travelling as [`AgentAsk::RunStarting`] before the
+//! dispatch and [`AgentNotice::RunSettled`] after it.
 //!
-//! An agent's query goes straight to the engine against its query session's own `WsId`, which
-//! is what makes the three costs of AA-03 disappear by construction rather than by
-//! mitigation: no tab is opened, so nothing steals focus, nothing has to be closed, and the
-//! window's diagnostics driver has nothing extra to validate on the engine the user's own
-//! press is waiting for. What the window still owns is the half only it can answer — does
-//! this agent hold this session, and record what it ran — which travels as
-//! [`AgentAsk::RunStarting`] before the dispatch and [`AgentNotice::RunSettled`] after it.
-//!
-//! The run is still a **real** execution: same engine, same snapshot lifecycle, same
-//! supersede and cancel. That was the half of AA-03's founding decision that was right, and
-//! it is why an agent's result can be paged, sorted and promoted into a tab rather than being
-//! a second, thinner pipeline.
+//! The run is still a **real** execution: same engine, same snapshot lifecycle, same supersede and
+//! cancel. That is why an agent's result can be paged, sorted and promoted into a tab rather than
+//! being a second, thinner pipeline.
 //!
 //! [`Windows`]: crate::platform::Windows
 
@@ -288,12 +281,6 @@ impl Host for AgentDirectory {
         mode: RunMode,
         page_size: usize,
     ) -> Result<RunSettle, AgentError> {
-        // **One resolution for the whole bracket.** The engine that executes, the driver that
-        // records the start and the driver that hears the settle are taken together, under one
-        // lock, so a re-registration cannot land between them — see `window`. Resolving three
-        // times (as this did) let an engine restart execute the run on the outgoing engine
-        // while the incoming window recorded it, or deliver a settle to a satellite that had
-        // never heard of the session, where it silently matched nothing.
         let Some((engine, asks, notices)) = self.window(project, |w| {
             (Arc::clone(&w.engine), w.asks.clone(), w.notices.clone())
         }) else {
@@ -309,18 +296,6 @@ impl Host for AgentDirectory {
 
         let ws = WsId::from(session);
         let tag = RunTag(self.runs.fetch_add(1, Ordering::Relaxed) as u128);
-        // **A dropped run still settles** (AS-04). Dropping this future is how a caller cancels
-        // — the assistant's stop drops the whole turn, and an MCP client hanging up mid-run does
-        // the same — and until this guard existed the settle below simply never ran, leaving the
-        // satellite's row on `Running` for the rest of the window's life. AA-03c reaps such a
-        // row when a *connection* ends, which covers a client that disconnects and nothing else:
-        // the assistant's connection is its own mount in the window, so its stopped runs would
-        // sit there until the project closed.
-        //
-        // The guard's message is the engine's own `CANCELLED`, not a word invented here, so the
-        // row reads exactly as a cancelled press does (AGENTS.md §2 — a stop is not a failure,
-        // and only `stopped_on_purpose` knows which is which). It is **disarmed** on the normal
-        // path, because a run that finished sends its real outcome one line further down.
         let mut cancelled = SettleOnDrop {
             armed: true,
             notices: notices.clone(),
@@ -333,28 +308,12 @@ impl Host for AgentDirectory {
                 .query(ws, tag, sql, page_size)
                 .await
                 .map(|(output, _)| Settled::Rows(output)),
-            // Wrapped here, exactly as the app's own Run capability does it: `Explain` means
-            // "plan this statement", never "the caller already wrote EXPLAIN" — and never
-            // `analyze`, which would execute the query the caller was avoiding.
             RunMode::Explain => engine
                 .explain(ws, tag, as_explain(&sql, false))
                 .await
                 .map(Settled::Plan),
         };
 
-        // Straight down the sender the start was answered on — not a fresh lookup, which is
-        // what could deliver this to a different mount.
-        //
-        // **A settle nobody is left to hear is dropped, deliberately.** If the window closed
-        // while the query was executing, this send fails and the agent still gets its rows —
-        // which is the honest answer, because the query really did run. Answering
-        // `WindowGone` instead was considered and refused: it would report a fault for a
-        // statement that succeeded, and the agent's recovery from a window loss is to run it
-        // again, so it would pay for the same scan twice. Nothing is stranded by the silence
-        // either — the satellite that would have shown the row went with the window. The one
-        // case where a settle could have landed on a *live* satellite that never heard the
-        // start is the same-root remount, and resolving the whole bracket once (above) is
-        // what makes that unrepresentable.
         cancelled.armed = false;
         let _ = notices.send(AgentNotice::RunSettled {
             agent,
@@ -451,8 +410,6 @@ mod tests {
                 let Some(AgentAsk::OpenQuerySession { agent, reply }) = asks.recv().await else {
                     panic!("expected an open-query-session ask");
                 };
-                // The identity travels with the ask, because opening is when the window first
-                // has anything of this agent's to show.
                 assert_eq!(agent.identity.name, "claude-code");
                 let _ = reply.send(answered);
             },
@@ -499,8 +456,6 @@ mod tests {
             "sales".into(),
             Arc::new(Engine::new(BTreeMap::new())),
         );
-        // The driver's end goes, the entry does not: a send into a closed channel is the
-        // same fact one step later.
         drop(asks);
         assert!(matches!(
             block_on(directory.catalog(Path::new("/w/sales"))),
@@ -532,7 +487,6 @@ mod tests {
                 100,
             ),
             async {
-                // Taken, and then dropped with the scope that held it.
                 drop(asks.recv().await);
             },
         ));
@@ -554,7 +508,6 @@ mod tests {
                 Path::new("/w/sales"),
                 AgentId::new(),
                 session,
-                // Would fail loudly if it ever executed.
                 "SELECT * FROM nothing_at_all".into(),
                 RunMode::Run,
                 100,
@@ -568,7 +521,6 @@ mod tests {
         ));
 
         assert!(matches!(settled, Err(AgentError::NotFound(_))));
-        // And nothing was recorded as settled, because nothing was recorded as started.
         assert!(notices.try_recv().is_err());
     }
 
@@ -651,8 +603,6 @@ mod tests {
                     panic!("expected a run-starting ask");
                 };
                 let _ = reply.send(Ok(7));
-                // The restart: this mount goes and a fresh one takes the same root, exactly
-                // as `ProjectLoaded` remounting does, while the run is still executing.
                 directory.deregister(id);
                 let (_, _new_asks, new_notices) = directory.register(
                     PathBuf::from("/w/sales"),

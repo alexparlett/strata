@@ -91,20 +91,12 @@ impl Component for ChatConfirm {
         let config = use_config(ConfigChan::Settings);
         let roles = use_roles();
         let error_tone = tones().error;
-        // The destructive action wears the shared `cancel_button` dress — the themes' authored
-        // destructive tone, never a hardcoded red.
         let danger = get_theme!(
             &None::<CancelButtonThemePartial>,
             CancelButtonThemePreference,
             "cancel_button"
         );
 
-        // The work itself, off the pressed element's scope.
-        //
-        // **The target rides in the state, never captured.** `use_side_effect` builds its closure
-        // **once** (`use_hook(|| Effect::create(..))`) and re-runs it when a state it `read()`s
-        // changes — so a target cloned out of this render would be frozen at the first one, which
-        // is `None`, and the effect would return every time without doing anything.
         use_side_effect(move || {
             let Some(target) = pending.read().clone() else {
                 return;
@@ -117,15 +109,10 @@ impl Component for ChatConfirm {
             }
         });
 
-        // Read after the hooks, never before: a component's hooks run a fixed number of times
-        // per render, so the early return has to come after all of them.
         let Some(target) = target else {
             return rect().into_element();
         };
         let verb = target.verb();
-        // **The action over its subject, in the header** — the drop confirm's shape exactly. The
-        // heading belongs to the header run and the body carries only the prose; saying it in
-        // both is the card stating its own name twice.
         let title = rect()
             .width(Size::fill())
             .vertical()
@@ -140,12 +127,6 @@ impl Component for ChatConfirm {
                 ChatDrop::All => None,
             });
 
-        // **The press records the intent; this component's own scope performs it.** `discard` and
-        // `clear_all` spawn the file work, and `spawn` binds to whichever scope is current during
-        // dispatch — the pressed Button's, which `slot.set(None)` unmounts in the same handler.
-        // Spawned from there the delete was dropped before its first poll, so the row vanished
-        // and the file stayed. The effect below runs in this component's scope, which outlives
-        // the dialog's contents.
         let armed = target.clone();
         let mut confirm = move || {
             pending.set(Some(armed.clone()));

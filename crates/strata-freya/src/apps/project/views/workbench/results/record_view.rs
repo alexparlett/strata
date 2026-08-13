@@ -159,42 +159,29 @@ impl PreviewMemo {
 }
 
 impl Component for RecordView {
-    // Two theme reads and the whole field gutter: one row per column of the record, each
-    // dressed by dtype. Length here is the field count, not tangle.
     #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, RecordViewThemePreference, "record_view");
-        // The shared type palette dresses the field gutter's dtype labels.
         let palette = type_palette();
         let shadow = use_roles().get(Role::Shadow);
         let mut open = self.open;
         let row = self.row;
         let len = self.data.rows.len();
 
-        // The label's absolute row number — the same numbering the gutter shows (a filtered
-        // page keeps the survivors' original positions).
         let abs_n = self
             .row_nums
             .as_ref()
             .and_then(|nums| nums.get(row).copied())
             .unwrap_or(self.row_base + row + 1);
 
-        // This display row's position in the page batch (a find-filtered page maps back
-        // through the survivors' gutter numbers) — the copy buttons and the nested blocks
-        // below both read it.
         let batch_row = page_batch_row(
             self.row_nums.as_deref().map(Vec::as_slice),
             self.row_base,
             row,
         );
 
-        // Every nested column's JSON preview for *this* row — built when the row changes, not on
-        // every render (P2-24).
         let previews = use_preview_memo().row(&self.data, batch_row);
 
-        // ── header: label · copy JSON/CSV · divider · prev/next · ghost close ────────────
-        // A copy button: outline dress (the theme's ghost-button recipe), copy glyph + label,
-        // routing through the shared results-copy path (see the module doc).
         let copy_button =
             |label: &'static str,
              title: &'static str,
@@ -215,8 +202,6 @@ impl Component for RecordView {
                             ),
                     )
             };
-        // Prev/next re-point the open slot within the page (clamped — the standard outline
-        // button's disabled dress covers the canvas's faint/no-cursor edge states).
         let step = |icon: IconName, title: &'static str, target: Option<usize>| {
             TooltipContainer::new(Tooltip::new_text(title))
                 .position(AttachedPosition::Bottom)
@@ -281,12 +266,10 @@ impl Component for RecordView {
             ))
             .child(close);
 
-        // ── body: one field row per column ───────────────────────────────────────────────
         let mut fields = rect().width(Size::fill()).vertical();
         for (ci, col) in self.data.columns.iter().enumerate() {
             let cell = &self.data.rows[row][ci];
             let nested = matches!(col.kind, Kind::Struct | Kind::List | Kind::Map) && !cell.null;
-            // The 150px left column: field name over its dtype in the type colour.
             let left = rect()
                 .width(Size::px(150.))
                 .vertical()
@@ -302,9 +285,6 @@ impl Component for RecordView {
                         .color(kind_color(col.kind, &palette))
                         .wrap(),
                 );
-            // The value: a nested cell renders its pretty JSON in a sunken scroll block
-            // (capped at 190px, per the canvas); a scalar renders as one wrapped mono run —
-            // nulls in the dimmed tone, everything else in the value colour.
             let value: Element = if nested {
                 let json = previews
                     .get(ci)
@@ -320,11 +300,6 @@ impl Component for RecordView {
                         ScrollView::new()
                             .height(Size::auto())
                             .max_height(Size::px(190.))
-                            // The block sits inside the scrolling field list: a wheel gesture
-                            // that starts over it (and can move it) stays latched to it — no
-                            // mid-gesture spill to the body (double scroll) — while a gesture
-                            // starting at its end, or over a block too short to scroll, passes
-                            // through to the body (no hover trap).
                             .latch_wheel()
                             .child(
                                 rect()
@@ -362,8 +337,6 @@ impl Component for RecordView {
                 )
                 .child(Divider::horizontal().color(theme.row_divider_fill));
         }
-        // Hugs a short record; a long one caps at ~the canvas's 82vh card (minus the header)
-        // and scrolls — the `cell_view` body idiom.
         let body = ScrollView::new()
             .height(Size::auto())
             .max_height(Size::window_percent(72.))
@@ -382,8 +355,6 @@ impl Component for RecordView {
             .child(Divider::horizontal().color(theme.divider_fill))
             .child(body);
 
-        // The overlay layer + global position (the `cell_view` wrapper, verbatim): backdrop
-        // press closes; presses on the card land on its own nodes and never reach the backdrop.
         rect()
             .layer(Layer::Overlay)
             .position(Position::new_global())
@@ -465,13 +436,13 @@ mod interaction {
             1.,
         );
         runner.sync_and_update();
-        runner.click_cursor((450., 350.)); // centre of the centred card
+        runner.click_cursor((450., 350.));
         runner.sync_and_update();
         assert!(
             open.peek().is_some(),
             "a press inside the card must not dismiss"
         );
-        runner.click_cursor((30., 30.)); // the backdrop
+        runner.click_cursor((30., 30.));
         runner.sync_and_update();
         assert!(open.peek().is_none(), "a backdrop press dismisses");
     }

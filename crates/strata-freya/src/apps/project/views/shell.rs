@@ -13,49 +13,32 @@
 //! them.
 //!
 //! Both rails are fixed (48px, always visible); the sidebar / right pane / drawer are collapsible
-//! `ResizableContainer` panels — present only when the layout has them open, so collapsing a panel
-//! removes it *and* its handle. `ResizableContainer` owns live resizing; each collapsible region
-//! reports its dragged size back to the layout (`Chan::LayoutSize`) so a reopen or a restart
-//! restores it (the shell seeds each panel's `initial_size` from the remembered size). The panels
-//! are **keyed** so the `Workbench` subtree (editor buffer, in-flight query) survives a sibling
-//! collapsing and shifting its position.
+//! `ResizableContainer` panels, present only when the layout has them open. Each reports its
+//! dragged size back to the layout (`Chan::LayoutSize`) so a reopen or a restart restores it, and
+//! the panels are **keyed** so the `Workbench` subtree survives a sibling collapsing and shifting
+//! its position.
 //!
 //! The vertical container is driven through an explicit [`ResizableContext`] controller, because
-//! one size change doesn't come from a drag: the drawer's expand toggle. Seeding `initial_size`
-//! can't move a mounted panel — `ResizablePanel` reads it once, in a `use_hook` — so programmatic
-//! sizing goes through the controller, which is what the fork's own
-//! `component_resizable_panel_controller` example does.
+//! one size change does not come from a drag: the drawer's expand toggle. `ResizablePanel` reads
+//! `initial_size` once in a `use_hook`, so programmatic sizing has to go through the controller.
 //!
-//! # How the shell behaves when it runs out of room (P5-06)
+//! **Behaviour when it runs out of room** follows RustRover rather than the design canvas, which
+//! declares `min-width: 1180px` and has no narrow states to port. Five rules, in order:
 //!
-//! The reference is RustRover, not the design canvas: `Strata.dc.html` declares
-//! `min-width: 1180px` on the app root and scrolls the page below it, so it has no narrow states
-//! to port. JetBrains' answer is the opposite of a minimum — *"it is not possible to enforce
-//! minimal tool window size, and it is up to users to resize it to their needs"* — and a
-//! RustRover window squeezed to ~680px keeps both tool windows **open**, wrapping their text,
-//! while the editor between them is reduced to a stub. Five rules, in order:
+//! 1. **Nothing has a usability floor; everything has a stub floor.** [`PANEL_STUB_W`] and
+//!    [`WORKBENCH_STUB_H`] exist so a panel cannot become a sliver too thin to grab, not to keep it
+//!    useful. The rail is exempt.
+//! 2. **Space is given up in a stated order**: the main pane is the container's *proportional*
+//!    panel, so it gives first and gives everything; the pixel side panels start giving only once
+//!    it is on `min_pixels`, and then equally. That is the sizing model, not a policy written here.
+//! 3. **Chrome shrinks its flexible run, then folds into an overflow menu** — `components::toolbar`.
+//! 4. **Nothing a drag or a squeeze does ever closes a panel.** Both stop at the stub, with the
+//!    handle still there to pull back out. `ResizablePanel::on_collapse` was tried and rejected: a
+//!    panel that vanishes mid-drag reads as having been lost.
+//! 5. **A body scrolls; chrome never does.** Vertically only — a long identifier ellipsizes.
 //!
-//! 1. **Nothing has a usability floor; everything has a stub floor.** [`PANEL_STUB_W`] and the
-//!    workbench's own [`WORKBENCH_STUB_H`] exist so a panel cannot become a sliver too thin to
-//!    grab, not to keep it useful. The rail is exempt: fixed width, never compressed.
-//! 2. **Space is given up in a stated order.** The main pane is the container's *proportional*
-//!    panel, which is what makes it give first and give everything; the side panels are pixel
-//!    panels, so they only start giving once it is on its `min_pixels`, and then they give in
-//!    equal measure. That order is the sizing model rather than a policy written here.
-//! 3. **Chrome shrinks its flexible run, then folds its actions into an overflow menu.** Owned by
-//!    `components::toolbar`, not by this module.
-//! 4. **Nothing a drag or a squeeze does ever closes a panel.** Both stop at the stub, which is
-//!    small enough to be out of the way and wide enough that the handle beside it is still there
-//!    to pull back out with. Closing stays an explicit act: the rail button, or the header ×.
-//!    (The fork grew `ResizablePanel::on_collapse` for a drag-past-the-floor close, and it was
-//!    tried and rejected here — a panel that vanishes mid-drag reads as having been lost, and
-//!    IntelliJ does not do it either.)
-//! 5. **A body scrolls; chrome never does.** Vertically only — a long identifier ellipsizes, which
-//!    is the canvas's answer everywhere it has one.
-//!
-//! Nothing overlaps at any width because each panel rect is `Overflow::Clip`, a flex panel is
-//! never measured negative (a torin fix this task carried), and each chrome row folds or
-//! ellipsizes inside its own box.
+//! Nothing overlaps at any width because each panel rect is `Overflow::Clip`, a flex panel is never
+//! measured negative, and each chrome row folds or ellipsizes inside its own box.
 
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -107,33 +90,22 @@ impl Shell {
 
 impl Component for Shell {
     fn render(&self) -> impl IntoElement {
-        // Subscribe on `Chan::Layout`: a collapse / toggle re-renders the shell (and re-seeds the
-        // panels from the remembered sizes), but a resize drag — which writes `Chan::LayoutSize`,
-        // deriving only `Persist` — never wakes it, so the drag runs churn-free.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
         let border = use_roles().get(Role::Border);
 
-        // The vertical container's controller (see the module note). Supplying one means its
-        // `direction` / `handle_size` come from here rather than the builder — the builder's
-        // `.handle_size` is documented as ignored when a controller is given.
         let drawer_sizing = use_state(|| ResizableContext {
             direction: Direction::Vertical,
             handle_size: 1.,
             ..ResizableContext::default()
         });
 
-        // Sidebar / right panels: present only when open. Each wraps its shell in a sizing
-        // probe (`on_resized`) that remembers the dragged width on `Chan::LayoutSize`.
         let sidebar_panel = layout.sidebar.map(|_| {
             ResizablePanel::new(PanelSize::px(layout.sidebar_w))
                 .min_size(PANEL_STUB_W)
                 .max_size(SIDEBAR_MAX_W)
                 .key("sidebar")
                 .order(0usize)
-                // Only a **drag** reports a width (`on_resized`, not `on_sized`): a window squeeze
-                // moves the panel too, and recording that would overwrite the remembered width
-                // with whatever the narrow window allowed, so widening back would not restore it.
                 .on_resized(move |w: f32| {
                     let mut radio = radio;
                     if radio.read().layout.sidebar_w != w {
@@ -142,10 +114,6 @@ impl Component for Shell {
                 })
                 .child(rect().expanded().child(Sidebar::new()))
         });
-        // The right pane: one slot, whichever assistive surface the right rail has chosen. Keyed
-        // per pane rather than "right", so switching between them remounts — the two share a
-        // position and nothing else, and a transcript inheriting the inspector's scroll offset is
-        // the kind of thing a shared key buys.
         let right_panel = layout.right.map(|pane| {
             let (width, key, max, body): (f32, &str, f32, Element) = match pane {
                 RightPane::Inspector => (
@@ -177,22 +145,13 @@ impl Component for Shell {
                 .child(rect().expanded().child(body))
         });
 
-        // panes-row: [ sidebar? | workbench (fills) | right pane? ]. The workbench panel is keyed
-        // so it isn't remounted when a sibling collapses.
         let panes_row = ResizableContainer::new()
             .direction(Direction::Horizontal)
             .handle_size(1.)
             .panel(sidebar_panel)
             .panel(
                 ResizablePanel::new(PanelSize::percent(100.))
-                    // The main pane is proportional, which is what makes it the **first** to give
-                    // when the window narrows; `min_pixels` is where it stops and the side panels
-                    // start giving instead, in equal measure (the RustRover order).
                     .min_pixels(PANEL_STUB_W)
-                    // ...and `min_pixels` is only the *whole* floor if the flex-weight one gets
-                    // out of its way. Left unstated it defaults to a quarter of the initial
-                    // weight, which is 25 of 100 — about 154px here, three times the stub, and
-                    // silently the thing that actually stops the drag.
                     .min_size(0.)
                     .key("main")
                     .order(1usize)
@@ -200,7 +159,6 @@ impl Component for Shell {
             )
             .panel(right_panel);
 
-        // Drawer panel: present only when open; remembers its dragged height.
         let drawer_panel = layout.drawer.map(|_| {
             ResizablePanel::new(PanelSize::px(layout.drawer_h))
                 .min_size(DRAWER_STUB_H)
@@ -216,17 +174,12 @@ impl Component for Shell {
                 .child(rect().expanded().child(Drawer::new(drawer_sizing)))
         });
 
-        // Right area: [ panes-row (fills) | drawer? ] stacked vertically.
         let right_area = ResizableContainer::new()
             .direction(Direction::Vertical)
             .controller(drawer_sizing)
             .panel(
                 ResizablePanel::new(PanelSize::percent(100.))
-                    // The point at which the drawer stops taking from the workbench. Comes from
-                    // the workbench's own bars rather than being restated here.
                     .min_pixels(WORKBENCH_STUB_H)
-                    // See the panes row's main panel: the defaulted flex-weight minimum would
-                    // otherwise outrank this and stop the drag well above the stub.
                     .min_size(0.)
                     .key("panes")
                     .order(0usize)
@@ -234,16 +187,6 @@ impl Component for Shell {
             )
             .panel(drawer_panel);
 
-        // Body row: the two fixed rails with the resizable area between them, each behind its
-        // own 1px rule. Both rails are full height, so the drawer sits *between* them rather
-        // than under either — the canvas's arrangement, and the one that keeps a rail a
-        // permanent edge rather than something the drawer can push around.
-        //
-        // **The middle takes what is left, and says so.** `ResizableContainer` renders itself
-        // `expanded()`, which in a `Content::Normal` row claims the whole width and pushes
-        // whatever follows off screen — which is exactly what happened when the right rail was
-        // added after it. So the row is `Content::Flex` and the middle is a flexing wrapper
-        // (`Size::flex` is only divided by a parent whose content is `Flex` — AGENTS.md §3).
         rect()
             .expanded()
             .horizontal()
@@ -278,8 +221,6 @@ pub fn set_drawer_panel_height(mut sizing: State<ResizableContext>, h: f32) {
         .find(|p| matches!(p.sizing, PanelSize::Pixels(_)))
     {
         panel.size = h;
-        // The toggle is a stated intent, so it moves `desired` as a drag would. Setting only
-        // `size` would have the container's next reflow put the drawer straight back.
         panel.desired = h;
     }
 }

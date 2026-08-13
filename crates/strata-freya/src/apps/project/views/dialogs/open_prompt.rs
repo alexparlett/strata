@@ -64,10 +64,6 @@ impl Component for OpenPromptCard {
         let roles = use_roles();
         let open = self.open;
 
-        // One binding per handler: `AppCtx` and `Platform` are `Clone`, not `Copy`, so each
-        // action takes its own. Enter and This Window are the same outcome and so are two
-        // separate closures over the same values, not one shared one — `on_confirm` carries
-        // `()` while a button handler carries its press event.
         let (this_app, this_platform) = (self.app.clone(), platform.clone());
         let (enter_app, enter_platform) = (self.app.clone(), platform.clone());
         let (new_app, new_platform) = (self.app.clone(), platform);
@@ -100,7 +96,6 @@ impl Component for OpenPromptCard {
 
         Dialog::new()
             .on_dismiss(move |()| open.dismiss())
-            // Enter takes the primary action, which is the comp's This Window.
             .on_confirm(move |()| {
                 open.choose(
                     enter_platform.clone(),
@@ -224,28 +219,19 @@ mod interaction {
             app,
             (900., 700.).into(),
             |r| {
-                // The window's two slots — the only thing the assertions read, because they
-                // are the only thing the dialog is allowed to change.
                 let open = r.provide_root_context(|| OpenCtx {
                     root: State::create(PathBuf::from(HERE)),
                     prompt: State::create(Some(PathBuf::from(THERE))),
-                    // Idle by default, like a window with nothing executing; the gate test
-                    // flips `running` before it presses.
                     guard: State::create(Arc::new(CloseGuard {
                         running: Arc::new(AtomicBool::new(false)),
                         confirm: AtomicBool::new(true),
                         last: AtomicBool::new(false),
                     })),
                     confirm: State::create(None),
-                    // A healthy window: the faulted-reload arm never fires here, and the
-                    // generation is a fresh counter nothing remounts on.
                     faulted: State::create(false),
-                    // …and one whose subtree is up, which is what the prompt is asked from.
                     loaded: State::create(true),
                     restart: EngineRestart(State::create(0)),
                 });
-                // The app-globals the actions are handed. Fresh per test, so nothing here
-                // touches the real app's config store.
                 r.provide_root_context(|| AppCtx {
                     themes: ThemesCtx::discover(),
                     config: ConfigStation::create_global(AppConfig::default()),
@@ -254,17 +240,10 @@ mod interaction {
                     menu: create_global_menu(),
                     open: create_global_open(),
                     agent: create_global_agent(),
-                    // Empty rather than `create_global_listings`, which reads the machine's
-                    // own satellite: same reason the config store above is a fresh default.
                     listings: State::create_global(Listings::default()),
                     probes: State::create_global(Probes::default()),
-                    // No runtime: this test opens no chat pane, and building one would spawn
-                    // threads for a window that never asks anything.
                     assistant: None,
-                    // Idle: the prompt makes no check, and a real one would dial out from a
-                    // test.
                     updates: create_global_updates(),
-                    // Nothing to drain: no menubar and no window registration here.
                     update_request: create_global_update_request(),
                 });
                 open
@@ -386,7 +365,6 @@ mod interaction {
                     runner.click_cursor(at);
                 }
                 "escape" => runner.press_key(Key::Named(NamedKey::Escape)),
-                // Well clear of the 420px card centred in a 900x700 window.
                 _ => runner.click_cursor((20., 20.)),
             }
             runner.sync_and_update();

@@ -98,7 +98,6 @@ pub fn draw(
     let mut marks = Vec::new();
     let mut area_out = None;
     if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
-        // Too small to have drawn anything, so there is nothing to be over either.
         return (marks, area_out);
     }
     let area = PlotSkiaBackend::new(
@@ -109,9 +108,6 @@ pub fn draw(
     .into_drawing_area();
 
     let dress = &frame.dress;
-    // A log axis is a *view* preference, and the frame carries it resolved against the mark
-    // (`config::log_axis`); whether the data can carry one is `mod.rs`'s question, asked once
-    // so the banner and the paint cannot disagree.
     let log = frame.log_y;
     let drawn = match &frame.data {
         ChartData::Table { axis, series } => match frame.mark {
@@ -151,14 +147,9 @@ pub fn draw(
             &mut area_out,
         ),
         ChartData::Bins(bins) => histogram(&area, dress, bins, log, &mut marks, &mut area_out),
-        // A refusal carries nothing to draw at all (spec §1.4) — the body renders the reason
-        // in place of the canvas.
         ChartData::OverCap { .. } | ChartData::Duplicates { .. } => Ok(()),
     };
     if let Err(err) = drawn {
-        // A plot that failed mid-draw leaves a part-drawn pane, which is the one thing the
-        // surface's notice states cannot describe — so it is a warning, not a debug line. It
-        // is not `error!` only because a resize drag would repeat it per frame.
         tracing::warn!("chart: {err}");
     }
     (marks, area_out)
@@ -252,8 +243,6 @@ where
         top: y as f32 - POINT_REACH,
         right: x as f32 + POINT_REACH,
         bottom: y as f32 + POINT_REACH,
-        // The point itself, not the box's corner — the box is a *reach* around it, and a
-        // crosshair drawn on its top edge would name a row [`POINT_REACH`] off the value.
         cross: Cross {
             at: (x as f32, y as f32),
             value: at.1,
@@ -261,8 +250,6 @@ where
         label,
     }
 }
-
-// ---- the cartesian marks ----
 
 /// Grouped bars: one run per series, each category's slot split between them.
 fn bars<'a>(
@@ -331,8 +318,6 @@ fn lines<'a>(
     area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let count = axis.labels.len();
-    // The rows' own X positions where the result is already in X order, so an irregular time
-    // series draws with its real gaps; equally spaced otherwise (see `axis`).
     let cats = Categories::placed(axis.positions.as_ref(), count)
         .unwrap_or_else(|| Categories::indexed(count));
     let all = || {
@@ -343,9 +328,6 @@ fn lines<'a>(
     };
     let values = value_range(series.iter().flat_map(|s| s.values.iter().copied()));
     let coord = value_coord(log, all(), &values);
-    // A log axis has no zero, so what a mark measures from is the axis's own floor. An area is
-    // never one of them — the span it fills *is* the magnitude, which is why a log axis is not
-    // offered for it.
     let base = if log {
         coord.range().start
     } else {
@@ -374,8 +356,6 @@ fn lines<'a>(
             } else {
                 chart.draw_series(LineSeries::new(run.iter().copied(), color.stroke_width(2)))?;
             }
-            // Dots while they still read as dots — and always for a value stranded between
-            // two gaps, which no line segment would show at all.
             if count <= POINT_MARKERS_MAX || run.len() == 1 {
                 chart.draw_series(
                     run.iter()
@@ -396,7 +376,6 @@ fn lines<'a>(
             ));
         }
     }
-    // A log axis has no zero on it, so there is no zero rule to draw either.
     if log {
         return Ok(());
     }
@@ -421,8 +400,6 @@ fn scatter<'a>(
     let xs = data_range(points.iter().map(|p| p.x));
     let ys = data_range(points.iter().map(|p| p.y));
     let coord = value_coord(log, points.iter().map(|p| p.y), &ys);
-    // The axis's own span — the log decades where a log axis was built — so the trendline is
-    // clipped to what this chart is actually drawing, not to the linear range.
     let y_span = coord.range();
     let y_label = coord.tick_label();
     let mut chart = ChartBuilder::on(area)
@@ -477,8 +454,6 @@ fn trendline<X>(
 where
     X: Ranged<ValueType = f64>,
 {
-    // The points' own hue at full strength — the points are drawn misted, so the fit reads
-    // as the statement about them rather than as a second series.
     let color = rgba(dress.series(0));
     let sampled: Vec<(f64, f64)> = (0..=TREND_SAMPLES)
         .filter_map(|i| {
@@ -487,8 +462,6 @@ where
             (y.is_finite() && y >= ys.start && y <= ys.end).then_some((x, y))
         })
         .collect();
-    // A fit that barely enters the plotted span has nothing honest to draw — a dashed line
-    // needs two vertices, and a lone R² with no line under it would label nothing.
     let Some((&anchor, _)) = sampled.last().zip(sampled.get(1)) else {
         return Ok(());
     };
@@ -498,9 +471,6 @@ where
         TREND_GAP,
         color.stroke_width(2),
     ))?;
-    // Anchored right of its point, hanging above it — except near the plot's top, where
-    // above would put the text into the margin (the backend does not clip), so it flips
-    // below: the same flip the crosshair's readout makes.
     let near_top = anchor.1 >= ys.start + (ys.end - ys.start) * 0.9;
     let v_pos = if near_top { VPos::Top } else { VPos::Bottom };
     let style = text(dress, &color).pos(Pos::new(HPos::Right, v_pos));
@@ -594,13 +564,8 @@ fn heatmap<'a>(
 ) -> Plot {
     let cats = Categories::indexed(axis.labels.len());
     let rows = Categories::indexed(series.len());
-    // One normalization for the whole surface — the paint here, the strip's ramp legend and
-    // the empty-matrix notice all read the same [`heat_bounds`], so they cannot drift.
     let bounds = heat_bounds(series);
     let t_of = |value: f64| match bounds {
-        // `hi - lo` can overflow to infinity on a column spanning more than f64 holds — the
-        // same overflow the histogram refuses by name. A ramp has no refusal to offer, so
-        // the whole matrix sits mid-ramp rather than painting NaN channels as black.
         Some((lo, hi)) if hi > lo && (hi - lo).is_finite() => {
             (((value - lo) / (hi - lo)) as f32).clamp(0., 1.)
         }
@@ -625,9 +590,6 @@ fn heatmap<'a>(
 
     let x_slot = cats.slot();
     let y_slot = rows.slot();
-    // One `draw_series` over every cell, not one per cell: a rectangle carries its own
-    // fill, and this loop runs on the render thread every repaint — per-cell calls are pure
-    // call-and-allocation churn at the read's 1,000-row cap.
     let mut cells = Vec::new();
     for (row, one) in series.iter().enumerate() {
         for (i, value) in one.values.iter().enumerate() {
@@ -646,8 +608,6 @@ fn heatmap<'a>(
                 [corner_a, corner_b],
                 rgba(dress.heat_at(t_of(value))).filled(),
             ));
-            // The cross sits at the cell's centre and carries the cell's own measure — the
-            // number worth reading out — not a corner's row index.
             hits.push(hit_box_at(
                 &chart,
                 corner_a,
@@ -715,8 +675,6 @@ fn band<'a>(
     area_out: &mut Option<PlotArea>,
 ) -> Plot {
     let [centre, lower, upper] = series else {
-        // A frame whose mark and data momentarily disagree — paint nothing true rather
-        // than guess which series is which.
         return Ok(());
     };
     let count = axis.labels.len();
@@ -734,10 +692,6 @@ fn band<'a>(
     )?;
 
     let color = rgba(dress.series(0));
-    // **One walk** decides what a category shows: runs of consecutive categories where the
-    // centre and both bounds are all present and finite, with the hover hit pushed beside
-    // the vertex it describes — one predicate, so a hit can never sit on a category the
-    // paint skipped.
     let mut runs: Vec<Vec<(f64, f64, f64, f64)>> = Vec::new();
     let mut run: Vec<(f64, f64, f64, f64)> = Vec::new();
     for i in 0..count {
@@ -771,8 +725,6 @@ fn band<'a>(
     }
 
     for run in &runs {
-        // The tinted span: the upper edge left to right, then the lower edge back — one
-        // closed polygon per run.
         let mut edge: Vec<(f64, f64)> = run.iter().map(|(x, _, _, hi)| (*x, *hi)).collect();
         edge.extend(run.iter().rev().map(|(x, _, lo, _)| (*x, *lo)));
         chart.draw_series(once(Polygon::new(edge, color.mix(0.14))))?;
@@ -826,9 +778,6 @@ fn box_plot<'a>(
     let slot = cats.slot();
     let half_box = slot * BOX_WIDTH / 2.;
     let half_cap = half_box * WHISKER_CAP;
-    // Batched per layer — whiskers and caps, box fills, box outlines, median ticks — rather
-    // than ~6 `draw_series` calls per category: this runs on the render thread every
-    // repaint, and per-part calls are pure churn at the read's 1,000-row cap.
     let mut strokes = Vec::new();
     let mut fills = Vec::new();
     let mut outlines = Vec::new();
@@ -848,7 +797,6 @@ fn box_plot<'a>(
             continue;
         }
         let x = cats.at(i);
-        // The whisker and its caps, under the box.
         strokes.push(PathElement::new(
             vec![(x, lo), (x, hi)],
             color.stroke_width(1),
@@ -859,9 +807,6 @@ fn box_plot<'a>(
                 color.stroke_width(1),
             ));
         }
-        // The quartile box: a translucent fill under its own outline. `min`/`max` rather
-        // than trusting q1 <= q3 — the columns are the user's, and a swapped pair should
-        // draw a box, not an inside-out rectangle.
         let (box_lo, box_hi) = (q1v.min(q3v), q1v.max(q3v));
         fills.push(Rectangle::new(
             [(x - half_box, box_lo), (x + half_box, box_hi)],
@@ -871,17 +816,11 @@ fn box_plot<'a>(
             [(x - half_box, box_lo), (x + half_box, box_hi)],
             color.stroke_width(1),
         ));
-        // The median tick, full box width, heaviest stroke — it is the answer the mark
-        // leads with.
         medians.push(PathElement::new(
             vec![(x - half_box, med), (x + half_box, med)],
             color.stroke_width(2),
         ));
 
-        // One hit per category over everything drawn — whiskers *and* box, whichever
-        // reaches further, since a swapped mapping can put the quartiles outside the
-        // whiskers and the drawn overhang must still answer a hover. Ruled at the median,
-        // and both pairs read min-to-max so a swap never prints backwards.
         let reach_lo = lo.min(hi).min(box_lo);
         let reach_hi = lo.max(hi).max(box_hi);
         hits.push(hit_box_at(
@@ -908,8 +847,6 @@ fn box_plot<'a>(
     zero_baseline(&mut chart, dress, &cats, &values)
 }
 
-// ---- the one radial mark ----
-
 /// One slice per category over a single measure.
 ///
 /// A missing or zero value has no wedge to be — a zero-area slice is a slice of nothing, which
@@ -933,19 +870,14 @@ fn pie(
     }
     let sizes: Vec<f64> = drawn.iter().map(|(_, value)| *value).collect();
     let colors: Vec<RGBColor> = (0..drawn.len()).map(|n| rgb(dress.slice(n))).collect();
-    // No text around the wedges: what a colour means is the strip's legend, which is the one
-    // place that both names every slice and has somewhere to scroll when there are 24 of them.
     let labels = vec![""; drawn.len()];
 
     let (width, height) = area.dim_in_pixel();
     let center = (width as i32 / 2, height as i32 / 2);
     let radius = f64::from(width.min(height)) * PIE_RADIUS;
     let mut wedges = Pie::new(&center, &radius, &sizes, &colors, &labels);
-    // Start at twelve o'clock, the way every pie in the canvas does.
     wedges.start_angle(-90.);
 
-    // The same sweep `Pie` walks, so a wedge and its hit region are the same wedge: it starts
-    // at the same angle and advances by each slice's share of the total.
     let total: f64 = sizes.iter().sum();
     let mut angle = -FRAC_PI_2;
     for (i, value) in &drawn {
@@ -994,8 +926,6 @@ pub fn pie_slices(series: &ChartSeries) -> Vec<(usize, f64)> {
         .filter_map(|(i, value)| Some((i, value.filter(|v| v.is_finite() && *v > 0.)?)))
         .collect()
 }
-
-// ---- shared furniture ----
 
 /// The plot frame every cartesian mark is built in.
 fn frame_on<'a>(
@@ -1119,12 +1049,8 @@ fn data_range(values: impl Iterator<Item = f64>) -> Range<f64> {
         high = high.max(value);
     }
     if !(low.is_finite() && high.is_finite()) {
-        // Nothing finite to span. The surface shows a notice instead of this plot, so the
-        // range only has to be one an axis can be built on.
         return 0.0..1.0;
     }
-    // A span of nothing is every point at one value: give it a window rather than a zero-width
-    // axis plotters cannot map into.
     let pad = if high > low {
         (high - low) * EDGE_AIR
     } else {
@@ -1160,8 +1086,6 @@ fn value_range(values: impl Iterator<Item = Option<f64>>) -> Range<f64> {
     }
     let start = if low < 0. { -nice_max(-low) } else { 0. };
     let end = nice_max(high);
-    // `nice_max` never answers non-finite, but the pair still has to be a usable span — see
-    // `finite_span` for why an unusable one is a hang rather than a bad-looking axis.
     finite_span(start, end, start, start + 1.)
 }
 
@@ -1287,11 +1211,9 @@ mod tests {
             "with air at both ends so an extreme point is inside the frame, got {years:?}"
         );
 
-        // One value repeated is a span of nothing, which no axis can be built on.
         let flat = data_range([51.5, 51.5].into_iter());
         assert!(flat.start < 51.5 && flat.end > 51.5, "{flat:?}");
 
-        // Nothing finite is still an axis — the surface shows a notice in place of the plot.
         assert_eq!(data_range([f64::NAN, f64::INFINITY].into_iter()), 0.0..1.0);
         assert_eq!(data_range(empty()), 0.0..1.0);
     }

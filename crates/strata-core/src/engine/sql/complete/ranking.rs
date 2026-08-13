@@ -187,9 +187,6 @@ impl<'a> Pool<'a> {
             return;
         }
         let c = make();
-        // The gate label **is** the completion's label — the whole equivalence with
-        // filtering after the fact rests on that, at every push site, and a site that
-        // gated on something else would silently offer a different set.
         debug_assert_eq!(
             c.label, label,
             "a pool gate must match on the label it pushes"
@@ -211,11 +208,6 @@ pub(super) fn rank(pool: Pool) -> Vec<Completion> {
         .into_iter()
         .map(|c| (c.mt, c.ctx, c.ord, c.c))
         .collect();
-    // The alphabetical tie-break compares ASCII-lowercased bytes **lazily** — the same
-    // order as comparing two `to_ascii_lowercase` copies, without building them. Inside
-    // a comparator those copies were two allocations per *comparison*, so an
-    // empty-partial offer (where nothing filters and the pool sorts entire) paid them
-    // O(n log n) times.
     ranked.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then(a.1.cmp(&b.1))

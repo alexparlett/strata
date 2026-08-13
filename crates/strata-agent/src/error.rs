@@ -3,17 +3,14 @@
 //!
 //! Two absences are the design:
 //!
-//! - **There is no `Stopped` variant.** A cancel or a supersede is not a fault: the engine
-//!   settles one of three strings that `strata_core::engine::stopped_on_purpose` knows, and
-//!   `run` reports them as a *non-fault outcome shape*
-//!   ([`RunResult::Stopped`](crate::wire::RunResult::Stopped)). Putting a stop in here would
-//!   be the third copy of a rule that already drifted twice in this codebase.
-//! - **There is no `Unauthorized` variant.** A bad token is answered with HTTP 401 by
-//!   [`crate::server`], *before* any tool runs, so it never reaches a tool result.
+//! - **No `Stopped` variant.** A cancel or a supersede is not a fault: `run` reports the engine's
+//!   three strings as [`RunResult::Stopped`](crate::wire::RunResult::Stopped), and a copy here
+//!   would be the third of a rule that has already drifted twice.
+//! - **No `Unauthorized` variant.** A bad token is answered with HTTP 401 by [`crate::server`],
+//!   before any tool runs.
 //!
-//! Everything here becomes an `isError` tool result rather than a JSON-RPC protocol error:
-//! these are conditions the agent should read and recover from (`list_query_sessions` /
-//! `list_tables` are the recovery), not malformed requests.
+//! Everything here becomes an `isError` tool result rather than a JSON-RPC protocol error: these
+//! are conditions the agent should read and recover from, not malformed requests.
 
 use std::error::Error;
 use std::fmt;
@@ -72,11 +69,6 @@ impl AgentError {
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // One statement gets the editor's message verbatim; several get it per
-            // statement, indexed, because "which one" is otherwise unanswerable. An empty
-            // list is not a refusal at all — the tool layer only builds this from a non-empty
-            // verdict — but the vector cannot say so, and the arm below would print *nothing*
-            // for it. A blank `isError` is the worst message there is, so it is spelled.
             AgentError::Policy(refusals) => match &refusals[..] {
                 [] => f.write_str(UNJUDGED),
                 [one] => f.write_str(&one.blocked.editor_message()),

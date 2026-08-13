@@ -47,13 +47,10 @@ impl Component for Inspector {
             return rect();
         };
         let status = row.status();
-        // Nothing useful to say about a row with no name that its own empty box does not already
-        // say.
         if status == KeyStatus::Blank {
             return rect();
         }
         let restart = strata_core::engine::config::is_restart_key(row.key());
-        // The badge and the sentence are one answer read twice, not two lookups.
         let (badge, blurb) = match status {
             KeyStatus::Known(def) => (None, def.desc),
             KeyStatus::Reserved => (Some(("RESERVED", tones.error)), RESERVED),
