@@ -6,6 +6,7 @@
 //! copies that differed only by omission (view rows had no click handler at all, so clicking one
 //! silently did nothing), which is exactly what a second copy of a list buys you.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -38,6 +39,7 @@ use crate::components::typography::{scale, Body, InputTypography, Meta, MonoValu
 use crate::keymap::on_command;
 use crate::state::use_config_station;
 use strata_core::config::Command;
+use strata_core::util::clip;
 
 /// Row heights + the column block's indent, from the design canvas.
 const ENTRY_HEIGHT: f32 = 30.;
@@ -110,6 +112,21 @@ const INTERNAL_BADGE: &str = "INTERNAL";
 /// on its own say the thing the user has to know before dropping the row.
 const INTERNAL_TIP: &str = "Strata stores this table's data in the project";
 
+/// How much of a refusal this tooltip will show, and where the rest of it is.
+///
+/// **The limit lives here because the limit is this surface's.** It used to live in the engine
+/// (`register_error`'s 240-character cut), which meant a constraint belonging to a sidebar
+/// overlay was applied to the string *every* consumer read — so the Problems drawer, which wraps,
+/// and its copy button, which exists to put the message on the clipboard, both handed back a
+/// sentence cut mid-clause. The engine's message is whole again; a tooltip that cannot hold it
+/// says so and names the surface that can.
+///
+/// Most refusals are one short sentence Strata wrote ("Reads orders, which is no longer in the
+/// catalog.") and are shown entire, with no pointer — the pointer appears exactly when something
+/// was left out, which is what makes it worth reading.
+const TIP_CHARS: usize = 160;
+const TIP_MORE: &str = "\nSee Problems for the full message.";
+
 /// What the row's one trailing status column is saying. A type rather than a built element so
 /// it can be compared, and because the row draws it in more than one place.
 #[derive(Clone, PartialEq)]
@@ -131,16 +148,31 @@ impl StatusMark {
             StatusMark::Loading => tip(LOADING)
                 .child(CircularLoader::new().size(STATUS_DOT).a11y_alt(LOADING))
                 .into_element(),
-            StatusMark::Problem(reason) => tip(reason.clone())
-                .child(
-                    rect().a11y_alt(reason.clone()).child(
-                        Icon::new(IconName::Warning)
-                            .color(theme.warn_color)
-                            .size(STATUS_DOT),
-                    ),
-                )
-                .into_element(),
+            StatusMark::Problem(reason) => {
+                let shown = tip_text(reason);
+                tip(shown.clone())
+                    .child(
+                        rect().a11y_alt(shown).child(
+                            Icon::new(IconName::Warning)
+                                .color(theme.warn_color)
+                                .size(STATUS_DOT),
+                        ),
+                    )
+                    .into_element()
+            }
         }
+    }
+}
+
+/// `reason` as much as this tooltip will show — whole when it fits, and otherwise clipped with
+/// the pointer to where the rest is (see [`TIP_CHARS`]).
+///
+/// [`clip`](strata_core::util::clip) is the app's one clipping funnel, so this cannot disagree
+/// with the grid or the value tree about where a clipped string stops.
+fn tip_text(reason: &str) -> String {
+    match clip(reason, TIP_CHARS) {
+        Cow::Borrowed(whole) => whole.to_string(),
+        Cow::Owned(cut) => format!("{cut}{TIP_MORE}"),
     }
 }
 

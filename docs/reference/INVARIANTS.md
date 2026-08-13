@@ -79,6 +79,39 @@ Things that must not regress. Each was fought for once already.
   is broken; and a repeating writer must record its **transition** as the event and hold the rest
   as the condition — both in the log and in the store, since re-recording an identical fault wakes
   every subscriber as surely as re-logging it buries every other row.
+- **A refusal is stored whole; the surface that cannot hold it clips it, and says where the rest
+  is.** A limit is a property of the surface that has it, never of the string every other surface
+  reads. `register_error` capped its pass-through at 240 characters with a trailing `…` for one
+  reason — the catalog row's tooltip and a11y label, which a sentence cannot be read in — and so
+  clipped the message *everywhere*: the Problems row, which wraps precisely so a refusal can be
+  read, and the copy button beside it, which exists so a refusal can be pasted into a search, both
+  handed back the same cut. It was not a hypothetical cut. An unreachable bucket reports past 240
+  characters and names its cause in the **last** clause, so what survived was `object_store`'s
+  retry bookkeeping and what went was the answer. The cap now lives at the tooltip
+  (`catalog::entry`'s `TIP_CHARS`), which shows a short refusal entire — most are one sentence
+  Strata wrote — and otherwise clips and names Problems, so the pointer appears exactly when
+  something was left out. The connections pane draws the line further and shows no reason at all
+  (its `REFUSED`), because a connection's refusal is always the engine's own prose; a catalog row's
+  is usually ours.
+- **A wrapper is not a diagnosis, so peeling one is not diagnosing — but every literal you peel
+  has to be read off the crate that writes it.** DataFusion and `object_store` prepend a name per
+  crate boundary crossed, which is what makes a refusal read as a stack trace: `External error:
+  Object Store error: Generic S3 error: Error performing GET <uri> in 5.383s, after 10 retries,
+  max_retries: 10, retry_timeout: 180s  - …` in front of the one clause that says what happened.
+  `catalog::readable` strips those layers (`LAYERS`), the store wrapper (`STORE_WRAPPER`) and that
+  retry bookkeeping (`RETRY_PREFIX`/`RETRY_CAUSE`) and **nothing else** — it loops because they
+  nest, stops at the first thing it does not recognise, and keeps the raw line when peeling would
+  leave nothing. It sits on the pass-through path deliberately, beside the mappers that do
+  diagnose and under the same rule they follow: an unfamiliar error is never translated, because a
+  confident wrong diagnosis is worse than a raw one the user can search for. It is reached by the
+  **table** funnel and the **view** funnel, because both land in one Problems list and a view
+  wearing the stack beside an unwrapped table reads as two apps.
+  Two things this got wrong first time, both worth keeping: the strings were taken from a **doc
+  comment** rather than from `object_store`'s `Display` impls, so three of them matched text the
+  crate has never emitted and the peel was a no-op on the one path it exists for — while its unit
+  test, whose fixture had been written to match the code, passed. And `Generic {store} error: ` is
+  a **format with an open store name**, not a list: enumerating it shipped `GoogleCloudStorage`
+  (the crate says `GCS`) and omitted `HTTP` outright. Match the pattern; quote the source.
 - **JSON is read by our own `FileFormat`, and a replaced reader inherits the replaced reader's
   diagnostics.** `engine::json_poly` is now the *only* JSON reader — arrow's `JsonFormat` is not
   constructed anywhere. It exists because arrow's inference admits five type combinations and
