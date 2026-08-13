@@ -56,7 +56,9 @@ To build something you can hand to a tester — a universal `.app` + DMG in `tar
 
 The same script is what the **Release** workflow runs (Actions → Release → Run workflow), which can
 also bump the crate version, tag the commit and publish a release page in the same press.
-`scripts/version.sh` owns the version number. See **`docs/RELEASING.md`**.
+`scripts/version.sh` owns the version number, and `scripts/update-cask.sh` regenerates the Homebrew
+cask in the `alexparlett/homebrew-strata` tap from the DMG that release publishes. See
+**`docs/RELEASING.md`**.
 
 Linting is part of the check, and CI runs it before the tests:
 

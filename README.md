@@ -86,6 +86,30 @@ history. Open one per window; the app reopens what you had at last quit.
 
 ---
 
+## Installing
+
+macOS, from Homebrew:
+
+```bash
+brew tap alexparlett/strata
+brew trust alexparlett/strata
+brew install --cask strata
+```
+
+The tap is [alexparlett/homebrew-strata](https://github.com/alexparlett/homebrew-strata). Both of the first two
+steps are Homebrew's own: it no longer taps a third-party repository on your behalf, and it will not load a cask
+out of one until you have said you trust it. Or take the DMG straight from the
+[latest release](https://github.com/alexparlett/strata/releases) and drag Strata to your Applications folder; the
+cask installs the same file.
+
+Updating is the app's own job either way (**App ▸ Check for Updates…**, or the version line in the launcher), so
+the cask is marked `auto_updates` and a plain `brew upgrade` leaves it alone rather than reinstalling over a newer
+build it cannot see. `brew upgrade --cask --greedy strata` hands the job back to Homebrew.
+
+The rest of this file is about building it yourself.
+
+---
+
 ## Prerequisites
 
 - A Rust toolchain via [rustup](https://rustup.rs).
