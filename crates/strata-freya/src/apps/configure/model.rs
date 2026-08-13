@@ -191,7 +191,11 @@ pub struct ConfigureDraft {
 }
 
 impl Default for ConfigureDraft {
-    /// A new table: parquet, one empty path row, every read option at its reader's default.
+    /// A new table: parquet, no path rows, every read option at its reader's default.
+    ///
+    /// The list opens **empty**, on its own empty state, rather than on a blank row: a row that
+    /// was never added is a path the user has to notice is not one, and Browse fills the list
+    /// from nothing exactly as it fills it from a selection ([`Self::set_paths`]).
     fn default() -> Self {
         let csv = CsvRead::default();
         let json = JsonRead::default();
@@ -204,7 +208,7 @@ impl Default for ConfigureDraft {
             // connection.
             provider: ProviderId::S3,
             connection: None,
-            sources: vec![String::new()],
+            sources: Vec::new(),
             csv_header: csv.header,
             csv_delimiter: csv.delimiter.to_string(),
             csv_quote: csv.quote.to_string(),
@@ -249,10 +253,7 @@ impl ConfigureDraft {
             remote: def.connection.is_some(),
             provider,
             connection: def.connection.clone(),
-            sources: match def.sources.is_empty() {
-                true => vec![String::new()],
-                false => def.sources.clone(),
-            },
+            sources: def.sources.clone(),
             hive_on: !def.partition_cols.is_empty(),
             partitions: def.partition_cols.clone(),
             ..Default::default()
@@ -1179,6 +1180,8 @@ mod tests {
     #[test]
     fn the_toolbars_row_actions_keep_the_selection_inside_the_list() {
         let mut draft = ConfigureDraft::default();
+        assert!(draft.sources.is_empty(), "a new table has no path rows");
+        assert_eq!(draft.add_path(), 0);
         assert_eq!(draft.add_path(), 1);
         assert_eq!(draft.add_path(), 2);
         assert_eq!((draft.sources.len(), draft.clamp_selection(2)), (3, 2));
