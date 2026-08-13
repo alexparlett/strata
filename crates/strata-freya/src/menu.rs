@@ -1,7 +1,8 @@
-//! The application menubar (macOS): an App menu — About · Settings… · Hide/Show · Quit — a
-//! File menu — New Query · Open… · Open Recent · Save Query · Close Project — a standard Edit
-//! menu — Undo · Redo · Cut · Copy · Paste · Select All — and a Window menu — Minimize · Zoom ·
-//! Cycle Windows — built with muda through the fork's `menu` feature.
+//! The application menubar (macOS): an App menu — About · Check for Updates… · Settings… ·
+//! Hide/Show · Quit — a File menu — New Query · Open… · Open Recent · Save Query · Close
+//! Project — a standard Edit menu — Undo · Redo · Cut · Copy · Paste · Select All — and a
+//! Window menu — Minimize · Zoom · Cycle Windows — built with muda through the fork's `menu`
+//! feature.
 //!
 //! **Quit and Close Project are different things, and both route through the close veto**,
 //! never Cocoa's `terminate:` (muda's `PredefinedMenuItem::quit()` sends exactly that, the
@@ -71,7 +72,8 @@ use strata_core::keymap::effective_chord;
 
 use crate::apps::project::{window_geometry_blocking, ProjectApp};
 use crate::platform::{self, OpenCtx, OpenTarget, Windows};
-use crate::state::{use_config, AppCtx, ConfigChan};
+use crate::state::{install_site, use_config, AppCtx, ConfigChan};
+use crate::updater::{press, AskSlot};
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
 /// share, so dispatch is an exhaustive `match`, not string comparison (the Dioxus
@@ -83,6 +85,9 @@ pub enum MenuCmd {
     Quit,
     /// Open the Settings window, pinned above the focused window.
     OpenSettings,
+    /// Ask GitHub for a newer release, and offer whatever the answer turns out to be
+    /// (`updater::press`).
+    CheckUpdates,
     /// Pick a project folder and open it.
     OpenProject,
     /// Close the focused window (and open the launcher if it was the last).
@@ -102,9 +107,10 @@ pub enum MenuCmd {
 }
 
 impl MenuCmd {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Quit,
         Self::OpenSettings,
+        Self::CheckUpdates,
         Self::OpenProject,
         Self::CloseProject,
         Self::NewQuery,
@@ -123,6 +129,7 @@ impl MenuCmd {
         match self {
             Self::Quit => "strata.quit",
             Self::OpenSettings => "strata.app.settings",
+            Self::CheckUpdates => "strata.app.check-updates",
             Self::OpenProject => "strata.file.open-project",
             Self::CloseProject => "strata.file.close-project",
             Self::NewQuery => "strata.file.new-query",
@@ -148,10 +155,12 @@ impl MenuCmd {
     /// window is focused (the launcher stands down after opening; a project window doesn't),
     /// **Settings…**, which pins itself above whichever window asked, and the two that act on
     /// the focused project window (New Query · Save Query). `None` for the window-lifecycle
-    /// items, which the handler routes through the close path instead.
+    /// items, which the handler routes through the close path instead — and for **Check for
+    /// Updates…**, which has no chord to synthesize (UP-03 binds none) and so acts on the
+    /// focused window's parked slot, the way Open Recent acts on its parked open path.
     fn key_command(self) -> Option<Command> {
         match self {
-            Self::Quit | Self::CloseProject => None,
+            Self::Quit | Self::CloseProject | Self::CheckUpdates => None,
             Self::OpenSettings => Some(Command::OpenSettings),
             Self::OpenProject => Some(Command::OpenProject),
             Self::NewQuery => Some(Command::NewTab),
@@ -272,6 +281,8 @@ pub struct MenuHandles {
     /// Every item that carries an accelerator, in the order [`MenuChords`] names them.
     quit: MenuItem,
     settings: MenuItem,
+    /// Carries no chord, so it is not in [`MenuChords`] — only a gate.
+    check_updates: MenuItem,
     open_project: MenuItem,
     close_project: MenuItem,
     new_query: MenuItem,
@@ -420,6 +431,13 @@ impl MenuHandles {
         } = self.gate;
         set(&self.quit, quit, None);
         set(&self.settings, open_settings, Some(workspace));
+        // Not through `set`: this item carries no chord, so the half of an enabled state that
+        // asks "is there one to synthesize" does not apply to it. Its two conditions are the
+        // window (a panel mounts no `UpdateConfirm` to raise) and the **install site** — in a
+        // `cargo run` build the updater is inert, and an item that looked live there would be
+        // the "enabled and does nothing" failure this gate exists to prevent.
+        self.check_updates
+            .set_enabled(workspace && install_site().bundle().is_some());
         set(&self.open_project, open_project, Some(workspace));
         // Close Project's own gate is `project`, but it is applied by `sync_closable` as
         // presence in the menu rather than here as an enabled state — hence the `_` above,
@@ -516,10 +534,10 @@ pub fn create_global_menu() -> MenuState {
 #[derive(Clone, Copy, PartialEq)]
 pub enum MenuScope {
     /// A project window: its recents, its open path, and something to close, save into and
-    /// open a tab in.
-    Project(OpenCtx),
+    /// open a tab in — plus the restart-question slot every workspace window carries.
+    Project(OpenCtx, AskSlot),
     /// The launcher: the recents and Open… — that is what it is for — but no project yet.
-    Launcher,
+    Launcher(AskSlot),
     /// A panel over one of the above: Settings, Export, Configure. None of the File or Window
     /// commands has a listener there.
     Panel,
@@ -548,13 +566,13 @@ impl MenuScope {
     /// it — so the launcher is always the only workspace window there is.
     fn gate(self, windows: &Windows) -> Gate {
         match self {
-            Self::Project(open) => Gate {
+            Self::Project(open, _) => Gate {
                 workspace: true,
                 project: true,
                 workbench: *open.loaded.read(),
                 cyclable: windows.workspace_count() > 1,
             },
-            Self::Launcher => Gate {
+            Self::Launcher(_) => Gate {
                 workspace: true,
                 ..Gate::default()
             },
@@ -566,8 +584,21 @@ impl MenuScope {
     /// Recent honours its "Opening a project" preference. Only a project window has one.
     fn open(self) -> Option<OpenCtx> {
         match self {
-            Self::Project(open) => Some(open),
-            Self::Launcher | Self::Panel => None,
+            Self::Project(open, _) => Some(open),
+            Self::Launcher(_) | Self::Panel => None,
+        }
+    }
+
+    /// The restart-question slot this window carries out an
+    /// [`AppCtx::update_request`](crate::state::AppCtx) with while it is focused, so App ▸
+    /// Check for Updates… raises its dialog where the user is looking.
+    ///
+    /// A panel has none: it mounts no `UpdateConfirm`, so a question raised there would be one
+    /// nobody is watching — the same failure the gate exists to prevent for every other item.
+    fn update_ask(self) -> Option<AskSlot> {
+        match self {
+            Self::Project(_, ask) | Self::Launcher(ask) => Some(ask),
+            Self::Panel => None,
         }
     }
 }
@@ -599,11 +630,28 @@ pub fn use_file_menu(app: &AppCtx, scope: MenuScope) {
     let settings = use_config(ConfigChan::Settings);
     let mut menu = app.menu;
     let mut focused_open = app.open;
+    let mut asked = app.update_request;
+    let updates = app.updates;
     let windows = app.windows;
     let open = scope.open();
+    let ask = scope.update_ask();
     use_side_effect(move || {
         if !*focused.read() {
             return;
+        }
+        // **Carry out a menubar update request.** `read`, so this effect is subscribed to the
+        // flag and a press while this window is focused wakes it; the guard is dropped at the
+        // end of the condition, which is what lets the body clear the same slot. The window
+        // does the work because `press` spawns and the menu handler cannot — see
+        // `MenuCmd::CheckUpdates` in `handle_menu_event`. Only a scope that *has* a slot drains
+        // it, so the flag can never be spent by a window with no `UpdateConfirm` to raise;
+        // the item is disabled over a panel anyway, which is what makes that unreachable rather
+        // than merely handled.
+        if *asked.read() {
+            if let Some(ask) = ask {
+                asked.set(false);
+                press(updates, ask);
+            }
         }
         // `set_if_modified`, not `set`: this effect also rides `ConfigChan::Recents`, so it
         // re-runs on every project open, close and pin — and re-parking an identical handle
@@ -719,6 +767,10 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
         &chords.open_settings,
         true,
     );
+    // Check for Updates…, where macOS puts it: under About, above the app's own preferences.
+    // It ships disabled like every scoped item — no window has focus yet — and unlike the rest
+    // it never gains an accelerator, because UP-03 binds no chord to a check.
+    let check_updates = MenuItem::with_id(MenuCmd::CheckUpdates, "Check for Updates…", false, None);
     let app = Submenu::new("Strata", true);
     let items: &[&dyn IsMenuItem] = &[
         &PredefinedMenuItem::about(
@@ -729,6 +781,7 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
                 ..Default::default()
             }),
         ),
+        &check_updates,
         &PredefinedMenuItem::separator(),
         &settings,
         &PredefinedMenuItem::separator(),
@@ -851,6 +904,7 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
             copy,
             paste,
             select_all,
+            check_updates,
             closable: false,
             gate: Gate::default(),
             recents: Vec::new(),
@@ -878,6 +932,18 @@ pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, app: AppCtx
     match MenuCmd::parse(event.id()) {
         Some(MenuCmd::Quit) => platform::quit_windows(&mut ctx),
         Some(MenuCmd::CloseProject) => ctx.request_close_window(None),
+        // **Recorded, not performed.** This runs on the renderer thread, outside Freya's
+        // current context — `updater::press` reaches `spawn_forever` on two of its arms, which
+        // panics there, and in a release build freya-winit catches that and exits the process.
+        // (Open Recent below sits on the same edge and hand-rolls its open for the same
+        // reason.) So the press is an intent the *focused* window drains in `use_file_menu`'s
+        // effect, where there is a scope to spawn in — AGENTS.md §3's rule for a press with no
+        // scope of its own. `State::set` needs no context, which is what makes this the line
+        // that is safe here.
+        Some(MenuCmd::CheckUpdates) => {
+            let mut asked = app.update_request;
+            asked.set(true);
+        }
         Some(cmd) => {
             let Some(command) = cmd.key_command() else {
                 return;
@@ -982,9 +1048,12 @@ mod test {
 
     #[test]
     fn every_dispatching_item_has_a_command_and_the_window_ones_do_not() {
-        // The window-lifecycle items route through the close path, not the key pipeline.
+        // The window-lifecycle items route through the close path, not the key pipeline —
+        // and Check for Updates… acts on the focused window's parked slot, for the same
+        // reason Open Recent does: there is no chord to synthesize.
         assert_eq!(MenuCmd::Quit.key_command(), None);
         assert_eq!(MenuCmd::CloseProject.key_command(), None);
+        assert_eq!(MenuCmd::CheckUpdates.key_command(), None);
         // These ride the key pipeline like the Edit set, but aren't *editing* commands: their
         // listener is the focused window's, not the focused editor's — which is why they are
         // the ones the scope gates.
@@ -1003,6 +1072,7 @@ mod test {
                 cmd,
                 MenuCmd::Quit
                     | MenuCmd::CloseProject
+                    | MenuCmd::CheckUpdates
                     | MenuCmd::OpenProject
                     | MenuCmd::OpenSettings
                     | MenuCmd::NewQuery
@@ -1044,10 +1114,13 @@ mod test {
     #[test]
     fn a_panel_can_reach_none_of_the_scoped_commands() {
         let windows = Windows::default();
+        // The launcher's own slot. `create_global` is what `main` calls before `launch`, so it
+        // needs no window — the same reason the app-globals can be built there.
+        let launcher = MenuScope::Launcher(State::create_global(None));
         // The launcher can get *into* a project and nothing else — and it is never cyclable,
         // because it and a project window never coexist.
         assert_eq!(
-            MenuScope::Launcher.gate(&windows),
+            launcher.gate(&windows),
             Gate {
                 workspace: true,
                 project: false,
@@ -1061,7 +1134,11 @@ mod test {
         // …and a panel parks no open path, so File ▸ Open Recent can't resolve through the
         // window underneath while the panel is the one on screen.
         assert!(MenuScope::Panel.open().is_none());
-        assert!(MenuScope::Launcher.open().is_none());
+        assert!(launcher.open().is_none());
+        // Nor an update slot: a panel mounts no `UpdateConfirm`, so App ▸ Check for Updates…
+        // must not be able to raise a question there. The launcher does mount one.
+        assert!(MenuScope::Panel.update_ask().is_none());
+        assert!(launcher.update_ask().is_some());
     }
 
     /// `MenuScope::Project` needs an `OpenCtx` and so a live window, which a unit test has no

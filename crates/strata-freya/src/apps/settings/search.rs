@@ -124,6 +124,11 @@ settings_index! {
         "Asks only while a query is still running; closing is silent otherwise.",
         "safety warn quit exit prompt";
 
+    CheckUpdates => Route::System,
+        "Check for updates on startup",
+        "",
+        "update upgrade version release download automatic launch";
+
     HistoryLimit => Route::System,
         "Query history limit",
         "How many past runs the History drawer keeps, newest first. Lowering it drops the older \

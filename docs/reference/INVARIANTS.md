@@ -1754,6 +1754,51 @@ Things that must not regress. Each was fought for once already.
   `cargo run` build, so there is no startup check and no offer, and that is what says so rather
   than a debug assertion. `strata-core` is versioned independently of the app, so the running
   version is an **argument** to the check and never the core's own `env!`.
+- **What the app offers about an update is one pure answer every surface reads, and the question
+  it raises is per window while the status behind it is the app's one.**
+  `updater::Affordance::of(status, site)` takes the app-global status and the cached install
+  site and answers what to draw and what a press means; `updater::press` is a thin match over
+  that answer, each arm one call into `state::updates`. Three surfaces read it — the launcher
+  rail's version line (UP-03's affordance, because that is the one place the app already talks
+  about its version, and it prints `state::updates::CURRENT` so the number shown and the number
+  compared are one), App ▸ *Check for Updates…*, and the restart dialog — and none of them
+  restates a rule. (A **palette row was built and removed**: those two are already where the app
+  talks about an update, and a third to keep in step with them bought a gesture nobody reaches
+  for by name. `press` is still the funnel, so putting it back is one method.) That is what
+  makes three things impossible
+  to get wrong in one place and right in another: a dev build offers **nothing** (the mechanism
+  is inert there, so an enabled control would be the "looks live, does nothing" failure the
+  menubar's `Gate` exists to prevent), a release carrying no archive **or** a bundle that cannot
+  be replaced degrades to the release page rather than promising an install, and a staged update
+  is a **restart** rather than a second download. Because `press` is that match and nothing
+  else, "check for updates" pressed over a staged update raises the restart question instead of
+  starting a check.
+  **The status is app-global and the question is not.** One running app has one answer about a
+  newer release, but two project windows must not both raise the dialog for one press — so
+  `UpdateConfirm` is one component mounted at both workspace roots over a per-window `AskSlot`,
+  carried on `use_register_window`'s `MenuScope` because the menubar needs it and a panel has
+  none (it mounts no dialog).
+  **And the menubar item records its press rather than performing it.** It carries no chord, so
+  unlike every other custom item it cannot reach a window through the keyboard pipeline — but it
+  cannot simply call `press` either: `handle_menu_event` runs on the renderer thread, outside
+  Freya's current context, and two of `press`'s arms reach `spawn_forever`, which panics there
+  (in a release build freya-winit catches it and exits the process). So the press sets
+  `AppCtx::update_request`, a plain `bool` a `State::set` can write with no context, and the
+  **focused** window drains it from `use_file_menu`'s effect, where there is a scope to spawn in.
+  That is AGENTS.md §3's rule for a press with no scope of its own, and it is the same edge Open
+  Recent sits on — which is why *that* item hand-rolls its open rather than calling
+  `OpenCtx::apply`, whose `NewWindow` arm is a `spawn_forever`.
+  **The slot lives on the project *window*, not its subtree**, because an update is a fact about
+  the app: a re-root must not drop a question the user has already been asked.
+  And confirming asks *only* "restart now?" — it is an ordinary quit, so every close confirm
+  still gets its say afterwards, and re-asking "lose the running query?" here would be a second,
+  weaker copy of that dialog. The card says a window that *would* ask before quitting still
+  asks, never that one with a running query does: `confirm_close_running` can be off, and a
+  dialog that promised a prompt the user had switched off would be a false reassurance.
+  **A failure is not silent just because it is not chrome.** The surfaces deliberately draw
+  nothing for `Update::Failed`, so `state::updates::failed` is the one constructor and it logs —
+  otherwise a refused signature and a finished download would be indistinguishable, with nothing
+  to diagnose from.
 - **No command bus.** App-level shortcuts are distributed `on_global_key_down` listeners per
   feature (helper: `strata-freya::keymap::on_command`), resolving through the central
   `strata-core::keymap` table. Precedence = document order; a modal barrier = an early-mounted

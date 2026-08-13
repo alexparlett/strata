@@ -501,6 +501,18 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   Verification is strict codesign, then `TEAM_ID`, then `APP_ID`, in that order and failing closed;
   the offer needs a **strictly newer** semver; `ditto` unpacks. A worker outlives its window, so it
   parks its answer in a process-global that the next mount adopts. Outside a bundle, inert.
+- **What the app offers about an update is one pure answer every surface reads, and the question
+  it raises is per window while the status behind it is the app's one.** `Affordance::of(status,
+  site)` decides and `press` is a thin match over it, so the launcher rail's version line,
+  App ▸ Check for Updates… and the dialog cannot disagree: a dev build offers
+  nothing, no archive or an unwritable bundle degrades to the release page, a staged update is a
+  restart. A palette row was built and removed — a third surface to keep in step, for a gesture
+  nobody names. `UpdateConfirm` is one component over a **per-window** slot, and that slot lives on
+  the project *window*, so a re-root cannot drop the question. The menubar item carries no chord
+  *and* cannot call `press` (the renderer thread has no Freya context, so `spawn_forever`
+  panics): it sets `AppCtx::update_request` and the focused window drains it from
+  `use_file_menu`'s effect. Confirming asks only "restart now?" — the close confirms still get
+  their say. `Update::Failed` draws nothing, so `state::updates::failed` logs it.
 
 **Settings, keymap, input**
 
