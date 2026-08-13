@@ -707,6 +707,11 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   real MinIO and is deliberately not `#[ignore]`d — an ignored test is one nobody runs. Point
   `DOCKER_HOST` at it if it is not on the default socket; CI gets one from
   `atomicjar/testcontainers-cloud-setup-action`.
+- **Read cargo's own exit status, never a pipe's.** `cargo test … | tail -20` and
+  `cargo test … | rg 'test result'` both report the *last stage's* status, so a run that failed to
+  compile reads as a pass and a filter that misses the failure line reads as a clean suite. Both
+  happened during the pre-release review, one of them twice. Redirect to a file and check `$?`, or
+  read the `test result:` lines themselves.
 - **A change you wrote is reviewed by critics who cannot see why you wrote it** — the
   `adversarial-review` skill: isolated read-only lenses handed artifacts and the contract but never
   the intent, then a refutation gate that defaults to killing a finding. In front of the build

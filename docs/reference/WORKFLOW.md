@@ -59,6 +59,18 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
   against fork source and hand off to a Mac build (see CLAUDE.md's environment note).
+- **Read cargo's own exit status, never a pipe's.** `cargo test … | tail -20` and
+  `cargo test … | rg 'test result'` report the status of `tail` and `rg`, which is zero whatever
+  cargo did. The failure modes are both silent and both happened during the pre-release review: a
+  run piped to `tail -15` reported "exit code 0" while it had not compiled at all (the errors were
+  above the window), and a run piped to a `test result|FAILED` filter reported success while one
+  test binary had failed to build. Neither is a filter that can be tightened — the exit status is
+  simply not cargo's any more. Redirect to a file and check `$?`, or read the `test result:` lines,
+  which say `ok` or `FAILED` per binary and cannot be truncated into looking like the other.
+
+  The same trap sits under `cargo clippy … | tail` and under any `&&`-free chain that ends in a
+  formatter. It is worth naming because the reflex — pipe a long build through `tail` so the output
+  fits — turns the check into something that cannot fail.
 - **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the
   workspace rather than at every site it fires.** The command is
   `cargo clippy --workspace --all-targets --locked -- -D warnings`, and CI runs it before the

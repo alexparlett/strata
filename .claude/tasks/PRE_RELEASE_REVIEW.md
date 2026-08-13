@@ -103,6 +103,35 @@ unchecked where `fetch_page`'s was deliberately saturating.
   ever silently ignored, the minio job falls back to the cancel behaviour its comment says it
   exists to prevent. One-time check against the docs.
 
+## One flaky test, and it is not this branch's
+
+`engine::store::tests::a_named_profile_signs_as_that_profile_and_not_as_the_environment`
+intermittently panics inside `aws-smithy-http-client`'s rustls provider:
+
+> TrustStore configured to enable native roots but no valid root certificates parsed!
+
+**Flaky, not broken, and not caused by anything here.** During this review it failed three times in
+a row — standalone in a fresh process, with the sandbox off, and on `main` in a worktree this
+branch never touched — and then passed cleanly in a later full-suite run with all 589 lib tests
+green. So it is a *transient* failure to read the machine's root certificates, not a deterministic
+one, which is consistent with what the message says.
+
+Ruled out as a cause: the dependency graph did not move — the only lock change on this branch is
+`app_dirs2` gaining an edge from `strata-core`, and its own dependencies are `jni` /
+`ndk-context` / `winapi` / `xdg`, none reachable on macOS and none touching TLS. The failing path
+(`profile_credentials` → `aws-config` → a TLS client whose roots come from `rustls-native-certs`)
+is untouched by this branch, and `strata-agent`'s provider tests — also untouched — sat over 60s
+on client construction in the same run, which points at the same shared cause.
+
+**Worth chasing before release** precisely *because* it is intermittent: this test is in CI's
+`test` job, so a flaky trust-store read is a flaky pipeline. The thing to establish is whether it
+ever fires on a GitHub runner or only on this machine.
+
+**Method note for whoever picks this up:** the failure was invisible for a while because
+`cargo test … | tail -n` and `cargo test … | rg …` both report the *pipe's* exit status, not
+cargo's. Two runs in this review looked green that way while one had not compiled at all.
+Redirect to a file and check `$?`, or read the `test result:` lines.
+
 ## Verified sound (do not re-audit without new evidence)
 
 The agent read-only boundary fails closed and has no escalation via `PREPARE`, `EXECUTE`, `SET` or
