@@ -43,6 +43,7 @@ pub mod sql;
 /// apply ([`store::CLIENT_KEYS`]) and refuses the ones it does not ([`store::check_client_config`])
 /// — the same call `connect` makes, so a form and the store cannot disagree about an option.
 pub mod store;
+mod udfs;
 pub mod value_tree;
 
 /// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
@@ -1424,27 +1425,18 @@ impl Engine {
     /// One relation inside a database connection's catalog, from what the session already
     /// holds.
     ///
-    /// The columns come from the provider that catalog builds and caches per relation
-    /// (`engine::db`), so this costs one remote introspection the first time a relation is
-    /// asked about and nothing afterwards — the same cost validating a query that names it
-    /// already pays. There is **no def and no `Reg` row** behind this and there is not meant to
-    /// be: a database answers for itself, so a surface that wants to describe a remote relation
-    /// asks the connection rather than the store (the workstream's discovery-gets-catalogs
-    /// rule).
+    /// The columns come from the provider the catalog caches per relation, so this costs one remote
+    /// introspection the first time and nothing afterwards. There is **no def and no `Reg` row**
+    /// behind it, by design: a database answers for itself.
     ///
-    /// **The three answers are kept apart, which is why this is not an `Option`.** `Ok(None)` is
-    /// an *expected absence* — a name not addressed into a database catalog at all, or one the
-    /// connection does not have — and the caller's own not-found stands. `Err` is a relation the
-    /// connection **does** list whose introspection failed, which is a fault about the server or
-    /// the session and not a fact about the name: reporting it as absent would tell an agent a
-    /// relation does not exist when it does, and throw away the sentence `DbSchemaProvider`
-    /// wrote to say why.
+    /// **The three answers are kept apart, which is why this is not an `Option`.** `Ok(None)` is an
+    /// *expected absence* and the caller's own not-found stands; `Err` is a relation the connection
+    /// **does** list whose introspection failed, which is a fault about the server rather than a
+    /// fact about the name — reporting it absent would tell an agent a relation does not exist when
+    /// it does.
     ///
-    /// Existence is asked of `table_exist`, deliberately: that reads the connect-time listing
-    /// and costs nothing, where `table` is the round trip. So the common miss never dials out —
-    /// and a relation the listing has but `table` then answers `None` for is one dropped
-    /// server-side since the connect, an absence either way, which the caller's own not-found
-    /// says better than a fault would.
+    /// Existence is asked of `table_exist`, which reads the connect-time listing and costs nothing,
+    /// where `table` is the round trip. So the common miss never dials out.
     pub async fn describe_remote(&self, name: String) -> Result<Option<RemoteRelation>, String> {
         let reference = TableReference::parse_str(&name);
         let TableReference::Full { catalog, .. } = &reference else {
@@ -1855,6 +1847,7 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
         tracing::warn!("engine: JSON functions unavailable: {e}");
     }
+    udfs::register(&ctx);
     ctx.with_function_factory(Arc::new(StrataFunctionFactory))
 }
 

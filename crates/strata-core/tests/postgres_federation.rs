@@ -587,18 +587,14 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
 
 /// **The statement policy over a real remote catalog** (DB-03) — a phase of the test above.
 ///
-/// The unit tests (`engine::ddl::tests`) drive every intercepted kind against a fake catalog,
-/// which is the right place for a checklist. What only a server can show is that the names being
-/// refused are names that genuinely *resolve*: against the fake catalog a wrong refusal and a
-/// right one both look like an error, while here the same statement's read half answers with
-/// rows.
+/// The unit tests drive every intercepted kind against a fake catalog, which is the right place for
+/// a checklist. What only a server can show is that the names being refused genuinely *resolve*:
+/// against a fake catalog a wrong refusal and a right one both look like an error.
 ///
-/// **The data root has to be set first**, and finding that out is the point of writing this
-/// against the real entry point: `CREATE TABLE AS` and `CREATE EXTERNAL TABLE` refuse an engine
-/// with no project folder *before* they look at the target, so without a root those two rows
-/// assert nothing about the catalog. That ordering is right and stays — on a project-less engine
-/// there is genuinely nowhere to put a table, whatever its name — and it is unobservable in the
-/// app, where a window always has a project. `dir` is the folder [`mixed_plan`] already made.
+/// **The data root has to be set first**, which is the point of writing this against the real entry
+/// point: `CREATE TABLE AS` and `CREATE EXTERNAL TABLE` refuse a rootless engine *before* they look
+/// at the target, so those two rows would otherwise assert nothing about the catalog. That ordering
+/// is right and stays; it is unobservable in the app, where a window always has a project.
 async fn statement_policy(engine: &Engine, dir: &Path) {
     engine.set_data_dir(dir);
     for sql in [
@@ -662,20 +658,12 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
 /// a file and a database. A phase of the test above.
 ///
 /// Driven on a **second engine** through the real registration pass, because three of the four
-/// things under test are about replay. In order: **(a)** dropping the local table names the view
-/// as a dependent, which is the question the `tables`/`remote` split had to keep answerable and
-/// is asked of the engine that holds the plans; **(b)** its recorded dependencies carry the
-/// remote name qualified and the workspace half bare, where recording by bare component would
-/// make both read as tables of this project; **(c)** it re-registers on replay *after* the
-/// connection, which is phase order and the reason connections are the pass's first phase; and
-/// **(d)** with the remote half taken away server-side it settles `Failed` naming the connection.
-/// Nothing on our side observes that removal — the view goes on answering from the plan it
-/// inlined — so the reconciliation is the next pass, and what it must say is which connection no
-/// longer has the relation.
-///
-/// The raw client's driver task is bound as `driver`, not `connection`: it is not a
-/// `ConnectionDef`, and that name would shadow this file's own [`connection`] builder for the
-/// rest of the scope.
+/// things under test are about replay: dropping the local table names the view as a dependent; its
+/// recorded dependencies carry the remote name qualified and the workspace half bare, where
+/// recording by bare component would make both read as this project's tables; it re-registers
+/// *after* the connection, which is why connections are the pass's first phase; and with the remote
+/// half taken away server-side it settles `Failed` naming the connection. Nothing observes that
+/// removal, so the reconciliation is the next pass.
 async fn cross_source_views(port: u16, dir: &Path) {
     let (client, driver) = tokio_postgres::connect(
         &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),

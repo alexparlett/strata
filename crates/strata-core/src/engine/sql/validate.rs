@@ -592,19 +592,14 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
 /// [`is_snapshot_ref`], next to the function that mints those names, because the provider's
 /// hiding rule asks the same question and the two must not drift.
 ///
-/// **Where the name points, not merely how it is spelled.** The namespace belongs to the
-/// workspace catalog, and since the DB workstream the session holds a catalog per database
-/// connection — where `__snap_3` is whatever the server called a table and reserves nothing.
-/// So the qualifier is read, through DataFusion's **own** normalization
-/// ([`object_name_to_table_reference`]) rather than a second reading of the identifier rules:
-/// the reference this judges is the reference the planner would resolve. A name it refuses
-/// (more than three parts, or a part that is not an identifier) resolves nowhere at all and is
-/// therefore reserved by nothing — the arms refuse it in their own words
-/// (`ddl::bare_name`), and a query naming it never plans.
+/// **Where the name points, not merely how it is spelled.** The namespace is the workspace
+/// catalog's, and a database connection's `__snap_3` is whatever the server called a table. So the
+/// qualifier is read through DataFusion's **own** normalization rather than a second reading of the
+/// identifier rules, and the reference judged is the one the planner would resolve. A name it
+/// refuses resolves nowhere and is reserved by nothing.
 ///
-/// **The prefix is tested first, and only then the qualifier.** This runs per relation per
-/// statement on every re-validation, the answer is almost always no, and the prefix test is seven
-/// bytes wide where normalizing the reference allocates a `TableReference` from a cloned name.
+/// **The prefix is tested first, and only then the qualifier**, because this runs per relation per
+/// statement on every re-validation and the answer is almost always no.
 fn is_reserved(name: &ObjectName) -> bool {
     let named = name
         .0

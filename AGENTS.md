@@ -525,7 +525,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   says a table is remote; its sources are bucket-relative exactly then, never relativized, and
   `resolve_source` takes the connection so the local rule cannot be reached for by mistake. The
   LOCATION toggle is an explicit choice, never a scheme parsed out of a path, and a forget's
-  confirm names the tables over the bucket and the views behind them.
+  confirm names the tables over the bucket and the views behind them. Configure keeps a path list
+  **per location** and the toggle moves none between them and seeds neither, so a blank row is
+  always one the user added.
 - **A connection's address is its provider's own, and every rule about it lives in one place.**
   `address`, not `bucket`: S3 and GCS name a bucket and take the provider's scheme, HTTP names a
   **whole origin URL** and a path is refused rather than trimmed — as is **userinfo**, because a

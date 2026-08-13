@@ -680,25 +680,17 @@ impl<H: Host> StrataTools<H> {
 
     /// One table or view in full — **or one relation in a database connection's catalog**.
     ///
-    /// The store is asked first and wins: a def is the project's own row, failure states
-    /// included, and only a def can be addressed by a bare name. A **qualified** name the store
-    /// has no row for is the remote case, and answering `not found` for it would be false about
-    /// a relation the agent can perfectly well query — three-part names resolve, so a tool that
-    /// cannot describe one leaves the model guessing at a schema it is entitled to read.
+    /// The store is asked first and wins: a def is the project's own row, failure states included,
+    /// and only a def can be addressed by a bare name. A **qualified** name the store has no row
+    /// for is the remote case, and answering `not found` would be false about a relation the agent
+    /// can perfectly well query. The columns come from the provider the connection already caches,
+    /// so this pays the same introspection validating such a query pays, once.
     ///
-    /// Asked of the engine, not of a second catalog: the columns come from the provider the
-    /// connection already caches per relation, so this is the same introspection validating a
-    /// query that names it pays, once.
-    ///
-    /// **Only [`AgentError::NotFound`] falls through**, never any error. The host's other
-    /// answers are facts about the *call* rather than about the name — `WindowGone` says the
-    /// bridge went mid-ask, `NoProject` that there is nothing open — and the engine handle this
-    /// method already holds outlives a closed window, so a blanket fallback would answer such a
-    /// call successfully and throw the real failure away.
-    ///
-    /// A failed *introspection* is likewise not a not-found: the relation is in the connection's
-    /// listing and the server or the session is what went wrong, so `describe_remote`'s `Err`
-    /// travels as the engine's own sentence.
+    /// **Only [`AgentError::NotFound`] falls through**, never any error: the host's other answers
+    /// are facts about the *call* rather than the name, and the engine handle this method holds
+    /// outlives a closed window, so a blanket fallback would answer successfully and throw the real
+    /// failure away. A failed *introspection* is likewise not a not-found — the relation is in the
+    /// listing and the server went wrong — so its `Err` travels as the engine's own sentence.
     pub async fn describe_table(
         &self,
         params: DescribeTableParams,

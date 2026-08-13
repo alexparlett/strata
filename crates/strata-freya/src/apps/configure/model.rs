@@ -169,13 +169,16 @@ pub struct ConfigureDraft {
     /// format switch: looking at the local arm and coming back must not forget which bucket was
     /// picked.
     pub connection: Option<String>,
-    /// Source paths, in the order they were added. A blank row is a row being typed, not a
-    /// path — [`nonblank_sources`](Self::nonblank_sources) is what anything downstream reads.
+    /// The **local disk's** source paths, in the order they were added — never seeded, and a
+    /// blank row is a row being typed.
+    pub local_sources: Vec<String>,
+    /// The **object store's** source path, of which a remote table has exactly one (spec §4).
     ///
-    /// Exactly **one** while [`remote`](Self::remote): an object-store table is a single
-    /// bucket-relative path (spec §4), which [`set_remote`](Self::set_remote) establishes and the
-    /// absent path toolbar keeps true.
-    pub sources: Vec<String>,
+    /// A field of its own, kept like a format's options are across a switch: the two locations are
+    /// written against different roots, so one list holding both would either lose what was typed
+    /// or carry `/data/events.parquet` under a bucket as though it were relative to it.
+    /// [`nonblank_sources`](Self::nonblank_sources) projects the one in play.
+    pub remote_source: String,
     pub csv_header: bool,
     pub csv_delimiter: String,
     pub csv_quote: String,
@@ -195,7 +198,7 @@ pub struct ConfigureDraft {
     /// [`Where::Internal`], and kept across a flip away from it exactly as a connection and a
     /// format's options are.
     ///
-    /// Position-addressed like [`sources`](Self::sources), and edited through the same
+    /// Position-addressed like [`local_sources`](Self::local_sources), and edited through the same
     /// two-way-synced rows, because it is the same control: a list of text fields with a
     /// selection and a `+`/`−` toolbar.
     pub columns: Vec<ColumnDraft>,
@@ -261,7 +264,8 @@ impl Default for ConfigureDraft {
     ///
     /// The list opens **empty**, on its own empty state, rather than on a blank row: a row that
     /// was never added is a path the user has to notice is not one, and Browse fills the list
-    /// from nothing exactly as it fills it from a selection ([`Self::set_paths`]).
+    /// from nothing exactly as it fills it from a selection ([`Self::set_paths`]). Nothing later
+    /// seeds one either, [`set_location`](Self::set_location) included.
     fn default() -> Self {
         let csv = CsvRead::default();
         let json = JsonRead::default();
@@ -271,7 +275,8 @@ impl Default for ConfigureDraft {
             location: Where::Local,
             provider: ProviderId::S3,
             connection: None,
-            sources: Vec::new(),
+            local_sources: Vec::new(),
+            remote_source: String::new(),
             csv_header: csv.header,
             csv_delimiter: csv.delimiter.to_string(),
             csv_quote: csv.quote.to_string(),
@@ -295,20 +300,18 @@ impl ConfigureDraft {
     /// Seed the draft from an existing def — every field it holds, so the window opens showing
     /// what is really stored and Save with nothing touched is a no-op.
     ///
-    /// The formats it *isn't* in keep their defaults: the def has nothing to say about them.
+    /// The formats it *isn't* in keep their defaults, and so does the location it is not in: a
+    /// def's sources belong to the one it names, and the other opens empty.
     ///
-    /// `connections` is the project's own list, and it is here for one field: the def names the
-    /// **connection** it reads through, and which provider serves that connection is the
-    /// connection's fact, not the table's — so the TYPE segment is resolved from it rather than
-    /// re-derived from the URL's scheme, which is the registry's word and deliberately has no
-    /// reader ([`strata_model::Provider`]). A def naming a connection this project no longer has
-    /// keeps the reference and opens on the first provider; `Save` is blocked until it is
-    /// re-pointed (`views::footer`), which is the same treatment a format with no reader gets.
+    /// `connections` is here for one field: which provider serves a connection is the connection's
+    /// fact rather than the table's, so the TYPE segment is resolved from it rather than re-derived
+    /// from the URL's scheme. A def naming a connection this project no longer has keeps the
+    /// reference and opens on the first provider, with `Save` blocked until it is re-pointed —
+    /// the same treatment a format with no reader gets.
     ///
-    /// A def naming a **database** connection gets that same treatment, and the filter below is
-    /// what gives it: a table reads files, the TYPE pill offers only
-    /// [`ProviderId::OBJECT_STORES`], and a draft opening on a provider the pill cannot render
-    /// would show no segment selected while the picker under it offered database URLs.
+    /// A def naming a **database** connection gets that treatment through the filter below: a table
+    /// reads files, so the TYPE pill offers only [`ProviderId::OBJECT_STORES`], and a draft opening
+    /// on a provider the pill cannot render would show no segment selected.
     pub fn of(def: &TableDef, connections: &[ConnectionDef]) -> Self {
         let provider = def
             .connection
@@ -317,16 +320,24 @@ impl ConfigureDraft {
             .map(|c| c.provider.id())
             .filter(|id| id.is_object_store())
             .unwrap_or(ProviderId::S3);
+        let remote = def.connection.is_some();
         let mut draft = Self {
             name: def.name.clone(),
             format: FormatId::of(&def.format),
-            location: match def.connection.is_some() {
+            location: match remote {
                 true => Where::Remote,
                 false => Where::Local,
             },
             provider,
             connection: def.connection.clone(),
-            sources: def.sources.clone(),
+            local_sources: match remote {
+                true => Vec::new(),
+                false => def.sources.clone(),
+            },
+            remote_source: match remote {
+                true => def.sources.first().cloned().unwrap_or_default(),
+                false => String::new(),
+            },
             hive_on: !def.partition_cols.is_empty(),
             partitions: def.partition_cols.clone(),
             ..Default::default()
@@ -396,10 +407,16 @@ impl ConfigureDraft {
     }
 
     /// Flip **LOCATION**, and settle what that means for the rest of the draft: a move to the
-    /// object store picks the provider's first connection when none is chosen yet and keeps the
-    /// **first non-blank path** (a remote table is single-path), and either direction clears the
-    /// detected partition columns, exactly as every other path mutator does — they describe the
-    /// layout of a location this draft no longer points at.
+    /// object store picks the provider's first connection when none is chosen yet, and either
+    /// direction clears the detected partition columns, exactly as every other path mutator does
+    /// — they describe the layout of a location this draft no longer points at.
+    ///
+    /// **No path moves with the flip, and none is invented** — each location keeps its own
+    /// ([`local_sources`](Self::local_sources) / [`remote_source`](Self::remote_source)).
+    /// Carrying the first local path over was the rule before, and it wrote
+    /// `/data/events.parquet` under a bucket that had nothing to do with it — or, from an empty
+    /// list, put a blank row in the one section whose toolbar is absent, so the path a remote
+    /// table has was a row nobody added and nobody could remove.
     pub fn set_location(&mut self, location: Where, connections: &[ConnectionDef]) {
         if self.location == location {
             return;
@@ -417,13 +434,6 @@ impl ConfigureDraft {
                 if self.connection.is_none() {
                     self.connection = first_connection(connections, self.provider);
                 }
-                let kept = self
-                    .nonblank_sources()
-                    .into_iter()
-                    .next()
-                    .or_else(|| self.sources.first().cloned())
-                    .unwrap_or_default();
-                self.sources = vec![kept];
             }
         }
     }
@@ -595,39 +605,82 @@ impl ConfigureDraft {
             .collect()
     }
 
-    /// The paths that are actually paths. A blank row is a row being typed.
+    /// The paths that are actually paths, for the LOCATION in play — the one place the two source
+    /// fields are projected, as [`store`](Self::store) is for the connection.
     pub fn nonblank_sources(&self) -> Vec<String> {
-        self.sources
-            .iter()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect()
+        match self.location {
+            Where::Local => self
+                .local_sources
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+            Where::Remote => match self.remote_source.trim() {
+                "" => Vec::new(),
+                path => vec![path.to_string()],
+            },
+            Where::Internal => Vec::new(),
+        }
+    }
+
+    /// How many rows the path list holds — the local list's length, and always one on a
+    /// connection, that arm being a single box rather than a list anything adds to.
+    ///
+    /// Whether the section draws them is `views::paths`'s question, which is why an internal
+    /// table answers here as the local one it will be again if the LOCATION moves back.
+    pub fn path_count(&self) -> usize {
+        match self.location {
+            Where::Local | Where::Internal => self.local_sources.len(),
+            Where::Remote => 1,
+        }
+    }
+
+    /// Row `at` as the list shows it — what a box holds, so blank rows included.
+    pub fn path_at(&self, at: usize) -> String {
+        match self.location {
+            Where::Remote => match at {
+                0 => self.remote_source.clone(),
+                _ => String::new(),
+            },
+            Where::Local | Where::Internal => {
+                self.local_sources.get(at).cloned().unwrap_or_default()
+            }
+        }
+    }
+
+    /// The field row `at` writes into, so a row's two-way sync cannot reach the wrong one.
+    fn path_slot(&mut self, at: usize) -> Option<&mut String> {
+        match self.location {
+            Where::Remote => (at == 0).then_some(&mut self.remote_source),
+            Where::Local | Where::Internal => self.local_sources.get_mut(at),
+        }
     }
 
     /// Clamp a selection to the list — it shrinks under the caller.
     pub fn clamp_selection(&self, selected: usize) -> usize {
-        selected.min(self.sources.len().saturating_sub(1))
+        selected.min(self.path_count().saturating_sub(1))
     }
 
-    /// Add a blank row; returns the index to select.
+    /// Add a blank row to the local list; returns the index to select. The toolbar it comes from
+    /// is drawn on that arm only.
     pub fn add_path(&mut self) -> usize {
-        self.sources.push(String::new());
-        self.sources.len() - 1
+        self.local_sources.push(String::new());
+        self.local_sources.len() - 1
     }
 
-    /// Remove row `at`; returns the index to select afterwards.
+    /// Remove row `at` from the local list; returns the index to select afterwards.
     pub fn remove_path(&mut self, at: usize) -> usize {
-        if self.sources.is_empty() {
+        if self.local_sources.is_empty() {
             return 0;
         }
-        let at = self.clamp_selection(at);
-        self.sources.remove(at);
+        let at = at.min(self.local_sources.len() - 1);
+        self.local_sources.remove(at);
         self.partitions.clear();
-        at.min(self.sources.len().saturating_sub(1))
+        at.min(self.local_sources.len().saturating_sub(1))
     }
 
-    /// Put `paths` into the list at the selection: the first replaces the selected row (or
+    /// Put `paths` into the local list at the selection: the first replaces the selected row (or
     /// becomes the first row when the list is empty), the rest are inserted after it.
     ///
     /// Multi-select is the picker's, not a flourish: a table *is* many paths, and picking five
@@ -643,18 +696,19 @@ impl ConfigureDraft {
             return at;
         }
         self.partitions.clear();
-        if self.sources.is_empty() {
-            self.sources = paths;
+        if self.local_sources.is_empty() {
+            self.local_sources = paths;
             return 0;
         }
-        let at = self.clamp_selection(at);
-        self.sources.splice(at..=at, paths.iter().cloned());
+        let at = at.min(self.local_sources.len() - 1);
+        self.local_sources.splice(at..=at, paths.iter().cloned());
         at + paths.len() - 1
     }
 
-    /// Type into row `at`. Clears the detected partitions for the reason above.
+    /// Type into row `at` — the local list's row, or the remote box. Clears the detected
+    /// partitions for the reason above.
     pub fn set_path(&mut self, at: usize, path: String) {
-        if let Some(slot) = self.sources.get_mut(at) {
+        if let Some(slot) = self.path_slot(at) {
             if *slot != path {
                 *slot = path;
                 self.partitions.clear();
@@ -1042,7 +1096,7 @@ mod tests {
         ConfigureDraft {
             name: "events".into(),
             format: FormatId::Csv,
-            sources: vec!["/data/events.csv".into()],
+            local_sources: vec!["/data/events.csv".into()],
             ..Default::default()
         }
     }
@@ -1210,7 +1264,7 @@ mod tests {
             origin: TableOrigin::External,
         };
         let mut draft = ConfigureDraft::of(&def, &[]);
-        draft.sources = vec!["/data/year=*/".into()];
+        draft.local_sources = vec!["/data/year=*/".into()];
         let round = draft.def(Path::new("/project"));
         assert_eq!(round.format, def.format);
         assert_eq!(round.partition_cols, def.partition_cols);
@@ -1253,7 +1307,7 @@ mod tests {
         assert!(draft.blocker().is_some_and(|b| b.contains("name")));
         draft.name = "t".into();
         assert!(draft.blocker().is_some_and(|b| b.contains("source path")));
-        draft.sources = vec!["   ".into(), "/data".into()];
+        draft.local_sources = vec!["   ".into(), "/data".into()];
         assert_eq!(draft.blocker(), None);
     }
 
@@ -1310,7 +1364,7 @@ mod tests {
     #[test]
     fn partition_columns_with_the_toggle_off_are_not_partitioning() {
         let mut draft = ConfigureDraft {
-            sources: vec!["/data/year=*/".into()],
+            local_sources: vec!["/data/year=*/".into()],
             partitions: vec![("year".into(), "Utf8".into())],
             ..csv_draft()
         };
@@ -1344,34 +1398,40 @@ mod tests {
     #[test]
     fn the_toolbars_row_actions_keep_the_selection_inside_the_list() {
         let mut draft = ConfigureDraft::default();
-        assert!(draft.sources.is_empty(), "a new table has no path rows");
+        assert!(
+            draft.local_sources.is_empty(),
+            "a new table has no path rows"
+        );
         assert_eq!(draft.add_path(), 0);
         assert_eq!(draft.add_path(), 1);
         assert_eq!(draft.add_path(), 2);
-        assert_eq!((draft.sources.len(), draft.clamp_selection(2)), (3, 2));
+        assert_eq!(
+            (draft.local_sources.len(), draft.clamp_selection(2)),
+            (3, 2)
+        );
         let mut at = 2;
         for _ in 0..3 {
             at = draft.remove_path(at);
         }
-        assert_eq!((draft.sources.len(), at), (0, 0));
+        assert_eq!((draft.local_sources.len(), at), (0, 0));
         assert_eq!(draft.remove_path(0), 0);
-        assert!(draft.sources.is_empty());
+        assert!(draft.local_sources.is_empty());
     }
 
     #[test]
     fn a_multi_file_pick_lands_as_one_row_each() {
         let mut draft = ConfigureDraft::default();
         draft.set_paths(0, vec!["/a".into(), "/b".into(), "/c".into()]);
-        assert_eq!(draft.sources, vec!["/a", "/b", "/c"]);
+        assert_eq!(draft.local_sources, vec!["/a", "/b", "/c"]);
         draft.set_paths(1, vec!["/x".into()]);
-        assert_eq!(draft.sources, vec!["/a", "/x", "/c"]);
+        assert_eq!(draft.local_sources, vec!["/a", "/x", "/c"]);
     }
 
     #[test]
     fn the_hive_switch_stays_reachable_once_it_is_on() {
         let root = Path::new("/project");
         let mut draft = ConfigureDraft {
-            sources: vec!["/data/one.parquet".into()],
+            local_sources: vec!["/data/one.parquet".into()],
             hive_on: true,
             ..csv_draft()
         };
@@ -1385,13 +1445,13 @@ mod tests {
     fn only_a_many_file_path_can_be_partitioned() {
         let root = Path::new("/project");
         let single = ConfigureDraft {
-            sources: vec!["/data/one.parquet".into()],
+            local_sources: vec!["/data/one.parquet".into()],
             ..Default::default()
         };
         assert!(!single.may_partition(root));
         for many in ["/data/year=*/", "/data/2024/", "/data/**/*.parquet"] {
             let draft = ConfigureDraft {
-                sources: vec![many.into()],
+                local_sources: vec![many.into()],
                 ..Default::default()
             };
             assert!(draft.may_partition(root), "{many}");
@@ -1401,7 +1461,7 @@ mod tests {
     #[test]
     fn a_relative_source_is_asked_about_where_the_project_actually_is() {
         let draft = ConfigureDraft {
-            sources: vec!["events/year=2024/".into()],
+            local_sources: vec!["events/year=2024/".into()],
             ..Default::default()
         };
         assert_eq!(
@@ -1441,11 +1501,9 @@ mod tests {
     #[test]
     fn a_table_over_a_connection_stores_the_url_and_a_bucket_relative_path() {
         let root = Path::new("/project");
-        let mut draft = ConfigureDraft {
-            sources: vec!["events/2024/**/*.parquet".into()],
-            ..csv_draft()
-        };
+        let mut draft = csv_draft();
         draft.set_location(Where::Remote, &connections());
+        draft.set_path(0, "events/2024/**/*.parquet".into());
 
         let def = draft.def(root);
         assert_eq!(def.connection.as_deref(), Some("s3://acme-lake"));
@@ -1462,22 +1520,40 @@ mod tests {
         );
     }
 
-    /// Flipping to the object store picks the provider's first connection and keeps the **first
-    /// non-blank** path, because a remote table is single-path.
+    /// **Each location keeps its own paths, and neither is written for the user** — the flip
+    /// picks the provider's first connection and settles nothing else, so an empty box is what
+    /// blocks Save.
     #[test]
-    fn switching_to_the_object_store_keeps_one_path_and_picks_a_connection() {
+    fn each_location_keeps_its_own_paths_and_neither_is_seeded() {
         let mut draft = ConfigureDraft {
-            sources: vec!["   ".into(), "/data/a.csv".into(), "/data/b.csv".into()],
+            local_sources: vec!["   ".into(), "/data/a.csv".into(), "/data/b.csv".into()],
             ..csv_draft()
         };
         draft.set_location(Where::Remote, &connections());
 
         assert_eq!(draft.connection.as_deref(), Some("s3://acme-lake"));
         assert_eq!(
-            draft.sources,
-            ["/data/a.csv"],
-            "the first path that was one"
+            draft.path_count(),
+            1,
+            "the one box that arm is built around"
         );
+        assert_eq!(draft.path_at(0), "", "and nothing typed into it");
+        assert!(draft.nonblank_sources().is_empty());
+        assert!(draft
+            .blocker()
+            .is_some_and(|why| why.contains("source path")));
+
+        draft.set_path(0, "events/".into());
+        assert_eq!(draft.nonblank_sources(), ["events/"]);
+        assert_eq!(
+            draft.local_sources,
+            ["   ", "/data/a.csv", "/data/b.csv"],
+            "the disk's list is whole, blank row and all"
+        );
+
+        draft.set_location(Where::Local, &connections());
+        assert_eq!(draft.nonblank_sources(), ["/data/a.csv", "/data/b.csv"]);
+        assert_eq!(draft.remote_source, "events/");
     }
 
     /// Picking a **TYPE** re-points the connection unless that provider already serves the one
@@ -1614,7 +1690,7 @@ mod internal_tests {
     fn moving_to_internal_opens_a_column_and_silences_the_file_sections() {
         let mut draft = ConfigureDraft {
             name: "t".into(),
-            sources: vec!["/data/t.parquet".into()],
+            local_sources: vec!["/data/t.parquet".into()],
             hive_on: true,
             partitions: vec![("year".into(), "Int32".into())],
             ..Default::default()
@@ -1627,7 +1703,7 @@ mod internal_tests {
         assert!(draft.options().is_empty(), "nothing to say about reading");
         assert!(!draft.may_partition(Path::new("/tmp")));
         assert_eq!(draft.store(), None);
-        assert_eq!(draft.sources, vec!["/data/t.parquet".to_string()]);
+        assert_eq!(draft.local_sources, vec!["/data/t.parquet".to_string()]);
     }
 
     #[test]

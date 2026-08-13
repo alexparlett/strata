@@ -8,18 +8,15 @@
 //! it. Picking files is multi-select — a table *is* many paths, and five files one dialog at a
 //! time is the same five rows with four more dialogs.
 //!
-//! ## An object-store table is **one** path, in the same list
+//! **An object-store table is one path, in the same list.** On a connection the section is singular
+//! throughout — `SOURCE PATH`, no toolbar, one row wearing the bucket as a non-editable prefix —
+//! because an object store has no file dialog and its paths are text. Still this list one row long
+//! rather than a second control: the row is where the two-way sync with the draft lives, and what
+//! actually goes is the toolbar and the empty state.
 //!
-//! On a connection (W7 · 04) the section is singular throughout — `SOURCE PATH`, no toolbar, one
-//! row wearing the bucket as a non-editable prefix — because a remote source is written against
-//! the connection's bucket and there is nothing to browse: an object store has no file dialog,
-//! and its paths are text.
-//!
-//! It is still this list, one row long, rather than a second control drawn beside it. The row is
-//! where the two-way sync between the box and the draft lives, and a canvas that draws a framed
-//! box in place of a one-row framed table is drawing the same thing: what actually goes is the
-//! toolbar (a control that would add rows the def cannot carry) and the empty state (a list that
-//! always holds exactly one row has none).
+//! That row is the draft's `remote_source` and the local list is its `local_sources` — two fields
+//! projected by the LOCATION in play (`ConfigureDraft::path_at`), so the toggle swaps what these
+//! rows show without moving a path between two roots it means different things under.
 
 use freya::prelude::*;
 
@@ -106,7 +103,7 @@ impl Component for Toolbar {
         let win = window_theme();
         let error = tones().error;
         let ctx = use_consume::<ConfigureCtx>();
-        let has_rows = !ctx.draft.read().sources.is_empty();
+        let has_rows = ctx.draft.read().path_count() > 0;
 
         rect()
             .horizontal()
@@ -214,12 +211,9 @@ enum Pick {
 fn pick(ctx: ConfigureCtx, kind: Pick) {
     let start = {
         let draft = ctx.draft.peek();
-        draft
-            .sources
-            .get(draft.clamp_selection(*ctx.selected_path.peek()))
-            .cloned()
-    }
-    .filter(|s| !s.trim().is_empty());
+        draft.path_at(draft.clamp_selection(*ctx.selected_path.peek()))
+    };
+    let start = (!start.trim().is_empty()).then_some(start);
 
     spawn(async move {
         let mut dialog = rfd::AsyncFileDialog::new().set_title("Choose a source");
@@ -273,7 +267,7 @@ impl Component for PathList {
         let (count, selected, prefix, remote) = {
             let draft = ctx.draft.read();
             (
-                draft.sources.len(),
+                draft.path_count(),
                 draft.clamp_selection(*ctx.selected_path.read()),
                 draft.bucket_prefix(),
                 draft.remote(),
@@ -312,6 +306,13 @@ impl Component for PathList {
 }
 
 /// One row of the table: a bare field in its only cell, filled when it is the selected row.
+///
+/// **The row owns its buffer and the traffic runs both ways**, which a one-way field cannot do
+/// here, because this row's value moves for two reasons that are not typing: a row above it is
+/// removed (the list is keyed by position, so index 0's scope is *kept* when the list shrinks, and
+/// a buffer seeded once would write the deleted path back over the survivor), and the browse picker
+/// sets it (that writes the draft, not the box). `reported` is what keeps the two directions from
+/// fighting — in state rather than captured, since `use_side_effect` builds its closure once.
 #[derive(PartialEq)]
 struct PathRow {
     index: usize,
@@ -338,13 +339,7 @@ impl Component for PathRow {
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
-        let initial = ctx
-            .draft
-            .peek()
-            .sources
-            .get(index)
-            .cloned()
-            .unwrap_or_default();
+        let initial = ctx.draft.peek().path_at(index);
         let text = use_state({
             let initial = initial.clone();
             move || initial
@@ -369,13 +364,7 @@ impl Component for PathRow {
             ctx.edit(move |draft| draft.set_path(index, path));
         });
         use_side_effect(move || {
-            let outer = ctx
-                .draft
-                .read()
-                .sources
-                .get(index)
-                .cloned()
-                .unwrap_or_default();
+            let outer = ctx.draft.read().path_at(index);
             if outer == *reported.peek() {
                 return;
             }

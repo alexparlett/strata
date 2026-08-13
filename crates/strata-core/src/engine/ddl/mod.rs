@@ -249,20 +249,15 @@ pub(super) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableTy
 /// The bare name a statement targets, and `what` those statements create — `"Tables"`,
 /// `"Views"`.
 ///
-/// **The one choke point in front of every arm.** The *workspace* catalog has exactly one schema
-/// (`engine::providers`), so a qualified name is one of three things: a longer spelling of the
-/// same place, a relation inside a database connection's catalog, or nowhere at all —
-/// and registration takes a bare name, so an unrecognised qualifier would otherwise be silently
-/// dropped and the object created somewhere the user did not ask for.
+/// **The one choke point in front of every arm.** The workspace catalog has exactly one schema, so
+/// a qualified name is a longer spelling of the same place, a relation inside a database
+/// connection's catalog, or nowhere at all — and registration takes a bare name, so an
+/// unrecognised qualifier would otherwise be dropped and the object created somewhere else.
 ///
-/// The middle case is the DB workstream's, and the reason this refusal is worded here rather than
-/// per arm: **every** intercepted statement that resolves a target comes through this function, so
-/// one sentence covers `DROP TABLE pg.public.orders`, `INSERT INTO pg.…`, `CREATE VIEW pg.…` and
-/// the rest — and an arm that grew its own copy of the check would be the drift this prevents.
-/// The catalog list is asked rather than a list of connections, because it is what *resolves* the
-/// name: a catalog is registered exactly while its connection is live
-/// ([`StrataCatalogList`](crate::engine::providers::StrataCatalogList)), which is also the window
-/// in which the user can address it.
+/// Every intercepted statement that resolves a target comes through here, so one sentence covers
+/// them all and no arm grows its own copy of the check. The catalog list is asked rather than a
+/// list of connections, because it is what *resolves* the name: a catalog is registered exactly
+/// while its connection is live, which is the window in which the user can address it.
 pub(super) fn bare_name(
     ctx: &SessionContext,
     name: &TableReference,

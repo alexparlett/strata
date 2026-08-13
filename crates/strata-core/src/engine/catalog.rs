@@ -503,19 +503,15 @@ const MISSING_SUFFIX: &str = "' not found";
 /// [`register_error`], and the same shape: one mapper that diagnoses, then [`readable`], which
 /// only unwraps.
 ///
-/// There is exactly one diagnosis, and it exists because a **cross-source view** is the one def
-/// whose dependency can disappear with nothing on our side to observe it. A workspace table's
-/// files are on a disk or in a bucket this app reads per scan, but a relation on a database
-/// server can be renamed or dropped by somebody else, and the first Strata hears of it is the
-/// next registration pass failing to plan the view. DataFusion's answer there — `table
-/// 'pg.public.orders' not found` — is true and reads like a bug in the SQL, when what happened is
-/// that the connection no longer has that relation.
+/// Exactly one diagnosis, because a **cross-source view** is the one def whose dependency can
+/// disappear with nothing on our side to observe it: a relation on a database server can be
+/// renamed by somebody else, and DataFusion's `table 'pg.public.orders' not found` reads like a bug
+/// in the SQL when the connection simply no longer has it.
 ///
-/// **The staleness this reports is bounded by the last connect, and that is the whole
-/// reconciliation.** A database connection's relation list is the connect-time enumeration
-/// (`engine::db`), so this sentence means "not in what the connection last told us", which is why
-/// the fix it names is a refresh rather than a promise about the server right now. Nothing polls,
-/// and nothing here asks the server: a ↻ re-runs the pass, which re-connects, which re-enumerates.
+/// **The staleness reported is bounded by the last connect**, which is the whole reconciliation: a
+/// connection's relation list is the connect-time enumeration, so this means "not in what the
+/// connection last told us" and the fix it names is a refresh. Nothing polls and nothing asks the
+/// server — a ↻ re-runs the pass, which re-connects.
 pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
     match missing_relation(ctx, raw) {
         Some(message) => message,

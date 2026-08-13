@@ -48,26 +48,21 @@ use super::{fold_ident, CATALOG, SCHEMA};
 /// Whether `name` addresses **the workspace catalog's one schema** — the three spellings of
 /// one place (`orders`, `public.orders`, `strata.public.orders`), and nothing else.
 ///
-/// One predicate rather than the test written out per caller, because two rules turn on it and
-/// they must not drift: what an intercepted statement may create, drop or write
+/// One predicate rather than the test written per caller, because two rules turn on it and must not
+/// drift: what an intercepted statement may create, drop or write
 /// ([`ddl::bare_name`](super::ddl::bare_name)), and what the `__snap_` namespace covers
-/// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session
-/// holds more than one catalog, so "is this name ours" is a real question rather than a
-/// formality — a database connection's catalog has as many schemas as the server does, and a
-/// relation in one is neither Strata's to manage nor part of Strata's reserved namespace.
+/// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session holds
+/// more than one catalog, so "is this name ours" is a real question.
 ///
-/// Reference-shaped, so it is asked of the same value DataFusion resolved: a `Partial` whose
-/// schema is not `public` names a schema the workspace catalog cannot have
-/// (`StrataCatalogProvider::schema`), which is why it answers false rather than looking at the
-/// catalog list.
+/// Reference-shaped, so it is asked of the value DataFusion resolved: a `Partial` whose schema is
+/// not `public` names a schema the workspace catalog cannot have, which is why it answers false
+/// rather than consulting the catalog list.
 ///
-/// **Each part is compared the way the thing that resolves it compares**, and the two halves
-/// differ on purpose. [`StrataCatalogList`] keys catalogs by [`fold_ident`], so `"STRATA"` —
-/// quoted, and therefore carried verbatim past the parser's own folding — resolves to the
-/// workspace catalog and has to answer true here; comparing it raw let that spelling out of the
-/// workspace, and with it out of the `__snap_` namespace, which is a way to read another tab's
-/// snapshot. [`StrataCatalogProvider::schema`] compares its one schema **exactly**, so a
-/// `"PUBLIC"` resolves to nothing at all and answering false about it is the honest answer.
+/// **Each part is compared the way the thing that resolves it compares.** [`StrataCatalogList`]
+/// keys catalogs by [`fold_ident`], so a quoted `"STRATA"` reaches the workspace catalog and must
+/// answer true — comparing it raw let that spelling out of the `__snap_` namespace, which is a way
+/// to read another tab's snapshot. [`StrataCatalogProvider::schema`] compares its one schema
+/// **exactly**, so `"PUBLIC"` resolves to nothing and false is the honest answer.
 pub(super) fn in_workspace(name: &TableReference) -> bool {
     match name {
         TableReference::Bare { .. } => true,
@@ -167,13 +162,10 @@ pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn Ca
 /// Register a catalog shaped the way a **database connection's** is — one schema, some
 /// relations — so a test can ask what the app does about a name inside one without a server.
 ///
-/// A `MemoryCatalogProvider` stands in exactly, because every rule under test reads the
-/// **catalog list** and nothing more: `ddl::bare_name`'s refusal, `catalog::view_error`'s
-/// diagnosis, `plan_deps`' qualified recording and `Engine::describe_remote` all ask whether a
-/// catalog of that name is registered and then work off the resolved reference. What
-/// `db::DbCatalogProvider` adds on top — lazily built federated providers and a `table_type`
-/// that costs no round trip — is what the *integration* test exercises against a real server
-/// (`tests/postgres_federation.rs`), and nothing here can stand in for that.
+/// A `MemoryCatalogProvider` stands in exactly, because every rule under test reads the **catalog
+/// list** and nothing more: each asks whether a catalog of that name is registered and then works
+/// off the resolved reference. What `db::DbCatalogProvider` adds on top is what the *integration*
+/// test exercises against a real server, and nothing here can stand in for that.
 ///
 /// Two columns rather than one, so a test can join a remote relation to a workspace table on
 /// `id` and still have something to project.

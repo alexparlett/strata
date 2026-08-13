@@ -29,26 +29,76 @@ JSON-only, paying a serialize-and-reparse round trip the common case never needs
 Together these close feedback items 1 and 2, in the form item 1 itself proposed ("a
 keys/entries function would fix it").
 
-**Alternative under evaluation — `datafusion-contrib/datafusion-variant`** (on Alex's radar;
-surveyed 2026-08-13): 0.1.0 pins **exactly our stack** (datafusion 54, arrow/parquet-variant
-58.3) and ships `cast_to_variant`, `variant_object_keys`, `variant_get`, `variant_to_json`
-(plus construct/insert/delete and `json_to_variant`). Over the hand-rolled plan it has one
-strict win — Variant carries per-row structure, so **no shape-unification requirement**: a
-heterogeneous struct gets dynamic access instead of a refusal toward `to_json`. It is the
-Spark/Iceberg-blessed shape for exactly this pathology. **Build step 0 below is the spike**;
-adopt if it passes, hand-roll otherwise. What the spike must verify from source and fixture,
-not assume: (a) maturity — its own README says pre-stable until its tracking issue closes;
-(b) `variant_get`'s path argument accepts a **computed** key (a literal-only path kills the
-headline case); (c) `cast_to_variant` survives the fixture's deep Structs, and what it does
-to `JSON_TEXT_KEY` conflict columns (JSON text would embed as a string — `json_to_variant`
-re-parses, but no raw-text column exists at scan time); (d) the result side — a projected
-Variant column reaches `serialize`/`value_tree`/the inspector as opaque binary, so either
-those learn a variant arm or the guidance is "wrap in `variant_to_json` before projecting";
-(e) cost — `struct_keys` off null bitmaps is cheaper than constructing variant binary when
-the question is keys-only; measure on the 19,311-key struct. Under adoption the deliverable
-shrinks to registration + whatever the spike found missing (likely `struct_keys` kept for
-the cheap keys-only read, and thin naming decisions); the refusal-toward-`to_json` design
-below applies only to the hand-rolled path.
+**Alternative evaluated and REJECTED — `datafusion-contrib/datafusion-variant`** (spike run
+2026-08-13, evidence below). The hand-rolled path stands; everything after this section is the
+deliverable.
+
+The survey that put it here was read off the **repository's** manifest, not the published
+crate, and the two are two DataFusion majors apart:
+
+| | published 0.1.0 | git HEAD `9e1c846` |
+|---|---|---|
+| datafusion / arrow | **52.1** / **57** | 54 / 58.3 |
+| `variant_object_keys` | **absent** | present |
+
+So `cargo add datafusion-variant` resolves a **second** DataFusion (52.5.0) and arrow 57.3.1
+into the graph beside our 54 / 58.3 — the UDFs are `ScalarUDFImpl`s of another DataFusion and
+cannot be registered on our `SessionContext` at all — and the release has no key-enumeration
+function, which is the headline ask. Only the unreleased git HEAD builds against our pin, and
+its own README says the crate is pre-stable until its tracking issue closes. The spike ran
+against that HEAD as a dev-dependency (single copy of datafusion/arrow confirmed by
+`cargo tree -d`) over a `json_poly`-inferred fixture of `config.json`'s shape.
+
+What it answered:
+
+- **(a) maturity** — adoption means a git-rev dependency on unpublished, self-declared
+  pre-stable code, inside the four-crate lockstep set that already pins DataFusion 54.
+- **(b) computed key — WORKS, and it is a real capability we do not have.**
+  `variant_get(v, pick)` with `pick` a *column* returned the right value per row. Its
+  columnar-path branch builds a one-row array per row and `concat`s them, so it is not cheap,
+  but it is correct.
+- **(c) `cast_to_variant` survives the fixture**, and per-row keys are right —
+  `variant_object_keys` gave `[a1, b2]` / `[c3]` over a struct whose three fields are unioned
+  across the two records, i.e. **no shape-unification requirement**, the one strict win.
+  `JSON_TEXT_KEY` columns embed as **strings**, as feared: `note` came back
+  `"\"plain prose\""` / `"{\"kind\":\"body\"}"`, so a conflict-state column stays opaque
+  inside the variant unless the user knows to write `json_to_variant`.
+- **(d) the result side — this is what decided it.** A projected variant column is
+  `Struct{metadata: BinaryView, value: BinaryView}` with `ARROW:extension:name =
+  arrow.parquet.variant`. Measured against our own readers: `column_info` says
+  `dtype=Struct kind=Struct`, `cell_preview_json` prints the two hex blobs, `value_tree`
+  shows a 2-child nest, CSV export writes the hex. The grid, the inspector and export would
+  each need a variant arm, or every query has to end in `variant_to_json`.
+- **(e) cost** — keys-only over a 5,000-key struct: **58.7 ms** for
+  `variant_object_keys(cast_to_variant(cb))` against **19.75 µs** for the null-bitmap walk.
+  The real document has 19,311 keys.
+
+Also settled, so it is not re-argued: variant would **not** have recovered "explicit null vs
+absent key". `cast_to_variant` drops the null fields too — the distinction is lost at
+`json_poly` inference, before either implementation sees the data.
+
+**Revisit when** the crate publishes a release on our DataFusion pin *and* the result-side
+surfaces (`column_info` / `serialize` / `value_tree` / export / the snapshot's extension
+metadata) have somewhere to put a Variant. Its dynamic access to a *heterogeneous* struct is
+the thing worth coming back for.
+
+**Learnings taken into the hand-rolled path** (module docs carry the same, at the site):
+
+- **A key, not a path.** Its `path_from_scalar` carries a `List`-of-strings overload
+  specifically "for keys that contain dots such as OTEL attribute keys like
+  `http.response.status_code`" — dot-path parsing broke on real keys. `struct_get` takes one
+  key, matched exactly, so that failure is unreachable.
+- **Gather with `interleave`, never a per-row loop.** Its per-row singleton-and-`concat` is a
+  large part of the 58.7 ms.
+- **Validate off the `Field`, not the `DataType`** (`try_field_as_variant_array` reads the
+  field's extension type). Same reason `to_json` reads `arg_fields[0].metadata()` for
+  `JSON_TEXT_KEY`: the meaning is on the field.
+- **Recorded, not built:** `variant_get`'s optional third argument, a type hint parsed by
+  `DataType::from_str` (`variant_get(v, path, 'Int64')`) — how it gets typed access out of a
+  heterogeneous object. Rejected here because it introduces Arrow type spellings as a second
+  vocabulary beside `short_type` / `Engine::column_type`, and because the refusal toward
+  `to_json` is this task's stated acceptance. It is the obvious first move if the
+  heterogeneous case turns out to matter more than the feedback suggested.
 
 **Considered and not built** (survey 2026-08-13, so the next reader doesn't re-shop the
 list): the array/list family (already in DF 54's `datafusion-functions-nested`),
@@ -85,11 +135,8 @@ demonstrated field need — registration is one line, so there is no economy in 
 
 ## Build
 
-0. **The `datafusion-variant` spike** (half a day, decides the rest): add the dep in a
-   scratch branch, register its UDFs, run the fixture chain — enumerate `contentBlocks`
-   keys, access by a key computed from another column, serialize a subtree — and answer
-   (a)–(e) above. Record the verdict and the evidence in this file either way; on adoption,
-   steps 1–3 shrink accordingly and the dependency note goes in the workstream README.
+0. ~~**The `datafusion-variant` spike**~~ — **done, rejected**; verdict and evidence above.
+   The dev-dependency and the spike test are removed; nothing in the tree references the crate.
 1. New module `crates/strata-core/src/engine/udfs.rs` (Strata's own built-ins — QE-02 joins
    it) holding all four `ScalarUDFImpl`s.
    - `struct_keys`: per row, the field names whose child is valid at that index — null
