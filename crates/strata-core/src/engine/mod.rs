@@ -59,6 +59,10 @@ pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
 /// The bin cap the histogram read clamps to — `pub` so the control offering a bin count is
 /// bounded by the same number rather than a second copy of it.
 pub use chart::MAX_BINS;
+/// What a surface can be told about one relation inside a database connection's catalog
+/// ([`Engine::describe_remote`]) — beside `TableMeta` because it answers the same question for
+/// the kind of source that has no def.
+pub use db::RemoteRelation;
 /// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
 /// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
 /// (ED-05) — the catalog's confirm says before the fact what the report says after it.
@@ -114,7 +118,7 @@ use datafusion::common::TableReference;
 use datafusion::execution::runtime_env::RuntimeEnv;
 // `register_udf` is `FunctionRegistry`'s, not an inherent method on `SessionState`.
 use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
-use datafusion::logical_expr::ScalarUDF;
+use datafusion::logical_expr::{ScalarUDF, TableType};
 use datafusion::prelude::*;
 use datafusion_federation::{default_optimizer_rules, FederatedQueryPlanner};
 use tokio::runtime::{Builder, Runtime};
@@ -1532,6 +1536,95 @@ impl Engine {
             return None;
         };
         db::listing(&self.databases, conn, pg)
+    }
+
+    /// The catalogs database connections have registered, in the spelling they were registered
+    /// under — the workspace's own excluded, since it is not one.
+    ///
+    /// Membership, not liveness, in the same sense `connections` is: a catalog is on the list
+    /// exactly while its connection is live, which is also exactly while a three-part name can
+    /// resolve through it. Synchronous and free — the list is a map this session holds.
+    pub fn database_catalogs(&self) -> Vec<String> {
+        self.ctx
+            .catalog_names()
+            .into_iter()
+            .filter(|name| fold_ident(name) != CATALOG)
+            .collect()
+    }
+
+    /// One relation inside a database connection's catalog, from what the session already
+    /// holds.
+    ///
+    /// The columns come from the provider that catalog builds and caches per relation
+    /// (`engine::db`), so this costs one remote introspection the first time a relation is
+    /// asked about and nothing afterwards — the same cost validating a query that names it
+    /// already pays. There is **no def and no `Reg` row** behind this and there is not meant to
+    /// be: a database answers for itself, so a surface that wants to describe a remote relation
+    /// asks the connection rather than the store (the workstream's discovery-gets-catalogs
+    /// rule).
+    ///
+    /// **The three answers are kept apart, which is why this is not an `Option`.** `Ok(None)` is
+    /// an *expected absence* — a name not addressed into a database catalog at all, or one the
+    /// connection does not have — and the caller's own not-found stands. `Err` is a relation the
+    /// connection **does** list whose introspection failed, which is a fault about the server or
+    /// the session and not a fact about the name: reporting it as absent would tell an agent a
+    /// relation does not exist when it does, and throw away the sentence `DbSchemaProvider`
+    /// wrote to say why.
+    ///
+    /// Existence is asked of `table_exist`, deliberately: that reads the connect-time listing
+    /// and costs nothing, where `table` is the round trip. So the common miss never dials out —
+    /// and a relation the listing has but `table` then answers `None` for is one dropped
+    /// server-side since the connect, an absence either way, which the caller's own not-found
+    /// says better than a fault would.
+    pub async fn describe_remote(&self, name: String) -> Result<Option<RemoteRelation>, String> {
+        let reference = TableReference::parse_str(&name);
+        let TableReference::Full { catalog, .. } = &reference else {
+            return Ok(None);
+        };
+        let folded = fold_ident(catalog);
+        if folded == CATALOG {
+            return Ok(None);
+        }
+        let Some(connection) = self
+            .ctx
+            .catalog_names()
+            .into_iter()
+            .find(|registered| fold_ident(registered) == folded)
+        else {
+            return Ok(None);
+        };
+        let Some(schema_name) = reference.schema() else {
+            return Ok(None);
+        };
+        let Some(schema) = self
+            .ctx
+            .catalog(&connection)
+            .and_then(|catalog| catalog.schema(schema_name))
+        else {
+            return Ok(None);
+        };
+        if !schema.table_exist(reference.table()) {
+            return Ok(None);
+        }
+        let relation = format!("{schema_name}.{}", reference.table());
+        let table = reference.table().to_string();
+        let provider = self
+            .rt()
+            .spawn(async move { schema.table(&table).await })
+            .await
+            .map_err(|e| format!("Reading '{name}' failed: {e}"))?
+            .map_err(|e| catalog::readable(&e.to_string()))?;
+        Ok(provider.map(|provider| RemoteRelation {
+            connection,
+            relation,
+            view: provider.table_type() == TableType::View,
+            columns: provider
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| column_info(field))
+                .collect(),
+        }))
     }
 
     /// The AWS profile names this machine's own configuration defines — what the connection
@@ -3824,5 +3917,87 @@ mod read_options_tests {
             .await
             .expect_err("not one byte in UTF-8");
         assert!(err.contains("single-byte character"), "{err}");
+    }
+}
+
+/// **What the engine can say about a database connection's catalog** (DB-03) — the two reads
+/// the agent vocabulary needs so it stops answering "not found" about relations it can query.
+#[cfg(test)]
+mod remote_catalog_tests {
+    use super::*;
+    use crate::engine::providers::fake_database;
+
+    #[tokio::test]
+    async fn the_workspace_catalog_is_not_a_database() {
+        let engine = Engine::new(BTreeMap::new());
+        assert!(
+            engine.database_catalogs().is_empty(),
+            "a project with no database connection has no database catalogs"
+        );
+        fake_database(&engine.ctx, "Sales", &["orders"]);
+        assert_eq!(
+            engine.database_catalogs(),
+            vec!["Sales".to_string()],
+            "in the spelling it was registered under, and without the workspace's own"
+        );
+    }
+
+    /// A qualified remote name describes; everything else is an **expected absence**
+    /// (`Ok(None)`) and leaves the store to say what it knows — a bare name is a def's, and a
+    /// def is not this method's business.
+    ///
+    /// The split that matters is absence against fault: every name below is an `Ok`, because
+    /// none of them is a failure. `Err` is reserved for a relation the connection lists whose
+    /// introspection then fails, which no fake catalog can produce — that arm is the real
+    /// server's (`tests/postgres_federation.rs`).
+    ///
+    /// Names are folded like every other in the session, and the answer carries the connection's
+    /// and the server's own spellings rather than the caller's. The absent set covers the four
+    /// ways a name is not this method's business: not in the connection, not a database catalog
+    /// (`strata`, and `STRATA`, which the catalog list resolves by folding), and not qualified
+    /// into one at all, which is a def's name for the store to answer.
+    #[tokio::test]
+    async fn describe_remote_answers_for_a_relation_and_nothing_else() {
+        let engine = Engine::new(BTreeMap::new());
+        fake_database(&engine.ctx, "pg", &["orders"]);
+
+        let described = engine
+            .describe_remote("pg.public.orders".into())
+            .await
+            .expect("no fault")
+            .expect("a relation the connection has");
+        assert_eq!(described.connection, "pg");
+        assert_eq!(described.relation, "public.orders");
+        assert!(!described.view);
+        assert_eq!(
+            described
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "total"]
+        );
+
+        let folded = engine
+            .describe_remote("PG.PUBLIC.ORDERS".into())
+            .await
+            .expect("no fault")
+            .expect("folded");
+        assert_eq!(folded.connection, "pg");
+        assert_eq!(folded.relation, "public.orders");
+
+        for name in [
+            "pg.public.gone",
+            "strata.public.orders",
+            "STRATA.public.orders",
+            "orders",
+            "public.orders",
+        ] {
+            assert_eq!(
+                engine.describe_remote(name.into()).await.expect("no fault"),
+                None,
+                "{name}"
+            );
+        }
     }
 }

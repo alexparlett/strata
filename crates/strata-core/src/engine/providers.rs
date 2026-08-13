@@ -35,7 +35,12 @@
 //!   snapshot **by name**, so none of them notices.
 //!
 //! The prefix itself is [`is_snapshot_name`], next to the function that mints the names: the
-//! hiding rule and the naming rule are one definition, and cannot drift apart.
+//! hiding rule and the naming rule are one definition, and cannot drift apart. The filter is
+//! **this** provider's and a database connection's is deliberately without one
+//! ([`db::DbSchemaProvider`](super::db)): the namespace is the workspace catalog's, so a remote
+//! relation a server happens to call `__snap_x` is an ordinary table that means nothing here —
+//! which is the same scoping [`is_snapshot_ref`](super::query::is_snapshot_ref) applies to the
+//! refusal, off [`in_workspace`].
 //!
 //! Everything else delegates to the map verbatim, `MemorySchemaProvider`'s semantics included
 //! — the duplicate-name error and all — so every existing reader, `find_and_deregister`,
@@ -48,9 +53,43 @@ use async_trait::async_trait;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use datafusion::common::{exec_err, DataFusionError, Result};
 use datafusion::prelude::SessionContext;
+use datafusion::sql::TableReference;
 
 use super::query::is_snapshot_name;
-use super::{fold_ident, SCHEMA};
+use super::{fold_ident, CATALOG, SCHEMA};
+
+/// Whether `name` addresses **the workspace catalog's one schema** — the three spellings of
+/// one place (`orders`, `public.orders`, `strata.public.orders`), and nothing else.
+///
+/// One predicate rather than the test written out per caller, because two rules turn on it and
+/// they must not drift: what an intercepted statement may create, drop or write
+/// ([`ddl::bare_name`](super::ddl::bare_name)), and what the `__snap_` namespace covers
+/// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session
+/// holds more than one catalog, so "is this name ours" is a real question rather than a
+/// formality — a database connection's catalog has as many schemas as the server does, and a
+/// relation in one is neither Strata's to manage nor part of Strata's reserved namespace.
+///
+/// Reference-shaped, so it is asked of the same value DataFusion resolved: a `Partial` whose
+/// schema is not `public` names a schema the workspace catalog cannot have
+/// (`StrataCatalogProvider::schema`), which is why it answers false rather than looking at the
+/// catalog list.
+///
+/// **Each part is compared the way the thing that resolves it compares**, and the two halves
+/// differ on purpose. [`StrataCatalogList`] keys catalogs by [`fold_ident`], so `"STRATA"` —
+/// quoted, and therefore carried verbatim past the parser's own folding — resolves to the
+/// workspace catalog and has to answer true here; comparing it raw let that spelling out of the
+/// workspace, and with it out of the `__snap_` namespace, which is a way to read another tab's
+/// snapshot. [`StrataCatalogProvider::schema`] compares its one schema **exactly**, so a
+/// `"PUBLIC"` resolves to nothing at all and answering false about it is the honest answer.
+pub(super) fn in_workspace(name: &TableReference) -> bool {
+    match name {
+        TableReference::Bare { .. } => true,
+        TableReference::Partial { schema, .. } => schema.as_ref() == SCHEMA,
+        TableReference::Full {
+            catalog, schema, ..
+        } => fold_ident(catalog) == CATALOG && schema.as_ref() == SCHEMA,
+    }
+}
 
 /// The engine's **catalog list**: DataFusion's, plus the one operation it does not have.
 ///
@@ -136,6 +175,42 @@ impl CatalogProviderList for StrataCatalogList {
 pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn CatalogProvider>> {
     let list = Arc::clone(ctx.state_ref().read().catalog_list());
     list.downcast_ref::<StrataCatalogList>()?.deregister(name)
+}
+
+/// Register a catalog shaped the way a **database connection's** is — one schema, some
+/// relations — so a test can ask what the app does about a name inside one without a server.
+///
+/// A `MemoryCatalogProvider` stands in exactly, because every rule under test reads the
+/// **catalog list** and nothing more: `ddl::bare_name`'s refusal, `catalog::view_error`'s
+/// diagnosis, `plan_deps`' qualified recording and `Engine::describe_remote` all ask whether a
+/// catalog of that name is registered and then work off the resolved reference. What
+/// `db::DbCatalogProvider` adds on top — lazily built federated providers and a `table_type`
+/// that costs no round trip — is what the *integration* test exercises against a real server
+/// (`tests/postgres_federation.rs`), and nothing here can stand in for that.
+///
+/// Two columns rather than one, so a test can join a remote relation to a workspace table on
+/// `id` and still have something to project.
+#[cfg(test)]
+pub(crate) fn fake_database(ctx: &SessionContext, catalog: &str, relations: &[&str]) {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
+    use datafusion::datasource::empty::EmptyTable;
+
+    let schema = Arc::new(MemorySchemaProvider::new());
+    for relation in relations {
+        let arrow = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("total", DataType::Int64, true),
+        ]));
+        schema
+            .register_table((*relation).to_string(), Arc::new(EmptyTable::new(arrow)))
+            .expect("fake relation");
+    }
+    let provider = Arc::new(MemoryCatalogProvider::new());
+    provider
+        .register_schema(SCHEMA, schema)
+        .expect("fake schema");
+    ctx.register_catalog(catalog, provider);
 }
 
 /// Strata's catalog: exactly one schema, [`SCHEMA`], for the whole life of the engine.

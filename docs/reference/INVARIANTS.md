@@ -1743,14 +1743,14 @@ Things that must not regress. Each was fought for once already.
   silent rewording. Default stays deny — a parse failure is the caller-side `Err`, the sqlparser
   wildcard is `Refuse(Unsupported)`, and the five-variant DFParser match is wildcard-free so a new
   DataFusion statement is a compile error.
-  **Reserved names, read and write**: a `__snap_`-prefixed identifier anywhere in a statement the
-  user typed — targets included — is refused, because the same prefix hides the collision from every
-  catalog reader and the collision itself is unrecoverable either way (the provider answers
-  "already exists", so it is the *Run* that fails, on a name the user cannot see). The predicate is
-  one function (`engine::query::is_snapshot_name`, beside `snapshot_name`) so the naming rule, the
-  refusal and the hiding rule cannot drift; the write targets sqlparser does not annotate for
-  `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name list) are named explicitly rather than
-  assumed.
+  **Reserved names, read and write**: a `__snap_`-prefixed identifier **in the workspace catalog**
+  anywhere in a statement the user typed — targets included — is refused, because the same prefix
+  hides the collision from every catalog reader and the collision itself is unrecoverable either
+  way (the provider answers "already exists", so it is the *Run* that fails, on a name the user
+  cannot see). The predicate is one function (`engine::query::is_snapshot_ref`, beside
+  `snapshot_name`) so the naming rule, the refusal and the hiding rule cannot drift; the write
+  targets sqlparser does not annotate for `visit_relations` (`CREATE VIEW`'s name, `DROP`'s name
+  list) are named explicitly rather than assumed.
 
   This fence covered only the **intercepted** forms until the pre-release review, on the stated
   grounds that a query may read a snapshot because snapshots are how results are addressed at all.
@@ -1769,6 +1769,78 @@ Things that must not regress. Each was fought for once already.
   `register_external` for tables, and `ddl::views::create` for views — which had no such backstop,
   so a view saved as `__snap_7` through ⌘S or a hand-edited `project.json` registered into the
   reserved namespace and cost a Run the first time the counter reached 7.
+
+  **The namespace is the *workspace catalog's*, and the DB workstream is what made that a real
+  question.** The rule was the prefix alone, on any part of any name, which was exactly right
+  while `strata` was the only catalog there was. A database connection can hold a relation
+  somebody called `__snap_3`, and there the name reserves nothing, hides nothing and collides
+  with nothing: it is not the namespace a Run mints into, the workspace schema provider is not
+  what enumerates it, and reading it hands back that server's rows rather than another tab's
+  result. So `is_snapshot_ref` is `is_snapshot_name` under `providers::in_workspace` — one
+  predicate, the same one `ddl::bare_name` uses to decide what an intercepted statement may
+  target, so the naming rule, the refusal, the hiding rule and the management rule cannot drift
+  apart. Writing to a remote `__snap_3` is still refused, for being remote, which is the true
+  reason. `validate::is_reserved` reads the qualifier through DataFusion's **own**
+  `object_name_to_table_reference`, so the reference judged is the reference the planner would
+  resolve; the scoping is deliberately **syntactic** (the three workspace spellings in,
+  everything else out), because `classify` is a pure function of the parsed statement and asking
+  the session which catalogs exist would make it a question about now. A qualifier naming no
+  catalog resolves nowhere anyway — `bare_name` refuses it by name, and a query naming it does
+  not plan. A database connection's schema provider correspondingly grew **no** hiding filter.
+
+  **`in_workspace` compares each part the way the thing that resolves it compares**, and the two
+  halves differ on purpose. `StrataCatalogList` keys catalogs by `fold_ident`, so a *quoted*
+  `"STRATA"` — carried verbatim past the parser's own folding — resolves to the workspace
+  catalog and must answer true; the first version compared it raw, which let that one spelling
+  out of the workspace and therefore out of the reserved namespace, so
+  `SELECT * FROM "STRATA".public.__snap_3` planned and handed back another tab's snapshot with
+  `__strata_ord` on it. The old any-part prefix test had caught it by accident. `StrataCatalogProvider::schema`
+  compares its one schema **exactly**, so a `"PUBLIC"` resolves to nothing and answering false
+  about it is honest. The same fold belongs in `ddl::database_catalog`, or a quoted workspace
+  spelling skips its guard and then *matches the workspace's own entry* in the catalog list —
+  telling the user their project's catalog is a database connection, which
+  `PgStore::check_catalog` makes impossible for any real one.
+- **A name qualified into a database connection's catalog is read like any other name and managed
+  by nothing, and the refusal is minted once — in `ddl::bare_name`, which is already in front of
+  every arm that resolves a target.** v1 is read-only against a database, so the sentence says
+  which of the two halves is true (`'pg.public.orders' is in the database connection 'pg'. Strata
+  reads remote tables; it does not create, drop or write them`) rather than naming a surface to go
+  and use: there is no Strata surface that creates a remote table, and the server's own client is
+  not something this app can point at. It is **not** parameterised by what the statement makes,
+  because the answer is about the catalog and not about the kind of thing being made in it; a
+  qualifier that resolves to *no* catalog keeps `elsewhere`'s older wording, which is a different
+  fact with no connection to name. The catalog **list** is what is asked — it is what resolves the
+  name, it holds a database's catalog exactly while the connection is live, and it answers with
+  the spelling that connection was registered under. Two consequences worth stating: `INSERT`
+  reaches this **before** `Engine::is_internal`, since ownership is not a question to ask about a
+  relation whose data Strata could never own; and `CREATE`/`DROP FUNCTION` need no fence of ours,
+  because DataFusion's planner already refuses a qualified function name in words that name the
+  fault. Reading is never refused — a plain query, a cross-source join, a `COPY`'s source and a
+  `PREPARE`d body all resolve a remote relation normally, which is the whole point of the
+  connection and the thing an over-broad gate would break.
+- **A view's dependencies are two lists, because only one of them is checkable against the
+  project's own rows.** `PlanDeps` keeps workspace scans **bare** (`tables`) and non-workspace
+  scans **qualified whole** (`remote`), split by the same `in_workspace`, and `ViewMeta` and the
+  store's `ViewInfo` carry the split through as `deps` / `remote_deps`. Recorded by bare component
+  — which is what `plan_deps` did before the DB workstream — a cross-source view's
+  `pg.public.orders` is indistinguishable from a workspace table called `orders`: dropping that
+  table names a view that never read it, `view_problem`'s missing-dependency check cries wolf over
+  a relation the store has no row for (a triangle on every working cross-source view), and a
+  forget of the connection matches nothing anywhere. `dependent_views`, `readers` and
+  `left_invalid` needed no change once the split existed, which is the tell that the split is
+  where the fact belongs. An agent asking what a view *reads* is handed both halves, because that
+  question is not about rows.
+- **A remote relation that vanishes server-side is a reconciliation, and its staleness bound is
+  stated where the message is built.** Nothing on our side can observe a server-side rename or
+  drop: the view goes on answering from the plan it inlined at creation, and the first Strata
+  hears of it is the next registration pass failing to re-plan. DataFusion's answer there (`table
+  'pg.public.orders' not found`) is true and reads like a bug in the SQL, so `catalog::view_error`
+  — the view funnel's counterpart to `register_error`, one diagnosis in front of `readable`'s
+  unwrapping, matching the literal off the crate that writes it — rewrites it to name the
+  connection and the fix. What that sentence reports is bounded by the **last connect**, which is
+  why the fix it names is a refresh: a connection's relation list is its connect-time enumeration,
+  nothing polls, and a ↻ re-runs the pass, which re-connects. A workspace name keeps DataFusion's
+  words, because the catalog pane has a row for it and that is a better thing to be pointed at.
 - **A `COPY … TO` may not land in storage Strata owns, and the gate is the *resolved* target.**
   The reserved-name half of that statement is the router's and covers the **source**; nothing looked
   at where the write went. A `COPY … TO '<project>/.strata/tables/sales/extra.arrow'` drops a file

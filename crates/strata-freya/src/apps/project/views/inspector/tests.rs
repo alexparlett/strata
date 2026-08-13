@@ -153,6 +153,7 @@ fn project() -> ProjectState {
         ViewMeta {
             columns: vec![col("day", DataType::Date32, Vec::new())],
             tables: vec!["events".into()],
+            remote: Vec::new(),
             aliases: Vec::new(),
         },
     );

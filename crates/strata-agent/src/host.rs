@@ -123,8 +123,22 @@ pub enum Described {
         name: String,
         sql: String,
         columns: Vec<ColumnInfo>,
-        /// The base tables the view scans.
+        /// The base tables the view scans — workspace and remote alike, because that is what
+        /// the view reads and the caller asked what it reads.
         reads: Vec<String>,
+    },
+    /// A relation in a **database connection's** catalog. There is no def behind it and so no
+    /// registration state: a database answers for itself, which is why the whole catalog comes
+    /// through a connection rather than one def per table. What can be said about it is its
+    /// address, the connection it is in, and the schema that connection reports.
+    Remote {
+        /// The qualified name, as the caller has to write it in SQL.
+        name: String,
+        /// The catalog the connection registered — the first part of `name`.
+        connection: String,
+        /// Whether the server calls it a view.
+        view: bool,
+        columns: Vec<ColumnInfo>,
     },
     /// The def is there; the engine refused it.
     Failed { name: String, error: String },
@@ -141,6 +155,7 @@ impl Described {
         match self {
             Described::Table { name, .. }
             | Described::View { name, .. }
+            | Described::Remote { name, .. }
             | Described::Failed { name, .. }
             | Described::Pending { name } => name,
         }
