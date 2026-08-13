@@ -331,18 +331,25 @@ fi
 # Submit one file and wait for Apple's verdict. `notarytool submit --wait` exits non-zero on a
 # rejection, so `set -e` stops the build rather than shipping something Apple refused.
 #
-# The Apple-ID rung reads its password from **stdin** rather than the command line. A submission
-# waits minutes, and for all of them an argument is visible to any `ps` on the machine - which on
-# a shared or multi-tenant builder is every other tenant. `--password -` is notarytool's own way
-# of saying "read it from stdin", so this costs nothing and needs no keychain profile. The
-# API-key rung, which is the preferred one and the only one CI wires, passes a file *path* and
-# was never exposed this way.
+# The Apple-ID rung passes its password as an argument, which is visible to any `ps` on the
+# machine for the minutes a submission takes. That is a real (if small) exposure on a shared
+# builder, and it stays, because notarytool offers no safe alternative that works unattended:
+# `xcrun notarytool submit --help` documents exactly three ways in, and only this one can be
+# scripted. Omitting `--password` gives "a secure prompt on the command line", which hangs a
+# build; there is no stdin convention (`--password -` submits the literal string `-` and Apple
+# rejects it, which `set -e` then turns into a failed release). The one real fix is
+# `notarytool store-credentials` + `--keychain-profile`, and that needs a keychain profile set up
+# on the builder ahead of time - worth doing if this rung ever runs anywhere shared, but it is a
+# setup step rather than a change to this line.
+#
+# The API-key rung above is the preferred one and the only one CI wires, and it passes a file
+# *path* rather than a secret, so it was never exposed this way.
 notarize() {
   case "$HAVE_NOTARY" in
     1) xcrun notarytool submit "$1" --key "$AC_API_KEY_PATH" --key-id "$AC_API_KEY_ID" \
       --issuer "$AC_API_ISSUER_ID" --wait ;;
-    2) printf '%s' "$AC_PASSWORD" | xcrun notarytool submit "$1" --apple-id "$AC_APPLE_ID" \
-      --password - --team-id "$AC_TEAM_ID" --wait ;;
+    2) xcrun notarytool submit "$1" --apple-id "$AC_APPLE_ID" --password "$AC_PASSWORD" \
+      --team-id "$AC_TEAM_ID" --wait ;;
     *) fail "notarize() called with no credentials configured" ;;
   esac
 }

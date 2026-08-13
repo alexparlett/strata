@@ -634,16 +634,27 @@ fn read_config() -> Result<AppConfig, String> {
         Ok(cfg) => Ok(cfg),
         Err(e) => {
             let aside = corrupt_config_path(&path);
-            let kept = fs::rename(&path, &aside).is_ok();
-            tracing::error!(
-                "config '{}' did not parse: {e}.{}",
-                path.display(),
-                if kept {
-                    format!(" Kept aside as '{}'", aside.display())
-                } else {
-                    String::new()
-                }
-            );
+            // **Writing is only safe once the bytes are somewhere else.** A rename that fails
+            // leaves the unparseable file as the user's only copy of their settings — and a
+            // truncated config usually holds most of them verbatim — sitting at the path the
+            // first window mount is about to write. So the latch goes off exactly as it does for
+            // an unreadable file: this session runs on defaults and does not replace what it
+            // could not preserve. `keep_corrupt_session` takes the same position for
+            // `session.json`, where it can afford to fail the open outright.
+            if fs::rename(&path, &aside).is_ok() {
+                tracing::error!(
+                    "config '{}' did not parse: {e}. Kept aside as '{}'",
+                    path.display(),
+                    aside.display()
+                );
+            } else {
+                WRITABLE.store(false, Ordering::Relaxed);
+                tracing::error!(
+                    "config '{}' did not parse: {e}, and could not be kept aside. Settings are \
+                     the defaults for this session and will not be saved over it",
+                    path.display()
+                );
+            }
             Ok(AppConfig::default())
         }
     }

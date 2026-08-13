@@ -78,6 +78,39 @@ unchecked where `fetch_page`'s was deliberately saturating.
   including a registration bug. It now asserts an access-denied/403.
 - **`parked()`** was unreferenced pre-work; removed, and AGENTS.md §5's citation of it made honest.
 
+## What the review of *this* work found
+
+The fixes above were then reviewed as a diff in their own right, which turned up six defects in
+them — three of them worse than what they replaced. Recorded because the pattern is the lesson:
+every one was a fix that reached one step further than the evidence supported.
+
+- **`notarytool --password -` does not exist.** The stdin form was invented, not looked up; it
+  would have passed the literal string `-` and failed notarization on the Apple-ID rung, aborting
+  the release build under `set -e`. `--help` documents exactly three ways in, and only the
+  argument form scripts. Reverted, with the real fix (`store-credentials` +
+  `--keychain-profile`) named as the setup step it is.
+- **`use_reactive` on an `EventHandler` re-fires the effect every render.** `EventHandler`'s
+  `PartialEq` is unconditionally `false` (freya-core `event_handler.rs:85`), so `use_reactive`
+  writes its `State` on every render; an effect that `read`s it is therefore subscribed to
+  something that always changes. `FieldControl` calls its handler *unconditionally*, so this
+  turned one call per text change into one per render, each writing the draft that causes the
+  next. Fixed by `peek`ing instead — which is what wanting *freshness without a trigger* actually
+  spells.
+- **The slug fix orphaned data it was meant to protect.** Hashing safe names that already look
+  hashed changes the slug of tables **already on disk**, and `table_dir` re-derives that path from
+  the name on every drop — so dropping such a table would delete nothing and strand the real
+  directory forever. The collision it closed needs a user to name one table the hash of another;
+  the regression needs only a table called `report-1a2b3c4d`. Reverted, and `slug`'s doc now says
+  why the shortcut has to stay.
+- **A failed keep-aside left the config writable**, so the one path where the bytes could not be
+  preserved was also the one where the next write destroyed them — the exact opposite of what the
+  new doc promised two lines above.
+- **`alive()` was inserted between `drop_row`'s doc comment and `drop_row`**, silently reassigning
+  thirty-five lines of rollback-policy reasoning to a two-line helper.
+- **`split_once("://")` read any path containing `://` as a URL**, so a local target like
+  `.strata/tables/sales/x://y` skipped the ownership fence entirely. Now shaped against RFC 3986
+  and pinned by two tests.
+
 ## Left, deliberately
 
 - **The chat transcript deep-clones the conversation on every render** (`transcript.rs:46`), and

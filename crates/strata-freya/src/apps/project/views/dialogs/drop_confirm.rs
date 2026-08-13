@@ -403,6 +403,15 @@ impl Component for DropConfirm {
     }
 }
 
+/// Whether the project subtree these two belong to is still mounted — the question every
+/// `spawn_forever` in [`drop_row`] has to ask before it writes what it learned.
+///
+/// Both, not either: they are separate states of the same subtree, and a check that named only
+/// one would be right by accident rather than by construction.
+fn alive(catalog: Catalog, report: ReportCtx) -> bool {
+    catalog.is_alive() && report.log.is_alive()
+}
+
 /// Perform the confirmed drop.
 ///
 /// **The store is the catalog**, so the def going is what the sidebar sees — there is nothing to
@@ -430,15 +439,6 @@ impl Component for DropConfirm {
 /// fallible engine call. That asymmetry is deliberate — the two situations differ in what has
 /// already become true — and the Problems drawer's `Project` scope carries the other half either
 /// way, naming the file that is behind for as long as it is.
-/// Whether the project subtree these two belong to is still mounted — the question every
-/// `spawn_forever` below has to ask before it writes what it learned.
-///
-/// Both, not either: they are separate states of the same subtree, and a check that named only
-/// one would be right by accident rather than by construction.
-fn alive(catalog: Catalog, report: ReportCtx) -> bool {
-    catalog.is_alive() && report.log.is_alive()
-}
-
 fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,

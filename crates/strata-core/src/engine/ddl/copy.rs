@@ -148,10 +148,19 @@ pub async fn copy_to(
 fn refuse_owned_target(target: &str, root: &DataRoot) -> Result<(), String> {
     // A target with a scheme belongs to an object store, not to this machine's filesystem.
     // `file:` is the one scheme that *is* a local path, so it is stripped rather than skipped.
+    //
+    // The scheme has to be **shaped** like one (RFC 3986: a letter, then letters, digits, `+`,
+    // `-` or `.`), not merely be whatever precedes the first `://`. Splitting alone read the
+    // whole of `<project>/.strata/tables/sales/x://y` as a scheme and waved the target through —
+    // a local path with those three characters in a file name skipped this fence entirely.
     let local = match target.split_once("://") {
-        Some(("file", rest)) => Cow::Owned(format!("/{}", rest.trim_start_matches('/'))),
-        Some(_) => return Ok(()),
-        None => Cow::Borrowed(target),
+        Some((scheme, rest)) if is_url_scheme(scheme) => {
+            match scheme.eq_ignore_ascii_case("file") {
+                true => Cow::Owned(format!("/{}", rest.trim_start_matches('/'))),
+                false => return Ok(()),
+            }
+        }
+        _ => Cow::Borrowed(target),
     };
     let path = resolve(Path::new(local.as_ref()));
 
@@ -169,6 +178,16 @@ fn refuse_owned_target(target: &str, root: &DataRoot) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Whether `s` is shaped like a URL scheme — RFC 3986's `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
+///
+/// A path separator can never appear in one, which is the whole point: it is what tells
+/// `s3://bucket` from a local file whose name happens to contain `://`.
+fn is_url_scheme(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 /// `path` as an absolute path with `.` and `..` folded away, anchored on the deepest ancestor that
@@ -280,9 +299,53 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::{env, process};
 
+    use super::is_url_scheme;
     use crate::engine::sql::Blocked;
     use crate::engine::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use crate::project::{save_defs, ProjectDefs};
+
+    /// **A scheme is a scheme, and a path with `://` in it is a path.** Reading everything before
+    /// the first `://` as a scheme waved `…/x://y` through the ownership fence as though it named
+    /// an object store, which is how a local target inside `.strata/` could skip the check.
+    #[test]
+    fn only_a_real_scheme_reads_as_a_url() {
+        for yes in ["s3", "gs", "http", "https", "file", "s3a", "x+y", "a-b.c"] {
+            assert!(is_url_scheme(yes), "{yes}");
+        }
+        for no in [
+            "",
+            "3s",     // must start with a letter
+            "/tmp/a", // a path is not a scheme
+            "sales/eu",
+            "/proj/.strata/tables/sales/x", // the shape that skipped the fence
+            "a b",
+            "a_b", // `_` is not in the scheme charset
+        ] {
+            assert!(!is_url_scheme(no), "{no}");
+        }
+    }
+
+    /// The fence itself, over the two shapes that matter: a remote target is not ours to judge,
+    /// and a local one carrying `://` is still a local one.
+    #[test]
+    fn a_local_target_with_a_colon_slash_slash_is_still_fenced() {
+        let root = env::temp_dir().join(format!("strata-copy-fence-{}", process::id()));
+        let strata = crate::project::strata_dir(&root);
+        let owned = strata.join("tables/sales/x://y");
+        let data_root: super::DataRoot = Some(root.clone());
+
+        super::refuse_owned_target(&owned.to_string_lossy(), &data_root)
+            .expect_err("a local path inside .strata is refused whatever is in its name");
+        // A genuine remote target is an object store's, and not this check's business.
+        super::refuse_owned_target("s3://acme-lake/out.parquet", &data_root)
+            .expect("a remote target is not local storage");
+        // And an ordinary local target outside the project is the user's own.
+        super::refuse_owned_target(
+            &root.join("out.parquet").to_string_lossy(),
+            &Some(root.join("elsewhere")),
+        )
+        .expect("the user's own file");
+    }
 
     /// Run one statement and take its report — anything else is a test that asked the wrong
     /// question.
