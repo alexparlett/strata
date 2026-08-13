@@ -18,6 +18,20 @@ datafusion = "54"
 # (`?` is registered as well but does not parse under our default `GenericDialect` — use
 # `json_contains`; see the note in `engine::build_context`.)
 datafusion-functions-json = "0.54"
+# `engine::build_context`: the federation optimizer rule + query planner (DB-01), which push a
+# same-source subplan back to the database that owns it rather than scanning it row by row. With
+# no `FederatedTableProviderAdaptor` in a plan the rule is a structural no-op, so a local-only
+# project pays nothing for it.
+#
+# **Lockstep with the `datafusion` pin.** Federation, the `datafusion-table-providers` crates
+# (DB-02), arrow and datafusion cross one type boundary — `TableProvider`, the unparser and the
+# federation plan node are all datafusion types — so app and providers must resolve *one*
+# DataFusion. 0.5.5 pins datafusion ^54 and arrow ^58.3; a future DataFusion bump moves all four
+# versions together, in one change.
+#
+# The `sql` feature is what DB-02's providers need (the SQL-federation half: the unparsing
+# executor and `SQLFederationProvider`). Declared here so the manifest edit lands once.
+datafusion-federation = { version = "0.5.5", features = ["sql"] }
 # `engine::store`: the object stores a connection registers (W7). DataFusion already carries
 # `object_store` with only its local-filesystem feature on; naming it here with `aws`/`gcp`/`http`
 # is what turns those three on — Cargo unifies features, so this is the *same* crate DataFusion

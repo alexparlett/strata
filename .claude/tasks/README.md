@@ -157,7 +157,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   Connections on the key alone), and ED-11 landed the completion offer over all of them in one
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
-  ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — ⬜
+  ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
+  **DB-01 ✅ (2026-08-13), the rest open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
@@ -169,7 +170,12 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   holistic redesign of the catalog pane that absorbs and retires the Connections pane
   (DB-05) — then gestures + completion (DB-06) and inspector + profiling over remote tables
   (DB-07) on the tree, plus the JSON-accessor pushdown rewrite (DB-08), which sits directly
-  on DB-02 and can land any time after it. Read the workstream README first — it records the settled decisions, including
+  on DB-02 and can land any time after it. **DB-01 is in** — `build_context` is on
+  `SessionStateBuilder` with the federation rule and planner installed, the whole suite green
+  with no test edited, and one correction recorded in its file: the rule is a no-op for every
+  plan DataFusion can execute, but not structurally (its expression walk refuses
+  `Expr::InSubquery` before consulting providers — which only changes the wording of an error
+  DataFusion already raised). Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
   while the store/discovery **invariant** underneath is not, and the connections no-secrets
@@ -206,8 +212,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 →
-   DB-02 first; DB-03, DB-04 and DB-08 sit on DB-02 independently (DB-08 needs nothing
+1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅, so
+   **DB-02 is next**; DB-03, DB-04 and DB-08 sit on DB-02 independently (DB-08 needs nothing
    after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after DB-04;
    DB-06 and DB-07 close on the tree.
 2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
