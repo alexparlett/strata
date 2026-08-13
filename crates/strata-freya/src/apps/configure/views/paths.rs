@@ -70,7 +70,15 @@ impl Component for SourcePaths {
         let ctx = use_consume::<ConfigureCtx>();
         // One path on a connection, so the label, the explanation and the toolbar are all
         // singular — see the module doc.
-        let remote = ctx.draft.read().remote;
+        let (remote, internal) = {
+            let draft = ctx.draft.read();
+            (draft.remote(), draft.internal())
+        };
+        // A internal table brings no files at all, so this section has nothing to ask. Drawn as an
+        // empty box rather than unmounted, for the differ (`views::hive`'s rule).
+        if internal {
+            return rect().into_element();
+        }
 
         // The label line, its REQUIRED marker and its resolution tooltip are all the shared
         // row's; this window contributes the toolbar and the list that go under them.
@@ -91,6 +99,7 @@ impl Component for SourcePaths {
                 .maybe_child((!remote).then_some(Toolbar))
                 .child(PathList),
         )
+        .into_element()
     }
 }
 
@@ -296,7 +305,7 @@ impl Component for PathList {
                 draft.sources.len(),
                 draft.clamp_selection(*ctx.selected_path.read()),
                 draft.bucket_prefix(),
-                draft.remote,
+                draft.remote(),
             )
         };
 

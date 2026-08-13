@@ -209,17 +209,17 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   **Workstream done.** Hand-rolled rather than Sparkle, deliberately; the workstream README
   records the settled decisions.
 - **Internal tables in the UI**
-  ([`workstream-internal-tables-ui/`](workstream-internal-tables-ui/README.md), IT) — ⬜
-  **both tasks open, planned 2026-08-13** — an internal table can today be created **only** by
-  typing SQL, while every other verb on one (drop with its data-goes confirm, refresh, profile,
-  ask) already has a surface. Two gestures, matching the classifier's own split of the two
-  create kinds: the **empty-table panel** off the catalog `+` (IT-01, `StmtKind::CreateTable`)
-  and **Save results as table** beside Export (IT-02, `StmtKind::Ctas`). Nothing ED settled
+  ([`workstream-internal-tables-ui/`](workstream-internal-tables-ui/README.md), IT) — 🟡
+  **IT-01 done, IT-02 open** — an internal table could until now be created **only** by typing
+  SQL, while every other verb on one (drop with its data-goes confirm, refresh, profile, ask)
+  already had a surface. Two gestures, matching the classifier's own split of the two create
+  kinds: **Configure's LOCATION ▸ Internal** (IT-01, `StmtKind::CreateTable`, ✅) and **Save
+  results as table** beside Export (IT-02, `StmtKind::Ctas`, ⬜). Nothing ED settled
   moves: `ddl::tables` stays the one implementation and both gestures are second entries into
-  it. The planning decision worth reading before touching the form is IT-01 §2 — the type field
-  is **free text validated per row against the planner**, after deriving a picker from Arrow was
-  investigated and rejected on three findings (no Arrow → SQL inverse, a config-dependent
-  mapping, and Arrow spellings refused by the planner outright).
+  it. The decision worth reading before touching the form is IT-01 §2 — the type field is
+  **free text validated per row against the planner** (`Engine::column_type`), after deriving a
+  picker from Arrow was investigated and rejected on three findings (no Arrow → SQL inverse, a
+  config-dependent mapping, and Arrow spellings refused by the planner outright).
 
 ## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 

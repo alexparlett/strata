@@ -18,6 +18,11 @@
 //! local `applied` flag is the whole dedup — the pin is keyed by the press's nonce, so there is
 //! never a second observer of one settle.
 //!
+//! **A surface that dispatches its own run folds through the same body**, not a copy of it: the
+//! empty-table panel (IT-01) composes a `CREATE TABLE`, calls `Engine::run` from a press and
+//! hands the report to [`settle`] through [`use_settle`]. A gesture that ran a statement and
+//! stopped there would have created a table the catalog never learns about.
+//!
 //! **And the log entry is recorded here, not by [`use_run_logging`](super::log::use_run_logging).**
 //! A statement's message claims something durable ("Table 't' created"), and only the fold knows
 //! whether the def actually reached `project.json` — the `save_view` lesson: a success row logged
@@ -40,7 +45,7 @@ use super::{ProjChan, ProjectState};
 /// The window's handles a fold writes through — resolved once at render, passed by value, like
 /// every other observer here (`save_view` takes the same set as arguments).
 #[derive(Clone, Copy)]
-struct Settle {
+pub struct Settle {
     project: RadioStation<ProjectState, ProjChan>,
     catalog: Catalog,
     rescan: CatalogRescan,
@@ -51,15 +56,26 @@ struct Settle {
     report: ReportCtx,
 }
 
-/// Fold a press's statement outcome into the window, once, when it settles. Call once per
-/// `RequestPin` (`views::keeper`).
-pub fn use_statement_settle(query: UseQuery<RunQuery>) {
-    let to = Settle {
+/// Gather the fold's handles from the window's stores and context.
+///
+/// For a surface that has a [`StatementReport`] in hand with **no query behind it** — the
+/// empty-table panel (IT-01) dispatches `Engine::run` from a press rather than from a
+/// `QuerySpec`, and then has exactly the same fold to perform. It reaches [`settle`] through
+/// this; [`use_statement_settle`] stays the query-driven wrapper over the same body, and there
+/// is deliberately no second `apply`, persist path or epoch bump.
+pub fn use_settle() -> Settle {
+    Settle {
         project: use_radio_station::<ProjectState, ProjChan>(),
         catalog: use_catalog(),
         rescan: use_catalog_rescan(),
         report: use_report(),
-    };
+    }
+}
+
+/// Fold a press's statement outcome into the window, once, when it settles. Call once per
+/// `RequestPin` (`views::keeper`).
+pub fn use_statement_settle(query: UseQuery<RunQuery>) {
+    let to = use_settle();
     // Not on `Settle`: an `Arc` handle would cost that struct its `Copy` for the sake of one arm.
     let engine = use_consume::<EngineCtx>();
     let mut applied = use_state(|| false);
@@ -81,7 +97,9 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
             return;
         };
         applied.set(true);
-        settle(to, &engine, &report);
+        // Ignored here: this pane has nothing to close on the answer, and a failed write has
+        // already reported itself through the faults funnel.
+        let _ = settle(to, &engine, &report);
     });
 }
 
@@ -90,7 +108,17 @@ pub fn use_statement_settle(query: UseQuery<RunQuery>) {
 ///
 /// The engine rides beside the `Copy` handles rather than on [`Settle`], exactly as `drop_row`
 /// takes it: `EngineCtx` is an `Arc` and would cost the struct its `Copy`, for one arm.
-fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) {
+///
+/// `pub` for the one caller that has a report without a query — see [`use_settle`]. There is no
+/// dedup hazard in that: the `applied` flag above guards a *pin's* re-render, and a press that
+/// dispatched its own run has no pin.
+///
+/// **It answers whether the change is durable**, which is the same question [`apply`] answers and
+/// for the same reason: a surface that closes itself on success has to be able to tell a create
+/// that reached `project.json` from one that did not. The query-driven caller ignores it — the
+/// results pane has nothing to close and `persisted_defs` has already reported the cause — but
+/// the Configure window's Save does not (`configure::views::footer`).
+pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool {
     // No effect is not a failure: a `SET` and a `COPY` change the session and the disk
     // respectively and nothing the catalog holds, so there is nothing to persist and the report
     // stands on its own.
@@ -101,6 +129,7 @@ fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) {
     if landed {
         log_event(to.report.log, LogLevel::Ok, report.message.clone());
     }
+    landed
 }
 
 /// Fold one effect into the stores. Returns whether the change is durable — `false` only when a
@@ -234,7 +263,9 @@ mod tests {
             };
             let engine = use_consume::<EngineCtx>();
             let report = self.report.clone();
-            use_hook(move || settle(to, &engine, &report));
+            use_hook(move || {
+                let _ = settle(to, &engine, &report);
+            });
             rect()
         }
     }

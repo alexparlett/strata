@@ -287,6 +287,17 @@ Completion (ED-11): `CREATE TABLE` is a statement lead; the name position is a B
 invented name offers nothing) and the `AS |` of a CTAS restarts the query ladder
 (`Clause::Restart` — query leads only), so the spooled query completes exactly as a typed one.
 
+**A second gesture, no second implementation (IT-01).** The Configure window's LOCATION offers
+a third answer, **Internal**, whose COLUMNS list composes a bare `CREATE TABLE "t" ("a" INT, …)`
+and dispatches it through `Engine::run` on a minted `WsId` — the same classification, the same
+arm, the same `StoreEffect` folded by the same `settle`. Two things in this file are reached rather than
+copied by it: the constraint / default refusals (`unenforced_clause`) and the duplicate-column
+wording (`duplicate_column`). Its type field is free text, validated per row by
+`Engine::column_type`, which plans `CREATE TABLE __strata_probe (c <typed>)` and executes
+nothing — there is no Arrow → SQL inverse to author an offer from, and the same spelling reaches
+different Arrow types under different `execution.time_zone` / `map_string_types_to_utf8view`
+settings, so the panel asks the planner rather than declaring anything.
+
 ### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
 **`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect

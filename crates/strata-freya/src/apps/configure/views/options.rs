@@ -67,7 +67,7 @@ mod tests {
 
     use super::ImportOptions;
     use crate::apps::configure::model::FormatId;
-    use crate::apps::configure::{ConfigureCtx, ConfigureDraft, ConfigureTarget, Status};
+    use crate::apps::configure::{ConfigureCtx, ConfigureDraft, ConfigureTarget, Probes, Status};
     use crate::theme::strata_theme;
 
     /// **CSV → JSON → CSV**, the switch that crashed the window in Freya's differ. The two
@@ -94,6 +94,8 @@ mod tests {
                     target: State::create(ConfigureTarget::New),
                     status: State::create(Status::Idle),
                     selected_path: State::create(0),
+                    selected_column: State::create(0),
+                    probes: State::create(Probes::new()),
                 })
             },
             1.,
