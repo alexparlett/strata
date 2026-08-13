@@ -17,11 +17,13 @@ form the feedback itself proposed. `to_json(x) → Utf8` is the total
 fallback for heterogeneous structs (and item 2's direct ask): `datafusion-functions-json`
 0.54.2 is registered whole (`engine/mod.rs:1985`) and its `json_object_keys`/`json_get`
 family speaks JSON text, so `to_json` hands any subtree to it — and its metadata-free Utf8
-also sidesteps the recursive-CTE unification bug (ledger item 4). QE-01 opens with a spike
-on `datafusion-contrib/datafusion-variant` (0.1.0 pins our exact stack — DF 54, arrow 58.3
-— and ships `variant_object_keys`/`variant_get`/`variant_to_json` with no shape-unification
-requirement): adopt if it survives the fixture, hand-roll otherwise; the questions it must
-answer are in the task.
+also sidesteps the recursive-CTE unification bug (ledger item 4). QE-01 opened with a spike on
+`datafusion-contrib/datafusion-variant` and **rejected** it (2026-08-13): the published 0.1.0
+pins DF 52 / arrow 57 — a second DataFusion in the graph — and has no key-enumeration function
+at all, only its unreleased git HEAD builds against our pin, and against the fixture a Variant
+column reaches the grid, the inspector and export as hex while a keys-only read costs 58.7 ms
+where the null-bitmap walk costs 19.75 µs. The evidence, the one capability it has that we do
+not (dynamic access to a *heterogeneous* struct), and the revisit condition are in the task.
 
 ## Tasks
 
