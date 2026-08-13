@@ -29,6 +29,27 @@ JSON-only, paying a serialize-and-reparse round trip the common case never needs
 Together these close feedback items 1 and 2, in the form item 1 itself proposed ("a
 keys/entries function would fix it").
 
+**Alternative under evaluation — `datafusion-contrib/datafusion-variant`** (on Alex's radar;
+surveyed 2026-08-13): 0.1.0 pins **exactly our stack** (datafusion 54, arrow/parquet-variant
+58.3) and ships `cast_to_variant`, `variant_object_keys`, `variant_get`, `variant_to_json`
+(plus construct/insert/delete and `json_to_variant`). Over the hand-rolled plan it has one
+strict win — Variant carries per-row structure, so **no shape-unification requirement**: a
+heterogeneous struct gets dynamic access instead of a refusal toward `to_json`. It is the
+Spark/Iceberg-blessed shape for exactly this pathology. **Build step 0 below is the spike**;
+adopt if it passes, hand-roll otherwise. What the spike must verify from source and fixture,
+not assume: (a) maturity — its own README says pre-stable until its tracking issue closes;
+(b) `variant_get`'s path argument accepts a **computed** key (a literal-only path kills the
+headline case); (c) `cast_to_variant` survives the fixture's deep Structs, and what it does
+to `JSON_TEXT_KEY` conflict columns (JSON text would embed as a string — `json_to_variant`
+re-parses, but no raw-text column exists at scan time); (d) the result side — a projected
+Variant column reaches `serialize`/`value_tree`/the inspector as opaque binary, so either
+those learn a variant arm or the guidance is "wrap in `variant_to_json` before projecting";
+(e) cost — `struct_keys` off null bitmaps is cheaper than constructing variant binary when
+the question is keys-only; measure on the 19,311-key struct. Under adoption the deliverable
+shrinks to registration + whatever the spike found missing (likely `struct_keys` kept for
+the cheap keys-only read, and thin naming decisions); the refusal-toward-`to_json` design
+below applies only to the hand-rolled path.
+
 **Considered and not built** (survey 2026-08-13, so the next reader doesn't re-shop the
 list): the array/list family (already in DF 54's `datafusion-functions-nested`),
 `arrow_typeof` (core DF), a Struct→Map cast or map_* equivalents (isomorphic to
@@ -64,6 +85,11 @@ demonstrated field need — registration is one line, so there is no economy in 
 
 ## Build
 
+0. **The `datafusion-variant` spike** (half a day, decides the rest): add the dep in a
+   scratch branch, register its UDFs, run the fixture chain — enumerate `contentBlocks`
+   keys, access by a key computed from another column, serialize a subtree — and answer
+   (a)–(e) above. Record the verdict and the evidence in this file either way; on adoption,
+   steps 1–3 shrink accordingly and the dependency note goes in the workstream README.
 1. New module `crates/strata-core/src/engine/udfs.rs` (Strata's own built-ins — QE-02 joins
    it) holding all four `ScalarUDFImpl`s.
    - `struct_keys`: per row, the field names whose child is valid at that index — null
