@@ -1158,7 +1158,6 @@ mod tests {
                 auth: S3Auth::Anonymous,
                 endpoint: bare_redirect_server(),
                 allow_http: true,
-                ..Default::default()
             },
         );
         let e = connect(&ctx, &conn).await.expect_err("refused");

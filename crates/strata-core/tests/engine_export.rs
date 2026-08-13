@@ -607,7 +607,7 @@ async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
     let out = dir.join("out.csv");
     let eng = engine();
 
-    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     eng.watch_inflight(flag.clone());
 
     let (first, _) = eng
