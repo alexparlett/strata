@@ -65,7 +65,7 @@ use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowK
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
-pub use model::{ConfigureDraft, ConfigureTarget};
+pub use model::{ConfigureDraft, ConfigureTarget, Probes};
 
 /// Everything a press of the catalog's **Configure** (or New table) needs, resolved where the
 /// stores and the DI handles both live and carried to the trigger as a prop.
@@ -153,6 +153,12 @@ pub struct ConfigureCtx {
     /// keeping it on the draft meant every click on a row counted as an edit, which cleared the
     /// engine's failure message out from under a user who was still reading it.
     pub selected_path: State<usize>,
+    /// Which column row the COLUMNS toolbar acts on (IT-01) — `selected_path`'s twin, window
+    /// state for the same reason.
+    pub selected_column: State<usize>,
+    /// What the planner has said about each SQL type spelling typed into a column box, keyed by
+    /// the text. Filled by [`use_probes`] and read by the rows and the footer.
+    pub probes: State<Probes>,
 }
 
 impl ConfigureCtx {
@@ -351,6 +357,8 @@ impl App for ConfigureApp {
                     target: State::create(target),
                     status: State::create(Status::Idle),
                     selected_path: State::create(0),
+                    selected_column: State::create(0),
+                    probes: State::create(Probes::new()),
                 }
             }
         });

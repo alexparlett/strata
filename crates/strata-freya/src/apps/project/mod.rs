@@ -40,6 +40,10 @@ pub use state::{persisted_defs, use_report, ReportCtx};
 pub use state::{
     refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState, Reg,
 };
+/// The window's one statement fold, for the **Configure** window: a memory table is created by a
+/// statement rather than registered from a def (IT-01), and it folds its report exactly as the
+/// editor's own Run does.
+pub use state::{settle, use_settle, Settle};
 /// The *values* behind the four handles above, for a **child window's tests**.
 ///
 /// A window that is not this one carries `Catalog`, `CatalogRescan` and `ReportCtx` as launch

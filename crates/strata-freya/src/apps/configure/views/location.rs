@@ -25,7 +25,7 @@ use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
 use strata_model::{ConnectionDef, ProviderId};
 
-use crate::apps::configure::model::connections_for;
+use crate::apps::configure::model::{connections_for, Where};
 use crate::apps::configure::ConfigureCtx;
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::ConnectionRequest;
@@ -45,14 +45,21 @@ const EMPTY_GAP: f32 = SP_3;
 const ITEM_ICON: f32 = 12.;
 const ITEM_GAP: f32 = SP_3;
 
-/// The **LOCATION** segmented control: Local · Remote.
+/// The **LOCATION** segmented control: Local · Remote · Internal.
 ///
-/// **One pair of opposites**, where the canvas says *Local disk* / *Object store*. "Object store"
-/// is the implementation's word — the thing DataFusion registers and this app calls a connection
-/// — and a reader who has never met it cannot tell which of the two answers is theirs. Answering
-/// the row's own question in one word each also makes the two read as the choice they are, rather
-/// than as a place beside a technology; everything that follows (TYPE, CONNECTION, a
-/// bucket-relative path) explains itself from there.
+/// **Answers, not technologies**, where the canvas says *Local disk* / *Object store*. "Object
+/// store" is the implementation's word — the thing DataFusion registers and this app calls a
+/// connection — and a reader who has never met it cannot tell which of the answers is theirs.
+/// Answering the row's own question in one word each also makes them read as the choice they are;
+/// everything that follows (TYPE, CONNECTION, a bucket-relative path, a column list) explains
+/// itself from there.
+///
+/// **Internal is the third answer and not a second surface** (IT-01). Creating a table Strata
+/// stores is the same question this window already asks — what is it called, and what is in it —
+/// with a different answer to *where*, so it belongs in this control rather than behind a menu
+/// on the catalog's `+`. What changes below it is which sections have anything to ask: an internal
+/// table has no store, no paths, no format options and no partitions, and declares its columns
+/// instead.
 ///
 /// Text segments, like the connection editor's PROVIDER pill next door, rather than the canvas's
 /// glyph-plus-label: the two windows' pills should read as one control, and the labels here say
@@ -63,25 +70,36 @@ pub struct Location;
 impl Component for Location {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // The station, not a subscribed read: this pill draws two labels and needs the
-        // connections only to hand `set_remote` one (see [`connections_at_press`]).
+        // The station, not a subscribed read: this pill draws three labels and needs the
+        // connections only to hand `set_location` one (see [`connections_at_press`]).
         let station = use_radio_station::<ProjectState, ProjChan>();
-        let remote = ctx.draft.read().remote;
+        let (location, editing) = (
+            ctx.draft.read().location,
+            ctx.target.read().editing().is_some(),
+        );
 
-        let segment = |label: &'static str, wants: bool| {
+        let segment = |label: &'static str, wants: Where| {
             ToggleSegment::text(label)
-                .selected(remote == wants)
+                .selected(location == wants)
+                // **Internal is create-only.** A table Strata already stores has nothing in this
+                // window to edit — which is why its catalog row has no Configure item at all
+                // (ED-04) — and an existing external table cannot be turned into one without
+                // silently discarding the def that points at the user's files. The segment is
+                // gated rather than absent so the control does not change shape between a new
+                // table and an edit.
+                .enabled(wants != Where::Internal || !editing)
                 .on_press(move |_| {
                     let connections = connections_at_press(station);
-                    ctx.edit(move |draft| draft.set_remote(wants, &connections));
+                    ctx.edit(move |draft| draft.set_location(wants, &connections));
                 })
         };
 
         Row::new("LOCATION").child(
             SegmentedToggle::new()
                 .form()
-                .child(segment("Local", false))
-                .child(segment("Remote", true)),
+                .child(segment("Local", Where::Local))
+                .child(segment("Remote", Where::Remote))
+                .child(segment("Internal", Where::Internal)),
         )
     }
 }
@@ -97,7 +115,7 @@ pub struct ObjectStore;
 impl Component for ObjectStore {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        let remote = ctx.draft.read().remote;
+        let remote = ctx.draft.read().remote();
 
         rect().width(Size::fill()).maybe_child(remote.then(|| {
             rect()

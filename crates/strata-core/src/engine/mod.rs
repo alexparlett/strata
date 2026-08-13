@@ -57,7 +57,9 @@ pub use chart::MAX_BINS;
 /// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
 /// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
 /// (ED-05) — the catalog's confirm says before the fact what the report says after it.
-pub use ddl::{drop_intent, SessionScope, StatementOutcome, StatementReport, StoreEffect};
+pub use ddl::{
+    drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
+};
 pub use query::purge_snapshot_root;
 
 use sql::{PolicyRefusal, Verdict};
@@ -692,6 +694,20 @@ impl Engine {
             .spawn(async move { sql::policy_verdicts(&ctx, &sql) })
             .await
             .map_err(|e| format!("policy task failed: {e}"))?
+    }
+
+    /// What this session's planner makes of one **SQL column type** — the empty-table panel's
+    /// per-row validation (IT-01). `Ok` is the Arrow type in the spelling every surface shows
+    /// it in; `Err` is the planner's own refusal, verbatim.
+    ///
+    /// A plan and nothing more, so it is as cheap as a diagnostics pass and has no more effect
+    /// than one — see [`ddl::column_type`] for why the offer cannot be authored instead.
+    pub async fn column_type(&self, sql_type: String) -> Result<String, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { ddl::column_type(&ctx, &sql_type).await })
+            .await
+            .map_err(|e| format!("column type task failed: {e}"))?
     }
 
     /// The engine's runtime (always present while the engine lives — see the field).
@@ -1737,7 +1753,10 @@ impl Drop for Engine {
 /// one schema and a catalog name is an opaque label, so `a.b` is the literal name `a.b`.
 /// (Nothing regresses: `register_table("a.b")` resolves to schema `a`, which doesn't exist,
 /// so such a table never registered either.)
-pub(crate) fn fold_ident(name: &str) -> String {
+/// `pub` because the empty-table panel asks the same question of its column rows (IT-01): two
+/// rows collide exactly when the create arm's own fold says they do, and a form approximating
+/// that with a case-insensitive compare would refuse pairs the engine accepts.
+pub fn fold_ident(name: &str) -> String {
     match TableReference::parse_str(name) {
         TableReference::Bare { table } => table.to_string(),
         _ => name.to_string(),

@@ -77,6 +77,21 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   never a second catalog), does a drop delete data, can Configure edit it (no: the item is
   *absent*). The def travels and the data does not, and the failed row says so in its own words.
   The spool is the **parsed plan**, never re-rendered SQL.
+- **An internal table is a third LOCATION in the Configure window, not a surface of its own.**
+  Local · Remote · **Internal**, the word the row's chip and `TableOrigin` already use; the
+  sections that ask about files draw nothing and a COLUMNS list takes their place, in that
+  window's own dress (the paths list's `Table`, toolbar and two-way-synced fields). A panel off a
+  menu on the catalog's `+` was built and rejected — same question, second surface, wrong theme.
+- **A surface that makes a table composes a statement and folds it through `settle`; it does not
+  register anything itself.** One visible statement, dispatched through `Engine::run` on a
+  **minted** `WsId`, its report handed to `state::settle` — never a second `apply`, persist path
+  or epoch bump. Save keeps its `Status::Registering` wait, so `use_watch_registration` closes the
+  window on the row the fold just landed.
+- **A form over a statement authors only what a form can be wrong about; every other refusal is
+  the arm's own, reached rather than restated.** `duplicate_column`, `unenforced_clause`,
+  `fold_ident`, `ProjectState::name_taken`. **The type field is free text probed per row** —
+  there is no Arrow → SQL inverse, so `Engine::column_type` plans and answers in `short_type`'s
+  spelling; eager per row is the requirement, not a nicety.
 - **A table is dropped in one place, on both origins, and a confirm is a gesture in front of that
   place — never a second implementation of it.** `ddl::tables::drop_table` resolves the target,
   deregisters, deletes `.strata/tables/<slug>/` **only** for an internal def, and names the

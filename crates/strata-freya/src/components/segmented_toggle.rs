@@ -192,9 +192,15 @@ pub struct ToggleSegment {
     content: SegmentContent,
     title: Option<String>,
     selected: bool,
+    enabled: bool,
     on_press: Option<EventHandler<Event<PressEventData>>>,
     theme: Option<SegmentedToggleThemePartial>,
 }
+
+/// How far a disabled segment's label fades. Freya's own `Button` fades a disabled control's
+/// fill to 85%; a segment has no fill of its own to fade when it is unselected, so the label
+/// carries it, and it goes further because text at 85% still reads as live.
+const DISABLED_ALPHA: u8 = 110;
 
 impl ToggleSegment {
     pub fn new(icon: IconName) -> Self {
@@ -202,6 +208,7 @@ impl ToggleSegment {
             content: SegmentContent::Icon(icon),
             title: None,
             selected: false,
+            enabled: true,
             on_press: None,
             theme: None,
         }
@@ -213,6 +220,7 @@ impl ToggleSegment {
             content: SegmentContent::Text(label.into()),
             title: None,
             selected: false,
+            enabled: true,
             on_press: None,
             theme: None,
         }
@@ -226,6 +234,18 @@ impl ToggleSegment {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Whether this segment can be chosen. A disabled one is **shown**, faded and inert, because
+    /// a segment that vanished would change the control's shape — and the answer it stands for
+    /// is usually still worth knowing about (Configure's LOCATION ▸ Internal, which exists but not
+    /// for a table that already has files).
+    ///
+    /// It gates the handler rather than going `interactive(false)`, which suppresses
+    /// `pointer_leave` and strands the hover (AGENTS.md §3).
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
         self
     }
 
@@ -248,16 +268,23 @@ impl Component for ToggleSegment {
 
         let background = if self.selected {
             theme.item_active_background
-        } else if hovered() {
+        } else if hovered() && self.enabled {
             theme.item_hover_background
         } else {
             Color::TRANSPARENT
         };
         let on_press = self.on_press.clone();
+        let enabled = self.enabled;
         let color = if self.selected {
             theme.item_active_color
         } else {
             theme.item_color
+        };
+        // The disabled fade every control in the app wears, applied to the label rather than to
+        // a fill: an unselected segment has no fill to fade.
+        let color = match enabled {
+            true => color,
+            false => color.with_a(DISABLED_ALPHA),
         };
         // Only the keyboard gets a ring: a press focuses the segment too, so an any-focus ring
         // would leave the last-pressed segment outlined alongside the selected one.
@@ -276,13 +303,16 @@ impl Component for ToggleSegment {
             .background(background)
             .border(focus_ring)
             .a11y_id(a11y_id)
-            .a11y_focusable(true)
+            .a11y_focusable(enabled)
             .a11y_role(AccessibilityRole::Button)
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             // `on_press` covers the OS activation keys as well as the pointer, so focusing on
             // press is all a keyboard operator needs (Freya's own `ButtonSegment` does the same).
             .on_press(move |e| {
+                if !enabled {
+                    return;
+                }
                 a11y_id.request_focus();
                 if let Some(on_press) = &on_press {
                     on_press.call(e);

@@ -82,4 +82,4 @@ pub use project::{FaultKind, ProjChan, ProjectState, Reg};
 #[cfg(test)]
 pub use project::{TableRow, ViewInfo, ViewRow};
 pub use session::{ProblemGroup, QueryTab, SessionState, Stamp};
-pub use statement::use_statement_settle;
+pub use statement::{settle, use_settle, use_statement_settle, Settle};

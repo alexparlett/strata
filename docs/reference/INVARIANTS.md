@@ -1017,6 +1017,50 @@ Things that must not regress. Each was fought for once already.
   `CreateMemoryTable.input`), so the query that runs is the query the user wrote and DataFusion's
   own exhaustive clause refusals come for free. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md)
   §6.1 + §7.
+- **An internal table is a third LOCATION in the Configure window, not a surface of its own.**
+  `Where::{Local, Remote, Internal}` — the word the catalog row's `INTERNAL` chip and
+  `TableOrigin::Internal` already use, so one thing has one name. Creating a table Strata stores
+  is the same question that window already asks (what is it called, what is in it) with a
+  different answer to *where*, so it belongs in that control; what changes below it is which
+  sections have anything to ask. On `Internal` the FORMAT picker, SOURCE PATHS, the import
+  options and HIVE all draw nothing, and a **COLUMNS** list takes their place — built from the
+  paths list's own `Table`, `+`/`−` `ToolButton` toolbar and two-way-synced bare fields, because
+  it is that control with two boxes instead of one. The segment is **shown and inert** on an
+  edit: a table that already has files cannot be turned into one Strata stores without silently
+  discarding the def that points at them, and a segment that vanished would change the control's
+  shape. **A modal panel behind a two-item menu on the catalog's `+` was built and rejected**
+  (Alex, 2026-08-13): it asked the same question on a second surface, in a dress that matched
+  nothing else in the app. Do not re-propose it.
+- **A surface that makes a table composes a statement and folds it through `settle`; it does not
+  register anything itself.** Configure's Save branches on `Internal` (`views::footer`): it
+  composes one visible statement — the same one the COLUMNS list describes — dispatches it
+  through `Engine::run` on a **minted** `WsId` (a tab's would abort whatever that tab is
+  running), and hands the report to `apps::project::state::settle`. That last step is the
+  load-bearing one: the `StoreEffect` is what puts the row in the store, the def in
+  `project.json`, the epoch bump behind every tab's diagnostics and the entry in the log, so a
+  gesture that ran the statement and stopped has made a table the catalog never learns about.
+  Never a second `apply`, persist path or epoch bump — and no def is written here at all, because
+  the spool that gives the table its data has none to be written from. The wait is the
+  **existing** one: `Status::Registering(name)` makes Save read "Validating…", and
+  `use_watch_registration` closes the window when that row lands `Ready`, which the fold makes
+  true in the same breath. Nothing new watches anything.
+- **A form over a statement authors only what a form can be wrong about; every other refusal is
+  the arm's own, reached rather than restated.** The panel's own vocabulary is four sentences (a
+  row with no name, a row with no type, a table with no name, a table with no columns).
+  Everything else is the engine's: `ddl::tables::duplicate_column` for a repeated column,
+  `unenforced_clause` for the constraint and default the create arm refuses, `fold_ident` for
+  *which* names collide (a case-insensitive compare refuses `"my col"` beside `"MY COL"`, which
+  the create accepts), and `ProjectState::name_taken` for a name the catalog already has —
+  shared with the Configure footer, which asks the same question. **The type field is free text
+  probed per row**: there is no Arrow → SQL inverse to author a picker from (the mapping is
+  many-to-one, and `map_string_types_to_utf8view` and `execution.time_zone` make it
+  config-dependent), so `Engine::column_type` plans `CREATE TABLE __strata_probe (c <typed>)`,
+  executes nothing, and answers in `short_type`'s spelling — the one the grid and the inspector
+  will show, so the form promises exactly what the user is about to get. **Eager per row is the
+  requirement, not a nicety**: validation deferred to the press means filling eight rows and
+  hunting for the one that was wrong, which is worse than typing the statement by hand. The probe
+  therefore also runs the arm's clause refusals and requires exactly one planned field, because
+  `INT PRIMARY KEY` plans clean and `INT, b INT` plans two columns.
 - **A table is dropped in one place, on both origins, and a confirm is a gesture in front of that
   place — never a second implementation of it.** `ddl::tables::drop_table` (ED-05) is the whole
   drop: resolve the target against the engine's own namespace (an unknown name errors, `IF EXISTS`

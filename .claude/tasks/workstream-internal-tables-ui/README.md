@@ -1,6 +1,6 @@
 # Internal tables in the UI (IT)
 
-**Status:** ⬜ open · **Planned:** 2026-08-13
+**Status:** 🟡 IT-01 done · **Planned:** 2026-08-13
 
 An internal table — one whose data Strata owns, spooled into `.strata/tables/<slug>/` — can
 today be **created only by typing SQL**. Everything else about it already has a surface: the
@@ -15,7 +15,7 @@ and every gesture added here is **a second entry into a funnel that already exis
 
 | # | Task | Statement | Status |
 |---|---|---|---|
-| IT-01 | [The empty-table panel](IT-01-empty-table-panel.md) — name + columns, from the catalog `+` | `StmtKind::CreateTable` | ⬜ |
+| IT-01 | [Creating an internal table](IT-01-internal-table.md) — Configure's LOCATION ▸ **Internal**, name + columns | `StmtKind::CreateTable` | ✅ |
 | IT-02 | Save results as table — from the results toolbar, beside Export | `StmtKind::Ctas` | ⬜ *(file not written)* |
 
 The classifier already splits these two ([`validate.rs:568`](../../../crates/strata-core/src/engine/sql/validate.rs), on
@@ -48,6 +48,6 @@ this file before starting it.
 
 ## Known seam
 
-The catalog `+` is where IT-01's panel is triggered from, and **DB-05 moves that `+` to the
-data-sources tree's header**. Build the menu where the `+` lives when the task is picked up; if
-DB-05 has landed first, it lands on the tree. Noted in both files.
+**DB-05 moves the catalog `+` to the data-sources tree's header.** Nothing here has to move with
+it: IT-01 lives entirely inside the Configure window, and the `+` is one press to that window
+exactly as it was before. Noted in both files.

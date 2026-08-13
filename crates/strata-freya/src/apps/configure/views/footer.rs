@@ -17,10 +17,14 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, Radio, RadioStation};
+use strata_core::engine::{RunOutcome, RunTag, WsId};
+use uuid::Uuid;
 
 use crate::apps::configure::{ConfigureCtx, ConfigureTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
+use crate::apps::project::{
+    log_event, settle, use_report, use_settle, LogLevel, ReportCtx, Settle,
+};
 use crate::apps::project::{
     persisted_defs, refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
 };
@@ -32,6 +36,10 @@ use crate::components::window::window_theme;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
 const FOOTER_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
+
+/// The page size a internal table's `CREATE TABLE` is dispatched with. It belongs to `Engine::run`'s
+/// **query** arm; a create classifies as a statement, so the router never reads it.
+const INTERNAL_PAGE_SIZE: usize = 1;
 
 #[derive(PartialEq)]
 pub struct Footer;
@@ -49,6 +57,11 @@ impl Component for Footer {
         let catalog = use_consume::<Catalog>();
         let engine = use_consume::<EngineCtx>();
         let report = use_report();
+        // The project window's one statement fold, reachable here because this window was handed
+        // every store it writes through (`ConfigureLaunch`). A internal table is **created** by a
+        // statement, not registered from a def, so its Save folds the report exactly as a typed
+        // `CREATE TABLE` in the editor does — never a second `apply`, persist path or epoch bump.
+        let to = use_settle();
         let platform = use_hook(Platform::get);
 
         let registering = matches!(*ctx.status.read(), Status::Registering(_));
@@ -64,6 +77,7 @@ impl Component for Footer {
             ctx.draft
                 .read()
                 .blocker()
+                .or_else(|| column_fault(ctx))
                 .or_else(|| name_clash(ctx, project))
                 .or_else(|| missing_connection(ctx, connections)),
             scanning,
@@ -83,7 +97,9 @@ impl Component for Footer {
             .height(Size::px(ACTION_HEIGHT))
             .enabled(!registering && note.is_none())
             .on_press({
-                move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), report)
+                move |_: Event<PressEventData>| {
+                    save(ctx, project, rescan, engine.clone(), report, to);
+                }
             })
             .child(Control::new(match registering {
                 true => "Validating…",
@@ -136,10 +152,32 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
     })
 }
 
+/// The blocker a **internal** table's columns carry (IT-01) — the first faulty row's message in
+/// full, and last the wait for a verdict that has not landed.
+///
+/// The draft cannot answer this on its own: what a type *means* is the planner's, cached in
+/// `probes`, so the row-level rule lives on the draft and the window supplies the answers.
+///
+/// The wait comes last because it is the only one of these that clears itself; everything above
+/// it is something the user has to do.
+fn column_fault(ctx: ConfigureCtx) -> Option<String> {
+    let draft = ctx.draft.read();
+    if !draft.internal() {
+        return None;
+    }
+    let probes = ctx.probes.read();
+    if let Some((_, message)) = draft.column_faults(&probes).into_iter().next() {
+        return Some(message);
+    }
+    (!draft.unprobed(&probes).is_empty()).then(|| "Checking column types.".into())
+}
+
 /// The one blocker the draft cannot see: a name that belongs to something else.
 ///
 /// Tables and views share one SQL namespace, so a new name has to be free in both — and on an
-/// edit, the def's own name does not clash with itself.
+/// edit, the def's own name does not clash with itself. The **sentence** is the store's
+/// ([`ProjectState::name_taken`]), shared with the empty-table panel, which asks the catalog the
+/// same question.
 fn name_clash(ctx: ConfigureCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
     let draft = ctx.draft.read();
     let name = draft.name.trim();
@@ -150,15 +188,7 @@ fn name_clash(ctx: ConfigureCtx, project: RadioStation<ProjectState, ProjChan>) 
     {
         return None;
     }
-    let kind = project.peek().name_in_use(name)?;
-    Some(format!(
-        "'{name}' is already the name of a {}.",
-        match kind {
-            strata_model::CatalogKind::Table => "table",
-            strata_model::CatalogKind::View => "view",
-            strata_model::CatalogKind::Query => "saved query",
-        }
-    ))
+    project.peek().name_taken(name)
 }
 
 /// The other blocker the draft cannot see: the connection it reads through is **gone** (W7 · 04).
@@ -191,14 +221,20 @@ fn missing_connection(
     })
 }
 
-/// Write the def, persist it, and ask for the registration pass. See the module doc.
+/// Write the def, persist it, and ask for the registration pass — or, on a **internal** table, run
+/// the statement that creates it. See the module doc.
 fn save(
     mut ctx: ConfigureCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
     engine: EngineCtx,
     report: ReportCtx,
+    to: Settle,
 ) {
+    if ctx.draft.peek().internal() {
+        create_internal_table(ctx, engine, to);
+        return;
+    }
     let root = project.peek().root.clone();
     let def = ctx.draft.peek().def(&root);
     let renamed_from = ctx
@@ -267,6 +303,60 @@ fn save(
         None => refresh_table(rescan, name),
     }
 }
+/// **Create the internal table** (IT-01): compose the statement the COLUMNS list describes, run it
+/// through the router every typed statement goes through, and fold the report.
+///
+/// One visible statement on a **minted** `WsId` — a tab's would abort whatever that tab is
+/// running — and its report handed to the window's one fold, which is what puts the row in the
+/// store, the def in `project.json`, the epoch bump behind every tab's diagnostics and the entry
+/// in the log. Registering a def here instead would be a second way to make a table, and the
+/// spool that gives it its data has no def to be written from.
+///
+/// The status carries the wait exactly as a registration does, so the button reads "Validating…"
+/// and `use_watch_registration` closes the window when the row it names lands `Ready` — which the
+/// fold makes true in the same breath. Nothing new watches anything.
+///
+/// `spawn` from the press is safe here for the reason it usually is not: nothing this press
+/// unmounts owns the task. The window closes only after the fold, and a window torn down before
+/// then takes the create with it, which is the same bargain every other run in the app strikes.
+fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
+    let Some(sql) = ctx.draft.peek().create_statement() else {
+        return;
+    };
+    let name = ctx.draft.peek().name.trim().to_string();
+    ctx.status.set(Status::Registering(name));
+    spawn(async move {
+        let ws = WsId(Uuid::new_v4().as_u128());
+        let tag = RunTag(Uuid::new_v4().as_u128());
+        match engine.run(ws, tag, sql, INTERNAL_PAGE_SIZE).await {
+            // **The fold's answer decides whether this window may close.** The table is created
+            // and registered either way — the statement already ran — but a def that never
+            // reached `project.json` is one the next open loses, and closing on `Ready` would
+            // show the user a clean success for it. Same sentence and same refusal to close as
+            // the external path above; `persisted_defs` has already logged the cause in the
+            // project window, so this window only owes them not to claim the save happened.
+            Ok(RunOutcome::Statement(report)) => {
+                if !settle(to, &engine, &report) {
+                    ctx.status.set(Status::Failed(
+                        "The table was created, but the project file could not be written, so \
+                         it will be gone when this project is reopened."
+                            .into(),
+                    ));
+                }
+            }
+            // Unreachable while the router classifies `CREATE TABLE` as a statement, and said
+            // rather than swallowed — but the minted workspace is retired either way, since no
+            // tab owns it and nothing else would ever release a snapshot a query arm took.
+            Ok(RunOutcome::Rows(..)) => {
+                engine.cleanup_ws(ws);
+                ctx.status
+                    .set(Status::Failed("The statement ran as a query.".into()));
+            }
+            Err(why) => ctx.status.set(Status::Failed(why)),
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::save_note;

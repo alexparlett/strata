@@ -27,8 +27,9 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
 
+use super::model::Where;
 use super::views::{ConfigureBody, Footer};
-use super::{ConfigureCtx, ConfigureDraft, ConfigureTarget, Status};
+use super::{ConfigureCtx, ConfigureDraft, ConfigureTarget, Probes, Status};
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{
@@ -104,6 +105,8 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
                 target: State::create(ConfigureTarget::New),
                 status: State::create(Status::Idle),
                 selected_path: State::create(0),
+                selected_column: State::create(0),
+                probes: State::create(Probes::new()),
             });
             (ctx, project, connections)
         },
@@ -166,7 +169,7 @@ fn remote_with_no_connection_explains_itself_and_blocks_save() {
 
     click_lowest(&mut runner, "Remote");
 
-    assert!(ctx.draft.peek().remote);
+    assert!(ctx.draft.peek().remote());
     assert_eq!(ctx.draft.peek().connection, None, "there is none to pick");
     assert!(
         shows(&runner, "No S3 connections yet. Add one to continue."),
@@ -250,7 +253,7 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
 
     click_lowest(&mut runner, "Local");
 
-    assert!(!ctx.draft.peek().remote);
+    assert!(!ctx.draft.peek().remote());
     assert_eq!(
         ctx.draft.peek().connection.as_deref(),
         Some("s3://acme-lake"),
@@ -282,7 +285,7 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
 #[test]
 fn a_forgotten_connection_is_named_and_blocks_save() {
     let mut draft = draft("events/");
-    draft.remote = true;
+    draft.location = Where::Remote;
     draft.provider = ProviderId::S3;
     draft.connection = Some("s3://gone".into());
     let (mut runner, _) = runner("forgotten", true, draft);
@@ -296,4 +299,129 @@ fn a_forgotten_connection_is_named_and_blocks_save() {
         "{:?}",
         texts(&runner)
     );
+}
+
+// ---- LOCATION ▸ Internal (IT-01) -------------------------------------------------------------
+
+/// An **internal** draft: one column row, ready to be typed into, as `set_location` leaves it.
+fn internal_draft() -> ConfigureDraft {
+    let mut draft = ConfigureDraft {
+        name: "daily".into(),
+        ..Default::default()
+    };
+    draft.set_location(Where::Internal, &[]);
+    draft
+}
+
+/// **The third LOCATION replaces the file questions with a column list.** The whole point of
+/// putting this in Configure rather than a surface of its own: it is the same window answering
+/// the same question, so what changes is which sections have anything to ask.
+#[test]
+fn internal_shows_columns_and_hides_everything_about_files() {
+    let (mut runner, _) = runner("internal", false, internal_draft());
+    settle(&mut runner);
+
+    assert!(shows(&runner, "Internal"), "the segment is offered");
+    assert!(shows(&runner, "COLUMNS"), "{:?}", texts(&runner));
+    // Nothing about files: no path list, no format picker, no partitions.
+    for absent in ["SOURCE PATHS", "SOURCE PATH", "FORMAT", "HIVE PARTITIONING"] {
+        assert!(!shows(&runner, absent), "{absent} is still on screen");
+    }
+}
+
+/// A table that already has files cannot be turned into one Strata stores — the segment is shown
+/// and inert, so the answer is discoverable without being a way to discard a def.
+#[test]
+fn internal_is_offered_on_a_new_table_and_refused_on_an_edit() {
+    let mut draft = ConfigureDraft {
+        name: "orders".into(),
+        sources: vec!["/data/orders.parquet".into()],
+        ..Default::default()
+    };
+    let (mut editing, (ctx, _, _)) = runner("internal-edit", false, draft.clone());
+    let mut target = ctx.target;
+    target.set(ConfigureTarget::Edit("orders".into()));
+    settle(&mut editing);
+
+    click_lowest(&mut editing, "Internal");
+    settle(&mut editing);
+    assert!(
+        !ctx.draft.peek().internal(),
+        "an edit may not move a table's data into Strata"
+    );
+    assert!(
+        shows(&editing, "SOURCE PATHS"),
+        "…and the form is unchanged"
+    );
+
+    // The same press on a *new* table takes.
+    draft.name = "fresh".into();
+    let (mut fresh, (ctx, _, _)) = runner("internal-new", false, draft);
+    settle(&mut fresh);
+    click_lowest(&mut fresh, "Internal");
+    settle(&mut fresh);
+    assert!(ctx.draft.peek().internal());
+}
+
+/// **Save is blocked until every column says what it is**, and the note names the first row that
+/// does not — the planner's own words where the type is the problem.
+#[test]
+fn an_internal_table_blocks_save_until_its_columns_are_whole() {
+    let mut draft = internal_draft();
+    draft.set_column_name(0, "region".into());
+    let (mut runner, (ctx, _, _)) = runner("internal-blocked", false, draft);
+    settle(&mut runner);
+
+    assert!(
+        shows(&runner, "Enter a column type."),
+        "{:?}",
+        texts(&runner)
+    );
+
+    // A type the planner refuses reaches the row and the note as written.
+    ctx.edit(|draft| draft.set_column_type(0, "FLOAT64".into()));
+    for _ in 0..200 {
+        runner.sync_and_update();
+        if texts(&runner).iter().any(|t| t.contains("FLOAT64")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        texts(&runner)
+            .iter()
+            .any(|t| t.contains("Unsupported SQL type FLOAT64")),
+        "{:?}",
+        texts(&runner)
+    );
+}
+
+/// The Configure window on **Internal**, to a PNG for eyeballing — the same harness the Shape
+/// panel's preview uses, and the check that this section wears the window's own dress.
+#[test]
+#[ignore = "writes target/configure-internal.png for eyeballing; run explicitly"]
+fn configure_internal_preview() {
+    let mut draft = internal_draft();
+    draft.name = "signups".into();
+    draft.set_column_name(0, "region".into());
+    draft.set_column_type(0, "VARCHAR".into());
+    draft.add_column();
+    draft.set_column_name(1, "signups".into());
+    draft.set_column_type(1, "BIGINT".into());
+    draft.add_column();
+    draft.set_column_name(2, "amount".into());
+    draft.set_column_type(2, "FLOAT64".into());
+
+    let (mut runner, _) = runner("internal-preview", false, draft);
+    for _ in 0..200 {
+        runner.sync_and_update();
+        if texts(&runner).iter().any(|t| t.contains("FLOAT64")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    runner.render_to_file(format!(
+        "{}/../../target/configure-internal.png",
+        env!("CARGO_MANIFEST_DIR")
+    ));
 }
