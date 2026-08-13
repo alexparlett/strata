@@ -221,6 +221,13 @@ pub struct TablesResult {
     /// Entries the catalog holds (or 'matching' matched), before paging.
     pub total: usize,
     pub entries: Vec<EntryWire>,
+    /// Catalogs the project's database connections have registered. Nothing in 'entries'
+    /// describes them and nothing is meant to: a database answers for itself, so its relations
+    /// are not defs of this project and 'matching' does not reach them. Read one by three-part
+    /// name ('pg.public.orders'), list them with SHOW TABLES, and read one relation's schema
+    /// with `describe_table` under that same name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub databases: Vec<String>,
     /// Present only when the answer is one window of more.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
@@ -270,6 +277,7 @@ pub(crate) fn windowed<T>(items: Vec<T>, page: Option<usize>, per: usize) -> Win
 /// answer always states what it matched against.
 pub fn tables_result(
     entries: Vec<CatalogEntry>,
+    databases: Vec<String>,
     matching: Option<&str>,
     page: Option<usize>,
 ) -> TablesResult {
@@ -285,6 +293,11 @@ pub fn tables_result(
     TablesResult {
         total: w.total,
         entries: w.shown.into_iter().map(entry_wire).collect(),
+        // Outside the window and outside 'total' on purpose: these are not entries, and
+        // counting them into a total the caller pages through would promise pages that do not
+        // exist. They are also **not** filtered by 'matching' — a narrowed listing that dropped
+        // the connections would read as a project with none.
+        databases,
         page: w.page,
         page_size: w.page_size,
     }
@@ -395,6 +408,11 @@ pub struct DescribeResult {
     pub kind: Option<EntryKindWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The database connection this relation lives in, for one that is not a def of the
+    /// project's — its catalog name, which is also the first part of 'name'. Absent for
+    /// everything in the workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -913,23 +931,49 @@ mod tests {
             })
             .collect();
 
-        let paged = tables_result(entries.clone(), None, None);
+        let paged = tables_result(entries.clone(), Vec::new(), None, None);
         assert_eq!(paged.total, 60);
         assert_eq!(paged.entries.len(), TABLES_PAGE);
         assert_eq!(paged.page, Some(1));
         assert_eq!(paged.page_size, Some(TABLES_PAGE));
 
-        let second = tables_result(entries.clone(), None, Some(2));
+        let second = tables_result(entries.clone(), Vec::new(), None, Some(2));
         assert_eq!(second.entries.len(), 10);
 
-        let matched = tables_result(entries.clone(), Some("T05"), None);
+        let matched = tables_result(entries.clone(), Vec::new(), Some("T05"), None);
         assert_eq!(matched.total, 1, "case-insensitive substring");
         assert_eq!(matched.page, None, "one page is a complete answer");
 
-        let small = tables_result(entries.into_iter().take(3).collect(), None, None);
+        let small = tables_result(
+            entries.into_iter().take(3).collect(),
+            Vec::new(),
+            None,
+            None,
+        );
         assert_eq!(small.total, 3);
         assert_eq!(small.page, None);
         assert_eq!(small.page_size, None);
+    }
+
+    /// **The database catalogs ride beside the entries, not among them** (DB-03): outside the
+    /// total, outside the window, and outside 'matching' — a narrowed listing that dropped them
+    /// would read as a project with no database connections.
+    #[test]
+    fn database_catalogs_are_named_beside_the_entries() {
+        let entries = vec![CatalogEntry::Table {
+            name: "people".into(),
+            format: "csv".into(),
+            sources: vec!["people.csv".into()],
+            reg: RegState::Ready,
+        }];
+        let listed = tables_result(
+            entries,
+            vec!["pg".to_string(), "warehouse".to_string()],
+            Some("nothing matches this"),
+            None,
+        );
+        assert_eq!(listed.total, 0, "the filter emptied the entries");
+        assert_eq!(listed.databases, vec!["pg", "warehouse"]);
     }
 
     /// A view row carries a preview a reader can tell is one; a saved query's SQL stays
@@ -957,6 +1001,7 @@ mod tests {
                     reg: RegState::Ready,
                 },
             ],
+            Vec::new(),
             None,
             None,
         );

@@ -27,7 +27,9 @@ toward Connections on the key alone (`STATEMENTS_SPEC.md` §6.7).
 The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
 `INSERT OVERWRITE`, `PREPARE` of a non-query, `SET`/`RESET` of an owned, `runtime.*`, `format.*` or
 dialect key, `DROP` of a non-table/view object, reserved `__snap_` names, multi-statement buffers,
-and unknown kinds.
+and unknown kinds. A statement whose target is qualified into a **database connection's** catalog
+is refused by name at dispatch, in one sentence minted by `ddl::bare_name` (`STATEMENTS_SPEC.md`
+§4): v1 reads a database and manages nothing in it. Reading one is never refused.
 `Capability::Agent` is read-only and refuses every non-query with its original wording.
 `Engine::run` is where that classification is *spent*: `Query` delegates to `query()`'s body
 byte-for-byte (the only arm that touches the snapshot lifecycle, so "DDL does not retire
@@ -40,9 +42,13 @@ See `docs/STATEMENTS_SPEC.md` and the invariants in `reference/INVARIANTS.md` fo
 (default-deny, reserved `__snap_` names, `Blocked` grows and never shrinks).
 
 **The catalog and schema providers are ours, for identity and visibility — never lifecycle**
-(ED-03, `engine::providers`, installed in `build_context` before anything registers). One catalog
-with one schema, `public`, whose `register_schema` refuses: `CREATE SCHEMA` is impossible by
-construction rather than by policy. One schema map keyed by `fold_ident`, so the single namespace
+(ED-03, `engine::providers`, installed in `build_context` before anything registers). The
+**workspace** catalog has one schema, `public`, whose `register_schema` refuses: `CREATE SCHEMA`
+is impossible by construction rather than by policy. That is a statement about the workspace and
+never about the session, which since the DB workstream holds a catalog per live database
+connection — registered on `StrataCatalogList`, DataFusion's list plus the `deregister` it has no
+method for. `providers::in_workspace` is the one predicate that tells the two apart, and both the
+statement gate and the `__snap_` fence (`is_snapshot_ref`) ask it. One schema map keyed by `fold_ident`, so the single namespace
 is genuinely case-insensitive. And `table_names()` filters the `__snap_` result snapshots while
 `table()` still resolves them — which matters because `table_names()` is the *only* path every
 `information_schema` view and every `SHOW` form enumerates through, so one filter hides the spool

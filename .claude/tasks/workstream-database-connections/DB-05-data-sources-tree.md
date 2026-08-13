@@ -112,8 +112,10 @@ paints, never where truth lives.
    connection. Nothing in the database is deleted." Consequences come from the **existing
    forget path** (`tables_over`/`views_over` + `forget_consequence`,
    drop_confirm.rs:279-283) extended for databases: no `TableDef` names one, so the match
-   is views whose recorded deps carry the connection's catalog prefix — which is what
-   DB-03's qualified `plan_deps` recording exists to make findable (`left_invalid` is the
+   is views whose **`ViewInfo::remote_deps`** carry the connection's catalog prefix — the
+   list DB-03 built for exactly this, holding each remote scan qualified whole
+   (`pg.public.orders`) while `deps` stays workspace-only. ✅ **the data is there**; the
+   match itself is this task's (`left_invalid` is the
    drop arms' *sentence formatter*, `pub(super)` to `engine::ddl` — not a data source and
    not reachable from here). The derived keystore entry is deleted through
    `secret::forget_derived` (re-derivable from the def being forgotten — no stored ref).

@@ -217,12 +217,44 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   answers `Query` / `Intercept(StmtKind)` / `Refuse(Blocked)` off the parsed statement, both
   surfaces in one match arm. `Capability::Agent` stays read-only and message-identical; the
   editor's refusals shrink to a short list and the older `Blocked` variants stay as the agent
-  path's messages; default stays deny. A `__snap_` name is refused to **every** statement the user
-  types, read or written — a plain `SELECT` included, because reading a snapshot hands back another
-  tab's result with `__strata_ord` showing and Export then writes that to a file, around the fence
-  that exists to stop exactly this; `EXPLAIN` descends to its inner statement, and
-  `register_external` and `ddl::views::create` backstop the write half at the two funnels a def can
-  also arrive through. Every interception is a second gesture into a funnel that already exists.
+  path's messages; default stays deny. A `__snap_` name **in the workspace catalog** is refused to
+  every statement the user types, read or written — a plain `SELECT` included, because reading a
+  snapshot hands back another tab's result with `__strata_ord` showing and Export then writes that
+  to a file, around the fence that exists to stop exactly this; `EXPLAIN` descends to its inner
+  statement, and `register_external` and `ddl::views::create` backstop the write half at the two
+  funnels a def can also arrive through. The namespace **is** the workspace catalog's, so the
+  predicate says so (`is_snapshot_ref` = `is_snapshot_name` under `providers::in_workspace`, beside
+  the function that mints the names): a database connection may hold a relation somebody called
+  `__snap_3`, where the name reserves nothing, and writing to it is refused for being remote.
+  `in_workspace` compares each part **the way the thing that resolves it compares** — the catalog
+  folded (`StrataCatalogList` keys by `fold_ident`, so a quoted `"STRATA"` is the workspace and a
+  raw compare let it out of the fence), the schema exact (`StrataCatalogProvider::schema` does).
+  Every interception is a second gesture into a funnel that already exists.
+- **A name qualified into a database connection's catalog is read like any other and managed by
+  nothing, and the refusal is minted once — in `ddl::bare_name`, in front of every arm.** One
+  sentence naming the connection, not parameterised by what the statement makes (it is about the
+  catalog); a qualifier resolving to *no* catalog keeps `elsewhere`'s older wording, which is a
+  different fact. The catalog **list** is asked, because it is what resolves the name, and it
+  answers with the connection's own spelling. `INSERT` reaches this before `Engine::is_internal`
+  — ownership is not a question to ask about a relation whose data Strata could never own — and
+  `CREATE`/`DROP FUNCTION` need no fence of ours, DataFusion refusing a qualified function name
+  while planning. Reading is never refused: a query, a `COPY`'s source and a `PREPARE`d body all
+  resolve a remote relation normally.
+- **A view's dependencies are two lists, because only one of them is checkable against the
+  project's rows.** `PlanDeps`/`ViewMeta`/`ViewInfo` keep workspace scans **bare** and
+  non-workspace scans **qualified whole** (`tables` / `remote`, `deps` / `remote_deps`), split by
+  the same `in_workspace`. Recorded by bare component — which is what it did before — a
+  cross-source view's `pg.public.orders` is indistinguishable from a workspace `orders`: dropping
+  that table names a view that never read it, `view_problem` cries wolf over a relation the store
+  has no row for, and a forget of the connection matches nothing. An agent asking what a view
+  *reads* gets both halves; that question is not about rows.
+- **A remote relation that vanishes server-side is a reconciliation, and its staleness bound is
+  stated where the message is built.** Nothing on our side observes a server-side rename, so the
+  first Strata hears of it is the next registration pass failing to re-plan the view;
+  `catalog::view_error` — the view funnel's `register_error`, one diagnosis in front of
+  `readable`'s unwrapping — names the connection and the refresh instead of DataFusion's `table
+  '…' not found`, which reads like a bug in the SQL. "Not in the connection" means "not in what it
+  last told us": the relation list is the connect-time enumeration, and a ↻ re-runs the pass.
 - **`Engine::run` routes; only its query arm touches the snapshot lifecycle.** One statement per
   Run, `Query` delegating to `query()` byte-for-byte, `Intercept` to `ddl::execute` under the
   in-flight bracket `explain` shares, `Refuse` to the squiggle's own message before DataFusion

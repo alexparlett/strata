@@ -116,6 +116,22 @@ pub fn describe_result(
             reads,
             ..schema_view(name, &columns, params)?
         }),
+        // The connection is the fact this arm adds; the *kind* is the server's own answer,
+        // because a remote view is a view and saying "table" about one would be the one thing
+        // this arm exists to stop the tool doing — claiming something it was not told.
+        Described::Remote {
+            name,
+            connection,
+            view,
+            columns,
+        } => Ok(DescribeResult {
+            kind: Some(match view {
+                true => EntryKindWire::View,
+                false => EntryKindWire::Table,
+            }),
+            connection: Some(connection),
+            ..schema_view(name, &columns, params)?
+        }),
         Described::Failed { name, error } => Ok(DescribeResult {
             error: Some(error),
             ..blank(name, StateWire::Failed)
@@ -132,6 +148,7 @@ fn blank(name: String, state: StateWire) -> DescribeResult {
         state,
         kind: None,
         error: None,
+        connection: None,
         format: None,
         sources: Vec::new(),
         sources_total: None,
@@ -599,6 +616,42 @@ mod tests {
             assert!(column.children.is_empty(), "the floor elides every child");
             assert_eq!(column.children_total, Some(300));
         }
+    }
+
+    /// **A relation in a database connection's catalog** (DB-03): its columns, the connection
+    /// it is in, and the server's own word for what it is — and none of the def facts, because
+    /// there is no def. A `not found` here would be false about something the agent can query.
+    #[test]
+    fn a_remote_relation_describes_as_itself() {
+        let described = Described::Remote {
+            name: "pg.public.orders".into(),
+            connection: "pg".into(),
+            view: false,
+            columns: vec![leaf("id"), leaf("total")],
+        };
+        let result = describe_result(described, &ask()).unwrap();
+        assert_eq!(result.name, "pg.public.orders");
+        assert_eq!(result.connection.as_deref(), Some("pg"));
+        assert!(matches!(result.kind, Some(EntryKindWire::Table)));
+        assert_eq!(result.columns.len(), 2);
+        assert!(
+            result.format.is_none() && result.sources.is_empty() && result.rows.is_none(),
+            "a remote relation has no def to report facts from"
+        );
+
+        // The server's own word, not a guess: a remote view is a view.
+        let remote_view = Described::Remote {
+            name: "pg.public.big_orders".into(),
+            connection: "pg".into(),
+            view: true,
+            columns: vec![leaf("id")],
+        };
+        let result = describe_result(remote_view, &ask()).unwrap();
+        assert!(matches!(result.kind, Some(EntryKindWire::View)));
+        assert!(
+            result.sql.is_none(),
+            "and its definition is the server's, not something this app holds"
+        );
     }
 
     /// The source list is the one envelope fact that scales with the user's data, and it

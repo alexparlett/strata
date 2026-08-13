@@ -41,12 +41,13 @@ use std::{env, fs, process};
 
 use keyring_core::mock;
 use strata_core::engine::db::{SchemaVisibility, PG_PASSWORD};
-use strata_core::engine::{Engine, RunTag, WsId};
-use strata_core::register::table_spec;
+use strata_core::engine::{Engine, RunOutcome, RunTag, ViewMeta, WsId};
+use strata_core::project::ProjectDefs;
+use strata_core::register::{register_project, table_spec, RegOutcome};
 use strata_core::secret::{Secret, SecretRef};
 use strata_model::{
     Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, TableDef,
-    TableOrigin,
+    TableOrigin, ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -278,6 +279,8 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let fixtures = env::temp_dir().join(format!("strata-pg-{}", process::id()));
     mixed_plan(&engine, &fixtures).await;
     exotic_types_and_refusals(&engine).await;
+    statement_policy(&engine, &fixtures).await;
+    cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
 
     let _ = fs::remove_dir_all(&fixtures);
@@ -673,4 +676,209 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         engine.db_listing(&renamed).is_none(),
         "…and it is no longer a live database"
     );
+}
+
+/// **The statement policy over a real remote catalog** (DB-03) — a phase of the test above.
+///
+/// The unit tests (`engine::ddl::tests`) drive every intercepted kind against a fake catalog,
+/// which is the right place for a checklist. What only a server can show is that the names being
+/// refused are names that genuinely *resolve*: against the fake catalog a wrong refusal and a
+/// right one both look like an error, while here the same statement's read half answers with
+/// rows.
+///
+/// **The data root has to be set first**, and finding that out is the point of writing this
+/// against the real entry point: `CREATE TABLE AS` and `CREATE EXTERNAL TABLE` refuse an engine
+/// with no project folder *before* they look at the target, so without a root those two rows
+/// assert nothing about the catalog. That ordering is right and stays — on a project-less engine
+/// there is genuinely nowhere to put a table, whatever its name — and it is unobservable in the
+/// app, where a window always has a project. `dir` is the folder [`mixed_plan`] already made.
+async fn statement_policy(engine: &Engine, dir: &Path) {
+    engine.set_data_dir(dir);
+    for sql in [
+        format!("DROP TABLE {CATALOG}.public.orders"),
+        format!("DROP VIEW {CATALOG}.public.big_orders"),
+        format!("CREATE TABLE {CATALOG}.public.mine AS SELECT 1 AS id"),
+        format!("CREATE VIEW {CATALOG}.public.mine AS SELECT 1 AS id"),
+        format!(
+            "CREATE EXTERNAL TABLE {CATALOG}.public.mine STORED AS PARQUET LOCATION 'x.parquet'"
+        ),
+    ] {
+        let Err(why) = engine.run(WsId(1), RunTag(21), sql.clone(), 200).await else {
+            panic!("'{sql}' was not refused");
+        };
+        assert!(
+            why.contains(&format!("database connection '{CATALOG}'")),
+            "'{sql}' must name the connection: {why}"
+        );
+    }
+
+    // …and the relation the refusals were about is still there, still readable. This is the half
+    // the fake catalog cannot assert: a refusal is only correct if the name was good.
+    assert_eq!(
+        rows(
+            engine,
+            22,
+            &format!("SELECT count(*) FROM {CATALOG}.public.orders")
+        )
+        .await,
+        vec![vec!["3".to_string()]]
+    );
+
+    // A workspace-catalog `__snap_` name is reserved; the same spelling inside the connection is
+    // an ordinary relation the server happens to have called that, and reading it is fine.
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(23),
+            "SELECT * FROM __snap_1".to_string(),
+            200,
+        )
+        .await
+    else {
+        panic!("the workspace's snapshot namespace is reserved");
+    };
+    assert!(why.contains("__snap_"), "{why}");
+    // Not found on the server, and that is the point: it got past the fence and was *looked up*.
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(24),
+            format!("SELECT * FROM {CATALOG}.public.__snap_1"),
+            200,
+        )
+        .await
+    else {
+        panic!("the server has no such relation");
+    };
+    assert!(
+        !why.contains("reserved"),
+        "a remote relation is not in Strata's reserved namespace: {why}"
+    );
+}
+
+/// **The cross-source view** — the load-bearing case: one workspace def whose dependencies span
+/// a file and a database. A phase of the test above.
+///
+/// Driven on a **second engine** through the real registration pass, because three of the four
+/// things under test are about replay: a view over a connection must re-register after it on
+/// re-open, its recorded dependencies must tell the two sources apart, and a relation that
+/// vanished server-side must land a sentence naming the connection rather than a planning error.
+async fn cross_source_views(port: u16, dir: &Path) {
+    // A relation of this phase's own, so dropping it server-side disturbs no other phase.
+    //
+    // `driver`, not `connection`: the driver task the raw client rides is not a `ConnectionDef`,
+    // and binding it under that name shadows this file's own [`connection`] builder for the rest
+    // of the scope.
+    let (client, driver) = tokio_postgres::connect(
+        &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .expect("a raw client to move the fixture under the app's feet");
+    tokio::spawn(async move {
+        if let Err(e) = driver.await {
+            eprintln!("fixture connection ended: {e}");
+        }
+    });
+    client
+        .batch_execute("CREATE TABLE public.transient (id INT PRIMARY KEY);")
+        .await
+        .expect("a relation to take away");
+
+    let defs = ProjectDefs {
+        connections: vec![connection(port, CATALOG, &["public"])],
+        tables: vec![TableDef {
+            name: "tiers".into(),
+            format: SourceFormat::Csv(CsvRead::default()),
+            connection: None,
+            sources: vec!["tiers.csv".into()],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::External,
+        }],
+        views: vec![
+            ViewDef {
+                name: "spanning".into(),
+                sql: format!(
+                    "SELECT t.tier, o.total FROM tiers t JOIN {CATALOG}.public.orders o \
+                     ON t.customer = o.customer"
+                ),
+            },
+            ViewDef {
+                name: "over_transient".into(),
+                sql: format!("SELECT id FROM {CATALOG}.public.transient"),
+            },
+        ],
+        ..ProjectDefs::default()
+    };
+
+    let engine = Engine::new(BTreeMap::new());
+    let outcomes = replay(&engine, dir, &defs).await;
+
+    // (c) It re-registers on replay, after the connection — which is phase order, and the reason
+    // connections are the pass's first phase.
+    let spanning = view_meta(&outcomes, "spanning").expect("the cross-source view re-registers");
+    // (b) Its dependencies carry the qualified remote name, and only the workspace half is a
+    // bare one. Recorded by bare component, both halves would read as tables of this project.
+    assert_eq!(spanning.tables, vec!["tiers".to_string()]);
+    assert_eq!(
+        spanning.remote,
+        vec![format!("{CATALOG}.public.orders")],
+        "the remote half is recorded whole"
+    );
+
+    // (a) Dropping the local table names it as a dependent — the question the split had to keep
+    // answerable, asked of the engine that holds the plans.
+    let Ok(dropped) = engine
+        .run(WsId(1), RunTag(30), "DROP TABLE tiers".to_string(), 200)
+        .await
+    else {
+        panic!("the workspace table drops");
+    };
+    let RunOutcome::Statement(report) = dropped else {
+        panic!("DROP TABLE ran as a query");
+    };
+    assert!(
+        report.message.contains("'spanning'"),
+        "the cross-source view is a dependent of its file half: {}",
+        report.message
+    );
+
+    // (d) The remote half taken away server-side. Nothing on our side observes it — the view goes
+    // on answering from the plan it inlined — so the reconciliation is the next pass, and what it
+    // must say is which connection no longer has the relation.
+    client
+        .batch_execute("DROP TABLE public.transient;")
+        .await
+        .expect("take the relation away");
+    let engine = Engine::new(BTreeMap::new());
+    let outcomes = replay(&engine, dir, &defs).await;
+    let why = view_error(&outcomes, "over_transient").expect("the view can no longer plan");
+    assert!(
+        why.contains(&format!("{CATALOG}.public.transient"))
+            && why.contains(&format!("database connection '{CATALOG}'"))
+            && why.contains("Refresh the catalog"),
+        "the row names the relation, the connection and the fix: {why}"
+    );
+}
+
+/// One whole-project registration pass, collected.
+async fn replay(engine: &Engine, root: &Path, defs: &ProjectDefs) -> Vec<RegOutcome> {
+    let mut out = Vec::new();
+    register_project(engine, root, defs, |o| out.push(o)).await;
+    out
+}
+
+/// What the pass answered for the view `name`.
+fn view_meta<'a>(outcomes: &'a [RegOutcome], name: &str) -> Option<&'a ViewMeta> {
+    outcomes.iter().find_map(|o| match o {
+        RegOutcome::View { name: n, result } if n == name => result.as_ref().ok(),
+        _ => None,
+    })
+}
+
+fn view_error<'a>(outcomes: &'a [RegOutcome], name: &str) -> Option<&'a String> {
+    outcomes.iter().find_map(|o| match o {
+        RegOutcome::View { name: n, result } if n == name => result.as_ref().err(),
+        _ => None,
+    })
 }

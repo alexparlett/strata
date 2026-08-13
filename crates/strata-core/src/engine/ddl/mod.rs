@@ -42,6 +42,7 @@ use datafusion::sql::TableReference;
 
 use crate::engine::catalog::{TableMeta, ViewMeta};
 use crate::engine::functions::Functions;
+use crate::engine::providers::in_workspace;
 use crate::engine::sql::StmtKind;
 use crate::engine::{fold_ident, Connections, InternalTables, CATALOG, SCHEMA};
 use crate::util::plural;
@@ -253,22 +254,72 @@ pub(super) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableTy
 /// The bare name a statement targets, and `what` those statements create — `"Tables"`,
 /// `"Views"`.
 ///
-/// Strata has exactly one catalog and one schema (`engine::providers`), so a qualified name is
-/// either a longer spelling of the same place or a place that does not exist — and registration
-/// takes a bare name, so an unrecognised qualifier would otherwise be silently dropped and the
-/// object created somewhere the user did not ask for.
-pub(super) fn bare_name(name: &TableReference, what: &str) -> Result<String, String> {
-    let ok = match name {
-        TableReference::Bare { .. } => true,
-        TableReference::Partial { schema, .. } => schema.as_ref() == SCHEMA,
-        TableReference::Full {
-            catalog, schema, ..
-        } => catalog.as_ref() == CATALOG && schema.as_ref() == SCHEMA,
-    };
-    match ok {
-        true => Ok(name.table().to_string()),
-        false => Err(elsewhere(what)),
+/// **The one choke point in front of every arm.** The *workspace* catalog has exactly one schema
+/// (`engine::providers`), so a qualified name is one of three things: a longer spelling of the
+/// same place, a relation inside a database connection's catalog, or nowhere at all —
+/// and registration takes a bare name, so an unrecognised qualifier would otherwise be silently
+/// dropped and the object created somewhere the user did not ask for.
+///
+/// The middle case is the DB workstream's, and the reason this refusal is worded here rather than
+/// per arm: **every** intercepted statement that resolves a target comes through this function, so
+/// one sentence covers `DROP TABLE pg.public.orders`, `INSERT INTO pg.…`, `CREATE VIEW pg.…` and
+/// the rest — and an arm that grew its own copy of the check would be the drift this prevents.
+/// The catalog list is asked rather than a list of connections, because it is what *resolves* the
+/// name: a catalog is registered exactly while its connection is live
+/// ([`StrataCatalogList`](crate::engine::providers::StrataCatalogList)), which is also the window
+/// in which the user can address it.
+pub(super) fn bare_name(
+    ctx: &SessionContext,
+    name: &TableReference,
+    what: &str,
+) -> Result<String, String> {
+    if in_workspace(name) {
+        return Ok(name.table().to_string());
     }
+    Err(match database_catalog(ctx, name) {
+        Some(catalog) => in_database(name, &catalog),
+        None => elsewhere(what),
+    })
+}
+
+/// The database connection's catalog `name` sits in, in the spelling it was registered under —
+/// `None` for the workspace catalog, and for a qualifier that resolves to nothing.
+///
+/// The registered spelling rather than the folded key, because that is what the connection is
+/// called everywhere else the user meets it: the catalog list keeps both for exactly this
+/// (see its `catalogs` field).
+///
+/// **Folded on both sides, the workspace's own name included.** The catalog list resolves by
+/// [`fold_ident`], so a quoted `"STRATA"` names the workspace catalog — and compared raw it
+/// would slip past the guard below and then *match* the workspace's own entry in the search,
+/// telling the user their project's catalog is a database connection. No real connection can
+/// produce that (`PgStore::check_catalog` refuses `strata` case-insensitively), so the sentence
+/// would name a connection that cannot exist.
+fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<String> {
+    let TableReference::Full { catalog, .. } = name else {
+        return None;
+    };
+    let folded = fold_ident(catalog);
+    if folded == CATALOG {
+        return None;
+    }
+    ctx.catalog_names()
+        .into_iter()
+        .find(|registered| fold_ident(registered) == folded)
+}
+
+/// The wording for a name inside a database connection's catalog — read-only in v1, and the
+/// sentence says which of the two halves is true rather than naming a surface to go and use:
+/// there is no Strata surface that creates a remote table, and the server's own client is not
+/// something this app can point at.
+///
+/// Not parameterised by `what`: the answer is the same for a table and for a view, because it is
+/// about the *catalog* and not about the kind of thing being made in it.
+pub(super) fn in_database(name: &TableReference, catalog: &str) -> String {
+    format!(
+        "'{name}' is in the database connection '{catalog}'. Strata reads remote tables; it does \
+         not create, drop or write them"
+    )
 }
 
 /// The wording for a name that points outside Strata's single schema — held apart from
@@ -297,4 +348,250 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
         plural(dependents.len(), "view"),
         names.join(", ")
     )
+}
+
+/// **The statement policy over a database connection's catalog** (DB-03) — one test module for
+/// one rule, because the rule is cross-arm: `bare_name` is the single choke point in front of
+/// every intercepted statement that resolves a target, so what is under test is that *no arm
+/// gets there another way*.
+///
+/// The fourteen [`StmtKind`]s divide into four answers and each is pinned below: a target inside
+/// a remote catalog is refused by name (the seven kinds that name a target), a **read** of one is
+/// not (`COPY`'s source, `PREPARE`'s body, and every plain query), a function name cannot be
+/// qualified at all (DataFusion refuses it while planning, which is one refusal in one place
+/// rather than a second of ours), and the four session statements name no relation.
+///
+/// Against a fake catalog rather than a server: see `providers::fake_database` for what that does
+/// and does not stand in for.
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::{env, process};
+
+    use crate::engine::providers::fake_database;
+    use crate::engine::{Engine, RunOutcome, RunTag, WsId};
+    use crate::project::{save_defs, ProjectDefs};
+
+    use super::*;
+
+    /// An engine with a project folder, a workspace table, and a live database connection's
+    /// catalog called `pg` holding `pg.public.orders`.
+    ///
+    /// The workspace table is called `orders` **too**, on purpose: every refusal below has to
+    /// be about the name the user wrote and not about the bare component it ends with, and a
+    /// fixture where the two could not collide would prove neither.
+    async fn engine(tag: &str) -> (PathBuf, Engine) {
+        let root = scratch(tag);
+        let eng = Engine::new(BTreeMap::new());
+        eng.set_data_dir(&root);
+        run(&eng, "CREATE TABLE orders AS SELECT 1 AS id, 2 AS total")
+            .await
+            .expect("workspace table");
+        fake_database(&eng.ctx, "pg", &["orders"]);
+        (root, eng)
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("strata_ddl_{}_{tag}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        save_defs(&dir, &ProjectDefs::default()).unwrap();
+        dir
+    }
+
+    async fn run(eng: &Engine, sql: &str) -> Result<RunOutcome, String> {
+        eng.run(WsId(1), RunTag(1), sql.into(), 10).await
+    }
+
+    /// The refusal `sql` came back with, or a failure naming what it did instead.
+    async fn refusal(eng: &Engine, sql: &str) -> String {
+        match run(eng, sql).await {
+            Err(why) => why,
+            Ok(_) => panic!("'{sql}' was not refused"),
+        }
+    }
+
+    /// Every statement that names a target: refused, naming the connection, whatever the arm.
+    ///
+    /// One test over the list rather than eight, because the point *is* that they answer
+    /// identically — eight tests asserting one sentence would let seven of them keep passing
+    /// while an arm quietly grew a wording of its own.
+    #[tokio::test]
+    async fn every_statement_that_names_a_target_refuses_a_remote_one() {
+        let (_root, eng) = engine("targets").await;
+        let expected = in_database(&TableReference::parse_str("pg.public.orders"), "pg");
+        for sql in [
+            "CREATE TABLE pg.public.orders (id INT)",
+            "CREATE TABLE pg.public.orders AS SELECT 1 AS id",
+            // Its own columns as the source, so the target's schema cannot be what refuses it —
+            // this test is about the target's *catalog* and nothing else.
+            "INSERT INTO pg.public.orders SELECT id, total FROM pg.public.orders",
+            "DROP TABLE pg.public.orders",
+            "DROP VIEW pg.public.orders",
+            "CREATE VIEW pg.public.orders AS SELECT 1 AS id",
+            "CREATE EXTERNAL TABLE pg.public.orders STORED AS PARQUET LOCATION 'data/'",
+        ] {
+            assert_eq!(refusal(&eng, sql).await, expected, "'{sql}'");
+        }
+    }
+
+    /// And the workspace table of the same bare name is untouched by all of it — the collision
+    /// the qualified refusal exists to keep apart, asserted from the other side.
+    #[tokio::test]
+    async fn the_workspace_table_of_the_same_name_still_drops() {
+        let (_root, eng) = engine("collision").await;
+        let _ = refusal(&eng, "DROP TABLE pg.public.orders").await;
+        let RunOutcome::Statement(report) = run(&eng, "DROP TABLE orders").await.expect("dropped")
+        else {
+            panic!("DROP TABLE ran as a query");
+        };
+        assert_eq!(report.message, "Table 'orders' and its data were deleted");
+    }
+
+    /// A qualifier that names **nothing** keeps the older wording, which is a different fact
+    /// and has to stay a different sentence: there is no connection to name.
+    #[tokio::test]
+    async fn an_unknown_catalog_is_still_nowhere() {
+        let (_root, eng) = engine("unknown").await;
+        assert_eq!(
+            refusal(&eng, "DROP TABLE nosuch.public.orders").await,
+            elsewhere("Tables")
+        );
+        assert_eq!(
+            refusal(&eng, "CREATE VIEW nosuch.public.v AS SELECT 1").await,
+            elsewhere("Views")
+        );
+    }
+
+    /// **The workspace catalog is never a database connection**, however it is spelled.
+    ///
+    /// `database_catalog` folds before it compares, and this is what says so: the catalog list
+    /// resolves by `fold_ident`, so a quoted `"STRATA"` names the workspace — and an unfolded
+    /// guard let that spelling past, whereupon the search *matched the workspace's own entry*
+    /// and told the user their project's catalog was a database connection. No real connection
+    /// can produce that sentence: `PgStore::check_catalog` refuses the name `strata`
+    /// case-insensitively, so it would have named a connection that cannot exist.
+    ///
+    /// And what it answers instead is the *right* thing: the name resolves to the workspace
+    /// catalog, so the statement simply acts on the workspace table, exactly as the unquoted
+    /// `strata.public.orders` does.
+    #[tokio::test]
+    async fn the_workspace_catalog_is_never_named_as_a_connection() {
+        let (_root, eng) = engine("workspace_spelling").await;
+        let RunOutcome::Statement(report) =
+            run(&eng, "CREATE VIEW \"STRATA\".public.v AS SELECT 1")
+                .await
+                .expect("a quoted spelling of the workspace catalog is the workspace")
+        else {
+            panic!("CREATE VIEW ran as a query");
+        };
+        assert_eq!(report.message, "View 'v' created");
+
+        let RunOutcome::Statement(report) = run(&eng, "DROP TABLE \"STRATA\".public.orders")
+            .await
+            .expect("and so is this one")
+        else {
+            panic!("DROP TABLE ran as a query");
+        };
+        assert!(
+            report
+                .message
+                .starts_with("Table 'orders' and its data were deleted"),
+            "{}",
+            report.message
+        );
+    }
+
+    /// **Reading is not managing.** The three ways a statement the router touches can read a
+    /// remote relation all work: a query, a `COPY`'s source, and a `PREPARE`d body — which is
+    /// the whole point of the connection and the thing an over-broad gate would break.
+    #[tokio::test]
+    async fn reading_a_remote_relation_is_never_refused() {
+        let (root, eng) = engine("reads").await;
+        let out = root.join("out.parquet");
+        run(&eng, "SELECT id FROM pg.public.orders")
+            .await
+            .expect("a plain query reads the connection");
+        run(
+            &eng,
+            &format!(
+                "COPY (SELECT id FROM pg.public.orders) TO '{}'",
+                out.display()
+            ),
+        )
+        .await
+        .expect("and a COPY may take its source from one");
+        run(&eng, "PREPARE p AS SELECT id FROM pg.public.orders")
+            .await
+            .expect("and a PREPARE may hold one");
+        run(&eng, "EXECUTE p").await.expect("and EXECUTE run it");
+    }
+
+    /// A cross-source read is the load-bearing one: the workspace table and the remote relation
+    /// of the same bare name, joined, both resolving to what their qualifier says.
+    #[tokio::test]
+    async fn a_cross_source_query_resolves_both_sides() {
+        let (_root, eng) = engine("cross").await;
+        run(
+            &eng,
+            "SELECT o.total FROM orders o JOIN pg.public.orders r ON o.id = r.id",
+        )
+        .await
+        .expect("cross-source join");
+    }
+
+    /// **`CREATE`/`DROP FUNCTION` cannot take a qualified name at all**, and the refusal is
+    /// DataFusion's own (`datafusion-sql-54.0.0/src/statement.rs:1390` and `:1484`, both
+    /// `not_impl_err!("Qualified functions are not supported")`). Pinned rather than
+    /// re-implemented: a second fence of ours would be a second sentence for one fact, and this
+    /// one already names the thing that is wrong.
+    #[tokio::test]
+    async fn a_function_name_cannot_be_qualified() {
+        let (_root, eng) = engine("functions").await;
+        for sql in [
+            "CREATE FUNCTION pg.public.f(x INT) RETURNS INT RETURN x + 1",
+            "DROP FUNCTION pg.public.f",
+        ] {
+            assert!(
+                refusal(&eng, sql).await.contains("Qualified functions"),
+                "'{sql}'"
+            );
+        }
+    }
+
+    /// The session statements name no relation, so a remote catalog cannot reach them — pinned
+    /// because "not applicable" is an answer the checklist has to state rather than skip.
+    #[tokio::test]
+    async fn the_session_statements_are_unaffected() {
+        let (_root, eng) = engine("session").await;
+        run(&eng, "SET datafusion.execution.batch_size = 4096")
+            .await
+            .expect("SET");
+        run(&eng, "RESET datafusion.execution.batch_size")
+            .await
+            .expect("RESET");
+        run(&eng, "PREPARE q AS SELECT 1").await.expect("PREPARE");
+        run(&eng, "DEALLOCATE q").await.expect("DEALLOCATE");
+    }
+
+    /// A `postgres://` URL typed into a `LOCATION` is **not** a way into a connection: it splits
+    /// like any other remote location and lands on the membership refusal, naming a connection
+    /// the project does not have. Pinned because the alternative — a bare planner error, or a
+    /// panic on a URL whose path is a database name — is what `url()`-carries-a-path makes
+    /// possible.
+    #[tokio::test]
+    async fn a_database_url_in_a_location_is_refused_as_a_connection() {
+        let (_root, eng) = engine("location").await;
+        let why = refusal(
+            &eng,
+            "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'postgres://host:5432/db/x'",
+        )
+        .await;
+        assert!(
+            why.contains("postgres://host:5432") && why.contains("connection"),
+            "{why}"
+        );
+    }
 }

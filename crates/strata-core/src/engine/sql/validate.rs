@@ -37,13 +37,14 @@ use datafusion::common::diagnostic::DiagnosticKind;
 use datafusion::common::{DataFusionError, SchemaError, TableReference};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{CopyToSource, DFParserBuilder, Statement as DFStatement};
+use datafusion::sql::planner::object_name_to_table_reference;
 use datafusion::sql::sqlparser::ast::{
     visit_relations, ObjectName, ObjectType, Statement as SqlStatement, Visit,
 };
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 
-use crate::engine::query::{is_snapshot_name, ReadPolicy};
+use crate::engine::query::{is_snapshot_name, is_snapshot_ref, ReadPolicy};
 use crate::engine::sql::lex::{
     is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -681,14 +682,29 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
     .is_break()
 }
 
-/// Whether any part of `name` is in the snapshot namespace. The predicate itself is
-/// [`is_snapshot_name`], next to the function that mints those names, because the
-/// provider's hiding rule asks the same question and the two must not drift.
+/// Whether `name` addresses the snapshot namespace. The predicate itself is
+/// [`is_snapshot_ref`], next to the function that mints those names, because the provider's
+/// hiding rule asks the same question and the two must not drift.
+///
+/// **Where the name points, not merely how it is spelled.** The namespace belongs to the
+/// workspace catalog, and since the DB workstream the session holds a catalog per database
+/// connection — where `__snap_3` is whatever the server called a table and reserves nothing.
+/// So the qualifier is read, through DataFusion's **own** normalization
+/// ([`object_name_to_table_reference`]) rather than a second reading of the identifier rules:
+/// the reference this judges is the reference the planner would resolve. A name it refuses
+/// (more than three parts, or a part that is not an identifier) resolves nowhere at all and is
+/// therefore reserved by nothing — the arms refuse it in their own words
+/// (`ddl::bare_name`), and a query naming it never plans.
 fn is_reserved(name: &ObjectName) -> bool {
-    name.0.iter().any(|part| {
-        part.as_ident()
-            .is_some_and(|ident| is_snapshot_name(&ident.value))
-    })
+    // **The prefix first, and only then the qualifier.** This runs per relation per statement on
+    // every re-validation, the answer is almost always no, and the prefix test is seven bytes
+    // wide where normalizing the reference allocates a `TableReference` from a cloned name.
+    let named = name
+        .0
+        .last()
+        .and_then(|part| part.as_ident())
+        .is_some_and(|ident| is_snapshot_name(&ident.value));
+    named && object_name_to_table_reference(name.clone(), true).is_ok_and(|n| is_snapshot_ref(&n))
 }
 
 /// One statement the managed-DDL policy refuses — [`policy_verdicts`]' per-statement
@@ -1613,6 +1629,57 @@ mod tests {
         ] {
             let out = run(sql);
             assert_eq!(out.len(), 1, "{sql}: {out:?}");
+            assert_eq!(
+                out[0].message,
+                Blocked::ReservedName.editor_message(),
+                "{sql}"
+            );
+        }
+    }
+
+    /// **The prefix is a namespace, and the namespace is the workspace catalog's** (DB-03). A
+    /// `__snap_` name qualified into a database connection's catalog is a relation somebody
+    /// else named, reserving nothing and hiding nothing, so reading it is ordinary and writing
+    /// to it is refused for being remote rather than for being reserved.
+    ///
+    /// Deliberately **syntactic**: nothing here asks whether `pg` is registered, because
+    /// [`classify`] is a pure function of the parsed statement and asking the session would make
+    /// it a question about now. A qualifier naming no catalog resolves nowhere, and the two arms
+    /// that could care already say so — `ddl::bare_name` refuses it by name, and a query naming
+    /// it does not plan.
+    #[test]
+    fn the_reserved_namespace_is_the_workspace_catalog() {
+        for sql in [
+            "SELECT * FROM pg.public.__snap_3",
+            "SELECT * FROM pg.analytics.__snap_3",
+            "EXPLAIN SELECT * FROM pg.public.__snap_3",
+        ] {
+            let out = run(sql);
+            assert!(
+                out.iter()
+                    .all(|d| d.message != Blocked::ReservedName.editor_message()),
+                "{sql}: {out:?}"
+            );
+        }
+        // And the workspace's own longer spellings are still inside it, or the scoping would
+        // have opened a way round the fence rather than bounding it.
+        //
+        // **The quoted spellings are the ones that bite**, and they are here because the first
+        // version of this scoping compared the catalog raw: the catalog list resolves by
+        // `fold_ident`, so `"STRATA"` reaches the workspace catalog while an unfolded compare
+        // reads it as somewhere else — which let `SELECT * FROM "STRATA".public.__snap_3`
+        // resolve and hand back another tab's snapshot with `__strata_ord` on it, the one thing
+        // this fence exists to stop. The unquoted spellings alone could not have caught it,
+        // because the parser folds those before the predicate ever sees them.
+        for sql in [
+            "SELECT * FROM public.__snap_3",
+            "SELECT * FROM strata.public.__snap_3",
+            "DROP TABLE strata.public.__snap_3",
+            "SELECT * FROM STRATA.PUBLIC.__SNAP_3",
+            "SELECT * FROM \"STRATA\".public.__snap_3",
+            "SELECT * FROM \"strata\".\"public\".\"__snap_3\"",
+        ] {
+            let out = run(sql);
             assert_eq!(
                 out[0].message,
                 Blocked::ReservedName.editor_message(),

@@ -158,7 +158,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
   ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
-  **DB-01 + DB-02 ✅ (2026-08-13), the rest open** —
+  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), the rest open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
@@ -184,7 +184,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   integration test in the container CI job. One structural correction is recorded in its file:
   DataFusion's `CatalogProviderList` can register a catalog and never remove one, so the engine
   now installs its own list (`StrataCatalogList`) — without it a forgotten connection would go on
-  answering for the life of the window.
+  answering for the life of the window. **DB-03 is in** — the audit held (`ddl::bare_name` really
+  is the one choke point in front of every arm that resolves a target), so the work was the
+  wording it mints, plus three corrections its file records: the `__snap_` namespace is the
+  **workspace catalog's** and one predicate says so, a view's dependencies are **two lists**
+  (workspace bare, remote qualified — or a cross-source view is indistinguishable from a
+  workspace table of the same bare name), and a relation that vanishes server-side is a
+  **reconciliation** whose staleness bound is stated where the message is built. The agent's
+  two name-answering tools grew the honesty to match: `list_tables` names the database catalogs,
+  `describe_table` answers for a three-part name.
   Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
@@ -234,10 +242,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅ and
-   DB-02 ✅, so **DB-03, DB-04 and DB-08 are next** and sit on DB-02 independently (DB-08 needs
-   nothing after it — schedule it early); DB-05 (the tree redesign, the heaviest task) after
-   DB-04; DB-06 and DB-07 close on the tree.
+1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅,
+   DB-02 ✅ and DB-03 ✅, so **DB-04 and DB-08 are next** and sit on DB-02 independently (DB-08
+   needs nothing after it — schedule it early); DB-05 (the tree redesign, the heaviest task)
+   after DB-04; DB-06 and DB-07 close on the tree.
 2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
 (Every other workstream is closed: **Connections/W7**, **Polymorphic JSON**, **Agent

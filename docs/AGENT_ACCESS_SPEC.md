@@ -68,8 +68,8 @@ ambiguity rather than guessing.
 | Tool | Answers |
 |---|---|
 | `list_projects` | The open projects: name and root. |
-| `list_tables(matching?, page?)` | The catalog **as the app shows it**: tables, views and saved queries, each with its source and registration state (`ready` / `failed` with the failure message / `pending`). The answer states its total; `matching` filters by name substring and `page` windows 50 entries at a time. A view row carries a one-line SQL preview (the full text is `describe_table`'s); a saved query's SQL stays whole, because no other tool returns it. |
-| `describe_table(name, path?, matching?, page?)` | One table or view: columns and types, nested fields, Hive partition columns, sources and format, plus the row count and column statistics the source reports for free. Only facts that were read — nothing is scanned or estimated. The schema is **bounded** (see below): `path` descends to a nested column, `matching` finds fields by name anywhere in the tree and answers with their paths, `page` reads more columns or matches. |
+| `list_tables(matching?, page?)` | The catalog **as the app shows it**: tables, views and saved queries, each with its source and registration state (`ready` / `failed` with the failure message / `pending`). The answer states its total; `matching` filters by name substring and `page` windows 50 entries at a time. A view row carries a one-line SQL preview (the full text is `describe_table`'s); a saved query's SQL stays whole, because no other tool returns it. `databases` names the catalogs the project's database connections registered — their relations are not entries and are read by three-part name. |
+| `describe_table(name, path?, matching?, page?)` | One table or view: columns and types, nested fields, Hive partition columns, sources and format, plus the row count and column statistics the source reports for free. Only facts that were read — nothing is scanned or estimated. The schema is **bounded** (see below): `path` descends to a nested column, `matching` finds fields by name anywhere in the tree and answers with their paths, `page` reads more columns or matches. A three-part name describes a relation in a database connection's catalog instead: its columns and the connection it is in, with no def facts because it has none. |
 | `list_functions(matching?)` | The engine's live function registry. What is registered is what exists — there is no second list to drift. The answer states its total; a set of 30 or fewer is full detail (signatures, returns, docs), a larger one is names only, and `matching` narrows by name substring back into detail. |
 | `validate(sql)` | Lints, the read-only policy, and a dry plan against the real catalog, without executing. The cheap way to find a typo before spending a run. |
 | `open_query_session()` | Mints a query session for the calling agent and returns its handle. |
@@ -107,6 +107,17 @@ Rules that hold across the vocabulary:
   Introspection would surface the engine's internal `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. A table that is
   merely broken must not look like a table that was never registered.
+- **A database connection is named, not enumerated, and `describe_table` reaches into one**
+  (DB-03). A database has no defs — the whole catalog comes through the connection — so its
+  relations are not entries, and listing them would mean an unbounded remote enumeration inside
+  a paged listing of something else. `list_tables` therefore carries a `databases` field naming
+  the catalogs (outside `total`, outside the window, and unfiltered by `matching`, since a
+  narrowed listing that dropped them would read as a project with none), and a **three-part
+  name** reads one relation: `SHOW TABLES` lists them, `describe_table('pg.public.orders')`
+  answers with its columns, the connection it is in, and the server's own word for whether it is
+  a view. The store is asked first and wins, so a def is never shadowed; only a qualified name
+  the store has no row for falls through. Answering `not found` for one would be false about a
+  relation the agent can perfectly well query.
 - **`explain` goes over the wire as text** — what `EXPLAIN` prints, the form every SQL tool
   shows and the one an agent can read. The app's structured plan tree exists to be *drawn*
   (it carries accent colours and time-share bars); off-screen it would be the same tree

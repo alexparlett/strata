@@ -730,6 +730,7 @@ mod tests {
             ViewMeta {
                 columns: Vec::new(),
                 tables: vec!["orders".into()],
+                remote: Vec::new(),
                 aliases: Vec::new(),
             },
         );
@@ -739,6 +740,7 @@ mod tests {
             ViewMeta {
                 columns: Vec::new(),
                 tables: vec!["orders".into()],
+                remote: Vec::new(),
                 aliases: vec!["orders_daily".into()],
             },
         );

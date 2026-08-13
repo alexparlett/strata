@@ -122,7 +122,7 @@ pub async fn create(
         return Err("Column defaults are not supported".into());
     }
 
-    let name = bare_name(&name, WHAT)?;
+    let name = bare_name(ctx, &name, WHAT)?;
     // Reproduced from DataFusion's own `ensure_unique_column_names` rule rather than inherited:
     // its CTAS never writes a file, and an IPC file *would* store both columns, after which
     // every read of the table resolves the second by name onto the first.
@@ -250,7 +250,10 @@ pub async fn insert(
             StmtKind::Insert.label()
         ));
     };
-    let name = bare_name(&dml.table_name, WHAT)?;
+    // **The gate's first half is the target's *catalog*.** A remote relation is not a table
+    // whose data Strata could own, so `is_internal` is not the question to ask about it — the
+    // honest answer names the connection, and it is the one every other arm gives.
+    let name = bare_name(ctx, &dml.table_name, WHAT)?;
     // The gate. A view and an external table are the same refusal: neither is a set of files
     // Strata wrote, and the wording names the surface that loads data into the other kind.
     if !internal.contains(&name) {
@@ -317,7 +320,7 @@ pub async fn drop_statement(
         ctx,
         root,
         internal,
-        &bare_name(&drop.name, WHAT)?,
+        &bare_name(ctx, &drop.name, WHAT)?,
         drop.if_exists,
     )
     .await

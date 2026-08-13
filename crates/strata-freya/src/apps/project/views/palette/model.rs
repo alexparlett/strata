@@ -411,6 +411,7 @@ mod tests {
                 reg: Reg::Ready(ViewInfo {
                     columns: vec![column("total", DataType::Float64)],
                     deps: vec!["orders".to_string()],
+                    remote_deps: Vec::new(),
                     view_deps: Vec::new(),
                 }),
                 profile: None,

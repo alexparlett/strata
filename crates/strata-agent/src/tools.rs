@@ -68,7 +68,7 @@ use uuid::Uuid;
 use crate::describe;
 use crate::error::AgentError;
 use crate::host::{
-    self, Agent, AgentId, AgentIdentity, Host, Project, QuerySessionId, RunMode, Settled,
+    self, Agent, AgentId, AgentIdentity, Described, Host, Project, QuerySessionId, RunMode, Settled,
 };
 use crate::wire::{
     cells, columns, functions_result, plan_result, rows_result, tables_result, Columns,
@@ -730,22 +730,70 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
+    /// The project's catalog, plus the database catalogs its connections registered.
+    ///
+    /// **The entries are the store's defs and only those** (the P3-02 correction: introspection
+    /// would hide exactly the failed rows an agent most needs to see). A database connection has
+    /// no defs to show — the whole catalog comes through the connection — so listing its
+    /// relations here would mean an unbounded remote enumeration inside a paged listing of
+    /// something else. Naming the catalogs is the honest middle: the answer says the databases
+    /// exist and how to reach into them, and `describe_table` answers for one relation at a
+    /// time.
     pub async fn list_tables(&self, params: ListTablesParams) -> Result<TablesResult, AgentError> {
-        let project = self.project(params.project.as_deref()).await?;
+        let (project, engine) = self.engine(params.project.as_deref()).await?;
         let entries = self.host.catalog(&project.root).await?;
         Ok(tables_result(
             entries,
+            engine.database_catalogs(),
             params.matching.as_deref(),
             params.page,
         ))
     }
 
+    /// One table or view in full — **or one relation in a database connection's catalog**.
+    ///
+    /// The store is asked first and wins: a def is the project's own row, failure states
+    /// included, and only a def can be addressed by a bare name. A **qualified** name the store
+    /// has no row for is the remote case, and answering `not found` for it would be false about
+    /// a relation the agent can perfectly well query — three-part names resolve, so a tool that
+    /// cannot describe one leaves the model guessing at a schema it is entitled to read.
+    ///
+    /// Asked of the engine, not of a second catalog: the columns come from the provider the
+    /// connection already caches per relation, so this is the same introspection validating a
+    /// query that names it pays, once.
+    ///
+    /// **Only [`AgentError::NotFound`] falls through**, never any error. The host's other
+    /// answers are facts about the *call* rather than about the name — `WindowGone` says the
+    /// bridge went mid-ask, `NoProject` that there is nothing open — and the engine handle this
+    /// method already holds outlives a closed window, so a blanket fallback would answer such a
+    /// call successfully and throw the real failure away.
     pub async fn describe_table(
         &self,
         params: DescribeTableParams,
     ) -> Result<DescribeResult, AgentError> {
-        let project = self.project(params.project.as_deref()).await?;
-        let described = self.host.describe(&project.root, &params.name).await?;
+        let (project, engine) = self.engine(params.project.as_deref()).await?;
+        let described = match self.host.describe(&project.root, &params.name).await {
+            Ok(described) => described,
+            Err(AgentError::NotFound(absent)) => {
+                // A failed introspection is the engine's own sentence, not a not-found: the
+                // relation is in the connection's listing and the server or the session is what
+                // went wrong.
+                let remote = engine
+                    .describe_remote(params.name.clone())
+                    .await
+                    .map_err(AgentError::Query)?;
+                match remote {
+                    Some(remote) => Described::Remote {
+                        name: format!("{}.{}", remote.connection, remote.relation),
+                        connection: remote.connection,
+                        view: remote.view,
+                        columns: remote.columns,
+                    },
+                    None => return Err(AgentError::NotFound(absent)),
+                }
+            }
+            Err(other) => return Err(other),
+        };
         describe::describe_result(described, &params)
     }
 
@@ -1035,7 +1083,10 @@ impl<H: Host> StrataTools<H> {
     /// it, so a def the engine refused is listed with its error rather than silently missing.
     /// The answer states its total; a large catalog is paged (50 per page, 'page' reads on)
     /// and 'matching' narrows by name substring. A view row carries a one-line SQL preview;
-    /// describe_table returns the full text.
+    /// describe_table returns the full text. 'databases' names the catalogs the project's
+    /// database connections registered: their relations are not entries here, are read with a
+    /// three-part name ('pg.public.orders'), are listed by SHOW TABLES, and are described one
+    /// at a time by describe_table.
     #[tool(name = "list_tables", annotations(read_only_hint = true))]
     async fn list_tables_tool(
         &self,
@@ -1052,7 +1103,9 @@ impl<H: Host> StrataTools<H> {
     /// or wide schema is bounded: elided children appear as counts, 'path' (name segments,
     /// exactly as an answer printed them) descends to any nested column, 'matching' finds
     /// fields by name substring anywhere in the tree and answers with their paths, and
-    /// 'page' reads more columns or matches. An answer with no totals in it is complete.
+    /// 'page' reads more columns or matches. An answer with no totals in it is complete. A
+    /// three-part name describes a relation in a database connection's catalog instead: its
+    /// columns and types, and the connection it is in, with no def facts because it has none.
     #[tool(name = "describe_table", annotations(read_only_hint = true))]
     async fn describe_table_tool(
         &self,
@@ -1416,6 +1469,43 @@ mod tests {
             panic!("expected a not-found error");
         };
         assert!(message.contains("'nope'"), "{message}");
+    }
+
+    /// **The remote fallback does not swallow the store's answer** (DB-03). A qualified name
+    /// with no database behind it resolves nowhere, so what comes back is the host's own
+    /// not-found — never a blank remote row, and never a different error for the same fault
+    /// spelled with dots.
+    ///
+    /// What the fallback does when a catalog *is* registered is the engine's
+    /// (`engine::remote_catalog_tests`, and `tests/postgres_federation.rs` against a server);
+    /// what it renders is `describe`'s (`a_remote_relation_describes_as_itself`). This is the
+    /// glue between them, and the only thing it can be wrong about is which error wins.
+    #[tokio::test]
+    async fn a_qualified_name_with_no_database_is_still_not_found() {
+        let (_root, tools) = one_project("describe_qualified").await;
+        let Err(AgentError::NotFound(message)) = tools
+            .describe_table(DescribeTableParams {
+                name: "pg.public.orders".into(),
+                ..DescribeTableParams::default()
+            })
+            .await
+        else {
+            panic!("expected a not-found error");
+        };
+        assert!(message.contains("'pg.public.orders'"), "{message}");
+    }
+
+    /// A project with no database connection says so by omission, and the field is what a
+    /// later one will appear in — pinned so the listing cannot start inventing catalogs.
+    #[tokio::test]
+    async fn list_tables_names_no_databases_when_there_are_none() {
+        let (_root, tools) = one_project("list_databases").await;
+        let listed = tools
+            .list_tables(ListTablesParams::default())
+            .await
+            .unwrap();
+        assert!(listed.databases.is_empty());
+        assert!(!listed.entries.is_empty(), "and the defs are still listed");
     }
 
     /// The function list is the live registry, so it carries DataFusion's built-ins and the
