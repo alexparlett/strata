@@ -10,6 +10,14 @@
 //! the *selected* fill differs: this rail marks where you are with the canvas's accent tint
 //! rather than the catalog's neutral selection grey. The rail *container* is hand-rolled
 //! because the fork ships no `SideBar`: its own example builds one from a `rect` too.
+//!
+//! **The version line is the update affordance** (UP-03). This is the one place the app
+//! already talks about its own version, which makes it where an offer of a newer one belongs —
+//! and the number it prints is [`CURRENT`], the same const the check compares against,
+//! so the rail and the mechanism cannot disagree about what is running. What the action says
+//! and what pressing it does are [`Affordance`]'s, shared with the menubar item; there is
+//! nothing to draw for `Idle`, `UpToDate`, `Checking` or a failed check, which is what keeps
+//! the rail from nagging.
 
 use freya::prelude::*;
 
@@ -20,7 +28,9 @@ use crate::components::metrics::{R_2, SP_1, SP_2, SP_3, SP_4, SP_5};
 use crate::components::sidebar_row::SidebarRow;
 use crate::components::typography::{Control, Meta, Title};
 use crate::platform::open_settings;
-use crate::state::AppCtx;
+use crate::state::{install_site, AppCtx, CURRENT};
+use crate::theme::{use_roles, Role};
+use crate::updater::{press, Affordance, UpdateAsk};
 
 /// The rail rows' padding (canvas `--sp-3 --sp-4`) — roomier than the catalog's, which sits
 /// in a narrower pane.
@@ -44,6 +54,13 @@ impl Component for LauncherRail {
         // itself above this one) and the app-globals.
         let platform = use_hook(Platform::get);
         let app = use_consume::<AppCtx>();
+        let roles = use_roles();
+        // Read, not peeked: this is the one surface that repaints as the updater learns
+        // something. The confirm slot beside it is this window's own — the status is
+        // app-global, the question is not.
+        let status = app.updates;
+        let ask = use_consume::<State<Option<UpdateAsk>>>();
+        let affordance = Affordance::of(&status.read(), install_site());
 
         // The brand: the app mark in a rounded, clipped tile (the SVG is square and paints
         // its own colours), the wordmark in the scale's Title role, and the build under it.
@@ -51,7 +68,6 @@ impl Component for LauncherRail {
             .horizontal()
             .cross_align(Alignment::Center)
             .spacing(SP_4)
-            .padding(Gaps::new(0., SP_2, SP_5, SP_2))
             .child(
                 rect()
                     .width(Size::px(34.))
@@ -65,8 +81,51 @@ impl Component for LauncherRail {
                     .vertical()
                     .spacing(SP_1)
                     .child(Title::new("Strata"))
-                    .child(Meta::new(env!("CARGO_PKG_VERSION")).color(theme.label_color)),
+                    .child(Meta::new(CURRENT).color(theme.label_color)),
             );
+
+        // The offer, under the brand rather than under the version run itself: the rail is
+        // 200px wide and the text column beside the 34px mark has no room for a sentence.
+        // Nothing renders at all for `Idle`, `UpToDate`, `Checking` or a failed check — the
+        // rail states the version and stops, exactly as it did before this task.
+        //
+        // The note is given a width so a long line wraps instead of hugging its content off the
+        // edge: a text run with no width never wraps, whatever its line cap. `fill` is only
+        // worth anything because the column below is `fill` too — a hugging parent would size
+        // itself from the brand row and this would wrap at *that*, half the rail's width.
+        let note = affordance.note().map(|note| {
+            Meta::new(note)
+                .color(theme.label_color)
+                .width(Size::fill())
+                .wrap()
+        });
+        let action = affordance.action().map(|label| {
+            Button::new()
+                .flat()
+                .compact()
+                // The launcher's ghost-action dress (the pane's OPEN), in the accent: one
+                // tone for the whole control, so the label cannot disagree with its box.
+                .theme_colors(
+                    ButtonColorsThemePartial::default()
+                        .color(roles.get(Role::Accent))
+                        .hover_color(roles.get(Role::Accent)),
+                )
+                .on_press(move |_: Event<PressEventData>| press(status, ask))
+                .child(Control::new(label))
+        });
+
+        // `fill`, not the hug this column would otherwise take: the note above is a `fill`
+        // child, and a `fill` child of a hugging parent fills whatever the *widest sibling*
+        // came to — here the brand row, about half the rail. The size has to land on the node
+        // the rail lays out (AGENTS.md §3), which is this wrapper.
+        let brand = rect()
+            .width(Size::fill())
+            .vertical()
+            .spacing(SP_2)
+            .padding(Gaps::new(0., SP_2, SP_5, SP_2))
+            .child(brand)
+            .maybe_child(note)
+            .maybe_child(action);
 
         // The current destination. `selected` outranks hover in the row's own dress, so the
         // pill stays put under the pointer, which is what a "you are here" marker should do.

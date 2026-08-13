@@ -27,6 +27,7 @@ use crate::menu::MenuScope;
 use crate::platform::{self, WindowKind};
 use crate::state::{use_share_config, use_updates, AppCtx};
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
+use crate::updater::{UpdateAsk, UpdateConfirm};
 
 // `%[no_ext]`: the window's dress is read by four sibling views (title bar · rail · pane ·
 // row) rather than by one `Launcher` component, so there's no type for the generated
@@ -100,6 +101,10 @@ impl App for LauncherApp {
             let app = self.app.clone();
             move || app
         });
+        // The restart-to-update question's slot (UP-03), before the registration below so it
+        // can be handed over with the scope: the menubar's Check for Updates… carries no chord
+        // to synthesize, so the focused window has to point it at the dialog it mounts.
+        let update_ask = use_provide_context(|| State::create(None::<UpdateAsk>));
         // Join the live window registry, so "open the launcher" finds this one instead of
         // opening a second, and a project window can tell whether it is the last one.
         //
@@ -107,7 +112,11 @@ impl App for LauncherApp {
         // lists and Open…, but neither Close Project nor an open path — there is no project
         // here to close, and nothing to open *into*, so a recent opens a window and this one
         // stands down.
-        platform::use_register_window(&self.app, || WindowKind::Launcher, MenuScope::Launcher);
+        platform::use_register_window(
+            &self.app,
+            || WindowKind::Launcher,
+            MenuScope::Launcher(update_ask),
+        );
         // The agent-access server's other reconciler. There is always at least one *workspace*
         // window alive — the launcher takes the last project's place — so mounting it on both
         // kinds is what makes the setting still live when every project is closed. Idempotent,
@@ -136,6 +145,13 @@ impl App for LauncherApp {
             // wordmark, the nav pill's label and its glyph — inherits it; without it they
             // fall back to Freya's base-theme default rather than this theme's ramp.
             .color(use_roles().get(Role::Text))
+            // The restart confirm (UP-03), first on purpose: while it is up, its barrier
+            // consumes keys before every listener below it in document order — including the
+            // ⌘Q catch-all at the foot of this root.
+            .child(UpdateConfirm {
+                ask: update_ask,
+                status: self.app.updates,
+            })
             .child(TitleBar)
             .child(
                 rect()

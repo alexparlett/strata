@@ -4,8 +4,8 @@
 //!
 //! **Why app-global.** There is one running app to update, so there is one answer to "is there
 //! a newer release", and the surfaces that show it live in different windows (the launcher
-//! rail, a project window's palette command). Per window it would be two bugs at once: a check
-//! per window against the same endpoint, and a download staged twice.
+//! rail, the restart confirm each workspace root mounts). Per window it would be two bugs at
+//! once: a check per window against the same endpoint, and a download staged twice.
 //!
 //! **Not persisted**, on [`Probes`](super::Probes)' reasoning. A check result is a fact about a
 //! request made minutes ago, and an "up to date" restored from disk at launch would be a claim
@@ -147,7 +147,7 @@ pub fn check(status: UpdateStatus) {
                 page_url: offer.page_url,
                 asset: offer.asset,
             },
-            Err(why) => Update::Failed { why },
+            Err(why) => failed(why),
         };
         park(settled);
         drop(working);
@@ -159,11 +159,6 @@ pub fn check(status: UpdateStatus) {
 
 /// **Download, unpack and verify the offered update.** A no-op unless the status is an offer
 /// carrying an archive.
-#[allow(
-    dead_code,
-    reason = "the press is UP-03's launcher affordance and palette command; this task owns the \
-              action, that one owns the surface (AGENTS.md §5)"
-)]
 pub fn download(status: UpdateStatus) {
     let mut status = status;
     let offered = match &*status.peek() {
@@ -201,7 +196,7 @@ pub fn download(status: UpdateStatus) {
                 page_url,
                 staged,
             },
-            Err(why) => Update::Failed { why },
+            Err(why) => failed(why),
         };
         park(settled);
         drop(working);
@@ -231,11 +226,6 @@ pub fn download(status: UpdateStatus) {
 /// The status is deliberately left on `Ready`. Nothing has happened yet that a cancelled quit
 /// would have to undo — [`abandon_install`] only has to forget the intent — and a status that
 /// said "installing" would be a claim about work that has not started and may never.
-#[allow(
-    dead_code,
-    reason = "the press is UP-03's UpdateConfirm dialog; this task owns the action, that one \
-              owns the surface (AGENTS.md §5)"
-)]
 pub fn install(status: UpdateStatus) {
     let mut status = status;
     let staged = match &*status.peek() {
@@ -245,11 +235,10 @@ pub fn install(status: UpdateStatus) {
     let Site::Writable(target) = install_site() else {
         // UP-03's surfaces offer the release page rather than this press when the site is not
         // writable, so arriving here means the site changed under a running app.
-        status.set(Update::Failed {
-            why: "Strata cannot be replaced where it is installed. Open the release page to \
-                  install the update by hand."
-                .into(),
-        });
+        status.set(failed(
+            "Strata cannot be replaced where it is installed. Open the release page to install \
+             the update by hand.",
+        ));
         return;
     };
     set_pending(Some(Pending {
@@ -311,8 +300,8 @@ pub fn use_updates(status: UpdateStatus, config: ConfigStation) {
         }
         // Peeked, not read: this is a decision made once at startup, and a window that
         // re-derived it every time the setting moved would check again mid-session. The
-        // setting gates only the automatic check — UP-03's manual command calls [`check`]
-        // whatever it says.
+        // setting gates only the automatic check — UP-03's menubar item calls [`check`]
+        // whatever it says, which is why its row is titled "on startup".
         if !config.peek().settings.check_updates {
             return;
         }
@@ -324,6 +313,18 @@ pub fn use_updates(status: UpdateStatus, config: ConfigStation) {
         }
         check(status);
     });
+}
+
+/// **Whatever went wrong, recorded where it was learned.** The one way to build
+/// [`Update::Failed`], because the surfaces deliberately draw *nothing* for it (UP-03: the rail
+/// never nags and a failed check is not chrome) — so if this did not log, a refused signature
+/// and a finished download would be indistinguishable and there would be nothing to diagnose
+/// from. One funnel rather than a `tracing` call remembered at five sites, on the log's own
+/// rule: the fact is recorded by whoever observed it.
+fn failed(why: impl Into<String>) -> Update {
+    let why = why.into();
+    tracing::warn!("{why}");
+    Update::Failed { why }
 }
 
 /// The swap a quit is for.
@@ -386,7 +387,7 @@ fn settle(status: UpdateStatus, ran: Option<()>, lost: &str) {
         return;
     }
     let mut status = status;
-    status.set(Update::Failed { why: lost.into() });
+    status.set(failed(lost));
 }
 
 /// Take a parked status into the slot, if there is one.
@@ -424,7 +425,7 @@ fn reconcile(status: UpdateStatus) {
         Update::Downloading { .. } => "The download did not finish.",
         _ => return,
     };
-    status.set(Update::Failed { why: lost.into() });
+    status.set(failed(lost));
 }
 
 fn set_pending(pending: Option<Pending>) {

@@ -307,6 +307,19 @@ pub fn relaunch(app: &Path) -> Result<(), String> {
         .map_err(|e| format!("Could not start '{}': {e}.", app.display()))
 }
 
+/// **Open a release page in the browser.** The link-out every surface that mentions an update
+/// offers: what changed, and — where this app cannot replace itself ([`Site::ReadOnly`]) — the
+/// download to install by hand.
+///
+/// Here rather than in the app because the page is the updater's own artifact: the URL comes
+/// from the same listing [`check_blocking`] read, and `open` is already this module's way of
+/// reaching Launch Services.
+pub fn open_page(url: &str) {
+    if let Err(e) = Command::new(OPEN).arg(url).spawn() {
+        tracing::error!("could not open '{url}': {e}");
+    }
+}
+
 /// Drop the staging folder a [`download_blocking`] answer lives in.
 ///
 /// From the bundle path alone, because the staging layout is a contract (see the module doc).

@@ -141,7 +141,11 @@ The updater is the one thing that outlives the event loop. It never mutates the 
 the press records the swap and calls the ordinary `quit()`, so every close confirm keeps its say,
 and `main` performs it after `launch` has returned and no window is left. What makes a download
 installable is its signature rather than where it came from — strict `codesign`, the team id, the
-bundle id, failing closed — so the network is untrusted by construction.
+bundle id, failing closed — so the network is untrusted by construction. What it *offers*, and
+what a press means, is one pure answer (`updater::Affordance`) that the launcher rail's version
+line, App ▸ Check for Updates… and the restart confirm all read, so a dev build
+offers nothing, a bundle that cannot be replaced degrades to the release page, and a staged
+update is a restart. The status is app-global; the question the confirm asks is per window.
 
 Config never holds a secret. The one class of secret the app must keep — third-party provider keys
 for the assistant — lives in the OS keystore (`strata_core::secret`, opened once in `main`), and

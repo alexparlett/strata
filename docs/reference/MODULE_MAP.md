@@ -62,7 +62,8 @@ src/platform/owner.rs            P4-16 — **how long a child window may live**:
                                  the folder, a restart changes neither it nor the window id — and
                                  an owner that has closed shows nothing, so it fails the same
                                  comparison rather than needing a clause
-src/menu.rs                      the macOS menubar: App · **File** (Open… · Open Recent ·
+src/menu.rs                      the macOS menubar: **App** (About · Check for Updates… ·
+                                 Settings…) · **File** (Open… · Open Recent ·
                                  Close Project) · Edit. Not static — `app_menu` hands back
                                  `MenuHandles`, and the *focused* window keeps the File menu
                                  pointed at itself (`use_file_menu`): its recents, Close Project
@@ -76,8 +77,9 @@ src/menu.rs                      the macOS menubar: App · **File** (Open… · 
 src/state/mod.rs                 `AppCtx` — the app-globals `main` creates once (themes · config ·
                                  window registry · theme preview · menubar handles · the focused
                                  window's open path · agent access · model listings · provider
-                                 probes · the assistant runtime · the update status), handed to
-                                 every window root as one value rather than as parameters
+                                 probes · the assistant runtime · the update status · the focused
+                                 window's restart-question slot), handed to every window root as
+                                 one value rather than as parameters
 src/agent/                       AA-03 / AA-03b — agent access, the half that outlives any one
                                  window. `AgentCtx` is the pair `main` creates: the **directory**
                                  (lives for the process; windows join and leave it) and the
@@ -124,7 +126,24 @@ src/state/updates.rs             UP-02 — the app-global **update status**: wha
                                  is parked in a process-global the next mount adopts, and the
                                  install intent is another one — the swap happens in `main` after
                                  `launch` returns. The mechanism itself is `strata_core::update`;
-                                 the surfaces are UP-03
+                                 the surfaces are `src/updater.rs`
+src/updater.rs                   UP-03 — the updater's **surfaces**, the half that belongs to no
+                                 single window (so not an `apps/` folder, which is one per OS
+                                 window). `Affordance::of(status, site)` is the one answer to "what
+                                 does the app offer right now" — a pure, unit-tested function, so
+                                 the launcher rail's label, App ▸ Check for Updates… and the
+                                 dialog cannot each restate the rules: a dev build offers
+                                 nothing, a release with no archive (or a bundle that cannot be
+                                 replaced) degrades to the release page, a staged update is a
+                                 restart. `press` is the one gesture behind all four, each arm a
+                                 call into `state::updates`. `UpdateConfirm` is the restart
+                                 question — one component, mounted at both workspace window roots,
+                                 over a **per-window** `AskSlot` (two project windows must not both
+                                 raise it). `UpdateRequest` is the app-global App ▸ Check for
+                                 Updates… records its press in: that item has no chord to
+                                 synthesize *and* no Freya scope (the menu handler runs on the
+                                 renderer thread, where `spawn_forever` panics), so the focused
+                                 window drains it from `use_file_menu`'s effect
 src/state/theme_preview.rs       the Settings window's **live theme preview** — the one half of
                                  its uncommitted draft every other window reads, so a pick
                                  repaints them all before it is saved. A second, higher-priority
@@ -251,7 +270,8 @@ src/components/                  shared component library
 src/apps/launcher/               the launcher / welcome window (P4-02, `Launcher.dc.html`)
   mod.rs                         root + window config + the `launcher` component theme
   model.rs                       ProjectList: the filter + PINNED/RECENT split (unit-tested)
-  views/                         title_bar · rail (SidebarRow) · projects · row · open (rfd pick)
+  views/                         title_bar · rail (SidebarRow — and the version line, which is
+                                 UP-03's update affordance) · projects · row · open (rfd pick)
 src/apps/settings/               the settings window (P4-03, `Settings.dc.html`) — one app-wide,
                                  pinned above its opener. All six categories are built
   mod.rs                         root + window config + the `settings` component theme, the
@@ -297,8 +317,8 @@ src/apps/settings/               the settings window (P4-03, `Settings.dc.html`)
                                  corrects would be a field that lies
     system.rs                    P4-06 — the System pane: reopen-on-startup · default project
                                  directory · **Opening a project** · confirm-on-running-close ·
-                                 query-history limit. All five already had their reader, so this
-                                 is the control; the open-pref pill is the one worth naming — the
+                                 check-for-updates (UP-03) · query-history limit. All six already
+                                 had their reader, so this is the control; the open-pref pill is the one worth naming — the
                                  This/New prompt's "Remember" was the only writer, and it is
                                  one-way, so nothing put the answer back to Ask. The history
                                  floor is `strata_core::config::HISTORY_MIN`, the same floor

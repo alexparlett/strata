@@ -17,7 +17,7 @@
 //! - the model listings satellite ([`listings`]) — what each provider last reported, which
 //!   both the Settings model picker and the chat composer choose from;
 //! - the update status ([`updates`]) — what the updater last learned about the newest release,
-//!   which the launcher rail and a project window's palette command both act on.
+//!   which the launcher rail and the menubar's Check for Updates… both act on.
 //!
 //! Plus the theme registry, which is immutable after discovery and so is a plain `Arc`
 //! rather than a store.
@@ -40,6 +40,7 @@ use crate::agent::AgentCtx;
 use crate::menu::MenuState;
 use crate::platform::{FocusedOpen, WindowRegistry};
 use crate::theme::ThemesCtx;
+use crate::updater::UpdateRequest;
 
 /// Everything `main` creates once and every window needs: the app-globals plus the shared
 /// theme registry.
@@ -87,6 +88,10 @@ pub struct AppCtx {
     /// there is one running app to update, so one answer, and the surfaces that show it live in
     /// different windows. Not persisted; see [`updates`].
     pub updates: UpdateStatus,
+    /// Set when App ▸ Check for Updates… has been pressed and no window has carried it out yet
+    /// (UP-03) — see [`UpdateRequest`]. Beside `open` because it is there for the same reason:
+    /// a menubar item that cannot reach its window through the keyboard pipeline.
+    pub update_request: UpdateRequest,
 }
 
 /// Every field is a handle on a process-wide singleton created before the first window, so

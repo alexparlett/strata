@@ -8,11 +8,12 @@ name **Strata** (uneven sedimentary layers = data strata).
 
 The app is built on **Freya 0.4 (Skia/native)**. It began as a Dioxus (wry/webview) app and was
 rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The open work
-(`.claude/tasks/`) is the updater's surfaces (UP-03) and design polish (phase 5). The assistant
+(`.claude/tasks/`) is design polish (phase 5). The assistant
 workstream is complete — the loop, the pane, the model listings, and conversations that survive
 the window (AS-07's `.strata/chats/`) — and so is the chart workstream (the marks, the trendline
-and the Shape panel included); the updater has its release artifact and its whole mechanism
-(UP-01/UP-02), with only the affordances left to draw.
+and the Shape panel included) and the **updater**: the release artifact, the mechanism and the
+surfaces (UP-01/02/03 — the launcher rail's version line, the Settings toggle,
+App ▸ Check for Updates… and the restart confirm).
 
 This file is the **map** — build, layout, and where everything is. @AGENTS.md is the **bar** — the
 rules, one line each, imported into every session alongside this file; hold all work to it. Both
@@ -224,8 +225,8 @@ is self-contained — current state, what to build, acceptance, Freya components
 pick up a single task (e.g. in a worktree) without loading the rest. Read the top `README.md`
 first (status legend, what remains, known bugs).
 
-The numbered phases are done (their folders removed), and so are the assistant and chart
-workstreams; what remains is the updater's surfaces (UP-03) and design polish (phase 5). **What each finished task settled — including several
+The numbered phases are done (their folders removed), and so are the assistant, chart and
+updater workstreams; what remains is design polish (phase 5). **What each finished task settled — including several
 corrections that must not be re-litigated** (the catalog is a store and not a query; diagnostics
 are a reconciliation; a log is recorded by its observer; only real facts) — is
 [docs/reference/SETTLED_TASKS.md](docs/reference/SETTLED_TASKS.md), with the rule form of each in

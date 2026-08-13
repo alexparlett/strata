@@ -142,7 +142,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   against connections: the reader's keys are the def's, the store's are refused toward
   Connections on the key alone), and ED-11 landed the completion offer over all of them in one
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
-- **Updater** ([`workstream-updater/`](workstream-updater/README.md), UP) — 🟡 in-app updates.
+- **Updater** ([`workstream-updater/`](workstream-updater/README.md), UP) — ✅ in-app updates.
   **UP-01 ✅** (2026-08-12): the release pipeline grows a `ditto`-zipped `.app` beside the DMG,
   the app compiles in its team identity, and a signed build cross-checks the two so it cannot
   ship signed by a team its own updater would refuse. **v0.3.1 is cut** and carries the zip.
@@ -150,10 +150,14 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   Releases check, an https-only download, `ditto` unpack, and verification against Apple's chain
   failing closed) and `state::updates` (the app-global status, the actions, the one startup
   check). The install is a quit: the press records the swap and `main` performs it after `launch`
-  returns, which it does. Verified end to end against v0.3.1, refusals included. Open: the
-  surfaces — launcher-rail affordance, one restart confirm, the Settings **row** for the
-  already-landed `check_updates` field, a palette command (UP-03). Hand-rolled rather than
-  Sparkle, deliberately; the workstream README records the settled decisions.
+  returns, which it does. Verified end to end against v0.3.1, refusals included.
+  **UP-03 ✅** (2026-08-13): the surfaces — the launcher rail's version line, the Settings row for
+  the already-landed `check_updates` field, App ▸ Check for Updates… on the menubar (asked for
+  late, and the reason the offer became one pure decision), and one restart confirm mounted at
+  both workspace roots. `updater::Affordance` is that decision and `updater::press` the one
+  gesture over it, so no surface restates a rule. A palette row was built and then cut.
+  **Workstream done.** Hand-rolled rather than Sparkle, deliberately; the workstream README
+  records the settled decisions.
 
 ## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 
@@ -168,12 +172,11 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Updater workstream** — UP-03 is what remains; UP-01 and UP-02 landed 2026-08-12 with the
-   mechanism verified against the published v0.3.1.
-2. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
+1. **Phase 5 polish** — the consistency + finish pass, largely theme/token work. All that remains.
 
 (The **Assistant** workstream is closed — AS-07 landed 2026-08-11 with AS-03 behind it — and so
-is the **Chart** workstream: 09/10/11 built and 05/07 cut, 2026-08-12.)
+are the **Chart** workstream, 09/10/11 built and 05/07 cut on 2026-08-12, and the **Updater**,
+UP-03 landing its surfaces on 2026-08-13.)
 
 ## Sourcing
 

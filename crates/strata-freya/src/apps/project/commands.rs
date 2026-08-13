@@ -27,6 +27,12 @@
 //!
 //! ## What is deliberately absent
 //!
+//! **Check for updates** is not here either. It was built and removed: the updater already has
+//! the two surfaces that are about updates — the launcher rail's version line and App ▸ Check
+//! for Updates… — and a third place to keep in step with them buys a gesture nobody reaches for
+//! by name. `updater::press` is still the one funnel, so putting it back is one method with no
+//! new mechanism behind it.
+//!
 //! The design canvas lists an **Export results…** row. It is not built: an
 //! [`ExportLaunch`](crate::apps::export::ExportLaunch) is assembled from the results pane's live
 //! sort and the page it has in hand, so this registry can neither build one nor tell whether

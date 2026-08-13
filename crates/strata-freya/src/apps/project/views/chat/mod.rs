@@ -310,6 +310,7 @@ mod tests {
         Probes,
     };
     use crate::theme::{strata_theme, ThemesCtx};
+    use crate::updater::create_global_update_request;
 
     /// A config whose AI half is `ai` — everything the composer branches on.
     fn config(ai: Ai) -> AppConfig {
@@ -402,6 +403,8 @@ mod tests {
                     // Idle and never asked: this pane makes no check, and a real one would
                     // dial out from a test.
                     updates: create_global_updates(),
+                    // Nothing to drain: no menubar and no window registration here.
+                    update_request: create_global_update_request(),
                 });
                 chats
             },

@@ -1,14 +1,20 @@
-//! **Settings ▸ Appearance & behaviour ▸ System** (P4-06, design `Settings.dc.html`) — the five
+//! **Settings ▸ Appearance & behaviour ▸ System** (P4-06, design `Settings.dc.html`) — the six
 //! settings that shape how the app itself behaves: what it reopens, where the folder picker
-//! starts, where a project opens, whether a running query is worth a question, and how much
-//! query history a project keeps.
+//! starts, where a project opens, whether a running query is worth a question, whether the
+//! updater asks GitHub at startup, and how much query history a project keeps.
 //!
 //! Every control writes [`SettingsCtx::draft`] and stops there; the footer's Apply commits. As
 //! on the data-display pane, each of these already has its reader waiting on the other side of
 //! that commit — startup routing reads `reopen_on_startup`, `platform::pick_project_folder`
 //! the default directory, `platform::open::decide` the open preference, the close confirm
-//! `confirm_close_running`, and the history satellite `max_history` — so this task is the
-//! control, not the wiring.
+//! `confirm_close_running`, the updater's startup check `check_updates`, and the history
+//! satellite `max_history` — so this task is the control, not the wiring.
+//!
+//! **Check for updates on startup** gates only the automatic check (UP-02/UP-03) — App ▸ Check
+//! for Updates… and the launcher rail's action run whatever it says. That is in the title
+//! rather than in subtext under it: "on startup" is the whole of what the row does, and a
+//! sentence restating it is the near-duplicate wording AGENTS.md §3 says to merge. Hence the
+//! empty hint in the index, like `Theme`'s.
 //!
 //! **Opening a project** is the row worth naming. Until now the only thing that wrote
 //! `open_pref` was the This/New prompt's "Remember, don't ask again", which is one-way in
@@ -43,13 +49,14 @@ impl Component for SystemPane {
         let ctx = use_consume::<SettingsCtx>();
         // Read in a block: the guard has to be gone before anything below takes a write one on
         // the same `State`.
-        let (reopen, default_dir, open_pref, confirm_close, max_history) = {
+        let (reopen, default_dir, open_pref, confirm_close, check_updates, max_history) = {
             let draft = ctx.draft.read();
             (
                 draft.reopen_on_startup,
                 draft.default_project_dir.clone(),
                 draft.open_pref,
                 draft.confirm_close_running,
+                draft.check_updates,
                 draft.max_history,
             )
         };
@@ -103,6 +110,17 @@ impl Component for SystemPane {
                     })
                     .child(Switch::new().toggled(confirm_close).on_toggle(move |()| {
                         ctx.edit(|s| s.confirm_close_running = !s.confirm_close_running);
+                    })),
+            )
+            .child(
+                Anchor::CheckUpdates
+                    .row()
+                    .trailing()
+                    .on_press(move |_: Event<PressEventData>| {
+                        ctx.edit(|s| s.check_updates = !s.check_updates);
+                    })
+                    .child(Switch::new().toggled(check_updates).on_toggle(move |()| {
+                        ctx.edit(|s| s.check_updates = !s.check_updates);
                     })),
             )
             .child(

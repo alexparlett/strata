@@ -203,6 +203,7 @@ mod interaction {
     use crate::platform::{create_global_open, create_global_windows};
     use crate::state::{create_global_theme_preview, create_global_updates, ConfigStation, Probes};
     use crate::theme::{strata_theme, ThemesCtx};
+    use crate::updater::create_global_update_request;
 
     const HERE: &str = "/data/sales";
     const THERE: &str = "/data/ml_features";
@@ -263,6 +264,8 @@ mod interaction {
                     // Idle: the prompt makes no check, and a real one would dial out from a
                     // test.
                     updates: create_global_updates(),
+                    // Nothing to drain: no menubar and no window registration here.
+                    update_request: create_global_update_request(),
                 });
                 open
             },

@@ -33,6 +33,7 @@ use crate::state::{
     create_global_theme_preview, create_global_updates, install_pending, AppCtx,
 };
 use crate::theme::ThemesCtx;
+use crate::updater::create_global_update_request;
 
 mod agent;
 mod apps;
@@ -43,6 +44,7 @@ mod platform;
 mod state;
 mod task;
 mod theme;
+mod updater;
 
 fn main() {
     // **Before anything app-global.** `strata mcp <project>` is a headless MCP server, not a
@@ -129,6 +131,11 @@ fn main() {
     // where a task has a scope to live in. Not persisted — a check result is a fact about a
     // request made minutes ago.
     let updates = create_global_updates();
+    // …and beside it, the slot App ▸ Check for Updates… records its press in (UP-03), for the
+    // same reason `focused_open` exists: that item carries no chord to synthesize. It cannot
+    // act from the menu handler either — the renderer thread has no Freya context to spawn in —
+    // so the focused window drains this.
+    let update_request = create_global_update_request();
     // The assistant's runtime (AS-02/AS-04): **one per app**, because a runtime is threads and
     // several conversations streaming at once are several tasks on the same two. Deliberately
     // *not* the MCP server's runtime, whose lifetime is a setting — the chat pane must not stop
@@ -156,6 +163,7 @@ fn main() {
         probes,
         assistant,
         updates,
+        update_request,
     };
     let menu_app = app.clone();
     let launch_config = with_embedded_fonts(LaunchConfig::new())

@@ -54,6 +54,7 @@ use crate::state::{
 };
 use crate::task::offload;
 use crate::theme::{peek_selection, use_strata_theme, window_background};
+use crate::updater::{AskSlot, UpdateConfirm};
 use async_io::Timer;
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -251,6 +252,13 @@ impl App for ProjectApp {
             restart: engine_restart,
         };
         use_provide_context(move || open);
+        // The restart-to-update question's slot (UP-03). On the **window** layer, beside the
+        // open path and for the same two reasons: it must survive a re-root (an update is a
+        // fact about the app, not about the project on screen), and the menubar has to be able
+        // to reach it — `use_register_window` below hands it over with the scope. Not into
+        // context, unlike the confirm slots in the subtree: its only two readers are that scope
+        // and the `UpdateConfirm` mounted below, both of which are handed it directly.
+        let update_ask: AskSlot = use_state(|| None);
 
         // Join the app's live window registry for this window's lifetime: it's what makes
         // "this project is already open" a focus instead of a second window, and what tells
@@ -265,7 +273,7 @@ impl App for ProjectApp {
         let window_id = use_register_window(
             &self.app,
             move || WindowKind::Project(open.root.read().to_string_lossy().into_owned()),
-            MenuScope::Project(open),
+            MenuScope::Project(open, update_ask),
         );
         // Keep the agent-access server in step with its setting. On the **window** layer, not
         // the project subtree: a re-root or an engine restart must not stop a server the app
@@ -359,6 +367,16 @@ impl App for ProjectApp {
             .child(OpenPrompt {
                 open,
                 app: self.app.clone(),
+            })
+            // The restart-to-update confirm (UP-03), beside the prompt above and after it: a
+            // question about the project you are opening outranks one about the app. Here on
+            // the window layer with its slot, so a re-root cannot drop a question the user has
+            // been asked. Confirming is an ordinary quit, so the project's own close confirm
+            // still gets its say afterwards — this dialog asks 'restart now?', never 'lose the
+            // running query?'.
+            .child(UpdateConfirm {
+                ask: update_ask,
+                status: self.app.updates,
             })
             .child(ProjectRoot {
                 root,

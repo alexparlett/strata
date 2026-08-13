@@ -1,7 +1,7 @@
-# UP-03 · Surfaces: launcher affordance, dialog, setting, palette command
+# UP-03 · Surfaces: launcher affordance, dialog, setting, menubar item
 
-**Workstream:** Updater · **Status:** ⬜ · **Depends on:** UP-02 (`UpdateStatus` + actions — all
-landed 2026-08-12)
+**Workstream:** Updater · **Status:** ✅ (2026-08-13) · **Depends on:** UP-02 (`UpdateStatus` +
+actions — all landed 2026-08-12)
 
 ## What UP-02 left for this task
 - `state::updates`: `Update` (the status enum), `UpdateStatus` on `AppCtx` as `app.updates`,
@@ -16,13 +16,13 @@ landed 2026-08-12)
   affordance shows nothing at all when it is `Unbundled`.
 - `Update::Downloading` carries `got` / `total` for step 2's progress text, and `Update::Ready`
   carries `version` and `page_url` for step 3's dialog body and its link-out.
-- A `Ready` status is deliberately **not** re-checked, so the palette command is a no-op there
+- A `Ready` status is deliberately **not** re-checked, so a manual check is a no-op there
   as well as while `Checking` / `Downloading`.
 
 ## Goal
 The mechanism becomes visible: a setting that gates the automatic check, an affordance where the
-version already shows, one confirm-shaped dialog in front of the restart, and a palette command
-for checking on demand. Deliberately quiet — no toast system, no badge on every window.
+version already shows, one confirm-shaped dialog in front of the restart, and one item for
+checking on demand. Deliberately quiet — no toast system, no badge on every window.
 
 ## Current state (verified 2026-08-12)
 - The launcher rail prints the version — `Meta::new(env!("CARGO_PKG_VERSION"))` at
@@ -83,22 +83,80 @@ for checking on demand. Deliberately quiet — no toast system, no badge on ever
    or start the download — same presses as the rail, through the same actions; the command adds
    no second implementation). While `Checking`/`Downloading`, the command is a no-op re-press.
 5. **Project-window visibility (kept minimal, on purpose).** No persistent indicator in v1: the
-   launcher rail and the palette command are the surfaces. If an in-project indicator is wanted
+   launcher rail and the menubar item are the surfaces. If an in-project indicator is wanted
    later it is a phase-5 design question (where does app chrome live in a window that is all
    panes?) — note it there rather than inventing chrome here.
 
 ## Acceptance
-- [ ] Toggle in Settings ▸ System, searchable, applied through the draft/apply funnel; off means
+- [x] Toggle in Settings ▸ System, searchable, applied through the draft/apply funnel; off means
       no startup check, and the manual command still works.
-- [ ] Launcher rail offers the update through its existing version line; no state change for
+- [x] Launcher rail offers the update through its existing version line; no state change for
       up-to-date/failed.
-- [ ] One `UpdateConfirm`, mounted at launcher and project roots, slot pattern, borrow-trap
+- [x] One `UpdateConfirm`, mounted at launcher and project roots, slot pattern, borrow-trap
       safe; confirm quits through the normal path (close confirms still fire), dismiss keeps
       `Ready`.
-- [ ] Palette command exists in project windows, no keybinding, acts through the same actions
-      as the rail.
-- [ ] All user-facing text in the IDE register (AGENTS.md §3): terse, single-quoted
+- [x] ~~Palette command~~ — **cut**, see below. Its job is App ▸ *Check for Updates…*, which acts
+      through the same actions as the rail and carries no keybinding either.
+- [x] All user-facing text in the IDE register (AGENTS.md §3): terse, single-quoted
       identifiers, no glyphs.
+
+## What was built, and the four things the plan did not have
+
+Everything above landed as written **except step 4**, which was built and then cut, and the plan
+gained a **menubar item** (App ▸ *Check for Updates…*) — asked for while the task was in flight,
+and the thing that shaped the rest.
+
+**0. The palette row is gone.** It shipped, and was removed on the same review pass that added the
+menubar item: the launcher rail's version line and App ▸ *Check for Updates…* are already the two
+places the app talks about an update, and a third surface to keep in step with them buys a gesture
+nobody reaches for by name. `commands.rs`'s "what is deliberately absent" note records it beside
+the Export row, because the cost of putting it back is one method — `updater::press` is still the
+funnel — and the reason not to is a judgement rather than an obstacle.
+
+**1. One pure decision, `updater::Affordance`, rather than four surfaces each restating the
+rules.** The plan describes the same conditions three times over (steps 2, 3 and 4) — show
+nothing on `Idle`/`UpToDate`/`Failed`, degrade to the release page when the site is not writable,
+open the confirm on `Ready`. With a fourth surface arriving that is exactly the shape that goes
+wrong in one place and right in three, so `Affordance::of(&Update, &Site)` is the one answer and
+`press` is a thin match over it, each arm a call into `state::updates`. Both are in
+**`src/updater.rs`**, a new top-level module: `apps/` is one folder per OS window and this is read
+by two of them. The rules are unit-tested without a window; `press` deliberately is not, because
+it asks `install_site()` and a test binary is never a bundle — handing the site in to make it
+testable is AGENTS.md §1's refused shape.
+
+**2. The rail draws a note *and* an action, not one line.** The plan's labels name the version
+(`Update to 0.4.0`), which does not fit a 200px rail once the degraded wording has to say it
+opens a page. So the version moved to a quiet `Meta` line above a short accent action — and that
+line does the download's progress too, so exactly one vocabulary covers "what is on offer" and
+"how it is getting on". `Restart` says *downloaded* where `Get` says *available*, because the two
+differ in what the press below costs.
+
+**3. The confirm slot is the project *window's*, not the loaded subtree's** (the plan said
+`app.rs:763-796`, inside `ProjectLoaded`). Two reasons, both from the menubar: `use_register_window`
+is called on the window layer, so that is where the `MenuScope` can carry the slot; and an update
+is a fact about the app, so a re-root must not drop a question the user has been asked. It mounts
+beside `OpenPrompt`, the window layer's existing modal.
+
+The menubar item itself needed two more pieces. It carries **no chord**, so unlike every other
+custom item it cannot reach its window through the keyboard pipeline — and it cannot act directly
+either: `handle_menu_event` runs on the renderer thread, outside Freya's current context, where
+the `spawn_forever` inside `check`/`download` panics (and a release build catches that and exits
+the process). **A first version did exactly that and was caught in review.** So the press sets
+`AppCtx::update_request`, a plain `bool` a context-free `State::set` can write, and the focused
+window drains it from `use_file_menu`'s effect where there *is* a scope to spawn in — AGENTS.md
+§3's rule for a press with no scope of its own. Open Recent sits on the same edge and is the
+precedent: it hand-rolls its open rather than calling `OpenCtx::apply`, whose `NewWindow` arm is a
+`spawn_forever`. The item is disabled outside a bundle as well as over a panel, since the updater
+is inert in a `cargo run` build and an enabled item there is the failure `Gate` exists to prevent.
+
+Two smaller things review also caught, both fixed: `Update::Failed` was written five times and
+read nowhere, so every failure — the signature refusals included — was silent in a design whose
+own comment called it "a log line rather than chrome"; `state::updates::failed` is now the one
+constructor and it logs. And the dialog promised that a window with a running query still asks
+before it closes, which is false with `confirm_close_running` off; it now says a window that
+*would* ask before quitting still asks.
+
+Step 5 stands: no persistent in-project indicator.
 
 ## References
 - `apps/launcher/views/rail.rs:68` — the version line.
