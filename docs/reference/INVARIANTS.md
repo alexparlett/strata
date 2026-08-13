@@ -1043,7 +1043,16 @@ Things that must not regress. Each was fought for once already.
   the spool that gives the table its data has none to be written from. The wait is the
   **existing** one: `Status::Registering(name)` makes Save read "Validating…", and
   `use_watch_registration` closes the window when that row lands `Ready`, which the fold makes
-  true in the same breath. Nothing new watches anything.
+  true in the same breath. Nothing new watches anything. **And the window will not close while
+  that create is in flight** (`Status::Creating`, answered once by `Status::holds_window` for
+  both Cancel and Esc): the fold runs *after* the spawned task's await, and
+  `ddl::tables::create` publishes its spool by **rename** before its own last await, so a window
+  dismissed mid-create would leave a data directory under `.strata/tables/` that no def points at
+  and `tidy_strata_dir` never sweeps. The engine's abort is not the gap — dropping `Engine::run`'s
+  future runs `DispatchGuard`'s drop, which aborts the detached task — but an abort is delivered
+  at the next **await**, and `create` has none left after `register_external`. `Registering` is
+  deliberately *not* held: that pass is the project window's and answers on the catalog row
+  whether this window is watching or not.
 - **A form over a statement authors only what a form can be wrong about; every other refusal is
   the arm's own, reached rather than restated.** The panel's own vocabulary is four sentences (a
   row with no name, a row with no type, a table with no name, a table with no columns).

@@ -64,7 +64,15 @@ impl Component for Footer {
         let to = use_settle();
         let platform = use_hook(Platform::get);
 
-        let registering = matches!(*ctx.status.read(), Status::Registering(_));
+        // Two busy states, and they differ in exactly one thing: whether the work is **this**
+        // window's. A registration belongs to the project window's scan driver and lands on the
+        // catalog row regardless, so Cancel stays live through it; a create is running here, and
+        // the fold that makes it durable is on the other side of this window's own task
+        // (`Status::Creating`).
+        let status = ctx.status.read().clone();
+        let registering = matches!(status, Status::Registering(_));
+        let creating = status.holds_window();
+        let busy = status.busy();
         // The project window's driver **drops** a request raised while a pass is already in
         // flight, and nothing retries it — so pressing Save then would leave the row `Loading`
         // for good. The sidebar's ↻ answers this by disabling itself for the duration; so does
@@ -86,8 +94,13 @@ impl Component for Footer {
         let cancel = {
             Button::new()
                 .height(Size::px(ACTION_HEIGHT))
-                // Always available: a registration in flight is the project window's, and it
-                // answers on the catalog row whether this window is here to watch or not.
+                // Available through a *registration*: that work is the project window's, and it
+                // answers on the catalog row whether this window is here to watch or not. Not
+                // through a **create**, which is this window's own — closing now drops the task
+                // before the fold, and `ddl::tables::create` publishes its spool by rename
+                // before its last await, so the data would be left with no def pointing at it.
+                // Esc is gated on the same state (`apps::configure`'s `Command::Cancel`).
+                .enabled(!creating)
                 .on_press(move |_: Event<PressEventData>| platform.close_current_window())
                 .child(Control::new("Cancel"))
         };
@@ -95,15 +108,16 @@ impl Component for Footer {
         let save = Button::new()
             .filled()
             .height(Size::px(ACTION_HEIGHT))
-            .enabled(!registering && note.is_none())
+            .enabled(!busy && note.is_none())
             .on_press({
                 move |_: Event<PressEventData>| {
                     save(ctx, project, rescan, engine.clone(), report, to);
                 }
             })
-            .child(Control::new(match registering {
-                true => "Validating…",
-                false => "Save",
+            .child(Control::new(match (creating, registering) {
+                (true, _) => "Creating…",
+                (_, true) => "Validating…",
+                _ => "Save",
             }));
 
         rect()
@@ -124,7 +138,7 @@ impl Component for Footer {
                     // wrote, and it has its own block at the end of the body.
                     .child(
                         rect().width(Size::flex(1.)).maybe_child(
-                            note.filter(|_| !registering).map(|why| {
+                            note.filter(|_| !busy).map(|why| {
                                 Path::new(why).color(form.hint_color).max_lines(2).wrap()
                             }),
                         ),
@@ -312,19 +326,27 @@ fn save(
 /// in the log. Registering a def here instead would be a second way to make a table, and the
 /// spool that gives it its data has no def to be written from.
 ///
-/// The status carries the wait exactly as a registration does, so the button reads "Validating…"
-/// and `use_watch_registration` closes the window when the row it names lands `Ready` — which the
-/// fold makes true in the same breath. Nothing new watches anything.
+/// **The window is held open until the fold lands** (`Status::Creating`), and that is the whole
+/// reason this state exists beside `Registering`. The task is spawned here, and everything that
+/// makes the create durable — the def, the catalog row, the epoch, the log — runs *after* its
+/// await. `ddl::tables::create` publishes its spool by **rename** before its own last await
+/// (`register_external`), so a window closed mid-create drops this task at a point where the data
+/// directory is already under its real name: no def would ever point at it, and `tidy_strata_dir`
+/// sweeps only `.tmp-…`, so it would be permanent litter. Cancel and Esc are both refused while
+/// this state holds; the moment the fold has landed it becomes `Registering`, and
+/// `use_watch_registration` closes the window on the row the fold just made `Ready`.
 ///
-/// `spawn` from the press is safe here for the reason it usually is not: nothing this press
-/// unmounts owns the task. The window closes only after the fold, and a window torn down before
-/// then takes the create with it, which is the same bargain every other run in the app strikes.
+/// The engine's own abort is not the gap: dropping `Engine::run`'s future runs `DispatchGuard`'s
+/// drop, which aborts the detached task. But an abort is delivered at the next **await**, and
+/// `create` has none left after `register_external` — so a create interrupted late finishes on
+/// the engine's runtime with nobody left to receive its report. Holding the window is what
+/// removes the window in which that can happen.
 fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
     let Some(sql) = ctx.draft.peek().create_statement() else {
         return;
     };
     let name = ctx.draft.peek().name.trim().to_string();
-    ctx.status.set(Status::Registering(name));
+    ctx.status.set(Status::Creating(name.clone()));
     spawn(async move {
         let ws = WsId(Uuid::new_v4().as_u128());
         let tag = RunTag(Uuid::new_v4().as_u128());
@@ -336,7 +358,11 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
             // the external path above; `persisted_defs` has already logged the cause in the
             // project window, so this window only owes them not to claim the save happened.
             Ok(RunOutcome::Statement(report)) => {
-                if !settle(to, &engine, &report) {
+                if settle(to, &engine, &report) {
+                    // The fold has landed, so the work is no longer this window's to protect —
+                    // and the row it named is already `Ready`, which is what closes the window.
+                    ctx.status.set(Status::Registering(name));
+                } else {
                     ctx.status.set(Status::Failed(
                         "The table was created, but the project file could not be written, so \
                          it will be gone when this project is reopened."

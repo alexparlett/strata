@@ -86,7 +86,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   register anything itself.** One visible statement, dispatched through `Engine::run` on a
   **minted** `WsId`, its report handed to `state::settle` — never a second `apply`, persist path
   or epoch bump. Save keeps its `Status::Registering` wait, so `use_watch_registration` closes the
-  window on the row the fold just landed.
+  window on the row the fold just landed — and **holds the window shut while its own create is in
+  flight** (`Status::holds_window`), because the fold is on the far side of that task's await and
+  the spool is already published by rename before it.
 - **A form over a statement authors only what a form can be wrong about; every other refusal is
   the arm's own, reached rather than restated.** `duplicate_column`, `unenforced_clause`,
   `fold_ident`, `ProjectState::name_taken`. **The type field is free text probed per row** —

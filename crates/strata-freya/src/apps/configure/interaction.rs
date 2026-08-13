@@ -425,3 +425,43 @@ fn configure_internal_preview() {
         env!("CARGO_MANIFEST_DIR")
     ));
 }
+
+/// **The window will not close while it is running the create itself.**
+///
+/// The one piece of work in this window that is *this* window's: the fold that writes the def,
+/// the catalog row and the log runs after the spawned task's await, and `ddl::tables::create`
+/// publishes its spool by rename before its own last await — so a window dismissed mid-create
+/// would leave a data directory under `.strata/tables/` that no def points at and no sweep
+/// collects. Cancel and Esc both read [`Status::holds_window`], so they cannot disagree.
+#[test]
+fn only_a_create_in_flight_holds_the_window() {
+    // A registration is the project window's work and must never trap this window; a create is
+    // this window's and must.
+    assert!(!Status::Idle.holds_window());
+    assert!(!Status::Registering("daily".into()).holds_window());
+    assert!(!Status::Failed("nope".into()).holds_window());
+    assert!(Status::Creating("daily".into()).holds_window());
+
+    // Both are busy, which is the separate question Save and `edit` ask.
+    assert!(!Status::Idle.busy());
+    assert!(Status::Registering("daily".into()).busy());
+    assert!(Status::Creating("daily".into()).busy());
+}
+
+/// A create in flight freezes the form and says so in its own words — "Creating", not the
+/// registration's "Registering", because they are different work.
+#[test]
+fn a_create_in_flight_freezes_the_form_and_names_itself() {
+    let (mut runner, (ctx, _, _)) = runner("internal-hold", false, internal_draft());
+    settle(&mut runner);
+
+    let mut status = ctx.status;
+    status.set(Status::Creating("daily".into()));
+    settle(&mut runner);
+
+    assert!(shows(&runner, "Creating 'daily'…"), "{:?}", texts(&runner));
+    // `edit` is refused, so nothing the user does can change the draft the statement was
+    // composed from while it runs.
+    ctx.edit(|draft| draft.name = "something else".into());
+    assert_eq!(ctx.draft.peek().name, "daily");
+}

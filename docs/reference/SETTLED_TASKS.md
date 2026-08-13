@@ -536,6 +536,14 @@ the table its data has no def to be written from. It keeps the existing wait:
 `Status::Registering(name)` reads "Validating…", and `use_watch_registration` closes the window
 when that row lands `Ready`, which the fold makes true in the same breath.
 
+**A create in flight holds the window shut** — `Status::Creating`, a state apart from
+`Registering` precisely because it answers a different question about closing. The fold runs
+after the spawned task's await and `ddl::tables::create` publishes its spool by rename before
+its own last await, so a window dismissed mid-create leaves a data directory nothing points at
+and nothing sweeps. Cancel and Esc both read `Status::holds_window`, so they cannot disagree.
+`Registering` is not held: that pass belongs to the project window's scan driver and answers on
+the catalog row regardless. (Found in review of #154.)
+
 **`ToggleSegment` grew an `enabled`** for the create-only segment: shown and faded rather than
 absent, because a segment that vanished would change the control's shape and the answer is still
 worth knowing about. It gates the handler rather than going `interactive(false)`.

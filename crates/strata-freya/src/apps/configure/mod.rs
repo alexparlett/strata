@@ -133,10 +133,47 @@ pub enum Status {
     Idle,
     /// The def is written and a registration pass is in flight for `name`. The window watches
     /// that row: `Ready` closes it, `Failed` brings the reason back here.
+    ///
+    /// The work belongs to the **project** window's scan driver, which lands its answer on the
+    /// catalog row whether this window is here to watch or not — which is why this state does
+    /// not hold the window open.
     Registering(String),
+    /// **This window is running the statement that creates `name`** (IT-01) — the one state in
+    /// which the work is *this* window's own.
+    ///
+    /// It is held apart from [`Registering`](Self::Registering) because it answers a different
+    /// question about closing. An internal table is created by a task spawned here, and the fold
+    /// that writes the def, the catalog row and the log entry runs **after** that task's await —
+    /// so a window closed now drops the task, and `ddl::tables::create` has already published its
+    /// spool by rename before its last await. The result would be a data directory under
+    /// `.strata/tables/` that no def points at and no sweep collects. So this state refuses the
+    /// window's own close paths (Cancel and Esc), and clears into `Registering` the moment the
+    /// fold has landed.
+    Creating(String),
     /// The last attempt failed. Kept on screen, because this window is the only place that can
     /// explain it while the user still has the draft that caused it.
     Failed(String),
+}
+
+impl Status {
+    /// Whether the window may **not** be dismissed right now, because the work in flight is this
+    /// window's own.
+    ///
+    /// One predicate, because two surfaces answer with it — the footer's Cancel button and the
+    /// root's Esc — and a window whose button said one thing while its key did another would be
+    /// the drift `save_note` exists to prevent one row up. `Registering` is deliberately *not*
+    /// included: that pass belongs to the project window's scan driver and lands on the catalog
+    /// row whether this window is watching or not, so refusing to close for it would only mean a
+    /// window nobody can dismiss if the pass never answers.
+    pub fn holds_window(&self) -> bool {
+        matches!(self, Status::Creating(_))
+    }
+
+    /// Whether the window is busy at all — either kind of work, which is what disables Save and
+    /// what [`ConfigureCtx::edit`] refuses against.
+    pub fn busy(&self) -> bool {
+        matches!(self, Status::Registering(_) | Status::Creating(_))
+    }
 }
 
 /// The window's shared state, provided at the root and consumed by every view.
@@ -177,7 +214,7 @@ impl ConfigureCtx {
         // A registration is in flight for the def as it was written; the window closes on its
         // answer, so a change accepted now would be silently discarded. Refusing keeps the form
         // honest about what it is about to become.
-        if matches!(*self.status.peek(), Status::Registering(_)) {
+        if self.status.peek().busy() {
             return;
         }
         {
@@ -388,13 +425,20 @@ impl App for ConfigureApp {
             // document order, so anything a view mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc closes, always. The def is written only by Save, so there is nothing
-                    // to undo — and a registration in flight belongs to the *project* window's
-                    // scan driver, which lands its answer on the catalog row whether this window
-                    // is watching or not. Refusing to close here would only mean a window that
-                    // cannot be dismissed if that pass never answers.
+                    // Esc closes — except while this window is running a create of its own.
+                    // The def is written only by Save, so there is nothing to undo, and a
+                    // *registration* in flight belongs to the project window's scan driver, which
+                    // lands its answer on the catalog row whether this window is watching or not;
+                    // refusing to close for that would only mean a window that cannot be
+                    // dismissed if the pass never answers. An internal table's create is the one
+                    // piece of work that is **this** window's (`Status::Creating`): the fold that
+                    // makes it durable runs after the task's await, and the spool is already
+                    // published by rename before it, so closing now would leave a data directory
+                    // nothing points at. The key is still consumed, so it does not fall through.
                     Command::Cancel => {
-                        platform.close_current_window();
+                        if !ctx.status.peek().holds_window() {
+                            platform.close_current_window();
+                        }
                         true
                     }
                     Command::Quit => {
