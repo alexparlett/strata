@@ -47,6 +47,9 @@ mod interaction;
 mod model;
 mod views;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use freya::prelude::*;
 use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
@@ -65,7 +68,7 @@ use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowK
 use crate::state::{use_share_config, AppCtx};
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
-pub use model::{ConfigureDraft, ConfigureTarget};
+pub use model::{ConfigureDraft, ConfigureTarget, Probes};
 
 /// Everything a press of the catalog's **Configure** (or New table) needs, resolved where the
 /// stores and the DI handles both live and carried to the trigger as a prop.
@@ -133,10 +136,47 @@ pub enum Status {
     Idle,
     /// The def is written and a registration pass is in flight for `name`. The window watches
     /// that row: `Ready` closes it, `Failed` brings the reason back here.
+    ///
+    /// The work belongs to the **project** window's scan driver, which lands its answer on the
+    /// catalog row whether this window is here to watch or not — which is why this state does
+    /// not hold the window open.
     Registering(String),
+    /// **This window is running the statement that creates `name`** (IT-01) — the one state in
+    /// which the work is *this* window's own.
+    ///
+    /// It is held apart from [`Registering`](Self::Registering) because it answers a different
+    /// question about closing. An internal table is created by a task spawned here, and the fold
+    /// that writes the def, the catalog row and the log entry runs **after** that task's await —
+    /// so a window closed now drops the task, and `ddl::tables::create` has already published its
+    /// spool by rename before its last await. The result would be a data directory under
+    /// `.strata/tables/` that no def points at and no sweep collects. So this state refuses the
+    /// window's own close paths (Cancel and Esc), and clears into `Registering` the moment the
+    /// fold has landed.
+    Creating(String),
     /// The last attempt failed. Kept on screen, because this window is the only place that can
     /// explain it while the user still has the draft that caused it.
     Failed(String),
+}
+
+impl Status {
+    /// Whether the window may **not** be dismissed right now, because the work in flight is this
+    /// window's own.
+    ///
+    /// One predicate, because two surfaces answer with it — the footer's Cancel button and the
+    /// root's Esc — and a window whose button said one thing while its key did another would be
+    /// the drift `save_note` exists to prevent one row up. `Registering` is deliberately *not*
+    /// included: that pass belongs to the project window's scan driver and lands on the catalog
+    /// row whether this window is watching or not, so refusing to close for it would only mean a
+    /// window nobody can dismiss if the pass never answers.
+    pub fn holds_window(&self) -> bool {
+        matches!(self, Status::Creating(_))
+    }
+
+    /// Whether the window is busy at all — either kind of work, which is what disables Save and
+    /// what [`ConfigureCtx::edit`] refuses against.
+    pub fn busy(&self) -> bool {
+        matches!(self, Status::Registering(_) | Status::Creating(_))
+    }
 }
 
 /// The window's shared state, provided at the root and consumed by every view.
@@ -153,6 +193,12 @@ pub struct ConfigureCtx {
     /// keeping it on the draft meant every click on a row counted as an edit, which cleared the
     /// engine's failure message out from under a user who was still reading it.
     pub selected_path: State<usize>,
+    /// Which column row the COLUMNS toolbar acts on (IT-01) — `selected_path`'s twin, window
+    /// state for the same reason.
+    pub selected_column: State<usize>,
+    /// What the planner has said about each SQL type spelling typed into a column box, keyed by
+    /// the text. Filled by [`use_probes`] and read by the rows and the footer.
+    pub probes: State<Probes>,
 }
 
 impl ConfigureCtx {
@@ -171,7 +217,7 @@ impl ConfigureCtx {
         // A registration is in flight for the def as it was written; the window closes on its
         // answer, so a change accepted now would be silently discarded. Refusing keeps the form
         // honest about what it is about to become.
-        if matches!(*self.status.peek(), Status::Registering(_)) {
+        if self.status.peek().busy() {
             return;
         }
         {
@@ -205,6 +251,16 @@ pub struct ConfigureApp {
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
     /// this window closing with the project window it configures.
     pub owner: WindowId,
+    /// Whether this window is refusing to close — the `on_close` half of
+    /// [`Status::holds_window`], mirrored into a flag the winit hook can read.
+    ///
+    /// Esc and the Cancel button are in-app presses this window answers itself, but the native
+    /// traffic-light button and ⌘Q are **winit's**: both route through `process_close_request`,
+    /// which closes unconditionally when a window registered no `on_close` hook. So the same
+    /// predicate has to be reachable from outside the component tree, and an `Arc<AtomicBool>`
+    /// built with the window is what reaches — the shape `project::close::close_bridge` already
+    /// uses for the same job.
+    pub close_hold: Arc<AtomicBool>,
 }
 
 impl ConfigureApp {
@@ -228,6 +284,11 @@ impl ConfigureApp {
             let id = sel.effective(strata_core::theme::os_is_dark());
             window_background(app.themes.get_or_default(&id))
         };
+        // The close hold, built here because it has to be readable from **both** sides: the
+        // component mirrors this window's status into it, and the `on_close` hook below is
+        // winit's own and has no component tree to consult.
+        let close_hold = Arc::new(AtomicBool::new(false));
+        let hook_hold = close_hold.clone();
         WindowConfig::new_app(ConfigureApp {
             app,
             project,
@@ -239,6 +300,22 @@ impl ConfigureApp {
             report,
             connections,
             owner,
+            close_hold,
+        })
+        // **The native close button and ⌘Q come through here, and nothing else stops them.**
+        // `process_close_request` takes a window's `on_close` and defaults to
+        // `CloseDecision::Close` when there is none, and `platform::quit_windows` requests a
+        // close on *every* window — so without this hook a create in flight would be dropped by
+        // the red button or by ⌘Q, exactly as it would by Esc, leaving a published spool no def
+        // points at. The parameter annotations keep the closure generic over
+        // `RendererContext`'s lifetime, as `close_bridge`'s does.
+        .with_on_close(move |_ctx: RendererContext<'_>, _id: WindowId| {
+            match hook_hold.load(Ordering::Relaxed) {
+                // No dialog and nothing to drain: the window is already saying "Creating…" and
+                // it closes itself the moment the fold lands.
+                true => CloseDecision::KeepOpen,
+                false => CloseDecision::Close,
+            }
         })
         .with_title("Table configuration")
         // The OS title is hidden (this window draws its own bar), so it names the *kind* of
@@ -351,6 +428,8 @@ impl App for ConfigureApp {
                     target: State::create(target),
                     status: State::create(Status::Idle),
                     selected_path: State::create(0),
+                    selected_column: State::create(0),
+                    probes: State::create(Probes::new()),
                 }
             }
         });
@@ -359,6 +438,12 @@ impl App for ConfigureApp {
         // awaited: the pass belongs to the project window's driver, and its answer arrives on
         // the row. See the module doc.
         use_watch_registration(ctx);
+        // Mirror the one predicate into the flag winit reads, so the red button and ⌘Q refuse on
+        // exactly the terms Esc and Cancel do (see [`ConfigureApp::close_hold`]).
+        let close_hold = self.close_hold.clone();
+        use_side_effect(move || {
+            close_hold.store(ctx.status.read().holds_window(), Ordering::Relaxed);
+        });
 
         let win = window_theme();
         let text = use_roles().get(Role::Text);
@@ -380,13 +465,20 @@ impl App for ConfigureApp {
             // document order, so anything a view mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc closes, always. The def is written only by Save, so there is nothing
-                    // to undo — and a registration in flight belongs to the *project* window's
-                    // scan driver, which lands its answer on the catalog row whether this window
-                    // is watching or not. Refusing to close here would only mean a window that
-                    // cannot be dismissed if that pass never answers.
+                    // Esc closes — except while this window is running a create of its own.
+                    // The def is written only by Save, so there is nothing to undo, and a
+                    // *registration* in flight belongs to the project window's scan driver, which
+                    // lands its answer on the catalog row whether this window is watching or not;
+                    // refusing to close for that would only mean a window that cannot be
+                    // dismissed if the pass never answers. An internal table's create is the one
+                    // piece of work that is **this** window's (`Status::Creating`): the fold that
+                    // makes it durable runs after the task's await, and the spool is already
+                    // published by rename before it, so closing now would leave a data directory
+                    // nothing points at. The key is still consumed, so it does not fall through.
                     Command::Cancel => {
-                        platform.close_current_window();
+                        if !ctx.status.peek().holds_window() {
+                            platform.close_current_window();
+                        }
                         true
                     }
                     Command::Quit => {

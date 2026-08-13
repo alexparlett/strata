@@ -15,8 +15,11 @@
 //! Which options exist at all is [`strata_model::CsvRead`]'s subject: the bar is that an option
 //! reaches the read, in both halves of it, and three that look available do not.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use strata_core::engine::export::quote_col;
+use strata_core::engine::{duplicate_column, fold_ident};
 use strata_core::project::{relativize, resolve_source};
 use strata_core::util::one_char;
 use strata_model::{
@@ -137,14 +140,17 @@ pub enum Edit {
 pub struct ConfigureDraft {
     pub name: String,
     pub format: FormatId,
-    /// **LOCATION** — whether the sources are read from an object store rather than the local
-    /// disk (W7 · 04).
+    /// **LOCATION** — where this table's data is (W7 · 04, IT-01).
     ///
-    /// Its own flag rather than "is a connection chosen": the toggle has to be operable before
+    /// A three-way answer rather than flags: `Local` and `Remote` differ in *which files* are
+    /// read, `Internal` in whether the user brings any. Two bools would make "remote and internal"
+    /// expressible, and every reader would have to know which one wins.
+    ///
+    /// Its own field rather than "is a connection chosen": the toggle has to be operable before
     /// there is anything to choose, and a project with no connections for the picked provider is
     /// exactly where the picker's empty line has something to say. It is also what makes the
     /// def's own [`TableDef::connection`] unambiguous — see [`store`](Self::store).
-    pub remote: bool,
+    pub location: Where,
     /// **TYPE** — which provider the CONNECTION picker is filtered to. Only meaningful while
     /// [`remote`](Self::remote), and kept in step with the chosen connection by
     /// [`set_provider`](Self::set_provider).
@@ -188,6 +194,70 @@ pub struct ConfigureDraft {
     pub hive_on: bool,
     /// The partition columns and the type each is read as, outermost first.
     pub partitions: Vec<(String, String)>,
+    // --- Internal ---
+    /// The declared columns of a table Strata will store (IT-01) — only meaningful on
+    /// [`Where::Internal`], and kept across a flip away from it exactly as a connection and a
+    /// format's options are.
+    ///
+    /// Position-addressed like [`sources`](Self::sources), and edited through the same
+    /// two-way-synced rows, because it is the same control: a list of text fields with a
+    /// selection and a `+`/`−` toolbar.
+    pub columns: Vec<ColumnDraft>,
+}
+
+/// **LOCATION** — the three answers to "where is this table's data".
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Where {
+    /// Files on this machine's disk.
+    #[default]
+    Local,
+    /// Files in one of the project's object stores (W7 · 04).
+    Remote,
+    /// No files of the user's at all: Strata writes and owns the data, under the project's
+    /// `.strata/tables/` (IT-01). The one LOCATION that **creates** rather than registers, so it
+    /// is the one whose Save composes a statement instead of a def.
+    Internal,
+}
+
+/// What the planner said about one type spelling — [`Ok`] is the Arrow type in the spelling the
+/// grid and the inspector will show, [`Err`] is the refusal in the planner's own words.
+pub type Verdict = Result<String, String>;
+
+/// Every type spelling this window has asked about, keyed by the **trimmed text** the user typed.
+///
+/// Keyed by text rather than by row because the answer is a pure function of it on this session:
+/// two `VARCHAR` rows are one question, and a row retyped back to a spelling it already had
+/// answers instantly.
+pub type Probes = BTreeMap<String, Verdict>;
+
+/// One declared column of a internal table: what it is called, and the SQL type as typed.
+///
+/// The type is **text**, not a pick from a list: there is no Arrow → SQL inverse to author an
+/// offer from, so what it means is asked of the planner per row
+/// ([`Engine::column_type`](strata_core::engine::Engine::column_type)) rather than declared here.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct ColumnDraft {
+    pub name: String,
+    pub sql_type: String,
+}
+
+impl ColumnDraft {
+    /// The name with its surrounding space removed — what every question about this column is
+    /// asked with, and what the composed statement quotes.
+    pub fn name(&self) -> &str {
+        self.name.trim()
+    }
+
+    /// The type text, likewise — and the key its planner verdict is cached under.
+    pub fn sql_type(&self) -> &str {
+        self.sql_type.trim()
+    }
+
+    /// Nothing typed in either box. Not a fault — it is a row you have just added — and it
+    /// composes nothing.
+    pub fn is_blank(&self) -> bool {
+        self.name().is_empty() && self.sql_type().is_empty()
+    }
 }
 
 impl Default for ConfigureDraft {
@@ -202,7 +272,7 @@ impl Default for ConfigureDraft {
         Self {
             name: String::new(),
             format: FormatId::Parquet,
-            remote: false,
+            location: Where::Local,
             // The picker's first provider, which is what an unset TYPE segment shows. It means
             // nothing until LOCATION is flipped, and flipping it picks that provider's first
             // connection.
@@ -223,6 +293,7 @@ impl Default for ConfigureDraft {
             json_compression: json.compression,
             hive_on: false,
             partitions: Vec::new(),
+            columns: Vec::new(),
         }
     }
 }
@@ -256,7 +327,10 @@ impl ConfigureDraft {
         let mut draft = Self {
             name: def.name.clone(),
             format: FormatId::of(&def.format),
-            remote: def.connection.is_some(),
+            location: match def.connection.is_some() {
+                true => Where::Remote,
+                false => Where::Local,
+            },
             provider,
             connection: def.connection.clone(),
             sources: def.sources.clone(),
@@ -316,10 +390,21 @@ impl ConfigureDraft {
     /// connection kept across a flip back to Local is not the location: `remote` says where
     /// the table reads from, `connection` says which bucket that would be.
     pub fn store(&self) -> Option<&str> {
-        match self.remote {
-            true => self.connection.as_deref(),
-            false => None,
+        match self.location {
+            Where::Remote => self.connection.as_deref(),
+            Where::Local | Where::Internal => None,
         }
+    }
+
+    /// Whether LOCATION is on Remote — the question every section that hides itself asks.
+    pub fn remote(&self) -> bool {
+        self.location == Where::Remote
+    }
+
+    /// Whether LOCATION is on Internal: the table has no sources, no format and no partitions,
+    /// and Save composes a `CREATE TABLE` rather than writing a def.
+    pub fn internal(&self) -> bool {
+        self.location == Where::Internal
     }
 
     /// Flip **LOCATION**, and settle what that means for the rest of the draft: a move to the
@@ -327,25 +412,168 @@ impl ConfigureDraft {
     /// **first non-blank path** (a remote table is single-path), and either direction clears the
     /// detected partition columns, exactly as every other path mutator does — they describe the
     /// layout of a location this draft no longer points at.
-    pub fn set_remote(&mut self, remote: bool, connections: &[ConnectionDef]) {
-        if self.remote == remote {
+    pub fn set_location(&mut self, location: Where, connections: &[ConnectionDef]) {
+        if self.location == location {
             return;
         }
-        self.remote = remote;
+        self.location = location;
         self.partitions.clear();
-        if !remote {
-            return;
+        match location {
+            // Nothing to settle: the paths, the format and the connection are all kept, exactly
+            // as a format's options are across a format switch. Internal simply stops *reading*
+            // them, and its own column list starts with one row to type into — an empty list
+            // would make the first gesture `+` rather than typing, which is the one thing the
+            // paths list can afford (Browse fills it from nothing) and this cannot.
+            Where::Internal => {
+                if self.columns.is_empty() {
+                    self.columns.push(ColumnDraft::default());
+                }
+            }
+            Where::Local => {}
+            Where::Remote => {
+                if self.connection.is_none() {
+                    self.connection = first_connection(connections, self.provider);
+                }
+                let kept = self
+                    .nonblank_sources()
+                    .into_iter()
+                    .next()
+                    .or_else(|| self.sources.first().cloned())
+                    .unwrap_or_default();
+                self.sources = vec![kept];
+            }
         }
-        if self.connection.is_none() {
-            self.connection = first_connection(connections, self.provider);
+    }
+
+    // --- internal columns ---
+
+    /// Append a blank column row and hand back its index — the paths toolbar's `add_path`, on the
+    /// other list.
+    pub fn add_column(&mut self) -> usize {
+        self.columns.push(ColumnDraft::default());
+        self.columns.len() - 1
+    }
+
+    /// Remove the column at `at`, answering with the row that takes its place. One row always
+    /// remains, so there is somewhere to type: a internal table with no columns is not something
+    /// this window can compose, and an empty list would strand the user on `+`.
+    pub fn remove_column(&mut self, at: usize) -> usize {
+        if at < self.columns.len() && self.columns.len() > 1 {
+            self.columns.remove(at);
+        } else if self.columns.len() == 1 {
+            self.columns[0] = ColumnDraft::default();
         }
-        let kept = self
-            .nonblank_sources()
-            .into_iter()
-            .next()
-            .or_else(|| self.sources.first().cloned())
-            .unwrap_or_default();
-        self.sources = vec![kept];
+        at.min(self.columns.len().saturating_sub(1))
+    }
+
+    pub fn set_column_name(&mut self, at: usize, name: String) {
+        if let Some(column) = self.columns.get_mut(at) {
+            column.name = name;
+        }
+    }
+
+    pub fn set_column_type(&mut self, at: usize, sql_type: String) {
+        if let Some(column) = self.columns.get_mut(at) {
+            column.sql_type = sql_type;
+        }
+    }
+
+    /// The columns that will compose one — everything that is not wholly blank.
+    pub fn declared_columns(&self) -> impl Iterator<Item = &ColumnDraft> {
+        self.columns.iter().filter(|column| !column.is_blank())
+    }
+
+    /// The distinct type spellings `probes` has not answered for yet, in row order — the probe
+    /// driver's whole work list, and a projection rather than a queue, so a row retyped while a
+    /// pass is in flight simply changes what is pending.
+    pub fn unprobed(&self, probes: &Probes) -> Vec<String> {
+        let mut pending: Vec<String> = Vec::new();
+        for column in self.declared_columns() {
+            let typed = column.sql_type();
+            if typed.is_empty() || probes.contains_key(typed) {
+                continue;
+            }
+            if !pending.iter().any(|held| held == typed) {
+                pending.push(typed.to_string());
+            }
+        }
+        pending
+    }
+
+    /// Why each faulty column row cannot be created, **by row index**.
+    ///
+    /// Four kinds, in the order a row hits them: a type with no column to apply it to, a name
+    /// another row already claims (**both** rows are marked, because either is the one to fix), a
+    /// name with no type yet, and the planner's own refusal of the type that was typed. A row
+    /// whose type has not been answered for yet carries nothing — the verdict is a beat away, and
+    /// a message that appears and vanishes per keystroke is worse than none.
+    ///
+    /// Only the first of those four is this window's own sentence; the rest are the create arm's,
+    /// **reached** rather than restated ([`duplicate_column`], and the planner verbatim), so the
+    /// form cannot be a second drifting copy of the engine's rules.
+    pub fn column_faults(&self, probes: &Probes) -> BTreeMap<usize, String> {
+        let mut faults = BTreeMap::new();
+        let mut claimed: BTreeMap<String, usize> = BTreeMap::new();
+        for (at, column) in self.columns.iter().enumerate() {
+            if column.is_blank() {
+                continue;
+            }
+            let name = column.name();
+            if name.is_empty() {
+                faults.insert(at, "Enter a column name.".to_string());
+                continue;
+            }
+            // The engine's own identity, not a case-insensitive compare: `fold_ident` is what the
+            // create arm folds with, so the form refuses exactly the pairs it would. Folded once,
+            // so the lookup and the claim cannot be asked different questions.
+            let folded = fold_ident(name);
+            if let Some(first) = claimed.get(&folded) {
+                let message = duplicate_column(name);
+                faults.insert(*first, message.clone());
+                faults.insert(at, message);
+                continue;
+            }
+            claimed.insert(folded, at);
+            let typed = column.sql_type();
+            if typed.is_empty() {
+                faults.insert(at, "Enter a column type.".to_string());
+                continue;
+            }
+            if let Some(Err(refusal)) = probes.get(typed) {
+                faults.insert(at, refusal.clone());
+            }
+        }
+        faults
+    }
+
+    /// The `CREATE TABLE` a internal table's Save runs, or `None` when there is nothing to compose
+    /// yet.
+    ///
+    /// Names are quoted **verbatim** ([`quote_col`], not the engine's `quote_ident`): what the
+    /// user typed into a box is the name they meant, so `Region` is a column called `Region`
+    /// rather than one silently folded to `region`. The engine still folds for *identity*, which
+    /// is why [`column_faults`](Self::column_faults) refuses `Region` beside `REGION`.
+    ///
+    /// The types are passed through as typed. They are the one part of the statement this window
+    /// does not author, which is exactly why each box is validated per row rather than at Save.
+    pub fn create_statement(&self) -> Option<String> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let columns: Vec<String> = self
+            .declared_columns()
+            .filter(|column| !column.name().is_empty() && !column.sql_type().is_empty())
+            .map(|column| format!("  {} {}", quote_col(column.name()), column.sql_type()))
+            .collect();
+        if columns.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "CREATE TABLE {} (\n{}\n);",
+            quote_col(name),
+            columns.join(",\n")
+        ))
     }
 
     /// Pick a **TYPE**, and with it a connection that provider actually serves — its first,
@@ -476,6 +704,12 @@ impl ConfigureDraft {
         // A def that already carries partition columns shows them for the same reason, whatever
         // its paths look like from here — hiding the section would hide a value still being
         // saved.
+        // A internal table has no directory layout to read columns out of, whatever was switched
+        // on before the LOCATION moved — and `set_location` cleared the columns on the way in,
+        // so there is nothing switched on to strand.
+        if self.internal() {
+            return false;
+        }
         self.hive_on
             || !self.partitions.is_empty()
             || self.resolved_sources(root).iter().any(|p| {
@@ -588,10 +822,20 @@ impl ConfigureDraft {
         if self.name.trim().is_empty() {
             return Some("A table needs a name.".into());
         }
+        // A internal table stops here: it has no sources, no format and no partitions to be wrong
+        // about. What its columns can be wrong about is the *rows'* question, and the footer
+        // asks it — the planner's verdict per type is not something the draft holds.
+        if self.internal() {
+            return self
+                .declared_columns()
+                .next()
+                .is_none()
+                .then(|| "A table needs at least one column.".into());
+        }
         // Ahead of the path, because it is what the path is written against: there is nothing
         // useful to type in a box whose bucket has not been chosen. The picker's own empty line
         // says the rest — that this provider has no connections yet.
-        if self.remote && self.connection.is_none() {
+        if self.remote() && self.connection.is_none() {
             return Some("A remote table needs a connection to read through.".into());
         }
         if self.nonblank_sources().is_empty() {
@@ -638,6 +882,11 @@ impl ConfigureDraft {
     /// the split would only be one more thing to open before a CSV's quote character can be
     /// reached, in a window whose whole subject is how a file is read.
     pub fn options(&self) -> Vec<Group<Edit>> {
+        // A internal table is written by Strata in its own format, so there is nothing to say
+        // about *reading* it — the format picker's answer is kept for a flip back to files.
+        if self.internal() {
+            return Vec::new();
+        }
         let mut groups = self.core();
         groups.extend(self.advanced());
         groups
@@ -1301,7 +1550,7 @@ mod tests {
             sources: vec!["events/2024/**/*.parquet".into()],
             ..csv_draft()
         };
-        draft.set_remote(true, &connections());
+        draft.set_location(Where::Remote, &connections());
 
         let def = draft.def(root);
         assert_eq!(def.connection.as_deref(), Some("s3://acme-lake"));
@@ -1326,7 +1575,7 @@ mod tests {
             sources: vec!["   ".into(), "/data/a.csv".into(), "/data/b.csv".into()],
             ..csv_draft()
         };
-        draft.set_remote(true, &connections());
+        draft.set_location(Where::Remote, &connections());
 
         assert_eq!(draft.connection.as_deref(), Some("s3://acme-lake"));
         assert_eq!(
@@ -1343,7 +1592,7 @@ mod tests {
     fn picking_a_provider_lands_on_one_of_its_connections() {
         let connections = connections();
         let mut draft = csv_draft();
-        draft.set_remote(true, &connections);
+        draft.set_location(Where::Remote, &connections);
         assert_eq!(draft.connection.as_deref(), Some("s3://acme-lake"));
 
         draft.set_provider(ProviderId::Gcs, &connections);
@@ -1369,8 +1618,8 @@ mod tests {
     fn a_remembered_connection_is_not_a_location() {
         let connections = connections();
         let mut draft = csv_draft();
-        draft.set_remote(true, &connections);
-        draft.set_remote(false, &connections);
+        draft.set_location(Where::Remote, &connections);
+        draft.set_location(Where::Local, &connections);
 
         assert_eq!(
             draft.connection.as_deref(),
@@ -1394,7 +1643,7 @@ mod tests {
             origin: TableOrigin::External,
         };
         let draft = ConfigureDraft::of(&def, &connections());
-        assert!(draft.remote);
+        assert!(draft.remote());
         assert_eq!(draft.provider, ProviderId::Gcs);
         assert_eq!(draft.connection.as_deref(), Some("gs://warehouse"));
         // Opening it and saving it back changes nothing — the round trip every seed owes.
@@ -1415,7 +1664,7 @@ mod tests {
             origin: TableOrigin::External,
         };
         let draft = ConfigureDraft::of(&def, &connections());
-        assert!(draft.remote);
+        assert!(draft.remote());
         assert_eq!(draft.connection.as_deref(), Some("s3://gone"));
         assert_eq!(draft.def(Path::new("/project")), def);
     }
@@ -1434,5 +1683,176 @@ mod tests {
             ["gs://warehouse"]
         );
         assert!(connections_for(&connections, ProviderId::Http).is_empty());
+    }
+}
+
+/// LOCATION ▸ **Internal** (IT-01) — the draft half: what the third answer does to the rest of
+/// the form, what it composes, and what it refuses.
+#[cfg(test)]
+mod internal_tests {
+    use super::*;
+
+    /// An internal draft with the given columns, in order.
+    fn draft(name: &str, columns: &[(&str, &str)]) -> ConfigureDraft {
+        let mut draft = ConfigureDraft {
+            name: name.into(),
+            ..Default::default()
+        };
+        draft.set_location(Where::Internal, &[]);
+        draft.columns.clear();
+        for (column, sql_type) in columns {
+            let at = draft.add_column();
+            draft.set_column_name(at, (*column).into());
+            draft.set_column_type(at, (*sql_type).into());
+        }
+        draft
+    }
+
+    /// Everything asked about, answered `Ok` with the given Arrow spelling.
+    fn answered(pairs: &[(&str, &str)]) -> Probes {
+        pairs
+            .iter()
+            .map(|(sql, arrow)| ((*sql).to_string(), Ok((*arrow).to_string())))
+            .collect()
+    }
+
+    /// **The third answer starts with a row to type into**, and takes the file questions off the
+    /// table — the whole reason this is a LOCATION rather than a surface of its own.
+    #[test]
+    fn moving_to_internal_opens_a_column_and_silences_the_file_sections() {
+        let mut draft = ConfigureDraft {
+            name: "t".into(),
+            sources: vec!["/data/t.parquet".into()],
+            hive_on: true,
+            partitions: vec![("year".into(), "Int32".into())],
+            ..Default::default()
+        };
+        draft.set_location(Where::Internal, &[]);
+
+        assert!(draft.internal());
+        assert!(!draft.remote());
+        assert_eq!(draft.columns.len(), 1, "somewhere to type");
+        assert!(draft.options().is_empty(), "nothing to say about reading");
+        assert!(!draft.may_partition(Path::new("/tmp")));
+        assert_eq!(draft.store(), None);
+        // The paths are **kept**, exactly as a connection and a format's options are across a
+        // switch: coming back to Local must not have forgotten them.
+        assert_eq!(draft.sources, vec!["/data/t.parquet".to_string()]);
+    }
+
+    #[test]
+    fn an_internal_draft_composes_the_statement_save_runs() {
+        let draft = draft("sales", &[("region", "VARCHAR"), ("amount", "DOUBLE")]);
+        assert_eq!(
+            draft.create_statement().expect("composes"),
+            "CREATE TABLE \"sales\" (\n  \"region\" VARCHAR,\n  \"amount\" DOUBLE\n);"
+        );
+    }
+
+    /// Names are quoted verbatim, embedded quotes doubled — what was typed is what the column is
+    /// called, reserved words and capitals included.
+    #[test]
+    fn names_are_quoted_exactly_as_they_were_typed() {
+        let draft = draft("My Table", &[("Order", "INT"), ("say \"hi\"", "VARCHAR")]);
+        assert_eq!(
+            draft.create_statement().expect("composes"),
+            "CREATE TABLE \"My Table\" (\n  \"Order\" INT,\n  \"say \"\"hi\"\"\" VARCHAR\n);"
+        );
+    }
+
+    #[test]
+    fn nothing_composes_until_there_is_a_name_and_a_whole_column() {
+        assert_eq!(draft("", &[("a", "INT")]).create_statement(), None);
+        assert_eq!(draft("t", &[("a", "")]).create_statement(), None);
+        assert_eq!(draft("t", &[("", "INT")]).create_statement(), None);
+        assert_eq!(draft("t", &[]).create_statement(), None);
+    }
+
+    #[test]
+    fn a_half_typed_row_names_the_box_that_is_empty() {
+        let draft = draft("t", &[("a", "INT"), ("", "VARCHAR"), ("c", "")]);
+        let faults = draft.column_faults(&answered(&[("INT", "Int32"), ("VARCHAR", "Utf8")]));
+        assert_eq!(faults[&1], "Enter a column name.");
+        assert_eq!(faults[&2], "Enter a column type.");
+        assert!(!faults.contains_key(&0));
+    }
+
+    /// The duplicate rule is the **engine's** fold and its wording is the create arm's — a form
+    /// that answered either in its own terms would be a second copy of one rule. The arm names
+    /// the *second* spelling, because its fold errors on the field that repeats.
+    #[test]
+    fn a_repeated_name_is_the_create_arms_own_refusal_and_marks_both_rows() {
+        let probes = answered(&[("VARCHAR", "Utf8")]);
+        let repeated = draft("t", &[("Region", "VARCHAR"), ("region", "VARCHAR")]);
+        let faults = repeated.column_faults(&probes);
+        assert_eq!(faults.len(), 2, "either row is the one to fix");
+        assert_eq!(faults[&0], duplicate_column("region"));
+        assert_eq!(faults[&1], duplicate_column("region"));
+
+        // A name the parser cannot read as one identifier is **verbatim** to the engine, so two
+        // spellings differing only in case are two columns — and the form must not refuse what
+        // the create would accept.
+        let spaced = draft("t", &[("my col", "VARCHAR"), ("MY COL", "VARCHAR")]);
+        assert!(spaced.column_faults(&probes).is_empty());
+    }
+
+    /// The planner's refusal reaches the row as written; nothing paraphrases it.
+    #[test]
+    fn a_refused_type_carries_the_planners_own_words() {
+        let draft = draft("t", &[("size", "FLOAT64")]);
+        let probes: Probes = [(
+            "FLOAT64".to_string(),
+            Err("Unsupported SQL type FLOAT64".to_string()),
+        )]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            draft.column_faults(&probes)[&0],
+            "Unsupported SQL type FLOAT64"
+        );
+    }
+
+    /// The probe work list is the distinct unanswered spellings — two `VARCHAR` rows are one
+    /// question, and an answered one is never asked again.
+    #[test]
+    fn the_probe_work_list_is_the_distinct_unanswered_types() {
+        let draft = draft(
+            "t",
+            &[
+                ("a", "VARCHAR"),
+                ("b", " VARCHAR "),
+                ("c", "INT"),
+                ("d", ""),
+            ],
+        );
+        assert_eq!(draft.unprobed(&Probes::new()), ["VARCHAR", "INT"]);
+        assert_eq!(draft.unprobed(&answered(&[("VARCHAR", "Utf8")])), ["INT"]);
+        assert!(draft
+            .unprobed(&answered(&[("VARCHAR", "Utf8"), ("INT", "Int32")]))
+            .is_empty());
+    }
+
+    /// The draft's own blocker stops at the column count; what a *type* means is the planner's,
+    /// so the footer asks that (`views::footer::column_fault`).
+    #[test]
+    fn the_blocker_names_the_next_thing_to_do() {
+        assert_eq!(
+            draft("", &[("a", "INT")]).blocker().as_deref(),
+            Some("A table needs a name.")
+        );
+        assert_eq!(
+            draft("t", &[]).blocker().as_deref(),
+            Some("A table needs at least one column.")
+        );
+        assert_eq!(draft("t", &[("a", "INT")]).blocker(), None);
+    }
+
+    /// One row always remains, so there is somewhere to type — removing the last empties it.
+    #[test]
+    fn the_column_list_always_has_a_row() {
+        let mut draft = draft("t", &[("a", "INT")]);
+        assert_eq!(draft.remove_column(0), 0);
+        assert_eq!(draft.columns.len(), 1);
+        assert!(draft.columns[0].is_blank());
     }
 }

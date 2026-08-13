@@ -50,7 +50,7 @@ use datafusion::logical_expr::{CreateMemoryTable, DdlStatement, LogicalPlan, Tab
 use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 
-use crate::engine::catalog::{dependent_views, register_external, TableSpec};
+use crate::engine::catalog::{dependent_views, register_external, short_type, TableSpec};
 use crate::engine::export::copy_row_count;
 use crate::engine::query::ipc_write_options;
 use crate::engine::sql::{Blocked, StmtKind};
@@ -98,42 +98,30 @@ pub async fn create(
         // plans both into `CreateMemoryTable`. Anything else is the two disagreeing.
         return Err(format!("{} did not plan as a table", kind.label()));
     };
+    if let Some(refusal) = unenforced_clause(&create) {
+        return Err(refusal.into());
+    }
     let CreateMemoryTable {
         name,
-        constraints,
+        // Both read by [`unenforced_clause`] a line above, which is the only thing that has an
+        // opinion about them — and which [`column_type`] asks the same question of.
+        constraints: _,
         input,
         if_not_exists,
         or_replace,
-        column_defaults,
+        column_defaults: _,
         // `TEMPORARY` never reaches here — DataFusion's own arm refuses it while planning
         // ("Temporary tables not supported"), which is one refusal in one place rather than
         // two that can disagree.
         temporary: _,
     } = create;
 
-    // The two clauses DataFusion *plans* and does not enforce. It does not check a constraint
-    // even on its own `MemTable`, so accepting one would be a promise nothing keeps; a column
-    // default has no meaning until something can `INSERT` without naming the column, which is
-    // ED-05's and needs a provider that applies it.
-    if !constraints.is_empty() {
-        return Err("Table constraints are not supported".into());
-    }
-    if !column_defaults.is_empty() {
-        return Err("Column defaults are not supported".into());
-    }
-
     let name = bare_name(&name, WHAT)?;
-    // Reproduced from DataFusion's own `ensure_unique_column_names` rule rather than inherited:
-    // its CTAS never writes a file, and an IPC file *would* store both columns, after which
-    // every read of the table resolves the second by name onto the first.
     let mut seen = Vec::new();
     for field in input.schema().fields() {
         let folded = fold_ident(field.name());
         if seen.contains(&folded) {
-            return Err(format!(
-                "Duplicate column name '{}'. Alias one of them",
-                field.name()
-            ));
+            return Err(duplicate_column(field.name()));
         }
         seen.push(folded);
     }
@@ -213,6 +201,101 @@ pub async fn create(
         count: Some(rows),
         effect: Some(StoreEffect::TableUpserted { def, meta }),
     })
+}
+
+/// The two clauses DataFusion **plans and does not enforce**, refused by name.
+///
+/// It does not check a constraint even on its own `MemTable`, so accepting one would be a
+/// promise nothing keeps; a column default has no meaning until something can `INSERT` without
+/// naming the column, which needs a provider that applies it.
+///
+/// Held apart from [`create`] because [`column_type`] has to ask the same question of the same
+/// planned statement: a `PRIMARY KEY` typed into the empty-table panel's type box has to be
+/// refused *while it is being typed*, in the words the create would have used (IT-01).
+fn unenforced_clause(create: &CreateMemoryTable) -> Option<&'static str> {
+    if !create.constraints.is_empty() {
+        return Some("Table constraints are not supported");
+    }
+    if !create.column_defaults.is_empty() {
+        return Some("Column defaults are not supported");
+    }
+    None
+}
+
+/// What a repeated column name is refused with.
+///
+/// Reproduced from DataFusion's own `ensure_unique_column_names` rule rather than inherited: its
+/// CTAS never writes a file, and an IPC file *would* store both columns, after which every read
+/// of the table resolves the second by name onto the first.
+///
+/// `pub` because the empty-table panel refuses the same thing as its rows are typed (IT-01), and
+/// a form that said it in its own words would be a second wording for one rule.
+pub fn duplicate_column(name: &str) -> String {
+    format!("Duplicate column name '{name}'. Alias one of them")
+}
+
+/// The throwaway statement [`column_type`] probes with. Never executed and never registered, so
+/// the name is only ever parsed — but it is spelled to be unmistakably ours if it ever appears
+/// in a planner message the user reads.
+const PROBE_TABLE: &str = "__strata_probe";
+/// The one column that statement declares.
+const PROBE_COLUMN: &str = "c";
+
+/// What DataFusion's planner makes of one **SQL column type** on this session — the empty-table
+/// panel's per-row validation (IT-01).
+///
+/// **There is no Arrow → SQL inverse to author an offer from**, which is why that panel's type
+/// field is free text and why this stands behind it. `convert_simple_data_type` is many-to-one
+/// (`INT | INTEGER | INT4` all reach `Int32`), and the same spelling reaches *different* Arrow
+/// types depending on session config: `map_string_types_to_utf8view` flips `VARCHAR` between
+/// `Utf8` and `Utf8View`, and `execution.time_zone` fills the zone on `TIMESTAMP WITH TIME ZONE`.
+/// So nothing is declared — the planner is asked, on the very session the create will run on, and
+/// its answer (or its refusal, in its own words) is what the row shows.
+///
+/// The answer is [`short_type`], which is the spelling `ColumnInfo::dtype` carries and therefore
+/// the one the grid header and the inspector will show once the table exists: the form promises
+/// exactly what the user is about to see, rather than a second rendering of the same type.
+///
+/// It plans the statement the panel composes and **executes nothing** — execution lives only in
+/// `execute_logical_plan` (module doc) — so this costs a parse and a plan of one empty relation.
+pub async fn column_type(ctx: &SessionContext, sql_type: &str) -> Result<String, String> {
+    let typed = sql_type.trim();
+    if typed.is_empty() {
+        return Err("Enter a column type".into());
+    }
+    let sql = format!("CREATE TABLE {PROBE_TABLE} ({PROBE_COLUMN} {typed})");
+    let plan = ctx
+        .state()
+        .create_logical_plan(&sql)
+        .await
+        .map_err(|e| e.to_string())?;
+    let LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(create)) = plan else {
+        return Err(not_a_column_type(typed));
+    };
+    if let Some(refusal) = unenforced_clause(&create) {
+        return Err(refusal.into());
+    }
+    // **A declared column list and nothing else.** A bare `CREATE TABLE t (cols…)` plans as an
+    // `EmptyRelation` carrying that schema (module doc), so anything that brought a *query*
+    // along is a value that closed the declaration and kept going — `INT) AS SELECT 1` plans
+    // as a perfectly good CTAS whose schema has exactly one field, and a field count alone
+    // would report it as a clean `Int64`. The panel would then compose an unbalanced statement
+    // and fail at the press, which is the deferred error this probe exists to prevent.
+    if !matches!(create.input.as_ref(), LogicalPlan::EmptyRelation(_)) {
+        return Err(not_a_column_type(typed));
+    }
+    // And one column, because the box holds a *type*: `INT, b INT` declares two, and reporting
+    // the first field's for it would call the row valid for something else entirely.
+    let schema = create.input.schema();
+    match schema.fields().as_ref() {
+        [field] => Ok(short_type(field.data_type())),
+        _ => Err(not_a_column_type(typed)),
+    }
+}
+
+/// What the probe says about a value that plans as something other than one column's type.
+fn not_a_column_type(typed: &str) -> String {
+    format!("'{typed}' is not a column type")
 }
 
 /// Append rows to an internal table from an `INSERT` (ED-05).
@@ -880,6 +963,92 @@ mod tests {
             !tables_dir(&root).join("t").exists(),
             "a refusal writes nothing"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **The type probe answers what the create will actually produce** (IT-01) — in the
+    /// spelling every other surface shows a type in, on this session's own config, and with the
+    /// planner's refusal verbatim where there is one.
+    ///
+    /// The two config-dependent answers are the reason the offer cannot be a static table: the
+    /// same `TIMESTAMP WITH TIME ZONE` reaches a different Arrow type depending on
+    /// `execution.time_zone`, and the empty-table panel promises what the user is about to get.
+    #[tokio::test]
+    async fn the_type_probe_answers_with_the_planners_own_arrow_type() {
+        let ctx = crate::engine::build_context(&BTreeMap::new());
+
+        assert_eq!(column_type(&ctx, "INT").await.unwrap(), "Int32");
+        assert_eq!(column_type(&ctx, "INTEGER").await.unwrap(), "Int32");
+        assert_eq!(column_type(&ctx, " double ").await.unwrap(), "Float64");
+        assert_eq!(column_type(&ctx, "BYTEA").await.unwrap(), "Binary");
+
+        // A spelling the planner does not implement comes back in **its** words, not ours: those
+        // are its types, described in its terms.
+        let refused = column_type(&ctx, "FLOAT64").await.expect_err("refused");
+        assert!(refused.contains("FLOAT64"), "{refused}");
+
+        // The two clauses the create arm refuses are refused here too, so a `PRIMARY KEY` typed
+        // into the box is caught while it is being typed rather than at the press.
+        assert_eq!(
+            column_type(&ctx, "INT PRIMARY KEY")
+                .await
+                .expect_err("refused"),
+            "Table constraints are not supported"
+        );
+        assert_eq!(
+            column_type(&ctx, "INT DEFAULT 1")
+                .await
+                .expect_err("refused"),
+            "Column defaults are not supported"
+        );
+
+        // A value that declares a **second column** parses and plans perfectly well, and is
+        // still not a column type: reporting the first field's type for it would call the row
+        // valid for a statement the panel then composes as something else.
+        assert_eq!(
+            column_type(&ctx, "INT, b INT")
+                .await
+                .expect_err("not one type"),
+            "'INT, b INT' is not a column type"
+        );
+        // And one that closes the declaration, brings a **query**, and comments out the probe's
+        // own trailing paren. It plans as a CTAS whose schema has exactly one field, so a field
+        // count alone reports it as a clean `Int64` — which is why the guard is the *shape* of
+        // the plan (an `EmptyRelation`) and not the width of its schema.
+        let smuggled = "INT) AS SELECT 1 --";
+        assert_eq!(
+            column_type(&ctx, smuggled)
+                .await
+                .expect_err("carries a query"),
+            format!("'{smuggled}' is not a column type")
+        );
+        assert!(column_type(&ctx, "  ").await.is_err(), "nothing to ask");
+    }
+
+    /// **The probe's answer is the type the table then carries.** Two readings of one session,
+    /// which is the whole promise the panel makes: what its row said is what the inspector shows.
+    #[tokio::test]
+    async fn the_probe_and_the_created_table_agree() {
+        let root = scratch("probe");
+        let eng = engine(
+            &root,
+            BTreeMap::from([(
+                "datafusion.execution.time_zone".to_string(),
+                "Europe/London".to_string(),
+            )]),
+        );
+
+        let probed = eng
+            .column_type("TIMESTAMP WITH TIME ZONE".into())
+            .await
+            .expect("planned");
+        let report = statement(&eng, "CREATE TABLE t (\"at\" TIMESTAMP WITH TIME ZONE)")
+            .await
+            .expect("created");
+        let Some(StoreEffect::TableUpserted { meta, .. }) = &report.effect else {
+            panic!("{:?}", report.effect);
+        };
+        assert_eq!(meta.columns[0].dtype, probed);
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -390,7 +390,17 @@ src/apps/configure/              the Configure-table window (P4-11 — `Configur
                                  mod.rs (root · window config · `ConfigureCtx` · `Status`),
                                  model.rs (the draft + its option groups), interaction.rs (the
                                  body and footer driven as a user drives them), views/ (title_bar ·
-                                 location · identity · paths · options · hive · status · footer).
+                                 location · identity · columns · paths · options · hive · status ·
+                                 footer). **LOCATION has three answers** (IT-01): Local · Remote ·
+                                 **Internal**, the last being a table Strata itself stores, where
+                                 FORMAT / SOURCE PATHS / the import options / HIVE all draw
+                                 nothing and **columns.rs** takes their place — the paths list's
+                                 own `Table`, `+`/`−` toolbar and two-way-synced fields, with a
+                                 third cell per row for what the planner made of the typed SQL
+                                 type (`Engine::column_type`, debounced by `views::use_probes`).
+                                 Save branches there: it composes a `CREATE TABLE`, runs it on a
+                                 minted `WsId` and folds the report through `state::settle`,
+                                 writing no def at all.
                                  It is a child of the project window that asked, so it writes that
                                  window's store through the shared `persisted_defs` funnel and
                                  asks *its* one scan driver for the registration pass — rather
@@ -553,7 +563,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  intercepted statement's `StoreEffect` — store channel →
                                  `persisted_defs` → `catalog_settled` → the event log. Driven
                                  from the request keeper, and it owns the log row because only
-                                 the fold knows whether the def was written
+                                 the fold knows whether the def was written. `use_settle` +
+                                 `settle` are the same body for a surface that dispatched its own
+                                 run and has no query behind it (IT-01's panel) — never a second
+                                 `apply`, persist path or epoch bump
   model/                         window-local view models
   views/
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
@@ -623,7 +636,9 @@ src/apps/project/                the project window (Valin-shaped)
                                  saved-query rows), columns (flatten + tests), menu (P3-06: one
                                  item list per row kind, shared by right-click and the ⋮ so the
                                  two triggers can't drift; Drop opens the confirm, never drops),
-                                 interaction (tests)
+                                 interaction (tests). The TABLES `+` is **one press to the
+                                 Configure window** — an internal table is a third LOCATION
+                                 there (IT-01), not a second surface reached through a menu
       connections/               W7 — the project's object stores: mod (pane + theme + the
                                  header's ⓘ and `+`, one row per `ConnRow`), interaction (tests).
                                  **The catalog entry row's shape**: badge, bucket, one trailing

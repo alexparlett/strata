@@ -11,9 +11,9 @@ rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The op
 (`.claude/tasks/`) is the **database-connections workstream** (DB — federated Postgres over
 `datafusion-table-providers` + `datafusion-federation`), the **query-ergonomics workstream**
 (QE — the deep-JSON field-feedback batch: the struct-enumeration UDFs, `regexp_extract_all`,
-and the agent surface's describe/session/export gaps), the **internal-tables-in-the-UI
-workstream** (IT — creating an internal table without typing SQL) and design polish
-(phase 5). The assistant
+and the agent surface's describe/session/export gaps), the rest of the
+**internal-tables-in-the-UI workstream** (IT — IT-01's empty-table panel is built; IT-02, Save
+results as table, is not) and design polish (phase 5). The assistant
 workstream is complete — the loop, the pane, the model listings, and conversations that survive
 the window (AS-07's `.strata/chats/`) — and so is the chart workstream (the marks, the trendline
 and the Shape panel included) and the **updater**: the release artifact, the mechanism and the
@@ -235,9 +235,9 @@ first (status legend, what remains, known bugs).
 
 The numbered phases are done and their folders removed — except phase 5, whose remaining
 polish is the open phase work — and so are the assistant, chart and updater workstreams;
-what remains is the database-connections workstream (DB), the internal-tables-in-the-UI
-workstream (IT — the two gestures that create an internal table without typing SQL), and that
-design polish (phase 5). **What each finished task settled — including several
+what remains is the database-connections workstream (DB), the second half of the
+internal-tables-in-the-UI workstream (IT — IT-01's empty-table panel is built, IT-02 is not),
+and that design polish (phase 5). **What each finished task settled — including several
 corrections that must not be re-litigated** (the catalog is a store and not a query; diagnostics
 are a reconciliation; a log is recorded by its observer; only real facts) — is
 [docs/reference/SETTLED_TASKS.md](docs/reference/SETTLED_TASKS.md), with the rule form of each in

@@ -59,10 +59,17 @@ pub(super) use functions::StrataFunctionFactory;
 pub(crate) use session::refuse_reserved_key;
 /// The session state a statement can move (ED-08) — held by the engine, reached by the arms.
 pub use session::SessionScope;
+/// The per-row type probe behind that panel's free-text type field — see
+/// [`tables::column_type`].
+pub(super) use tables::column_type;
 /// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
 /// catalog pane says them too, and `ddl` is the vocabulary module the app already reads.
 pub use tables::drop_intent;
 pub(super) use tables::drop_table;
+/// A repeated column name's refusal — see [`tables::duplicate_column`]. Re-exported for the
+/// same reason `drop_intent` is: the empty-table panel (IT-01) refuses one as it is typed, and
+/// it must say what the create arm would have said.
+pub use tables::duplicate_column;
 pub(super) use views::{create as create_view, drop as drop_view};
 
 /// What one intercepted statement did — the `RunOutcome::Statement` the results pane renders
