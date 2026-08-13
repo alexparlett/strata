@@ -55,9 +55,6 @@ impl Component for StepCard {
         let step = &self.step;
         let theme = &self.theme;
 
-        // **A stop is a status, never a failure.** `failed` is the fault flag and a stop does not
-        // set it, so the two arms are read in that order and the stop keeps the engine's own
-        // wording rather than being restated here.
         let (dot, figures, figures_color) = match (&step.failed, &step.facts.stopped) {
             (None, _) => (accent, "running…".to_string(), theme.figures_color),
             (Some(_), Some(reason)) => (tones.warning, reason.clone(), theme.figures_color),
@@ -75,7 +72,6 @@ impl Component for StepCard {
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    // A painted border is not laid out, so the body's own inset carries it.
                     .padding(CARD_PAD)
                     .spacing(SP_2)
                     .child(
@@ -95,8 +91,6 @@ impl Component for StepCard {
                                     .text_overflow(TextOverflow::Ellipsis),
                             ),
                     )
-                    // The statement, for the tools that take one — collapsed to the History
-                    // drawer's one-liner, which is the same preview an agent's run gets.
                     .maybe_child(step.facts.sql.as_ref().map(|sql| {
                         Path::new(collapse_sql(sql))
                             .color(theme.sql_color)
@@ -106,7 +100,6 @@ impl Component for StepCard {
                     })),
             );
 
-        // Only a statement can be promoted, so only a card that has one carries the presses.
         match &step.facts.sql {
             None => card,
             Some(sql) => card
@@ -148,17 +141,12 @@ impl Component for OfferCard {
             .background(self.theme.card_background)
             .border(Border::new().width(1.).fill(self.theme.card_border_fill))
             .child(
-                rect()
-                    .width(Size::fill())
-                    .padding(CARD_PAD)
-                    // In full, not collapsed: this is a statement the user is being asked to run,
-                    // so what they read has to be what runs.
-                    .child(
-                        Readout::new(self.sql.clone())
-                            .color(self.theme.sql_color)
-                            .width(Size::fill())
-                            .wrap(),
-                    ),
+                rect().width(Size::fill()).padding(CARD_PAD).child(
+                    Readout::new(self.sql.clone())
+                        .color(self.theme.sql_color)
+                        .width(Size::fill())
+                        .wrap(),
+                ),
             )
             .child(Divider::horizontal().color(self.theme.card_border_fill))
             .child(Actions {
@@ -197,8 +185,6 @@ impl Component for Actions {
                     move |_| {
                         let id = actions::open_sql(session, &sql);
                         if run {
-                            // The editor's own Run, on the tab that was just opened — so a promoted
-                            // query is an ordinary press in every respect, history included.
                             actions::run_query(&engine, session, id);
                         }
                     }

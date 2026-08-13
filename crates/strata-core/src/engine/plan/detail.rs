@@ -113,10 +113,8 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert!(parts[0].has_key && parts[0].key == "mode" && parts[0].val == "Partitioned");
         assert_eq!(parts[1].key, "join_type");
-        // The comma inside the brackets must not split the `on` value.
         assert_eq!(parts[2].key, "on");
         assert_eq!(parts[2].val, "[(user_id@0, user_id@0)]");
-        // A bare fragment with no leading identifier stays key-less.
         let bare = detail_parts("TableScan: t");
         assert!(!bare[0].has_key);
     }
@@ -133,10 +131,6 @@ mod tests {
             self_label: String::new(),
             metrics: Vec::new(),
         };
-        // root → child → two grandchildren. The first grandchild's own (elbow)
-        // column stays lit because a depth-2 sibling still follows; its ancestor
-        // (depth-0) column is off (the root has no sibling). The last grandchild
-        // lights nothing (no following siblings). The root has no rails.
         let nodes = vec![n(0), n(1), n(2), n(2)];
         assert_eq!(guide_rails(&nodes, 0), Vec::<bool>::new());
         assert_eq!(guide_rails(&nodes, 2), vec![false, true]);

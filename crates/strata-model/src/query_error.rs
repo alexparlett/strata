@@ -1,13 +1,8 @@
-//! Parse a raw engine/DataFusion error string into a structured [`QueryError`]
-//! for the results-pane error view (S6).
+//! Parse a raw engine/DataFusion error string into a structured [`QueryError`] for the results
+//! pane: a friendly error class, a `line:col` location where there is one, a one-line code frame,
+//! and a short hint for a few common cases.
 //!
-//! DataFusion surfaces failures as flat strings, e.g.
-//! `"Error during planning: table 'foo' not found"` or a sqlparser message like
-//! `"SQL error: ParserError(\"Expected: …, found: FROM at Line: 2, Column: 8\")"`.
-//! We split off a friendly error class, pull out a `line:col` location when one
-//! is present, build a one-line code frame with a caret under the offending
-//! column, and attach a short hint for a few common cases. Everything is
-//! best-effort: an unrecognised string still yields a usable message.
+//! Everything is best-effort — an unrecognised string still yields a usable message.
 
 /// A parsed query error, shaped for the results-pane error banner + code frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -94,7 +89,6 @@ fn split_type(raw: &str) -> (String, String) {
     for (pfx, nice) in KNOWN {
         if let Some(rest) = raw.strip_prefix(*pfx) {
             let rest = rest.trim_start_matches([':', ' ']).trim();
-            // sqlparser wraps its message in `ParserError("…")`; unwrap it.
             let rest = unwrap_parser_error(rest);
             let msg = if rest.is_empty() {
                 raw.to_string()

@@ -122,8 +122,6 @@ fn cell_cursor(batch: &RecordBatch, col: usize, row: usize) -> Option<Cursor> {
 fn resolve(batch: &RecordBatch, col: usize, row: usize, path: &[usize]) -> Option<Cursor> {
     let mut cursor = cell_cursor(batch, col, row)?;
     for &step in path {
-        // One child at a time: `entries` does the type match once per level either way, and a
-        // single-child window keeps a deep path O(depth) rather than O(depth x width).
         let (_, mut children) = entries(&cursor, step, 1)?;
         cursor = children.pop()?;
     }
@@ -143,8 +141,6 @@ fn node(key: Option<String>, index: usize, cursor: &Cursor) -> ValueNode {
 }
 
 fn value_of(cursor: &Cursor) -> NodeValue {
-    // `DataType::Null`'s nulls are logical, so `is_null` reports false for every index of it — the
-    // same trap the preview's leaf encoding hit (see `serialize`).
     if cursor.array.is_null(cursor.idx) || matches!(cursor.array.data_type(), DataType::Null) {
         return NodeValue::Null;
     }
@@ -169,7 +165,6 @@ fn leaf_text(cursor: &Cursor) -> String {
     let options = FormatOptions::default();
     match ArrayFormatter::try_new(cursor.array.as_ref(), &options) {
         Ok(formatter) => clip(&formatter.value(cursor.idx).to_string(), DISPLAY_CHARS).into_owned(),
-        // A type arrow cannot format at all. Naming it beats an empty row that looks like a bug.
         Err(_) => format!("<unprintable {}>", cursor.array.data_type()),
     }
 }
@@ -193,7 +188,6 @@ fn len(cursor: &Cursor) -> Option<usize> {
         DataType::Struct(fields) => Some(fields.len()),
         DataType::List(_) => Some(array.as_list::<i32>().value_length(idx) as usize),
         DataType::LargeList(_) => Some(array.as_list::<i64>().value_length(idx) as usize),
-        // A list *view* carries per-element sizes rather than offsets, so its length reads there.
         DataType::ListView(_) => Some(array.as_list_view::<i32>().value_sizes()[idx] as usize),
         DataType::LargeListView(_) => Some(array.as_list_view::<i64>().value_sizes()[idx] as usize),
         DataType::FixedSizeList(_, n) => Some(*n as usize),
@@ -214,8 +208,6 @@ fn entries(
     let window = skip..total.min(skip.saturating_add(take));
     match array.data_type() {
         DataType::Struct(fields) => {
-            // A struct's children share the parent's index space, so descending one costs a field
-            // lookup and an `Arc` clone.
             let columns = array.as_struct().columns();
             let mut keys = Vec::new();
             let mut cursors = Vec::new();
@@ -252,8 +244,6 @@ fn entries(
             Some((keys, cursors))
         }
         _ => {
-            // Every list flavour: narrow to this cell's items once (an O(1) Arrow slice), then
-            // index into them.
             let (field, items) = list_items(cursor)?;
             let cursors = window
                 .clone()
@@ -345,7 +335,6 @@ mod tests {
         assert_eq!(kids[1].dtype, "List");
         assert_eq!(kids[1].value, NodeValue::Nest(3));
 
-        // A null field is Null, not an empty leaf — the row dims it like a grid cell.
         assert_eq!(kids[2].key.as_deref(), Some("seats"));
         assert_eq!(kids[2].value, NodeValue::Null);
     }

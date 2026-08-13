@@ -57,23 +57,15 @@ impl Component for ChatHeader {
         let project = use_radio_station::<ProjectState, ProjChan>();
         let root = project.read().root.clone();
         let report = use_report();
-        // **The confirm lives at the window root**, not here: listeners fire in document order,
-        // so a dialog mounted inside this 40px row would be a barrier over nothing.
         let mut confirming = use_consume::<State<Option<ChatDrop>>>();
         let config = use_config(ConfigChan::Settings);
         let mut open = use_state(|| false);
         let mut menu = use_state(|| false);
-        // **The press records the intent; this scope performs it.** A `spawn` from the menu
-        // item's own handler is bound to the menu item's scope, which the same handler unmounts
-        // by closing the menu — so the export task was dropped before its first poll. The flag
-        // is read here, in the header, which is still mounted when the dialog comes back.
         let mut exporting = use_state(|| false);
         let log = use_consume::<LogCtx>();
         let theme = self.theme.clone();
         let on_close = self.on_close.clone();
 
-        // A fresh conversation starts on Settings' defaults, resolved through the one funnel that
-        // drops a provider that is no longer enabled.
         let fresh = move || seed_pick(&config.read().settings.ai);
 
         let (title, rows) = {
@@ -91,10 +83,6 @@ impl Component for ChatHeader {
                     true => format!("{} messages", row.messages),
                     false => format!("{} · {} messages", row.model, row.messages),
                 };
-                // **The delete is a sibling of the row, never inside it.** A built-in control's
-                // press reaches its ancestors (AGENTS.md §3), so nesting it made every delete
-                // also fire the row's own handler: the switcher closed on each one, and the row
-                // press raced `delete` for a conversation that was about to stop existing.
                 menu.child(
                     rect()
                         .width(Size::px(MENU_WIDTH - MENU_ROW_CHROME))
@@ -107,9 +95,6 @@ impl Component for ChatHeader {
                                     let assistant = assistant.clone();
                                     let root = root.clone();
                                     move |_| {
-                                        // A stored conversation is **read** rather than switched to
-                                        // — the one place the two kinds of row differ, and only
-                                        // until it is open.
                                         match key {
                                             RowKey::Live(id) => chats.write().show(id),
                                             RowKey::Shelved(id) => {
@@ -142,9 +127,6 @@ impl Component for ChatHeader {
                                         .child(Meta::new(meta).color(theme.meta_color)),
                                 ),
                         )
-                        // **It asks.** Before conversations were stored this press discarded a
-                        // transcript the window happened to be holding; it now removes a file,
-                        // which is the user's record of an investigation.
                         .child(ToolButton::new(IconName::Close, "Delete chat").on_press({
                             let title = row.title.clone();
                             move |_| {
@@ -159,10 +141,6 @@ impl Component for ChatHeader {
             },
         );
 
-        // **This conversation's own actions**, between New chat and Close: what you can do to
-        // the chat you are looking at sits before the control that makes another one and the
-        // one that puts the pane away. Per-row delete stays in the switcher, where it can reach
-        // a conversation that is not the open one.
         let actions = Menu::new()
             .min_width(Size::px(ACTIONS_WIDTH))
             .on_close(move |()| menu.set(false))
@@ -191,8 +169,6 @@ impl Component for ChatHeader {
             export_chat(chats.peek().active(), log);
         });
 
-        // The title *is* the trigger, so the pane's one heading and its one navigation control
-        // are the same object — the canvas's shape, and the only one that fits a 340px pane.
         let trigger = Button::new()
             .flat()
             .height(Size::px(COMPACT_BUTTON))
@@ -243,8 +219,6 @@ impl Component for ChatHeader {
             .child(
                 ToolButton::new(IconName::Plus, "New chat").on_press(move |_| {
                     chats.write().open(fresh());
-                    // A new conversation can push the oldest off the end, and the one that goes may
-                    // not be on disk yet.
                     store_shed(&root, chats, report);
                 }),
             )

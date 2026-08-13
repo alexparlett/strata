@@ -69,31 +69,29 @@ pub enum SidebarPane {
     Connections,
 }
 
-/// A stored layout value this build may no longer have a variant for — see [`sidebar_pane`] for
-/// the rule in full, and [`retired_to`] for the readers built on it.
+/// A stored layout value this build may no longer have a variant for — see [`sidebar_pane`] for the
+/// rule in full.
 ///
-/// The fallback arm is a `String` and **not** `IgnoredAny`: a name this build has retired is the
-/// one thing worth tolerating here, and taking anything at all would swallow a genuinely
-/// malformed value (`42`, `{}`, `[1, 2]`) that ought to fail the load and get the file kept
-/// aside for recovery. A retired variant that carried *data* is therefore still strict, which is
-/// the deliberate half of the trade: those are rare, and the alternative accepts nonsense.
+/// The fallback arm is a `String` and **not** `IgnoredAny`: a retired *name* is the one thing worth
+/// tolerating, and taking anything would swallow a malformed value (`42`, `{}`) that ought to fail
+/// the load. A retired variant that carried data is therefore still strict.
+///
+/// [`Retired`](Self::Retired)'s payload is never read, and it must stay a `String` rather than the
+/// unit type rustc suggests: the *type* is the check, and `()` deserializes only from `null`, which
+/// already means "collapsed".
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Stored<T> {
     Known(T),
-    // Never read, and it must stay a `String` rather than the unit type rustc suggests: the
-    // *type* is the check. `()` deserializes only from `null`, which would take this arm for
-    // the one input that already means "collapsed" and let `42` through the other.
-    #[allow(dead_code, reason = "the field's type is the validation; see above")]
+    #[allow(
+        dead_code,
+        reason = "the field's type is the validation; see the type's docs"
+    )]
     Retired(String),
 }
 
 /// Read a **non-optional** layout field, resolving a variant this build has retired to `fallback`
-/// rather than failing the whole session.
-///
-/// The generic half of [`sidebar_pane`]'s rule, and it exists because that rule was written for
-/// one field while applying word for word to every other closed vocabulary in a session: the cost
-/// of a strict read is not the field, it is `session.json` moved aside and every open tab lost.
+/// rather than failing the whole session — the generic half of [`sidebar_pane`]'s rule.
 fn retired_to<'de, D, T>(d: D, fallback: T) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
@@ -106,11 +104,8 @@ where
 }
 
 /// Read an **optional** layout field, resolving a retired variant to `fallback` while keeping
-/// `null` meaning what it has always meant: that surface is collapsed.
-///
-/// The two are genuinely different answers, which is why the stored `None` is not simply reused
-/// as the fallback — the file said the surface was *open*, and that half is still true and still
-/// the user's arrangement.
+/// `null` meaning what it always has: that surface is collapsed. Two different answers — the file
+/// said the surface was *open*, and that half is still the user's arrangement.
 fn retired_open<'de, D, T>(d: D, fallback: T) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -147,11 +142,8 @@ where
     retired_to(d, ProblemsTab::default())
 }
 
-/// [`TabSnapshot::origin`]'s reader — a retired origin makes the tab a scratch tab.
-///
-/// It keeps its text, which is the part that cannot be regenerated; what it loses is a binding to
-/// a view or saved query this build no longer understands. Losing one tab's binding is a much
-/// smaller thing than losing the session.
+/// [`TabSnapshot::origin`]'s reader — a retired origin makes the tab a scratch tab. It keeps its
+/// text, which is the part that cannot be regenerated.
 fn tab_origin<'de, D>(d: D) -> Result<Origin, D::Error>
 where
     D: Deserializer<'de>,
@@ -159,18 +151,13 @@ where
     retired_to(d, Origin::Scratch)
 }
 
-/// Read [`Layout::sidebar`], treating a pane this build no longer offers as the **default**
-/// pane rather than as a corrupt session.
+/// Read [`Layout::sidebar`], treating a pane this build no longer offers as the **default** pane
+/// rather than as a corrupt session.
 ///
-/// `#[serde(default)]` covers a *missing* field and nothing else, so a session written while
-/// a since-removed pane was open would fail the whole `SessionSnapshot` — which the loader
-/// answers by moving `session.json` aside, costing the user every tab they had open. A pane
-/// that no longer exists is not corruption; it is a layout value with nowhere to go.
-///
-/// It resolves to [`SidebarPane::Catalog`], not to `None`: the stored value said the sidebar
-/// was **open**, and that half of it is still true and still the user's arrangement. `None`
-/// stays reserved for what it has always meant — an explicit `null`, the sidebar collapsed —
-/// which the arm below keeps distinct.
+/// `#[serde(default)]` covers a *missing* field and nothing else, so a session written while a
+/// since-removed pane was open would fail the whole `SessionSnapshot` — and the loader answers that
+/// by moving `session.json` aside, costing every open tab. It resolves to
+/// [`SidebarPane::Catalog`] and not to `None`, which stays reserved for an explicit `null`.
 fn sidebar_pane<'de, D>(d: D) -> Result<Option<SidebarPane>, D::Error>
 where
     D: Deserializer<'de>,
@@ -178,15 +165,12 @@ where
     retired_open(d, SidebarPane::Catalog)
 }
 
-/// Which assistive surface the **right** rail shows. `None` on [`Layout::right`] means the
-/// right side is collapsed.
+/// Which assistive surface the **right** rail shows. `None` on [`Layout::right`] means the right
+/// side is collapsed.
 ///
-/// A single-selection pane rather than two independent flags, exactly as
-/// [`SidebarPane`] is on the left: the canvas (`Strata.dc.html` `data-rg="rightrail"`) gives
-/// the right edge its own 48px rail and one column beneath it, so the inspector and the chat
-/// are alternatives rather than neighbours. That is what keeps a 1180px window readable with
-/// both rails and the drawer up, and it is the same arrangement RustRover uses on its right
-/// edge.
+/// A single-selection pane rather than two independent flags, exactly as [`SidebarPane`] is on the
+/// left: the right edge has one rail and one column beneath it, so the inspector and the chat are
+/// alternatives rather than neighbours. That is what keeps a 1180px window readable.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum RightPane {
     /// The selected column's facts (P3-08).
@@ -224,8 +208,7 @@ pub struct Layout {
     #[serde(default = "default_inspector_w")]
     pub inspector_w: f32,
     /// The chat pane's width. Its own field rather than one shared with the inspector: the two
-    /// share a slot on screen and nothing else — a transcript wants more room than a column's
-    /// facts do, and a user who sizes one has not sized the other.
+    /// share a slot on screen and nothing else, and a user who sizes one has not sized the other.
     #[serde(default = "default_chat_w")]
     pub chat_w: f32,
     #[serde(default = "default_drawer_h")]
@@ -235,18 +218,15 @@ pub struct Layout {
     /// no separate flag to keep in step with the height.
     #[serde(default)]
     pub drawer_restore_h: Option<f32>,
-    /// Which of the Problems drawer's two scopes is showing. Layout, not a view-local flag, for
-    /// the reason every other field here is: it is part of the arrangement the user set up, so
-    /// it survives collapsing the drawer, switching to Events and back, and a restart.
+    /// Which of the Problems drawer's two scopes is showing. Layout rather than a view-local flag,
+    /// so it survives collapsing the drawer, switching to Events and back, and a restart.
     #[serde(default, deserialize_with = "problems_tab")]
     pub problems_tab: ProblemsTab,
 }
 
-/// The two scopes of the Problems drawer (P4-15 item 3).
-///
-/// A strip *inside* one drawer body rather than a fourth entry on the rail, because these are the
-/// same kind of thing — problems — at two scopes, where the rail chooses between different
-/// surfaces entirely. (JetBrains' Problems panel splits on exactly this axis.)
+/// The two scopes of the Problems drawer. A strip *inside* one drawer body rather than a fourth
+/// entry on the rail, because these are the same kind of thing at two scopes, where the rail
+/// chooses between different surfaces entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProblemsTab {
@@ -327,11 +307,7 @@ pub struct WindowGeom {
 mod tests {
     use super::*;
 
-    /// **A session written while a since-retired pane was open still loads, and keeps its
-    /// tabs.** That is the whole point of the lenient read: the alternative is a parse
-    /// failure, which the loader answers by moving `session.json` aside — so removing a pane
-    /// would cost anyone who had it open everything they had open with it.
-    ///
+    /// **A session written while a since-retired pane was open still loads, and keeps its tabs.**
     /// Through `SessionSnapshot` rather than `Layout`, because the tabs are the claim.
     #[test]
     fn a_retired_sidebar_pane_keeps_the_session_it_was_written_in() {
@@ -345,7 +321,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(restored.tabs.len(), 1, "the tabs survive");
-        // Open, on the default pane — the stored value said the sidebar was up.
         assert_eq!(restored.layout.sidebar, Some(SidebarPane::Catalog));
     }
 
@@ -368,13 +343,8 @@ mod tests {
         assert!(serde_json::from_str::<Layout>(r#"{"sidebar":{}}"#).is_err());
     }
 
-    /// **Every closed vocabulary in a session reads the same way**, not just the sidebar.
-    ///
-    /// The rule was written for one field and applies word for word to the rest: retiring a
-    /// `DrawerTab`, adding a `RightPane` and downgrading, or renaming a Problems scope would each
-    /// otherwise fail the whole `SessionSnapshot` — and the loader answers that by moving
-    /// `session.json` aside, which costs every open tab. Each falls back the way the sidebar
-    /// does: the surface stays *open*, on the default choice.
+    /// **Every closed vocabulary in a session reads the same way**, not just the sidebar: each
+    /// falls back the way the sidebar does, with the surface staying *open* on the default choice.
     #[test]
     fn a_retired_layout_value_keeps_the_session_it_was_written_in() {
         let layout: Layout = serde_json::from_str(
@@ -386,7 +356,6 @@ mod tests {
         assert_eq!(layout.drawer, Some(DrawerTab::Problems));
         assert_eq!(layout.problems_tab, ProblemsTab::Queries);
 
-        // Known values still read as themselves, and `null` still means collapsed.
         let known: Layout =
             serde_json::from_str(r#"{"right":"Chat","drawer":"History","problems_tab":"project"}"#)
                 .unwrap();
@@ -398,7 +367,6 @@ mod tests {
         assert_eq!(collapsed.right, None);
         assert_eq!(collapsed.drawer, None);
 
-        // And malformed is still malformed.
         assert!(serde_json::from_str::<Layout>(r#"{"drawer":42}"#).is_err());
     }
 
@@ -417,7 +385,6 @@ mod tests {
         assert_eq!(restored.tabs[0].origin, Origin::Scratch);
         assert_eq!(restored.tabs[0].text, "SELECT 1", "the SQL is what matters");
 
-        // A binding this build *does* understand is untouched.
         let bound = format!(
             r#"{{"id":"{}","name":"v","origin":{{"View":"sales"}},"text":""}}"#,
             Uuid::nil()

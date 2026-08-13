@@ -196,12 +196,10 @@ mod tests {
 
     #[test]
     fn resolve_prunes_rows_that_outlived_the_page() {
-        // A row pick from a longer page: the stale index drops, the valid one survives.
         assert_eq!(
             resolve(&Selection::Rows(vec![7, 1]), 3, 2),
             Some((vec![1], vec![0, 1]))
         );
-        // Nothing left in-page → nothing to copy.
         assert_eq!(resolve(&Selection::Rows(vec![7]), 3, 2), None);
     }
 }

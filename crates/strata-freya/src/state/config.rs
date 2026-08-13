@@ -120,24 +120,17 @@ pub fn use_config_channel(station: ConfigStation, chan: ConfigChan) -> ConfigRad
 /// **The window's claim on a project**: it joins the persisted open-set on mount and leaves it
 /// on close — but not on quit.
 ///
-/// Called by `ProjectRoot`, so every arm of the project subtree claims alike: a window loading
-/// a project, showing one, or reporting that it could not be loaded is in every case *a window
-/// on that project*. That is what makes a quit reopen it — resurfacing a fault honestly — and a
-/// deliberate close drop it from reopen-on-startup. Deliberately **not** paired with the
-/// recents promotion below, which a project has to earn by loading.
+/// Called by `ProjectRoot`, so every arm of the project subtree claims alike — a window loading a
+/// project, showing one, or reporting that it could not be loaded is in every case *a window on
+/// that project*, which is what makes a quit reopen it and resurface a fault honestly. Deliberately
+/// **not** paired with the recents promotion below, which a project has to earn by loading.
 ///
-/// `root` is the project folder ([`RecentProject::path`](strata_core::config::RecentProject::path)),
-/// already canonicalized by whoever opened the window.
+/// The add half is load-bearing rather than symmetry: an unpaired remove-on-drop loses the entry on
+/// every remount of the subtree, and the quit after that would silently forget the window.
 ///
-/// The add half is load-bearing rather than symmetry: an unpaired remove-on-drop loses the
-/// entry on every remount of the subtree — a failed Try again, an engine restart — because
-/// nothing re-adds what the drop took out, and the quit after that would silently forget the
-/// window.
-///
-/// Quitting closes windows too, so this drop runs then as well — and must **not** remove
-/// anything, or the persisted open-set would end up empty and "Reopen projects on startup"
-/// would restore nothing. [`is_quitting`] is what tells the two apart, and that difference
-/// is the whole feature: quitting with three projects open reopens those three, while
+/// Quitting closes windows too, so this drop runs then as well — and must **not** remove anything,
+/// or the persisted open-set would end up empty. [`is_quitting`] tells the two apart, and that
+/// difference is the whole feature: quitting with three projects open reopens those three, while
 /// closing all three by hand means "start me at the launcher".
 pub fn use_claim_open(station: ConfigStation, root: &Path) {
     let path = root.to_string_lossy().into_owned();
@@ -186,33 +179,24 @@ const ALL_AUDIENCES: [ConfigChan; 3] =
 /// [`ConfigChan::Recents`] and [`ConfigChan::Open`]): the edit runs once, each listed
 /// channel is notified, and the file is written once, after the UI has been woken.
 ///
-/// The write is synchronous and immediate rather than debounced like the session
-/// autosave: config changes are discrete user events (open a project, pin a recent, flip a
-/// setting), not a keystroke stream, so there is no burst to coalesce and nothing in
-/// flight to lose on a crash. A control that streams values (a drag-slider) would need to
-/// commit on settle rather than per frame.
-/// Returns whether the edit reached disk (P4-15). The in-memory store is updated and every
-/// listed channel notified **either way** — the UI must show what the user just did, and a
-/// window whose config write failed is otherwise fine — so the `Err` is about the durable copy
-/// alone: the setting holds for this run of the app and reverts at the next launch.
+/// The write is synchronous and immediate rather than debounced like the session autosave: config
+/// changes are discrete user events, not a keystroke stream, so there is no burst to coalesce. A
+/// control that streams values would need to commit on settle rather than per frame.
+///
+/// Returns whether the edit reached disk. The in-memory store is updated and every listed channel
+/// notified **either way**, so the `Err` is about the durable copy alone: the setting holds for
+/// this run and reverts at the next launch.
 ///
 /// Callers that represent a **deliberate commit** report it where the user is looking
-/// (`SettingsCtx::apply`). The bookkeeping writes — pushing a recent, adding to or leaving the
-/// open-project set, pruning a recent whose folder is gone — deliberately do not: the user did
-/// not ask for them, there is nothing to undo, and nine call sites each announcing the same
-/// failure of the same file is the stacked near-duplicate AGENTS.md §3 rules out. Making a
-/// bookkeeping failure visible wants **one standing condition**, not nine events; that is
-/// P4-15 build items 3 and 6, and it is not built.
+/// (`SettingsCtx::apply`); the bookkeeping writes deliberately do not, because the user did not ask
+/// for them and nine call sites announcing the same failure of the same file is the stacked
+/// near-duplicate AGENTS.md §3 rules out. Making a bookkeeping failure visible wants **one standing
+/// condition**, which is not built.
 pub fn write_config(
     mut station: ConfigStation,
     channels: &[ConfigChan],
     edit: impl FnOnce(&mut AppConfig),
 ) -> bool {
-    // A `RadioStation` is only mutable *through* a channel guard, so an empty `channels`
-    // has no write path of its own — and running the edit inside the per-channel loop ran
-    // it zero times there, then persisted the untouched config: a silently dropped edit.
-    // Every field belongs to an audience, so naming none is a caller bug; take the
-    // conservative reading (all of them, so nothing can be left stale) and say so.
     let channels = if channels.is_empty() {
         tracing::error!("write_config: no audience named; notifying all of them");
         &ALL_AUDIENCES[..]
@@ -220,14 +204,10 @@ pub fn write_config(
         channels
     };
     let mut channels = channels.iter();
-    // The edit runs exactly once, under the first channel's guard — whose drop is that
-    // channel's notification. Non-empty by construction, so it always runs.
     if let Some(first) = channels.next() {
         edit(&mut station.write_channel(*first));
     }
     for chan in channels {
-        // The remaining audiences: an empty write, taken and dropped one at a time (each
-        // guard holds the value borrow until it notifies).
         drop(station.write_channel(*chan));
     }
     match config::save(&station.peek()) {

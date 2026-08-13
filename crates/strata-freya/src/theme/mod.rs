@@ -226,7 +226,6 @@ pub fn use_strata_theme(themes: ThemesCtx, config: ConfigStation, preview: Theme
     let settings = use_config_channel(config, ConfigChan::Settings);
     let mut theme = use_init_theme({
         let themes = themes.clone();
-        // `peek`s — the side effect below owns reactivity.
         move || {
             let sel = peek_selection(config, preview);
             let os_dark = sel.sync_os && *preferred.peek() == PreferredTheme::Dark;
@@ -234,12 +233,8 @@ pub fn use_strata_theme(themes: ThemesCtx, config: ConfigStation, preview: Theme
         }
     });
     use_side_effect(move || {
-        // Both inputs are read on every pass, not short-circuited on the preview: a Save
-        // writes the settings and clears the preview, and a subscription taken only while
-        // the preview was absent would miss whichever of the two landed second.
         let committed = ThemeSel::from(&settings.read().settings);
         let sel = preview.read().clone().unwrap_or(committed);
-        // Short-circuit: only subscribe to the OS appearance while actually syncing.
         let os_dark = sel.sync_os && *preferred.read() == PreferredTheme::Dark;
         let id = sel.effective(os_dark);
         let applied = theme.peek().name;
@@ -258,8 +253,6 @@ pub fn strata_theme(t: &StrataTheme) -> Theme {
         Mode::Light => light_theme(),
         Mode::Dark => dark_theme(),
     };
-    // Freya's `Theme.name` is `&'static str`; the id is a runtime string (built-in or custom),
-    // so leak it once (negligible, lives for the program).
     th.name = Box::leak(t.id.clone().into_boxed_str());
     let roles = resolve_roles(t);
     let typo = resolve_typography(t);
@@ -273,9 +266,6 @@ pub fn strata_theme(t: &StrataTheme) -> Theme {
         EditorSyntaxThemePreference::from_scopes(|scope| t.syntax.get(scope).map(|s| pc(s))),
     );
     th.set(ROLES_KEY, roles);
-    // Install the resolved type scale onto the theme itself (its `Box<dyn Any>` component
-    // store), so typography components read it with a standard `use_theme().get::<Typography>`
-    // — no provider, no cache. Keyed `strata_typography` to avoid Freya's built-in `typography`.
     th.set(TYPOGRAPHY_KEY, typo);
     th
 }
@@ -313,10 +303,6 @@ fn pc(s: &str) -> Color {
         }
     }
     let hex = s.trim_start_matches('#');
-    // Gate before slicing: `len()` is bytes, so a multibyte character in a "6-char" value
-    // would split a UTF-8 boundary and panic — and a broken user theme must never take the
-    // app down. A wrong-character value of the right length is the same loud magenta, not a
-    // silently zeroed channel.
     if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return MAGENTA;
     }
@@ -468,8 +454,6 @@ mod tests {
         fn app() -> impl IntoElement {
             let (themes, config, preview) = use_consume::<Handles>();
             use_strata_theme(themes, config, preview);
-            // The applied id, surfaced as text so the assertions read what Freya installed
-            // (`Theme.name` carries it) rather than re-deriving it.
             label().text(use_theme().read().name)
         }
 
@@ -504,14 +488,12 @@ mod tests {
         );
         assert_eq!(applied(&mut runner), "midnight");
 
-        // The Settings window picks another theme: uncommitted, but live here.
         preview.set(Some(ThemeSel {
             theme: "daylight".to_string(),
             sync_os: false,
         }));
         assert_eq!(applied(&mut runner), "daylight");
 
-        // Cancel drops the slot, and the window falls back to what is committed.
         preview.set(None);
         assert_eq!(applied(&mut runner), "midnight");
     }

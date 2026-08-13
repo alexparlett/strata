@@ -1,54 +1,34 @@
 //! **A connection, against a real S3 server** (W7) — the half no unit test can reach.
 //!
-//! `engine::store`'s own tests prove a `ConnectionDef` produces a store and that the store
-//! lands under the right registry key. What they cannot prove is that anything can be *read*
-//! through it: every one of them stops at the registry, and the two that involve credentials
-//! either skip signing entirely (`Anonymous`) or resolve a credential and throw it away
-//! without ever signing a request with it.
+//! `engine::store`'s unit tests stop at the registry: they prove a `ConnectionDef` produces a store
+//! under the right key, never that anything can be *read* through it. So this drives MinIO in a
+//! container and asserts the whole chain — connection → registered object store → a table def
+//! naming that connection → `register_external`'s listing and inference → rows. It is the only
+//! thing that exercises **`SigV4` signing through the `aws-config` bridge**, where a server that
+//! verifies signatures is the only witness that the credential triple is right.
 //!
-//! So this drives MinIO in a container and asserts the whole chain end to end — connection →
-//! registered object store → **a table def naming that connection**, composed by
-//! `register::table_spec` (W7 · 04) → `register_external`'s listing and schema inference → a
-//! query that returns rows. In particular it is the only thing that exercises **`SigV4` signing through the
-//! `aws-config` bridge**: `SdkCredentials` hands `object_store` a key/secret/token triple, and
-//! a server that actually verifies signatures is the only witness that the triple is right.
+//! **A real server rather than a mock**, because an S3 mock is written by the same understanding of
+//! the protocol it is meant to check. The fixture is seeded with `aws-sdk-s3` for the same reason:
+//! a different client from the one under test, so the write and read sides cannot share a mistake.
 //!
-//! **Why a real server rather than a mock.** An S3 mock is written by the same understanding of
-//! the protocol it is meant to check, so a misreading produces a mock that agrees with the bug
-//! and a test that passes. MinIO cannot be talked round. The fixture is seeded with
-//! `aws-sdk-s3` for the same reason — a different client from the one under test, so the write
-//! and read sides cannot share a mistake.
-//!
-//! **An ordinary integration test, deliberately not `#[ignore]`d.** An ignored test is one
-//! nobody runs, and this is exactly the test worth running: it is the only thing that would
-//! notice a regression in the credential bridge or the registration order. So a **container
-//! runtime is a development prerequisite** for this repo — Testcontainers Cloud, Docker,
-//! colima, whichever. Without one this fails rather than quietly passing, which is the point:
-//! "no runtime" and "the code is fine" must not look the same. The runtime is discovered from
+//! **Deliberately not `#[ignore]`d.** An ignored test is one nobody runs, and this is the only
+//! thing that would notice a regression in the credential bridge. A container runtime is therefore
+//! a development prerequisite; without one this fails rather than quietly passing, because "no
+//! runtime" and "the code is fine" must not look the same. The runtime is found from
 //! `~/.testcontainers.properties` or `DOCKER_HOST` — the former only because `testcontainers`
-//! is built with **`properties-config`**, without which that file is `#[cfg]`'d out and a
-//! Testcontainers Cloud agent (which advertises itself only through that file) reads as no
-//! runtime at all. That is not hypothetical: it is how this first failed on CI.
+//! carries **`properties-config`**, without which a Testcontainers Cloud agent reads as no runtime
+//! at all. That is how this first failed on CI.
 //!
-//! **Two providers, S3 and HTTP** — the same container serves both, because MinIO is an S3 API
-//! *and* an ordinary HTTP origin once a bucket is world-readable. The HTTP arm reads a single
-//! object rather than a prefix, and that is not a shortcut: `object_store`'s HTTP store lists
-//! through **WebDAV PROPFIND**, which MinIO does not implement, so a directory-shaped source
-//! could not work against it. A single-file source is exactly what an `http(s)://` connection is
-//! for in any case, and it exercises the whole path — connection, registered store, `head` +
-//! `get` over the wire, schema inference, rows.
+//! **Two providers, S3 and HTTP**, off one container: MinIO is an S3 API and an ordinary HTTP
+//! origin once a bucket is world-readable. The HTTP arm reads a single object rather than a prefix,
+//! and that is not a shortcut — `object_store`'s HTTP store lists through WebDAV PROPFIND, which
+//! MinIO does not implement.
 //!
-//! **GCS is a known gap**, not an oversight — it was tried, and the gap is *listing*.
-//! `object_store`'s GCS client speaks the **XML** API and needs two halves of it:
-//! `{base}/{bucket}?list-type=2` to list and `{base}/{bucket}/{key}` to get (its
-//! `gcp/client.rs:156,670`). DataFusion lists a prefix before reading, so neither is optional.
-//! MiniSky and fake-gcs-server are JSON-API only; localgcp does serve XML *downloads* but has
-//! no XML list, so a listing request 404s. MinIO has the whole XML API and was measured: the
-//! GCS arm gets a **403 even on a world-readable bucket**, because a service-account file with
-//! `disable_oauth` makes `object_store` send an empty `Authorization: Bearer` header, which
-//! MinIO refuses rather than reading as anonymous. None of this is evidence against the GCS
-//! provider — real GCS authenticates with OAuth bearer tokens, the path no emulator exercises
-//! — it means GCS coverage needs a real bucket rather than a container.
+//! **GCS is a known gap**, not an oversight. `object_store`'s GCS client speaks the XML API and
+//! needs both list and get; the JSON-API emulators serve neither, localgcp has no XML list, and
+//! MinIO 403s the GCS arm because a service-account file with `disable_oauth` sends an empty
+//! `Authorization: Bearer` header. Real GCS authenticates with OAuth tokens, which no emulator
+//! exercises, so GCS coverage needs a real bucket.
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -168,7 +148,6 @@ async fn seed(endpoint: &str, objects: &[(&str, &str)]) {
         .behavior_version(BehaviorVersion::latest())
         .region(Region::new(REGION))
         .endpoint_url(endpoint)
-        // MinIO serves path-style; virtual-hosted would resolve a hostname that isn't there.
         .force_path_style(true)
         .credentials_provider(Credentials::new(KEY_ID, SECRET, None, None, "test"))
         .build();
@@ -191,9 +170,6 @@ async fn seed(endpoint: &str, objects: &[(&str, &str)]) {
             .unwrap_or_else(|e| panic!("put the fixture object '{key}': {e}"));
     }
 
-    // …and make it readable without a signature, which is what turns this container into an
-    // ordinary HTTP origin as well as an S3 endpoint. Only `GetObject`, and only on this
-    // bucket's objects: the HTTP arm reads one file and needs nothing else.
     client
         .put_bucket_policy()
         .bucket(BUCKET)
@@ -228,10 +204,6 @@ fn connection(endpoint: &str, auth: S3Auth) -> ConnectionDef {
             endpoint: endpoint.into(),
             allow_http: true,
         }),
-        // **Client options ride the signed store too**, which is the half a reader is most likely
-        // to doubt: `AmazonS3ConfigKey::Client(..)` routes straight into the same `ClientOptions`
-        // the HTTP builder takes (`aws/builder.rs`), so this proves it against a server that
-        // verifies signatures rather than only against a store that builds.
         client_config: client_options(),
     }
 }
@@ -277,10 +249,6 @@ fn table() -> TableSpec {
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
-    // The project folder is **never consulted** for a source over a connection, which is why any
-    // path serves here: `resolve_source` composes onto the bucket instead. Handing this to the
-    // local rule is the failure this arrangement exists to catch — it would answer
-    // `/nowhere/data/` and report a missing folder, with the bucket never contacted.
     table_spec(Path::new("/nowhere"), &def)
 }
 
@@ -418,8 +386,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .await
         .expect("the connection registers its object store");
 
-    // Registration reads the object through that store — this is the first real network
-    // traffic our own code causes, and the first signed request.
     let meta = engine
         .register(table())
         .await
@@ -433,19 +399,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .expect("query the remote table");
     assert_eq!(output.total, 3, "every seeded row came back");
 
-    // --- Hive partitioning, over the bucket ----------------------------------------------
-    //
-    // **The folder tree read as columns, against a store that has no folders.** Everything in
-    // this arm is `ObjectStore`-level on DataFusion's side — `list_partitions` walks
-    // `list_with_delimiter`'s common prefixes and `parse_partitions_for_path` reads the
-    // `key=value` segments off the object path — so nothing about it is local-disk-shaped in
-    // principle. What could not be checked without a real store is whether *our* half holds:
-    // `detect_partitions` lists through the session's registered store rather than `read_dir`,
-    // and the values have to survive the trip as the typed columns the def declares.
-    //
-    // The keys are **found, not declared**: this is the same call the Configure window's Hive
-    // switch makes, so the section that says it found `key=value` folders in a bucket is the
-    // thing being proved.
     let found = engine
         .detect_partitions(vec![format!("s3://{BUCKET}/{HIVE_PREFIX}")])
         .await;
@@ -499,11 +452,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "every partition's rows came back carrying its folder's values"
     );
 
-    // **A filter on a partition column takes a different path through the store**:
-    // `pruned_partition_list` lists the levels and drops whole prefixes before any file is
-    // opened, where the unfiltered read above just lists everything. It is the arm that would
-    // break if a value arrived as text, since `year = 2025` would then be comparing against
-    // `'2025'` — and the one that proves the pruning talks to the same registered store.
     let (pruned, _) = engine
         .query(
             WsId(1),
@@ -516,13 +464,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     assert_eq!(pruned.total, 1, "only the 2025 partition was read");
     assert_eq!(pruned.rows[0][0].text, "30");
 
-    // **And the diagnosis, which is the part that needed a listing of our own.** A lake under
-    // plain `2024/` folders read by a def that declares `year` matches nothing, and DataFusion
-    // reports the location as empty with the files sitting right there — the one Hive mistake
-    // worth naming. A local directory earns that message from a bounded `std::fs` walk;
-    // `holds_under_partitions` asks the **object store** the same question, so the two now say
-    // the same thing. Nothing but a real bucket with real objects in it can prove that: with an
-    // empty prefix the message is the same either way.
     let unkeyed = TableSpec {
         name: "flat".into(),
         paths: vec![format!("s3://{BUCKET}/{HIVE_UNKEYED_PREFIX}")],
@@ -541,10 +482,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the store was listed, found the files, and the columns are what missed them"
     );
 
-    // **The assertion above cannot fail on its own**, which is why this one is here: an
-    // unsettled answer counts as "do not claim emptiness", so a listing that never happened
-    // produces exactly the message it does. A prefix with *nothing* under it is the case only a
-    // real listing can tell apart — `Some(false)`, and the columns are then not to blame.
     let empty = TableSpec {
         name: "empty".into(),
         paths: vec![format!("s3://{BUCKET}/nothing/")],
@@ -560,14 +497,10 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the store settled that there is nothing there, so the partition columns are not blamed"
     );
 
-    // Swept at the end of the test rather than by the phase, which leaves the engine's data root
-    // live for everything after it.
     let project = env::temp_dir().join(format!("strata_typed_external_{}", process::id()));
     let _ = fs::remove_dir_all(&project);
     typed_registration(&engine, &project).await;
 
-    // …and the engine reads through the connection, not around it: a bucket nothing connected
-    // has no store, which is the failure a table over an unregistered bucket must give.
     let orphan = TableSpec {
         name: "orphan".into(),
         paths: vec!["s3://not-connected/data/".into()],
@@ -579,17 +512,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    // --- the same server as a plain HTTP origin ------------------------------------------
-    //
-    // **The second provider, end to end.** Nothing here is signed and nothing is inferred: the
-    // connection's address *is* the URL the user typed, the table's source is one object under
-    // it, and the read is a `head` and a `get` over the wire. It shares this container because
-    // MinIO is an ordinary HTTP server once its bucket is world-readable — and sharing it is
-    // also what proves the two connections are independent registry entries rather than one
-    // store answering twice.
-    //
-    // It carries client options too (`http_connection`), so `with_config` is proved against a
-    // store that is then actually read through rather than only against one that builds.
     engine
         .connect(http_connection(&endpoint))
         .await
@@ -607,9 +529,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .expect("query the remote table");
     assert_eq!(output.total, 3, "every seeded row came back over HTTP");
 
-    // …and an HTTP origin nothing connected is as unreachable as an unconnected bucket, which
-    // is what says the registry keyed this one on its own scheme and authority rather than
-    // answering for `http://` in general.
     let orphan = TableSpec {
         name: "orphan_http".into(),
         paths: vec!["http://127.0.0.1:1/lake/x.csv".into()],
@@ -621,14 +540,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    // --- and Forget takes it back out ----------------------------------------------------
-    //
-    // **`disconnect` is the only thing that can un-register a bucket**, which is why it is
-    // pinned against a real store rather than asserted on a return value it does not have:
-    // `connect` is additive by contract and never sees the def it replaced, so without this
-    // call a forgotten connection stays queryable for the life of the window and the pane says
-    // it is gone. The failure it must produce is the orphan's above, on the bucket that worked
-    // two lines ago.
     engine.disconnect(&connection(&endpoint, S3Auth::Ambient).url());
     let forgotten = TableSpec {
         name: "forgotten".into(),
@@ -643,43 +554,9 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "a forgotten bucket is unreachable, exactly as one that was never connected: {refused}"
     );
 
-    // --- and now the same connection with credentials the server refuses -----------------
-    //
-    // **A connection whose credentials the server rejects still registers, and fails at the
-    // table** — and this phase is the one that pins it, because MinIO answering a real 403 is
-    // the only way to reach the arm.
-    //
-    // It is deliberate rather than left over. `store::reachable` asks whether the connection is
-    // *described* right — region, bucket, endpoint — and an authorization answer is not that.
-    // It cannot be: `connect` is `register_pass`'s first phase, so no table has registered and
-    // there is no prefix to probe with, leaving a **root** listing as the only question
-    // available. That is a far stronger demand than Strata makes of the bucket, and two ordinary
-    // setups fail it while working perfectly — an `s3:ListBucket` conditioned on
-    // `s3:prefix: ["team/*"]` (AWS's own documented way to hand somebody a folder), and a
-    // published dataset granting `GetObject` but not `ListBucket`. Refusing either would take
-    // every table in a working project down with the connection.
-    //
-    // So `reachable` refuses **one** thing — a bare redirect, which is a bucket that is not in
-    // the region it was given — and passes everything else a listing can answer, this 403
-    // included. The wrong-region diagnosis, the fault the probe was built for, is untouched.
-    //
-    // It is worth knowing *why* the rule is that blunt, because the obvious version was written
-    // first and this test is what killed it. `reachable` used to match `Error::PermissionDenied`
-    // and `Unauthenticated` to let this phase through, on the strength of `RetryError::error`
-    // mapping 403 and 401 onto them. It does — but the S3 **list** path never reaches that
-    // mapping: `aws/client.rs`'s `From<Error> for crate::Error` sends `ListRequest` (and every
-    // variant but two) to `_ => Generic`, so a 403, a 404 and a redirect all arrive as one
-    // variant and every arm was unreachable. `RetryError` is `pub(crate)`, so the status cannot
-    // be recovered by downcast either. Matching one distinctive message is what is left.
-    //
-    // Last, and in the same test, for the reason the doc comment gives: this rewrites the
-    // environment the phases above depend on.
     env::set_var("AWS_ACCESS_KEY_ID", "AKIAWRONGKEY");
     env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-secret");
 
-    // A fresh engine, so this phase starts from nothing: the one above has had its store
-    // disconnected by the block before this, and even before that its registration came from
-    // the good credentials. Either way a pass here cannot be an artefact of the earlier one.
     let engine = Engine::new(BTreeMap::new());
     engine
         .connect(connection(&endpoint, S3Auth::Ambient))
@@ -689,10 +566,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .register(table())
         .await
         .expect_err("MinIO rejects the signature");
-    // **What the refusal says, not merely that there is one.** Any non-empty string passed this
-    // before — a registration bug, a wrong endpoint, a listing fault — so the phase asserted the
-    // credential bridge worked by asserting that *something* went wrong. MinIO answers a bad
-    // signature with a 403, and that is the specific thing this phase exists to reach.
     let lower = refused.to_lowercase();
     assert!(
         lower.contains("403")
@@ -701,10 +574,6 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
             || lower.contains("signature"),
         "the row should carry MinIO's rejection of the signature, got: {refused}"
     );
-
-    // …and the connection editor needs nothing of its own for any of this: Save writes the def,
-    // asks for the pass, and watches its row, which is where a refusal lands. A Save-time probe
-    // was built and withdrawn — see `apps::connection::views::footer::save`.
 
     let _ = fs::remove_dir_all(&project);
 }

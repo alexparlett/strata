@@ -26,26 +26,20 @@ use crate::components::metrics::{SP_2, SP_3, SP_4};
 /// cluster are outline [`Button`]s wrapping an icon (the rationalised button model — no bespoke
 /// `IconButton`); **Find is grid-only** (`CHART_SPEC` §2), Reload and Download show in both modes.
 ///
-/// **Search** (P2-09) toggles the find popover — an [`Attached`] panel on the [`Menu`] base for
-/// its backdrop dismissal (outside-click / its own Esc). Every close path goes through
-/// [`FindState::dismiss`], clearing the filter with the popover.
+/// **Search** toggles the find popover, an [`Attached`] panel on the [`Menu`] base for its backdrop
+/// dismissal; every close path goes through [`FindState::dismiss`], clearing the filter with the
+/// popover. The panel is anchored to a **zero-width pinned slot** rather than to the Search button,
+/// so the button is free to fold into the overflow menu at narrow widths — anchored to the button,
+/// folding it took the anchor with it and ⌘F went silently dead exactly when the pane was too
+/// narrow to press the button instead.
 ///
-/// The panel is anchored to a **zero-width pinned slot**, not to the Search button, so the button
-/// is free to fold into the overflow menu at narrow widths (P5-06). Anchored to the button, folding
-/// it took the panel's anchor with it and ⌘F — which the datagrid handles, not this row — went
-/// silently dead exactly when the pane was too narrow to press the button instead.
+/// **Trash** clears the active tab's results by dropping its Run trigger, unmounting the grid back
+/// to the empty state and resetting the per-run find state with it. The mid-run guard is
+/// structural: this toolbar only renders inside a settled grid body.
 ///
-/// **Trash** clears the active tab's results (Rz8 / P2-14): it drops the tab's Run trigger,
-/// unmounting the grid back to the empty state — the per-run find state unmounts (and so resets)
-/// with it. The mid-run guard is structural — this toolbar only renders inside a settled grid body
-/// (a running query shows the Running body instead), so the button can't fire while a query
-/// executes. Reload / Download stay stubbed until their layers land (re-run P2-15, export in
-/// Phase 4).
-///
-/// **Copy Image** is the Chart body's (Chart 08): it renders the settled frame offscreen and puts
-/// the pixels on the system clipboard (`chart::capture`). It is here rather than in the strip
-/// because it acts on the same settled run Download does, and it is absent — not disabled —
-/// wherever the chart drew a notice instead of a plot.
+/// **Copy Image** is the Chart body's: it renders the settled frame offscreen onto the system
+/// clipboard (`chart::capture`). Here rather than in the strip because it acts on the same settled
+/// run Download does, and it is absent — not disabled — wherever the chart drew a notice.
 #[derive(PartialEq)]
 pub struct ResultsToolbar {
     /// The tab whose results this pane shows — Trash clears its Run trigger, the toggle
@@ -97,46 +91,26 @@ impl ResultsToolbar {
 impl Component for ResultsToolbar {
     fn render(&self) -> impl IntoElement {
         let roles = use_roles();
-        // Neither the destructive tone nor the accent is read here any more: `ToolbarAction`'s
-        // `danger` and `active` own those dresses, so Clear's red hover and Find's on-state are
-        // variants rather than five overrides at this call site.
         let (bg, faint) = (
             roles.get(Role::Background),
             roles.get(Role::TextPlaceholder),
         );
-        // The grid's shared selection (provided by the results pane) — cleared with the results so
-        // a later run doesn't wake up wearing the old grid's selection.
         let mut sel = use_consume::<State<Selection>>();
         let tab = self.tab;
         let mut session = use_radio::<SessionState, Chan>(Chan::Request(tab));
-        // The chat pane's conversations, for the result-anchored entry below, and the station
-        // its write goes through (this row already subscribes on the tab's request channel).
         let chats = use_consume::<ChatsCtx>();
         let station = use_radio_station::<SessionState, Chan>();
-        // The Table/Chart view mode — its own channel, so a flip wakes only the results pane.
         let mut view_radio = use_radio::<SessionState, Chan>(Chan::View(tab));
         let view = view_radio.read().view(tab);
 
-        // The Export window's launch inputs arrive as a prop (see `ExportLaunch`); only the
-        // `Platform` is taken here, because a handler has no scope to read one from.
         let export = self.export.clone();
         let platform = use_hook(Platform::get);
-        // The Shape panel's slot at the project root (Chart 09) — the press fills it, the
-        // panel mounted there acts on it (the drop-confirm pattern).
         let shape_slot = use_consume::<State<Option<ShapeTarget>>>();
 
-        // ── find (Search) ─────────────────────────────────────────────────────────────────
         let find = self.find;
         let open = *find.open.read();
 
-        // The popover panel (comp `res-find-panel`, 340×34): the `Menu` chrome *is* the
-        // panel — one bordered row holding the magnifier, a chrome-less `Input` that fills
-        // it, and the ✕. The ✕ sits *beside* the input, not in its `trailing`: the input's
-        // focus-press `prevent_default`s the pointer-down, which suppresses the follow-up
-        // press on anything nested inside it.
         let popover = move || {
-            // The ✕: a flat 20×20 icon button (the tab-close recipe — its icon inherits the
-            // flat-button colour + hover tint, so it reads as interactive). No tooltip.
             let close = Button::new()
                 .flat()
                 .width(Size::px(20.))
@@ -158,9 +132,6 @@ impl Component for ResultsToolbar {
                 .child(
                     InputTypography::mono(
                         Input::new(find.query)
-                            // Bare, per the comp: the panel wears the border/background, so
-                            // the input's own dress goes fully transparent — every state of
-                            // it, or a hover or a Tab draws a second box inside the panel.
                             .background(Color::TRANSPARENT)
                             .hover_background(Color::TRANSPARENT)
                             .focus_background(Color::TRANSPARENT)
@@ -176,35 +147,15 @@ impl Component for ResultsToolbar {
                     .width(Size::flex(1.)),
                 )
                 .child(close);
-            // The `Menu` base supplies the popup chrome + dismissal (outside-press backdrop
-            // and its own Esc — normally consumed first by the grid root's `Cancel`). The
-            // padded wrapper floats the panel 4px clear of the trigger (`Attached` itself
-            // anchors flush).
             rect()
                 .padding(Gaps::new(SP_2, 0., 0., 0.))
                 .child(Menu::new().on_close(move |()| find.dismiss()).child(panel))
         };
-        // **The popover's anchor is not the button.** It sits in the row's pinned slot at zero
-        // width, so it exists at every width the pane can take — which is what lets the Find
-        // *button* fold into the overflow menu like any other action.
-        //
-        // With the popover anchored to the button, folding the button took the panel's anchor with
-        // it: ⌘F (handled in the datagrid, not here) would flip `find.open` and nothing would
-        // render, so the chord went quietly dead exactly when the pane was too narrow to press the
-        // button instead. An anchor that cannot fold is the whole fix.
-        // Zero **width** so it costs the row nothing, but the height of the button it replaced:
-        // `AttachedPosition::Bottom` offsets the panel by `inner_height`, so a zero-height anchor
-        // would open it at the row's vertical centre, straight over the toolbar strip, instead of
-        // below the row. At `TOOL_SIZE` tall it is centred in the row exactly as the Search button
-        // was, and the panel lands where it always did.
         let search_anchor = Attached::new(rect().width(Size::px(0.)).height(Size::px(TOOL_SIZE)))
             .bottom()
             .align_end()
             .maybe_child(open.then(popover));
 
-        // ── the Table/Chart segmented toggle (left cluster, P2-07) ────────────────────────
-        // A press writes the tab's view mode; leaving the grid dismisses the find popover
-        // (and so its filter) with it — Find is grid-only.
         let toggle = SegmentedToggle::new()
             .child(
                 ToggleSegment::new(IconName::Grid)
@@ -228,22 +179,8 @@ impl Component for ResultsToolbar {
                     }),
             );
 
-        // The row folds tail-first once the pane is too narrow to hold it (P5-06,
-        // `components::toolbar`): Copy Image where there is one, then Export, then Ask, then
-        // Clear, then Reload, then Shape — Find last of all.
-        //
-        // **The Table/Chart toggle is the leading run**, so it never folds — it decides what the
-        // whole body below is, and it flexes to push the tool cluster to the far end exactly as
-        // the comp draws it.
-        //
-        // **Find is an ordinary action**, folding into the menu with its chord like the rest, and
-        // it is deliberately first so it is the last to go. Its popover hangs off the pinned
-        // anchor above rather than off this button, which is what lets it fold at all.
         let row = Toolbar::new()
             .background(bg)
-            // Charged the toggle's real width, not zero: the wrapper flexes but the pill inside it
-            // does not, so telling the fold arithmetic this run can vanish kept the tool cluster
-            // inline past the point it fitted, and the pill then painted out over it.
             .leading(
                 rect()
                     .width(Size::flex(1.))
@@ -251,24 +188,14 @@ impl Component for ResultsToolbar {
                     .child(toggle),
                 TOOLBAR_TWO_ICON_WIDTH,
             )
-            // Find is grid-only (CHART_SPEC §2), so in Chart mode there is no item at all rather
-            // than an empty slot still charged for its width.
             .maybe(view == ResultsView::Grid, |bar| {
                 bar.item(
-                    // A **bare** label: `Toolbar` appends the chord to the tooltip itself, and the
-                    // folded menu row renders it as a `KeyHint`. Passing a pre-composed
-                    // "Find in results (⌘F)" here would print the chord twice in the menu.
                     ToolbarAction::new(IconName::Search, "Find in results")
                         .hint(Command::Find)
                         .active(open)
                         .on_press(move |_| find.toggle()),
                 )
             })
-            // The Shape composer (Chart 09): a grouped query over this settled run, opened
-            // unrun in a new tab. The press only fills the project root's slot — the panel
-            // mounted there is what acts, the drop-confirm pattern. Disabled rather than
-            // absent without a settled run, on `export`'s terms: the capability exists and
-            // is merely not available yet.
             .item({
                 let shape = self.shape.clone();
                 let slot = shape_slot;
@@ -286,8 +213,6 @@ impl Component for ResultsToolbar {
                     .enabled(false),
             )
             .item(
-                // Destructive dress on hover, per the comp: red icon over a red-tinted fill and
-                // border (the Dioxus `.res-clear` recipe — 15% / 45% red mixes).
                 ToolbarAction::new(IconName::Trash, "Clear results")
                     .danger()
                     .on_press(move |_| {
@@ -295,10 +220,6 @@ impl Component for ResultsToolbar {
                         sel.set(Selection::None);
                     }),
             )
-            // **Result-anchored help** (AS-04): one press into the chat pane with this run's
-            // schema, its exact total and the page in hand already attached. Absent rather than
-            // disabled when the run settled no rows — there is nothing to ask about, and the
-            // same `export` value is what says so.
             .map(self.export.clone(), |bar, launch| {
                 bar.item(
                     ToolbarAction::new(IconName::Chat, "Ask the assistant about this result")
@@ -308,9 +229,6 @@ impl Component for ResultsToolbar {
                 )
             })
             .item(
-                // Opens a window **on this run**, carrying its snapshot handle: the window
-                // pins that snapshot for its life, so re-running here afterwards doesn't
-                // change what it writes (SNAPSHOT_SPEC §4).
                 ToolbarAction::new(IconName::Download, "Export results")
                     .enabled(export.is_some())
                     .on_press(move |_| {
@@ -319,15 +237,12 @@ impl Component for ResultsToolbar {
                         }
                     }),
             )
-            // Chart mode only, and only over a plot that drew — the body hands one down exactly
-            // then, so there is no state in which this is present and does nothing.
             .map(self.copy_image.clone(), |bar, capture| {
                 bar.item(
                     ToolbarAction::new(IconName::Copy, "Copy chart as image")
                         .on_press(move |_| capture.copy()),
                 )
             })
-            // Zero width, so it costs the fold arithmetic nothing and never folds.
             .pinned(search_anchor, 0.);
 
         rect().width(Size::fill()).vertical().child(row)

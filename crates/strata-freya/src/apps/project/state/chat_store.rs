@@ -115,8 +115,6 @@ impl Read {
 /// the pane was open.
 pub fn document(chat: &Chat) -> Option<ChatDoc> {
     let created_ms = chat.created_ms?;
-    // A poisoned lock is a turn task that panicked; the transcript is still worth storing, so
-    // this reads what it can and stores an empty memory rather than propagating the panic.
     let memory = chat
         .memory
         .lock()
@@ -202,8 +200,6 @@ pub fn load_heads(root: &Path, cap: usize) -> Result<Vec<ChatHead>, String> {
     }
     heads.sort_by_key(|head| Reverse(head.updated_ms));
     for head in heads.iter().skip(cap) {
-        // Best-effort: a delete that fails leaves the file for the next open to retry, which is
-        // the same shape `load_history`'s rotation takes.
         let _ = delete_chat(root, &head.id);
     }
     heads.truncate(cap);
@@ -237,9 +233,6 @@ pub fn load(root: &Path, id: &Uuid) -> Result<Option<Read>, String> {
         );
         return Ok(None);
     }
-    // The memory is the one part that may fail on its own terms — it is a provider vocabulary,
-    // and the pin behind it can move. Failing it costs what the model remembered, never the
-    // transcript.
     let readable = Conversation::from_json(doc.memory.clone()).is_ok();
     Ok(Some(if readable {
         Read::Full(Box::new(doc))
@@ -320,13 +313,10 @@ mod tests {
 
         let read = load(&root.0, &chat.uuid).unwrap().expect("it is there");
         assert!(matches!(read, Read::Full(_)));
-        // The fixture's turns are built by hand, so its model memory is legitimately empty —
-        // what matters here is that the stored document came back whole.
         let (doc, _) = read.into_parts();
         assert_eq!(doc.title, "how many orders?");
         assert_eq!(doc.messages, 2);
         assert_eq!(doc.turns, chat.turns);
-        // The step's facts are the engine's own numbers, still.
         let has_facts = doc.turns.iter().any(|turn| match turn {
             Turn::Reply(reply) => reply.blocks.iter().any(|block| match block {
                 Block::Step(step) => step.facts.rows == Some(12),
@@ -385,7 +375,6 @@ mod tests {
         assert_eq!(heads.len(), 2);
         assert_eq!(heads[0].updated_ms, 5);
         assert_eq!(heads[1].updated_ms, 4);
-        // The files themselves are gone, not merely unlisted.
         assert_eq!(chat_files(&root.0).unwrap().len(), 2);
     }
 
@@ -403,7 +392,6 @@ mod tests {
         doc.version = CHAT_VERSION + 99;
         doc.id = future;
         save_chat(&root.0, &future, &to_string(&doc).unwrap()).unwrap();
-        // …and one that is not a document at all.
         let junk = Uuid::new_v4();
         save_chat(&root.0, &junk, "{ not json").unwrap();
 
@@ -412,7 +400,6 @@ mod tests {
         assert_eq!(heads[0].id, good.uuid);
         assert!(load(&root.0, &future).unwrap().is_none());
         assert!(load(&root.0, &junk).unwrap().is_none());
-        // A skipped file is not deleted by rotation either: it never counted.
         assert!(load(&root.0, &good.uuid).unwrap().is_some());
     }
 

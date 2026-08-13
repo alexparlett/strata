@@ -33,57 +33,18 @@ use super::infer::JSON_TEXT_KEY;
 /// appears later in the file.
 pub fn fit(value: &mut Value, field: &Field) {
     match field.data_type() {
-        // A **conflicted** column holds JSON text, so every value becomes its JSON form —
-        // including a string, which is therefore quoted.
-        //
-        // This is the difference between a column that is uniformly parseable and one that only
-        // looks like it. Leaving a string bare made `{"c": "{\"k\":1}"}` and `{"c": {"k":1}}`
-        // produce byte-identical cells, so `json_get(c, 'k')` answered `1` for a row whose value
-        // was never an object — and a plain `hello` is not valid JSON at all, so the accessors
-        // this column exists to serve failed on exactly the rows that were already text.
-        //
-        // Told apart from an ordinary string column by `infer`'s metadata mark, because
-        // `DataType::Utf8` alone cannot say which is which and quoting a prose column would put
-        // `"` around every cell in the grid.
         _ if is_json_text(field) => {
             if !value.is_null() {
                 *value = Value::String(json_text(value));
             }
         }
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-            // Every non-string value in a text slot becomes its own JSON text — objects and
-            // arrays *and* scalars.
-            //
-            // The scalars are not redundant. Arrow's `StringArrayDecoder` will render a bool or
-            // number into a string column only when `coerce_primitive` is set, and DataFusion's
-            // `JsonOpener` never sets it (it builds a bare `ReaderBuilder::new(schema)`), so
-            // `{"content": false}` against a `Utf8` column is `expected string got false` — the
-            // second failure the real `sample/config.json` produces, after the object arm.
-            //
-            // Setting the flag on our own reader would have been the smaller diff and the wrong
-            // one: `coerce_primitive` is not scoped to the conflicted column, so it would also
-            // start accepting `"1"` into an `Int64` — a behaviour change to every JSON table,
-            // which is exactly what the narrow rule exists to prevent.
-            match value {
-                // Already text. Serializing would wrap it in a second pair of quotes.
-                Value::String(_) => {}
-                // `null` stays null: the column is nullable and "absent" is not the text "null".
-                Value::Null => {}
-                _ => *value = Value::String(json_text(value)),
-            }
-        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => match value {
+            Value::String(_) => {}
+            Value::Null => {}
+            _ => *value = Value::String(json_text(value)),
+        },
         DataType::Struct(fields) => fit_record(value, fields),
         DataType::List(elem) | DataType::LargeList(elem) | DataType::FixedSizeList(elem, _) => {
-            // A bare value against a list target is wrapped into a one-element list.
-            //
-            // This is arrow's own promotion, finished. `InferredType::merge` folds Scalar into
-            // Array (`{"v": "x"}` beside `{"v": ["y"]}` infers `List<Utf8>`) — but the *decoder*
-            // has no matching rule and reports `expected [ got "x"`, so stock arrow can produce
-            // a schema it then refuses to read. `sample/config.json` has exactly one such path,
-            // `nba.nbas[].templateRules…rules[].value`, and it fails there with or without the
-            // conflict handling above.
-            //
-            // Null is left alone: a null list is absent, not a list containing null.
             if !value.is_array() && !value.is_null() {
                 *value = Value::Array(vec![value.take()]);
             }
@@ -152,8 +113,6 @@ mod tests {
     fn an_object_in_a_text_slot_becomes_its_json() {
         let mut v = json!({"kind": "block", "n": 1});
         fit(&mut v, &utf8("c"));
-        // serde_json preserves object order (the crate is built with `preserve_order`), so the
-        // text is the source's own key order rather than an alphabetised rewrite.
         assert_eq!(v, json!(r#"{"kind":"block","n":1}"#));
     }
 
@@ -189,8 +148,6 @@ mod tests {
         fit(&mut o, &f);
         assert_eq!(o, json!(r#"{"k":1}"#));
 
-        // The collision the quoting removes: a string *containing* JSON must not read back
-        // identically to the object.
         let mut looks_like = json!(r#"{"k":1}"#);
         fit(&mut looks_like, &f);
         assert_ne!(looks_like, o, "a string holding JSON is not that object");
@@ -285,7 +242,6 @@ mod tests {
         fit(&mut v, &plain(target.clone()));
         assert_eq!(v, json!(["N0004768"]));
 
-        // An actual list is left as it is.
         let mut v = json!(["a", "b"]);
         fit(&mut v, &plain(target));
         assert_eq!(v, json!(["a", "b"]));

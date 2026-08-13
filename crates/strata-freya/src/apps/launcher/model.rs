@@ -118,18 +118,15 @@ mod tests {
 
     #[test]
     fn filter_matches_name_or_path_case_insensitively() {
-        // By name…
         let list = ProjectList::build(&config(), "METRICS");
         assert_eq!(list.pinned.len(), 1);
         assert!(list.recent.is_empty());
-        // …and by path, which is the only thing distinguishing these two.
         let list = ProjectList::build(&config(), "/data/");
         assert!(list.pinned.is_empty());
         assert_eq!(
             list.recent.iter().map(|r| &r.name).collect::<Vec<_>>(),
             ["ml_features"]
         );
-        // A whitespace-only query is not a filter.
         assert_eq!(ProjectList::build(&config(), "   ").recent.len(), 2);
     }
 

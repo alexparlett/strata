@@ -1,27 +1,21 @@
 //! Arrow IPC row counts from the file's own footer (ED-04) — the one thing DataFusion's
 //! `ArrowFormat` does not answer.
 //!
-//! Every other reader Strata registers reports a free row count: parquet from its footer, and
-//! CSV/JSON honestly from nowhere at all, which the inspector renders as an absent row. Arrow was
-//! the odd one out — `ArrowFormat::infer_stats` returns `Statistics::new_unknown` — and with
-//! internal tables (`docs/STATEMENTS_SPEC.md` §6.1) that gap became load-bearing: an internal
-//! table's entire data set is one Strata wrote, in this exact format, and a catalog row for it
-//! that cannot say how many rows it holds is the one table in the project with no answer.
+//! `ArrowFormat::infer_stats` returns `Statistics::new_unknown`, and with internal tables that gap
+//! became load-bearing: an internal table's whole data set is one Strata wrote in this format, so a
+//! catalog row that cannot say how many rows it holds is the one table in the project with no
+//! answer.
 //!
 //! [`StrataArrowFormat`] is `ArrowFormat` with one method replaced. The count comes from the IPC
-//! **file footer**: it lists a block per record batch, and a block's metadata carries that
-//! batch's `length`. So the read is metadata-only — the footer, then one small range per block —
-//! and never touches a data page. The ranges go through
-//! [`ObjectStore::get_ranges`](datafusion::object_store::ObjectStore::get_ranges), which coalesces
-//! adjacent requests, so a many-batch file does not become a many-round-trip file.
+//! **file footer**, which lists a block per record batch carrying that batch's `length` — so the
+//! read is metadata-only and never touches a data page, and the ranges go through
+//! [`get_ranges`](datafusion::object_store::ObjectStore::get_ranges), which coalesces adjacent
+//! requests.
 //!
-//! **Row counts only.** Null counts would need the batches' own buffers, which is a read of the
-//! data — and nothing displays a table-level null count anyway; the profile answers that for real
-//! with a full scan. Absent stays absent (P3-08: only real facts).
-//!
-//! A file whose footer will not parse is not an error here. `infer_stats` is best-effort by
-//! contract — every caller treats `Absent` as "this source reports nothing" — and the *scan* is
-//! where an unreadable file has to fail, with its own diagnosis.
+//! **Row counts only.** Null counts would need the batches' own buffers, and the profile answers
+//! that for real with a full scan; absent stays absent. A footer that will not parse is not an
+//! error here — `infer_stats` is best-effort by contract, and the *scan* is where an unreadable
+//! file has to fail with its own diagnosis.
 
 use std::sync::Arc;
 
@@ -171,15 +165,6 @@ async fn footer_rows(store: &Arc<dyn ObjectStore>, object: &ObjectMeta) -> Optio
         .ok()?;
     let blocks = root_as_footer(&footer).ok()?.recordBatches()?;
 
-    // Every block's metadata region, in file order. `get_ranges` coalesces neighbours, and IPC
-    // blocks are laid out back to back, so a file of many small batches costs far fewer requests
-    // than it has batches.
-    //
-    // Checked rather than cast: the footer's `offset` is an `i64` and its `metaDataLength` an
-    // `i32`, both read straight out of a file that may be corrupt or truncated. `as u64` on a
-    // negative offset yields a value near `u64::MAX`, and the addition then **panics** in a debug
-    // build — inside a function whose whole contract is to answer `None` for a file it cannot
-    // read. One bad `.arrow` file in a user's external table is enough to reach it.
     let mut ranges: Vec<std::ops::Range<u64>> = Vec::with_capacity(blocks.len());
     for block in blocks {
         let start = u64::try_from(block.offset()).ok()?;
@@ -188,8 +173,6 @@ async fn footer_rows(store: &Arc<dyn ObjectStore>, object: &ObjectMeta) -> Optio
         ranges.push(start..end);
     }
     if ranges.is_empty() {
-        // A footer with no record batches is a real, readable, empty file — which is exactly
-        // what a zero-row `CREATE TABLE` writes, and zero is the true answer for it.
         return Some(0);
     }
     let metas = store.get_ranges(&object.location, &ranges).await.ok()?;

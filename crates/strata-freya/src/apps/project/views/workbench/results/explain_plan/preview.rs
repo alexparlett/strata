@@ -107,8 +107,6 @@ fn plan_preview() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../target/plan-preview.png"
     ));
-    // Expanded states: SortExec's Metrics box open + AggregateExec's Detail expanded
-    // (the second coordinate accounts for the first box's ~160px reflow).
     runner.click_cursor((63., 169.));
     runner.click_cursor((70., 424.));
     runner.sync_and_update();
@@ -116,14 +114,12 @@ fn plan_preview() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../target/plan-preview-open.png"
     ));
-    // The Logical tab.
     runner.click_cursor((114., 18.));
     runner.sync_and_update();
     runner.render_to_file(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../target/plan-preview-logical.png"
     ));
-    // The Raw text view (back on Physical).
     runner.click_cursor((44., 18.));
     runner.click_cursor((937., 18.));
     runner.sync_and_update();

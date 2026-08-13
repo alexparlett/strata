@@ -72,8 +72,6 @@ impl Component for RequestKeeper {
         let radio = use_radio::<SessionState, Chan>(Chan::Request(self.id));
         let spec = radio.read().request(self.id).cloned();
         rect().map(spec, |el, spec| {
-            // Keyed by the press's nonce, like `ResultsBody`: a new press drops the old
-            // pin — its superseded entry starts aging out — and mounts a fresh one.
             let run = spec.run;
             el.child(
                 RequestPin {
@@ -112,15 +110,7 @@ impl Component for RequestPin {
         let engine = use_consume::<EngineCtx>();
         let query = use_query(self.spec.query(&engine));
         use_history_recording(query, self.spec.run, self.spec.sql.clone());
-        // …and the press's outcome into the event log (P3-13), on the same terms and for the same
-        // reason: this pin outlives its tab's visibility, so a backgrounded run is recorded when
-        // it actually settles. Unlike history, both arms are recorded — a run that failed or was
-        // cancelled is exactly what a log is read for.
         use_run_logging(query);
-        // …and an intercepted statement's `StoreEffect` into the project stores (ED-02), for the
-        // third time the same reason: a `CREATE TABLE` run in a tab the user then left still has
-        // to reach the sidebar and `project.json`. This one also owns the statement's log row —
-        // only the fold knows whether the def was written (`state::statement`).
         use_statement_settle(query);
         rect()
     }

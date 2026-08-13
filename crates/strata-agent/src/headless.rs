@@ -6,35 +6,24 @@
 //! project's registration pass replayed over it (AA-01's [`register_project`]), and the same
 //! [`StrataTools`] the in-app server routes to. One vocabulary, two deployments.
 //!
-//! What makes this a *second* host rather than a second implementation of the feature:
+//! What makes this a *second host* rather than a second implementation:
 //!
-//! - **Registration outcomes are the catalog.** In the app the catalog is `ProjectState`, and
-//!   a def the engine refused is a row carrying its error; here it is the pass's own answers,
-//!   folded once at startup into exactly that shape. Neither asks DataFusion, which would hide
-//!   the failed defs (AGENTS.md §2).
-//! - **A query session is an engine workspace and nothing else.** No pane, no satellite, no
-//!   tab: [`WsId`] nonces, with supersede, retire and cancel the engine's own — so an agent's
-//!   run behaves identically to one it makes against the running app.
-//! - **One project by construction.** The process is opened *on* a project, so there is
-//!   nothing to look up and nothing to disambiguate: `list_projects` answers with it, and the
-//!   `project` argument of every other tool resolves to it or to nothing (`host::resolve`).
+//! - **Registration outcomes are the catalog.** The pass's own answers, folded once at startup into
+//!   the shape `ProjectState` holds in the app. Neither asks DataFusion, which would hide the
+//!   failed defs (AGENTS.md §2).
+//! - **A query session is an engine workspace and nothing else.** [`WsId`] nonces, with supersede,
+//!   retire and cancel the engine's own.
+//! - **One project by construction.** The process is opened *on* a project, so there is nothing to
+//!   look up: every tool's `project` argument resolves to it or to nothing.
 //!
-//! ## What it deliberately does not touch
+//! It touches no app config, no `session.json`, no history, and writes nothing: a folder with no
+//! project in it is refused rather than scaffolded, because a server the user cannot see should not
+//! create the files the app owns. Running beside the live app is safe for the reason it is safe
+//! between two app windows — every engine lock-claims its own snapshot directory.
 //!
-//! No app config (so no `datafusion.*` overrides — v1 runs the engine's defaults, and a
-//! `--config` flag can arrive when somebody wants one), no `session.json`, no
-//! `.strata/history.jsonl`, and no writes to the project at all: a folder with no project in
-//! it is refused rather than scaffolded, because a server the user cannot see should not
-//! create the files the app owns. Running beside the live app is safe for the reason it is
-//! safe between two app windows — every engine lock-claims its own snapshot directory
-//! (`query::claim_snapshot_dir`).
-//!
-//! ## No idle sweep here
-//!
-//! [`StrataTools::retire_idle`] exists for a client with no connection to key on, which is a
-//! Streamable-HTTP condition. Over stdio there is exactly one client, it has no HTTP request
-//! behind it (`tools::Caller::Owned`), and its departure closes the transport — so the
-//! service value's drop is the disconnection and a timer would have nothing to measure.
+//! **No idle sweep here.** [`StrataTools::retire_idle`] exists for a client with no connection to
+//! key on, a Streamable-HTTP condition. Over stdio there is one client whose departure closes the
+//! transport, so the service value's drop is the disconnection.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -100,20 +89,17 @@ impl HeadlessHost {
     /// Open `root`: load its defs, build a plain engine, and replay the registration pass
     /// over it.
     ///
-    /// The pass runs to completion **before** anything is served, which is what lets this
-    /// host ignore the registration window `strata_core::register` warns about: the app has
-    /// to gate validation behind its scan claim because a re-scan runs against a live
-    /// catalog, and here there is no second pass to race.
+    /// The pass runs to completion **before** anything is served, which is what lets this host
+    /// ignore the registration window `strata_core::register` warns about: there is no second pass
+    /// to race here.
     ///
-    /// `Err` only for a project that cannot be read — a missing or unparseable
-    /// `project.json`. A *def* that the engine refused is not an error: it is a `failed`
-    /// catalog row, exactly as in the app, and the rest of the project is queryable.
+    /// `Err` only for a project that cannot be read. A *def* the engine refused is not an error: it
+    /// is a `failed` catalog row, exactly as in the app.
     ///
-    /// The pass connects the project's object stores first (W7), so a table over a bucket
-    /// registers here exactly as it does in a window. A connection is not itself a catalog
-    /// entry — an agent queries data, and a bucket is not something it can name — so
-    /// [`settled`](Self::settled) does not list one; a connection the engine refused surfaces
-    /// as the `failed` rows of the tables that needed it.
+    /// The pass connects the project's object stores first, so a table over a bucket registers here
+    /// exactly as it does in a window. A connection is not itself a catalog entry, so
+    /// [`settled`](Self::settled) does not list one — a refused connection surfaces as the `failed`
+    /// rows of the tables that needed it.
     pub async fn open(root: PathBuf) -> Result<HeadlessHost, String> {
         if !exists_at(&root) {
             return Err(format!(
@@ -123,11 +109,6 @@ impl HeadlessHost {
         }
         let defs = load_defs(&root)?;
         let engine = Arc::new(Engine::new(BTreeMap::new()));
-        // The project this engine belongs to (ED-04). It serves a read-only vocabulary, so
-        // nothing here can *create* an internal table — but a project that already has one
-        // registers it from `.strata/tables/`, and an engine that has not been told where its
-        // project is would answer for it out of context. One call, on the same terms the app
-        // makes it: the host is opened *on* a project, so this is that project.
         engine.set_data_dir(&root);
         let mut outcomes = Vec::new();
         register_project(&engine, &root, &defs, |o| outcomes.push(o)).await;
@@ -157,9 +138,6 @@ impl HeadlessHost {
             catalog.push(CatalogEntry::Table {
                 name: def.name.clone(),
                 format: def.format.name().to_string(),
-                // As stored. A relative entry is the user's own text and stays that way —
-                // resolving it is the pass's business, and a listing that absolutized paths
-                // would describe a def nobody wrote.
                 sources: def.sources.clone(),
                 reg: reg_state(result),
             });
@@ -176,9 +154,6 @@ impl HeadlessHost {
                     name: def.name.clone(),
                     error: error.clone(),
                 },
-                // The pass settles every def it is given, so this is the state of a def it
-                // was never given — which cannot happen here and is still the only honest
-                // reading of "the engine has not answered for this one".
                 None => Described::Pending {
                     name: def.name.clone(),
                 },
@@ -217,18 +192,12 @@ impl HeadlessHost {
         }));
         HeadlessHost {
             project: Project {
-                // The defs' own name, as the app reads it (`ProjectState::from_defs`) — the
-                // root is the identity and this is the label.
                 name: defs.name,
                 root,
             },
             engine,
             catalog,
             described,
-            // The app's default row limit, **compiled in rather than read**: the setting the
-            // user edits lives in app config, which this host deliberately never opens. The
-            // tool layer resolves the `0` that means "no limit" (`Host::default_page_size`),
-            // so the shipped default travels here unmodified.
             page_size: Settings::default().row_limit,
             sessions: Mutex::new(Vec::new()),
             runs: AtomicU64::new(0),
@@ -244,8 +213,6 @@ impl HeadlessHost {
         let sweep = {
             let mut sessions = self.sessions.lock().unwrap();
             let Some(at) = sessions.iter().position(|s| s.id == session) else {
-                // The agent disconnected while its query ran: `agent_gone` took the row and
-                // tore the workspace down already.
                 return;
             };
             sessions[at].dispatched = sessions[at].dispatched.saturating_sub(1);
@@ -282,11 +249,6 @@ impl Host for HeadlessHost {
         self.page_size
     }
 
-    // Every project-scoped method below ignores its `project` argument, and that is the shape
-    // rather than an oversight: `host::resolve` only ever hands back a project this host
-    // listed, and it listed one. A lookup would be a check that can only ever pass, and an
-    // error arm for it would be a taxonomy entry nothing can reach.
-
     async fn engine(&self, _project: &Path) -> Result<Arc<Engine>, AgentError> {
         Ok(Arc::clone(&self.engine))
     }
@@ -298,8 +260,6 @@ impl Host for HeadlessHost {
     async fn describe(&self, _project: &Path, name: &str) -> Result<Described, AgentError> {
         self.described
             .iter()
-            // Case-insensitively, because the engine folds unquoted identifiers and an agent
-            // that read `orders` out of a query is naming the same table as the def does.
             .find(|d| d.name().eq_ignore_ascii_case(name))
             .cloned()
             .ok_or_else(|| AgentError::NotFound(format!("Table or view '{name}' not found.")))
@@ -315,16 +275,11 @@ impl Host for HeadlessHost {
             .lock()
             .unwrap()
             .iter()
-            // A session already closed is not one the agent holds, whatever is still
-            // finishing inside it: listing a tombstone would offer back a handle every other
-            // tool answers not-found for.
             .filter(|s| s.agent == agent && !s.closing)
             .map(|s| QuerySessionInfo {
                 session: s.id,
                 state: match s.ran {
                     false => QuerySessionState::Empty,
-                    // The engine owns the workspace and is the only thing that knows what is
-                    // executing in it — the same authority the app's bridge asks.
                     true if self.engine.is_running(s.id.into()) => QuerySessionState::Running,
                     true => QuerySessionState::Settled,
                 },
@@ -370,16 +325,9 @@ impl Host for HeadlessHost {
                 0 => {
                     sessions.remove(at);
                 }
-                // A tombstone: the handle answers nothing from here on, but the row outlives
-                // the close so `dispatched_back` can tear the workspace down after the last
-                // settle rather than under it.
                 _ => sessions[at].closing = true,
             }
         }
-        // **On both arms.** `close_query_session` promises the agent that a run still in
-        // flight is cancelled, and that promise is about a query the engine is really
-        // executing — deferring the abort until the settle would let a runaway scan burn to
-        // completion with no handle left to stop it.
         self.engine.cleanup_ws(session.into());
         Ok(())
     }
@@ -393,9 +341,6 @@ impl Host for HeadlessHost {
         mode: RunMode,
         page_size: usize,
     ) -> Result<RunSettle, AgentError> {
-        // The ownership check, before the engine is asked anything — the same gate the app
-        // performs as `AgentAsk::RunStarting`, and the reason an agent can never run against
-        // another agent's workspace.
         {
             let mut sessions = self.sessions.lock().unwrap();
             let Some(open) = sessions
@@ -416,9 +361,6 @@ impl Host for HeadlessHost {
                 .query(ws, tag, sql, page_size)
                 .await
                 .map(|(output, _)| Settled::Rows(output)),
-            // Wrapped here, exactly as the app's own Run capability does it: `Explain` means
-            // "plan this statement", never "the caller already wrote EXPLAIN" — and never
-            // `analyze`, which would execute the query the caller was avoiding.
             RunMode::Explain => self
                 .engine
                 .explain(ws, tag, as_explain(&sql, false))
@@ -434,10 +376,6 @@ impl Host for HeadlessHost {
     /// afford.
     fn agent_gone(&self, agent: AgentId) {
         let released: Vec<QuerySessionId> = {
-            // `lock()` rather than `unwrap()` on the guard, `tools::Busy::drop`'s rule and for
-            // its reason: the caller is a `Drop`, which may itself be an unwind, and a panic
-            // there aborts the process. A poisoned lock costs the teardown of sessions whose
-            // engine is about to be dropped anyway; it must not cost the process.
             let Ok(mut sessions) = self.sessions.lock() else {
                 return;
             };
@@ -449,8 +387,6 @@ impl Host for HeadlessHost {
             sessions.retain(|s| s.agent != agent);
             released
         };
-        // Outside the lock, and unconditionally: a session with a run still in flight is
-        // exactly the one whose abort matters.
         for session in released {
             self.engine.cleanup_ws(session.into());
         }
@@ -493,14 +429,6 @@ pub fn serve_stdio(root: PathBuf) -> Result<(), String> {
         tracing::info!("agent access over stdio ended: {reason:?}");
         Ok(())
     });
-    // **Shut down explicitly rather than by dropping**, and for this transport specifically:
-    // `stdio()` reads through `tokio::io::stdin`, which is an ordinary blocking read on a
-    // pool thread that — tokio's own documentation says so — *cannot be cancelled*. A plain
-    // `Runtime` drop waits for the blocking pool, so a session that ends any way other than
-    // stdin reaching EOF (the client cancelling, a protocol fault) would leave this process
-    // hanging on a read for input nobody is going to send. Everything worth finishing has
-    // already finished: the service value is dropped inside `block_on` when its loop ends,
-    // which is what retracts the agent and takes the engine's snapshots with it.
     rt.shutdown_background();
     served
 }
@@ -580,7 +508,6 @@ mod tests {
 
         let entries = host.catalog(&root).await.unwrap();
 
-        // Tables then views, each in the order `load_defs` sorted them by name.
         match &entries[..] {
             [CatalogEntry::Table {
                 name: failed,
@@ -599,7 +526,6 @@ mod tests {
                 assert_eq!(failed, "gone");
                 assert!(why.contains("missing.csv"), "{why}");
                 assert_eq!(ready, "people");
-                // As stored: the def's own relative path, not the resolved one.
                 assert_eq!(sources, &vec!["people.csv".to_string()]);
                 assert_eq!(view, "adults");
             }
@@ -622,7 +548,6 @@ mod tests {
             columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
             vec!["id", "name"]
         );
-        // CSV reports no free row count, and inventing one would be a derivation (P3-08).
         assert_eq!(rows, None);
 
         let Described::View { reads, .. } = host.describe(&root, "adults").await.unwrap() else {
@@ -671,7 +596,6 @@ mod tests {
         let Ok(Settled::Rows(output)) = settled else {
             panic!("{settled:?}");
         };
-        // Bounded by the page, exact in the total: no `LIMIT` was injected.
         assert_eq!(output.rows.len(), 2);
         assert_eq!(output.total, 3);
         assert!(matches!(

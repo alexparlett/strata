@@ -224,35 +224,19 @@ impl Component for DropConfirm {
         let mut slot = self.target;
         let target = slot.read().clone();
         let engine = use_consume::<EngineCtx>();
-        // Two handles on the Project store, deliberately: `views` subscribes to the one channel
-        // the consequence line is derived from, while the station is the unsubscribed write side.
-        // `RadioStation::read()` would listen on *every* channel, so a catalog re-scan landing
-        // under the open dialog would re-render it (and re-run the O(views × deps) scan) once per
-        // table, to produce a pixel-identical card.
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let session = use_radio_station::<SessionState, Chan>();
-        // A drop moves the engine's catalog: every tab reading the dropped row is now wrong,
-        // and none of them has been typed in. The bump is what re-derives them.
         let catalog = use_catalog();
-        // A drop is a catalog mutation, so it is recorded in the event log (P3-13) — including
-        // the one failure mode the catalog itself cannot show: a `DROP VIEW` the engine refused
-        // after the def was already gone.
         let report = use_report();
         let tones = tones();
         let roles = use_roles();
-        // The destructive action wears the shared `cancel_button` dress — the themes' authored
-        // destructive tone (the running body's Cancel, the close confirm's Stop), not a
-        // hardcoded red.
         let danger = get_theme!(
             &None::<CancelButtonThemePartial>,
             CancelButtonThemePreference,
             "cancel_button"
         );
 
-        // Shared by the button and the Enter key. It takes the engine rather than capturing it,
-        // so the closure holds only `Copy` handles and can live in both handlers; each of them
-        // carries its own `Arc` clone.
         let confirm = move |engine: &EngineCtx| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
@@ -266,16 +250,7 @@ impl Component for DropConfirm {
             return rect().into_element();
         };
 
-        // Subscribed to `ProjChan::Views` (see above), so a view registering or being dropped
-        // under the open dialog refreshes the count — the dialog blocks input, not the engine,
-        // and this is the one screen where acting on a stale count is destructive.
         let (dependents, consequence) = match (&target, target.kind()) {
-            // Not a member of the SQL namespace: what reads it is the tables whose def names it,
-            // and then the views over those. The tables come off the **unsubscribed** station,
-            // because `tables_over` reads a stored field and nothing a re-scan touches: a
-            // `ProjChan::Tables` subscription would re-render this card once per table for an
-            // answer that cannot have changed, which is the very cost the split above avoids.
-            // The chips are the tables and then the views, in catalog order.
             (DropTarget::Connection(url), _) => {
                 let over = project.peek().tables_over(url);
                 let behind = views.read().views_over(&over);
@@ -290,9 +265,6 @@ impl Component for DropConfirm {
             (_, None) => (Vec::new(), None),
         };
 
-        // The action over its subject — the close confirm's shape exactly, which is what the comp
-        // asks for. The name is mono at 12.5 on its own line, where it reads as the identifier it
-        // is; inline beside a 14.5 title it just looked shrunken. The accent is what marks it out.
         let title = rect()
             .width(Size::fill())
             .vertical()
@@ -306,8 +278,6 @@ impl Component for DropConfirm {
         let callout = consequence.map(|line| {
             rect()
                 .width(Size::fill())
-                // No margin of its own: the body column already spaces at 12, which is the
-                // comp's `margin-top: var(--sp-4)` above the callout.
                 .corner_radius(R_3)
                 .padding(SP_4)
                 .background(tones.warning.with_a(23))
@@ -317,8 +287,6 @@ impl Component for DropConfirm {
                 .spacing(SP_3)
                 .child(
                     rect()
-                        // A 1px optical nudge onto the first line of the prose beside it — an alignment
-                        // nudge, which the design keeps literal.
                         .margin((HAIRLINE, 0., 0., 0.))
                         .child(Icon::new(IconName::Warning).color(tones.warning).size(15.)),
                 )
@@ -328,8 +296,6 @@ impl Component for DropConfirm {
                         .vertical()
                         .spacing(SP_3)
                         .child(Caption::new(line).color(tones.warning).wrap())
-                        // The names themselves, as chips. A tall list caps and scrolls rather
-                        // than growing the card off the screen (the comp's 96px well).
                         .child(
                             ScrollView::new()
                                 .height(Size::auto())
@@ -340,9 +306,6 @@ impl Component for DropConfirm {
                                         .horizontal()
                                         .content(Content::wrap_spacing(SP_2))
                                         .spacing(SP_2)
-                                        // `into_iter`: the names are owned and unused after
-                                        // this, so the chips take them rather than cloning
-                                        // every one a second time per render.
                                         .children(
                                             dependents
                                                 .into_iter()
@@ -353,8 +316,6 @@ impl Component for DropConfirm {
                 )
         });
 
-        // Header · body · footer, like every other dialog: the title rides the chip, and the copy
-        // and callout run the full width beneath rather than indented beside it.
         let body = rect()
             .width(Size::fill())
             .vertical()
@@ -420,25 +381,19 @@ fn alive(catalog: Catalog, report: ReportCtx) -> bool {
 /// write, because their validity is derived from the live table rows (P3-04) and the VIEWS
 /// section subscribes to [`ProjChan::Tables`] for exactly this.
 ///
-/// ## A drop whose write fails is rolled back (P4-15 item 4)
+/// **A drop whose write fails is rolled back.** Of every mutation that writes `project.json`, the
+/// drop is the only one whose silent failure *resurrects* what the user destroyed — the row leaves
+/// the catalog, the file still lists it, and it is back at the next open.
 ///
-/// Of every mutation that writes `project.json`, the drop is the only one whose silent failure
-/// **resurrects** what the user destroyed: the row leaves the catalog, the file still lists it,
-/// and it is back at the next open — a destructive action they deliberately confirmed, undone
-/// later with nothing said.
+/// It is also the only one that *can* be rolled back, which is what decides it: at the moment the
+/// write fails nothing else has happened, because every arm mutates and persists inside one guard
+/// with the engine and session calls after. So the section is snapshotted and a failed write puts
+/// it back **inside that same guard** — one notification carrying the original state, never a row
+/// that vanishes and returns.
 ///
-/// It is also the only one that *can* be rolled back, which is what decides it. At the moment
-/// the write fails nothing else has happened yet: every arm mutates the store and persists
-/// inside one guard, and the engine and session calls all come after. So the section is
-/// snapshotted, and a failed write puts it back **inside that same guard** — subscribers see one
-/// notification carrying the original state, never a row that vanishes and returns.
-///
-/// The policy is therefore "roll back what can be rolled back", not "mutations are atomic".
-/// `save_view` genuinely cannot: `CREATE OR REPLACE VIEW` has already succeeded on the engine, so
-/// the view is live and queryable for the rest of the session and undoing it needs a second
-/// fallible engine call. That asymmetry is deliberate — the two situations differ in what has
-/// already become true — and the Problems drawer's `Project` scope carries the other half either
-/// way, naming the file that is behind for as long as it is.
+/// The policy is "roll back what can be rolled back", not "mutations are atomic": `save_view`
+/// cannot, because `CREATE OR REPLACE VIEW` has already succeeded on the engine. The Problems
+/// drawer's `Project` scope carries the other half either way.
 fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
@@ -447,11 +402,6 @@ fn drop_row(
     report: ReportCtx,
     target: &DropTarget,
 ) {
-    // A removal is recorded at `Info`, not `Ok`: it is a change to the catalog, not a piece of
-    // work that succeeded, and the green tick belongs to the latter. Recorded **after** the def
-    // is written, and only if that write landed — `persisted` says so, and says so itself when it
-    // did not. A drop the project file never heard about comes back on the next open, so logging
-    // it first would leave the log contradicting the catalog.
     match target {
         DropTarget::Table { name, .. } => {
             let landed = {
@@ -468,43 +418,21 @@ fn drop_row(
             }
             let engine = engine.clone();
             let name = name.clone();
-            // **`Engine::drop_table`, not `deregister`** (ED-05): a table Strata wrote owns a
-            // directory under `.strata/tables/`, and forgetting the provider without deleting it
-            // orphans that data forever — no def points at it and the `.strata` housekeeping only
-            // sweeps `.tmp-` directories. The typed `DROP TABLE` goes through the same call, so
-            // the two gestures cannot leave different states behind.
-            //
-            // `spawn_forever` rather than `spawn`, for the reason the view arm below gives: the
-            // engine call has to outlive the dialog that ordered it.
             spawn_forever(async move {
-                // `if_exists`: the row came out of the store, and a def whose registration failed
-                // has no provider to deregister — which is a drop that has nothing left to do,
-                // not a drop that failed.
                 let outcome = engine.drop_table(name.clone(), true).await;
                 if let Err(e) = &outcome {
                     tracing::error!("drop table '{name}': {e}");
                 }
-                // **Root-scoped outlives the project subtree, so the subtree is asked.** A re-root
-                // or an engine restart unmounts the whole subtree while this call is in flight —
-                // the `EngineCtx` clone keeps the outgoing engine alive, so the drop finishes and
-                // comes back to a `Catalog` and a log whose owner is gone. Writing them then
-                // panics, and the release panic hook takes the process with it. The drop itself
-                // has already happened, which is the part that mattered; what is skipped is
-                // telling a window that no longer exists.
                 if !alive(catalog, report) {
                     return;
                 }
                 if let Err(e) = outcome {
-                    // The def is already gone, which is the catalog's truth; what may be left is
-                    // a stale registration or, on an internal table, its data directory. The log
-                    // is the only surface that can say so — the row it would describe is gone.
                     log_event(
                         report.log,
                         LogLevel::Warning,
                         format!("The engine could not finish dropping table '{name}': {e}"),
                     );
                 }
-                // Every tab that reads it is now wrong, and none of them has been typed in.
                 catalog_settled(catalog);
             });
         }
@@ -526,27 +454,15 @@ fn drop_row(
             }
             let engine = engine.clone();
             let name = name.clone();
-            // **`spawn_forever`, not `spawn`.** `spawn` binds the task to `current_scope_id()`,
-            // which during an event is the scope of the element that owns the handler — a
-            // `Button` inside the dialog. Confirming closes the dialog in the same tick, that
-            // subtree unmounts, and scope teardown drops its tasks *before the future is ever
-            // polled*: the def would go, the file would be written, and DataFusion would never
-            // hear about it. Verified with a probe — the task ran 0 times. The engine call has
-            // to outlive the dialog that ordered it, so it belongs to the root.
             spawn_forever(async move {
                 let outcome = engine.drop_view(name.clone()).await;
                 if let Err(e) = &outcome {
-                    // The def is already gone, which is the catalog's truth; a failed DROP VIEW
-                    // leaves a stale registration the next re-scan clears.
                     tracing::error!("drop view '{name}': {e}");
                 }
-                // The table arm's reason, and the same answer.
                 if !alive(catalog, report) {
                     return;
                 }
                 if let Err(e) = outcome {
-                    // The log is the only surface that can say so — the row it would have
-                    // described is gone. Only the part the row above doesn't already say.
                     log_event(
                         report.log,
                         LogLevel::Warning,
@@ -569,14 +485,9 @@ fn drop_row(
             if !landed {
                 return;
             }
-            // Synchronous and local, like a table's `deregister`: DataFusion drops the entry
-            // from its object-store registry. Without it the bucket stays queryable for the
-            // life of the window — `register_pass` is additive by contract, so nothing else
-            // would ever take the store back out.
             engine.disconnect(url);
         }
         DropTarget::Query { id, .. } => {
-            // Never registered with the engine — a saved query is a stored string.
             let landed = {
                 let mut p = project.write_channel(ProjChan::Queries);
                 let taken = p.remove_saved_query(*id);
@@ -594,8 +505,6 @@ fn drop_row(
             }
         }
     }
-    // Unconditional: every arm above returns early when its write did not land, so reaching here
-    // means the def is gone *and* `project.json` says so.
     log_event(
         report.log,
         LogLevel::Info,
@@ -734,7 +643,6 @@ mod tests {
                 aliases: Vec::new(),
             },
         );
-        // The planner inlines the inner view: base tables in `tables`, the view in `aliases`.
         p.view_registered(
             "orders_weekly",
             ViewMeta {
@@ -788,10 +696,7 @@ mod tests {
                 let project = r.provide_root_context(|| {
                     RadioStation::<ProjectState, ProjChan>::create(project(&root))
                 });
-                // The window's event log: a drop is a mutation, so it records one (P3-13).
                 let log = r.provide_root_context(|| State::create(Log::default()));
-                // And the write-fault satellite the same funnel holds the condition in (P4-15) —
-                // a failed drop write raises a Problems row as well as the event asserted below.
                 r.provide_root_context(|| State::create(PersistFaults::default()));
                 (target, session, project, log)
             },
@@ -885,9 +790,6 @@ mod tests {
             "nothing reads `users`: {:?}",
             texts(&runner)
         );
-        // The body copy still runs — the dialog isn't empty, it just makes no extra claim. And
-        // for an **external** table the claim it makes is that the files stay, which is the half
-        // that stopped being true for every table the moment Strata could own some (ED-05).
         assert!(texts(&runner)
             .iter()
             .any(|t| t.contains("files on disk are not deleted")));
@@ -940,8 +842,6 @@ mod tests {
             texts(&runner)
         );
         assert!(shows(&runner, "orders_weekly"));
-        // Once, in the header — the row being dropped is not listed as its own dependent. A
-        // presence check can't say this any more, since the title names it by design.
         assert_eq!(
             texts(&runner)
                 .iter()
@@ -1213,8 +1113,6 @@ mod tests {
         let (mut runner, (mut slot, ..)) = runner("footer");
         open(&mut runner, &mut slot, dropping("orders"));
 
-        // Both actions, by their laid-out boxes: the two buttons are the only 34px-tall boxes
-        // carrying a button role.
         let buttons: Vec<f32> = runner.find_many(|node, element| {
             (element.accessibility().builder.role() == AccessibilityRole::Button)
                 .then(|| node.layout().area.height())
@@ -1225,7 +1123,6 @@ mod tests {
             "Cancel and the drop action are both 34px tall"
         );
 
-        // The strip: the widest box that is exactly 58 tall.
         let strip = runner
             .find_many(|node, _| {
                 let a = node.layout().area;
@@ -1377,8 +1274,6 @@ mod tests {
     #[test]
     fn a_forgets_line_counts_the_tables_and_the_views_behind_them() {
         assert_eq!(forget_consequence(0, 0), None);
-        // A view can only read through a table, so views without tables cannot happen — and if
-        // it somehow did, the callout still says nothing rather than inventing a subject.
         assert_eq!(forget_consequence(0, 3), None);
         assert_eq!(
             forget_consequence(1, 0).as_deref(),
@@ -1432,7 +1327,6 @@ mod tests {
         project_io::save_defs(&root, &ProjectDefs::default()).expect("scaffolded");
         let engine = EngineCtx::default();
         engine.set_data_dir(&root);
-        // A real internal table, made the way the editor makes one.
         block_on(engine.run(
             WsId(9),
             RunTag(9),
@@ -1490,8 +1384,6 @@ mod tests {
 
         click_action(&mut runner, "Drop table");
 
-        // The drop is dispatched onto the engine's own runtime and awaited by a root task, so
-        // the answer lands a wake later — bounded rather than assumed.
         for _ in 0..200 {
             if !dir.exists() {
                 break;

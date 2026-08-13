@@ -46,39 +46,23 @@ impl Component for EditorToolbar {
         let (bg, border) = (roles.get(Role::Background), roles.get(Role::Border));
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
         let engine = use_consume::<EngineCtx>();
-        // The Project store — save-target access only, so no channel subscription (the
-        // toolbar shows nothing catalog-derived).
         let project = use_radio_station::<ProjectState, ProjChan>();
         let catalog = use_catalog();
-        // The window's event log — a save records its outcome there (P3-13).
         let report = use_report();
-        // The tab's Run trigger, on its own channel — a press re-renders this toolbar
-        // without waking the editor, and keystrokes (on `Chan::Tab`) never land here twice.
         let request_radio = use_radio::<SessionState, Chan>(Chan::Request(id));
 
-        // This tab's request while it's still executing: the tab has a request *and* the
-        // running mirror still holds its nonce (the request alone can't tell — it stays set
-        // after settle to keep the results body mounted).
         let in_flight = request_radio
             .read()
             .request(id)
             .filter(|s| *self.running.read() == Some(s.run))
             .map(|s| s.run);
 
-        // A blank buffer can't run — the button gates to Disabled. Subscribed on
-        // `Chan::Tab(id)`, so typing re-derives it; `chars().all` early-exits on the first
-        // real character (no rope→String materialise per keystroke). Validation
-        // diagnostics never gate Run (P2-23): they advise, the engine decides — a
-        // doomed run fails at plan time with the same error in the results pane.
         let blank = radio
             .read()
             .tabs
             .get(&id)
             .is_none_or(|t| t.editor.rope.chars().all(char::is_whitespace));
 
-        // A press is an *action* — `actions::press_query` snapshots the text, mints a
-        // fresh nonce, and sets the tab's current execution; the ⌘↵ listener in the
-        // workbench dispatches the very same call.
         let press = move |mode: QueryMode| actions::press_query(radio, id, mode);
 
         let run_state = if in_flight.is_some() {
@@ -89,27 +73,14 @@ impl Component for EditorToolbar {
             RunState::Idle
         };
 
-        // The save actions' handles (the engine is moved into `run_press` below).
         let save_engine = engine.clone();
         let view_engine = engine.clone();
 
-        // Running → the press is Cancel (`actions::cancel_run` — shared with the Running
-        // body's control and Esc). Otherwise it's Run. Disabled never fires (RunButton
-        // swallows it).
         let run_press = move |_| match in_flight {
             Some(run) => actions::cancel_run(&engine, radio, report.log, id, run),
             None => press(QueryMode::Run),
         };
 
-        // The row folds tail-first once the pane is too narrow to hold it (P5-06,
-        // `components::toolbar`), which puts Save at the head of the queue and Explain at the
-        // back. That is the right order here as well as the positional default: the actions with
-        // chords are the ones a folded row costs least, and Save's rides into the menu with it.
-        //
-        // **Run is the leading run, so it never folds** — it is the pane's reason to exist, it
-        // carries the in-flight Cancel state, and a toolbar that has folded away its Run has
-        // stopped being an editor toolbar. It hugs rather than flexing, so everything else packs
-        // in behind it exactly as the comp draws it.
         let action = |icon: IconName, label: &'static str| ToolbarAction::new(icon, label);
 
         let row = Toolbar::new()
@@ -138,7 +109,6 @@ impl Component for EditorToolbar {
             }))
             .item(
                 action(IconName::Save, "Save query")
-                    // The live chord, in the tooltip inline and in the menu row once folded.
                     .hint(Command::SaveQuery)
                     .on_press(move |_| {
                         actions::save(radio, project, save_engine.clone(), catalog, report, id);

@@ -1,19 +1,15 @@
 //! The MCP server: Streamable HTTP on loopback, bearer token, **stop on drop**.
 //!
-//! The Engine pattern, for the same reason the engine uses it. rmcp needs a Tokio reactor
-//! and the app's UI thread is not one, so [`AgentServer`] owns a small private runtime and
-//! the caller holds a plain handle. Nothing about starting or stopping it asks the app to
-//! own an executor.
+//! The Engine pattern, for the Engine's reason: rmcp needs a Tokio reactor and the UI thread is not
+//! one, so [`AgentServer`] owns a small private runtime and the caller holds a plain handle.
 //!
-//! **Why HTTP and not a Unix socket:** the transport menu belongs to the client. MCP clients
-//! speak stdio (where the *client* spawns the server — structurally impossible for a server
-//! living inside an already-running GUI) and Streamable HTTP. A UDS server would force a
-//! stdio↔socket proxy into every connection. So: loopback bind plus a bearer token, checked
-//! before the request reaches a tool.
+//! **Why HTTP and not a Unix socket:** the transport menu belongs to the client. MCP clients speak
+//! stdio — where the *client* spawns the server, structurally impossible inside an already-running
+//! GUI — and Streamable HTTP; a UDS server would force a stdio↔socket proxy into every connection.
 //!
-//! rmcp's `StreamableHttpService` is a tower service with no listener of its own, which is
-//! the seam the auth check sits in: [`serve`] answers 401 itself and only then hands the
-//! request over, so an unauthorized call cannot reach the router, let alone a `Host`.
+//! rmcp's `StreamableHttpService` is a tower service with no listener of its own, which is the seam
+//! the auth check sits in: [`serve`] answers 401 itself and only then hands the request over, so an
+//! unauthorized call cannot reach the router, let alone a `Host`.
 
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
@@ -105,11 +101,6 @@ impl AgentServer {
         if token.is_empty() {
             return Err("agent server needs a token: an empty one authorizes every request".into());
         }
-        // Bound with `std` and **before** the runtime exists, for two separate reasons that
-        // both bite a caller who is already inside a runtime: `rt.block_on` panics there,
-        // and so does dropping a `Runtime` — which is what an early `?` on a taken port
-        // would do if the runtime were built first. Nothing about claiming a port is async;
-        // the spawned task adopts the listener with `from_std`, in the runtime's context.
         let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, port))
             .map_err(|e| format!("agent server could not bind 127.0.0.1:{port}: {e}"))?;
         listener
@@ -129,20 +120,8 @@ impl AgentServer {
         let tools = StrataTools::new(host);
         let sweeper = tools.clone();
         let service = StreamableHttpService::new(
-            // **A connection's worth of agent, where there is a connection.** On the session
-            // lifecycle this factory runs once per MCP session and the value it returns is
-            // owned by that session's worker for its whole life, so `Connection`'s drop is
-            // the disconnect. On the stateless branch it runs per *request* and the value
-            // dies with the response — which is why the agent every session-scoped call is
-            // made under is resolved from the request (`tools::Caller`) rather than from
-            // this value. A `clone()` here would make every client on the first branch the
-            // same agent and never retract one; the retraction a per-request value performs
-            // removes nothing, because its id was never used.
             move || Ok(tools.connection()),
             Arc::new(LocalSessionManager::default()),
-            // Defaults throughout but the token: the DNS-rebinding host allow-list already
-            // names loopback, and session mode is left as rmcp ships it so clients that
-            // negotiate an older protocol version still pair.
             StreamableHttpServerConfig::default().with_cancellation_token(cancel.clone()),
         );
         rt.spawn(accept(listener, service, Arc::new(token), cancel.clone()));
@@ -165,13 +144,6 @@ impl AgentServer {
 
 impl Drop for AgentServer {
     fn drop(&mut self) {
-        // **Before** the cancel, and here rather than in the sweep task: a stateless agent
-        // has no connection whose drop retracts it, so stopping the server is the last chance
-        // to release its query sessions. Without this, turning agent access off (or changing
-        // the port, which builds a fresh server and roster) leaves a ghost agent in every
-        // window's satellite and holds each session's snapshot for the engine's life — while
-        // a session-lifecycle client retracts itself through `Connection::drop`, so the two
-        // paths would disagree.
         (self.retract)();
         self.cancel.cancel();
         if let Some(rt) = self.rt.take() {
@@ -219,9 +191,6 @@ async fn accept<H: Host>(
             () = cancel.cancelled() => break,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
-                // One refused connection is not a reason to stop listening — but retrying
-                // with no pause is how a standing condition (no descriptors left) becomes a
-                // spinning core, so back off before going round again.
                 Err(e) => {
                     tracing::warn!("agent server accept failed: {e}");
                     tokio::select! {

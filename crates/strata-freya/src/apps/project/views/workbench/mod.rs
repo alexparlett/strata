@@ -68,59 +68,24 @@ impl Component for Workbench {
         let active = radio.read().active;
         let engine = use_consume::<EngineCtx>();
 
-        // The in-flight press's nonce, mirrored out of the results body's query lifecycle
-        // (see `ResultsBody`) so the toolbar can wear Run→Cancel. One resolver, one slot,
-        // read by props, so neither the toolbar nor the Running body has to know what a
-        // query is.
-        //
-        // It used to be a *correctness* requirement: freya-query re-ran an entry a mounting
-        // subscriber found stale, and an in-flight entry read as stale, so a second enabled
-        // subscriber double-executed the run. Our fork fixed that at the source — an execution
-        // in flight is counted, and a mounting subscriber attaches to it (freya-query's
-        // `RunningGuard` / `query_inflight_dedup.rs`). So the toolbar *could* subscribe now; it
-        // still doesn't, because `.enable(false)` is part of `Query`'s cache identity (a
-        // disabled subscriber reads a different, never-running entry, so there is no way to
-        // "watch without running"), and because the toolbar would then re-render on every step
-        // of a lifecycle it only wants one bit of.
-        // (The Run trigger itself lives on each tab — `QueryTab::request`, state-arch §6.)
-        //
-        // It answers for the **active tab only**, which is all the toolbar needs since it
-        // only ever addresses that tab. Nothing else asks it: the close-while-running
-        // guard (T2) spans every tab, and ⌘↵'s "already running" gate has to answer for a
-        // caller with no results pane at all (the command palette), so both go to the
-        // engine instead (`close::CloseGuard` / `TabCloser`, `actions::run_query`).
         let running = use_state(|| None::<RunId>);
 
         let confirm = use_consume::<State<Option<CloseTarget>>>();
-        // The engine as a `Copy` slot for `TabCloser`, which is passed by value into the
-        // tab strip's closures.
         let closer_engine = use_state({
             let engine = engine.clone();
             move || engine
         });
-        // The single-tab close gate, shared by every close path (⌘W here; the tab's ×,
-        // the tab context menu, and the nav dropdown consume it from context).
         let closer = use_provide_context(move || TabCloser {
             engine: closer_engine,
             confirm,
         });
 
-        // The workbench-owned shortcuts (one keyboard handler per node — see
-        // `keymap::on_commands`). Tab commands write the session store; ⌘↵ and ⌘S share
-        // the toolbar buttons' `actions`. Handlers peek and derive the active id at call
-        // time — never a mount-time snapshot. This rect is an ancestor of the whole
-        // workbench, so these fire before any Esc consumer below (fine: no Esc here, and
-        // each of these chords has a single consumer).
         let config = use_config_station();
         let project = use_radio_station::<ProjectState, ProjChan>();
-        // ⌘S can create a view, which moves the engine's catalog — the driver re-derives every
-        // tab's verdict against it (`state::diagnostics`).
         let catalog = use_catalog();
-        // …and records its outcome in the event log (P3-13), like the toolbar's Save button.
         let report = use_report();
         let mut cmd_radio = radio;
         let shortcuts = on_commands(config, move |cmd| {
-            // `read()` is peek-equivalent here: event handlers have no reactive context.
             let active = cmd_radio.read().active;
             match cmd {
                 Command::NewTab => {
@@ -133,17 +98,11 @@ impl Component for Workbench {
                 }
                 Command::CloseActiveTab => {
                     let Some(id) = active else { return false };
-                    // Through the shared gate: the T2 confirm when the tab's query is
-                    // in flight (and the pref is on) — same dialog as the window close.
                     closer.close(cmd_radio, config, id);
                     true
                 }
                 Command::RunQuery => {
                     let Some(id) = active else { return false };
-                    // In flight → consume but do nothing: Esc is the cancel, and a second
-                    // press must not double-run. The gate is `actions::run_query`'s, not
-                    // this handler's, because the command palette asks for the same Run
-                    // from a scope that cannot see the `running` mirror below.
                     actions::run_query(&engine, cmd_radio, id);
                     true
                 }
@@ -164,30 +123,21 @@ impl Component for Workbench {
                 el.child(
                     ResizableContainer::new()
                         .direction(Direction::Vertical)
-                        // Match the app's 1px rules (the handle's colour comes from the
-                        // `resizable_handle` theme; bump this if it reads too thin to grab).
                         .handle_size(1.)
                         .panel(
                             ResizablePanel::new(PanelSize::px(240.))
                                 .min_size(EDITOR_STUB_H)
                                 .max_size(EDITOR_MAX_H)
-                                // No `on_collapse`: unlike the side panels, nothing would bring
-                                // this one back, so it stops at its stub instead of closing.
                                 .child(EditorTab::new(id, running)),
                         )
                         .panel(
                             ResizablePanel::new(PanelSize::percent(100.))
                                 .min_pixels(RESULTS_STUB_H)
-                                // The pixel floor is the whole floor here: the defaulted
-                                // flex-weight minimum would outrank it (see `views::shell`).
                                 .min_size(0.)
                                 .child(Results::new(id, running)),
                         ),
                 )
             })
-            // Empty state: a filling body under the pinned 38px `TabBar`. (Centring the *root* would
-            // float the whole strip into the middle, since with no editor pane there's no space-filling
-            // sibling to hold it up.)
             .maybe(active.is_none(), |el| el.child(EmptyState::new()))
     }
 }

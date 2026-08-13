@@ -1,43 +1,28 @@
 //! The results pane's **Chart** body (Rz2, `docs/CHART_SPEC.md`): the shared results toolbar
 //! over a control strip and a plot of the current result.
 //!
-//! ## What it charts
+//! **What it charts** is the snapshot the grid is paging, never the source files. The read is
+//! [`ChartSpec`], a freya-query entry on the page read's terms, carrying the tab's persisted
+//! [`ChartConfig`] resolved against the **result's own schema** — see [`config`], which owns both
+//! the defaults an unset channel takes and the one `encode` site.
 //!
-//! The snapshot the grid is paging — never the source files (spec §1.1). The read is
-//! [`ChartSpec`], a freya-query entry on the page read's terms, and the request it carries is
-//! the tab's persisted [`ChartConfig`] resolved against the **result's own schema** — see
-//! [`config`], which owns both halves: the defaults an unset channel takes, and the one
-//! `encode` site that turns the resolved encoding into a [`ChartQuery`].
+//! **Three of the strip's controls never reach that request**: [`sort`], the legend's hidden set
+//! ([`hide`]) and the log value axis are view transforms over the settled answer, so flipping them
+//! repaints rather than re-reading. The bin count is the one that does reach it, because the engine
+//! is what counts. The two data transforms apply **sorted, then hidden** — hiding blanks a series'
+//! values and `ByYDesc` sorts on the first series, so hiding first would let a legend press
+//! reshuffle the category axis.
 //!
-//! **Three of the strip's controls never reach that request**: the [`sort`], the legend's
-//! hidden set ([`hide`]) and the log value axis are view transforms over the settled answer
-//! (spec §6), so flipping any of them repaints what is already in hand instead of paying for a
-//! second read of the same rows. The bin count is the one that does reach it, because the
-//! engine is what counts.
+//! **What each state renders.** A drawable answer becomes a [`ChartCanvas`]; everything else
+//! becomes a [`Notice`] in its place. That last group is not politeness: without it the pane is
+//! *blank*, which is indistinguishable from a bug. [`notice`] is the one place that decides, so a
+//! state cannot be drawable in one reading and blank in another. The two engine refusals name
+//! aggregating in SQL, which is the user's own `GROUP BY`.
 //!
-//! The two data transforms are applied **sorted, then hidden**. Hiding blanks a series'
-//! values, and `ByYDesc` sorts on the first series — so hiding first would let a legend press
-//! silently reshuffle the whole category axis.
-//!
-//! ## What each state renders
-//!
-//! A drawable answer becomes a [`ChartCanvas`]; everything else becomes a [`Notice`] in place
-//! of the canvas — an encoding the columns cannot satisfy, a read that failed, the engine's two
-//! refusals (over the row cap, and a pivot that found two rows in one cell), a shape the chosen
-//! mark cannot draw honestly, and an answer with nothing in it at all. That last group is not
-//! politeness: without it the pane is *blank* — no axes, no message — which is indistinguishable
-//! from a bug. [`notice`] is the one place that decides, so a state cannot be drawable in one
-//! reading and blank in another.
-//!
-//! Every one of those is a [`Notice`] and nothing more — a glyph tile, the condition, and where
-//! there is a fix, the fix in prose. The two engine refusals name aggregating in SQL, which is
-//! the user's own `GROUP BY`; V1 does not write it for them (spec §8).
-//!
-//! A drawable answer can still be *unreadable*, which is a third thing again: past
-//! [`CROWDED`] categories the axis has more labels than it can draw, so the canvas takes a
-//! non-blocking [`Banner`] above it and renders underneath, unaltered. The same banner carries
-//! the log axis's fallback ([`log_fallback`]) — a display preference never costs the user their
-//! chart, so a value no logarithm has a place for is drawn linearly and said out loud.
+//! A drawable answer can still be *unreadable*, which is a third thing: past [`CROWDED`] categories
+//! the axis has more labels than it can draw, so the canvas takes a non-blocking [`Banner`] above
+//! it and renders underneath unaltered. The same banner carries the log axis's fallback
+//! ([`log_fallback`]) — a display preference never costs the user their chart.
 
 mod axis;
 mod capture;
@@ -131,8 +116,6 @@ define_theme!(
     }
 );
 
-// ---- the body ----
-
 /// The chart body: the shared toolbar on top, then the control strip beside the plot.
 #[derive(PartialEq)]
 pub struct ChartView {
@@ -182,26 +165,16 @@ impl Component for ChartView {
         let log = use_consume::<LogCtx>();
         let roles = Roles::of(&self.columns);
 
-        // The tab's encoding, on its own channel — so the strip's edits re-chart this body
-        // and wake nothing else, and so they survive a re-run and a restart. What is *drawn*
-        // is that intent resolved against this result's columns: unset channels take the
-        // schema's defaults, and a column this result no longer has falls back to one rather
-        // than reaching the read.
         let session = use_radio::<SessionState, Chan>(Chan::Chart(self.tab));
         let config = session.read().chart(self.tab);
         let encoding = resolve(&config, &roles);
         let mark_now = encoding.mark;
         let encoded = encode(&encoding, &roles);
 
-        // The engine's display config rides in the key: axis labels render through it, and it
-        // changes without a restart (see `ChartSpec`). Subscribed, not peeked — a format
-        // change in Settings has to re-label the chart there and then.
         let settings = use_config(ConfigChan::Settings);
         let display = display_subset(&settings.read().settings.engine);
         let spec = ChartSpec {
             snapshot: self.snapshot.unwrap_or(SnapshotId(0)),
-            // A disabled read never reaches the engine, so the placeholder is only ever a
-            // cache key that nothing runs.
             query: encoded.clone().unwrap_or(ChartQuery::Histogram {
                 col: String::new(),
                 bins: None,
@@ -211,13 +184,6 @@ impl Component for ChartView {
         let readable = self.snapshot.is_some() && encoded.is_ok();
         let chart = use_query(spec.query(&engine, readable));
 
-        // The trendline is its own read (Chart 11), keyed by the two columns the scatter
-        // plots — deliberately never part of `ChartQuery`, so the toggle cannot re-read the
-        // points. Subscribed unconditionally (a hook behind a condition is a hook count that
-        // changes between renders) and enabled only once the points themselves **settled
-        // drawable**: the fit is uncapped — one aggregation over the whole snapshot — and a
-        // read that refused over the points cap must not still pay for a fit no overlay
-        // will ever paint. `encoding.trend` is already false for every other mark.
         let points_settled = matches!(
             &*chart.read().state(),
             QueryStateData::Settled {
@@ -232,9 +198,6 @@ impl Component for ChartView {
             y: encoding.ys.first().cloned().unwrap_or_default(),
         };
         let trend = use_query(trend_spec.query(&engine, fit_wanted));
-        // `None` while loading as much as for a fit the data cannot support: the scatter
-        // draws without the line and the settle repaints it in — a fit is an overlay, never
-        // something the chart waits for.
         let fit = fit_wanted
             .then(|| match &*trend.read().state() {
                 QueryStateData::Settled { res: Ok(fit), .. } => *fit,
@@ -244,12 +207,7 @@ impl Component for ChartView {
 
         let typography = scale();
         let dress = Dress::new(&theme, &typography);
-        // What the plot's colours mean, resolved beside the body that draws them so the two
-        // read the same settled answer — the strip renders it, because that is what scrolls.
         let mut key: Vec<LegendEntry> = Vec::new();
-        // What Copy Image would put on the clipboard, set only where a chart was actually drawn
-        // — over any notice there is nothing to copy, and the toolbar shows no item at all
-        // rather than an inert one.
         let mut snap: Option<ChartCapture> = None;
         let body: Element = match (self.snapshot, &encoded) {
             (None, _) => Notice::new(
@@ -270,30 +228,9 @@ impl Component for ChartView {
                     Notice::new("The chart could not be read", err.clone(), theme.note_color).into()
                 }
                 QueryStateData::Settled { res: Ok(data), .. } => {
-                    // The one clone per render, with the strip's two order-and-visibility
-                    // transforms applied on the way through — the notice, the legend and the
-                    // frame all read the rows as they will be drawn.
-                    //
-                    // **Sorted first, then hidden.** Hiding blanks a series' values, and
-                    // `ByYDesc` sorts on the first series — so hiding before sorting would let
-                    // pressing a legend row reshuffle the whole category axis. Visibility is
-                    // the last thing that happens to the data, which is what makes it a
-                    // display transform rather than a second sort key.
-                    //
-                    // `encoding.hidden` is already empty for a mark whose legend cannot
-                    // un-hide (`config::resolve`), so a pie is never blanked by a set left
-                    // over from a bar.
                     let sorted = sort::sorted(data.clone(), encoding.sort);
                     let all_hidden = hide::all_hidden(&sorted, &encoding.hidden);
                     let data = hide::applied(sorted, &encoding.hidden);
-                    // **The legend outlives one notice, and only one.** It is the control that
-                    // un-hides a series, and hiding the last one puts a notice in place of the
-                    // plot — so a legend built only on the drawable path would vanish exactly
-                    // when its own message ("press a legend entry to show it again") tells the
-                    // user to press it, a dead end the tab carries across a re-run and a
-                    // restart because `hidden` is persisted. Every *other* notice draws no
-                    // plot and has no way back through the legend, so keying colours beside
-                    // one would name colours nothing on screen is wearing.
                     let reason = notice(&data, mark_now, all_hidden);
                     if reason.is_none() || all_hidden {
                         key = legend(&data, mark_now, &dress, &encoding.hidden);
@@ -301,15 +238,8 @@ impl Component for ChartView {
                     match reason {
                         Some((title, body)) => Notice::new(title, body, theme.note_color).into(),
                         None => {
-                            // A log axis the data cannot carry is said out loud and drawn
-                            // linearly — a display preference never refuses a chart. Asked
-                            // once, here, so the banner and the painter cannot disagree.
                             let fallback = encoding.log_y.then(|| log_fallback(&data)).flatten();
                             let banner = fallback.map(str::to_string).or_else(|| crowded(&data));
-                            // One frame, two readers: the canvas paints it and Copy Image
-                            // captures it, so an image is the chart on screen by construction —
-                            // the log axis and the hidden series included, because both are
-                            // already settled into the frame by here.
                             let frame = Rc::new(Frame {
                                 data,
                                 mark: mark_now,
@@ -319,8 +249,6 @@ impl Component for ChartView {
                             });
                             snap = Some(ChartCapture::new(Rc::clone(&frame), log));
                             let plot = ChartCanvas::new(frame);
-                            // The banner sits *over* the plot, never instead of it: a crowded
-                            // axis is still the user's data, drawn honestly.
                             rect()
                                 .width(Size::fill())
                                 .height(Size::fill())
@@ -348,10 +276,6 @@ impl Component for ChartView {
             .child(
                 ResultsToolbar::new(self.tab, self.find, self.export.clone())
                     .copy_image(snap)
-                    // The Shape press from the Chart view arrives seeded from the resolved
-                    // encoding — the cut press's "composed from the encoding" value, in the
-                    // panel's placement (Chart 09). Only real category columns seed groups:
-                    // a scatter's X is a measure, and a row-index X is no column at all.
                     .shape(self.shape.clone().map(|target| {
                         ShapeTarget {
                             seed: Some(ShapeSeed {
@@ -438,14 +362,10 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
                  SQL so each category has one value."
             ),
         )),
-        // The engine bins over finite values only, so an empty set of bins is a column with
-        // none — which draws no axes at all rather than an empty plot.
         ChartData::Bins(bins) if bins.is_empty() => Some((
             NOTHING,
             "This column has no finite values to put in a bin.".to_string(),
         )),
-        // One bin with no width is a column with a single distinct value: the engine answers
-        // it honestly, and a zero-width rectangle paints nothing at all.
         ChartData::Bins(bins) if bins.iter().all(|bin| bin.hi <= bin.lo) => Some((
             "Every value is the same",
             "This column has one distinct value, so there is no range to spread over bins."
@@ -458,16 +378,9 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
         ChartData::Table { axis, .. } if axis.labels.is_empty() => {
             Some((NOTHING, "This result has no rows.".to_string()))
         }
-        // A table with no series at all draws axes and nothing else — and for a pie, not even
-        // those. `encode` cannot produce it today, but `ChartQuery::Rows` only *documents*
-        // that `ys` is non-empty, and Chart 03 hands `ys` to the user.
         ChartData::Table { series, .. } if series.is_empty() => {
             Some((NOTHING, "No column is being plotted.".to_string()))
         }
-        // The Tier B marks' own empty states (Chart 10): each draws nothing at all when the
-        // roles it reads are never complete, and a blank frame is indistinguishable from a
-        // bug. After the empty shapes — "this result has no rows" is still the truer thing
-        // to say about one.
         ChartData::Table { series, .. }
             if mark == ChartMark::Heatmap && marks::heat_bounds(series).is_none() =>
         {
@@ -489,9 +402,6 @@ fn notice(data: &ChartData, mark: ChartMark, all_hidden: bool) -> Option<(&'stat
                 "No category of this result has all five measures.".to_string(),
             ))
         }
-        // After the empty shapes, because "this result has no rows" is the truer thing to say
-        // about a result with no rows — but before the pie's, since a hidden series is a state
-        // the *user* put the chart into and the only one they can undo from the legend.
         ChartData::Table { .. } if all_hidden => Some((
             "Every series is hidden",
             "Press a legend entry to show it again.".to_string(),
@@ -548,7 +458,6 @@ fn log_fallback(data: &ChartData) -> Option<&'static str> {
             true,
         ),
         ChartData::Points(points) => log_reason(|| points.iter().map(|p| p.y), true),
-        // A count is a `u64` and an empty bin draws nothing, so zero blocks nothing here.
         ChartData::Bins(bins) => log_reason(|| bins.iter().map(|bin| bin.count as f64), false),
         ChartData::OverCap { .. } | ChartData::Duplicates { .. } => None,
     }
@@ -572,10 +481,6 @@ fn log_reason<I: Iterator<Item = f64>>(
     if zero_blocks && values().any(|v| v.is_finite() && v <= 0.) {
         return Some(NON_POSITIVE);
     }
-    // **Nothing positive at all is not a fallback worth a banner** — there is no chart under
-    // it to explain, and `log_span` says `None` for that case and for an unusable ratio alike.
-    // Reporting the ratio's message here told a user whose every value was NULL that their
-    // data spanned too many orders of magnitude.
     if !values().any(|v| v.is_finite() && v > 0.) {
         return None;
     }
@@ -636,10 +541,6 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
             })
             .collect();
     }
-    // The heatmap's legend keys the **ramp**, not the series: the normalized scale's ends
-    // and middle, off [`marks::heat_bounds`] — the same walk the cells blend over, the
-    // `pie_slices` rule — so a swatch cannot name a stop no cell wears. Inert rows — a
-    // matrix row cannot be hidden.
     if mark == ChartMark::Heatmap {
         let Some((lo, hi)) = marks::heat_bounds(series) else {
             return Vec::new();
@@ -660,8 +561,6 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
             })
             .collect();
     }
-    // A band is one statement in one hue — the centre named once, its bounds the same
-    // colour's tint. A row per bound would key colours nothing separate is wearing.
     if mark == ChartMark::Band {
         return series
             .first()
@@ -675,7 +574,6 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
             .into_iter()
             .collect();
     }
-    // A box plot draws in one colour by construction — the scatter and histogram rule.
     if mark == ChartMark::Box {
         return Vec::new();
     }
@@ -686,8 +584,6 @@ fn legend(data: &ChartData, mark: ChartMark, dress: &Dress, hidden: &[String]) -
         .map(|(i, one)| LegendEntry {
             swatch: dress.series(i),
             detail: None,
-            // The name, not the position: it is what the config remembers, and what survives
-            // a re-run that changes how many series there are.
             series: toggles.then(|| one.name.clone()),
             hidden: hidden.contains(&one.name),
             label: one.name.clone(),
@@ -749,13 +645,6 @@ impl Notice {
 impl Component for Notice {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ChartThemePartial>, ChartThemePreference, "chart");
-        // **A fixed block, centred — not a filling one.** The pane it sits in is the middle
-        // pane, which collapses to nothing and clips (`canvas_pane`); a block that took the
-        // pane's width verbatim would instead *reflow* into whatever is left, and prose given
-        // less room than a word wraps one character per line — a column of letters down the
-        // pane, which reads as a rendering fault rather than a narrow window. Sized here, the
-        // copy wraps where it always wraps and the pane cuts it off. Measured: 10px per text
-        // run when it reflowed, its full 380 now.
         rect()
             .width(Size::fill())
             .height(Size::fill())
@@ -910,7 +799,6 @@ mod tests {
             crowded(&axis_of(CROWDED + 1)).as_deref(),
             Some("61 categories on the axis. Only some labels are drawn.")
         );
-        // Neither of the other two shapes has a category axis to crowd.
         assert_eq!(crowded(&ChartData::Bins(Vec::new())), None);
         assert_eq!(crowded(&ChartData::Points(Vec::new())), None);
     }
@@ -928,7 +816,6 @@ mod tests {
     /// is a parent's doing, so only a parent can prove it gone.
     #[test]
     fn a_collapsed_pane_clips_the_notice_rather_than_reflowing_it() {
-        // Narrower than the strip alone, which is the state the screenshot caught.
         let app = || {
             use_init_theme(|| strata_theme(&load("midnight")));
             rect()
@@ -954,9 +841,6 @@ mod tests {
             runner.sync_and_update();
         }
 
-        // The copy keeps the width it wraps at everywhere else — it is laid out whole, then
-        // cut off. Before this it was handed the 28px the strip left over and wrapped at
-        // roughly one 7px character (measured: 10.4px per run).
         let widths: Vec<f32> = runner.find_many(|node: freya_testing::TestingNode, element| {
             Label::try_downcast(element).map(|_| node.layout().area.width())
         });
@@ -993,7 +877,6 @@ mod tests {
     fn the_legend_keys_the_colours_the_plot_drew() {
         let dress = dress();
 
-        // A series per Y column, in the ramp's own order.
         let two = ChartData::Table {
             axis: Axis {
                 labels: vec!["a".into(), "b".into()],
@@ -1012,8 +895,6 @@ mod tests {
         assert_eq!((key[0].swatch, key[1].swatch), (Color::RED, Color::GREEN));
         assert!(key[0].detail.is_none(), "a series reads off the axis");
 
-        // A pie keys the *drawn* slices: the zero and the gap have no wedge, so the second
-        // colour belongs to `c` and the legend has to say so.
         let pie = ChartData::Table {
             axis: Axis {
                 labels: vec!["a".into(), "skipped".into(), "gone".into(), "c".into()],
@@ -1029,7 +910,6 @@ mod tests {
         assert_eq!((key[0].swatch, key[1].swatch), (Color::RED, Color::GREEN));
         assert_eq!(key[0].detail.as_deref(), Some("75%"));
 
-        // Nothing to key where the plot draws in one colour.
         assert!(legend(
             &ChartData::Bins(Vec::new()),
             ChartMark::Histogram,
@@ -1057,12 +937,9 @@ mod tests {
         assert_eq!(title, "Every series is hidden");
         assert!(body.contains("legend"), "{body}");
 
-        // One of two hidden is an ordinary chart, and the flag is what decides — not the
-        // blanked values, which an all-NULL result has too.
         assert_eq!(notice(&table(&[Some(1.)]), ChartMark::Bar, false), None);
         assert_eq!(notice(&table(&[None, None]), ChartMark::Bar, false), None);
 
-        // An empty result is described by what it is, not by what the legend did to it.
         assert_eq!(
             notice(&table(&[]), ChartMark::Bar, true).map(|(title, _)| title),
             Some("Nothing to chart")
@@ -1118,7 +995,6 @@ mod tests {
         let why = log_fallback(&wide).expect("a 600-decade span is not a log axis");
         assert!(why.contains("orders of magnitude"), "{why}");
         assert!(!why.contains("zero"), "the wrong reason: {why}");
-        // And the axis itself refuses to build one, so the painter is safe on its own.
         assert_eq!(axis::log_span([1e-300, 1e300].into_iter()), None);
     }
 
@@ -1135,11 +1011,9 @@ mod tests {
         assert_eq!(notice(&empty, ChartMark::Line, false), None, "it is drawn");
         assert_eq!(log_fallback(&empty), None);
 
-        // A zero is still a zero: it *is* a value a line would have drawn.
         let zeroed = table(&[Some(0.), None]);
         assert!(log_fallback(&zeroed).is_some_and(|why| why.contains("zero")));
 
-        // And a histogram of nothing says nothing either, rather than blaming its span.
         let bin = |count| ChartBin {
             lo: 0.,
             hi: 1.,
@@ -1185,13 +1059,11 @@ mod tests {
             use_init_theme(|| strata_theme(&load("midnight")));
             let store = use_radio::<SessionState, Chan>(Chan::Chart(tab));
             let config = store.read().chart(tab);
-            // The one measure this result has is the one the user hid.
             let columns = [column_info(&Field::new("amount", DataType::Float64, true))];
             let roles = Roles::of(&columns);
             let encoding = resolve(&config, &roles);
             let data = hide::applied(table(&[Some(1.), Some(2.)]), &encoding.hidden);
             let all_hidden = hide::all_hidden(&data, &encoding.hidden);
-            // The body's own rule, verbatim — a copy that drifted would prove nothing.
             let reason = notice(&data, encoding.mark, all_hidden);
             let key = if reason.is_none() || all_hidden {
                 legend(&data, encoding.mark, &dress(), &encoding.hidden)
@@ -1226,9 +1098,6 @@ mod tests {
             "the notice names a legend that is not on screen: {seen:?}"
         );
 
-        // The other half: a notice the legend cannot undo keys nothing. A pie refused for a
-        // negative value draws no plot, so a swatch beside it would name a colour nothing is
-        // wearing.
         let refused = table(&[Some(3.), Some(-1.)]);
         let reason = notice(&refused, ChartMark::Pie, false).expect("a pie refuses a negative");
         assert_eq!(reason.0, "A pie cannot show negative values");
@@ -1254,7 +1123,6 @@ mod tests {
         for mark in [ChartMark::Pie, ChartMark::Scatter, ChartMark::Histogram] {
             assert!(!config::hideable(mark), "{mark:?}");
         }
-        // What the body does for those marks: an empty set, so the pie draws its slices.
         assert_eq!(hide::applied(data.clone(), &[]), data);
         assert!(!hide::all_hidden(&data, &[]));
         assert_eq!(notice(&data, ChartMark::Pie, false), None);
@@ -1277,8 +1145,6 @@ mod tests {
         assert!(!key[0].hidden);
         assert_eq!(key[1].series.as_deref(), Some("cost"));
         assert!(key[1].hidden, "the hidden row says so");
-        // Hidden or not, the colour is the one the series had — that is what blanking in
-        // place buys.
         assert_eq!((key[0].swatch, key[1].swatch), (Color::RED, Color::GREEN));
 
         let pie = ChartData::Table {
@@ -1309,7 +1175,6 @@ mod tests {
             notice(&table(&[Some(3.), Some(0.), None]), ChartMark::Pie, false),
             None
         );
-        // …and the same values under a mark that *can* draw a negative are not refused.
         assert_eq!(
             notice(&table(&[Some(3.), Some(-1.)]), ChartMark::Bar, false),
             None

@@ -135,8 +135,6 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
     let mark = encoding.mark;
     let data = super::hide::applied(data, &encoding.hidden);
     let key = legend(&data, mark, &dress, &encoding.hidden);
-    // The same two questions the body asks, in the same order — a fixture that skipped them
-    // would be a picture of a surface the app does not have.
     let fallback = encoding.log_y.then(|| super::log_fallback(&data)).flatten();
     let banner = fallback
         .map(str::to_string)
@@ -148,7 +146,6 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
         .content(Content::Flex)
         .background(theme.background)
         .child(ControlStrip::new(TabId::new(), config, encoding.clone(), roles).legend(key))
-        // The body's own pane, floor and all — not a second copy of it (see `canvas_pane`).
         .child(super::canvas_pane(
             rect()
                 .width(Size::fill())
@@ -163,8 +160,6 @@ fn body(data: ChartData, config: ChartConfig, schema: Vec<ColumnInfo>) -> impl I
                         .height(Size::flex(1.))
                         .child(ChartCanvas::new(Rc::new(Frame {
                             log_y: encoding.log_y && fallback.is_none(),
-                            // The harness has no engine to fit one; the trendline's own look
-                            // is pinned by the paint tests.
                             trend: None,
                             data,
                             mark,
@@ -214,8 +209,6 @@ fn shoot_as(
         use_init_theme(|| strata_theme(&load("midnight")));
         body(data.clone(), config.clone(), schema.clone())
     };
-    // The strip's controls write the tab's encoding, so they need the session store the
-    // window provides — nothing presses here, but the handles have to resolve.
     let (mut runner, ()) = TestingRunner::new(
         app,
         (1000., 620.).into(),
@@ -226,30 +219,18 @@ fn shoot_as(
         },
         1.,
     );
-    // **Settled, not merely synced once.** The hit regions below are recorded by the *paint*,
-    // at whatever layout is current when it runs — so a tree still one pass short of its final
-    // layout records them at coordinates the finished picture does not use, and a hover lands
-    // on nothing while the shot looks perfectly right. Measured: the histogram fixture missed
-    // its own bar that way.
     for _ in 0..4 {
         runner.sync_and_update();
     }
     if let Some(at) = press {
         runner.move_cursor(at);
         runner.click_cursor(at);
-        // A `Select`'s list fades and slides in, and it is *transparent* until that animation
-        // has run — so a shot that only settled the tree would show an open list as nothing at
-        // all. Polling past the 125ms open is what puts it in the picture.
         runner.poll(Duration::from_millis(1), Duration::from_millis(350));
     }
     if let Some(at) = hover {
-        // A paint first: the hit regions are recorded *by* the paint that draws them, and
-        // headless only paints on demand — so without this the pointer lands on an empty map.
-        // (In the app a frame has always been drawn before a pointer can be moved over it.)
         runner.render();
         runner.move_cursor(at);
         runner.sync_and_update();
-        // The readout is placed from its own measured size, so it settles a frame later.
         runner.sync_and_update();
     }
     runner.render_to_file(format!(
@@ -262,10 +243,7 @@ fn shoot_as(
 #[ignore = "writes target/chart-*.png for eyeballing; run explicitly"]
 fn chart_preview() {
     shoot("bar", table(), ChartMark::Bar, None);
-    // Inside the second category's first bar.
     shoot("bar-hover", table(), ChartMark::Bar, Some((445., 400.)));
-    // The Y encoder open, on its trigger — where a multi-pick list lands, and how far it
-    // runs before the strip's own scroll clips it.
     shoot_at(
         "strip-open",
         table(),
@@ -274,8 +252,6 @@ fn chart_preview() {
         None,
         Some((116., 259.)),
     );
-    // The same list over a 40-column `SELECT *`: it must cap and scroll rather than run off
-    // the bottom of the window, where its tail would be unreachable.
     shoot_at(
         "strip-open-wide",
         table(),
@@ -290,10 +266,6 @@ fn chart_preview() {
     shoot("scatter", points(), ChartMark::Scatter, None);
     shoot("histogram", bins(), ChartMark::Histogram, None);
 
-    // ---- Chart 06 ----
-
-    // A hidden series: the middle line gone from the plot, its legend row dim, and every other
-    // series still in the colour it had.
     shoot_as(
         "hidden-series",
         table(),
@@ -306,7 +278,6 @@ fn chart_preview() {
         None,
     );
 
-    // A log count axis over a long tail — decade gridlines, bars standing on the axis floor.
     shoot_as(
         "log-histogram",
         ChartData::Bins(
@@ -314,8 +285,6 @@ fn chart_preview() {
                 .map(|i| ChartBin {
                     lo: f64::from(i) * 5.,
                     hi: f64::from(i + 1) * 5.,
-                    // Two and a half decades of counts, with an empty bin in the tail — which
-                    // must not cost the axis its log scale.
                     count: [900, 400, 180, 70, 30, 12, 6, 3, 2, 1, 0, 1][i as usize],
                 })
                 .collect(),
@@ -329,7 +298,6 @@ fn chart_preview() {
         None,
     );
 
-    // The same preference over a series that dips to zero: linear, under the banner.
     shoot_as(
         "log-refused",
         ChartData::Table {
@@ -351,9 +319,6 @@ fn chart_preview() {
         None,
     );
 
-    // The crosshair: two hairlines across the plot frame through the hovered bin's own top
-    // edge, its value at the axis, and the ordinary hover readout beside it. The pointer has
-    // to be **on** a mark — the crosshair rides on the hover, which is what makes it free.
     shoot(
         "crosshair",
         bins(),
@@ -361,10 +326,6 @@ fn chart_preview() {
         Some((495., 450.)),
     );
 
-    // ---- Chart 10 ----
-
-    // The matrix: what to look for is the ramp reading low-to-high, the empty cell staying
-    // the pane's colour, every row named, and the three ramp swatches in the legend.
     shoot_as(
         "heatmap",
         matrix(),
@@ -382,8 +343,6 @@ fn chart_preview() {
         None,
     );
 
-    // The band: the tint between the bounds, the centre line over it, and the run cut where
-    // a bound is missing.
     shoot_as(
         "band",
         banded(),
@@ -398,8 +357,6 @@ fn chart_preview() {
         None,
     );
 
-    // The box plot: whiskers with caps, the quartile box, the median rule — and the readout
-    // naming all five on hover.
     shoot_as(
         "box",
         boxed(),

@@ -43,8 +43,6 @@ fn rows(target: &ExportTarget) -> &[Vec<Cell>] {
 /// A CSV rendering that mirrors the writer: the chosen delimiter and null text, and a field
 /// quoted exactly when it contains the delimiter, the quote, or a newline.
 fn csv(draft: &ExportDraft, target: &ExportTarget) -> String {
-    // The preview shows what the *field text* will be, so it resolves the same escapes the
-    // spec does — a `\t` delimiter previews as a tab, not as two characters.
     let delimiter = resolve(&draft.csv_delimiter).unwrap_or(',');
     let quote = resolve(&draft.csv_quote).unwrap_or('"');
     let escape = resolve(&draft.csv_escape);
@@ -185,9 +183,6 @@ fn partition_tree(draft: &ExportDraft, target: &ExportTarget) -> String {
         .and_then(|name| index(name).map(|i| (name, i)))
     {
         Some((first, col)) => {
-            // The **whole** page in hand, not the five rows the flat previews show: a tree is
-            // about distinct values, so more rows mean a truer shape. (The line below says how
-            // many were seen, so this stays honest about being one page.)
             let mut values: Vec<String> = target
                 .sample
                 .iter()
@@ -210,7 +205,6 @@ fn partition_tree(draft: &ExportDraft, target: &ExportTarget) -> String {
             if values.len() > TREE_BRANCHES {
                 lines.push("  …".into());
             }
-            // Never claim the tree is complete: these are the values on the page in hand.
             lines.push(String::new());
             lines.push(format!(
                 "shape from the {} loaded; the full export covers {}",
@@ -485,8 +479,6 @@ mod tests {
 
     #[test]
     fn the_scope_choice_does_not_change_the_preview_shape() {
-        // Scope changes how many rows are written, not what a row looks like — the preview
-        // shows the same first rows either way.
         let all = build(&ExportDraft::default(), &target());
         let page = build(
             &ExportDraft {

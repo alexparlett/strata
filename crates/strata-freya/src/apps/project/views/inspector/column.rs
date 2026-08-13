@@ -92,10 +92,6 @@ pub struct ColumnPanel {
 
 impl Component for ColumnPanel {
     fn render(&self) -> impl IntoElement {
-        // The palette is resolved **here**, once, and passed down: it is a theme read, which is
-        // a hook, and two of the three sections below are conditional — reading it inside
-        // `nested_box` would make the hook count depend on whether the selected column happens
-        // to be nested. Every other colour comes off `self.theme`, which needs no hook at all.
         let palette = type_palette();
         let swatch = kind_color(self.facts.kind, &palette);
         let fields = nested_fields(&self.facts.children);
@@ -104,14 +100,8 @@ impl Component for ColumnPanel {
             .width(Size::fill())
             .vertical()
             .child(self.title(swatch))
-            // A view's column is defined by a query, not by a file — so the panel says why the
-            // facts box below it has only a type in it, rather than leaving the emptiness to
-            // read as a bug.
             .maybe_child(self.facts.derived.then(|| self.derived_note()))
             .maybe_child((!fields.is_empty()).then(|| self.nested_box(fields, &palette)))
-            // The STATISTICS zone is its own component because its scanned half **subscribes**:
-            // a hook can't be conditional, and whether there is a scan to watch is exactly what
-            // varies here (see `Statistics`).
             .child(Statistics {
                 facts: self.facts.clone(),
                 theme: self.theme.clone(),
@@ -149,17 +139,12 @@ impl ColumnPanel {
                     .width(Size::fill())
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    // The three runs wrap rather than truncate: a long dtype (`Timestamp`,
-                    // `Decimal`) beside a long owner name would otherwise push "from …" out of
-                    // a narrow panel.
                     .content(Content::wrap_spacing(SP_3))
                     .spacing(SP_3)
                     .child(Badge::value(self.facts.dtype.clone(), swatch).radius(BADGE_RADIUS))
                     .child(
                         Badge::tag(self.facts.format.label(), self.format_color())
                             .radius(BADGE_RADIUS)
-                            // The format badge hugs like a value run, not like a tag: it sits
-                            // beside the dtype and the two must read as one pair.
                             .padding(Gaps::new(SP_1, SP_3, SP_1, SP_3)),
                     )
                     .child(Path::new(format!("from {}", self.facts.owner)).color(t.meta_color)),
@@ -238,8 +223,6 @@ impl ColumnPanel {
                                     .text_overflow(TextOverflow::Ellipsis),
                             )
                             .child(Meta::new(f.dtype).color(hue))
-                            // The rule sits *between* rows: on the last one it would double up
-                            // with the box's own bottom edge.
                             .maybe(i < last, |el| {
                                 el.border(Border::new().width(row_rule()).fill(t.divider_fill))
                             })
@@ -265,8 +248,6 @@ fn completeness_bar(facts: &ColumnFacts, t: &InspectorTheme) -> Option<Element> 
         .background(t.border_fill)
         .horizontal()
         .content(Content::Flex)
-        // Flex weights rather than percentage widths, so the two shares divide the track
-        // exactly however the panel is resized. A zero share contributes no segment at all.
         .maybe(filled > 0., |el| {
             el.child(
                 rect()
@@ -298,8 +279,6 @@ fn completeness_bar(facts: &ColumnFacts, t: &InspectorTheme) -> Option<Element> 
                     .child(Meta::new("Completeness").color(t.note_color))
                     .child(Meta::new(fill.label()).color(t.emphasis_color)),
             )
-            // The bar carries no numbers, so the numbers are its tooltip: how many rows are
-            // null, out of how many, and which side of the split is which.
             .child(
                 TooltipContainer::new(Tooltip::new_text(fill.detail()))
                     .position(AttachedPosition::Bottom)
@@ -325,9 +304,6 @@ struct Statistics {
 
 impl Component for Statistics {
     fn render(&self) -> impl IntoElement {
-        // Gathered here rather than inside `scan_card`: the card is a plain function, and these
-        // are hooks — they have to run in a component's scope. What the card's handler captures
-        // is `Copy` handles taken at render time.
         let actions = use_profile_actions();
         match self.facts.scan {
             None => zone(
@@ -336,10 +312,6 @@ impl Component for Statistics {
                 None,
                 Some(scan_card(&self.facts, &self.theme, actions)),
             ),
-            // Keyed on the **entry**, not on the request: a ↻ re-scan has to keep the numbers it
-            // is replacing on screen, and it can only do that from a scope that survives the new
-            // request (see `ScannedStatistics::held`). Switching entries *is* a remount, so one
-            // table's numbers can never be held over another's.
             Some(scan) => ScannedStatistics {
                 facts: self.facts.clone(),
                 theme: self.theme.clone(),
@@ -360,24 +332,17 @@ impl Component for Statistics {
 /// spinner) attach to one execution — and the running state is `query.read().state()`. Nothing
 /// here is stored, so nothing here can go stale behind the store's back.
 ///
-/// ## The zone never shows less than it did a moment ago
+/// **The zone never shows less than it did a moment ago.** A re-scan is a new request, hence a new
+/// cache key and a `Pending` entry, which on its own would blank the facts box and put a spinner
+/// where the numbers were. Two interlocking halves:
 ///
-/// A re-scan is a *new* request, hence a new cache key, hence a `Pending` entry — so on its own it
-/// would blank the facts box and put a spinner where the numbers were, then swap back a moment
-/// later. On a small table that whole round trip is a flicker: the eye reads it as a glitch rather
-/// than as a state.
+/// 1. **The last settled numbers stay live** ([`held`](Self::held)) — they were true as of their
+///    own timestamp, and the header says when that was.
+/// 2. **The re-scan only announces itself once it has outlasted [`PROGRESS_HOLD`]**, so inside that
+///    window a re-scan is invisible: numbers, then different numbers.
 ///
-/// Two halves, and they interlock — the second is only possible because of the first:
-///
-/// 1. **The last settled numbers stay live** ([`held`](Self::held)). They were true as of their own
-///    timestamp, and the header says when that was, so there is nothing dishonest about leaving
-///    them up while the next pass runs.
-/// 2. **The re-scan only announces itself once it has outlasted [`PROGRESS_HOLD`]** — the same hold
-///    the catalog row's registration spinner serves. Inside it, a re-scan is invisible: numbers,
-///    then different numbers.
-///
-/// A **first** scan is deliberately exempt from the hold: there is nothing to hold onto, and a
-/// press that shows nothing for 400ms reads as a press that missed.
+/// A **first** scan is exempt from the hold: there is nothing to hold onto, and a press that shows
+/// nothing for 400ms reads as a press that missed.
 #[derive(PartialEq)]
 struct ScannedStatistics {
     facts: ColumnFacts,
@@ -398,14 +363,8 @@ impl Component for ScannedStatistics {
         let query = use_profile(&engine, &self.facts.owner, self.scan);
         let session = use_radio_station::<SessionState, Chan>();
         let actions = use_profile_actions();
-        // The one colour this component takes from the **shared ramp** rather than from its own
-        // theme: a failure is semantic, and must follow the app-wide error ramp wherever it
-        // appears (AGENTS.md §3).
         let danger = tones().error;
 
-        // Cloned out, so the query's read guard is gone before any element is built. A `Loading`
-        // entry never carries a previous value here — every request is a fresh key — so it is
-        // simply the running state.
         let reader = query.read();
         let state = match &*reader.state() {
             QueryStateData::Pending | QueryStateData::Loading { .. } => Scan::Running,
@@ -414,9 +373,6 @@ impl Component for ScannedStatistics {
         };
         drop(reader);
 
-        // The last numbers this entry settled — what a re-scan keeps on screen (see the type doc).
-        // Remembered in an effect rather than during render, and only when it actually moves, so a
-        // settle costs one render and not two.
         let mut held = use_state(|| None::<CatalogProfile>);
         use_side_effect(move || {
             if let QueryStateData::Settled { res: Ok(p), .. } = &*query.read().state() {
@@ -424,9 +380,6 @@ impl Component for ScannedStatistics {
             }
         });
 
-        // Whether the scan in flight has outlasted the hold, and so is worth saying out loud.
-        // Re-armed from zero on every entry into (and exit from) a scan — the same shape, and the
-        // same reasoning, as the catalog row's status slot.
         let running = matches!(state, Scan::Running);
         let announced = use_state(|| false);
         let pending = use_state(|| None::<TaskHandle>);
@@ -452,27 +405,17 @@ impl Component for ScannedStatistics {
         let cancel = {
             let owner = owner.clone();
             move |_| {
-                // Both halves, because they answer different questions: the engine stops paying
-                // for the scan, and dropping the request is what puts the zone back to offering
-                // one — there is no result of *this* scan, so nothing else would be honest.
                 engine.cancel_profile(&owner);
                 actions.clear(kind, &owner);
             }
         };
 
-        // The facts + controls half is identical for settled and held numbers, which is the whole
-        // point: a re-scan in progress is not a different-looking panel.
         let settled = |profile: &CatalogProfile, tail: Option<Element>| {
-            // The scan's facts fold into the one list, matched on `StatKey` — so a fact can never
-            // appear twice, and the completeness bar picks up a *counted* null count wherever the
-            // footer had none.
             let facts = with_scan(self.facts.clone(), profile);
             let footnotes = rect()
                 .width(Size::fill())
                 .vertical()
                 .spacing(SP_3)
-                // What a nested field's absent facts mean, since the box above it would
-                // otherwise read as a scan that found nothing.
                 .maybe_child(facts.child.then(|| {
                     Path::new(NESTED_NOTE)
                         .color(t.note_color)
@@ -497,10 +440,7 @@ impl Component for ScannedStatistics {
         };
 
         match shown(&state, previous.as_ref(), *announced.read()) {
-            // Nothing on screen yet, so the press says so at once — no hold.
             Shown::FirstScan => zone(&self.facts, t, None, Some(running_row(t, SCANNING, cancel))),
-            // A re-scan slow enough to be worth saying: the numbers stay, the row explains why
-            // they are still the old ones, and Cancel is right there.
             Shown::ReScan(profile) => settled(profile, Some(running_row(t, RESCANNING, cancel))),
             Shown::Facts(profile) => settled(profile, None),
             Shown::Failed(error, previous) => {
@@ -511,8 +451,6 @@ impl Component for ScannedStatistics {
                     .spacing(SP_3)
                     .child(
                         rect()
-                            // A 1px optical nudge onto the first line of the prose beside it — an alignment
-                            // nudge, which the design keeps literal.
                             .margin((HAIRLINE, 0., 0., 0.))
                             .child(Icon::new(IconName::Alert).color(danger).size(14.)),
                     )
@@ -523,11 +461,7 @@ impl Component for ScannedStatistics {
                             .wrap(),
                     );
                 match previous {
-                    // A failed *re*-scan keeps what it was replacing, for the same reason a
-                    // running one does — and the ↻ in the header is the retry.
                     Some(profile) => settled(profile, Some(reason.into_element())),
-                    // A failed first scan says why and offers the retry, which is one press: the
-                    // request is still on the row, so it goes straight through the confirm.
                     None => zone(
                         &self.facts,
                         t,
@@ -597,8 +531,6 @@ fn shown<'a>(scan: &'a Scan, held: Option<&'a CatalogProfile>, announced: bool) 
             Some(previous) if announced => Shown::ReScan(previous),
             Some(previous) => Shown::Facts(previous),
         },
-        // Stopped on purpose is not a failure to report: the zone falls back to whatever it had,
-        // or to offering the scan again.
         Scan::Failed(e) if stopped_on_purpose(e) => match held {
             Some(previous) => Shown::Facts(previous),
             None => Shown::Offer,
@@ -611,17 +543,6 @@ fn shown<'a>(scan: &'a Scan, held: Option<&'a CatalogProfile>, announced: bool) 
 /// nothing about it (`with_scan` refuses the lookup — see there for why).
 const NESTED_NOTE: &str =
     "The scan describes top-level columns, so it reports nothing for a nested field.";
-
-// Was this scan stopped deliberately rather than broken?
-//
-// `cancelled` is what a press of Cancel settles — and, for the moment before the store drops the
-// request, what a scan aborted by a re-registration settles. `superseded` is a re-scan replacing
-// this one. Neither is news the user needs told: they asked for it, or the app did on their behalf.
-//
-// The rule itself is the **engine's** (`engine::stopped_on_purpose`), because the strings are: this
-// used to be a local `== "cancelled" || starts_with("superseded")`, and the event log grew a second
-// copy that had already drifted (it caught the cancel but not the supersede). One definition, beside
-// the constants that produce it.
 
 /// The zone's frame: the eyebrow (with whatever the scan half puts beside it), the facts box,
 /// the completeness bar, and a tail.
@@ -650,7 +571,6 @@ fn zone(
                 .content(Content::Flex)
                 .cross_align(Alignment::Center)
                 .child(Eyebrow::new("STATISTICS").color(t.label_color))
-                // The controls take the slack and sit at the panel edge, as the canvas has them.
                 .maybe_child(controls.map(|c| {
                     rect()
                         .width(Size::flex(1.))
@@ -678,9 +598,6 @@ fn zone(
                         .padding((SP_3, PANEL_PAD))
                         .background(t.box_background)
                         .child(Eyebrow::new(row.label).color(t.label_color))
-                        // The value takes the slack and right-aligns, so a long Min/Max
-                        // (a timestamp, a truncated string bound) truncates at the panel
-                        // edge instead of pushing its own key off the row.
                         .child(
                             MonoValue::new(row.value)
                                 .color(t.value_color)
@@ -741,17 +658,8 @@ fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -
         )
         .child(
             Button::new()
-                // The stock **filled** dress: the accent over inverse text, which is both
-                // the canvas's `background: var(--accent); color: var(--c-onaccent)` and the
-                // Run control's idle state. No `theme_colors` override — a call site that
-                // restates colours the variant already resolves is a second copy of them.
                 .filled()
-                // A committing action is the design system's 34px everywhere — one number,
-                // in `components`. The rest of the layout (padding, radius) stays the
-                // `button_layout` theme's.
                 .theme_layout(ButtonLayoutThemePartial::default().height(Size::px(ACTION_HEIGHT)))
-                // The one entry point, shared with the row menus' item: a first scan asks the
-                // cost confirm, a retry goes straight through (`ProfileActions::ask`).
                 .on_press(move |_| actions.ask(kind, &owner))
                 .child(
                     rect()
@@ -829,17 +737,11 @@ fn scan_controls(
         .horizontal()
         .cross_align(Alignment::Center)
         .spacing(SP_2)
-        // The age is coarse on purpose (`scan_age`), so the exact instant is its tooltip — the
-        // same trade the completeness bar makes with its own numbers. ISO-8601, UTC, from the one
-        // place that prints instants (`util::iso8601`).
         .child(
             TooltipContainer::new(Tooltip::new_text(iso8601(profile.at)))
                 .position(AttachedPosition::Bottom)
                 .child(Meta::new(scan_age(profile.at)).color(t.meta_color)),
         )
-        // **View as query** — the profile is never a black box. Absent when the unparser
-        // couldn't render an expression (`profile_sql` returns nothing then): no button beats a
-        // button that opens a query which doesn't run.
         .maybe_child((!sql.is_empty()).then(|| {
             control_button(
                 IconName::Brackets,
@@ -854,8 +756,6 @@ fn scan_controls(
                 },
             )
         }))
-        // ↻ **Re-scan** — an explicit re-scan, so it skips the cost confirm (P3-10) by going
-        // straight to the request rather than through `ask`.
         .child(control_button(IconName::Reload, "Re-scan", move |_| {
             actions.start(kind, &owner);
         }))

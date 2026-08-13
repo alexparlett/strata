@@ -76,13 +76,6 @@ impl PartialEq for TreeModel {
             && self.row == other.row
             && self.open == other.open
             && self.shown == other.shown
-            // By **identity**, as `GridData` compares its batch: clones of one batch share their
-            // arrays, so a pointer compare says "the same data" without walking it. A column count
-            // does not — two different batches of equal width compare equal, and since Freya skips
-            // re-rendering a scope whose props are equal, a model repointed at such a batch would
-            // keep showing the old one's rows. No call site reaches that today (the modal's
-            // backdrop covers the grid, so the open slot cannot go `Some` → `Some`), which is
-            // exactly why it should not rest on that staying true.
             && self.batch.num_columns() == other.batch.num_columns()
             && self
                 .batch
@@ -147,9 +140,6 @@ impl TreeModel {
         let Some(children) = cell_children(&self.batch, self.col, self.row, path, 0, window) else {
             return;
         };
-        // What this container's entries are called, taken from a child already in hand — a named
-        // entry is a key, an anonymous one a list item. Matches the record view's sampled text, so
-        // the two surfaces count the same things by the same names.
         let unit = match children.first().map(|c| c.key.is_some()) {
             Some(true) => "key",
             _ => "item",
@@ -176,9 +166,6 @@ impl TreeModel {
             }
             path.pop();
         }
-        // Only measure the container once **it** filled its window — an offset read is cheap, but a
-        // container smaller than one page cannot have a tail. `out` counts the whole tree, so it is
-        // not the quantity that answers this.
         if shown >= window {
             if let Some(total) = cell_len(&self.batch, self.col, self.row, path) {
                 if total > window {

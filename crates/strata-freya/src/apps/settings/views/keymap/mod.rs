@@ -1,49 +1,32 @@
 //! **Settings ▸ Keymap** (P4-08, `DEV_TASKS` W4, design `Settings.dc.html`) — every command the
 //! app dispatches, and the chord it answers to.
 //!
-//! **The mechanism was already here; this is the control.** P2-20 shipped the whole
-//! settings-driven resolution — [`strata_core::keymap`]'s table, `effective_chord`, the
-//! conflict policy, the unbind — so rebinding by hand-editing `config.json` has worked all
-//! along and every hint, dispatcher and editor binding already follows it. What P4-08 adds is
-//! the page: the grid, capture, the conflict answer, reset.
+//! **The mechanism was already here; this is the control.** [`strata_core::keymap`]'s table,
+//! `effective_chord`, the conflict policy and the unbind all shipped with P2-20, so every hint,
+//! dispatcher and editor binding already follows them. This adds the page.
 //!
-//! **Every change is one funnel.** Capture, the per-row reset and Reassign all go through
-//! [`ask`], which asks [`keymap::propose`] what the change would cost and either commits it or
-//! raises the note. So there is no path that writes a binding without the conflict check, and
-//! the check itself is in core beside `validate_bind` rather than here — the same rules a
-//! hand-edited config meets.
-//!
-//! **A reset is conflict-checked too**, which is easy to miss: a command's default chord can
-//! have been taken by another command in the meantime (bind Save query to ⌘G, bind Find to the
-//! ⌘S that freed up, then reset Save query), so resetting is a proposal like any other rather
-//! than a `retain` on the draft.
+//! **Every change is one funnel.** Capture, the per-row reset and Reassign all go through [`ask`],
+//! which asks [`keymap::propose`] what the change would cost. So no path writes a binding without
+//! the conflict check, and the check lives in core beside `validate_bind` — the same rules a
+//! hand-edited config meets. **A reset is conflict-checked too**, which is easy to miss: a
+//! command's default chord can have been taken in the meantime.
 //!
 //! **The menubar is disarmed while a row is listening and this window has the keys.** The OS
-//! resolves a menu accelerator before the window sees the key, so with the menubar armed, pressing
-//! ⌘C to bind it would copy and the row would go on waiting. Half of what a user reaches for here
-//! is a menu accelerator (⌘Z ⌘X ⌘C ⌘V ⌘A ⌘O ⌘Q ⌘,), so
-//! [`MenuHandles::suspend_accelerators`] holds them off — but only while this window is focused,
-//! because the listener it is protecting is this window's and cannot fire otherwise. Settings is
-//! not modal, so an abandoned capture (click the project window, never press a key) would
-//! otherwise leave the whole app's menubar disarmed until the window closed.
+//! resolves an accelerator before the window sees the key, so pressing ⌘C to bind it would copy
+//! while the row went on waiting. [`MenuHandles::suspend_accelerators`] holds them off — but only
+//! while this window is focused, because Settings is not modal and an abandoned capture would
+//! otherwise leave the whole app's menubar disarmed.
 //!
-//! ## Divergences from the canvas
+//! **Divergences from the canvas:**
 //!
-//! - Its intro still reads "Click a shortcut to rebind it" from before the pane became a table,
-//!   while the cell it describes now carries `onDoubleClick` and the title "Double-click to
-//!   rebind". The gesture is the deliberate half of that pair — a single click in a table row
-//!   means "I am pointing at this" — so the sentence follows the gesture rather than the other
-//!   way round. It also names the **row**, which is where the handler sits: the canvas hangs
-//!   `onDoubleClick` off the shortcut cell alone, and a row is one command with one chord, so
-//!   there is no part of it that means something else to press.
-//! - **No zebra.** The canvas bands these rows; the Engine pane's grid was banded in the canvas
-//!   too and P4-07 settled that a settings list is not a results grid (AGENTS.md §3). One answer
-//!   for both of this window's tables.
-//! - **There is no unbind control**, because the canvas has none: a chord becomes free by being
-//!   taken (Reassign), which is also the only thing that produces the unbound row the canvas
-//!   *does* draw, with its Add shortcut. The state is fully supported — `effective_chord` returns
-//!   `None`, hints vanish, menu items ship disabled — there is simply no button that says "leave
-//!   this command with no shortcut". Worth revisiting with the designer rather than inventing.
+//! - Its intro still reads "Click a shortcut to rebind it" from before the pane became a table.
+//!   The gesture is the deliberate half of that pair — a single click in a table row means "I am
+//!   pointing at this" — and it is on the **row**, which is one command with one chord.
+//! - **No zebra**, the answer P4-07 settled for both of this window's tables: a settings list is
+//!   not a results grid.
+//! - **No unbind control**, because the canvas has none. A chord becomes free by being taken. The
+//!   state is fully supported; there is simply no button for it, which is worth revisiting with
+//!   the designer rather than inventing.
 
 mod model;
 mod table;
@@ -78,32 +61,14 @@ impl Component for KeymapPane {
         let ctx = use_consume::<SettingsCtx>();
         let mut editing = use_state(Editing::default);
 
-        // The rows are a pure projection of the draft — a chord is already the shape the setting
-        // stores, so unlike the Engine pane there is no editing model between the two.
         let (rows, overridden) = {
             let draft = ctx.draft.read();
             (rows(&draft), has_overrides(&draft))
         };
 
-        // Hold the menubar's accelerators off for as long as a row is listening **in this
-        // window while it has the keys** (module doc), and put back exactly what the *committed*
-        // settings say the moment either stops being true — the same set the focused window's
-        // routine sync applies, so the two can't disagree.
-        //
-        // Focus is half the condition, not a detail. The suspension exists to stop the OS
-        // resolving an accelerator before the capture listener sees the key, and that listener is
-        // this window's: it cannot receive one while another window has focus, so there is nothing
-        // to protect and no reason to hold the menubar off. Settings is deliberately **not** modal
-        // (`platform::settings`), so clicking the project window behind it mid-capture is an
-        // ordinary thing to do — and without focus in the condition the accelerators would stay
-        // off app-wide until the capture was finished or the window closed, taking every Edit-menu
-        // item's chord *and* its enabled state with them.
         let committed = use_config(ConfigChan::Settings);
         let focused = use_hook(Platform::get).is_app_focused;
         let mut menu = use_consume::<AppCtx>().menu;
-        // Every input is read **inside** the effect. `use_side_effect` builds its closure once, so
-        // a value computed in the render above would freeze at its first reading and neither a
-        // capture nor a focus change would ever move it (AGENTS.md §3).
         use_side_effect(move || {
             let listening = *focused.read() && editing.read().capturing_command().is_some();
             let chords = menu_chords(&committed.read().settings);
@@ -112,9 +77,6 @@ impl Component for KeymapPane {
                 handles.suspend_accelerators(listening);
             }
         });
-        // A capture must not outlive the page it started on: leaving the category unmounts the
-        // listener below, so the menubar has to be re-armed on the way out too. The effect above
-        // covers a window that merely loses focus; this covers one that goes.
         use_drop(move || {
             if let Some(handles) = menu.write().as_mut() {
                 handles.suspend_accelerators(false);
@@ -150,10 +112,6 @@ impl Component for KeymapPane {
             )
             .child(rect().height(Size::px(INTRO_GAP)))
             .child(KeyTable { rows, editing })
-            // The capture listener, mounted only while a row is listening. Deliberately the LAST
-            // child: same-name global listeners fire in document order, and the window root's own
-            // Esc/⌘Q handler sits after the router — so this outranks it and Esc cancels the
-            // capture instead of closing the window.
             .maybe_child(
                 editing
                     .read()
@@ -200,7 +158,6 @@ impl Component for CaptureListener {
 /// Ask for a rebind: commit it when nothing is in the way, otherwise raise the note under the row
 /// and wait for an answer. The **one** write path for a binding on this page.
 fn ask(ctx: SettingsCtx, mut editing: State<Editing>, command: Command, rebind: Rebind) {
-    // Read in a block: `ctx.edit` takes a write guard on the same draft.
     let proposal = {
         let draft = ctx.draft.peek();
         keymap::propose(&draft, command, &rebind)

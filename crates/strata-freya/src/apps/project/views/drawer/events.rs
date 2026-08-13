@@ -60,9 +60,6 @@ impl Component for Events {
     fn render(&self) -> impl IntoElement {
         let log = use_consume::<LogCtx>();
         let tones = tones();
-        // The header's tally, resolved by the mounted body (see `DrawerCount`) — which is also
-        // what enables **Clear**, so the button and the number can't disagree about whether
-        // there is anything to clear.
         let count = self.count;
         let shown = log.read().len();
         use_side_effect_with_deps(&shown, move |shown| {
@@ -77,22 +74,15 @@ impl Component for Events {
         });
 
         if shown == 0 {
-            // The rail's own Events glyph, in the default empty tone: "no events" is not a
-            // severity, so there is no semantic colour to reach for here.
             return DrawerEmpty::new(IconName::Lines, "No events yet").into_element();
         }
 
-        // Each row keyed by its append sequence: an event arriving at the top must not hand the
-        // row below it a different scope.
         let rows: Vec<Element> = log
             .read()
             .events()
             .map(|event| {
                 EventRow {
                     tone: tone_of(tones, event.level),
-                    // An error's message wears the error ramp too (the canvas tints the whole
-                    // row): the dot alone is 6px, and a failure is the one thing worth finding
-                    // by eye in a scrollback.
                     error: event.level == LogLevel::Error,
                     error_color: tones.error,
                     message: event.message.clone(),
@@ -291,8 +281,6 @@ mod tests {
             long.height(),
             short.height()
         );
-        // And it stays inside the drawer rather than running off the side, which is what a
-        // non-wrapping flex child would do.
         assert!(
             long.max_x() <= 420.,
             "the message overflowed the panel width: {}",

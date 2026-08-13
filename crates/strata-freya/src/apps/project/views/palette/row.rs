@@ -82,11 +82,6 @@ impl Component for PaletteRow {
             false => (theme.row_color, theme.icon_color),
         };
 
-        // A column's glyph is its **type** swatch, in the type ramp whether or not the row is
-        // active — the colour is a fact about the column, not a selection state (the catalog's
-        // own column rows carry the same dot). Everything else takes the row's tone, and its
-        // mark from the catalog: the palette lists what the sidebar lists, so it marks them the
-        // same way.
         let icon = |name| {
             Icon::new(name)
                 .size(GLYPH_SIZE)
@@ -129,8 +124,6 @@ impl Component for PaletteRow {
                     .main_align(Alignment::Center)
                     .child(glyph),
             )
-            // The name takes the slack and truncates; everything after it keeps its own width,
-            // so a long table name never pushes the shortcut hint off the card.
             .child(
                 Prose::new(self.entry.label())
                     .color(label_color)
@@ -150,7 +143,6 @@ impl Component for PaletteRow {
                     .filter(|hint| !hint.is_empty())
                     .map(|hint| KeyCap::chip(hint.clone()).into_element()),
             )
-            // The `↵` marks what Enter will do, so it belongs to the active row alone.
             .maybe_child(
                 self.active
                     .then(|| MonoValue::new("\u{21b5}").color(accent).into_element()),

@@ -79,23 +79,10 @@ impl Component for Fields {
             (draft.provider, draft.note())
         };
 
-        // **Every row is keyed by the provider**, which makes switching one a clean
-        // remove-and-add of the whole section — `OptionList::new`'s rule, for the crash it
-        // documents. Keying only the rows that come and go is not enough: the ones that *stay*
-        // (the client options, the note) sit at a different index under each provider, and
-        // Freya's differ records a matched pair at a new index as **moved**, then unwraps a
-        // `scope_id` the move left behind.
-        //
-        // Each key is scoped by the row as well, exactly as an option row's is scoped by its
-        // format: two siblings keyed `"S3"` are a duplicate sibling key, which the differ panics
-        // on rather than guessing at.
         let scope = provider.label();
         let mut form = Form::new()
             .child(ProviderPicker { key: DiffKey::None }.key(format!("provider·{scope}")))
             .child(Authority { key: DiffKey::None }.key(format!("authority·{scope}")));
-        // Named, not `!= Http`: [`Auth`] is the two object stores' credential pill and its
-        // fall-through arm is S3's, so anything else reaching it would render AWS's auth modes
-        // over a connection that has none — which is this module's own rule broken.
         if matches!(provider, ProviderId::S3 | ProviderId::Gcs) {
             form = form.child(Auth { key: DiffKey::None }.key(format!("auth·{scope}")));
         }
@@ -104,15 +91,9 @@ impl Component for Fields {
                 .child(RegionField { key: DiffKey::None }.key(format!("region·{scope}")))
                 .child(Endpoint { key: DiffKey::None }.key(format!("endpoint·{scope}")));
         }
-        // Every *object store* is built on one HTTP client, so this section is offered whatever
-        // the picker says — but a database speaks no HTTP, and `object_store`'s client keys mean
-        // nothing to it (`ConnectionDef::client_config`).
         if provider.is_object_store() {
             form = form.child(ClientOptions { key: DiffKey::None }.key(format!("client·{scope}")));
         }
-        // Unlabelled, unlike every row above it: the note is a standing statement about the
-        // whole form rather than an answer to a question, and a label over it would imply there
-        // is something here to set.
         form.child(
             NoteRow {
                 note,
@@ -155,9 +136,6 @@ impl Component for ProviderPicker {
         let mut pill = SegmentedToggle::new().form();
         for id in ProviderId::OBJECT_STORES {
             pill = pill.child(
-                // `ProviderId::label`, not a word typed here: the pane's row badge names
-                // providers from the same table, and a name written twice is a name that can
-                // disagree.
                 ToggleSegment::text(id.label())
                     .selected(id == current)
                     .on_press(move |_| ctx.edit(move |draft| draft.provider = id)),
@@ -207,12 +185,6 @@ impl Component for Authority {
             let initial = ctx.draft.peek().address.clone();
             move || initial
         });
-        // Report the keystroke, then put the box back in step with what was stored — which for
-        // HTTP is what was typed, so the echo is a no-op there and this stays one rule. S3 and
-        // GCS take their scheme from the picker, so a pasted `s3://acme-lake` is normalised away
-        // and the box has to be corrected or it would show one thing and mean another (the rule a
-        // length cap follows too). Written in the same effect and guarded, so the self-write
-        // settles in one further pass; the draft is **peeked**, so this wakes on the box alone.
         use_side_effect(move || {
             let mut text = text;
             let typed = text.read().clone();
@@ -224,10 +196,6 @@ impl Component for Authority {
         Row::new(label)
             .required()
             .maybe(http, |row| {
-                // There is no scheme chip and no scheme picker: `http` and `https` are two
-                // different origins, and only the person typing knows which their server speaks.
-                // So the box takes the whole URL, and the hint says what it may not carry —
-                // which is the one thing about it that is not obvious.
                 row.hint(
                     "The whole origin, scheme included. A path belongs to the table that reads it",
                 )
@@ -279,8 +247,6 @@ impl Component for Auth {
                     );
                 }
             }
-            // S3 is the fall-through rather than an arm of its own, because HTTP never mounts
-            // this row at all — it has no auth to choose (spec §6).
             _ => {
                 for id in S3AuthId::ALL {
                     pill = pill.child(
@@ -292,8 +258,6 @@ impl Component for Auth {
             }
         }
 
-        // The reference is a `Row` of its own inside this one, so it carries its own label and
-        // `REQUIRED` marker while staying part of the answer above it.
         Row::new("AUTHENTICATION")
             .child(pill)
             .maybe_child(
@@ -338,8 +302,6 @@ impl Component for ProfilePicker {
             return row.child(Prose::new("Reading this machine's AWS configuration…"));
         };
         if profiles.is_empty() {
-            // A dead end the app cannot fix, said plainly rather than as an empty dropdown: the
-            // profiles are the user's own AWS setup, and Ambient is the mode that needs none.
             return row.child(Note::new(
                 "No profiles are defined in this machine's AWS configuration (~/.aws/config). \
                  Add one there, or use Ambient, which resolves whatever this machine already has.",
@@ -506,9 +468,6 @@ impl Component for Endpoint {
                                 ctx.edit(|draft| draft.allow_http = !draft.allow_http);
                             }),
                     )
-                    // A *sibling* of the switch, never its parent: a built-in's press reaches
-                    // its ancestors, so a pressable wrapper would take the same click and
-                    // toggle back.
                     .child(Prose::new(
                         "Allow plain HTTP - for an S3-compatible endpoint on this machine",
                     )),
@@ -576,8 +535,6 @@ impl Component for OptionToolbar {
         let win = window_theme();
         let error = tones().error;
         let ctx = use_consume::<ConnectionCtx>();
-        // Subscribes: Remove is armed by a selection, which is the one thing the toolbar has to
-        // know about the table.
         let selected = *ctx.selected_option.read();
 
         rect()
@@ -589,9 +546,6 @@ impl Component for OptionToolbar {
                     .outlined()
                     .color(win.icon_color)
                     .on_press(move |_| {
-                        // Seeded from the current selection, like the path toolbar's: an edit
-                        // refused while a connection is in flight leaves the highlight where it
-                        // was rather than pointing at a row that was never added.
                         let mut slot = ctx.selected_option;
                         let mut added = *slot.peek();
                         ctx.edit(|draft| {
@@ -627,8 +581,6 @@ impl Component for OptionTable {
         let rows = ctx.draft.read().client_config.clone();
 
         if rows.is_empty() {
-            // **Inside the table**, the path list's rule: an empty list still reads as the thing
-            // it is, where hiding the frame reads as a section that failed to load.
             return option_table().child(
                 rect()
                     .width(Size::fill())
@@ -735,9 +687,6 @@ impl Component for OptionRow {
         let ctx = use_consume::<ConnectionCtx>();
         let id = self.id;
 
-        // Each box owns its buffer and pushes into the list — the grid's one direction of travel,
-        // and for its reason: the list wakes on every keystroke, so writing it back would drag the
-        // cursor. Guarded, or the write would wake this row and cost a second pass per keystroke.
         let name = use_state(|| {
             ctx.draft
                 .peek()
@@ -752,10 +701,6 @@ impl Component for OptionRow {
                 .value_of(id)
                 .unwrap_or_default()
         });
-        // **Both boxes' ids are ours**, and both for the same reason: `Input` stops propagation on
-        // its focus press (`on_input_focus_press`), so a click that lands in either field never
-        // reaches `TableRow::on_press` and the row would not select itself. The name box needs its
-        // id anyway, so the suggestions can watch it take and lose focus.
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
         let value_id = use_a11y();
@@ -774,8 +719,6 @@ impl Component for OptionRow {
             }
         });
 
-        // Either field taking focus selects the row — the toolbar acts on that selection, so a
-        // value typed into a row the highlight never moved to is a Remove aimed at the wrong one.
         let mut slot = ctx.selected_option;
         use_side_effect(move || {
             let focused = focus() != Focus::Not || value_focus() != Focus::Not;
@@ -784,17 +727,11 @@ impl Component for OptionRow {
             }
         });
 
-        // An unknown name is an **error**, not the grid's warning: `check_client_config` refuses
-        // an option `object_store` has never heard of, where an unknown engine key may simply be
-        // newer than this build.
         let name_color = match ctx.draft.read().client_config.names_a_client_option(id) {
             Some(false) => tones.error,
             _ => roles.get(Role::Text),
         };
 
-        // Open exactly while the box has focus and the catalogue has something left to offer.
-        // Picking a name fills the box, which empties the list, which closes the panel — one
-        // condition rather than an open flag to keep in step with it.
         let suggestions: Vec<&'static ClientKey> = match focus() {
             Focus::Not => Vec::new(),
             _ => ctx.draft.read().client_config.suggestions(id),
@@ -810,14 +747,6 @@ impl Component for OptionRow {
                     .child(SuggestionRow { entry }),
             );
         }
-        // **The panel scrolls, and the gesture latches to it** — the macOS convention the fork
-        // implements: a wheel gesture that starts here stays here for its whole life, including
-        // past the end of the range, so flicking through the offers cannot hand off mid-gesture
-        // and scroll the form behind them. The **height** is capped rather than the list, so the
-        // panel stays shorter than the table it hangs over while still offering every match —
-        // `auto` + `max_height`, the app's own shape for this (`record_view`, `drop_confirm`),
-        // because `height` alone is an exact size and would hold all three rows' worth of panel
-        // open over a single offer.
         let menu = Menu::new().min_width(Size::px(SUGGEST_WIDTH)).child(
             ScrollView::new()
                 .latch_wheel()
@@ -850,8 +779,6 @@ impl Component for OptionRow {
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
                             .spacing(CELL_INSET - ERROR_STRIPE)
-                            // A painted rect and not a border: torin draws a border inside bounds
-                            // the box already fills, so it would be the one edge you cannot see.
                             .child(
                                 rect()
                                     .width(Size::px(ERROR_STRIPE))
@@ -863,8 +790,6 @@ impl Component for OptionRow {
                             )
                             .child(
                                 Attached::new(
-                                    // The tone is set on the wrapper: `Input` paints no colour of
-                                    // its own, so its text takes the ambient one.
                                     rect().width(Size::flex(1.)).color(name_color).child(
                                         ValueField::new(name)
                                             .bare()

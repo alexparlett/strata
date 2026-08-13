@@ -106,12 +106,7 @@ fn runner_at(store: ProjectState, width: f32) -> (TestingRunner, Handles) {
         move |r| {
             let project =
                 r.provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(store));
-            // The remove-confirm slot Forget sets. The dialog itself is the window root's and is
-            // not mounted here — setting the slot is the whole of what this menu item does.
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
-            // …and the editor-window slot Add and Edit set, on exactly the same terms: the
-            // window is opened by `ConnectionLauncher` at the project root, which is not mounted
-            // here either.
             let editor = r.provide_root_context(|| State::create(None::<ConnectionTarget>));
             r.provide_root_context(|| {
                 RadioStation::<SessionState, Chan>::create(SessionState::default())
@@ -228,7 +223,6 @@ fn a_refused_connection_points_at_problems_rather_than_reciting_the_reason() {
     let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
-    // Not in the row itself: a settled row is clean, and a refused one says it with a glyph.
     assert!(
         !shows(&runner, "This S3 connection needs a region."),
         "the reason is not spelled into the row: {:?}",
@@ -237,9 +231,6 @@ fn a_refused_connection_points_at_problems_rather_than_reciting_the_reason() {
 
     let triangle = status_glyph(&runner, "broken").expect("the refused row wears a triangle");
     runner.move_cursor(centre(triangle));
-    // `TooltipContainer` holds back for 500ms before it shows, so the tree has to be run past
-    // that rather than merely settled — `poll` in terms of the fork's own constant, not a
-    // number of frames.
     runner.poll(Duration::from_millis(20), TOOLTIP_DELAY * 3);
     settle(&mut runner);
 
@@ -290,7 +281,6 @@ fn a_connection_still_waiting_past_the_hold_spins() {
         status_glyph(&runner, "lake").is_some(),
         "a wait this long is worth reporting"
     );
-    // And the refused row is untouched by the wait: its triangle is a settled verdict.
     assert!(status_glyph(&runner, "broken").is_some());
     assert!(
         status_glyph(&runner, "acme-lake").is_none(),
@@ -307,7 +297,6 @@ fn an_unanswered_connection_states_nothing_until_the_hold_expires() {
     let (mut runner, ..) = runner(project());
     settle(&mut runner);
 
-    // The GCS row is still `Loading`, and well inside the hold.
     assert!(shows(&runner, "lake"), "the row itself is listed");
     assert!(
         status_glyph(&runner, "lake").is_none(),
@@ -444,10 +433,6 @@ fn a_drag_that_shrinks_the_pane_squeezes_the_rows_rather_than_spilling_them() {
         "laid out past the {width}px panel edge: {overflowing:?}"
     );
 
-    // And the squeeze cost the rows their *text*, not their controls: every row still carries a
-    // full-size ⋮, which is the whole of what a user can still do to a connection here. Counted
-    // by the **line** each 22×22 box sits on, because the button nests several of them (the
-    // tooltip container, the button, its content) at the same origin.
     let mut lines: Vec<i32> = runner
         .find_many(|node, _| {
             let a = node.layout().area;
@@ -503,14 +488,8 @@ fn an_empty_project_explains_what_a_connection_is_for() {
 ///
 #[test]
 fn the_empty_state_keeps_its_floor_when_the_drag_reaches_the_stub() {
-    // The shell's `PANEL_STUB_W` — restated rather than imported, as the inspector's tests do,
-    // because it is a shell constant and this is a pane.
     const PANEL_STUB_W: f32 = 48.;
-    // A wrapped label's box is its longest **line**, and a line ends at the last word boundary
-    // before the limit — so the run sits a partial word short of the box it was given, however
-    // much room it has. That remainder is what this allows for, and nothing else.
     const WRAP_SLACK: f32 = 12.;
-    // What the copy is entitled to at the floor: the body minimum less the empty state's inset.
     let floor = PANE_BODY_MIN_W - EMPTY_PAD.left() - EMPTY_PAD.right();
 
     let (mut runner, ..) = runner_at(empty_project(), PANEL_STUB_W);
@@ -524,8 +503,6 @@ fn the_empty_state_keeps_its_floor_when_the_drag_reaches_the_stub() {
         })
         .expect("the empty state's copy");
 
-    // Wider than the panel containing it, which is only possible because the floor put it there:
-    // without one the copy is capped at the panel's content box, which at the stub is nothing.
     assert!(
         copy.width() >= floor - WRAP_SLACK,
         "the copy laid out at {}px inside a {PANEL_STUB_W}px panel, under the {floor}px floor — \

@@ -235,9 +235,6 @@ fn clause_of(word: &str) -> Clause {
         "INSERT" => Clause::Insert,
         "COPY" => Clause::Copy,
         "SET" | "RESET" => Clause::SetOption,
-        // `PREPARE` also appears *inside* `DEALLOCATE PREPARE p`, but the position-0 guard
-        // ([`leads_statement_only`]) makes that safe: the scan skips it at index 1 and lands
-        // on `DEALLOCATE` at index 0, keeping the prepared-name offer.
         "PREPARE" => Clause::Prepare,
         _ => Clause::Unknown,
     }
@@ -254,10 +251,6 @@ fn clause_of(word: &str) -> Clause {
 /// list's. A statement lead cannot be reached mid-list, so position is the whole test — exactly
 /// as ED-08 built it for `EXECUTE`.
 fn leads_statement_only(clause: Clause) -> bool {
-    // Exhaustive on purpose: a new lead added to [`clause_of`] must decide here at
-    // compile time whether position 0 is its whole test. A wildcard would default it
-    // to "governs anywhere" and silently resurrect the column-named-like-a-lead bug
-    // this guard exists for.
     match clause {
         Clause::Execute
         | Clause::Create
@@ -406,7 +399,6 @@ fn role_at(
             }
         }
         Clause::Describe => {
-            // `DESCRIBE |` expects the relation; after it, the statement is done.
             if prev.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("DESCRIBE")) {
                 Role::Operand
             } else {
@@ -414,9 +406,6 @@ fn role_at(
             }
         }
         Clause::Execute => {
-            // `EXECUTE |` / `DEALLOCATE [PREPARE] |` expects the prepared name; after it, the
-            // rest is arguments. Postgres lets `DEALLOCATE` take an optional `PREPARE` (which
-            // sqlparser and DataFusion both ignore), so the name follows either word.
             let named = prev.is_some_and(|t| {
                 t.kind == TokKind::Keyword
                     && (t.eq_ci("EXECUTE") || t.eq_ci("DEALLOCATE") || t.eq_ci("PREPARE"))
@@ -427,10 +416,7 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // The object word comes next (`CREATE |`, `DROP |`) — always a continuation.
         Clause::Create | Clause::Drop => Role::Continuation,
-        // `DROP TABLE |`, `DROP TABLE IF EXISTS |`, `DROP TABLE a, |` all expect the
-        // object's name; after it the statement is complete.
         Clause::DropTable | Clause::DropView | Clause::DropFunction => {
             let object = match clause {
                 Clause::DropTable => "TABLE",
@@ -443,10 +429,6 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // `INSERT INTO |` expects the target table. The **column list** names
-        // existing columns of the target — an operand, answered by the same
-        // resolver the pool reads; a VALUES tuple's content is the user's own
-        // data, a Binding.
         Clause::Insert => {
             if prev_kw(&["INTO"]) {
                 Role::Operand
@@ -460,12 +442,6 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // `COPY |` expects the source relation, like a FROM target. Inside a later
-        // paren group, `PARTITIONED BY (…)` names existing columns of that source —
-        // an operand, answered by the same resolver the pool reads — while any
-        // other group (`OPTIONS`, DataFusion's open namespace) is the user's own
-        // content. (`COPY (|` itself is the restart branch in [`analyze_caret`]
-        // and never reaches here.)
         Clause::Copy => {
             if prev_kw(&["COPY"]) {
                 Role::Operand
@@ -479,8 +455,6 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // The name after the object word is being invented; `(` / `,` open a column
-        // definition list, names being invented too.
         Clause::CreateTable | Clause::CreateView => {
             let object = if clause == Clause::CreateTable {
                 "TABLE"
@@ -493,8 +467,6 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // As above; the `STORED AS |` operand comes from the AS carve-out in
-        // [`analyze_caret`], never from here.
         Clause::CreateExternal => {
             if prev_kw(&["TABLE"]) || prev_punct(&["(", ","]) {
                 Role::Binding
@@ -502,11 +474,6 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // Once a `RETURN` lies between the head and the caret, the body is an
-        // expression — alternate on [`item_complete`] like the default arm, except
-        // that `RETURN` itself expects the body (`RETURN |` and `RETURN price * |`
-        // are operands, `RETURN price |` a continuation). Before it, the argument
-        // list invents names and everything else continues (`RETURNS`, `RETURN`).
         Clause::CreateFunction => {
             let after_return = before
                 .iter()
@@ -523,8 +490,6 @@ fn role_at(
                 Role::Continuation
             }
         }
-        // `PREPARE |` invents the statement's name; `AS` restarts the ladder via the
-        // carve-out in [`analyze_caret`].
         Clause::Prepare => {
             if prev_kw(&["PREPARE"]) {
                 Role::Binding
@@ -569,10 +534,8 @@ fn aliases_of(toks: &[Tok]) -> Vec<(String, String)> {
         let is_from = toks[i].kind == TokKind::Keyword && toks[i].eq_ci("FROM");
         let is_join = toks[i].kind == TokKind::Keyword && toks[i].eq_ci("JOIN");
         if is_from || is_join {
-            // The relation name is the next identifier-ish token.
             if let Some(tbl) = toks.get(i + 1).filter(|t| is_name_like(t)) {
                 let table = tbl.text.clone();
-                // Optional `AS`, then an optional alias identifier.
                 let mut j = i + 2;
                 if toks.get(j).map(|t| t.eq_ci("AS")).unwrap_or(false) {
                     j += 1;
@@ -667,8 +630,6 @@ fn projection_columns(body: &[Tok]) -> Vec<String> {
             }
             continue;
         }
-        // Connectives and literals are never projection columns (shared tables —
-        // a CTE body of `SELECT NULL` must not yield a column named `null`).
         if t.kind == TokKind::Keyword
             && (OPERAND_EXPECTING.iter().any(|w| t.eq_ci(w))
                 || LITERAL_WORDS.iter().any(|w| t.eq_ci(w)))
@@ -684,7 +645,6 @@ fn projection_columns(body: &[Tok]) -> Vec<String> {
                         || (n.kind == TokKind::Keyword && n.eq_ci("FROM"))
                 }
             };
-            // Skip the item if it was already captured via `AS` (prev token is AS).
             let after_as = i > 0 && body[i - 1].kind == TokKind::Keyword && body[i - 1].eq_ci("AS");
             if ends_item && !after_as {
                 out.push(t.text.clone());
@@ -764,9 +724,6 @@ fn governing_clause(
         }
         if s == scope && branch[i].kind == TokKind::Keyword {
             let clause = clause_of(&branch[i].text);
-            // A statement-lead-only keyword governs from position 0 and nowhere else — see
-            // [`leads_statement_only`]. Skipped rather than returned, so the scan carries on to
-            // the real clause behind it (`SELECT execute, |` keeps `SELECT`).
             if clause != Clause::Unknown && !(leads_statement_only(clause) && i != 0) {
                 return Some(i);
             }
@@ -787,8 +744,6 @@ fn clause_region(branch: &[Tok], branch_scopes: &[i32], gov: usize) -> Range<usi
             break;
         }
         if branch_scopes[i] == scope && t.kind == TokKind::Keyword {
-            // The same guard the governing scan uses, and it is total here: this region starts at
-            // `gov + 1`, so a statement lead can never legitimately appear inside one.
             let clause = clause_of(&t.text);
             if clause != Clause::Unknown && !leads_statement_only(clause) {
                 end = i;
@@ -860,8 +815,6 @@ fn select_refs(
 /// yields the CTE name (columns from whatever body tokens exist).
 fn ctes_of(stmt: &[Tok]) -> Vec<CteSym> {
     let mut out = Vec::new();
-    // First WITH in the statement. (A WITH nested in a subquery would match too —
-    // its CTE is then treated as statement-visible, which over-offers harmlessly.)
     let mut i = match stmt
         .iter()
         .position(|t| t.kind == TokKind::Keyword && t.eq_ci("WITH"))
@@ -872,20 +825,15 @@ fn ctes_of(stmt: &[Tok]) -> Vec<CteSym> {
     if stmt.get(i).map(|t| t.eq_ci("RECURSIVE")).unwrap_or(false) {
         i += 1;
     }
-    // The header is the list's own condition — "is there another CTE name here?". Every `break`
-    // inside the body is the other thing: a malformed or unterminated clause, mid-edit.
     while let Some(name_tok) = stmt.get(i).filter(|t| is_name_like(t)) {
         let name = name_tok.text.clone();
         i += 1;
-        // optional explicit column list `(a, b)`
         let mut explicit_cols: Vec<String> = Vec::new();
         if stmt.get(i).map(|t| t.text == "(").unwrap_or(false)
             && stmt
                 .get(i + 1)
                 .map(|t| is_name_like(t) || t.text == ")")
                 .unwrap_or(false)
-            // Only a column list if `AS` follows the close paren — otherwise this
-            // paren is something else entirely.
             && {
                 let close = matching_paren(stmt, i);
                 close
@@ -902,12 +850,10 @@ fn ctes_of(stmt: &[Tok]) -> Vec<CteSym> {
             }
             i = close + 1;
         }
-        // AS
         if !stmt.get(i).map(|t| t.eq_ci("AS")).unwrap_or(false) {
             break;
         }
         i += 1;
-        // ( body )
         if !stmt.get(i).map(|t| t.text == "(").unwrap_or(false) {
             break;
         }
@@ -922,10 +868,9 @@ fn ctes_of(stmt: &[Tok]) -> Vec<CteSym> {
         };
         out.push(CteSym { name, columns });
         let Some(close) = close else {
-            break; // unterminated body — mid-edit
+            break;
         };
         i = close + 1;
-        // chained `, next_cte AS ( … )`
         if stmt.get(i).map(|t| t.text == ",").unwrap_or(false) {
             i += 1;
             continue;
@@ -996,9 +941,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     let (lo, hi) = statement_bounds(toks, sql.len(), caret);
     let stmt: Vec<Tok> = statement_tokens(toks, sql.len(), caret).to_vec();
 
-    // Reference scoping: the caret's set-op branch (regions never cross a
-    // branch) with per-token paren scopes. CTEs stay statement-scoped (a WITH
-    // prefixes the whole statement); aliases/refs are branch-scoped.
     let (blo, bhi) = branch_bounds(&stmt, lo, hi, caret);
     let branch: Vec<Tok> = stmt
         .iter()
@@ -1014,8 +956,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     let select_aliases = column_aliases(&branch);
     let ctes = ctes_of(&stmt);
 
-    // The partial word = a name/keyword token whose span ends exactly at the caret
-    // (i.e. we're typing its tail). Otherwise the caret sits after some other token.
     let partial_tok = stmt.iter().find(|t| {
         t.span.end == caret
             && matches!(
@@ -1028,7 +968,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         None => (String::new(), caret..caret),
     };
 
-    // Preceding meaningful token (the one before the partial, else before the caret).
     let before: Vec<&Tok> = stmt
         .iter()
         .filter(|t| t.span.end <= replace.start)
@@ -1040,7 +979,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         None
     };
 
-    // The caret's paren scope, then the clause governing it (scope-aware).
     let caret_scope = branch
         .iter()
         .filter(|t| t.span.end <= replace.start)
@@ -1053,21 +991,14 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     let governing = gov_idx
         .map(|i| clause_of(&branch[i].text))
         .unwrap_or(Clause::Unknown);
-    // An unrefined statement lead is narrowed by the head keywords (`CREATE TABLE` vs
-    // `CREATE VIEW` …) — the refined value replaces the clause everywhere below.
     let governing = refine_statement_clause(&branch, governing);
 
-    // The single-relation column-list positions, resolved **once**: the role and the
-    // pool both read this answer, so the boundary (column list vs VALUES tuple vs
-    // OPTIONS group) has exactly one encoding.
     let column_list = match governing {
         Clause::Insert => insert_column_list(&stmt, caret),
         Clause::Copy => copy_partition_list(&stmt, caret),
         _ => None,
     };
 
-    // The written-reference regions: the caret's own clause list (demotion) and
-    // its nearest SELECT list (coverage).
     let clause_refs = gov_idx
         .map(|i| {
             let region = clause_region(&branch, &branch_scopes, i);
@@ -1076,8 +1007,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         .unwrap_or_default();
     let projection = select_refs(&branch, &branch_scopes, replace.start, caret_scope);
 
-    // A trailing comparison (`… e.user_id = |`): capture the other side's column
-    // ref so completion can rank same-type-family candidates first.
     let comparand = prev
         .filter(|t| {
             t.kind == TokKind::Op
@@ -1089,7 +1018,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
             if !is_name_like(operand) {
                 return None;
             }
-            // `qual . column` or bare `column`.
             let dotted = before
                 .get(n.wrapping_sub(3))
                 .copied()
@@ -1106,19 +1034,11 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     let context = if prev.is_none() {
         Context::At(Clause::Start, Role::Operand)
     } else if governing == Clause::SetOption {
-        // The `SET` dotted-key rule, read **before** the `.` rule below: a config key
-        // is one dotted name, and the `Dot` rule would read `SET datafusion.|` as the
-        // columns of a relation named `datafusion`. Key vs value is the presence of an
-        // `=` between the lead keyword and the caret.
         match before
             .iter()
             .position(|t| t.kind == TokKind::Op && t.text == "=")
         {
             None => {
-                // Key position: absorb the dotted chain backwards into **one** partial
-                // with **one** replace span, so accepting a full key at
-                // `SET datafusion.|` replaces the whole chain rather than appending a
-                // second namespace.
                 let mut i = before.len();
                 while i >= 2
                     && before[i - 1].kind == TokKind::Punct
@@ -1132,24 +1052,14 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
                     partial = format!("{chain}{partial}");
                     replace.start = before[i].span.start;
                 }
-                // The token before the (absorbed) span decides: the lead keyword means
-                // the key is being typed; a written key means only `=` can follow, and
-                // `=` is punctuation — the continuation arm offers nothing.
                 if i == 1 {
                     Context::At(Clause::SetOption, Role::Operand)
                 } else {
                     Context::At(Clause::SetOption, Role::Continuation)
                 }
             }
-            // A mid-edit statement can put the `=` before the lead itself (`= 1 UNION
-            // SET |` — the branch scan finds SET at branch position 0 while `before`
-            // is statement-scoped), so a slice from 1 would panic. There is no key to
-            // carry there; the continuation's empty offer is the safe answer.
             Some(0) => Context::At(Clause::SetOption, Role::Continuation),
             Some(eq) => {
-                // Value position: carry the key so the pool can offer the value
-                // vocabulary its kind names. After a complete value (`SET k = v |`)
-                // the ordinary item test continues, whose arm offers nothing.
                 set_key = Some(before[1..eq].iter().map(|t| t.text.as_str()).collect());
                 if item_complete(prev, prev2) {
                     Context::At(Clause::SetOption, Role::Continuation)
@@ -1162,8 +1072,6 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         .map(|t| t.kind == TokKind::Punct && t.text == ".")
         .unwrap_or(false)
     {
-        // `x.` → columns of x (resolution: alias → CTE → catalog name; the resolved
-        // name is carried, complete() checks CTEs first).
         let owner = prev2.map(|t| t.text.clone()).unwrap_or_default();
         let resolved = aliases
             .iter()
@@ -1171,55 +1079,17 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
             .map(|(_, t)| t.clone())
             .unwrap_or(owner);
         Context::Dot(resolved)
-    } else if prev
-        .map(|t| t.kind == TokKind::Punct && t.text == "(")
-        .unwrap_or(false)
-        && (governing == Clause::From
-            || (governing == Clause::Copy
-                && prev2.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("COPY"))))
-    {
-        // `FROM ( |` — a derived table — and `COPY ( |` — the statement's query
-        // source, and only that paren: a later group (`PARTITIONED BY (`, `OPTIONS (`)
-        // is the statement's own and takes [`role_at`]'s Copy arm — both restart the
-        // ladder.
-        Context::At(Clause::Restart, Role::Operand)
-    } else if prev.is_some_and(|t| {
-        t.kind == TokKind::Keyword
-            && (SET_OP_WORDS.iter().any(|w| t.eq_ci(w))
-                || (t.eq_ci("ALL") && prev2.is_some_and(|p| p.eq_ci("UNION")))
-                || t.eq_ci("EXPLAIN")
-                || (t.eq_ci("ANALYZE") && prev2.is_some_and(|p| p.eq_ci("EXPLAIN"))))
-    }) {
-        // `… UNION ALL |` / `EXPLAIN [ANALYZE] |` — a fresh query begins: the
-        // ladder restarts (deeper positions inside that branch already resolve
-        // to its own clauses via the nearest-clause scan).
-        Context::At(Clause::Restart, Role::Operand)
-    } else if (prev_as
-        || (prev.is_some_and(|t| t.kind == TokKind::Punct && t.text == "(")
-            && prev2.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("AS"))))
-        && matches!(
-            governing,
-            Clause::CreateTable | Clause::CreateView | Clause::Prepare
-        )
-    {
-        // The `AS` of CTAS / `CREATE [OR REPLACE] VIEW` / `PREPARE` opens the
-        // statement's query body — the ladder restarts, exactly as after a set op.
-        // A parenthesized body (`CREATE TABLE t AS (|`) is the same position one
-        // paren in, and must not read as a column-definition Binding.
+    } else if restarts_ladder(prev, prev2, prev_as, governing) {
         Context::At(Clause::Restart, Role::Operand)
     } else if prev_as
         && governing == Clause::CreateExternal
         && prev2.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("STORED"))
     {
-        // `STORED AS |` — the format-word position.
         Context::At(Clause::CreateExternal, Role::Operand)
     } else if prev_as
         || prev.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("SHOW"))
         || prev2.is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci("SHOW"))
     {
-        // `… AS |` invents a name; `SHOW <noun> |` is an unmodeled statement
-        // noun. Nothing existing completes either — the empty offer is the
-        // correct one, not a suppression.
         Context::At(governing, Role::Binding)
     } else {
         Context::At(
@@ -1246,6 +1116,45 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     }
 }
 
+/// Whether the caret sits where a **fresh query begins**, so the clause ladder restarts.
+///
+/// Three positions, all of them an operand at [`Clause::Restart`]: a derived table or a `COPY`'s
+/// query source (`FROM ( |`, `COPY ( |` — and only that paren, since a later group such as
+/// `PARTITIONED BY (` is the statement's own and takes [`role_at`]'s Copy arm); a set operation or
+/// `EXPLAIN [ANALYZE]`; and the `AS` that opens the query body of CTAS, `CREATE [OR REPLACE] VIEW`
+/// or `PREPARE`, parenthesized or not — a parenthesized body must not read as a column-definition
+/// Binding.
+fn restarts_ladder(
+    prev: Option<&Tok>,
+    prev2: Option<&Tok>,
+    prev_as: bool,
+    governing: Clause,
+) -> bool {
+    let open_paren = |t: &Tok| t.kind == TokKind::Punct && t.text == "(";
+    let keyword = |t: &Tok, word: &str| t.kind == TokKind::Keyword && t.eq_ci(word);
+
+    let query_source = prev.is_some_and(open_paren)
+        && (governing == Clause::From
+            || (governing == Clause::Copy && prev2.is_some_and(|t| keyword(t, "COPY"))));
+
+    let set_operation = prev.is_some_and(|t| {
+        t.kind == TokKind::Keyword
+            && (SET_OP_WORDS.iter().any(|w| t.eq_ci(w))
+                || (t.eq_ci("ALL") && prev2.is_some_and(|p| p.eq_ci("UNION")))
+                || t.eq_ci("EXPLAIN")
+                || (t.eq_ci("ANALYZE") && prev2.is_some_and(|p| p.eq_ci("EXPLAIN"))))
+    });
+
+    let query_body = (prev_as
+        || (prev.is_some_and(open_paren) && prev2.is_some_and(|t| keyword(t, "AS"))))
+        && matches!(
+            governing,
+            Clause::CreateTable | Clause::CreateView | Clause::Prepare
+        );
+
+    query_source || set_operation || query_body
+}
+
 /// The target table of the `INSERT INTO t (…)` **column list** the caret sits inside —
 /// the paren group directly after the target's name, before any `VALUES`. `None`
 /// anywhere else, VALUES tuples included: the column list names existing columns of
@@ -1261,7 +1170,6 @@ pub(crate) fn insert_column_list(stmt: &[Tok], caret: usize) -> Option<ColumnLis
     let into = stmt
         .iter()
         .position(|t| t.kind == TokKind::Keyword && t.eq_ci("INTO"))?;
-    // The target name, dotted parts absorbed (`s.t` → target ends at `t`).
     let mut i = into + 1;
     if !stmt.get(i).is_some_and(is_name_like) {
         return None;
@@ -1272,8 +1180,6 @@ pub(crate) fn insert_column_list(stmt: &[Tok], caret: usize) -> Option<ColumnLis
         i += 2;
     }
     let target = stmt[i].text.clone();
-    // The column list is the paren group directly after the name; the caret must be
-    // inside it (before its close, when it has one).
     let open = i + 1;
     if !stmt
         .get(open)
@@ -1336,7 +1242,6 @@ pub(crate) fn copy_partition_list(stmt: &[Tok], caret: usize) -> Option<ColumnLi
     {
         return None;
     }
-    // The innermost paren still open at the caret must be `PARTITIONED BY`'s.
     let mut stack: Vec<usize> = Vec::new();
     for (i, t) in stmt.iter().enumerate() {
         if t.span.start >= caret {
@@ -1358,8 +1263,6 @@ pub(crate) fn copy_partition_list(stmt: &[Tok], caret: usize) -> Option<ColumnLi
         let close = matching_paren(stmt, 1).unwrap_or(stmt.len());
         ListSource::Projection(projection_columns(&stmt[2..close.min(stmt.len())]))
     } else if is_name_like(source) {
-        // Dotted parts absorbed to the last segment, exactly as the INSERT target:
-        // the single-namespace catalog resolves the bare name.
         let mut i = 1;
         while stmt.get(i + 1).is_some_and(|t| t.text == ".")
             && stmt.get(i + 2).is_some_and(is_name_like)
@@ -1395,7 +1298,6 @@ pub(crate) fn function_arguments(toks: &[Tok], sql_len: usize, caret: usize) -> 
     else {
         return Vec::new();
     };
-    // An unclosed list (mid-edit) still yields the names written so far.
     let close = matching_paren(stmt, open).unwrap_or(stmt.len());
     let mut out = Vec::new();
     let mut depth = 0i32;
@@ -1409,7 +1311,6 @@ pub(crate) fn function_arguments(toks: &[Tok], sql_len: usize, caret: usize) -> 
             depth -= 1;
             continue;
         }
-        // Only the group's own items — a nested paren (a parameterised type) is deeper.
         if depth != 1 {
             continue;
         }
@@ -1484,7 +1385,6 @@ mod tests {
             at("SELECT * FROM a LEFT JOIN |").context,
             Context::At(Clause::From, Role::Operand)
         );
-        // After a join lead-in the JOIN keyword itself comes next, not a relation.
         assert_eq!(
             at("SELECT * FROM a LEFT |").context,
             Context::At(Clause::From, Role::Continuation)
@@ -1517,8 +1417,6 @@ mod tests {
 
     #[test]
     fn continuation_after_a_complete_item() {
-        // The screenshot bug: `SELECT * f` must be a continuation (FROM), not an
-        // operand (floor/flatten/…).
         assert_eq!(
             at("SELECT * f|").context,
             Context::At(Clause::Select, Role::Continuation)
@@ -1547,8 +1445,6 @@ mod tests {
             at("SELECT * FROM t LIMIT 5 |").context,
             Context::At(Clause::Limit, Role::Continuation)
         );
-        // A direction keyword completes the ORDER BY item (accept-chaining must not
-        // reopen an operand list after `ASC `).
         assert_eq!(
             at("SELECT * FROM t ORDER BY x ASC |").context,
             Context::At(Clause::OrderBy, Role::Continuation)
@@ -1557,8 +1453,6 @@ mod tests {
 
     #[test]
     fn multiplication_star_is_an_operand_position() {
-        // `a * |` expects the right-hand operand; only the projection star
-        // (`SELECT * |`) completes an item.
         assert_eq!(
             at("SELECT a * |").context,
             Context::At(Clause::Select, Role::Operand)
@@ -1583,7 +1477,6 @@ mod tests {
             at("SELECT * FROM (|").context,
             Context::At(Clause::Restart, Role::Operand)
         );
-        // A paren in an expression position is not a statement start.
         assert_eq!(
             at("SELECT * FROM t WHERE (|").context,
             Context::At(Clause::Where, Role::Operand)
@@ -1598,10 +1491,8 @@ mod tests {
     fn dot_resolution_prefers_alias() {
         let ca = at("SELECT o.| FROM events o");
         assert_eq!(ca.context, Context::Dot("events".into()));
-        // Unaliased: the qualifier is carried as written.
         let ca = at("SELECT events.| FROM events");
         assert_eq!(ca.context, Context::Dot("events".into()));
-        // Unknown qualifier is carried verbatim (complete() decides emptiness).
         let ca = at("SELECT x.| FROM events o");
         assert_eq!(ca.context, Context::Dot("x".into()));
     }
@@ -1611,7 +1502,6 @@ mod tests {
         let ca = at("SELECT sta| FROM t");
         assert_eq!(ca.partial, "sta");
         assert_eq!(ca.replace, 7..10);
-        // Mid-word caret → no partial (caret is not at the token's end).
         let ca = at("SELECT st|a FROM t");
         assert_eq!(ca.partial, "");
         assert_eq!(ca.replace, 9..9);
@@ -1619,11 +1509,9 @@ mod tests {
 
     #[test]
     fn multi_statement_bounds() {
-        // The caret's statement is the second one — its scope, not the first's.
         let ca = at("SELECT a FROM t1; SELECT b FROM t2 WHERE |");
         assert_eq!(ca.context, Context::At(Clause::Where, Role::Operand));
         assert_eq!(ca.in_scope, vec!["t2".to_string()]);
-        // And the first statement is unaffected by the second.
         let ca = at("SELECT a FROM t1 WHERE |; SELECT b FROM t2");
         assert_eq!(ca.in_scope, vec!["t1".to_string()]);
     }
@@ -1652,18 +1540,12 @@ mod tests {
 
     #[test]
     fn projection_refs_are_source_columns_only() {
-        // Bare refs + the column part of qualified refs; function names, args
-        // (depth > 0), and AS output aliases are not source columns.
         let ca = at("SELECT name, u.tags, sum(x) AS spend FROM |");
         assert_eq!(ca.projection, vec!["name".to_string(), "tags".to_string()]);
-        // CTE bodies sit inside parens — the main statement's list only.
         let ca = at("WITH r AS (SELECT amount FROM events) SELECT total FROM |");
         assert_eq!(ca.projection, vec!["total".to_string()]);
-        // `*` contributes nothing.
         assert!(at("SELECT * FROM |").projection.is_empty());
     }
-
-    // ---- CTE capture ----
 
     #[test]
     fn cte_names_and_bare_projection() {
@@ -1702,7 +1584,6 @@ mod tests {
     fn recursive_and_unterminated_cte_bodies() {
         let ca = at("WITH RECURSIVE r AS (SELECT x FROM t) SELECT | FROM r");
         assert_eq!(ca.ctes[0].name, "r");
-        // Mid-edit: the body paren isn't closed yet — the name still registers.
         let ca = at("WITH r AS (SELECT x FROM t SELECT |");
         assert_eq!(ca.ctes[0].name, "r");
     }
@@ -1712,8 +1593,6 @@ mod tests {
         let ca = at("WITH Recent AS (SELECT x FROM t) SELECT | FROM Recent");
         assert!(ca.cte("recent").is_some(), "case-insensitive lookup");
     }
-
-    // ---- statement positions (ED-11) ----
 
     #[test]
     fn statement_heads_refine_and_role() {
@@ -1752,16 +1631,12 @@ mod tests {
             ("DROP FUNCTION |", Clause::DropFunction, Role::Operand),
             ("INSERT INTO |", Clause::Insert, Role::Operand),
             ("INSERT INTO t |", Clause::Insert, Role::Continuation),
-            // The column list names existing columns — an operand; a VALUES tuple's
-            // content is the user's own data — a binding.
             ("INSERT INTO t (|", Clause::Insert, Role::Operand),
             ("INSERT INTO t (a, |", Clause::Insert, Role::Operand),
             ("INSERT INTO t VALUES (1, |", Clause::Insert, Role::Binding),
             ("INSERT INTO t (a) VALUES (|", Clause::Insert, Role::Binding),
             ("COPY |", Clause::Copy, Role::Operand),
             ("COPY t |", Clause::Copy, Role::Continuation),
-            // A partition list names existing columns of the source; any other group
-            // (OPTIONS — DataFusion's open namespace) is the user's own content.
             (
                 "COPY t TO 'x' PARTITIONED BY (|",
                 Clause::Copy,
@@ -1788,8 +1663,6 @@ mod tests {
             "PREPARE p AS |",
             "PREPARE p(INT) AS |",
             "COPY (|",
-            // A parenthesized body is the same position one paren in — it must not
-            // read as a column-definition Binding and go silent.
             "CREATE TABLE t AS (|",
             "CREATE OR REPLACE VIEW v AS (|",
         ] {
@@ -1799,7 +1672,6 @@ mod tests {
                 "{sql}"
             );
         }
-        // The other `AS` positions keep their bindings.
         assert_eq!(
             at("SELECT amount AS |").context,
             Context::At(Clause::Select, Role::Binding)
@@ -1808,8 +1680,6 @@ mod tests {
             at("SELECT * FROM t AS |").context,
             Context::At(Clause::From, Role::Binding)
         );
-        // `STORED AS |` is the format operand, `COPY`'s stays a binding (only the
-        // CREATE EXTERNAL TABLE arm has a format vocabulary behind it).
         assert_eq!(
             at("COPY t TO 'x' STORED AS |").context,
             Context::At(Clause::Copy, Role::Binding)
@@ -1852,16 +1722,12 @@ mod tests {
         let ca = at("SET dat|");
         assert_eq!(ca.context, Context::At(Clause::SetOption, Role::Operand));
         assert_eq!((ca.partial.as_str(), ca.replace.clone()), ("dat", 4..7));
-        // The chain is absorbed into one partial with one replace span, so an accept
-        // replaces the whole key rather than appending a second namespace.
         let ca = at("SET datafusion.|");
         assert_eq!(ca.partial, "datafusion.");
         assert_eq!(ca.replace, 4..15);
         let ca = at("SET datafusion.execution.b|");
         assert_eq!(ca.partial, "datafusion.execution.b");
         assert_eq!(ca.replace, 4..26);
-        // A written key continues (only `=` can follow); the value position carries
-        // the key; a complete value continues.
         let ca = at("SET datafusion.execution.batch_size |");
         assert_eq!(
             ca.context,
@@ -1878,7 +1744,6 @@ mod tests {
             ca.context,
             Context::At(Clause::SetOption, Role::Continuation)
         );
-        // RESET shares the clause.
         assert_eq!(
             at("RESET datafusion.|").context,
             Context::At(Clause::SetOption, Role::Operand)
@@ -1887,9 +1752,6 @@ mod tests {
 
     #[test]
     fn a_mid_edit_equals_before_the_set_lead_does_not_panic() {
-        // `branch_bounds` finds SET at branch position 0 while `before` is
-        // statement-scoped with the `=` at index 0 — the value-position slice must
-        // not run from 1..0. Garbage in, the continuation's empty offer out.
         let ca = at("= 1 UNION SET |");
         assert_eq!(
             ca.context,
@@ -1901,8 +1763,6 @@ mod tests {
 
     #[test]
     fn a_column_named_values_stays_in_the_column_list() {
-        // sqlparser lexes `values` as a Keyword, but the role reads the positional
-        // resolver, not a keyword scan — the list keeps its Operand.
         assert_eq!(
             at("INSERT INTO t (values, |").context,
             Context::At(Clause::Insert, Role::Operand)
@@ -1911,8 +1771,6 @@ mod tests {
 
     #[test]
     fn deallocate_prepare_keeps_the_execute_clause() {
-        // `PREPARE` joins `clause_of` under the position-0 guard: at index 1 the scan
-        // skips it and `DEALLOCATE` governs, so the prepared-name offer survives.
         assert_eq!(
             at("DEALLOCATE PREPARE |").context,
             Context::At(Clause::Execute, Role::Operand)
@@ -1938,7 +1796,6 @@ mod tests {
             Some(("t".into(), vec!["a".into()]))
         );
         assert_eq!(target("INSERT INTO s.t (|"), Some(("t".into(), vec![])));
-        // Outside the list, and inside a VALUES tuple: no target.
         assert_eq!(target("INSERT INTO t |"), None);
         assert_eq!(target("INSERT INTO t (a) VALUES (|"), None);
         assert_eq!(target("INSERT INTO t (a) |"), None);
@@ -1959,8 +1816,6 @@ mod tests {
             }
             other => panic!("{:?}", other.is_some()),
         }
-        // The dotted rule is the siblings' shared rule: a qualified COPY source
-        // absorbs to its last segment, exactly as the INSERT target does.
         match list("COPY s.events TO 'x' PARTITIONED BY (|") {
             Some(ColumnList {
                 source: ListSource::Table(name),
@@ -1968,7 +1823,6 @@ mod tests {
             }) => assert_eq!(name, "events"),
             other => panic!("{:?}", other.is_some()),
         }
-        // A query source answers its scraped projection, exactly as a CTE body's.
         match list("COPY (SELECT user_id, amount FROM events) TO 'x' PARTITIONED BY (|") {
             Some(ColumnList {
                 source: ListSource::Projection(cols),
@@ -1976,7 +1830,6 @@ mod tests {
             }) => assert_eq!(cols, ["user_id", "amount"]),
             other => panic!("{:?}", other.is_some()),
         }
-        // OPTIONS is not a partition list, and a closed list is behind the caret.
         assert!(list("COPY t TO 'x' OPTIONS (|").is_none());
         assert!(list("COPY t TO 'x' PARTITIONED BY (a) OPTIONS (|").is_none());
     }
@@ -1991,12 +1844,10 @@ mod tests {
             args("CREATE FUNCTION f(price DOUBLE, qty BIGINT) RETURNS DOUBLE RETURN "),
             ["price", "qty"]
         );
-        // Mid-edit: an unclosed list still yields the names written so far.
         assert_eq!(
             args("CREATE FUNCTION f(price DOUBLE, qty"),
             ["price", "qty"]
         );
-        // A nested paren (a parameterised type) contributes nothing.
         assert_eq!(
             args("CREATE FUNCTION f(price DECIMAL(10, 2)) RETURNS DOUBLE RETURN "),
             ["price"]

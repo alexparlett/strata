@@ -54,13 +54,10 @@ pub struct Running {
 pub fn use_agent_server(agent: AgentCtx, config: ConfigStation) {
     let settings = use_config_channel(config, ConfigChan::Settings);
     use_side_effect(move || {
-        // Both reads together, under one borrow, so the effect subscribes once.
         let (want, page_size) = {
             let cfg = settings.read();
             (cfg.settings.agent_access.clone(), cfg.settings.row_limit)
         };
-        // `run`'s default page size, mirrored where a `Host` can answer it synchronously —
-        // it must never become a question a window has to be awake to answer.
         agent.directory.set_default_page_size(page_size);
         reconcile(agent.server, config, &agent.directory, want);
     });
@@ -90,27 +87,17 @@ fn reconcile(
         return;
     }
     if want.token.is_empty() {
-        // Mint and persist; the `Settings` notification brings this effect back round with a
-        // token to start on. Nothing is started this pass — a server with no secret is one
-        // every local process is authorized against.
         write_config(config, &[ConfigChan::Settings], |cfg| {
             cfg.settings.agent_access.token = mint_token();
         });
         return;
     }
-    // The old server first: it still holds the port, and rebinding it would otherwise fail
-    // against ourselves.
     slot.set(None);
     match AgentServer::start(want.port, want.token.clone(), Arc::clone(directory)) {
         Ok(server) => slot.set(Some(Running {
             settings: want,
             server,
         })),
-        // Reported and left stopped, with the attempt deliberately **not** recorded: the
-        // common failure is a port another process holds, and forgetting the attempt is what
-        // makes the next settings write retry rather than latch. The header's status dot used
-        // to say so on screen and has been removed, so **this trace is the only report** — the
-        // app shows an enabled-but-not-listening server nowhere.
         Err(e) => tracing::error!("{e}"),
     }
 }

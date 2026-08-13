@@ -93,8 +93,6 @@ pub struct Results {
 
 impl Results {
     pub fn new(id: TabId, running: State<Option<RunId>>) -> Self {
-        // Keyed by the tab, like `EditorTab`: the pane renders in one fixed slot, so without
-        // a key a tab switch reuses the scope and the `Selection` context leaks across tabs.
         Self {
             id,
             running,
@@ -114,7 +112,6 @@ impl Component for Results {
     fn render(&self) -> impl IntoElement {
         use_provide_context(|| State::create(Selection::None));
 
-        // Subscribes to the tab's Run trigger: a press re-renders the pane with the new spec.
         let id = self.id;
         let radio = use_radio::<SessionState, Chan>(Chan::Request(id));
         let spec = radio.read().request(id).cloned();
@@ -122,8 +119,6 @@ impl Component for Results {
         let el: Element = match spec {
             None => shell(EmptyState.into(), StatusBar::new(ResultsState::Empty)),
             Some(spec) => {
-                // Keyed by the press's nonce so a new Run remounts the body — the page below
-                // resets to 1 and the grid's column widths reseed for the new schema.
                 let run = spec.run;
                 ResultsBody {
                     spec,
@@ -165,25 +160,11 @@ impl KeyExt for ResultsBody {
 }
 
 impl Component for ResultsBody {
-    // The run subscription, the `running`-slot mirror with its nonce guard, and an arm per
-    // query state. The mirror's effect has to sit beside the subscription it mirrors.
     #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
         let query = use_query(self.spec.query(&engine));
 
-        // Mirror the run's in-flight-ness into the workbench's `running` slot for the
-        // toolbar's Run→Cancel flip (P2-15). The tab's keeper pins this query too, but only
-        // this body resolves the slot: the press's nonce while Pending/Loading, cleared on
-        // settle. Unmount (cancel / supersede / tab close) clears it too — nonce-guarded,
-        // so if a new press's body mounts before the old one drops, the stale drop can't
-        // clobber the newer run's flag.
-        //
-        // The toolbar could subscribe the query itself without re-executing it (our fork
-        // counts in-flight executions, so a mounting subscriber attaches to one rather than
-        // dispatching a duplicate) — it doesn't, because `.enable(false)` is part of `Query`'s
-        // cache identity, so there is no "watch without running" subscription to make. See the
-        // `running` prop's own note in `workbench::Workbench`.
         let run = self.spec.run;
         let mut running = self.running;
         use_side_effect(move || {
@@ -204,39 +185,18 @@ impl Component for ResultsBody {
             }
         });
 
-        // (Query history is the keeper's: its pin observes the settle even while this tab
-        // is backgrounded and this body is unmounted — see `views::keeper`.)
-        // The 1-based snapshot page the grid shows and the rows-per-page it's cut into. They
-        // live here — beside the status bar that pages them and the grid that reads them — and
-        // reset for every press (this component is keyed by the press's nonce). `page_size`
-        // starts at the size the Run itself executed with.
         let page = use_state(|| 1usize);
         let run_size = self.spec.page_size;
         let page_size = use_state(move || run_size);
-        // The plan view's tree selection (P2-05). Like the page, per-press — a new Run
-        // starts back on physical. It lives here so the status bar's active-tab summary
-        // reads the same selection the view renders. (The Raw/Tree flag needs no lifting —
-        // the toolbar's ToggleButton owns it, mirrored inside the plan view.)
         let plan_tab = use_state(PlanTab::default);
 
-        // The tab's Table/Chart view mode (P2-07) — per-tab (its own `Chan::View` channel),
-        // so it survives re-runs and tab switches; the toolbar's toggle writes it.
         let ws = self.spec.tab;
         let view_radio = use_radio::<SessionState, Chan>(Chan::View(ws));
         let results_view = view_radio.read().view(ws);
 
-        // Find-in-results (P2-09): per-press state, like the page number — a new Run starts
-        // unfiltered. A query change reshuffles the filtered rows under the page-local
-        // selection — the old indices would silently point at *different* cells (the same
-        // invariant the pager jump protects) — so it clears the selection.
         let find = FindState::use_new();
-        // The page in hand + the find view over it, both O(page) and both memoized on what
-        // actually determines them (`find::PageMemo`) — this body re-renders for plenty of
-        // reasons that move neither.
         let pages = find::use_page_memo();
         let sel = use_consume::<State<Selection>>();
-        // Column sort (P2-13): per-press view intent, like the page — a new Run starts
-        // unsorted. Cycling clears the selection and jumps to page 1 itself (see `sort.rs`).
         let sort = SortState::use_new(page, sel);
         use_side_effect(move || {
             let _ = find.query.read();
@@ -246,15 +206,6 @@ impl Component for ResultsBody {
             }
         });
 
-        // The current page's snapshot read (SNAPSHOT_SPEC §6): keyed by [`PageSpec`] and cached
-        // forever (`stale_time(MAX)` — reads of an immutable snapshot never go stale), so a
-        // revisited page settles straight from the cache. The Run's embedded page 1 short-circuits
-        // this read — but only while the page size still matches the Run's own: a page-size change
-        // re-cuts the snapshot, so even page 1 must then be a real read. Disabled until the Run
-        // settles rows — the placeholder id of a disabled read never reaches the engine.
-        // The sort intent resolves to the engine's `(column name, ascending)` here — the one
-        // boundary that knows the settled schema (the intent itself is index-keyed; an index
-        // the schema can't resolve falls back to unsorted rather than erroring the read).
         let (snapshot, sort_key) = match &*query.read().state() {
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Rows(rows)),
@@ -269,10 +220,7 @@ impl Component for ResultsBody {
         };
         let cur_page = *page.read();
         let cur_size = *page_size.read();
-        // A sorted read is never the Run's own page 1 — the snapshot re-orders under it.
         let native_page1 = cur_page == 1 && cur_size == run_size && sort_key.is_none();
-        // The cut being read — the read's cache key *and* the page memo's below, which is the
-        // point: the rows are a pure function of it.
         let page_spec = PageSpec {
             snapshot: snapshot.unwrap_or(SnapshotId(0)),
             page: cur_page,
@@ -281,14 +229,6 @@ impl Component for ResultsBody {
         };
         let fetch = use_query(page_spec.query(&engine, snapshot.is_some() && !native_page1));
 
-        // Cancel = abort engine-side (S14: tag-guarded, a stale press can't kill a newer run)
-        // + clear this tab's Run trigger, unmounting this body back to the empty state. The
-        // query entry settles `Err("cancelled")` unobserved — a new press is a fresh nonce
-        // anyway — which is why `cancel_run` is also where the cancel is *logged* (P3-13).
-        //
-        // Through `actions::cancel_run`, the toolbar's Cancel path: one implementation, so the
-        // two controls can't drift (this body had its own copy of the same two steps, which is
-        // how one of them would have ended up not recording anything).
         let session = use_radio::<SessionState, Chan>(Chan::Request(ws));
         let log = use_consume::<LogCtx>();
         let cancel = {
@@ -297,25 +237,11 @@ impl Component for ResultsBody {
             move |()| actions::cancel_run(&engine, session, log, ws, run)
         };
 
-        // What Download would export (P4-10). Built here because this is the one place that
-        // knows all of it at once — the snapshot handle, the run's own schema and row count,
-        // the sort the grid is showing, the page the pager is on, and rows already fetched
-        // (the only honest preview source). Both settled-rows bodies carry the same toolbar,
-        // so both resolve it the same way.
-        //
-        // The sample is the **Run's own page 1**, not the page on screen: it is always in
-        // hand, so the preview never waits on a fetch, and every row in it is a real row of
-        // this result.
         let tab_name = session.read().name(ws);
         let export_sort = page_spec.sort.clone();
-        // The DI handles ride with it, resolved here rather than consumed in the button: the
-        // toolbar is a shallow, known consumer, which is props' case and not context's
-        // (`AGENTS.md` §4).
         let export_app = use_consume::<AppCtx>();
         let export_log = use_consume::<LogCtx>();
         let export_engine = engine;
-        // What that log belongs to, so the window it opens closes with it rather than with the
-        // window that owns it (`platform::owner`).
         let export_subtree = use_consume::<Subtree>();
         let export_target = |rows: &QueryPage| -> Option<ExportLaunch> {
             rows.output.snapshot.map(|snapshot| ExportLaunch {
@@ -336,9 +262,6 @@ impl Component for ResultsBody {
             })
         };
 
-        // What the Shape press composes over (Chart 09): the press's own SQL — the query
-        // that produced the settled result, never the live buffer — and that result's
-        // schema. Only a materialized result shapes; an empty one has nothing to group.
         let shape_sql = self.spec.sql.clone();
         let shape_target = |rows: &QueryPage| -> Option<ShapeTarget> {
             rows.output.snapshot.map(|_| ShapeTarget {
@@ -355,11 +278,6 @@ impl Component for ResultsBody {
                 Running::new(cancel).into(),
                 StatusBar::new(ResultsState::Running),
             ),
-            // Chart mode (P2-07): the chart body under the shared toolbar. The pager and
-            // selection aggregate are grid concerns, so the bar keeps only the run readouts;
-            // the page/find/sort state above stays put for the switch back. The snapshot and
-            // the run's schema ride with it — the chart reads the same materialized result
-            // the grid pages, and derives its encoding from that result's own columns.
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Rows(rows)),
                 settlement_instant,
@@ -383,12 +301,6 @@ impl Component for ResultsBody {
                 res: Ok(QueryOutcome::Rows(rows)),
                 settlement_instant,
             } => {
-                // Resolve the page both consumers share: the grid renders it, the status bar
-                // aggregates the selection over it (see `PageRead`). It comes out of the memo
-                // already find-filtered — the filter narrows the *resolved* page (page-bounded
-                // — see `find`), so grid and aggregate see the same rows while the pager keeps
-                // walking the unfiltered snapshot — and neither the resolve nor the filter
-                // re-runs for a render that moved neither the cut nor the query.
                 let run_grid =
                     pages.run_page(|| Rc::new(GridData::from_run(&rows.output, &rows.batch)));
                 let row_base = (cur_page - 1) * cur_size;
@@ -450,8 +362,6 @@ impl Component for ResultsBody {
                     bar,
                 )
             }
-            // The settled EXPLAIN (P2-05): the three-tier plan card tree. The status bar's
-            // summary counts the *shown* tree — the same effective tab the view resolves.
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Plan(plan)),
                 ..
@@ -466,8 +376,6 @@ impl Component for ResultsBody {
                     StatusBar::new(ResultsState::ExplainPlan).plan(ops, tab),
                 )
             }
-            // A statement that ran (ED-02): what it was and what it did, over the same footer.
-            // Nothing is paged and no snapshot handle is held — the tab keeps the one it had.
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Statement(report)),
                 ..
@@ -504,10 +412,6 @@ fn shell(body: Element, bar: StatusBar) -> Element {
             rect()
                 .width(Size::fill())
                 .height(Size::flex(1.))
-                // Clipped, because `Overflow` defaults to painting *outside* the box: a pane
-                // dragged short gives this slot less height than the body wants, and the centred
-                // empty / running / error states then drew straight through the status bar
-                // underneath them (P5-06). The bar keeps its 40px whatever the body does.
                 .overflow(Overflow::Clip)
                 .child(body),
         )

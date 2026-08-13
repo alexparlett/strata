@@ -1,25 +1,18 @@
 //! The **SQL language service** (S26) — one analysis layer over the SQL buffer that
 //! backs both autocomplete (S7) and validation (S25). See `docs/SQL_LANGUAGE_SPEC.md`.
 //!
-//! Layers:
-//! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds), under the
-//!   engine's configured `datafusion.sql_parser.dialect`.
+//! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds), under the engine's
+//!   configured `datafusion.sql_parser.dialect`.
 //! - [`context`] — split statements + classify the caret's clause context.
-//! - [`symbols`] — the [`Catalog`] (tables/views/columns from `state.project` +
-//!   registered functions) and in-statement alias resolution.
-//! - [`validate`] — [`validate::validate`] the full diagnostics pass: lexical lints +
-//!   the statement router ([`validate::classify`]) + the native name [`resolve`]r + the engine **dry-plan**
-//!   (parse → resolve → analyze against the live `SessionContext`, never
-//!   executing). Byte-spanned for squiggles.
-//! - [`resolve`] — the AST name resolver behind validation: every unknown
-//!   table/column in a parsed statement (multi-error, mid-edit tolerant), leaving
-//!   types/casts/arity to the dry-plan.
-//! - [`complete`] — [`complete`] ranked completions for a caret position.
+//! - [`symbols`] — the [`Catalog`] and in-statement alias resolution.
+//! - [`validate`] — the full diagnostics pass: lexical lints, the statement router, the native
+//!   name [`resolve`]r, and the engine **dry-plan**. Byte-spanned for squiggles.
+//! - [`resolve`] — the AST name resolver behind validation: every unknown table/column in a parsed
+//!   statement, multi-error and mid-edit tolerant, leaving types and arity to the dry-plan.
+//! - [`complete`] — ranked completions for a caret position.
 //!
-//! Completion resolves against a [`Catalog`] snapshot (cheap to build on the UI
-//! thread); validation runs engine-side via [`Engine::validate`](crate::engine::Engine)
-//! so unknown tables/columns/functions and type faults are the *same* errors a Run
-//! would hit.
+//! Completion resolves against a [`Catalog`] snapshot, cheap to build on the UI thread; validation
+//! runs engine-side so its faults are the *same* errors a Run would hit.
 
 pub mod complete;
 pub mod context;
@@ -235,7 +228,6 @@ mod function_sym_tests {
     #[test]
     fn detail_nullary_and_unknown_arity() {
         assert_eq!(sym("now", &[&[]], Some("Timestamp")).detail(), "()");
-        // No signatures at all (a `UserDefined` form) → the unknown-args marker.
         let ud = FunctionSym::from("udf");
         assert_eq!(ud.detail(), "(…)");
     }

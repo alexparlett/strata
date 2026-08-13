@@ -65,8 +65,6 @@ async fn pages_over_the_split_threshold_are_stable_and_in_result_order() {
 #[tokio::test]
 async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
     let eng = Engine::new(Default::default());
-    // Every row ties on `k`, so the sort is *all* tie-break — and the source is ordered, so
-    // the tie-break's answer is predictable.
     let snap = snapshot(
         &eng,
         "SELECT 0 AS k, i, md5(i::text) AS h FROM generate_series(1, 3000000) t(i) ORDER BY i",
@@ -139,8 +137,6 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
 /// batch, not an exported file.
 #[tokio::test]
 async fn the_ordinal_is_bookkeeping_and_never_leaks() {
-    // An `Arc`, because this test exports: `Engine::export` takes `&Arc<Self>` so the pin and the
-    // in-flight count it claims can be handed to the spawned write and outlive the call.
     let eng = Arc::new(Engine::new(Default::default()));
     let (out, page1) = eng
         .query(
@@ -251,8 +247,6 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
         let start = ((page - 1) * 100 + 1) as i64;
         let expected: Vec<i64> = (start..start + 100).collect();
         assert_eq!(i, expected, "page {page} is in the user's ORDER BY");
-        // The user's window computed correctly beneath ours: within PARTITION BY i % 4
-        // ORDER BY i, the row number of i is (i - 1) / 4 + 1.
         let rn = ints(&first, 2);
         for (i, rn) in i.iter().zip(rn) {
             assert_eq!(rn, (i - 1) / 4 + 1, "user rn for i={i}");
@@ -323,7 +317,6 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
     let i = ints(&rows, 0);
     let expected: Vec<i64> = (101..=200).collect();
     assert_eq!(i, expected, "pages follow the user's ORDER BY i");
-    // Their window numbered DESC over 200k rows: rn = 200000 - i + 1.
     for (i, rn) in i.iter().zip(ints(&rows, 2)) {
         assert_eq!(rn, 200_000 - i + 1, "user's __strata_ord for i={i}");
     }
@@ -392,7 +385,6 @@ async fn duplicate_named_columns_still_read() {
 /// `keep_partition_by_columns`.
 #[tokio::test]
 async fn a_partitioned_export_never_writes_the_ordinal() {
-    // An `Arc` for the exporting test above's reason.
     let eng = Arc::new(Engine::new(Default::default()));
     let (out, _) = eng
         .query(

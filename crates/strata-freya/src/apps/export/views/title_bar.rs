@@ -24,7 +24,6 @@ impl Component for TitleBar {
         let ctx = use_consume::<ExportCtx>();
         let subtitle = ctx.target.read().subtitle();
 
-        // The window's mark: the download glyph in an accent-tinted tile.
         let mark = rect()
             .width(Size::px(COMPACT_BUTTON))
             .height(Size::px(COMPACT_BUTTON))
@@ -37,7 +36,6 @@ impl Component for TitleBar {
                     .color(theme.icon_color),
             );
 
-        // Title over the run it describes — the canvas's two-line block.
         let heading = rect()
             .vertical()
             .spacing(SP_1)

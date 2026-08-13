@@ -65,8 +65,6 @@ struct Options;
 impl Component for Options {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ExportCtx>();
-        // Both reads subscribe: a format switch or any edit rebuilds the list, which is the
-        // point — the Parquet level group appears and disappears with the codec.
         let (scope, groups) = {
             let draft = ctx.draft.read();
             (draft.format.name(), draft.groups(&ctx.target.read()))
@@ -86,7 +84,6 @@ impl Component for Preview {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&None::<ExportThemePartial>, ExportThemePreference, "export");
         let ctx = use_consume::<ExportCtx>();
-        // Subscribes to both: every edit re-renders the preview, which is the point.
         let text = preview::build(&ctx.draft.read(), &ctx.target.read());
 
         rect()
@@ -94,8 +91,6 @@ impl Component for Preview {
             .vertical()
             .spacing(SP_4)
             .child(Divider::horizontal().color(theme.border_fill))
-            // The canvas puts an estimated output size on the right of this header. It is
-            // computed from invented compression factors, so it isn't here — see `footer`.
             .child(Eyebrow::new("PREVIEW").color(theme.label_color))
             .child(
                 rect()

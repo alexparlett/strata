@@ -50,8 +50,6 @@ fn a_secret_round_trips_through_the_os_keystore() {
         Some("strata-as-05-first")
     );
 
-    // A key the user re-pastes replaces the one before it rather than adding a second
-    // credential under the same reference (which the store would then call ambiguous).
     key.put(&Secret::new("strata-as-05-second").unwrap())
         .unwrap();
     assert_eq!(

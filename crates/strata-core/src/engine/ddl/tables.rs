@@ -10,31 +10,21 @@
 //! differs between them is a question asked of the user, not what the drop does, and an internal
 //! table's data directory has to go on both or it is silent data left on disk.
 //!
-//! # Why this is not DataFusion's CTAS
+//! **Not DataFusion's CTAS**, which collects the whole result into RAM as a `MemTable` and
+//! registers it from a sync hook: nothing can be streamed to disk and nothing survives a restart.
+//! Both are disqualifying — a table is a durable thing here, and the result may be larger than the
+//! window.
 //!
-//! DataFusion's own `CREATE TABLE AS` collects the whole result into RAM as a `MemTable` and
-//! registers it from a **sync** hook (`context/mod.rs:868-927`), so there is no point at which a
-//! result could be streamed to disk and nothing survives a restart. Both are disqualifying: a
-//! table is a durable thing here, and the result may be larger than the window.
+//! **What is still DataFusion's, deliberately.** The *plan*: the statement goes to
+//! `statement_to_plan` exactly as parsed, so the query that runs is the query the user wrote by
+//! construction rather than by fidelity of a round trip. Planning a `CREATE TABLE` executes
+//! nothing, and it buys two things — the planner already refuses every clause it does not
+//! implement, fifty-odd of them each with its own message, and already resolves a declared column
+//! list against the query. And the *write*: a `CopyTo` node over that plan, `STORED AS ARROW`,
+//! which streams, writes the snapshot codec and reports the exact row count.
 //!
-//! # What is still DataFusion's, deliberately
-//!
-//! **The plan.** The statement is handed to `SessionState::statement_to_plan` exactly as parsed —
-//! no text is re-rendered and no span is sliced, so the query that runs is the query the user
-//! wrote, by construction rather than by fidelity of a round trip. Planning a `CREATE TABLE`
-//! executes nothing (execution lives only in `execute_logical_plan`), and it buys two things
-//! outright: DataFusion's planner already refuses every clause it does not implement — fifty-odd
-//! of them, `TEMPORARY` and `LOCATION` and `PARTITION BY` included, each with its own message —
-//! and it already resolves a declared column list against the query, casting and renaming to it.
-//! Reimplementing that beside it would be fifty refusals we would have to keep in step.
-//!
-//! **The write.** The spool is a `CopyTo` node over that plan, `STORED AS ARROW` — DataFusion's
-//! Arrow sink, which streams, writes LZ4-frame IPC (the snapshot codec) and reports the exact row
-//! count as its single `count` column.
-//!
-//! What is ours is the part no hook can carry: where the files go, that they are published by
-//! rename, what the def says, and the name semantics — `IF NOT EXISTS` / `OR REPLACE` /
-//! plain-exists resolved against the one namespace tables and views share.
+//! Ours is the part no hook can carry: where the files go, that they are published by rename, what
+//! the def says, and the name semantics against the one namespace tables and views share.
 
 use std::collections::HashMap;
 use std::fs;
@@ -78,24 +68,18 @@ pub async fn create(
     root: DataRoot,
 ) -> Result<StatementOutcome, String> {
     let Some(root) = root else {
-        // Only reachable on an engine with no project behind it. Polite rather than internal:
-        // the statement is perfectly good, there is just nowhere to put the table.
         return Err(format!(
             "{} needs a project folder to store the table's data",
             kind.label()
         ));
     };
 
-    // DataFusion's planner is the clause gate (module doc). Its `not_impl` wording reaches the
-    // user as written, which is right: those are its clauses, described in its terms.
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(create)) = plan else {
-        // The router classified this statement as one of the two kinds above, and DataFusion
-        // plans both into `CreateMemoryTable`. Anything else is the two disagreeing.
         return Err(format!("{} did not plan as a table", kind.label()));
     };
     if let Some(refusal) = unenforced_clause(&create) {
@@ -103,16 +87,11 @@ pub async fn create(
     }
     let CreateMemoryTable {
         name,
-        // Both read by [`unenforced_clause`] a line above, which is the only thing that has an
-        // opinion about them — and which [`column_type`] asks the same question of.
         constraints: _,
         input,
         if_not_exists,
         or_replace,
         column_defaults: _,
-        // `TEMPORARY` never reaches here — DataFusion's own arm refuses it while planning
-        // ("Temporary tables not supported"), which is one refusal in one place rather than
-        // two that can disagree.
         temporary: _,
     } = create;
 
@@ -126,11 +105,6 @@ pub async fn create(
         seen.push(folded);
     }
 
-    // The one namespace, asked of the engine that owns it. `Reg::Failed` defs are invisible here
-    // by construction — a def the engine refused has no provider — so a create over a broken
-    // external def's name succeeds and the fold replaces that def. That is the honest outcome:
-    // the user named a table they wanted to exist, the row visibly changes kind, and nothing on
-    // their disk is touched.
     let replacing = match existing(ctx, &name).await {
         Some(TableType::View) => return Err(format!("'{name}' is a view")),
         Some(_) if if_not_exists => {
@@ -141,14 +115,9 @@ pub async fn create(
             })
         }
         Some(_) if !or_replace => return Err(format!("Table '{name}' already exists")),
-        // `OR REPLACE` over a name that is *free* creates; the report has to say which happened,
-        // and the clause on its own does not know.
         taken => taken.is_some(),
     };
 
-    // Defense in depth behind the router's classification, per spec §4: the inner plan is a
-    // query and nothing else. `verify_plan` visits subqueries, so smuggled DDL dies here even
-    // though the classification in front of `Engine::run` already refused it.
     SQLOptions::new()
         .with_allow_dml(false)
         .with_allow_ddl(false)
@@ -156,8 +125,6 @@ pub async fn create(
         .verify_plan(&input)
         .map_err(|e| e.to_string())?;
 
-    // One derivation, three readers: the directory the spool publishes into, the portable source
-    // the def stores, and the absolute path the registration takes.
     let slug = table_slug(&name);
     let dir = tables_dir(&root).join(&slug);
     let rows = spool(ctx, &input, &tables_dir(&root), &slug).await?;
@@ -165,8 +132,6 @@ pub async fn create(
     let def = TableDef {
         name: name.clone(),
         format: SourceFormat::Arrow,
-        // Never a connection: this table's data is Strata's own, spooled into the project's
-        // `.strata/tables/` a few lines above. What a remote source names is the user's bucket.
         connection: None,
         sources: vec![internal_source(&slug)],
         partition_cols: Vec::new(),
@@ -174,7 +139,6 @@ pub async fn create(
     };
     let spec = TableSpec {
         name: name.clone(),
-        // Absolute for the engine; the def above keeps the portable form.
         paths: vec![dir_path(&dir)],
         format: SourceFormat::Arrow,
         partitions: Vec::new(),
@@ -182,12 +146,6 @@ pub async fn create(
     };
     let meta = match register_external(ctx, &spec).await {
         Ok(meta) => meta,
-        // **Only on a create.** On a create nothing will ever name this directory — the def is
-        // not returned, so it never reaches `project.json` and no later pass registers it — and
-        // leaving it would be litter with no sweeper. On a *replace* the opposite holds: a def
-        // under this name is already in the store pointing right here, the data it points at is
-        // the data we just wrote, and removing it would turn a failed registration into the loss
-        // of the table. The user's recovery there is Refresh, which needs the files to exist.
         Err(e) if !replacing => {
             let _ = fs::remove_dir_all(&dir);
             return Err(e);
@@ -275,17 +233,9 @@ pub async fn column_type(ctx: &SessionContext, sql_type: &str) -> Result<String,
     if let Some(refusal) = unenforced_clause(&create) {
         return Err(refusal.into());
     }
-    // **A declared column list and nothing else.** A bare `CREATE TABLE t (cols…)` plans as an
-    // `EmptyRelation` carrying that schema (module doc), so anything that brought a *query*
-    // along is a value that closed the declaration and kept going — `INT) AS SELECT 1` plans
-    // as a perfectly good CTAS whose schema has exactly one field, and a field count alone
-    // would report it as a clean `Int64`. The panel would then compose an unbalanced statement
-    // and fail at the press, which is the deferred error this probe exists to prevent.
     if !matches!(create.input.as_ref(), LogicalPlan::EmptyRelation(_)) {
         return Err(not_a_column_type(typed));
     }
-    // And one column, because the box holds a *type*: `INT, b INT` declares two, and reporting
-    // the first field's for it would call the row valid for something else entirely.
     let schema = create.input.schema();
     match schema.fields().as_ref() {
         [field] => Ok(short_type(field.data_type())),
@@ -322,39 +272,25 @@ pub async fn insert(
     stmt: DFStatement,
     internal: &InternalTables,
 ) -> Result<StatementOutcome, String> {
-    // Planning is side-effect free (execution lives only in `execute_logical_plan`), and it is
-    // what resolves the target name, the write op and the source query in one pass — so the
-    // statement is judged from the same value that then runs, rather than from a second parse.
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Dml(dml) = &plan else {
-        // The router classified this as an `INSERT` and DataFusion plans one as a `Dml` node.
-        // Anything else is the two disagreeing.
         return Err(format!(
             "{} did not plan as a write",
             StmtKind::Insert.label()
         ));
     };
     let name = bare_name(ctx, &dml.table_name, WHAT)?;
-    // The gate. A view and an external table are the same refusal: neither is a set of files
-    // Strata wrote, and the wording names the surface that loads data into the other kind.
     if !internal.contains(&name) {
         return Err(Blocked::InsertExternal.editor_message());
     }
-    // `INSERT OVERWRITE` is refused at the router, being a pure function of the statement;
-    // `REPLACE INTO` is not, and DataFusion folds both onto the one thing the Arrow sink
-    // cannot do ("Overwrites are not implemented yet for Arrow format"). Refused here so the
-    // answer is Strata's, and names what to do instead.
     if !matches!(dml.op, WriteOp::Insert(InsertOp::Append)) {
         return Err(Blocked::InsertOverwrite.editor_message());
     }
 
-    // Defense in depth behind the router's classification, per spec §4: a write and nothing
-    // else. `verify_plan` visits subqueries, so DDL smuggled into the source query dies here
-    // even though the classification in front of `Engine::run` already refused it.
     SQLOptions::new()
         .with_allow_dml(true)
         .with_allow_ddl(false)
@@ -362,21 +298,15 @@ pub async fn insert(
         .verify_plan(&plan)
         .map_err(|e| e.to_string())?;
 
-    // This *is* DataFusion's native dispatch: `execute_logical_plan` special-cases `Ddl` and
-    // `Statement` and hands everything else to exactly this, so driving the plan is `ctx.sql`
-    // minus the re-parse — and the plan that runs is therefore the plan that was gated.
     let batches = DataFrame::new(ctx.state(), plan)
         .collect()
         .await
         .map_err(|e| e.to_string())?;
-    // The sink reports what it wrote in the same single `count` column a `COPY` does.
     let rows = copy_row_count(&batches);
 
     Ok(StatementOutcome {
         message: format!("Inserted {} into '{name}'", plural(rows, "row")),
         count: Some(rows as u64),
-        // The row count on the catalog row is read from the files, never added up from what a
-        // statement claimed — so the fold asks the scan driver for this table.
         effect: Some(StoreEffect::RescanTable { name }),
     })
 }
@@ -399,8 +329,6 @@ pub async fn drop_statement(
             StmtKind::DropTable.label()
         ));
     };
-    // Planning a `DROP` builds the node and checks nothing — the existence test lives in
-    // `execute_logical_plan`, which is the half we are replacing, so it is ours below.
     drop_table(
         ctx,
         root,
@@ -435,9 +363,6 @@ pub async fn drop_table(
         Some(TableType::View) => return Err(format!("'{name}' is a view. Use DROP VIEW")),
         Some(_) if internal.contains(name) => TableOrigin::Internal,
         Some(_) => TableOrigin::External,
-        // Resolved before anything is touched, because `ctx.deregister_table` cannot tell "there
-        // was nothing here" from "it is gone now" — and `IF EXISTS` is the difference between a
-        // statement that reports a no-op and one that failed.
         None if if_exists => {
             return Ok(StatementOutcome {
                 message: format!("Table '{name}' does not exist"),
@@ -447,11 +372,6 @@ pub async fn drop_table(
         }
         None => return Err(format!("Table '{name}' does not exist")),
     };
-    // Resolved before the deregister too, so a table whose data cannot be located is refused
-    // rather than half-dropped. Unreachable in a running host: a name is only internal because a
-    // registration said so, and every registration of one resolved its path against this root.
-    //
-    // Both paths, because [`discard`] moves the table's directory aside *within* `tables/`.
     let data = match origin {
         TableOrigin::Internal => {
             let root = root.as_ref().ok_or_else(|| {
@@ -461,23 +381,11 @@ pub async fn drop_table(
         }
         TableOrigin::External => None,
     };
-    // While there are still plans to walk.
     let dependents = dependent_views(ctx, name).await;
 
     let provider = ctx.deregister_table(name).map_err(|e| e.to_string())?;
     if let Some((tables, dir)) = data.filter(|(_, dir)| dir.exists()) {
         if let Err(e) = discard(&tables, &dir) {
-            // **Put the provider back.** Everything above this line is a question; the discard is
-            // the first step that destroys anything, and its *first* act is the rename — so a
-            // failure here means nothing was destroyed and the drop did not happen. Returning the
-            // error with the table still deregistered would report a failure while having already
-            // performed the irreversible half of it: the def would stay in `project.json` and on
-            // the sidebar naming a table the session could no longer resolve, recoverable only by
-            // a re-scan the user has no reason to run.
-            //
-            // Undoable because `deregister_table` hands back what it removed. The **same** `Arc`
-            // goes back, so a view holding it never noticed, and the name is free by construction
-            // (we are what took it), so `register_table`'s already-exists refusal cannot fire.
             if let Some(provider) = provider {
                 if let Err(put_back) = ctx.register_table(name, provider) {
                     tracing::error!(
@@ -491,7 +399,6 @@ pub async fn drop_table(
 
     Ok(StatementOutcome {
         message: drop_report(name, origin, &dependents),
-        // Not a count of zero: a drop moves no rows, which is a different fact.
         count: None,
         effect: Some(StoreEffect::TableRemoved {
             name: name.to_string(),
@@ -638,9 +545,6 @@ async fn publish(
     dest: &Path,
 ) -> Result<u64, String> {
     let rows = write_into(ctx, input, tmp).await?;
-    // `rename` will not replace a non-empty directory, and a replace has to leave the *new*
-    // data in place — so the old directory goes first. The window between the two is the whole
-    // exposure, and the data being moved in is already complete.
     if dest.exists() {
         fs::remove_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
@@ -763,7 +667,6 @@ mod tests {
         let dir = env::temp_dir().join(format!("strata_internal_{}_{tag}", process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        // A real project, so `save_defs` scaffolds the `.strata` the spool writes under.
         save_defs(&dir, &ProjectDefs::default()).unwrap();
         dir
     }
@@ -824,7 +727,6 @@ mod tests {
         };
         assert_eq!(def.origin, TableOrigin::Internal);
         assert_eq!(def.format, SourceFormat::Arrow);
-        // Project-relative, so the def travels with `project.json`.
         assert_eq!(def.sources, vec![".strata/tables/daily/".to_string()]);
         assert_eq!(meta.rows, Some(3), "read from the IPC footer");
         assert_eq!(
@@ -907,8 +809,6 @@ mod tests {
         assert_eq!(replaced.message, "Table 't' replaced, 1 row");
         assert_eq!(read(&eng, "SELECT n, m FROM t").await, vec![vec!["2", "3"]]);
 
-        // `OR REPLACE` over a name that is free **creates**, and the report has to say so — the
-        // clause on its own does not know whether anything was there.
         let fresh = statement(&eng, "CREATE OR REPLACE TABLE brand_new AS SELECT 1 AS n")
             .await
             .expect("created");
@@ -950,9 +850,6 @@ mod tests {
                 .expect_err("refused"),
             "Column defaults are not supported"
         );
-        // A *projection* with two `n`s never reaches us — DataFusion's planner refuses it. A
-        // join does: `SELECT *` over two relations that each have an `i` builds a plan whose
-        // schema carries both, qualified apart in the plan and identical in an IPC file.
         assert_eq!(
             statement(
                 &eng,
@@ -987,13 +884,9 @@ mod tests {
         assert_eq!(column_type(&ctx, " double ").await.unwrap(), "Float64");
         assert_eq!(column_type(&ctx, "BYTEA").await.unwrap(), "Binary");
 
-        // A spelling the planner does not implement comes back in **its** words, not ours: those
-        // are its types, described in its terms.
         let refused = column_type(&ctx, "FLOAT64").await.expect_err("refused");
         assert!(refused.contains("FLOAT64"), "{refused}");
 
-        // The two clauses the create arm refuses are refused here too, so a `PRIMARY KEY` typed
-        // into the box is caught while it is being typed rather than at the press.
         assert_eq!(
             column_type(&ctx, "INT PRIMARY KEY")
                 .await
@@ -1007,19 +900,12 @@ mod tests {
             "Column defaults are not supported"
         );
 
-        // A value that declares a **second column** parses and plans perfectly well, and is
-        // still not a column type: reporting the first field's type for it would call the row
-        // valid for a statement the panel then composes as something else.
         assert_eq!(
             column_type(&ctx, "INT, b INT")
                 .await
                 .expect_err("not one type"),
             "'INT, b INT' is not a column type"
         );
-        // And one that closes the declaration, brings a **query**, and comments out the probe's
-        // own trailing paren. It plans as a CTAS whose schema has exactly one field, so a field
-        // count alone reports it as a clean `Int64` — which is why the guard is the *shape* of
-        // the plan (an `EmptyRelation`) and not the width of its schema.
         let smuggled = "INT) AS SELECT 1 --";
         assert_eq!(
             column_type(&ctx, smuggled)
@@ -1106,7 +992,6 @@ mod tests {
         let Some(StoreEffect::TableUpserted { def, .. }) = report.effect else {
             panic!("{:?}", report.effect);
         };
-        // What the app's fold persists, done here so the replay reads a real project file.
         save_defs(
             &root,
             &ProjectDefs {
@@ -1148,7 +1033,6 @@ mod tests {
         let Some(StoreEffect::TableUpserted { def, .. }) = report.effect else {
             panic!("{:?}", report.effect);
         };
-        // Exactly what a clone has: the def, and no `.strata/tables`.
         fs::remove_dir_all(tables_dir(&root)).unwrap();
 
         let cold = Engine::new(BTreeMap::new());
@@ -1173,7 +1057,6 @@ mod tests {
     #[tokio::test]
     async fn the_sinks_count_and_the_footers_agree() {
         let root = scratch("batches");
-        // Small enough that the spool is several batches whatever the partitioning.
         let eng = engine(
             &root,
             BTreeMap::from([(
@@ -1195,11 +1078,6 @@ mod tests {
         assert_eq!(report.count, Some(7), "the sink's own count");
         assert_eq!(meta.rows, Some(7), "and the footers agree with it");
 
-        // **A table is a directory of files, not a file** — the Arrow sink writes one per output
-        // partition, so any table big enough to parallelise is multi-file from the first CTAS.
-        // The listing is over the directory, so the count above is a sum across every file *and*
-        // every batch inside each; a single-file assertion here would pass only by accident of
-        // `target_partitions` on the machine running it.
         let files = fs::read_dir(tables_dir(&root).join("many"))
             .unwrap()
             .count();
@@ -1241,7 +1119,6 @@ mod tests {
         let tables = tables_dir(&root);
         fs::create_dir_all(&tables).unwrap();
 
-        // A plan big enough that the spool is still writing at its first await.
         let plan = Arc::new(
             ctx.sql("SELECT * FROM generate_series(1, 5000000)")
                 .await
@@ -1292,7 +1169,6 @@ mod tests {
 
         assert_ne!(slug("sales eu"), slug("sales/eu"), "both sanitize alike");
         assert!(slug("sales eu").starts_with("sales_eu-"));
-        // Never a name the temp-directory sweep would claim, whatever the user typed.
         assert!(!slug(".tmp-1-0").starts_with('.'));
     }
 
@@ -1304,8 +1180,6 @@ mod tests {
         assert_eq!(hash32(""), 0x4fd0_bfc1);
         assert_eq!(slug("sales eu"), "sales_eu-2dc32f1b");
     }
-
-    // ---- ED-05: INSERT and DROP TABLE ---------------------------------------------------
 
     /// Register `name` as an **external** table over `paths` — the user's own files, as far as
     /// the engine is concerned.
@@ -1381,10 +1255,6 @@ mod tests {
             })
         );
         assert!(!dir.exists(), "the data directory went with it");
-        // **Nothing at all left under `tables/`.** The delete moves the directory aside before
-        // removing it, so this asserts both halves: the table's own directory is gone *and* the
-        // `.tmp-…` it went through was cleaned up rather than left for the sweep. A drop that
-        // finishes should leave the sweep nothing to do.
         assert!(
             entries(&tables_dir(&root)).is_empty(),
             "{:?}",
@@ -1429,7 +1299,6 @@ mod tests {
             .await
             .expect_err("the data could not be moved out of the way");
 
-        // Before the assertions, so a failing one cannot strand an unremovable scratch folder.
         fs::set_permissions(&tables, fs::Permissions::from_mode(0o700)).unwrap();
         assert!(error.contains("Permission denied"), "{error}");
         assert_eq!(
@@ -1461,10 +1330,6 @@ mod tests {
 
         discard(&tables, &dir).expect("the rename is the operation, and it landed");
 
-        // The mode goes back **before** the assertions, not after: it is only needed while
-        // `discard` runs, and a failing assertion below would otherwise leave a directory the
-        // scratch root cannot remove — poisoning every later run of this test with an unrelated
-        // permission panic rather than the failure it actually found.
         let left = entries(&tables);
         for name in &left {
             let _ = fs::set_permissions(
@@ -1593,8 +1458,6 @@ mod tests {
             "the registration's footer reads were cached"
         );
 
-        // One appended file, one more entry once something scans it — the new file's, the rest
-        // already being there.
         statement(&eng, "INSERT INTO t VALUES (2)")
             .await
             .expect("inserted");
@@ -1640,9 +1503,6 @@ mod tests {
             "and the refusal wrote nothing"
         );
 
-        // `INSERT OVERWRITE` never reaches here — the router refuses it off the parsed
-        // statement — but `REPLACE INTO` only names itself in the plan, so this arm is the
-        // gate for it, and it answers with the same words.
         assert_eq!(
             statement(&eng, "REPLACE INTO owned VALUES (2)")
                 .await
@@ -1694,8 +1554,6 @@ mod tests {
         eng.create_view("direct".into(), "SELECT n FROM theirs".into())
             .await
             .expect("view");
-        // The nested reader — inlined when it was created, so it names `theirs` at its leaf and
-        // is just as invalid. A dependency list built by reading SQL text would stop at `direct`.
         eng.create_view("nested".into(), "SELECT n FROM direct".into())
             .await
             .expect("view");
@@ -1772,7 +1630,6 @@ mod tests {
         }
 
         let typed = statement(&eng, "DROP TABLE typed").await.expect("dropped");
-        // What the catalog pane's confirm calls, after it has taken the def out of the store.
         let pressed = eng
             .drop_table("pressed".into(), true)
             .await

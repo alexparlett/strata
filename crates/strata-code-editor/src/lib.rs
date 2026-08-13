@@ -1,13 +1,9 @@
 //! Strata's code-editor surface — **vendored** from `freya-code-editor` (marc2332/freya, MIT).
 //!
-//! We own this layer because every knob we need is hardcoded upstream (block-only cursor, the
-//! current-line highlight rule, gutter styling) and the features we want (diagnostic squiggles,
-//! an autocomplete popup) have no render surface there at all. The editing *engine* (`freya-edit`:
-//! `TextEditor`, history, selection, key processing) and the grammar (`tree-sitter`) remain
-//! upstream dependencies — we only own the render + syntax-glue.
-//!
-//! Kept close to upstream on purpose so diffs stay legible; Strata-specific changes are called out
-//! where they land (`editor_line` = cursor/gutter/highlight/squiggles, `editor_ui` = autocomplete).
+//! We own this layer because every knob we need is hardcoded upstream and the features we want
+//! (diagnostic squiggles, an autocomplete popup) have no render surface there. The editing *engine*
+//! (`freya-edit`) and the grammar (`tree-sitter`) remain upstream dependencies — we own only the
+//! render + syntax glue, kept close to upstream so diffs stay legible.
 
 pub mod completion;
 pub mod constants;

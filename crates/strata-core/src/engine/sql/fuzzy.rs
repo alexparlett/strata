@@ -132,8 +132,6 @@ mod tests {
             "_",
             "1",
         ];
-        // Candidates crossed with their own fragments — prefixes, interior runs and
-        // every-other-char picks, which is what reaches the looser tiers.
         let mut partials: Vec<String> = words.iter().copied().map(String::from).collect();
         for w in words {
             let n = w.chars().count();
@@ -172,8 +170,6 @@ mod tests {
                 }
             }
         }
-        // An implication is vacuously true where its premise never holds, so the corpus
-        // has to actually reach every tier or this guard would rot into nothing.
         assert!(
             fired.iter().all(|&n| n > 0),
             "corpus never exercised some tier: {fired:?} (exact, prefix, word-boundary, contains)"
@@ -193,27 +189,24 @@ mod tests {
 
     #[test]
     fn humps_beat_substring() {
-        // `ui` hits the word starts of user_id but is only an interior run of guid.
         assert_eq!(match_tier("user_id", "ui"), Some(2));
         assert_eq!(match_tier("guid", "ui"), Some(3));
     }
 
     #[test]
     fn hump_runs_continue_within_a_word() {
-        // `ordid` = "ord" run at word start + "id" at a later word start.
         assert_eq!(match_tier("order_id", "ordid"), Some(2));
     }
 
     #[test]
     fn gap_subsequence_matches_last() {
-        // usrid: u-s-r in "user" with a gap (not word-boundary runs), then id.
         assert_eq!(match_tier("user_id", "usrid"), Some(4));
     }
 
     #[test]
     fn non_subsequence_is_none() {
         assert_eq!(match_tier("amount", "xyz"), None);
-        assert_eq!(match_tier("id", "idx"), None); // longer than candidate
+        assert_eq!(match_tier("id", "idx"), None);
     }
 
     #[test]

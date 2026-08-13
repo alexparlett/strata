@@ -7,30 +7,20 @@
 //! exists once a server has parsed and answered it. A unit test can prove a `ConnectionDef`
 //! yields a well-formed parameter map, and nothing beyond that.
 //!
-//! **Why a real server rather than a mock.** The same argument as `object_store_minio.rs`: a
-//! Postgres mock is written by the same understanding of Postgres that the code under test has,
-//! so a misreading produces a mock that agrees with the bug. In particular the unparser's output
-//! is judged by the *server*, and a stand-in that accepted whatever we sent would assert nothing
-//! at all. The fixture is seeded over raw `tokio-postgres` — a lower layer than the pool and
-//! factory under test — so the write side cannot share a mistake with the read side.
+//! **A real server rather than a mock**, the same argument as `object_store_minio.rs`: the
+//! unparser's output is judged by the *server*, and a stand-in accepting whatever we sent would
+//! assert nothing. The fixture is seeded over raw `tokio-postgres`, a lower layer than the pool and
+//! factory under test.
 //!
-//! **It drives `Engine::connect`, the real entry point, password and all.** The password reaches
-//! the pool through the keystore bridge (`SecretRef::derived` → `KeystorePassword` → one read per
-//! pool connection), which is the genuinely new machinery here, so the test would be worth much
-//! less driving `db::connect` with a static provider instead. What it substitutes is the
-//! *keystore*, not the bridge: `keyring_core::mock` is the store for this binary, exactly as
-//! `secret`'s own unit tests use it. `secret::open_keystore` is never called, so no real Keychain
-//! is touched — that round trip stays `tests/secret_keystore.rs`'s, which is a separate binary
-//! because a process has one default store.
+//! **It drives `Engine::connect`, the real entry point, password and all**, because the keystore
+//! bridge (`SecretRef::derived` → `KeystorePassword` → one read per pool connection) is the
+//! genuinely new machinery. What it substitutes is the *keystore*, not the bridge:
+//! `keyring_core::mock` is this binary's store, so no real Keychain is touched — that round trip
+//! stays `tests/secret_keystore.rs`'s, a separate binary because a process has one default store.
 //!
-//! **An ordinary integration test, deliberately not `#[ignore]`d**, for the reason the MinIO test
-//! is not: an ignored test is one nobody runs. A container runtime is a development prerequisite
-//! for this repo, discovered from `~/.testcontainers.properties` or `DOCKER_HOST` — see that
-//! file's own header, and `.github/workflows/ci.yml`, where this binary runs in the `containers`
-//! job (the one that carries the runtime) and is skipped by name in the other.
-//!
-//! One test, sequential phases, container held for the duration — again the MinIO shape, and for
-//! its reason: a second `#[tokio::test]` would race this one for the single cloud worker.
+//! **Deliberately not `#[ignore]`d**, for the reason the MinIO test is not. One test, sequential
+//! phases, container held for the duration: a second `#[tokio::test]` would race this one for the
+//! single cloud worker.
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -204,11 +194,6 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let conn = connection(port, CATALOG, &["public"]);
     store_password(&conn, PASSWORD);
 
-    // --- refusals, through the same entry point --------------------------------------------
-    //
-    // **The password is not on this machine.** The derived-reference story's whole cost, and it
-    // has to be a sentence naming the fix rather than an opaque auth failure: a colleague opening
-    // a shared project sees exactly this until they enter their own password.
     let missing = connection(port, "no_password", &["public"]);
     store_password(&missing, "");
     let why = engine
@@ -220,13 +205,6 @@ async fn a_database_connection_registers_a_federated_catalog() {
         "the refusal names the machine and the connection: {why}"
     );
 
-    // **A description that is well-formed and wrong.** Both of these build a perfectly valid
-    // parameter map; only the server can say no, which is why building the pool *is* the probe
-    // and there is no separate reachability step.
-    // A port the OS has just confirmed is free, rather than `port + 1`: on a busy CI box the
-    // neighbouring port is frequently another container's, which fails with an auth or handshake
-    // error instead of the unreachable one this is about — and `port + 1` wraps to 0 when
-    // testcontainers hands out 65535, which the address rule refuses before anything is dialled.
     let closed = {
         let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let port = taken.local_addr().expect("an address").port();
@@ -252,7 +230,6 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .expect_err("the password is wrong");
     assert!(why.contains(USER), "the refusal names the user: {why}");
 
-    // A catalog name the workspace owns is refused before anything is dialled.
     let reserved = connection(port, "strata", &["public"]);
     store_password(&reserved, PASSWORD);
     let why = engine
@@ -261,13 +238,11 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .expect_err("'strata' is the workspace's own catalog");
     assert!(why.contains("strata"), "{why}");
 
-    // …and none of those registered anything.
     assert!(
         engine.db_listing(&conn).is_none(),
         "a refused connection registers nothing"
     );
 
-    // --- the good connect --------------------------------------------------------------------
     engine
         .connect(conn.clone())
         .await
@@ -275,7 +250,6 @@ async fn a_database_connection_registers_a_federated_catalog() {
 
     enumeration(&engine, port).await;
     pushdown(&engine).await;
-    // The mixed plan needs a real file table; the folder is the test's own and swept below.
     let fixtures = env::temp_dir().join(format!("strata-pg-{}", process::id()));
     mixed_plan(&engine, &fixtures).await;
     exotic_types_and_refusals(&engine).await;
@@ -289,16 +263,10 @@ async fn a_database_connection_registers_a_federated_catalog() {
 /// **What the catalog says it holds** — a *phase*, called in sequence, not a test of its own
 /// (a second `#[tokio::test]` would race this one for the single container worker).
 async fn enumeration(engine: &Engine, port: u16) {
-    // **The whole database came through**, with nothing declared per table: both schemas, the
-    // view included. This read is also what proves `table_type` is answered from the cached
-    // relkind — `information_schema.tables` calls it per relation, and the default
-    // implementation would have built (and introspected) a provider for each one.
     let names = rows(
         engine,
         1,
         &format!(
-            // `information_schema` itself is added per catalog by DataFusion, so it is
-            // excluded here rather than asserted — what this pins is the *database's* shape.
             "SELECT table_schema, table_name FROM information_schema.tables \
              WHERE table_catalog = '{CATALOG}' AND table_schema <> 'information_schema' \
              ORDER BY 1, 2"
@@ -316,10 +284,6 @@ async fn enumeration(engine: &Engine, port: u16) {
         "every schema the role can see, and every relation in them"
     );
 
-    // …and the **scoped and tagged** view of the same thing, which is what a surface reads.
-    // `analytics` is not enabled on the def; an enabled schema the server does not have says so
-    // rather than vanishing, because the picker has to show the entry the user is about to
-    // un-tick.
     let (catalog, listing) = engine
         .db_listing(&connection(port, CATALOG, &["public", "warehouse"]))
         .expect("a live database has a listing");
@@ -352,8 +316,6 @@ async fn enumeration(engine: &Engine, port: u16) {
         "a remote view is listed as one, which pg_tables could not have said"
     );
 
-    // **Visibility scopes display, never resolution**: `analytics` is not enabled and still
-    // resolves and runs. That is the whole reason registration exposes every schema.
     assert_eq!(
         rows(
             engine,
@@ -381,17 +343,12 @@ async fn pushdown(engine: &Engine) {
         ]
     );
 
-    // A filtered single-table scan carries its filter into the remote statement. `SqlTable`'s
-    // own scan unparses filters, so this holds even without federation — it is the floor.
     let filtered = explain(
         engine,
         4,
         &format!("SELECT id FROM {CATALOG}.public.orders WHERE customer = 20"),
     )
     .await;
-    // Matched on the clause rather than on a rendering of it: the unparser quotes identifiers
-    // (`"orders"."customer" = 20`), and pinning that spelling would fail on a dialect change
-    // that had not broken anything.
     assert!(
         filtered.contains("base_sql=")
             && filtered.contains("WHERE")
@@ -399,8 +356,6 @@ async fn pushdown(engine: &Engine) {
         "the filter did not reach the remote statement:\n{filtered}"
     );
 
-    // **The workstream's own claim**: a same-connection join leaves as *one* federated node
-    // whose remote SQL contains the JOIN, rather than two scans joined here.
     let joined = explain(
         engine,
         5,
@@ -467,8 +422,6 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
         .await
         .expect("a local file table");
 
-    // The pg side federates, the join runs here. Asserted by its **answer** as well as by the
-    // plan's shape.
     let mixed_sql = format!(
         "SELECT t.tier, count(*) FROM {CATALOG}.public.orders o \
          JOIN tiers t ON t.customer = o.customer GROUP BY t.tier ORDER BY 1"
@@ -498,24 +451,6 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
 /// **`jsonb`, a user's own window, `IN (subquery)` and read-only** — the things pinned as they
 /// are today; a phase of the test above.
 async fn exotic_types_and_refusals(engine: &Engine) {
-    // **A user's own window function over a remote table is a known gap**, pinned the way DB-01
-    // pinned `IN (subquery)`. DataFusion 54's unparser renders a projection under a `WindowAggr`
-    // as a derived table (`… FROM (SELECT …) AS "derived_projection"`) and does not rebase the
-    // outer column qualifiers onto that alias, so the statement names a relation its own `FROM`
-    // has aliased away and Postgres answers `42P01`. Postgres would run the *intended* statement
-    // perfectly well — the defect is entirely in the SQL we generate.
-    //
-    // This is exactly the shape that used to break **every** federated read, because the
-    // snapshot ordinal was a plan-level `row_number() OVER ()` (`engine::query::materialize`).
-    // Numbering at write time took our own bookkeeping out of the plan; what is left here is the
-    // genuine user-facing case, and closing it needs an upstream unparser fix rather than
-    // anything this workstream owns.
-    // The trigger is narrow, and worth stating exactly because two simpler guesses were wrong:
-    // a window over an **already-projected** subquery. One projection under the window unparses
-    // fine (`SELECT id, row_number() OVER () FROM pg.public.orders` answers), and a window with
-    // nothing else selected never builds a derived table at all. It takes the second projection
-    // for the unparser to emit `… FROM (SELECT …) AS "derived_projection"` and then leave the
-    // outer references qualified by the original relation.
     assert!(
         engine
             .query(
@@ -533,11 +468,6 @@ async fn exotic_types_and_refusals(engine: &Engine) {
          workstream README and this comment with it"
     );
 
-    // `UnsupportedTypeAction::String` is what makes a table with a `jsonb` column readable at
-    // all; the crate's default (`Error`) would refuse the whole relation for the one column.
-    // What is pinned is exactly that decision — the value arrives intact, as the JSON text the
-    // app's own Postgres-style accessors are written against — and nothing about *where* an
-    // accessor runs, which is the next assertion's subject.
     assert_eq!(
         rows(
             engine,
@@ -553,10 +483,6 @@ async fn exotic_types_and_refusals(engine: &Engine) {
         "a jsonb column arrives as JSON text rather than making its table unreadable"
     );
 
-    // **Pinned as it is today, for DB-08 to flip.** An accessor in a position the federation rule
-    // pushes down reaches Postgres as a function Postgres does not have. It fails loudly at
-    // execute time rather than silently falling back — which is the documented contract — and
-    // DB-08's operator rewrite is what turns this into an answer.
     assert!(
         engine
             .query(
@@ -574,12 +500,6 @@ async fn exotic_types_and_refusals(engine: &Engine) {
          than quietly answering from a local fallback that does not exist"
     );
 
-    // --- `IN (subquery)`, the `skip_failed_rules = false` cliff ----------------------------------
-    //
-    // Pinned rather than predicted (DB-01 measured the local half): `DecorrelatePredicateSubquery`
-    // runs immediately ahead of the federation rule and rewrites filter-position `IN` into a join,
-    // so this shape survives and answers. Projection position is the one that does not — and did
-    // not before federation either, because DataFusion's physical planner has never supported it.
     assert_eq!(
         rows(
             engine,
@@ -608,12 +528,6 @@ async fn exotic_types_and_refusals(engine: &Engine) {
         "an InSubquery in projection position has never been plannable"
     );
 
-    // --- read-only ------------------------------------------------------------------------------
-    //
-    // v1 does not write to a database. The `INSERT` gate is `Engine::is_internal`'s and refuses
-    // this because the target is not a table Strata owns; the schema provider refuses a
-    // registration in its own words underneath it, which is what answers if anything ever reaches
-    // `ctx.sql` around the router.
     let Err(why) = engine
         .run(
             WsId(1),
@@ -630,8 +544,6 @@ async fn exotic_types_and_refusals(engine: &Engine) {
 
 /// **A reconnect replaces, and a disconnect stops resolving** — a phase of the test above.
 async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
-    // The editor's rename case: the same URL, a new catalog name. Handled where the registration
-    // is, so no surface has to remember to take the old name back out.
     let renamed = connection(port, "warehouse", &["public"]);
     engine
         .connect(renamed.clone())
@@ -654,11 +566,6 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "the name it was registered under before must stop resolving"
     );
 
-    // --- disconnect -------------------------------------------------------------------------------
-    //
-    // The catalog stops resolving. This is the operation DataFusion's own `CatalogProviderList`
-    // cannot express, and the reason `StrataCatalogList` exists: without it, a forgotten
-    // connection would go on answering for the life of the window.
     engine.disconnect(&renamed.url());
     assert!(
         engine
@@ -680,18 +587,14 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
 
 /// **The statement policy over a real remote catalog** (DB-03) — a phase of the test above.
 ///
-/// The unit tests (`engine::ddl::tests`) drive every intercepted kind against a fake catalog,
-/// which is the right place for a checklist. What only a server can show is that the names being
-/// refused are names that genuinely *resolve*: against the fake catalog a wrong refusal and a
-/// right one both look like an error, while here the same statement's read half answers with
-/// rows.
+/// The unit tests drive every intercepted kind against a fake catalog, which is the right place for
+/// a checklist. What only a server can show is that the names being refused genuinely *resolve*:
+/// against a fake catalog a wrong refusal and a right one both look like an error.
 ///
-/// **The data root has to be set first**, and finding that out is the point of writing this
-/// against the real entry point: `CREATE TABLE AS` and `CREATE EXTERNAL TABLE` refuse an engine
-/// with no project folder *before* they look at the target, so without a root those two rows
-/// assert nothing about the catalog. That ordering is right and stays — on a project-less engine
-/// there is genuinely nowhere to put a table, whatever its name — and it is unobservable in the
-/// app, where a window always has a project. `dir` is the folder [`mixed_plan`] already made.
+/// **The data root has to be set first**, which is the point of writing this against the real entry
+/// point: `CREATE TABLE AS` and `CREATE EXTERNAL TABLE` refuse a rootless engine *before* they look
+/// at the target, so those two rows would otherwise assert nothing about the catalog. That ordering
+/// is right and stays; it is unobservable in the app, where a window always has a project.
 async fn statement_policy(engine: &Engine, dir: &Path) {
     engine.set_data_dir(dir);
     for sql in [
@@ -755,20 +658,12 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
 /// a file and a database. A phase of the test above.
 ///
 /// Driven on a **second engine** through the real registration pass, because three of the four
-/// things under test are about replay. In order: **(a)** dropping the local table names the view
-/// as a dependent, which is the question the `tables`/`remote` split had to keep answerable and
-/// is asked of the engine that holds the plans; **(b)** its recorded dependencies carry the
-/// remote name qualified and the workspace half bare, where recording by bare component would
-/// make both read as tables of this project; **(c)** it re-registers on replay *after* the
-/// connection, which is phase order and the reason connections are the pass's first phase; and
-/// **(d)** with the remote half taken away server-side it settles `Failed` naming the connection.
-/// Nothing on our side observes that removal — the view goes on answering from the plan it
-/// inlined — so the reconciliation is the next pass, and what it must say is which connection no
-/// longer has the relation.
-///
-/// The raw client's driver task is bound as `driver`, not `connection`: it is not a
-/// `ConnectionDef`, and that name would shadow this file's own [`connection`] builder for the
-/// rest of the scope.
+/// things under test are about replay: dropping the local table names the view as a dependent; its
+/// recorded dependencies carry the remote name qualified and the workspace half bare, where
+/// recording by bare component would make both read as this project's tables; it re-registers
+/// *after* the connection, which is why connections are the pass's first phase; and with the remote
+/// half taken away server-side it settles `Failed` naming the connection. Nothing observes that
+/// removal, so the reconciliation is the next pass.
 async fn cross_source_views(port: u16, dir: &Path) {
     let (client, driver) = tokio_postgres::connect(
         &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),

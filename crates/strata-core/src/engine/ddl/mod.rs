@@ -203,31 +203,19 @@ pub async fn execute(
         baseline,
     } = engine;
     let start = Instant::now();
-    // Exhaustive on `StmtKind` with no wildcard, so a kind the router learns to intercept is a
-    // compile error here rather than a statement that classifies and then falls through.
-    // The arms are grouped by the task that owns each capability, which is also how they will
-    // stop being stubs — one task, one arm, one funnel behind it.
     let outcome: StatementOutcome = match kind {
-        // ED-04 — internal tables: spool the inner query to `.strata/tables/<slug>/`, register
-        // the resulting Arrow def through `register_external`.
         StmtKind::CreateTable | StmtKind::Ctas => tables::create(ctx, kind, stmt, root).await,
-        // ED-05 — writes and removal over the internal-name set.
         StmtKind::Insert => tables::insert(ctx, stmt, &internal).await,
         StmtKind::DropTable => tables::drop_statement(ctx, &root, &internal, stmt).await,
-        // ED-06 — typed view DDL onto the body the save-view funnel already runs.
         StmtKind::CreateView => views::create_statement(ctx, stmt).await,
         StmtKind::DropView => views::drop_statement(ctx, stmt).await,
-        // ED-07 — editor `COPY … TO`, behind the pre-flight NULL-partition gate.
         StmtKind::Copy => copy::copy_to(ctx, stmt, &root).await,
-        // ED-08 — the session overlay and prepared statements.
         StmtKind::Set => session::set(ctx, stmt, &scope).await,
         StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,
         StmtKind::Prepare => session::prepare(ctx, stmt, &scope).await,
         StmtKind::Deallocate => session::deallocate(ctx, stmt, &scope).await,
-        // ED-09 — SQL-bodied scalar functions, over the factory `build_context` installed.
         StmtKind::CreateFunction => functions::create(ctx, stmt, &registry).await,
         StmtKind::DropFunction => functions::drop(ctx, stmt, &registry).await,
-        // ED-10 — the typed form of Table Config's registration.
         StmtKind::CreateExternalTable => {
             external::create(ctx, stmt, &root, &internal, &connections).await
         }
@@ -261,20 +249,15 @@ pub(super) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableTy
 /// The bare name a statement targets, and `what` those statements create — `"Tables"`,
 /// `"Views"`.
 ///
-/// **The one choke point in front of every arm.** The *workspace* catalog has exactly one schema
-/// (`engine::providers`), so a qualified name is one of three things: a longer spelling of the
-/// same place, a relation inside a database connection's catalog, or nowhere at all —
-/// and registration takes a bare name, so an unrecognised qualifier would otherwise be silently
-/// dropped and the object created somewhere the user did not ask for.
+/// **The one choke point in front of every arm.** The workspace catalog has exactly one schema, so
+/// a qualified name is a longer spelling of the same place, a relation inside a database
+/// connection's catalog, or nowhere at all — and registration takes a bare name, so an
+/// unrecognised qualifier would otherwise be dropped and the object created somewhere else.
 ///
-/// The middle case is the DB workstream's, and the reason this refusal is worded here rather than
-/// per arm: **every** intercepted statement that resolves a target comes through this function, so
-/// one sentence covers `DROP TABLE pg.public.orders`, `INSERT INTO pg.…`, `CREATE VIEW pg.…` and
-/// the rest — and an arm that grew its own copy of the check would be the drift this prevents.
-/// The catalog list is asked rather than a list of connections, because it is what *resolves* the
-/// name: a catalog is registered exactly while its connection is live
-/// ([`StrataCatalogList`](crate::engine::providers::StrataCatalogList)), which is also the window
-/// in which the user can address it.
+/// Every intercepted statement that resolves a target comes through here, so one sentence covers
+/// them all and no arm grows its own copy of the check. The catalog list is asked rather than a
+/// list of connections, because it is what *resolves* the name: a catalog is registered exactly
+/// while its connection is live, which is the window in which the user can address it.
 pub(super) fn bare_name(
     ctx: &SessionContext,
     name: &TableReference,

@@ -49,9 +49,6 @@ impl Component for StatusBlock {
                 .border(Border::new().width(1.).fill(win.border_fill))
                 .child(CircularLoader::new().size(STATUS_GLYPH))
                 .child(Path::new(format!("Connecting to '{url}'…")).color(text)),
-            // A failure is a *sentence the engine wrote*, so it gets room to wrap rather than a
-            // single clipped line — a credential-chain refusal is two clauses long, and this is
-            // the one place it can be read beside the field that caused it.
             Status::Failed(why) => rect()
                 .width(Size::fill())
                 .horizontal()

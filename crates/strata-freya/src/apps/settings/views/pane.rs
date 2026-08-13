@@ -70,9 +70,6 @@ impl Pane {
 impl Component for Pane {
     fn render(&self) -> impl IntoElement {
         let route = use_route::<Route>();
-        // The frame a searched-for row scrolls itself into (P4-09). Created and provided whichever
-        // shape this pane takes — a hook cannot be conditional, and an unattached controller has no
-        // viewport, so on a `filled` pane a reveal is the flash and nothing else.
         let controller = use_scroll_controller(ScrollConfig::default);
         use_provide_context(move || RevealScroll::new(controller));
 
@@ -119,8 +116,6 @@ struct Breadcrumb {
 impl Component for Breadcrumb {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
-        // Every route has a category (`model`'s test pins that); a page with none would be
-        // unreachable, so there is nothing sensible to draw for it.
         let Some(category) = category(&self.route) else {
             return rect();
         };

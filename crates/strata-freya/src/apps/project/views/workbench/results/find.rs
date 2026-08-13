@@ -97,8 +97,6 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
         }
     }
     FindView {
-        // The unfiltered page batch rides along untouched: survivors map back to it through
-        // `row_nums` (see `cell_view::page_batch_row`).
         data: Rc::new(GridData::from_page(
             data.columns.clone(),
             rows,
@@ -107,8 +105,6 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
         row_nums: Some(Rc::new(nums)),
     }
 }
-
-// ── the page memo ─────────────────────────────────────────────────────────────────────────
 
 /// What defines the rows in hand — the [`PageMemo`]'s cache key.
 ///
@@ -182,7 +178,6 @@ impl PageMemo {
     ) -> FindView {
         let mut inner = self.0.borrow_mut();
         let entry = match inner.page.take() {
-            // The same cut: keep its rows, and re-filter only if the query moved under them.
             Some(mut e) if e.key == key => {
                 if e.needle.as_deref() != needle || e.row_base != row_base {
                     e.view = filter_page(needle, &e.data, row_base);
@@ -246,18 +241,15 @@ mod tests {
 
     #[test]
     fn matches_any_cell_case_insensitively() {
-        // "alpha" hits row 0 (col a, "Alpha") and row 2 (col b, "ALPHABET").
         let view = filter_page(Some("alpha"), &page(), 0);
         assert_eq!(view.data.rows.len(), 2);
         assert_eq!(view.data.rows[0][0].text, "Alpha");
         assert_eq!(view.data.rows[1][0].text, "gamma");
-        // Schema rides along for the grid's type colouring.
         assert_eq!(view.data.columns.len(), 2);
     }
 
     #[test]
     fn survivors_keep_their_absolute_row_numbers() {
-        // Page 2 of 100/page: rows 101..=103; "alpha" survives rows 101 and 103.
         let view = filter_page(Some("alpha"), &page(), 100);
         assert_eq!(view.row_nums.as_deref(), Some(&vec![101, 103]));
     }
@@ -314,8 +306,6 @@ mod tests {
         assert_eq!(view.row_nums.as_deref(), Some(&vec![1, 3]));
     }
 
-    // ── the page memo ─────────────────────────────────────────────────────────────────────
-
     fn memo() -> PageMemo {
         PageMemo(Rc::new(RefCell::new(MemoInner::default())))
     }
@@ -333,7 +323,6 @@ mod tests {
     fn the_memo_resolves_a_page_once_per_cut() {
         let memo = memo();
         let builds = std::cell::Cell::new(0);
-        // `Cell` is shared by reference, so this closure is `Copy` — each call gets its own.
         let build = || {
             builds.set(builds.get() + 1);
             page()
@@ -341,15 +330,12 @@ mod tests {
 
         let first = memo.view(PageKey::Run, build, None, 0);
         assert_eq!(builds.get(), 1);
-        // Same cut, same query: the very same view comes back — no rebuild, no re-filter.
         let again = memo.view(PageKey::Run, build, None, 0);
         assert_eq!(builds.get(), 1);
         assert!(Rc::ptr_eq(&first.data, &again.data));
 
-        // A different cut of the snapshot rebuilds.
         memo.view(PageKey::Snapshot(spec(2)), build, None, 100);
         assert_eq!(builds.get(), 2);
-        // …and going back to it rebuilds again: the memo holds one page, not a cache.
         memo.view(PageKey::Run, build, None, 0);
         assert_eq!(builds.get(), 3);
     }
@@ -358,7 +344,6 @@ mod tests {
     fn the_memo_refilters_the_page_it_already_has() {
         let memo = memo();
         let builds = std::cell::Cell::new(0);
-        // `Cell` is shared by reference, so this closure is `Copy` — each call gets its own.
         let build = || {
             builds.set(builds.get() + 1);
             page()
@@ -366,12 +351,10 @@ mod tests {
 
         let all = memo.view(PageKey::Run, build, None, 0);
         assert_eq!(all.data.rows.len(), 3);
-        // A keystroke re-filters the page in hand — it does not resolve it again.
         let hit = memo.view(PageKey::Run, build, Some("alpha"), 0);
         assert_eq!(builds.get(), 1);
         assert_eq!(hit.data.rows.len(), 2);
         assert_eq!(hit.row_nums.as_deref(), Some(&vec![1, 3]));
-        // As does a row base that moved under the same rows (a page-size change lands here).
         let rebased = memo.view(PageKey::Run, build, Some("alpha"), 100);
         assert_eq!(builds.get(), 1);
         assert_eq!(rebased.row_nums.as_deref(), Some(&vec![101, 103]));
@@ -381,7 +364,6 @@ mod tests {
     fn the_memo_builds_the_run_page_once() {
         let memo = memo();
         let builds = std::cell::Cell::new(0);
-        // `Cell` is shared by reference, so this closure is `Copy` — each call gets its own.
         let build = || {
             builds.set(builds.get() + 1);
             page()

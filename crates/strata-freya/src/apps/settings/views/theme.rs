@@ -45,24 +45,11 @@ impl Component for ThemePane {
         let ctx = use_consume::<SettingsCtx>();
         let preferred = use_hook(Platform::get).preferred_theme;
 
-        // Which card wears the tick is the **effective** theme, not the stored id: while
-        // Sync-with-OS is on, the id in the draft isn't what any window is wearing, and the
-        // grid is the only thing on this pane that answers "so which theme am I using?".
-        // Resolved through `ThemeSel::effective` — the same pure function `use_strata_theme`
-        // derives with — and then through `get_or_default`, the same fallback it resolves the
-        // id *with*. Both steps are needed for the tick to agree with what is on screen: a
-        // persisted id whose theme is gone (a user file deleted since it was picked) paints
-        // the default, so that is the card the tick belongs on, not no card at all.
         let sel = ThemeSel::from(&*ctx.draft.read());
         let sync_os = sel.sync_os;
-        // Short-circuited, so this only subscribes to the OS appearance while syncing.
         let os_dark = sync_os && *preferred.read() == PreferredTheme::Dark;
         let selected = themes.get_or_default(&sel.effective(os_dark)).id.clone();
 
-        // Why the grid is inert rather than absent: it is still the answer to "which theme am
-        // I using?", which Sync-with-OS doesn't tell you — so while syncing it keeps its place
-        // and gains the line saying whose choice it now is. That line is the one row subtext in
-        // the window that is *conditional*, which is why it is set here rather than in the index.
         let mut grid = Anchor::Theme.row().child(ThemeGrid {
             themes,
             selected,
@@ -108,8 +95,6 @@ struct ThemeGrid {
 
 impl Component for ThemeGrid {
     fn render(&self) -> impl IntoElement {
-        // The grid is the radio **group**: without it each card announces "radio button" with
-        // no set to belong to, so there is no way to hear how many themes there are.
         let group = use_a11y();
         let entries = self.themes.entries();
         let rows = entries.chunks(CARDS_PER_ROW).map(|chunk| {
@@ -133,7 +118,6 @@ impl Component for ThemeGrid {
                     .key(entry.theme.id.clone()),
                 );
             }
-            // Pad a short final row so its cards keep the width they'd have in a full one.
             for _ in chunk.len()..CARDS_PER_ROW {
                 row = row.child(rect().width(Size::flex(1.)));
             }
@@ -201,8 +185,6 @@ impl KeyExt for ThemeCard {
 /// Canvas card metrics.
 const CARD_RADIUS: f32 = R_3;
 
-// The miniature's own sub-scale shapes — see [`Preview`]. A text run and the traffic light are
-// drawn as pills; the rail is the one plain box, rounded by eye at this size.
 const RUN: f32 = 5.;
 const TITLE: f32 = 4.;
 const TITLE_RUN: f32 = 34.;
@@ -219,19 +201,12 @@ impl Component for ThemeCard {
         let mut hovering = use_state(|| false);
         let a11y_id = use_a11y();
 
-        // `sync_os` is left alone: while it is on this card takes no press (see below), so a
-        // pick never runs from a synced state. Turning it off is the switch's job.
         let theme_id = self.theme_id.clone();
         let pick = move || {
             let mut draft = ctx.draft;
             draft.write().theme = theme_id.clone();
         };
 
-        // Hover is *tracked* even while inert and only *dressed* when live — the shape Freya's
-        // own controls use for a disabled state (`Switch` gates `on_press` on `enabled` and
-        // leaves `on_pointer_enter` / `on_pointer_leave` registered unconditionally). Killing
-        // the pointer events instead is what leaves the flag stuck: `pointer_leave` never
-        // arrives, so the ring comes back stale the moment the cards go live again.
         let (ring, width) = if self.selected {
             (theme.selected_color, 2.)
         } else if hovering() && !self.inert {
@@ -247,8 +222,6 @@ impl Component for ThemeCard {
         rect()
             .width(Size::flex(1.))
             .vertical()
-            // A radio, not a button: the cards are one choice with one answer, and the tick is
-            // the selected state a reader needs announced.
             .a11y_id(a11y_id)
             .a11y_role(AccessibilityRole::RadioButton)
             .a11y_member_of(self.group)
@@ -260,14 +233,7 @@ impl Component for ThemeCard {
             })
             .background(theme.card_background)
             .corner_radius(CARD_RADIUS)
-            // The thumbnail bleeds to the card's edge, so it has to be clipped to the radius.
             .overflow(Overflow::Clip)
-            // The ring is **inner**, and the content is inset by exactly its width so it can't
-            // paint over it. The thumbnail bleeds edge to edge, so without the inset its own
-            // background covered the ring on three sides, leaving it visible only along the
-            // name row (where the card's background shows through). `Outer` is not the fix:
-            // that puts the ring outside the bounds children are clipped to, where it gets
-            // overpainted anyway — all that survives is the corner arcs.
             .padding(Gaps::new_all(width))
             .border(
                 Border::new()
@@ -275,9 +241,6 @@ impl Component for ThemeCard {
                     .width(width)
                     .alignment(BorderAlignment::Inner),
             )
-            // Sync-with-OS owns the choice, so while it is on the card takes no press rather
-            // than writing a theme the OS immediately overrides. Only the *press* is gated:
-            // hover keeps tracking (see the ring above), so nothing can be left stale.
             .maybe(!self.inert, |el| {
                 el.on_press(move |_: Event<PressEventData>| {
                     a11y_id.request_focus();
@@ -286,9 +249,6 @@ impl Component for ThemeCard {
             })
             .on_pointer_enter(move |_| hovering.set(true))
             .on_pointer_leave(move |_| hovering.set(false))
-            // The inset means the card's own clip no longer cuts the preview's corners — they
-            // sit a ring's width inside it, where the card's radius has already curved away.
-            // So the preview carries the matching inner radius: the card's, less the inset.
             .child(Preview {
                 swatch: self.swatch,
                 radius: CARD_RADIUS - width,
@@ -298,7 +258,6 @@ impl Component for ThemeCard {
                 rect()
                     .width(Size::fill())
                     .horizontal()
-                    // For the spacer below, which pushes the tick to the trailing edge.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
                     .spacing(SP_3)
@@ -357,10 +316,7 @@ impl Component for Preview {
             .content(Content::Flex)
             .background(body)
             .corner_radius(radius)
-            // The title strip fills the width, so without a clip here *its* square corners
-            // would poke through the rounding this rect just gained.
             .overflow(Overflow::Clip)
-            // The title strip: a traffic light and a window title.
             .child(
                 rect()
                     .width(Size::fill())
@@ -385,14 +341,11 @@ impl Component for Preview {
                             .background(line),
                     ),
             )
-            // The body: the sidebar, then the content's text runs.
             .child(
                 rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
                     .horizontal()
-                    // For the text-run column's `flex(1.)`, which takes the width the rail
-                    // leaves — and whose `percent` runs are measured against it.
                     .content(Content::Flex)
                     .spacing(SP_3)
                     .padding(Gaps::new_all(SP_3))

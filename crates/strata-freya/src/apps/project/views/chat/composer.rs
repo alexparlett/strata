@@ -81,25 +81,15 @@ impl Component for Composer {
         let session = use_radio::<SessionState, Chan>(Chan::Tabs);
         let project = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let mut text = use_state(String::new);
-        // The bar draws the focus ring, so it has to know when the field has focus — which means
-        // minting the id here and handing it to the `Input`, rather than letting it mint its own.
         let a11y = use_hook(AccessibilityId::new_unique);
         let focus = use_focus(a11y);
-        // The expand toggle: half the pane at rest, two thirds expanded — IntelliJ's two stops.
         let mut expanded = use_state(|| false);
-        // The `@`-completion, driven from this field because this is where the keyboard is.
         let mut selected = use_state(|| 0usize);
         let dismissed = use_state(|| None::<usize>);
         let caret = use_state(|| 0usize);
-        // The catalog's other two channels, read for the subscription: an offer list that did not
-        // notice a new view is a list that completes names the next send cannot resolve.
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let queries = use_radio::<ProjectState, ProjChan>(ProjChan::Queries);
 
-        // **The highlight is a property of the token, so the token changing resets it.** Any
-        // keystroke re-narrows the list, and the row that was second under the old text has
-        // nothing to do with the row that is second under the new. Escape is undone by the same
-        // rule, because a mention still being typed is a question not yet finished.
         use_side_effect(move || {
             let _ = text.read();
             let mut dismissed = dismissed;
@@ -120,8 +110,6 @@ impl Component for Composer {
         };
         let refusal = blocked(&assistant, &ai, &pick);
 
-        // What `@` is offering right now. Computed here, once, and handed to both the list that
-        // draws it and the key handler that takes from it.
         let mut mentions = Mentions {
             id,
             chats,
@@ -137,14 +125,9 @@ impl Component for Composer {
             mentions.offered(&project.read(), &session.read())
         };
 
-        // The one funnel both the button and the Enter key press.
         let stores = Stores { session, project };
         let report = use_report();
         let root = project.read().root.clone();
-        // Where a stopped turn's write is performed: this component's scope, which outlives the
-        // Stop button the press itself removes. The conversation rides **in the state** rather
-        // than being captured, because `use_side_effect` builds its closure once and a captured
-        // id would freeze at whichever conversation was open on the first render.
         let mut stopping = use_state(|| None::<ChatId>);
         use_side_effect(move || {
             let Some(target) = *stopping.read() else {
@@ -158,34 +141,18 @@ impl Component for Composer {
             let ai = ai.clone();
             move || {
                 let question = text.peek().clone();
-                // **Only a send empties the box.** Every refusal in `send` is silent — a turn
-                // already streaming, nothing configured, nothing typed — and clearing on one
-                // destroys a message the user still has to send, from an Enter that looked like
-                // it worked.
                 if send(&assistant, chats, stores, report, &ai, id, question) {
                     text.set(String::new());
                 }
             }
         };
 
-        // The chips the next send carries, each removable where it is shown.
         let chips = (!pinned.is_empty()).then(|| Chips {
             id,
             pinned,
             theme: theme.clone(),
         });
 
-        // **The field grows with what is typed, then scrolls.** `Input::multiline` wraps the text
-        // and takes its own height from it; `max_height` is where that stops and the text starts
-        // scrolling instead. Enter sends and Shift+Enter is a newline — the fork's rule, stated
-        // once there rather than re-decided at this call site.
-        //
-        // **Undressed, because the bar around it is the box.** Every one of the field's own state
-        // colours — rest, hover, focus and the keyboard ring — is cleared per instance rather than
-        // in the shared `input` theme (every other flat input in the app still wants them); the
-        // bar below carries all of them, so there is one outline and it lights up around
-        // everything the message is made of —
-        // IntelliJ's shape, and the reason the chips and the actions live *inside* it.
         let field = InputTypography::body(
             Input::new(text)
                 .flat()
@@ -202,24 +169,12 @@ impl Component for Composer {
                 )
                 .multiline(true)
                 .max_height(ceiling(*self.pane_height.read(), expanded()))
-                // **Expanded is a size, not a bigger ceiling.** Raising only the cap leaves an
-                // empty box exactly as short as it was, which is what made the toggle look
-                // broken: the floor is what makes the press do something with nothing typed.
                 .maybe(expanded(), |input| {
                     input.min_height(ceiling(*self.pane_height.read(), true))
                 })
                 .width(Size::fill())
                 .placeholder("Ask about your data…")
-                // **Bound two-way**, so an `@`-completion is an edit at a position: the token
-                // under the caret is what narrows the list, the token's span is what an accept
-                // replaces, and the caret lands after the name. Without it the completion can
-                // only be the tail of the buffer, which is wrong the moment a mention is typed
-                // mid-sentence.
                 .caret(caret)
-                // **The completion list claims three keys before the field sees them**, because a
-                // focused `Input` owns the keyboard (AGENTS.md §3) and `on_submit` would
-                // otherwise send the message the Enter was meant to complete. Everything the list
-                // does not take goes to the field's own rule rather than a second copy of it.
                 .on_pre_key_down({
                     let offered = offered.clone();
                     move |e: Event<KeyboardEventData>| match mentions.claim(&e, &offered) {
@@ -238,8 +193,6 @@ impl Component for Composer {
         )
         .width(Size::fill());
 
-        // The bar: the field, then the chips it will send with, then its own actions — one box
-        // with one border, which is what the focus ring belongs around.
         let bar = rect()
             .width(Size::fill())
             .vertical()
@@ -249,7 +202,6 @@ impl Component for Composer {
                 true => roles.get(Role::BorderFocused),
                 false => theme.card_border_fill,
             }))
-            // A painted border is not laid out, so the inset carries it (AGENTS.md §3).
             .padding(Gaps::new_all(SP_3))
             .spacing(SP_3)
             .child(
@@ -259,8 +211,6 @@ impl Component for Composer {
                     .content(Content::Flex)
                     .spacing(SP_2)
                     .child(rect().width(Size::flex(1.)).child(field))
-                    // Top-right of the bar, beside the first line rather than centred on a block
-                    // that may be twenty lines tall.
                     .child(
                         ToolButton::new(
                             match expanded() {
@@ -291,17 +241,6 @@ impl Component for Composer {
                     .child(match running {
                         true => ToolButton::new(IconName::Stop, "Stop")
                             .color(roles.get(Role::Error))
-                            // **A stopped turn is stored too.** `stop` settles the reply marked
-                            // cancelled, and a conversation whose last turn was stopped is
-                            // exactly as much the user's record as one that answered —
-                            // cancelled is never failed, on disk as much as on screen.
-                            //
-                            // The press only records which conversation to write; the effect
-                            // above performs it. Neither `spawn_forever` nor `spawn` works here:
-                            // the first is root-scoped and would write this subtree's state after
-                            // an await, and the second binds to *this button*, which `stop`
-                            // unmounts by flipping the composer back to Send — cancelling the
-                            // write before its first poll.
                             .on_press(move |_| {
                                 chats.write().stop(id);
                                 stopping.set(Some(id));
@@ -313,9 +252,6 @@ impl Component for Composer {
                     }),
             );
 
-        // The completion list sits **above** the bar, opening upward: the composer is at the
-        // bottom of the pane, so a list under it would be off screen. It draws nothing at all
-        // unless a mention is being typed and something matches it.
         let bar = Attached::new(bar)
             .top()
             .align_start()
@@ -332,15 +268,12 @@ impl Component for Composer {
             .padding(PAD)
             .spacing(ROW_GAP)
             .child(bar)
-            // What is missing, named — never a dead send button.
             .maybe_child(refusal.as_ref().map(|why| {
                 Prose::new(why.note())
                     .color(theme.meta_color)
                     .width(Size::fill())
                     .wrap()
             }))
-            // Below the bar, not inside it: what the conversation is talking to is a property of
-            // the conversation, where everything in the bar is a property of this message.
             .child(Footer {
                 id,
                 pick,
@@ -530,15 +463,9 @@ impl Component for ProviderPicker {
                                     return;
                                 }
                                 pick.provider = Some(kind);
-                                // The model belongs to a provider, so one that the new provider
-                                // does not serve is not a pick any more — and a rung is a
-                                // property of the model, so it goes with it. Both are dropped
-                                // rather than left to be refused at the next send.
                                 if !serves.iter().any(|name| name == &pick.model) {
                                     pick.model = String::new();
                                 }
-                                // The rung is re-asked against the new ladder even when the
-                                // name survives, because the ladder is the pair.
                                 pick.effort = keep_rung(kind, &pick.model, pick.effort);
                             });
                             open.set(false);
@@ -588,26 +515,7 @@ impl Component for ModelPicker {
         let chosen = self.pick.model.clone();
         let picked = self.pick.provider;
 
-        // **Opening the picker refreshes a stale list, in the background** — AS-06's rule reached
-        // through AS-06's own funnel, guard included, so this surface and Settings ▸ AI ▸ Chat ask
-        // the same question the same way. The cached list renders immediately and stays usable
-        // throughout, and only the **picked** provider is asked: the others are not on screen.
-        //
-        // **Above the no-provider arm, and unconditional**, because a hook must run the same
-        // number of times on every render of a scope (AGENTS.md §3). Registered below an early
-        // return it was skipped while the conversation had no provider, so picking the first one
-        // grew the hook count and Freya panicked on the next render — the "you cannot call them
-        // conditionally" arm. The provider is a *value* the effect reads, never a reason not to
-        // register it.
         let listings = app.listings;
-        // **Through `use_reactive`, not captured.** `use_side_effect` builds its closure once
-        // (`use_hook`), and props carry no write-through — so a plainly captured `picked` and
-        // `ai` are the *first* render's, for the life of the scope. This component is un-keyed in
-        // the footer, so a repick never remounts it: the effect would go on asking about the
-        // provider the pane was opened with, or early-return forever on the `None` a fresh setup
-        // starts from, which is exactly the moment the list is wanted. A key or URL edited in
-        // Settings after mount would likewise never reach `Ask::from_config`. Settings ▸ AI ▸ Chat
-        // reads the same pair the same way.
         let live_pick = use_reactive(&picked);
         let live_ai = use_reactive(&self.ai);
         use_side_effect(move || {
@@ -617,8 +525,6 @@ impl Component for ModelPicker {
             if !*open.read() {
                 return;
             }
-            // Subscribed on purpose: the settled write lands here, and `needs_asking` then stops
-            // it going round again.
             let _ = listings.read();
             if needs_asking(listings, probes, kind) {
                 refresh(listings, probes, Ask::from_config(&live_ai.read(), kind));
@@ -626,8 +532,6 @@ impl Component for ModelPicker {
         });
 
         let Some(kind) = picked else {
-            // No provider, no models to offer: the provider control beside this one is where the
-            // fix is, so this says what it has rather than opening on nothing.
             return picker_trigger(
                 "Pick a provider first",
                 "no model".to_string(),
@@ -646,8 +550,6 @@ impl Component for ModelPicker {
             |menu, name| {
                 let name = name.clone();
                 let current = name == chosen;
-                // A model that reasons says so, because that is the one property of a name that
-                // changes which controls appear beside it.
                 let reasons = !efforts(kind, &name).is_empty();
                 menu.child(
                     MenuButton::new()
@@ -656,8 +558,6 @@ impl Component for ModelPicker {
                             move |_| {
                                 let name = name.clone();
                                 chats.write().repick(id, |pick| {
-                                    // A rung the new model does not offer is dropped, not kept
-                                    // out of sight.
                                     pick.effort = keep_rung(kind, &name, pick.effort);
                                     pick.model = name;
                                 });
@@ -773,9 +673,6 @@ impl Component for EffortPicker {
                     MenuButton::new()
                         .on_press(move |_| {
                             chats.write().repick(id, |pick| {
-                                // Pressing the rung already set clears it — "no preference" is a
-                                // real value (the model's own default) and otherwise there would
-                                // be no way back to it.
                                 pick.effort = match pick.effort {
                                     Some(set) if set == rung => None,
                                     _ => Some(rung),

@@ -69,9 +69,6 @@ impl Component for Cell {
         let mut hovered = use_state(|| false);
         let sel = self.sel;
         let role = self.role;
-        // Read the selection reactively so this cell re-renders on any change — even though it lives
-        // inside the memoized virtual scroller (whose builder never re-runs). Compute *this* cell's
-        // styling from its role.
         let selection = sel.sel.read();
         let ss = match role {
             CellRole::Data(r, c) => cell_sel_style(
@@ -102,7 +99,6 @@ impl Component for Cell {
             Meta::new(text).color(text_color).into()
         };
 
-        // 2px accent ring on whichever outer edges this cell sits on (invisible when all zero).
         let border = Border::new()
             .fill(self.sel_border)
             .alignment(BorderAlignment::Inner)
@@ -127,9 +123,6 @@ impl Component for Cell {
                 let on_open = self.on_open.clone();
                 let on_secondary = self.on_secondary.clone();
                 move |e: Event<PointerEventData>| {
-                    // Right-click → the copy menu (see the `on_secondary` field doc for
-                    // why it lives in this handler). Consumed so the press can't fall
-                    // through to the grid background's click-to-deselect.
                     if e.data().button() == Some(MouseButton::Right) {
                         if let Some(on_secondary) = &on_secondary {
                             e.stop_propagation();
@@ -140,7 +133,6 @@ impl Component for Cell {
                     if !e.data().is_primary() {
                         return;
                     }
-                    // Consume so the grid-background handler doesn't treat this as a click-to-deselect.
                     e.stop_propagation();
                     match role {
                         CellRole::Data(r, c) => sel.cell_down(r, c),
@@ -148,9 +140,6 @@ impl Component for Cell {
                         CellRole::Corner => sel.all(),
                         CellRole::None => {}
                     }
-                    // Double-click opens (nested cell value / whole row). Detected here — inside
-                    // the same handler as the single-click selection (à la the resize grip), so
-                    // the first press of the pair still selects and the second just opens.
                     if let Some(open) = &on_open {
                         if EventsCombos::pressed(e.global_location()).is_double() {
                             open.call(e);
@@ -161,7 +150,7 @@ impl Component for Cell {
             .on_pointer_enter(move |_| {
                 hovered.set(true);
                 if let CellRole::Data(r, c) = role {
-                    sel.cell_paint(r, c); // drag-paint (no-op unless a drag is active)
+                    sel.cell_paint(r, c);
                 }
             })
             .on_pointer_leave(move |_| hovered.set(false))
@@ -169,8 +158,6 @@ impl Component for Cell {
                 rect()
                     .width(Size::flex(1.))
                     .height(Size::fill())
-                    // Vertical centring only; the vertical padding lives in the row height so a single
-                    // line can't be clipped by the fixed row box.
                     .main_align(Alignment::Center)
                     .cross_align(self.cross.clone())
                     .padding(self.pad)

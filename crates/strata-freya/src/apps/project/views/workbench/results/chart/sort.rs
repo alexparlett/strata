@@ -53,8 +53,6 @@ fn order(axis: &Axis, series: &[ChartSeries], sort: ChartSort) -> Option<Vec<usi
     let mut order: Vec<usize> = (0..axis.labels.len()).collect();
     match sort {
         ChartSort::ResultOrder => return None,
-        // By X's true value where it has one (a numeric or temporal axis carries positions),
-        // else by the label — which for a categorical axis is the only value there is.
         ChartSort::ByX => match &axis.positions {
             Some(positions) => order.sort_by(|a, b| {
                 compare(
@@ -70,8 +68,6 @@ fn order(axis: &Axis, series: &[ChartSeries], sort: ChartSort) -> Option<Vec<usi
                     .cmp(&axis.labels.get(*b).map(String::as_str))
             }),
         },
-        // By the **first** series: with several plotted there is no one value to a category,
-        // and the first is the one the legend leads with.
         ChartSort::ByYDesc => {
             let values = series.first().map(|one| &one.values)?;
             order.sort_by(|a, b| {
@@ -246,7 +242,6 @@ mod tests {
         }]);
         assert_eq!(sorted(bins.clone(), ChartSort::ByYDesc), bins);
 
-        // A refusal carries no data at all, so there is nothing to reorder either.
         let refused = ChartData::Duplicates {
             x: "month".into(),
             series: "region".into(),

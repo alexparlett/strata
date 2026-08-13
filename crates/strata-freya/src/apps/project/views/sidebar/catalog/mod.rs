@@ -102,19 +102,11 @@ impl Component for Catalog {
         let theme = get_theme!(&self.theme, CatalogThemePreference, "catalog");
         let filter = self.filter.read().clone();
 
-        // Which entries are expanded to their columns, keyed `"{kind}::{name}"`, and which nested
-        // columns are open, keyed `"{owner}::{a.b}"`. Both pane-local: expansion is a way of
-        // looking, not project data.
         let open_entries = use_state(HashSet::<String>::new);
         let expanded_cols = use_state(HashSet::<String>::new);
 
-        // `ScrollView` takes no padding of its own, so the scroll body's inset lives on a wrapper
-        // inside it — which is also what keeps the scrollbar flush to the panel edge.
         let body = rect()
             .width(Size::fill())
-            // Floored, with the panel clipping the rest — see `PANE_BODY_MIN_W`. Rows ellipsize on
-            // their own, but the sections' empty states are prose and would wrap to one character
-            // per line without it (P5-06).
             .min_width(Size::px(PANE_BODY_MIN_W))
             .vertical()
             .padding(Gaps::new(SP_3, SP_3, SP_4, SP_3))
@@ -164,7 +156,6 @@ impl TablesSection {
 impl Component for TablesSection {
     fn render(&self) -> impl IntoElement {
         let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
-        // Names only, cloned out, so the store's read guard drops before any element is built.
         let names: Vec<String> = radio
             .read()
             .tables
@@ -173,13 +164,6 @@ impl Component for TablesSection {
             .filter(|n| matches(n, &self.filter))
             .collect();
 
-        // TABLES leads the pane, so it drops the inter-section gap the others carry — and it is
-        // the section that can gain a row, so it carries the New-table action (P4-11). VIEWS and
-        // QUERIES are made by saving a query, not by a form, so neither has one.
-        //
-        // **One press, one window** — the Configure window answers every way a table is made,
-        // including a memory table (IT-01), which is a third LOCATION in that form rather than a
-        // second surface reached through a menu here.
         let actions = use_catalog_actions();
         CatalogSection::new("TABLES", names.len(), self.theme.clone())
             .first()
@@ -290,8 +274,6 @@ impl Component for QueriesSection {
             .filter(|(_, n)| matches(n, &self.filter))
             .collect();
 
-        // The empty state is about the *section*, not the filter: with a filter typed, an empty
-        // result is a non-match, and "no saved queries yet" would be a lie.
         let empty_note = (queries.is_empty() && self.filter.is_empty()).then(|| {
             rect()
                 .padding(Gaps::new(SP_2, SP_3, SP_4, SP_3))

@@ -50,37 +50,19 @@ impl Component for Footer {
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
-        // The one channel this footer has to *watch*: a connection forgotten in the pane next
-        // door has to disable Save here, and nothing else in this window would notice.
         let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let rescan = use_consume::<CatalogRescan>();
         let catalog = use_consume::<Catalog>();
         let engine = use_consume::<EngineCtx>();
         let report = use_report();
-        // The project window's one statement fold, reachable here because this window was handed
-        // every store it writes through (`ConfigureLaunch`). A internal table is **created** by a
-        // statement, not registered from a def, so its Save folds the report exactly as a typed
-        // `CREATE TABLE` in the editor does — never a second `apply`, persist path or epoch bump.
         let to = use_settle();
         let platform = use_hook(Platform::get);
 
-        // Two busy states, and they differ in exactly one thing: whether the work is **this**
-        // window's. A registration belongs to the project window's scan driver and lands on the
-        // catalog row regardless, so Cancel stays live through it; a create is running here, and
-        // the fold that makes it durable is on the other side of this window's own task
-        // (`Status::Creating`).
         let status = ctx.status.read().clone();
         let registering = matches!(status, Status::Registering(_));
         let creating = status.holds_window();
         let busy = status.busy();
-        // The project window's driver **drops** a request raised while a pass is already in
-        // flight, and nothing retries it — so pressing Save then would leave the row `Loading`
-        // for good. The sidebar's ↻ answers this by disabling itself for the duration; so does
-        // this. Subscribes, so the button comes back by itself when the pass settles.
         let scanning = catalog.read().is_scanning();
-        // What the *draft* can answer, the two things only the catalog can (a name another def
-        // already owns, a connection this project no longer has), and last the one nobody can —
-        // see [`save_note`].
         let note = save_note(
             ctx.draft
                 .read()
@@ -94,12 +76,6 @@ impl Component for Footer {
         let cancel = {
             Button::new()
                 .height(Size::px(ACTION_HEIGHT))
-                // Available through a *registration*: that work is the project window's, and it
-                // answers on the catalog row whether this window is here to watch or not. Not
-                // through a **create**, which is this window's own — closing now drops the task
-                // before the fold, and `ddl::tables::create` publishes its spool by rename
-                // before its last await, so the data would be left with no def pointing at it.
-                // Esc is gated on the same state (`apps::configure`'s `Command::Cancel`).
                 .enabled(!creating)
                 .on_press(move |_: Event<PressEventData>| platform.close_current_window())
                 .child(Control::new("Cancel"))
@@ -133,9 +109,6 @@ impl Component for Footer {
                     .spacing(SP_4)
                     .padding(FOOTER_PADDING)
                     .background(win.background)
-                    // Why the button is off, rather than an unexplained dead control. A
-                    // registration failure is *not* shown here — it is a paragraph the engine
-                    // wrote, and it has its own block at the end of the body.
                     .child(
                         rect().width(Size::flex(1.)).maybe_child(
                             note.filter(|_| !busy).map(|why| {
@@ -259,8 +232,6 @@ fn save(
         .map(str::to_string);
     let name = def.name.clone();
 
-    // The write and the persist are one step, and the persist is checked. `upsert_table` puts
-    // the row back in `Reg::Loading`, which is already the state this window renders as busy.
     let landed = {
         let mut p = project.write_channel(ProjChan::Tables);
         if let Some(old) = &renamed_from {
@@ -269,14 +240,6 @@ fn save(
         p.upsert_table(def);
         persisted_defs(&p, report)
     };
-    // The store write above has already happened, so the row exists either way and **must** be
-    // registered either way: returning here would leave it in `Reg::Loading` with nothing left
-    // to answer it — a permanent spinner in the catalog. So the pass is asked for below whatever
-    // the persist said; what the failure changes is only what this window claims.
-    //
-    // `persisted_defs` has already logged the cause, in the project window where the user will look
-    // for it. Saying so here too would be the same failure twice; what this window owes them is
-    // not to claim the save happened, and not to close as though it had.
     if !landed {
         ctx.status.set(Status::Failed(
             "The table is registered, but the project file could not be written, so it will \
@@ -286,19 +249,11 @@ fn save(
     } else {
         ctx.status.set(Status::Registering(name.clone()));
     }
-    // **The window is now configuring what it just wrote.** Without this a second Save — after a
-    // registration failure, say — measures `renamed_from` against the name the window *opened*
-    // on, so the row the first Save created is never removed and the catalog keeps a phantom
-    // table under the intermediate name.
     {
         let mut target = ctx.target;
         target.set(ConfigureTarget::Edit(name.clone()));
     }
 
-    // A rename leaves the engine still holding the old name, which the scan pass cannot know
-    // about — it registers the defs, and this one no longer has a def. Dropping it is the one
-    // engine call this window makes. Views written against the old name break, which is the
-    // user's edit: their rows fail their own re-create and say so.
     if let Some(old) = &renamed_from {
         engine.deregister(old);
         log_event(
@@ -309,10 +264,6 @@ fn save(
     }
 
     match renamed_from {
-        // **A rename is a whole-catalog pass, not a one-table one.** `views_to_refresh` can only
-        // find views whose deps name the table it is given, and a view that read the *old* name
-        // names neither — so scoping to the new name leaves those views `Ready`, still answering
-        // from the provider this rename just deregistered.
         Some(_) => refresh_catalog(rescan),
         None => refresh_table(rescan, name),
     }
@@ -326,21 +277,16 @@ fn save(
 /// in the log. Registering a def here instead would be a second way to make a table, and the
 /// spool that gives it its data has no def to be written from.
 ///
-/// **The window is held open until the fold lands** (`Status::Creating`), and that is the whole
-/// reason this state exists beside `Registering`. The task is spawned here, and everything that
-/// makes the create durable — the def, the catalog row, the epoch, the log — runs *after* its
-/// await. `ddl::tables::create` publishes its spool by **rename** before its own last await
-/// (`register_external`), so a window closed mid-create drops this task at a point where the data
-/// directory is already under its real name: no def would ever point at it, and `tidy_strata_dir`
-/// sweeps only `.tmp-…`, so it would be permanent litter. Cancel and Esc are both refused while
-/// this state holds; the moment the fold has landed it becomes `Registering`, and
-/// `use_watch_registration` closes the window on the row the fold just made `Ready`.
+/// **The window is held open until the fold lands** (`Status::Creating`), which is why that state
+/// exists beside `Registering`. Everything that makes the create durable runs *after* this task's
+/// await, while `ddl::tables::create` publishes its spool by **rename** before its own last await —
+/// so a window closed mid-create would leave a data directory under its real name that no def
+/// points at, and `tidy_strata_dir` sweeps only `.tmp-…`. Cancel and Esc are both refused while
+/// this state holds.
 ///
-/// The engine's own abort is not the gap: dropping `Engine::run`'s future runs `DispatchGuard`'s
-/// drop, which aborts the detached task. But an abort is delivered at the next **await**, and
-/// `create` has none left after `register_external` — so a create interrupted late finishes on
-/// the engine's runtime with nobody left to receive its report. Holding the window is what
-/// removes the window in which that can happen.
+/// The engine's own abort is not the gap: an abort is delivered at the next **await**, and `create`
+/// has none left after `register_external`, so a create interrupted late finishes on the engine's
+/// runtime with nobody left to receive its report.
 fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
     let Some(sql) = ctx.draft.peek().create_statement() else {
         return;
@@ -351,16 +297,8 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
         let ws = WsId(Uuid::new_v4().as_u128());
         let tag = RunTag(Uuid::new_v4().as_u128());
         match engine.run(ws, tag, sql, INTERNAL_PAGE_SIZE).await {
-            // **The fold's answer decides whether this window may close.** The table is created
-            // and registered either way — the statement already ran — but a def that never
-            // reached `project.json` is one the next open loses, and closing on `Ready` would
-            // show the user a clean success for it. Same sentence and same refusal to close as
-            // the external path above; `persisted_defs` has already logged the cause in the
-            // project window, so this window only owes them not to claim the save happened.
             Ok(RunOutcome::Statement(report)) => {
                 if settle(to, &engine, &report) {
-                    // The fold has landed, so the work is no longer this window's to protect —
-                    // and the row it named is already `Ready`, which is what closes the window.
                     ctx.status.set(Status::Registering(name));
                 } else {
                     ctx.status.set(Status::Failed(
@@ -370,9 +308,6 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
                     ));
                 }
             }
-            // Unreachable while the router classifies `CREATE TABLE` as a statement, and said
-            // rather than swallowed — but the minted workspace is retired either way, since no
-            // tab owns it and nothing else would ever release a snapshot a query arm took.
             Ok(RunOutcome::Rows(..)) => {
                 engine.cleanup_ws(ws);
                 ctx.status
@@ -396,8 +331,6 @@ mod tests {
 
     #[test]
     fn a_re_scan_is_explained_once_it_is_the_only_thing_left() {
-        // The regression this guards: Save was disabled while scanning and the footer said
-        // nothing, because the two were computed separately.
         let note = save_note(None, true).expect("a scanning footer says why");
         assert!(note.contains("re-scanned"), "{note}");
     }

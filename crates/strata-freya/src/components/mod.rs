@@ -28,6 +28,3 @@ pub mod toolbar;
 pub mod type_palette;
 pub mod typography;
 pub mod window;
-// NB: the bespoke `icon_button` is retired — icon buttons are now Freya's `Button` variants
-// (`.flat()` / `.outline()`) wrapping an `Icon`. The old `icon_button.rs` is an orphan (unreferenced,
-// not compiled) and can be deleted.

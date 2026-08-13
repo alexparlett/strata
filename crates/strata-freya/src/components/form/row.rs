@@ -116,27 +116,12 @@ impl ChildrenExt for Row {
 impl Component for Row {
     fn render(&self) -> impl IntoElement {
         let theme = form_theme();
-        // Set once on the form (see the module doc); a bare row outside one is set in the
-        // register the app's window forms use.
         let variant = use_try_consume::<Variant>().unwrap_or_default();
 
-        // Being revealed: the ask (window-lived), the frame to scroll within (page-lived), our own
-        // measured box, and the flash. All four hooks run whether or not this row has an anchor —
-        // hook order is positional, so a row cannot pay for them conditionally.
         let anchor = self.anchor;
         let reveal = use_try_consume::<Reveal>();
         let scroll = use_try_consume::<RevealScroll>();
         let mut area = use_state(|| None::<Area>);
-        // Dependent on the tint, so a theme change while this row is mounted re-arms the flash on
-        // the new accent rather than freezing the one captured at mount.
-        //
-        // Two things that look like detail and are not. `OnChange::Finish`, because the default is
-        // `Reset` — which sets `has_run_yet` *and* puts the value back to the animation's **origin**,
-        // i.e. the tint, so switching theme on the Appearance pane left every row on it wearing a
-        // permanent accent wash. Finishing lands on the destination instead, which is the invisible
-        // end of the fade. And the destination is the tint at **zero alpha**, not `TRANSPARENT`:
-        // `AnimColor` interpolates r, g, b and a independently, so fading to (0,0,0,0) drags the
-        // wash's hue toward black on the way out instead of fading the accent out.
         let flash = use_animation_with_dependencies(&theme.reveal_background, |conf, tint| {
             conf.on_change(OnChange::Finish);
             AnimColor::new(*tint, tint.with_a(0))
@@ -151,10 +136,6 @@ impl Component for Row {
             if !reveal.wanted(anchor) {
                 return;
             }
-            // Our area lands a frame after the page mounts, so the first pass through here only
-            // subscribes to it. Reading it *after* the ask is what keeps the later passes cheap:
-            // torin re-emits `Sized` for every row on scroll, and by then the ask is cleared, so
-            // this returns above without taking a subscription on the area at all.
             let Some(area) = *area.read() else {
                 return;
             };
@@ -165,25 +146,11 @@ impl Component for Row {
             reveal.taken();
         });
 
-        // Transparent until the flash has actually run: `AnimColor` sits at its origin — the tint —
-        // before it is started, so an unflashed row would wear the wash permanently.
         let wash = match *flash.has_run_yet().read() {
             true => flash.get().value(),
             false => Color::TRANSPARENT,
         };
 
-        // The label block. In the fields register the explanation hangs off a ⓘ beside the
-        // label; in preferences it is a line of subtext under it, wrapped — those are full
-        // sentences and the pane is narrow, so `Caption`'s default single-line cap would eat
-        // the end of half of them.
-        //
-        // A preferences **title** wraps for the same reason: it is a sentence-case phrase and
-        // some of them are whole clauses ("Confirm before closing a tab or window with a
-        // running query"), which at the window's minimum width would otherwise be clipped
-        // mid-word by the single-line default. A fields eyebrow stays capped — it is a short
-        // uppercase label, and one that grew long would be the wrong label.
-        // The marker reads as a small mono note beside the label in either register — quieter
-        // than the label it qualifies, because it describes the field rather than naming it.
         let required = self
             .required
             .then(|| Meta::new("REQUIRED").color(theme.required_color));
@@ -238,9 +205,6 @@ impl Component for Row {
         };
 
         let row = if self.trailing {
-            // Label block and control side by side. `Content::Flex` is what makes the label's
-            // `flex(1.)` divide the row rather than take its natural width — without it the
-            // control is pushed off the surface.
             let mut row = rect()
                 .width(Size::fill())
                 .horizontal()
@@ -264,8 +228,6 @@ impl Component for Row {
             row
         };
 
-        // The flash paints on the row itself rather than a wrapper, so it is the row's own box that
-        // lights up and nothing about the form's rhythm changes. An anchorless row measures nothing.
         row.background(wash)
             .corner_radius(FLASH_RADIUS)
             .maybe(anchor.is_some(), |el| {
@@ -293,11 +255,6 @@ impl Note {
 impl Component for Note {
     fn render(&self) -> impl IntoElement {
         let theme = form_theme();
-        // The box comes off the form's own theme, never a direct role read. Reaching for
-        // `surface.background` there looked equivalent and is not: it is a *lower* tone than the
-        // window body, so the note read as a hole punched in the surface while the panes beside
-        // it read as raised. A component's dress is its own theme's (AGENTS.md §3), and direct
-        // reads are only for the semantic ramp — which a note is not.
         rect()
             .width(Size::fill())
             .padding((SP_4, SP_4))

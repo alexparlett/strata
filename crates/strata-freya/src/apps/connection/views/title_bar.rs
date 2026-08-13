@@ -23,15 +23,10 @@ pub struct TitleBar;
 impl Component for TitleBar {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
-        // The subtitle's tone. Through the roles because the window theme has no text field —
-        // it dresses chrome (surfaces, rules, the mark), and a recessive line of prose is the
-        // semantic ramp's, exactly as the Configure window's status block reads it.
         let muted = use_roles().get(Role::TextMuted);
         let ctx = use_consume::<ConnectionCtx>();
         let target = ctx.target.read();
 
-        // The window's mark: the same glyph the Connections pane and the activity rail use, in
-        // an accent-tinted tile.
         let mark = rect()
             .width(Size::px(COMPACT_BUTTON))
             .height(Size::px(COMPACT_BUTTON))
@@ -44,8 +39,6 @@ impl Component for TitleBar {
                     .color(win.icon_color),
             );
 
-        // Title over the connection it names — the canvas's two-line block, and one line on a
-        // new connection, whose URL is still being typed.
         let heading = rect()
             .vertical()
             .spacing(SP_1)

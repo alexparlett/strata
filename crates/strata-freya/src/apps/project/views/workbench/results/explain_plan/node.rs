@@ -83,8 +83,6 @@ pub fn plan_row(
                 .width(Size::px(RAIL_W))
                 .height(Size::fill_minimum())
                 .maybe(*on, |el| {
-                    // Centres the 1px connector in the rail column: an arithmetic inset, not a
-                    // gap, so it is off the spacing scale like every alignment nudge.
                     el.padding(Gaps::new(0., RAIL_W / 2., 0., RAIL_W / 2. - HAIRLINE))
                         .child(
                             rect()
@@ -125,9 +123,6 @@ impl KeyExt for PlanNodeCard {
 }
 
 impl Component for PlanNodeCard {
-    // One card carrying three independent disclosures (detail, metrics, zero-valued metrics)
-    // over a metrics table. The three `use_state`s are the component's identity; the rest is
-    // one tree whose branches are those flags.
     #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let mut detail_open = use_state(|| false);
@@ -140,7 +135,6 @@ impl Component for PlanNodeCard {
         let self_ms = self.node.self_ms.unwrap_or(0.0);
         let hot = show_metrics && self_ms >= self.max_ms * 0.6;
         let rows_label = self.node.rows.map(fmt_int);
-        // Bytes headline is a source concept only.
         let bytes_label = (self.node.kind == PlanKind::Source)
             .then(|| {
                 self.node
@@ -154,7 +148,6 @@ impl Component for PlanNodeCard {
         let metric_total = self.node.metrics.len();
         let zero_count = self.node.metrics.iter().filter(|m| m.zero).count();
 
-        // Parsed detail; collapsed shows the first two parts (the design rule).
         let all_parts = detail_parts(&self.node.detail);
         let detail_long = all_parts.len() > 2 || self.node.detail.chars().count() > 110;
         let shown: &[DetailPart] = if detail_long && !*detail_open.read() {
@@ -164,7 +157,6 @@ impl Component for PlanNodeCard {
         };
         let key_w = key_col_width(&all_parts);
 
-        // ── head: kind square · mono name · HOTSPOT ───────────────────────────────────────
         let head = rect()
             .horizontal()
             .cross_align(Alignment::Center)
@@ -179,7 +171,6 @@ impl Component for PlanNodeCard {
             .child(MonoValue::new(self.node.name.clone()).color(kind))
             .maybe(hot, |el| el.child(Badge::tag("HOTSPOT", t.hot_color)));
 
-        // ── parsed detail: a key/value grid; bare fragments span both columns ─────────────
         let detail_grid = (!shown.is_empty()).then(|| {
             let rows = shown.iter().map(|part| {
                 let value = Path::new(part.val.clone()).color(t.color).wrap();
@@ -220,7 +211,6 @@ impl Component for PlanNodeCard {
             }
         });
 
-        // ── tier 1: rows · self-time · bytes · the time-share bar ─────────────────────────
         let tier1 = show_metrics.then(|| {
             let pct = bar_pct(self_ms, self.max_ms);
             let stats = rect()
@@ -254,7 +244,6 @@ impl Component for PlanNodeCard {
             let bar = rect()
                 .width(Size::fill())
                 .height(Size::px(BAR_H))
-                // A pill, so half its extent rather than a scale step (`metrics::pill`).
                 .corner_radius(pill(BAR_H))
                 .background(t.border_fill)
                 .overflow(Overflow::Clip)
@@ -273,7 +262,6 @@ impl Component for PlanNodeCard {
                 .child(bar)
         });
 
-        // ── tier 2: non-zero insight callouts, tone-coloured pills ────────────────────────
         let tier2 = (show_metrics && !ins.is_empty()).then(|| {
             let pills = ins.iter().map(|i| {
                 Badge::value(i.text.clone(), self.palette.tone(i.tone))
@@ -289,7 +277,6 @@ impl Component for PlanNodeCard {
                 .children(pills.collect::<Vec<_>>())
         });
 
-        // ── tier 3: the full metrics box — grouped, collapsed, zeros hidden ───────────────
         let tier3 = show_metrics.then(|| {
             let open = *metrics_open.read();
             let toggle = PlanLink {
@@ -333,7 +320,6 @@ impl Component for PlanNodeCard {
                                 rect()
                                     .width(Size::px(STRIPE_W))
                                     .height(Size::px(STRIPE_H))
-                                    // A pill on its short axis (`metrics::pill`).
                                     .corner_radius(pill(STRIPE_W))
                                     .background(self.palette.group(group)),
                             )
@@ -395,8 +381,6 @@ impl Component for PlanNodeCard {
                 .maybe_child(boxed)
         });
 
-        // The card: 1px hairline + clipped kind-coloured 3px accent strip (Freya's `Border`
-        // is all-sides — the strip child is the border-left idiom), then the content column.
         rect()
             .width(Size::fill())
             .corner_radius(R_2)
@@ -486,7 +470,6 @@ mod tests {
             part("", "TableScan: t", false),
         ];
         assert_eq!(key_col_width(&parts), 9.0 * DETAIL_CHAR_W);
-        // No keyed part → no key column.
         assert_eq!(key_col_width(&[part("", "bare", false)]), 0.0);
     }
 }

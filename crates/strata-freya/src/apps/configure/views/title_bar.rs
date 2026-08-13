@@ -24,7 +24,6 @@ impl Component for TitleBar {
         let ctx = use_consume::<ConfigureCtx>();
         let title = ctx.target.read().title();
 
-        // The window's mark: the canvas's layered-strata glyph in an accent-tinted tile.
         let mark = rect()
             .width(Size::px(COMPACT_BUTTON))
             .height(Size::px(COMPACT_BUTTON))
@@ -37,8 +36,6 @@ impl Component for TitleBar {
                     .color(win.icon_color),
             );
 
-        // One line, not the export bar's two: the canvas gives this window a title and no
-        // subtitle, and the name it would carry is the title.
         rect()
             .width(Size::fill())
             .height(Size::px(TITLE_BAR_HEIGHT))

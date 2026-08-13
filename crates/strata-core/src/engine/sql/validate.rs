@@ -4,26 +4,18 @@
 //!
 //! 1. **Lexical** — the tokenizer's own faults (unterminated string / quoted ident),
 //!    unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`).
-//! 2. **Policy** — each statement is parsed with DataFusion's own `DFParser` (via
-//!    [`SessionState::sql_to_statement`]) and put through the statement router,
-//!    [`classify`], as [`Capability::Editor`]. Queries and introspection run; the
-//!    statements the editor implements itself ([`Verdict::Intercept`] — typed table
-//!    and view DDL, internal tables, `COPY`, `SET`) draw no squiggle and go on to the
-//!    tiers below; the short list still refused ([`Verdict::Refuse`] —
-//!    `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`, unknown kinds) gets a policy
-//!    diagnostic pointing at the right surface instead of a confusing engine error.
-//! 3. **Names** — the native [`resolve`](crate::engine::sql::resolve)r walks the
-//!    parsed AST and reports **every** unknown table/column with a span (the planner
-//!    below is fail-fast: one name per statement), staying quiet where a mid-edit
-//!    scope is unknowable. When it finds name faults, the dry-plan is skipped.
-//! 4. **Semantic** — the allowed statements are **dry-planned** against the live
-//!    `SessionContext` ([`SessionState::statement_to_plan`], then
-//!    [`SessionState::optimize`] for the analyzer's type coercion): unknown
-//!    functions, bad casts, arity/coercion faults and name semantics the resolver
-//!    skips (ambiguity, exact case) surface as the *same* errors a Run would hit —
-//!    zero drift, nothing executes and no snapshot materializes. DF 54 attaches
-//!    spanned [`Diagnostic`]s to resolution errors (the engine enables
-//!    `collect_spans`), which map straight onto squiggles.
+//! 2. **Policy** — each statement is parsed with DataFusion's own `DFParser` and put through
+//!    [`classify`] as [`Capability::Editor`]. Queries, introspection and the statements the editor
+//!    implements itself draw no squiggle and go on to the tiers below; the short list still
+//!    refused gets a policy diagnostic pointing at the right surface.
+//! 3. **Names** — the native [`resolve`](crate::engine::sql::resolve)r walks the parsed AST and
+//!    reports **every** unknown table/column with a span (the planner below is fail-fast: one name
+//!    per statement), staying quiet where a mid-edit scope is unknowable. Name faults skip the
+//!    dry-plan.
+//! 4. **Semantic** — the allowed statements are **dry-planned** against the live `SessionContext`,
+//!    then optimized for the analyzer's type coercion, so unknown functions, bad casts and the
+//!    name semantics the resolver skips surface as the *same* errors a Run would hit. Nothing
+//!    executes and no snapshot materializes.
 //!
 //! Statements are split on top-level `;` and validated independently, so one broken
 //! statement never hides the others' diagnostics.
@@ -106,17 +98,11 @@ pub async fn validate(
         return out;
     }
 
-    // The dialect first, because the *tokenizer* takes it too: reading it after lexing is
-    // how the two came apart in the first place (WJ-04). Off `state_ref`, not `ctx.state()` —
-    // that clones the whole `SessionState`, and the tokenizer-error arm below returns without
-    // ever needing one (an unterminated string is a constant mid-edit state, and this runs per
-    // keystroke). The dialect itself is a `Copy` enum, so nothing outlives the guard.
     let dialect = ctx.state_ref().read().config_options().sql_parser.dialect;
 
     let (toks, lex_err) = lex(sql, dialect.as_ref());
     if let Some(e) = lex_err {
         out.push(diag(Severity::Error, e.message, e.span, sql));
-        // A tokenizer failure means splitting/planning would misread the text.
         return out;
     }
 
@@ -131,18 +117,11 @@ pub async fn validate(
         let stmt = match state.sql_to_statement(slice, &dialect) {
             Ok(stmt) => stmt,
             Err(err) => {
-                // A trailing statement that fails at end-of-input is a valid *prefix*
-                // — the user is mid-thought, not mistaken. Stay quiet (Run still
-                // rejects it); an incomplete statement *followed by* another one is a
-                // real fault and keeps its error. Name checks below run either way.
                 if idx == last && is_incomplete(&err, slice, &stmt_range, &toks) {
                     check_from_targets(ctx, &toks, &stmt_range, sql, &mut out);
                     continue;
                 }
                 let mut d = df_error_diag(&err, sql, slice, &stmt_range, &toks);
-                // When the parser choked on a token that reads as a keyword typo, the
-                // hint is the better wording of the same fault — one diagnostic, not
-                // an error and a warning stacked on the same span.
                 if let Some((_, hint)) = hints
                     .iter()
                     .find(|(span, _)| d.span.as_ref().is_some_and(|s| overlaps(s, span)))
@@ -150,10 +129,6 @@ pub async fn validate(
                     d.message = hint.clone();
                 }
                 out.push(d);
-                // The statement didn't parse, so the planner never resolved names —
-                // best-effort check the FROM/JOIN targets against the catalog so a
-                // broken keyword doesn't hide an unknown table. (When the parse
-                // succeeds, the planner is the authority and this never runs.)
                 check_from_targets(ctx, &toks, &stmt_range, sql, &mut out);
                 continue;
             }
@@ -168,39 +143,18 @@ pub async fn validate(
                 ));
                 continue;
             }
-            // An intercepted statement is one the editor *runs*, through an engine
-            // method — so no squiggle, and it falls through to the same name and
-            // semantic tiers a query gets. Planning a DDL statement builds its node
-            // without executing it (execution lives in `execute_logical_plan`), so
-            // typed DDL earns its name-resolution diagnostics for free.
             Verdict::Intercept(_) | Verdict::Query => {}
         }
-        // The native name resolver first: every unknown table/column in the
-        // statement, not just the one the planner would fail-fast on. When it
-        // finds name faults the dry-plan is skipped — the planner would stop at
-        // the same first name, and types are meaningless against unknown columns
-        // (they surface on the next pass, once the names are fixed).
         let resolution = resolve(ctx, &stmt, slice, stmt_range.start, sql).await;
         if !resolution.diags.is_empty() {
             out.extend(resolution.diags);
             continue;
         }
         let planned = match state.statement_to_plan(stmt).await {
-            // The analyzer pass (type coercion, subquery checks) only runs in
-            // `optimize` — it's what catches statically-bad casts and expressions.
             Ok(plan) => state.optimize(&plan).map(|_| ()),
             Err(err) => Err(err),
         };
         if let Err(err) = planned {
-            // The resolver found nothing wrong. If it also had *full* knowledge of
-            // every scope, a planner field error is engine truth the walk skipped
-            // (ambiguity, exact-case semantics) and surfaces. But where the walk
-            // went quiet — a FROM-less draft, a table function, an underivable
-            // projection — "column not found" is premature, not wrong (`SELECT
-            // name, tags` mid-composition resolves against an empty schema): the
-            // same valid-prefix stance as the incomplete trailing statement above.
-            // Everything else (unknown functions, bad casts) still surfaces, and a
-            // Run reports the real engine error in the results.
             let premature = is_unresolved_column(&err) && !resolution.complete;
             if !premature {
                 out.push(df_error_diag(&err, sql, slice, &stmt_range, &toks));
@@ -208,9 +162,6 @@ pub async fn validate(
         }
     }
 
-    // A hint standing on its own becomes a warning; one overlapping any error is
-    // redundant (the parse arm already took its wording, or the engine's message —
-    // e.g. an unknown-column error on the same token — says it better).
     for (span, hint) in hints {
         let covered = out
             .iter()
@@ -263,8 +214,6 @@ fn is_incomplete(err: &DataFusionError, slice: &str, stmt: &Range<usize>, toks: 
     msg.contains("found: EOF")
 }
 
-// ---- statement split -------------------------------------------------------
-
 /// Byte ranges of the token-bearing statements in `sql`, split on top-level `;`.
 /// Token-level, so `;` inside strings/comments never splits, and whitespace- or
 /// comment-only segments (no tokens) are dropped rather than "validated".
@@ -287,8 +236,6 @@ fn trim_range(sql: &str, range: Range<usize>) -> Option<Range<usize>> {
     let end = start + trimmed.trim_end().len();
     (start < end).then_some(start..end)
 }
-
-// ---- the statement router --------------------------------------------------
 
 /// Which surface is asking — the router's second axis (ED-01).
 ///
@@ -390,13 +337,6 @@ pub enum Blocked {
     /// Every other DDL/DML form.
     Unsupported,
 
-    // ---- what the editor still refuses (ED-01) ----
-    // `CreateDatabase` and `Unsupported` above are the rest of that list.
-    // Some are a pure function of the parsed statement and are produced by
-    // `classify`; the rest need context the bare statement lacks (an INSERT
-    // target's origin, a SET key's class) and are produced at dispatch. Either
-    // way the wording lives here, so a refusal reads the same wherever it is
-    // decided.
     /// `INSERT` into an external table or a view — only internal tables take writes.
     InsertExternal,
     /// An `INSERT` that replaces rows rather than appending — `INSERT OVERWRITE` (refused
@@ -487,27 +427,12 @@ impl Blocked {
 pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict {
     let (editor, agent) = classify_form(stmt);
     match cap {
-        // Reserved names, read and write: a `__snap_` identifier anywhere in a
-        // statement the editor would run itself is refused before it can collide with
-        // a live snapshot registration — which the provider answers "already exists"
-        // to, so the collision costs a *Run*, on a name the same prefix hides from
-        // every catalog reader.
-        //
-        // **Reads included, which means plain queries too.** A `SELECT * FROM __snap_3`
-        // classifies as an ordinary query, and left to run it hands back another tab's
-        // retained result carrying `__strata_ord` as an ordinary column — which Export
-        // then writes into the user's file, around the very fence that keeps the
-        // ordinal out of a typed `COPY`'s output. One namespace, one answer, whatever
-        // the statement's form.
         Capability::Editor => match editor {
             Verdict::Intercept(_) | Verdict::Query if names_reserved(stmt) => {
                 Verdict::Refuse(Blocked::ReservedName)
             }
             verdict => verdict,
         },
-        // The agent's own refusals come first and keep their wording — it already
-        // refuses every intercepted form, and a reserved name is not why. What is left
-        // is the read, which leaks the same ordinal into a tool result.
         Capability::Agent => match agent {
             Some(blocked) => Verdict::Refuse(blocked),
             None if names_reserved(stmt) => Verdict::Refuse(Blocked::ReservedName),
@@ -526,7 +451,6 @@ pub fn classify(stmt: &DFStatement, cap: Capability) -> Verdict {
 /// staying in step. The agent never intercepts, and the type says so.
 fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
     let s = match stmt {
-        // Typed registration is the second gesture into Table Config's own funnel.
         DFStatement::CreateExternalTable(_) => {
             return intercept(StmtKind::CreateExternalTable, Blocked::CreateExternalTable)
         }
@@ -536,7 +460,6 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
         DFStatement::Statement(s) => s.as_ref(),
     };
     match s {
-        // Runnable: queries + introspection.
         SqlStatement::Query(_)
         | SqlStatement::Explain { .. }
         | SqlStatement::ExplainTable { .. }
@@ -547,15 +470,6 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
         | SqlStatement::ShowVariables { .. }
         | SqlStatement::ShowDatabases { .. }
         | SqlStatement::ShowSchemas { .. } => runnable(),
-        // `EXECUTE` rides the snapshot pipeline whole — safe because `PREPARE` fenced
-        // the inner plan. The agent surface cannot `PREPARE`, so `EXECUTE` is nothing
-        // it can name, and it keeps the wildcard answer it shipped with.
-        //
-        // The one `Verdict::Query` whose plan is not a plain query: it is a
-        // `LogicalPlan::Statement`, which the read path's all-false triple refuses. That
-        // widening is [`read_policy`]'s, per dispatch, because it is only sound for a
-        // statement this router judged. (`EXECUTE IMMEDIATE` is not a hole: DataFusion
-        // answers `not_impl` before any string is planned.)
         SqlStatement::Execute { .. } => (Verdict::Query, Some(Blocked::Unsupported)),
         SqlStatement::CreateView(_) => intercept(StmtKind::CreateView, Blocked::CreateView),
         SqlStatement::Drop { object_type, .. } => match object_type {
@@ -563,9 +477,6 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
             ObjectType::Table => intercept(StmtKind::DropTable, Blocked::Drop),
             _ => refuse(Blocked::Drop),
         },
-        // CTAS and a bare column list are different engine methods — one spools a
-        // query, the other writes an empty schema-carrying file — so they are named
-        // apart here rather than re-derived at dispatch.
         SqlStatement::CreateTable(create) if create.query.is_some() => {
             intercept(StmtKind::Ctas, Blocked::CreateTable)
         }
@@ -660,12 +571,7 @@ fn names_reserved(stmt: &DFStatement) -> bool {
             };
             targets.iter().any(is_reserved) || reads_reserved(s.as_ref())
         }
-        // `EXPLAIN` names whatever its inner statement names, and is asked here rather than
-        // waved through: it is a *query* verdict, and since this predicate now gates those too,
-        // stopping at the wrapper would make `EXPLAIN SELECT * FROM __snap_3` the one spelling
-        // that still resolves a reserved name.
         DFStatement::Explain(explain) => names_reserved(&explain.statement),
-        // Names nothing.
         DFStatement::Reset(_) => false,
     }
 }
@@ -686,19 +592,14 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
 /// [`is_snapshot_ref`], next to the function that mints those names, because the provider's
 /// hiding rule asks the same question and the two must not drift.
 ///
-/// **Where the name points, not merely how it is spelled.** The namespace belongs to the
-/// workspace catalog, and since the DB workstream the session holds a catalog per database
-/// connection — where `__snap_3` is whatever the server called a table and reserves nothing.
-/// So the qualifier is read, through DataFusion's **own** normalization
-/// ([`object_name_to_table_reference`]) rather than a second reading of the identifier rules:
-/// the reference this judges is the reference the planner would resolve. A name it refuses
-/// (more than three parts, or a part that is not an identifier) resolves nowhere at all and is
-/// therefore reserved by nothing — the arms refuse it in their own words
-/// (`ddl::bare_name`), and a query naming it never plans.
+/// **Where the name points, not merely how it is spelled.** The namespace is the workspace
+/// catalog's, and a database connection's `__snap_3` is whatever the server called a table. So the
+/// qualifier is read through DataFusion's **own** normalization rather than a second reading of the
+/// identifier rules, and the reference judged is the one the planner would resolve. A name it
+/// refuses resolves nowhere and is reserved by nothing.
 ///
-/// **The prefix is tested first, and only then the qualifier.** This runs per relation per
-/// statement on every re-validation, the answer is almost always no, and the prefix test is seven
-/// bytes wide where normalizing the reference allocates a `TableReference` from a cloned name.
+/// **The prefix is tested first, and only then the qualifier**, because this runs per relation per
+/// statement on every re-validation and the answer is almost always no.
 fn is_reserved(name: &ObjectName) -> bool {
     let named = name
         .0
@@ -769,8 +670,6 @@ pub fn classify_one(ctx: &SessionContext, sql: &str) -> Result<(DFStatement, Ver
     if statements.len() > 1 {
         return Err("Run executes one statement at a time".into());
     }
-    // Not unreachable: a buffer of only comments tokenizes fine and parses to nothing, and the
-    // blank-buffer gate upstream (`press_query`) does not catch it.
     let stmt = statements.pop_front().ok_or("Nothing to run")?;
     let verdict = classify(&stmt, Capability::Editor);
     Ok((stmt, verdict))
@@ -829,11 +728,6 @@ fn check_from_targets(
     sql: &str,
     out: &mut Vec<Diagnostic>,
 ) {
-    // A token usable as a table name. sqlparser classes every word in its keyword
-    // dictionary as a keyword — including non-reserved ones that are perfectly
-    // legal table names (`event`, `user`, `day`, …) — so keyword tokens count as
-    // names here too, except the words the parser itself reserves in name position
-    // (the same authority the context analyzer's name captures use).
     fn is_name(t: &Tok) -> bool {
         match t.kind {
             TokKind::Ident | TokKind::QuotedIdent => true,
@@ -858,7 +752,6 @@ fn check_from_targets(
         if t.kind != TokKind::Keyword || !(t.eq_ci("FROM") || t.eq_ci("JOIN")) {
             continue;
         }
-        // The dotted name chain right after the clause keyword.
         let mut parts: Vec<&Tok> = Vec::new();
         let mut j = i;
         while j < stmt_toks.len() && is_name(stmt_toks[j]) {
@@ -876,7 +769,6 @@ fn check_from_targets(
         if parts.is_empty() {
             continue;
         }
-        // A table function call, not a table name.
         if stmt_toks
             .get(j)
             .is_some_and(|t| t.kind == TokKind::Punct && t.text == "(")
@@ -887,7 +779,6 @@ fn check_from_targets(
             continue;
         }
         let exists = match parts.as_slice() {
-            // A quoted name resolves exactly; `bare` skips the parse-and-normalize.
             [one] if one.kind == TokKind::QuotedIdent => {
                 ctx.table_exist(TableReference::bare(one.text.clone()))
             }
@@ -913,8 +804,6 @@ fn check_from_targets(
         }
     }
 }
-
-// ---- engine error → diagnostic ---------------------------------------------
 
 /// Fold a parse/plan error for the statement at `stmt` (whose text is `slice`) into a
 /// byte-spanned [`Diagnostic`]. Best span first: the planner's own spanned
@@ -956,7 +845,6 @@ fn df_error_diag(
     };
     let span = match parse_loc {
         Some((line, col)) => {
-            // The location is part of the span now — drop the noisy suffix.
             if let Some(at) = message.rfind(" at Line: ") {
                 message.truncate(at);
             }
@@ -1005,8 +893,6 @@ fn extract_line_col(message: &str) -> Option<(usize, usize)> {
         .ok()?;
     Some((line, column))
 }
-
-// ---- lexical / structural tier ----------------------------------------------
 
 /// Unbalanced parentheses → point at the offending `(` or `)`.
 fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
@@ -1057,26 +943,19 @@ fn keyword_typo_hints(
         if t.kind != TokKind::Ident || t.text.len() < 2 {
             continue;
         }
-        // Don't second-guess something that actually resolves.
         if ctx.table_exist(t.text.as_str()).unwrap_or(false) || functions.contains(&t.text) {
             continue;
         }
-        // An identifier right after a name with nothing name-like following is an
-        // alias slot (`FROM orders od WHERE …`), not a typo'd clause keyword — a
-        // typo'd keyword would still be followed by its operand (`FORM t`).
         if name_like(i.checked_sub(1).and_then(|p| toks.get(p))) && !name_like(toks.get(i + 1)) {
             continue;
         }
-        // A dotted position (`od.amount`, `t.od`) is a qualified reference —
-        // clause keywords never touch a dot. Unknown qualifiers are the
-        // resolver's finding, with the better message.
         let dot = |t: Option<&Tok>| t.is_some_and(|t| t.kind == TokKind::Punct && t.text == ".");
         if dot(toks.get(i + 1)) || dot(i.checked_sub(1).and_then(|p| toks.get(p))) {
             continue;
         }
         let up = t.text.to_ascii_uppercase();
         if CLAUSE_KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(&up)) {
-            continue; // it *is* a keyword (lexer may have classed a contextual word as ident)
+            continue;
         }
         if let Some(kw) = CLAUSE_KEYWORDS.iter().find(|k| near_keyword(&up, k)) {
             hints.push((
@@ -1242,22 +1121,14 @@ mod tests {
 
     #[test]
     fn cte_drafts_keep_the_no_from_grace() {
-        // The FROM inside the CTE body resolves *that* scope — the main query is
-        // still a FROM-less draft and keeps its mid-edit grace.
         assert!(run("WITH x AS (SELECT id FROM t) SELECT draft_col").is_empty());
     }
 
     #[test]
     fn columns_before_from_stay_quiet() {
-        // Mid-composition: no FROM yet, so column references have nothing to
-        // resolve against — flagging them is premature, not helpful.
         assert!(run("SELECT name, tags").is_empty());
         assert!(run("SELECT missing").is_empty());
-        // Non-column faults still surface without a FROM…
         assert!(!run("SELECT nosuchfn(1)").is_empty());
-        // …and once a FROM exists, unknown columns are real again (see
-        // `unknown_column_is_spanned`); a FROM-less literal projection stays
-        // valid as ever.
         assert!(run("SELECT 1 + 2").is_empty());
     }
 
@@ -1273,14 +1144,11 @@ mod tests {
     fn views_resolve_like_tables() {
         let ctx = ctx_with_view();
         let f = FunctionCatalog::default();
-        // A view is a first-class query target…
         assert!(block_on(validate(&ctx, &f, "SELECT id FROM v")).is_empty());
-        // …its columns are checked through it…
         let sql = "SELECT missing FROM v";
         let out = block_on(validate(&ctx, &f, sql));
         assert_eq!(out.len(), 1);
         assert_eq!(spanned(sql, &out[0]), "missing");
-        // …and the broken-parse fallback resolves views too (no false "not found").
         let out = block_on(validate(&ctx, &f, "selct id from v"));
         assert!(
             !out.iter().any(|d| d.message.contains("not found")),
@@ -1302,7 +1170,6 @@ mod tests {
 
     #[test]
     fn function_arity_is_checked() {
-        // Too few and too many arguments both fail the signature at plan time.
         let out = run("SELECT upper() FROM t");
         assert_eq!(
             out.len(),
@@ -1324,9 +1191,6 @@ mod tests {
 
     #[test]
     fn function_argument_types_are_checked() {
-        // An argument the signature can't accept (a scalar into an array function).
-        // Note the bound is the engine's own coercion rules: e.g. Int64 into
-        // `character_length` coerces and is deliberately NOT flagged.
         let out = run("SELECT array_length(id) FROM t");
         assert_eq!(
             out.len(),
@@ -1336,13 +1200,11 @@ mod tests {
         );
         assert!(out[0].is_error());
 
-        // A correctly-typed call stays clean.
         assert!(run("SELECT character_length(name) FROM t").is_empty());
     }
 
     #[test]
     fn expression_type_faults_are_checked() {
-        // Un-coercible arithmetic (the analyzer's type-coercion pass).
         let out = run("SELECT name + INTERVAL '1 day' FROM t");
         assert_eq!(
             out.len(),
@@ -1381,8 +1243,6 @@ mod tests {
 
     #[test]
     fn syntax_error_is_located() {
-        // A mid-statement fault (an expression can't start with AND) — not an
-        // incompleteness case, so it reports with a span.
         let sql = "SELECT id FROM t WHERE AND id = 1";
         let out = run(sql);
         assert_eq!(
@@ -1397,12 +1257,10 @@ mod tests {
 
     #[test]
     fn trailing_incomplete_statement_stays_quiet() {
-        // A valid prefix at the end of the buffer is typing-in-progress, not a fault.
         assert!(run("select").is_empty());
         assert!(run("SELECT id FROM t WHERE").is_empty());
         assert!(run("SELECT id FROM t ORDER BY").is_empty());
 
-        // …but an incomplete statement followed by another one is a real fault.
         let sql = "SELECT id FROM t WHERE; SELECT id FROM t";
         let out = run(sql);
         assert_eq!(
@@ -1423,9 +1281,6 @@ mod tests {
 
     #[test]
     fn broken_statement_still_flags_unknown_from_target() {
-        // A typo'd keyword kills the parse, but the FROM target must still be checked
-        // (the token-level fallback). Exactly two diagnostics: the merged parse error
-        // on `selct` (hint wording, no separate warning) and the `nope` lookup.
         let sql = "selct * from nope";
         let out = run(sql);
         assert_eq!(
@@ -1452,27 +1307,21 @@ mod tests {
 
     #[test]
     fn from_target_fallback_stays_conservative() {
-        // A real table never gets flagged…
         let sql = "selct * from t";
         assert!(!run(sql).iter().any(|d| d.message.contains("not found")));
-        // …nor a qualified name that resolves…
         let sql = "selct * from public.t";
         assert!(!run(sql).iter().any(|d| d.message.contains("not found")));
-        // …nor a name the statement introduces itself (CTE).
         let sql = "WITH x AS (SELCT 1) SELECT * FROM x";
         assert!(
             !run(sql).iter().any(|d| d.message.contains("not found")),
             "CTE name must not be flagged"
         );
-        // …nor a table-function call in FROM position.
         let sql = "selct * from read_parquet('f.parquet')";
         assert!(!run(sql).iter().any(|d| d.message.contains("not found")));
     }
 
     #[test]
     fn keyword_like_table_names_are_still_checked() {
-        // `event` sits in sqlparser's keyword dictionary (non-reserved), so it lexes
-        // as a keyword — the fallback must still treat it as a table name.
         let sql = "selc * from event";
         let out = run(sql);
         assert!(
@@ -1482,7 +1331,6 @@ mod tests {
             out.iter().map(|d| &d.message).collect::<Vec<_>>()
         );
 
-        // And a real table that happens to carry a keyword name is not flagged.
         let ctx = ctx();
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
@@ -1500,8 +1348,6 @@ mod tests {
 
     #[test]
     fn keyword_typo_merges_into_the_parse_error() {
-        // One diagnostic, not an error and a warning stacked on the same token: the
-        // parse error takes the hint's wording.
         let sql = "SELECT * FORM t";
         let out = run(sql);
         assert_eq!(
@@ -1521,8 +1367,6 @@ mod tests {
 
     #[test]
     fn typo_hint_defers_to_a_better_engine_error() {
-        // `fom` parses fine as a column, so the planner's unknown-column error is the
-        // authority — the speculative keyword hint must not add a second row.
         let sql = "SELECT fom FROM t";
         let out = run(sql);
         assert_eq!(
@@ -1541,14 +1385,12 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].message, Blocked::CreateDatabase.editor_message());
 
-        // A refusal underlines the statement's leading keyword run, not the statement.
         let sql = "DELETE FROM t";
         let out = run(sql);
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].message, Blocked::Unsupported.editor_message());
         assert_eq!(spanned(sql, &out[0]), "DELETE FROM");
 
-        // The refusals inside otherwise-intercepted forms.
         let out = run("INSERT OVERWRITE INTO t VALUES (3, 'c')");
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].message, Blocked::InsertOverwrite.editor_message());
@@ -1603,7 +1445,6 @@ mod tests {
     #[test]
     fn a_snapshot_name_is_refused_in_any_statement() {
         for sql in [
-            // Written.
             "CREATE EXTERNAL TABLE __snap_2 STORED AS PARQUET LOCATION 'f.parquet'",
             "CREATE TABLE __snap_2 AS SELECT * FROM t",
             "CREATE TABLE __SNAP_2 (id BIGINT)",
@@ -1611,21 +1452,11 @@ mod tests {
             "INSERT INTO __snap_2 VALUES (3, 'c')",
             "DROP TABLE __snap_2",
             "DROP VIEW __snap_2",
-            // Read.
             "CREATE TABLE mine AS SELECT * FROM __snap_3",
             "COPY (SELECT * FROM __snap_3) TO 'out.parquet'",
             "COPY __snap_3 TO 'out.parquet'",
-            // **A plain query too**, which the intercepted forms' fence used to let past on
-            // the grounds that snapshots are how results are addressed at all. They are — but
-            // that addressing is `fetch_page`'s and the chart's, which reach the snapshot
-            // through `ctx.sql` and never come by here. What a *typed* one buys is a way to
-            // read another tab's retained result with its `__strata_ord` showing as an ordinary
-            // column, and then to Export it: the ordinal reaches a user's file down a route the
-            // COPY fence never sees, which is the one thing that fence exists to stop.
             "SELECT 1 FROM __snap_3",
             "SELECT * FROM __snap_3",
-            // And through the wrapper, or `EXPLAIN` would be the one spelling that still
-            // resolves the name.
             "EXPLAIN SELECT * FROM __snap_3",
         ] {
             let out = run(sql);
@@ -1638,26 +1469,19 @@ mod tests {
         }
     }
 
-    /// **The prefix is a namespace, and the namespace is the workspace catalog's** (DB-03). A
-    /// `__snap_` name qualified into a database connection's catalog is a relation somebody
-    /// else named, reserving nothing and hiding nothing, so reading it is ordinary and writing
-    /// to it is refused for being remote rather than for being reserved.
+    /// **The prefix is a namespace, and the namespace is the workspace catalog's.** A `__snap_`
+    /// name qualified into a database connection's catalog is a relation somebody else named, so
+    /// reading it is ordinary and writing to it is refused for being remote rather than reserved.
     ///
-    /// Deliberately **syntactic**: nothing here asks whether `pg` is registered, because
-    /// [`classify`] is a pure function of the parsed statement and asking the session would make
-    /// it a question about now. A qualifier naming no catalog resolves nowhere, and the two arms
-    /// that could care already say so — `ddl::bare_name` refuses it by name, and a query naming
-    /// it does not plan.
+    /// Deliberately **syntactic**: nothing asks whether `pg` is registered, because [`classify`] is
+    /// a pure function of the parsed statement. A qualifier naming no catalog resolves nowhere, and
+    /// the two arms that could care already say so.
     ///
-    /// The second half holds the other direction — the workspace's own longer spellings are
-    /// still inside the namespace, or the scoping would have opened a way round the fence rather
-    /// than bounding it. **The quoted spellings are the ones that bite**, and they are here
-    /// because the first version of this scoping compared the catalog raw: the catalog list
-    /// resolves by `fold_ident`, so `"STRATA"` reaches the workspace catalog while an unfolded
-    /// compare reads it as somewhere else, which let `SELECT * FROM "STRATA".public.__snap_3`
-    /// resolve and hand back another tab's snapshot with `__strata_ord` on it. The unquoted
-    /// spellings alone could not have caught it, because the parser folds those before the
-    /// predicate ever sees them.
+    /// The second half holds the other direction, and **the quoted spellings are the ones that
+    /// bite**: the catalog list resolves by `fold_ident`, so a raw compare reads `"STRATA"` as
+    /// somewhere else and let `SELECT * FROM "STRATA".public.__snap_3` hand back another tab's
+    /// snapshot. The unquoted spellings could not have caught it, since the parser folds those
+    /// first.
     #[test]
     fn the_reserved_namespace_is_the_workspace_catalog() {
         for sql in [
@@ -1688,8 +1512,6 @@ mod tests {
             );
         }
     }
-
-    // ---- the capability axis (ED-01) ---------------------------------------
 
     /// The one parsed statement in `sql`.
     fn parse_one(sql: &str) -> DFStatement {
@@ -1784,8 +1606,6 @@ mod tests {
                 Verdict::Refuse(Blocked::PrepareNonQuery),
                 Verdict::Refuse(Blocked::Unsupported),
             ),
-            // EXECUTE rides the snapshot pipeline for the editor; the agent surface
-            // cannot PREPARE, so it keeps the wildcard refusal it shipped with.
             (
                 "EXECUTE p",
                 Verdict::Query,
@@ -1826,8 +1646,6 @@ mod tests {
                 Verdict::Refuse(Blocked::Unsupported),
                 Verdict::Refuse(Blocked::Unsupported),
             ),
-            // A reserved name is the editor's refusal alone: the agent already refuses
-            // the form, and with the words it has always used.
             (
                 "CREATE TABLE __snap_2 AS SELECT * FROM t",
                 Verdict::Refuse(Blocked::ReservedName),
@@ -1934,8 +1752,6 @@ mod tests {
         }
     }
 
-    // ---- the standalone policy gate (AA-01) --------------------------------
-
     /// The zero-copies claim, made executable: for every form **both** surfaces
     /// refuse, the gate's classification renders byte-for-byte the message the
     /// editor's diagnostic shows for the same SQL — one `classify`, one
@@ -2002,10 +1818,7 @@ mod tests {
     fn the_gate_fails_closed_on_input_it_cannot_judge() {
         let ctx = ctx();
         assert!(policy_verdicts(&ctx, "SELEC * FRM t").is_err());
-        // A refusal beside a statement that does not parse: still Err, not a pass.
         assert!(policy_verdicts(&ctx, "SELEC 1; INSERT INTO t VALUES (1, 'a')").is_err());
-        // A tokenizer-level fault (unterminated string) beside a refusal — the case
-        // where the old lex-gated shape returned a clean-looking `[]`.
         assert!(policy_verdicts(&ctx, "INSERT INTO t VALUES (1, 'a'); SELECT 'oops").is_err());
     }
 
@@ -2048,16 +1861,12 @@ mod tests {
         assert!(out.iter().any(|d| d.message.contains("Unclosed")));
     }
 
-    // ---- the native resolver in front of the dry-plan (P2-23) --------------
-
     fn messages(out: &[Diagnostic]) -> Vec<&str> {
         out.iter().map(|d| d.message.as_str()).collect()
     }
 
     #[test]
     fn multiple_unknown_columns_all_squiggle() {
-        // The headline: the planner stops at the first bad name; the resolver
-        // reports them all.
         let sql = "SELECT nme, product_idd FROM t";
         let out = run(sql);
         assert_eq!(out.len(), 2, "{:?}", messages(&out));
@@ -2068,7 +1877,6 @@ mod tests {
 
     #[test]
     fn unknown_table_mutes_its_columns() {
-        // The table is the fault; its columns have nothing to resolve against.
         let sql = "SELECT missing FROM nope";
         let out = run(sql);
         assert_eq!(out.len(), 1, "{:?}", messages(&out));
@@ -2110,8 +1918,6 @@ mod tests {
 
     #[test]
     fn cte_body_columns_are_checked() {
-        // The main query is a FROM-less draft (quiet), but the CTE body has a
-        // FROM of its own and resolves.
         let sql = "WITH c AS (SELECT missing FROM t) SELECT draft";
         let out = run(sql);
         assert_eq!(out.len(), 1, "{:?}", messages(&out));
@@ -2125,14 +1931,11 @@ mod tests {
         assert_eq!(out.len(), 1, "{:?}", messages(&out));
         assert_eq!(spanned(sql, &out[0]), "d.missing");
 
-        // A wildcard body still expands to checkable columns…
         let sql = "SELECT d.missing FROM (SELECT * FROM t) d";
         let out = run(sql);
         assert_eq!(out.len(), 1);
         assert_eq!(spanned(sql, &out[0]), "d.missing");
 
-        // …while a computed projection is unknowable — quiet, and the planner's
-        // own field error is suppressed as mid-edit noise.
         assert!(run("SELECT d.x FROM (SELECT id + 1 FROM t) d").is_empty());
     }
 
@@ -2170,20 +1973,15 @@ mod tests {
 
     #[test]
     fn name_faults_defer_type_faults() {
-        // With a bad name in the statement the dry-plan is skipped — the type
-        // fault surfaces on the next pass, once the name is fixed (the planner
-        // never co-reported them either: it fail-fasts on the name).
         let sql = "SELECT nme, name + INTERVAL '1 day' FROM t";
         let out = run(sql);
         assert_eq!(out.len(), 1, "{:?}", messages(&out));
         assert_eq!(spanned(sql, &out[0]), "nme");
-        // And with the name fixed, the type fault is the diagnostic.
         assert!(!run("SELECT name + INTERVAL '1 day' FROM t").is_empty());
     }
 
     #[test]
     fn dangling_join_stays_quiet() {
-        // Half-written JOINs are valid prefixes — the trailing-incomplete grace.
         assert!(run("SELECT id FROM t JOIN").is_empty());
         assert!(run("SELECT id FROM t LEFT JOIN").is_empty());
     }
@@ -2196,8 +1994,6 @@ mod tests {
 
     #[test]
     fn ambiguity_is_still_engine_authoritative() {
-        // The resolver proves names exist; *ambiguity* between relations is the
-        // planner's judgement and still surfaces.
         let ctx = ctx();
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -2236,17 +2032,13 @@ mod tests {
 
     #[test]
     fn aliases_near_keywords_are_not_second_guessed() {
-        // `od` is one edit from `ON`, but it sits in an alias slot — flagging a
-        // legitimate alias as a keyword typo is lint noise, not help.
         assert!(run("SELECT od.id FROM t od WHERE od.id > 0").is_empty());
         assert!(run("SELECT id AS od FROM t").is_empty());
     }
 
     #[test]
     fn incompleteness_is_positional_not_textual() {
-        // The parser choking *past* the written tokens is incomplete (quiet)…
         assert!(run("SELECT id FROM t WHERE").is_empty());
-        // …choking *on* a written token is a real fault, even at the very end.
         assert!(!run("SELECT id FROM t WHERE ORDER").is_empty());
     }
 }

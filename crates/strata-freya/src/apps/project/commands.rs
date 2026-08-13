@@ -1,44 +1,26 @@
 //! The window's **command registry** (P6-01) — what the command palette's ACTIONS group offers,
 //! and what running one does.
 //!
-//! ## One declaration site, and no second implementation
+//! **One declaration site, and no second implementation.** Each command is a method carrying its
+//! own metadata in rmcp's shape: the id is the method's name, the subtext its doc comment, and
+//! `strata_command_macro` turns the block into the [`Action`] enum, the [`ROUTES`] slice and a
+//! total `Action::run`. A command that renders but does nothing is not expressible.
 //!
-//! Each command is a method carrying its own metadata, in rmcp's shape (`strata-agent`'s
-//! `#[tool_router]` / `#[tool]`): the id is the method's name, the subtext is its doc comment,
-//! and `strata_command_macro` turns the block into the [`Action`] enum, the [`ROUTES`] slice and
-//! a total `Action::run`. A command that renders but does nothing is not expressible.
+//! **Every body here is one call into a funnel that already exists** — a palette row is a second
+//! way to ask for something, never a second implementation. Where a piece of that logic was inline
+//! somewhere the palette cannot reach, it *moved* to the funnel rather than being copied.
 //!
-//! **Every body here is one call into a funnel that already exists.** A palette row is a second
-//! way to ask for something, never a second implementation of it — Run is `actions::run_query`
-//! (⌘↵'s own gate), Save as view is the Eye button's `actions::save_as_view`, Close project is
-//! the predicate the red button and ⇧⌘W share, and the catalog gestures are the catalog row
-//! menus' (`views::view_row` and friends), down to the row-limit setting their generated
-//! `SELECT *` takes its `LIMIT` from. Where a piece of that logic was inline somewhere the
-//! palette cannot reach, it moved to the funnel rather than being copied
-//! ([`run_query`](actions::run_query), [`close_project`]).
+//! **The palette is not a function of the keymap.** [`key`](CommandRoute::key) names the chord a
+//! command also answers to and is used only to render the row's hint. Synthesizing the chord — the
+//! trick `menu.rs` uses, because a muda handler has no stores — would make a command the user
+//! unbound unreachable from the one surface that exists so you need not know the chord.
 //!
-//! ## The palette is not a function of the keymap
-//!
-//! [`key`](CommandRoute::key) names the chord a command *also* answers to, and is used for one
-//! thing: rendering the row's shortcut hint off the live settings. It is never how the command
-//! runs. Synthesizing the chord — the trick `menu.rs` uses, which is right there because a muda
-//! handler has no stores — would make a command the user unbound unreachable from the one surface
-//! that exists so you don't have to know the chord.
-//!
-//! ## What is deliberately absent
-//!
-//! **Check for updates** is not here either. It was built and removed: the updater already has
-//! the two surfaces that are about updates — the launcher rail's version line and App ▸ Check
-//! for Updates… — and a third place to keep in step with them buys a gesture nobody reaches for
-//! by name. `updater::press` is still the one funnel, so putting it back is one method with no
-//! new mechanism behind it.
-//!
-//! The design canvas lists an **Export results…** row. It is not built: an
+//! **Deliberately absent:** *Check for updates* was built and removed, because the updater already
+//! has two surfaces and a third to keep in step buys a gesture nobody reaches for by name. And the
+//! canvas's *Export results…* is not built — an
 //! [`ExportLaunch`](crate::apps::export::ExportLaunch) is assembled from the results pane's live
-//! sort and the page it has in hand, so this registry can neither build one nor tell whether
-//! there is anything to export — and a row that is dead, or disabled for a reason the user cannot
-//! see, is worse than a row that isn't there. See the P6-01 task file for what wiring it would
-//! take.
+//! sort and the page in hand, so this registry can neither build one nor tell whether there is
+//! anything to export.
 
 use std::sync::Arc;
 
@@ -116,8 +98,6 @@ pub struct PaletteCtx {
 pub fn use_palette_ctx() -> PaletteCtx {
     PaletteCtx {
         catalog: use_catalog_actions(),
-        // The channel is only the antenna's default; no `read()` happens in a render, so this
-        // subscribes nothing. Every command reads through `peek` on the station instead.
         session: use_radio::<SessionState, Chan>(Chan::Tabs),
         engine: use_consume::<EngineCtx>(),
         selection: use_catalog_selection(),

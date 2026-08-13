@@ -78,9 +78,6 @@ impl Component for FormatCard {
         let format = self.format;
         let selected = self.selected;
 
-        // The glyph takes the type palette's hue for the shape of data the format holds — the
-        // canvas's per-format stroke colours are that same ramp, so they are named once here
-        // rather than restated as four theme fields.
         let glyph = match format {
             FormatId::Csv => kind_color(Kind::Str, &palette),
             FormatId::Json => kind_color(Kind::Ts, &palette),
@@ -107,13 +104,6 @@ impl Component for FormatCard {
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |_| {
-                // Through `edit`, like every other control: switching format after a failed
-                // export is the obvious way to recover from one, so it has to clear the
-                // message the failure left. Writing the draft directly here left a CSV error
-                // sitting under a now-valid Parquet draft.
-                //
-                // A format switch never discards the other formats' options — the draft keeps
-                // them side by side (see `ExportDraft`).
                 ctx.edit(|draft| draft.format = format);
             })
             .child(Icon::new(IconName::File).size(17.).color(glyph))

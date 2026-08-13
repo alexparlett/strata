@@ -4,26 +4,16 @@
 //! the fetched list outlives the window that fetched it: a `Select` whose only content arrives
 //! from a network call is an empty `Select` every time the app starts.
 //!
-//! ## A satellite, on history's precedent
+//! **A satellite, on history's precedent**, not a field of
+//! [`AppConfig`](crate::config::AppConfig): a fetched list is a cache of a remote fact rather than
+//! something the user edited, and routing a background refresh through the config funnel would
+//! persist and broadcast a change nobody made. Same mechanism as config (`preferences`, the app's
+//! own [`AppInfo`](preferences::AppInfo), the key `"models"`), and a missing or unreadable file is
+//! an empty [`Listings`] rather than an error.
 //!
-//! Not a field of [`AppConfig`](crate::config::AppConfig). A fetched list is a **cache of a
-//! remote fact**, not something the user edited — and the app config is user intent, written
-//! through one funnel that notifies the settings audience. Routing a background refresh through
-//! it would persist and broadcast a change nobody made, and wake every surface that reads a
-//! setting. So this is its own file, exactly as `history.jsonl` is beside the project defs:
-//! loaded once at startup as config is, written by the fetch that fills it.
-//!
-//! It is the **same mechanism** rather than a path invented here — `preferences`, the app's own
-//! [`AppInfo`](preferences::AppInfo), and the key `"models"` beside `"config"`. A missing or
-//! unreadable file is an empty [`Listings`] and never an error: the expected absence is a first
-//! launch.
-//!
-//! ## It holds names and timestamps, and nothing else
-//!
-//! No key, no [`SecretRef`](crate::secret::SecretRef), no endpoint. The neighbouring module is
-//! [`crate::secret`] and this one stays boring enough that nobody has to check — which is
-//! asserted on the serialized bytes below rather than left to the field list, because a test on
-//! the fields would pass on the day someone adds one.
+//! **It holds names and timestamps and nothing else** — no key, no
+//! [`SecretRef`](crate::secret::SecretRef), no endpoint — asserted on the serialized bytes below
+//! rather than on the field list, because a test on the fields would pass the day someone adds one.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
@@ -181,8 +171,6 @@ mod tests {
             .0
             .insert(ProviderKind::OpenAi, aged(&["gpt-5"], STALE_AFTER));
         assert!(listings.needs_refresh(ProviderKind::OpenAi));
-        // …and it is still usable while it is being asked again, which is the whole of
-        // stale-while-revalidate: the names are read from the same entry.
         assert_eq!(listings.models(ProviderKind::OpenAi), ["gpt-5"]);
     }
 
@@ -207,9 +195,7 @@ mod tests {
         let mut listings = Listings::default();
         let kind = ProviderKind::OpenAiCompatible;
 
-        // Nothing reported at all: the pick is the whole offer.
         assert_eq!(listings.offer(kind, "qwen3:32b"), ["qwen3:32b"]);
-        // And nothing chosen either is an empty offer, not a blank entry.
         assert!(listings.offer(kind, "").is_empty());
         assert!(listings.offer(kind, "   ").is_empty());
 
@@ -222,7 +208,6 @@ mod tests {
             listings.offer(kind, "gemma-3"),
             ["gemma-3", "llama-3.3-70b", "mistral-large"]
         );
-        // A pick the provider already reports is not offered twice.
         assert_eq!(
             listings.offer(kind, "mistral-large"),
             ["llama-3.3-70b", "mistral-large"]
@@ -262,8 +247,6 @@ mod tests {
 
         assert!(text.contains("claude-sonnet-5"), "{text}");
         assert!(text.contains("llama-3.3-70b"), "{text}");
-        // The three things a listing is not. It describes a request; it does not carry what the
-        // request was made with, and the module beside this one is the secret store.
         for absent in ["key", "secret", "url", "token"] {
             assert!(
                 !text.contains(absent),
@@ -271,8 +254,6 @@ mod tests {
             );
         }
 
-        // And it comes back as itself, timestamps included — a round trip that dropped the
-        // stamp would make every entry permanently fresh or permanently stale.
         let read = Listings::load_from(&mut written.as_slice()).unwrap();
         assert_eq!(read, listings);
     }

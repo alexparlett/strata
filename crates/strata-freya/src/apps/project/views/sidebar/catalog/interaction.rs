@@ -148,7 +148,6 @@ fn project() -> ProjectState {
             rows: Some(10),
         },
     );
-    // `users` stays `Reg::Loading` — the first-paint state every row passes through.
     p.view_registered(
         "archive_totals",
         ViewMeta {
@@ -260,25 +259,15 @@ fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Ha
             let store = r.provide_root_context(move || {
                 RadioStation::<ProjectState, ProjChan>::create(project())
             });
-            // The row menus' remaining handles: the engine (never asked anything here — no test
-            // presses Refresh), the scan flag, the app config behind "View table"'s LIMIT, and
-            // the drop-confirm slot the Drop items set.
             r.provide_root_context(EngineCtx::default);
             r.provide_root_context(|| State::create(CatalogState::Settled(0)));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
-            // The Configure-window request slot (P4-11). The row menus only ever *set* it —
-            // the window is opened by the project root's launcher, which is not mounted here.
             r.provide_root_context(|| State::create(None::<ConfigureTarget>));
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
-            // Where the one action in these menus that writes `project.json` itself — the
-            // saved-query rename — reports a failed write (P4-15): the event log, and the
-            // write-fault satellite that holds the condition after it.
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
-            // The window's conversations (AS-04): the catalog row menus' **Ask about this**
-            // pins into the open one, so the handle is gathered with the rest.
             r.provide_root_context(|| State::create(Chats::new(Pick::default())));
             (
                 filter,
@@ -412,8 +401,6 @@ fn expand_nested(runner: &mut TestingRunner, name: &str, back: f32) {
     settle(runner);
 }
 
-// ---- filtering ----------------------------------------------------------------------------
-
 /// The headline behaviour: one filter narrows tables *and* views *and* saved queries at once,
 /// keeping only the matches in each — not just the section that happens to be first.
 #[test]
@@ -421,7 +408,6 @@ fn filter_narrows_all_three_sections_at_once() {
     let (mut runner, (mut filter, ..)) = runner();
     settle(&mut runner);
 
-    // Unfiltered: every def in every section.
     for name in [
         "orders",
         "users",
@@ -435,11 +421,9 @@ fn filter_narrows_all_three_sections_at_once() {
 
     type_filter(&mut runner, &mut filter, "order");
 
-    // The three matches survive — one from each section.
     for name in ["orders", "orders_daily", "orders by region"] {
         assert!(shows(&runner, name), "{name} matches 'order'");
     }
-    // The non-matches are gone from all three.
     for name in ["users", "regions", "signup funnel"] {
         assert!(!shows(&runner, name), "{name} does not match 'order'");
     }
@@ -452,14 +436,11 @@ fn filter_folds_case_in_both_directions() {
     let (mut runner, (mut filter, ..)) = runner();
     settle(&mut runner);
 
-    // Upper-case query against lower-case names.
     type_filter(&mut runner, &mut filter, "ORD");
     assert!(shows(&runner, "orders"));
     assert!(shows(&runner, "orders_daily"));
     assert!(!shows(&runner, "users"));
 
-    // Lower-case query against a name with upper-case in it (the saved query "signup funnel"
-    // stays out; "Region" must still reach "orders by region" and the `regions` view).
     type_filter(&mut runner, &mut filter, "REGION");
     assert!(shows(&runner, "regions"));
     assert!(shows(&runner, "orders by region"));
@@ -535,7 +516,6 @@ fn saved_query_empty_note_is_suppressed_while_filtering() {
     let (mut runner, (mut filter, ..)) = runner();
     settle(&mut runner);
 
-    // Two saved queries exist, so no note either way.
     assert!(!shows(&runner, "No saved queries yet"));
 
     type_filter(&mut runner, &mut filter, "zzz");
@@ -563,8 +543,6 @@ fn filtering_hides_an_expanded_entrys_columns() {
     );
 }
 
-// ---- expansion + selection ----------------------------------------------------------------
-
 /// Pressing an entry reveals its columns; pressing again puts them away. Nested children stay
 /// folded until their own chevron is used.
 #[test]
@@ -582,7 +560,6 @@ fn entry_expands_to_its_columns_and_nests_one_level_at_a_time() {
         "a struct's children need their own chevron"
     );
 
-    // The PART chip rides the partition column, which is top-level only.
     assert!(shows(&runner, "PART"));
 
     click_text(&mut runner, "orders");
@@ -653,10 +630,6 @@ fn collapsing_a_section_hides_only_its_own_rows() {
 /// from a top-level `city` — the identity bug `ColRef`'s `Vec<String>` path exists to prevent.
 #[test]
 fn a_nested_field_selects_by_its_full_path() {
-    // The struct's own chevron sits left of its name; pressing the *name* would select the column
-    // instead, so the press has to land in the chevron gutter. Its offset back from the name run is
-    // fixed by the row's layout: chevron slot (11) + gap (8) + swatch (6) + gap (8) = 33 to the
-    // slot's left edge, so its centre is 33 - 11/2 = 27.5 back.
     const CHEVRON_BACK_FROM_NAME: f32 = 27.5;
 
     let (mut runner, (_, selection, ..)) = runner();
@@ -678,8 +651,6 @@ fn a_nested_field_selects_by_its_full_path() {
         "the path carries the parent, not just the leaf"
     );
 }
-
-// ---- the status slot: unanswered · invalid (P3-04) --------------------------------------------
 
 /// Every status glyph's message, from its **a11y label** — the spinner's "Loading…" and the
 /// validity triangle's reason. Nothing else in the pane declares a label (Freya's own rows, icons
@@ -736,7 +707,6 @@ fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
         ],
         "the broken rows flag immediately; the waiting one holds its peace"
     );
-    // The words live on the glyph, not in the row: the name gets the whole width back.
     for gone in ["loading…", "failed"] {
         assert!(!shows(&runner, gone), "{gone:?} is no longer a text run");
     }
@@ -895,7 +865,6 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
     let broken = "No such file or directory (os error 2)";
     assert!(status_labels(&runner).iter().any(|l| l == broken));
 
-    // ↻ — every table row unanswered again, `events` included.
     store.write_channel(ProjChan::Tables).reload_tables();
     settle(&mut runner);
 
@@ -906,7 +875,6 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
     );
     assert_eq!(spinners(&runner), 0, "and no row spins on the spot");
 
-    // The retry lands, still broken: the triangle was there before, during and after.
     store
         .write_channel(ProjChan::Tables)
         .table_failed("events", broken.into());
@@ -980,8 +948,6 @@ fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
     );
 }
 
-// ---- the row menus (P3-06) --------------------------------------------------------------------
-
 /// **The trailing run is one column, whatever the row is doing.** The badge, the validity
 /// triangle and the profiling spinner all used to be separate children, so a row that had ever
 /// been profiled kept a mounted, idle slot in the run and everything left of it sat 20px further
@@ -992,13 +958,10 @@ fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
     let (runner, ..) = settled_over(|| {
         let mut p = mixed_origins();
         p.table_failed("orders", "boom".into());
-        // The state that broke it: a scan asked for on the internal row.
         p.request_profile(CatalogKind::Table, "daily_totals");
         p
     });
 
-    // The ⋮ is the row's rightmost item and is unconditional, so it is the column to measure
-    // everything else against.
     let right_of = |name: &str| {
         let row = text_area(&runner, name);
         let mid = row.min_y() + row.height() / 2.;
@@ -1026,11 +989,9 @@ fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
 /// — the rendered half of [`the_row_folds_least_informative_first`], which pins the order itself.
 #[test]
 fn the_internal_badge_folds_before_the_name_truncates() {
-    // A short name at a wide pane: room for both, so the marker stays.
     let (runner, ..) = settled_over(mixed_origins);
     assert!(shows(&runner, "INTERNAL"), "a wide pane keeps the marker");
 
-    // Narrow enough that the badge is what would tip the name into an ellipsis.
     let (mut runner, _) = runner_sized(mixed_origins, 240.);
     settle(&mut runner);
     assert!(
@@ -1051,7 +1012,6 @@ fn the_internal_badge_folds_before_the_name_truncates() {
 /// it just gets shorter.
 #[test]
 fn the_row_folds_least_informative_first() {
-    // Wide: everything up.
     assert_eq!(
         fold_plan(400., 100., true),
         Folds {
@@ -1060,7 +1020,6 @@ fn the_row_folds_least_informative_first() {
             status: true
         }
     );
-    // The badge is what tips the name into an ellipsis, so it goes alone.
     assert_eq!(
         fold_plan(260., 100., true),
         Folds {
@@ -1069,7 +1028,6 @@ fn the_row_folds_least_informative_first() {
             status: true
         }
     );
-    // Tighter: the icon follows.
     assert_eq!(
         fold_plan(200., 100., true),
         Folds {
@@ -1078,8 +1036,6 @@ fn the_row_folds_least_informative_first() {
             status: true
         }
     );
-    // Tighter still: the status glyph is the last to go, and the name simply keeps shrinking
-    // after that — there is no fourth step.
     assert_eq!(
         fold_plan(120., 100., true),
         Folds {
@@ -1088,7 +1044,6 @@ fn the_row_folds_least_informative_first() {
             status: false
         }
     );
-    // An external row has no badge to give up, so its first fold is the icon.
     assert_eq!(
         fold_plan(230., 140., false),
         Folds {
@@ -1113,7 +1068,6 @@ fn the_name_goes_on_collapsing_once_the_row_has_folded() {
         "the badge folded first: {:?}",
         texts(&runner)
     );
-    // The row still owns its own width — nothing spilled out of the pane to keep the name whole.
     let name = text_area(&runner, "daily_totals");
     assert!(
         name.max_x() <= 150.,
@@ -1145,13 +1099,8 @@ fn a_folded_status_column_still_subscribes_to_the_scan() {
     };
     let scan = Some(ScanId::new());
 
-    // While the column is there, `ProfileStatus` in it owns the subscription.
     assert_eq!(watched_scan(shown, scan), None);
-    // Once it folds, the row has to take the subscription over — this is the case that broke.
     assert_eq!(watched_scan(folded, scan), scan);
-    // And a row with no scan subscribes to nothing, folded or not: a sidebar full of tables must
-    // not dispatch scans nobody asked for. Both halves of the condition are in here, so both of
-    // these are the production path rather than an argument only a test ever passes.
     assert_eq!(watched_scan(folded, None), None);
     assert_eq!(watched_scan(shown, None), None);
 }
@@ -1286,9 +1235,6 @@ fn each_row_kind_offers_its_own_menu() {
          SQL is something to ask about"
     );
 
-    // An **internal** table (ED-04) is a fourth row kind as far as this list is concerned. Its
-    // omission is pinned here, by the same test that pins every other kind's, rather than being
-    // incidental to whoever edits the menu next.
     let (mut runner, ..) = settled_over(mixed_origins);
     assert_eq!(
         open_menu(&mut runner, "daily_totals"),
@@ -1323,7 +1269,6 @@ fn an_internal_table_row_is_marked_and_an_external_one_is_not() {
         1,
         "exactly the one table Strata owns carries the marker: {runs:?}"
     );
-    // Beside the row it belongs to, not floating somewhere in the pane.
     let badge = text_area(&runner, "INTERNAL");
     let row = text_area(&runner, "daily_totals");
     assert!(
@@ -1453,8 +1398,6 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
         "and nothing is scanning yet"
     );
 
-    // A **view's** item asks about the view — the other section, and the kind that decides which
-    // channel the request lands on.
     let (mut runner, (.., profile_target)) = settled();
     right_click_row(&mut runner, "orders_daily");
     click_text(&mut runner, "Profile view");
@@ -1514,8 +1457,6 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
     store
         .write_channel(ProjChan::Tables)
         .request_profile(CatalogKind::Table, "orders");
-    // Settle rather than counting passes. The scan itself has not settled — its label is up
-    // because the query is in flight, not because time has passed.
     settle(&mut runner);
 
     assert_eq!(
@@ -1524,10 +1465,6 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
         "the row that was asked about, and only that row: {:?}",
         status_labels(&runner)
     );
-    // Deliberately no claim about `Loading…` here: `users` is left unanswered by the fixture, so
-    // whether *it* is spinning depends on whether 400ms of wall clock has passed — nothing to do
-    // with profiling. That the two spinners are distinguishable at all is the point, and it is
-    // `a_row_wearing_every_status_glyph_still_opens_its_own_menu` that pins it.
 }
 
 /// The row's trailing run changes shape under it — the status column can hold a spinner, a
@@ -1616,9 +1553,6 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
         !shows(&runner, "signup funnel"),
         "the label gave way to the rename input"
     );
-    // The seeded name arrives **selected** (`Input::select_all_on_init`), so this replaces it
-    // rather than landing in front of it. That is the whole behaviour: a rename opens over the
-    // old label.
     runner.write_text("funnel v2");
     runner.sync_and_update();
     runner.press_key(Key::Named(NamedKey::Enter));
@@ -1700,8 +1634,6 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
         },
         "the row it was pressed on, not the whole catalog"
     );
-    // And the item itself touches nothing: resetting rows is the driver's half of the pass, so a
-    // request that never gets served can't strand a row in `Loading`.
     assert!(
         matches!(store.peek().tables[1].reg, Reg::Ready(_)),
         "`orders` still wears the answer it had"

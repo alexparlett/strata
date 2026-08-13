@@ -223,8 +223,6 @@ async fn parquet_accepts_the_full_tuning_surface() {
         .expect("parquet export");
     assert_eq!(rows, 5);
 
-    // A complete parquet file opens and closes with the `PAR1` magic — the footer is written
-    // last, so the trailing one is what says the writer finished rather than truncated.
     let bytes = fs::read(&out).expect("read back");
     assert!(bytes.len() > 8, "not an empty file");
     assert_eq!(&bytes[..4], b"PAR1", "parquet magic at the head");
@@ -362,7 +360,6 @@ async fn partitioning_writes_a_hive_tree_and_drops_the_columns_by_default() {
         "one directory level per distinct value, key=value"
     );
 
-    // The partition column is in the directory name, so it is gone from the file itself.
     let leaf = fs::read_dir(out.join("column3=true"))
         .expect("leaf dir")
         .filter_map(Result::ok)
@@ -404,11 +401,6 @@ async fn keeping_partition_columns_puts_them_back_in_the_files() {
         "kept inside the files too: {header:?}"
     );
 
-    // **And it said so in the statement, not in the session.** The option rides in the COPY's own
-    // `OPTIONS`, which the planner reads before falling back to the session config — so an export
-    // that keeps its partition columns does not decide that for every later one. The `SET` this
-    // replaced never restored the value, which was invisible only for as long as nothing else
-    // could read it back.
     assert_eq!(
         keep_partition_by_columns(&eng).await,
         "false",
@@ -475,18 +467,14 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
         .expect("run 1");
     let snap = first.snapshot.expect("snapshot");
 
-    // The export window opens on that result and holds it.
     let pin = eng.pin_snapshot(snap);
 
-    // The user goes back to the tab and re-runs. Normally this retires the old snapshot at
-    // dispatch; the pin defers it.
     let (second, _) = eng
         .query(WsId(1), RunTag(2), SQL.into(), 2)
         .await
         .expect("run 2");
     assert_ne!(second.snapshot.unwrap(), snap, "a genuinely new snapshot");
 
-    // The pinned one is still readable, and still exportable.
     eng.fetch_page(snap, 1, 2, None)
         .await
         .expect("the pinned snapshot survived the re-run");
@@ -496,7 +484,6 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
         .expect("export of the pinned snapshot");
     assert_eq!(rows, 5, "the rows that were on screen, not the new run's");
 
-    // Closing the window releases it, and the deferred retire lands.
     drop(pin);
     eng.fetch_page(snap, 1, 2, None)
         .await
@@ -616,22 +603,16 @@ async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
         .expect("run");
     let snap = first.snapshot.expect("snapshot");
 
-    // Start an export and throw the future away without polling it to completion — exactly
-    // what dropping the window's task does.
     {
         use std::future::Future;
 
         let fut = eng.export(snap, spec(&out, Format::Csv(csv())));
         futures::pin_mut!(fut);
-        // One poll so the hold is taken and the work is dispatched, then drop it unfinished.
         let waker = futures::task::noop_waker();
         let mut cx = std::task::Context::from_waker(&waker);
         let _ = fut.as_mut().poll(&mut cx);
     }
 
-    // **The write outlives its caller and finishes the file.** Bounded rather than unbounded: a
-    // hold that is never released is the leak this test's first version was written for, and it
-    // has to fail here rather than hang.
     let mut settled = false;
     for _ in 0..400 {
         if !flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -645,7 +626,6 @@ async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
         "the hold must be released when the write ends, or the engine claims work forever"
     );
 
-    // The file is whole — header plus all five rows — which is the thing the pin was protecting.
     let written = fs::read_to_string(&out).expect("the dropped caller still left a file");
     assert_eq!(
         written.lines().count(),
@@ -653,7 +633,6 @@ async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
         "a detached write must still finish its file: {written:?}"
     );
 
-    // And the pin went with the write, so the snapshot retires on the next re-run like any other.
     eng.query(WsId(1), RunTag(2), SQL.into(), 2)
         .await
         .expect("re-run");

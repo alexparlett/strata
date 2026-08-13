@@ -71,8 +71,6 @@ impl Component for KeyTable {
         let editing = self.editing;
         let warning = tones().warning;
 
-        // One snapshot for the whole list: at most one row is blocked, and nothing in the loop can
-        // change which.
         let editing_now = editing.read().clone();
 
         let mut body = TableBody::new();
@@ -85,8 +83,6 @@ impl Component for KeyTable {
                         editing,
                         key: DiffKey::None,
                     }
-                    // Keyed on the command, not its label: the command is the row's identity, and
-                    // a label is a display string two commands could one day share.
                     .key(row.command),
                 )
                 .maybe_child(blocked.map(|blocked| {
@@ -182,30 +178,17 @@ impl Component for KeyTableRow {
         let row = &self.row;
         let command = row.command;
 
-        // The canvas hangs the description off the whole row's `title`; here it hangs off the
-        // action's name. Not because the row is the wrong target — it is the press target — but
-        // because a tooltip spanning the row would nest inside the reset button's own, and both
-        // would open together over the same pointer.
-        //
-        // The label names no colour, deliberately: `Table` paints the ambient one from its own
-        // theme's `color`, which is already the canvas's `--c-text2`. Naming the settings theme's
-        // `item_color` here (a nav row at rest, a step dimmer) is how the label ends up quieter
-        // than the design, and it would be a second source for one surface's text tone.
         let label = TooltipContainer::new(Tooltip::new_text(row.desc))
             .position(AttachedPosition::Bottom)
             .child(Prose::new(row.label));
 
         TableRow::new()
-            // A fixed command shows its chord and offers nothing, so it takes no handler at all
-            // rather than one that declines.
             .maybe(!row.fixed, |table_row| {
                 table_row.on_press(move |e: Event<PressEventData>| {
                     let double = match e.data() {
                         PressEventData::Mouse(m) => {
                             EventsCombos::pressed(m.global_location).is_double()
                         }
-                        // A keyboard activation carries no location and so no combo. Declining is
-                        // the honest answer: "press twice" has no keyboard equivalent.
                         _ => false,
                     };
                     if double {
@@ -305,9 +288,6 @@ impl Component for ShortcutCell {
                 .child(Caps {
                     caps: row.caps.clone(),
                 })
-                // No `&& !row.fixed`: a fixed command is never custom, because the override a
-                // hand-edited config gives it is ignored (`keymap::is_custom`). One predicate, so
-                // the badge and this control can never disagree about the same row.
                 .maybe_child(row.custom.then_some(ResetRow { editing, command }))
                 .into_element(),
         };
@@ -328,9 +308,6 @@ struct Caps {
 
 impl Component for Caps {
     fn render(&self) -> impl IntoElement {
-        // One `KeyCap` per key, which is this grid's presentation of a chord — the palette shows
-        // the same chord as a single flat chip. The cap itself is shared, so the two windows
-        // cannot end up drawing a key two ways (`components::keycap`).
         let mut row = rect().horizontal().spacing(CAP_GAP);
         for cap in &self.caps {
             row = row.child(KeyCap::key(cap.clone()));
@@ -373,10 +350,6 @@ impl Component for AddShortcut {
         let mut editing = self.editing;
         let command = self.command;
 
-        // A flat button already resolves the muted label that lifts to the accent on hover; what
-        // it cannot resolve is an *empty slot*, which is this control's whole point — so the three
-        // overrides are the edge it grows, the edge that edge becomes on hover, and declining the
-        // fill a flat button would take, because the canvas moves only the outline and the text.
         Button::new()
             .flat()
             .height(Size::px(PILL_HEIGHT))

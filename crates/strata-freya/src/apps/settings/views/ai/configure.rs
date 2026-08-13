@@ -78,14 +78,6 @@ impl Component for ConfigureDialog {
         let tones = tones();
         let required_color = form_theme().required_color;
 
-        // **Local, and seeded once.** The draft is not written until Save, so these are the only
-        // copy of what the user is typing — which is what makes Cancel a revert.
-        //
-        // The key box seeds from what is *pending*, and never from what is stored: a key typed
-        // and not yet applied is the user's own input sitting in memory, and hiding it would make
-        // reopening the dialog look like the paste had been lost. A stored key has nothing to
-        // seed from — that is the point of the dialog rather than a defect in it, and what it
-        // gets instead is a sentence saying so, below.
         let key_buf = use_state({
             let seed = ctx.ai_keys.peek().get(kind).to_string();
             move || seed
@@ -95,24 +87,9 @@ impl Component for ConfigureDialog {
             move || seed
         });
         let mut revealed = use_state(|| false);
-        // **What a Test here was run against** — the boxes as they stood at the press, which is
-        // what decides whether the listing it fetched still describes the provider once this
-        // dialog closes ([`retract_if_stale`]).
-        //
-        // The values and not a flag, because the boxes keep moving after a Test: a flag can only
-        // ask "do the boxes differ *now*", which throws away a good listing when a test against
-        // the draft's own values is followed by an idle edit, and keeps a bad one when an edited
-        // box is tested and then typed back. Local, and exactly as long-lived as the key box it
-        // copies from, so it is no more exposure than the box itself.
         let tested = use_state(|| None::<Tested>);
-        // **The window's probe, not a local one.** A test here is the only place one is taken,
-        // and its answer is read by two surfaces that are not this dialog: the row's subline and
-        // AI ▸ Chat's model list. A local copy would leave both of them permanently untested.
         let probe = ctx.probes.read().get(kind).clone();
 
-        // "Will there be a key after Apply", not "is one filed now" — the marker only moves when
-        // Apply reaches the keystore, so reading it alone leaves this note describing the state
-        // before an edit the user has already made.
         let stored = will_have_key(&ctx.draft.read().ai, &ctx.ai_keys.read(), kind);
 
         let boxes_url = !matches!(provider.base_url, BaseUrl::Provider);
@@ -193,17 +170,6 @@ impl Component for ConfigureDialog {
                             .outline()
                             .height(Size::px(FIELD_HEIGHT))
                             .on_press(move |_: Event<PressEventData>| {
-                                // **What Apply would send, which is not always what is filed.**
-                                // A test that proved something other than what is on screen is
-                                // worse than none — so the boxes win, and the stored key is
-                                // only the answer when nothing is pending against it.
-                                //
-                                // An empty box is not "nothing pending": `ai_keys` can hold a
-                                // queued *removal* this dialog did not make (switching the
-                                // provider off records one, and the gear still opens). Falling
-                                // back to the marker there authenticated with a key on its way
-                                // out and reported "verified" directly beneath a note saying
-                                // there was none.
                                 let typed_now = key_buf.peek().clone();
                                 let pending = ctx.ai_keys.peek().touched(kind);
                                 let ask = Ask {
@@ -220,16 +186,7 @@ impl Component for ConfigureDialog {
                                         })
                                         .flatten(),
                                 };
-                                // The one funnel — which also holds the in-flight guard, so a
-                                // second press during a request is left alone rather than
-                                // racing it. The names it returns reach the satellite, so a
-                                // Test is what fills the model picker for good rather than
-                                // only for this window — which is exactly why closing has to
-                                // know what this test was run against.
                                 let asked = (url_buf.peek().clone(), typed_now);
-                                // Only when a request actually started: the guard swallows a
-                                // press made during one, and the handle for *that* request is
-                                // the one already held here.
                                 if let Some(task) = probe::refresh(ctx, ask) {
                                     let mut tested = tested;
                                     tested.set(Some(Tested {
@@ -328,8 +285,6 @@ fn status_line(probe: &Probe, roles: &RoleColors, tones: Tones) -> Element {
                 .spacing(SP_3)
                 .content(Content::Flex)
                 .child(Dot::new(color).size(TONE_DOT))
-                // Wrapped, because a provider's own error is a sentence and genai's carry a
-                // second line naming the cause — the half a single-line run silently drops.
                 .child(Body::new(said).width(Size::flex(1.)).wrap().color(color))
                 .into()
         }
@@ -428,8 +383,6 @@ fn retract_if_stale(
 /// changed key and then saving that key is the case the box comparison also gets wrong.
 fn save(ctx: SettingsCtx, kind: ProviderKind, key: &str, url: &str, tested: Option<Tested>) {
     let before = in_effect(ctx, kind);
-    // What the dialog leaves behind: the URL box, and the key box unless it is empty — an empty
-    // box is not an edit, so what stays in effect is whatever was already pending.
     let after = (
         url.to_string(),
         match key.trim().is_empty() {
@@ -437,8 +390,6 @@ fn save(ctx: SettingsCtx, kind: ProviderKind, key: &str, url: &str, tested: Opti
             false => key.to_string(),
         },
     );
-    // A listing this dialog did not fetch was fetched against what it opened on, and there is no
-    // request of ours behind it to stop.
     let fetched_with = tested.or(Some(Tested {
         asked: before.clone(),
         task: None,

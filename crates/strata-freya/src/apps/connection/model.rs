@@ -94,9 +94,6 @@ impl GcsAuthId {
 
     pub fn label(self) -> &'static str {
         match self {
-            // Named for what it reads, because "Ambient" alone says nothing about *which*
-            // ambient: GCS's chain is Application Default Credentials, which is the term the
-            // user's own `gcloud` uses.
             Self::Ambient => "Ambient / ADC",
             Self::ServiceAccount => "Service-account file",
             Self::Anonymous => "Anonymous",
@@ -111,16 +108,13 @@ pub struct ConnectionDraft {
     /// Where the connection points, in its provider's own terms — a bucket name for S3 and GCS,
     /// a whole origin URL for HTTP. [`ConnectionDef::address`]'s value, and the box's, verbatim.
     pub address: String,
-    // --- S3 ---
     pub region: String,
     pub s3_auth: S3AuthId,
     pub profile: String,
     pub endpoint: String,
     pub allow_http: bool,
-    // --- GCS ---
     pub gcs_auth: GcsAuthId,
     pub sa_path: String,
-    // --- Postgres ---
     /// A database connection's settings, carried **whole and unedited** until DB-04 builds the
     /// rows for them.
     ///
@@ -160,11 +154,6 @@ impl Default for ConnectionDraft {
         }
     }
 }
-
-// The catalogue is small enough to offer whole: the name box shows **every** match and scrolls,
-// where the properties grid caps its list at seven. What is capped here is the panel's *height*
-// (`views::form::SUGGEST_ROWS`), not the answer — an option cut from the list is one the user
-// cannot find by typing more, since these names share so many substrings.
 
 /// One row of the client-options table: an option and its value, under an id that outlives both.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -346,12 +335,6 @@ impl ConnectionDraft {
     /// The providers it *isn't* keep their defaults: the def has nothing to say about them.
     pub fn of(def: &ConnectionDef) -> Self {
         let mut draft = Self {
-            // **Clamped to what the picker renders**, the same guard the Configure window's own
-            // `of` applies: `ProviderPicker` offers `OBJECT_STORES` until DB-04 builds the
-            // database rows, so a draft opening on `Postgres` would light no segment at all and
-            // one press would silently retype the connection, discarding `pg` on Save. The
-            // settings still round-trip — see [`ConnectionDraft::pg`] — but the *picker* cannot
-            // show a provider it does not offer, so the draft must not claim one.
             provider: match def.provider.id() {
                 id if id.is_object_store() => id,
                 _ => ProviderId::S3,
@@ -383,7 +366,6 @@ impl ConnectionDraft {
                 }
             },
             Provider::Http => {}
-            // Carried whole — see [`ConnectionDraft::pg`].
             Provider::Postgres(pg) => draft.pg = pg.clone(),
         }
         draft
@@ -443,9 +425,6 @@ impl ConnectionDraft {
                         },
                     },
                     endpoint: self.endpoint.trim().to_string(),
-                    // Only meaningful with an endpoint set (AWS itself is HTTPS), so a toggle
-                    // left on from an endpoint that has since been cleared does not ride along
-                    // into the def.
                     allow_http: self.allow_http && !self.endpoint.trim().is_empty(),
                 }),
                 ProviderId::Gcs => Provider::Gcs(GcsStore {
@@ -481,9 +460,6 @@ impl ConnectionDraft {
     pub fn blocker(&self) -> Option<String> {
         let def = self.def();
         if def.address.is_empty() {
-            // Said in the terms of the field rather than of the row: the store's own message for
-            // an empty address names the def ("This connection has no bucket"), which reads oddly
-            // over a box the user is still filling in.
             return Some(format!("A connection needs a {}.", self.address_noun()));
         }
         if let Err(why) = def.provider.check_address(&def.address) {
@@ -506,9 +482,6 @@ impl ConnectionDraft {
                 }
             }
             ProviderId::Http => {}
-            // Only what the *def* can answer for itself. The catalog name's clash against the
-            // project's other connections is `check_catalog_name`'s and belongs in the footer
-            // beside the URL clash, which is DB-04's — the same split the S3 rows follow.
             ProviderId::Postgres => {
                 if let Err(why) = self.pg.check_catalog() {
                     return Some(why);
@@ -518,10 +491,6 @@ impl ConnectionDraft {
                 }
             }
         }
-        // The client options last: they are the same on every **object store**, and a half-typed
-        // one is less urgent than a connection with no region. Skipped entirely for a provider
-        // whose form shows no CLIENT OPTIONS section (`views::form::Fields`), or the footer would
-        // block Save naming a row the window does not render and the user cannot reach.
         if self.provider.is_object_store() {
             if let Some(why) = self.client_config.blocker() {
                 return Some(why);
@@ -623,8 +592,6 @@ mod tests {
                 provider: Provider::Http,
                 client_config: Default::default(),
             },
-            // The plain-`http` origin, which is a different origin and not a laxer way of
-            // reaching the same one — so it has to survive the round trip as itself.
             ConnectionDef {
                 address: "http://aserver:8484".into(),
                 provider: Provider::Http,
@@ -652,10 +619,6 @@ mod tests {
             assert_eq!(draft.blocker(), None, "{typed}");
         }
 
-        // A **path** is a validation error we point out, not something trimmed off behind the
-        // user: the registry keys on scheme and authority, so a connection carrying one would go
-        // in under a key nothing looks up while the box went on showing it. The message quotes
-        // the part to drop.
         draft.set_address("https://aserver:8484/fake".into());
         assert_eq!(
             draft.address, "https://aserver:8484/fake",
@@ -667,8 +630,6 @@ mod tests {
             "{why}"
         );
 
-        // A scheme is not optional either — the field is the URL, so half of one is refused
-        // rather than completed on the user's behalf.
         draft.set_address("aserver:8484".into());
         let why = draft.blocker().expect("no scheme");
         assert!(why.contains("scheme"), "{why}");
@@ -720,9 +681,7 @@ mod tests {
         for (typed, kept) in [
             ("s3://acme-lake", "acme-lake"),
             ("https://example.com", "example.com"),
-            // Not a scheme: a host and its port.
             ("example.com:8080", "example.com:8080"),
-            // Nor is this — the leading segment has to look like a scheme.
             ("//acme-lake", "//acme-lake"),
         ] {
             draft.set_address(typed.into());
@@ -739,9 +698,6 @@ mod tests {
         let blank = ConnectionDraft::default();
         assert!(blank.blocker().unwrap().contains("bucket"));
 
-        // A path in a *bucket* name is refused by the charset rule — a slash is simply not one
-        // of the characters a bucket may hold. (HTTP's own path case is above, where the address
-        // is a URL and the message quotes the part to drop.)
         let mut pathy = s3_draft();
         pathy.address = "acme-lake/year=2024".into();
         assert!(pathy
@@ -766,14 +722,12 @@ mod tests {
         keyless.sa_path = "/keys/reader.json".into();
         assert_eq!(keyless.blocker(), None, "GCS asks for no region");
 
-        // HTTP has nothing to configure but its URL, so a URL is the whole of its validation.
         let http = ConnectionDraft {
             provider: ProviderId::Http,
             address: "https://example.com".into(),
             ..Default::default()
         };
         assert_eq!(http.blocker(), None);
-        // …and the prose about it is the URL's, not the bucket's.
         let mut urlless = http;
         urlless.address = String::new();
         assert!(urlless.blocker().unwrap().contains("URL"));
@@ -787,12 +741,10 @@ mod tests {
         let mut draft = s3_draft();
         assert_eq!(draft.blocker(), None);
 
-        // A fresh row blocks nothing: it is the state the Add button leaves behind.
         let first = draft.client_config.add(String::new(), String::new());
         assert_eq!(draft.blocker(), None);
         assert!(draft.def().client_config.is_empty(), "and reaches no def");
 
-        // A value with nowhere to go is refused rather than dropped.
         draft.client_config.set_value(first, "30s".into());
         assert!(draft.blocker().unwrap().contains("no option"));
 
@@ -805,21 +757,17 @@ mod tests {
                 .collect()
         );
 
-        // The same option twice has no meaning in the map, so it is named before it gets there.
         let second = draft.client_config.add("timeout".into(), "5s".into());
         assert!(draft.blocker().unwrap().contains("'timeout' is set twice"));
         draft.client_config.set_key(second, "user_agent".into());
         assert_eq!(draft.blocker(), None);
 
-        // An option `object_store` has never heard of is the engine's own answer, reached
-        // through the same call `connect` makes — not a second list kept here.
         draft.client_config.set_key(second, "nonsense".into());
         assert!(draft
             .blocker()
             .unwrap()
             .contains("'nonsense' is not a client option"));
 
-        // …and a row removed is a row gone from the def.
         draft.client_config.remove(second);
         draft.client_config.remove(first);
         assert_eq!(draft.blocker(), None);
@@ -849,8 +797,6 @@ mod tests {
             "another row already claims it"
         );
 
-        // `user_agent`, not `timeout`: the quiet arm fires when the typed text matches exactly
-        // one catalogue name, and `timeout` is a substring of four of them.
         let mut rows = ConfigRows::default();
         let exact = rows.add("user_agent".into(), String::new());
         assert!(
@@ -858,8 +804,6 @@ mod tests {
             "offering back what is already typed is not a suggestion"
         );
 
-        // A blank box offers the **whole** catalogue: the panel scrolls rather than truncating,
-        // because these names share so many substrings that a cut entry is one typing cannot find.
         let mut rows = ConfigRows::default();
         let blank = rows.add(String::new(), String::new());
         assert_eq!(rows.suggestions(blank).len(), CLIENT_KEYS.len());
@@ -892,14 +836,10 @@ mod tests {
             .map(|key| rows.add(key.into(), "x".into()))
             .collect();
 
-        // A row in the middle hands over the one below it.
         assert_eq!(rows.remove(ids[1]), Some(ids[2]));
-        // The last row hands over the new last.
         assert_eq!(rows.remove(ids[2]), Some(ids[0]));
-        // …and the only row hands over nothing, which is what disarms the button.
         assert_eq!(rows.remove(ids[0]), None);
         assert!(rows.is_empty());
-        // An id the list never held selects the last row rather than reporting a removal.
         assert_eq!(rows.remove(99), None);
     }
 

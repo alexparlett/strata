@@ -1,50 +1,37 @@
 //! The catalog list, catalog and schema **Strata owns** — identity and visibility, never
 //! lifecycle.
 //!
-//! DataFusion 54's provider traits are resolution and enumeration interfaces:
-//! `register_table` is sync and carries no caller identity, so nothing here could spool a
-//! CTAS result or authorize a `DROP` (`docs/STATEMENTS_SPEC.md` §3 — settled; the lifecycle
-//! lives in [`ddl`](super::ddl), in front of `ctx.sql`). What the traits *can* do is fix the
-//! shape of the namespace and decide what enumerating it returns, which is exactly the two
-//! jobs this module has:
+//! DataFusion's provider traits are resolution and enumeration interfaces: `register_table` is sync
+//! and carries no caller identity, so nothing here could spool a CTAS result or authorize a `DROP`.
+//! Lifecycle lives in [`ddl`](super::ddl), in front of `ctx.sql`. What the traits *can* do is fix
+//! the namespace's shape and decide what enumerating it returns — this module's two jobs:
 //!
-//! * **Identity** — **the workspace catalog** has one schema, with tables keyed by
-//!   [`fold_ident`]. [`StrataCatalogProvider::register_schema`] refuses, so `CREATE SCHEMA x`
-//!   fails at the provider even when a statement reaches `ctx.sql` with the router bypassed.
-//!   (`CREATE DATABASE` cannot be stopped here: DataFusion's `create_catalog` registers into
-//!   the [`CatalogProviderList`], whose `register_catalog` returns an `Option` and so has no
-//!   way to refuse — `context/mod.rs:1030-1050`, and [`StrataCatalogList`] is no different.
-//!   The router's `Blocked::CreateDatabase` is the only gate that can say no about it, and it
-//!   is the first line for `CREATE SCHEMA` too.)
+//! * **Identity** — the workspace catalog has one schema, tables keyed by [`fold_ident`].
+//!   [`StrataCatalogProvider::register_schema`] refuses, so `CREATE SCHEMA x` fails at the provider
+//!   even with the router bypassed. `CREATE DATABASE` cannot be stopped here — `register_catalog`
+//!   returns an `Option` and has no way to refuse — so the router's `Blocked::CreateDatabase` is
+//!   its only gate. The scoping is load-bearing since the DB workstream: the session holds one
+//!   catalog per database connection too, and it is the *workspace* whose flat bare-name namespace
+//!   is one-catalog-one-schema.
+//! * **Removability** — [`StrataCatalogList`] exists for the one thing DataFusion cannot serve:
+//!   `CatalogProviderList` has `register_catalog` and no counterpart. Forgetting a database
+//!   connection has to make its catalog stop resolving, or a removed source stays queryable until
+//!   the window is re-opened.
+//! * **Visibility** — [`StrataSchemaProvider::table_names`] drops the `__snap_`-prefixed snapshots
+//!   while `table()` still resolves them. Every `information_schema` view and `SHOW` form
+//!   enumerates through `table_names()`, so one filter hides the spool from all of them, and
+//!   `__strata_ord` never reaches `information_schema.columns`. Every other reader addresses a
+//!   snapshot **by name**, so none notices. The prefix is [`is_snapshot_name`], beside the function
+//!   that mints the names, so the hiding rule and the naming rule cannot drift.
 //!
-//!   That scoping is load-bearing since the DB workstream: the session holds **N** catalogs —
-//!   the workspace's plus one per database connection — and a remote catalog has as many
-//!   schemas as the server does. What is one-catalog-one-schema is the *workspace*, whose
-//!   flat, bare-name namespace is the deepest assumption in the app.
-//! * **Removability** — [`StrataCatalogList`], which exists for one reason DataFusion cannot
-//!   serve: `CatalogProviderList` has `register_catalog` and no counterpart, and
-//!   `MemoryCatalogProviderList` is an insert-only map. Forgetting a database connection has
-//!   to make its catalog stop resolving, or a removed source stays silently queryable until
-//!   the window is re-opened — the exact inverse of the catalog-is-the-store rule.
-//! * **Visibility** — [`StrataSchemaProvider::table_names`] drops the `__snap_`-prefixed
-//!   result snapshots while `table()` still resolves them. Every `information_schema` view
-//!   and every `SHOW` form enumerates through `table_names()`
-//!   (`datafusion-catalog-54.0.0/src/information_schema.rs:96-216`), so one filter hides the
-//!   spool from all of them — and `__strata_ord`, a column only a snapshot carries, never
-//!   reaches `information_schema.columns`. Paging, chart, export and retirement all address a
-//!   snapshot **by name**, so none of them notices.
+//! That filter is **this** provider's, and a database connection's
+//! ([`db::DbSchemaProvider`](super::db)) deliberately has none: the namespace is the workspace
+//! catalog's, so a remote relation a server happens to call `__snap_x` is an ordinary table — the
+//! same scoping [`is_snapshot_ref`](super::query::is_snapshot_ref) applies to the refusal, off
+//! [`in_workspace`].
 //!
-//! The prefix itself is [`is_snapshot_name`], next to the function that mints the names: the
-//! hiding rule and the naming rule are one definition, and cannot drift apart. The filter is
-//! **this** provider's and a database connection's is deliberately without one
-//! ([`db::DbSchemaProvider`](super::db)): the namespace is the workspace catalog's, so a remote
-//! relation a server happens to call `__snap_x` is an ordinary table that means nothing here —
-//! which is the same scoping [`is_snapshot_ref`](super::query::is_snapshot_ref) applies to the
-//! refusal, off [`in_workspace`].
-//!
-//! Everything else delegates to the map verbatim, `MemorySchemaProvider`'s semantics included
-//! — the duplicate-name error and all — so every existing reader, `find_and_deregister`,
-//! validation's `table_exist` and snapshot retirement keep working with no call-site changes.
+//! Everything else delegates to the map verbatim, `MemorySchemaProvider`'s duplicate-name error
+//! included, so every existing reader keeps working with no call-site changes.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -61,26 +48,21 @@ use super::{fold_ident, CATALOG, SCHEMA};
 /// Whether `name` addresses **the workspace catalog's one schema** — the three spellings of
 /// one place (`orders`, `public.orders`, `strata.public.orders`), and nothing else.
 ///
-/// One predicate rather than the test written out per caller, because two rules turn on it and
-/// they must not drift: what an intercepted statement may create, drop or write
+/// One predicate rather than the test written per caller, because two rules turn on it and must not
+/// drift: what an intercepted statement may create, drop or write
 /// ([`ddl::bare_name`](super::ddl::bare_name)), and what the `__snap_` namespace covers
-/// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session
-/// holds more than one catalog, so "is this name ours" is a real question rather than a
-/// formality — a database connection's catalog has as many schemas as the server does, and a
-/// relation in one is neither Strata's to manage nor part of Strata's reserved namespace.
+/// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session holds
+/// more than one catalog, so "is this name ours" is a real question.
 ///
-/// Reference-shaped, so it is asked of the same value DataFusion resolved: a `Partial` whose
-/// schema is not `public` names a schema the workspace catalog cannot have
-/// (`StrataCatalogProvider::schema`), which is why it answers false rather than looking at the
-/// catalog list.
+/// Reference-shaped, so it is asked of the value DataFusion resolved: a `Partial` whose schema is
+/// not `public` names a schema the workspace catalog cannot have, which is why it answers false
+/// rather than consulting the catalog list.
 ///
-/// **Each part is compared the way the thing that resolves it compares**, and the two halves
-/// differ on purpose. [`StrataCatalogList`] keys catalogs by [`fold_ident`], so `"STRATA"` —
-/// quoted, and therefore carried verbatim past the parser's own folding — resolves to the
-/// workspace catalog and has to answer true here; comparing it raw let that spelling out of the
-/// workspace, and with it out of the `__snap_` namespace, which is a way to read another tab's
-/// snapshot. [`StrataCatalogProvider::schema`] compares its one schema **exactly**, so a
-/// `"PUBLIC"` resolves to nothing at all and answering false about it is the honest answer.
+/// **Each part is compared the way the thing that resolves it compares.** [`StrataCatalogList`]
+/// keys catalogs by [`fold_ident`], so a quoted `"STRATA"` reaches the workspace catalog and must
+/// answer true — comparing it raw let that spelling out of the `__snap_` namespace, which is a way
+/// to read another tab's snapshot. [`StrataCatalogProvider::schema`] compares its one schema
+/// **exactly**, so `"PUBLIC"` resolves to nothing and false is the honest answer.
 pub(super) fn in_workspace(name: &TableReference) -> bool {
     match name {
         TableReference::Bare { .. } => true,
@@ -180,13 +162,10 @@ pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn Ca
 /// Register a catalog shaped the way a **database connection's** is — one schema, some
 /// relations — so a test can ask what the app does about a name inside one without a server.
 ///
-/// A `MemoryCatalogProvider` stands in exactly, because every rule under test reads the
-/// **catalog list** and nothing more: `ddl::bare_name`'s refusal, `catalog::view_error`'s
-/// diagnosis, `plan_deps`' qualified recording and `Engine::describe_remote` all ask whether a
-/// catalog of that name is registered and then work off the resolved reference. What
-/// `db::DbCatalogProvider` adds on top — lazily built federated providers and a `table_type`
-/// that costs no round trip — is what the *integration* test exercises against a real server
-/// (`tests/postgres_federation.rs`), and nothing here can stand in for that.
+/// A `MemoryCatalogProvider` stands in exactly, because every rule under test reads the **catalog
+/// list** and nothing more: each asks whether a catalog of that name is registered and then works
+/// off the resolved reference. What `db::DbCatalogProvider` adds on top is what the *integration*
+/// test exercises against a real server, and nothing here can stand in for that.
 ///
 /// Two columns rather than one, so a test can join a remote relation to a workspace table on
 /// `id` and still have something to project.
@@ -297,9 +276,6 @@ impl SchemaProvider for StrataSchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        // `MemorySchemaProvider`'s answer, kept: every Strata registration deregisters first
-        // (`catalog::register_external`, snapshot retirement), so a collision here is a bug
-        // and must not read as a silent replacement.
         if self.table_exist(name.as_str()) {
             return exec_err!("The table {name} already exists");
         }
@@ -339,8 +315,6 @@ mod tests {
             vec![Arc::clone(&ids)],
         )
         .expect("batch");
-        // A snapshot carries the ordinal column, and only a snapshot does — which is what
-        // makes `__strata_ord` the tell that the filter is working.
         let snapshot = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),

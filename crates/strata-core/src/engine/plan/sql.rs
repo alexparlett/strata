@@ -23,7 +23,6 @@ pub fn is_explain(sql: &str) -> bool {
 /// prefix. Applied to the press's snapshot of the editor text at dispatch — the buffer
 /// itself is never rewritten.
 pub fn as_explain(sql: &str, analyze: bool) -> String {
-    // Strip a leading keyword (word-boundary, case-insensitive), returning the rest.
     fn strip<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
         s.get(..kw.len())
             .filter(|h| h.eq_ignore_ascii_case(kw))
@@ -92,7 +91,6 @@ mod tests {
             as_explain("  EXPLAIN VERBOSE select 1", false),
             "EXPLAIN\nselect 1"
         );
-        // Don't strip an identifier that merely starts with "explain".
         assert_eq!(
             as_explain("SELECT * FROM explain_t", false),
             "EXPLAIN\nSELECT * FROM explain_t"

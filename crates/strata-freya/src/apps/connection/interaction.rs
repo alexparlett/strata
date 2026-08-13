@@ -75,13 +75,9 @@ fn runner(
         app,
         (480., 900.).into(),
         move |r| {
-            // A real engine, asked nothing: there is no scan *driver* here — that lives at the
-            // project window's root — so Save raises a request and the row stays `Loading`,
-            // which is exactly the contract under test.
             r.provide_root_context(EngineCtx::default);
             r.provide_root_context(|| State::create(CatalogState::Settled(0)));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
-            // The window's report halves — `persisted_defs` writes through them.
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
             let project = r.provide_root_context(|| {
@@ -91,8 +87,6 @@ fn runner(
                 draft: State::create(draft.clone()),
                 target: State::create(target.clone()),
                 status: State::create(Status::Idle),
-                // Answered, and empty: the profile picker is not what these test, and `None`
-                // would leave it reading "still looking" for ever.
                 profiles: State::create(Some(Vec::new())),
                 selected_option: State::create(None),
             });
@@ -208,8 +202,6 @@ fn a_providers_controls_are_the_ones_that_provider_has() {
     assert!(!shows(&runner, "REGION"));
     assert!(!shows(&runner, "ENDPOINT"));
     assert!(!shows(&runner, "BUCKET"));
-    // No scheme chip and no scheme picker: the one box holds the whole URL, which is why a
-    // bucket name carried over from S3 is now refused for having no scheme.
     assert!(
         shows(
             &runner,
@@ -219,8 +211,6 @@ fn a_providers_controls_are_the_ones_that_provider_has() {
         texts(&runner)
     );
 
-    // Back to S3, and the region it was given is still there — the draft holds every provider's
-    // fields, so the round trip forgets nothing.
     click_lowest(&mut runner, "S3");
     assert_eq!(ctx.draft.peek().region, "eu-west-2");
     assert!(shows(&runner, "REGION"));
@@ -277,8 +267,6 @@ fn saving_writes_the_def_and_waits_for_the_pass() {
         "the window is waiting on its own row, not claiming it connected"
     );
     assert_eq!(rescan.peek().seq, 1, "one pass asked for");
-    // And the window is now editing what it just wrote, so a second Save measures its move
-    // against the URL on disk rather than the one it opened on.
     assert_eq!(
         *ctx.target.peek(),
         ConnectionTarget::Edit("s3://acme-lake".into())
@@ -340,11 +328,9 @@ fn the_client_options_header_stands_at_the_split_it_declares() {
     let split = |runner: &TestingRunner| {
         let option = text_area(runner, "Option");
         let value = text_area(runner, "Value");
-        // The gap between the two header labels is what the column split decides.
         (value.min_x() - option.min_x()).round()
     };
 
-    // The empty branch renders the header too, which is what makes the shift visible at all.
     assert!(
         shows(
             &runner,
@@ -359,8 +345,6 @@ fn the_client_options_header_stands_at_the_split_it_declares() {
         "empty, and already correct"
     );
 
-    // Added through `ctx.edit`, the same funnel the toolbar's press goes through — the bug is in
-    // the table's two branches, not in the button.
     ctx.edit(|draft| {
         draft.client_config.add("timeout".into(), "30s".into());
     });
@@ -390,7 +374,6 @@ fn clicking_into_either_box_of_an_option_row_selects_it() {
     let (mut runner, (ctx, ..)) = runner("options-select", ConnectionTarget::New, s3_draft());
     settle(&mut runner);
 
-    // Two rows, so "selected" is a real answer rather than the only one available.
     ctx.edit(|draft| {
         draft.client_config.add("timeout".into(), "30s".into());
         draft
@@ -408,13 +391,10 @@ fn clicking_into_either_box_of_an_option_row_selects_it() {
         .collect();
     assert_eq!(ids.len(), 2);
 
-    // Nothing is selected until something is clicked.
     let mut slot = ctx.selected_option;
     slot.set(None);
     settle(&mut runner);
 
-    // The **value** box of the second row: found by its own text, which is the one thing on that
-    // line unique to it.
     let point = centre(field_area(&runner, "strata"));
     runner.move_cursor(point);
     runner.click_cursor(point);
@@ -425,7 +405,6 @@ fn clicking_into_either_box_of_an_option_row_selects_it() {
         "clicking the value box selected its own row"
     );
 
-    // …and the name box of the first, which selects it away again.
     let point = centre(field_area(&runner, "timeout"));
     runner.move_cursor(point);
     runner.click_cursor(point);

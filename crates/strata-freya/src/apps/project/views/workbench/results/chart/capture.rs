@@ -106,20 +106,9 @@ fn why(err: ClipboardError) -> &'static str {
 /// same thing to the caller, which has no image either way.
 fn render(frame: &Frame) -> Option<ClipboardImage> {
     let mut surface = raster_n32_premul((EXPORT_WIDTH, EXPORT_HEIGHT))?;
-    // `try_`, so a window with no font collection is the "no image" the caller already handles
-    // rather than a panic on the render thread. Copying a chart is not worth taking the window
-    // down for.
     let mut font_collection = try_consume_root_context::<FontCollection>()?;
     {
         let canvas = surface.canvas();
-        // The live canvas is transparent over the pane, which paints the background behind it;
-        // an offscreen surface has nothing behind it, so a capture without this is a chart
-        // floating on whatever the target application puts under an alpha channel.
-        //
-        // **Forced opaque.** A theme may state its colours with alpha (`theme.schema.json`
-        // allows `#RRGGBBAA` and `rgba(...)`), and a translucent `surface.raised` would clear to
-        // a translucent background — putting back exactly the see-through capture this line is
-        // here to prevent.
         canvas.clear(frame.dress.background.with_a(u8::MAX));
         canvas.scale((EXPORT_SCALE, EXPORT_SCALE));
         marks::draw(canvas, &mut font_collection, logical_size(), frame);

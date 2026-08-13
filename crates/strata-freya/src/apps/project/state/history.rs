@@ -74,7 +74,6 @@ impl History {
             tracing::error!("load history: {e}");
             Vec::new()
         });
-        // File order is oldest → newest; the satellite holds newest-first.
         Self {
             entries: loaded.into_iter().rev().collect(),
             seen: HashSet::new(),
@@ -144,28 +143,18 @@ pub type HistoryCtx = State<History>;
 pub fn use_history_recording(query: UseQuery<RunQuery>, run: RunId, sql: String) {
     let history = use_consume::<HistoryCtx>();
     let project = use_radio_station::<ProjectState, ProjChan>();
-    // Peeked at record time, never subscribed: the cap decides how much to keep, and a
-    // settings change has no business re-rendering a results pane.
     let config = use_config_station();
-    // A failed append is reported rather than only `tracing`d (P4-15): the row is on screen
-    // either way, so a silent failure is the drawer disagreeing with the file until the next open.
     let report = use_report();
     let mut recorded = use_state(|| false);
     use_side_effect(move || {
         if *recorded.peek() {
             return;
         }
-        // Pull the primitives out while the query borrow is held (both `Copy`), so the
-        // borrow is released before `record_run` runs.
         let settled = match &*query.read().state() {
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Rows(rows)),
                 ..
             } => Some((rows.output.elapsed_ms as u64, rows.output.total as u64)),
-            // A statement that ran is a query the user may want back (ED-02) — a typed
-            // `CREATE TABLE` no less than the `SELECT` it wraps. Its `count` is the rows it
-            // moved; a statement that counts nothing records `0`, which is what the drawer's
-            // "N rows" then honestly says about it.
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Statement(report)),
                 ..
@@ -209,14 +198,10 @@ fn record_run(
     cap: usize,
     report: ReportCtx,
 ) {
-    // Peek first: an already-seen run must not take a write lock (which would wake the
-    // history subscribers for nothing).
     if history.peek().seen.contains(&run) {
         return;
     }
     let replaced = history.write().push(run, entry.clone(), cap);
-    // Snapshotted out here, after the write guard is dropped and before the task runs, so the
-    // list that reaches disk is the one this run produced.
     let rewrite = replaced.then(|| history.peek().file_order());
     spawn(async move {
         persisted_history_offloaded(&root, rewrite, entry, report).await;
@@ -289,10 +274,9 @@ mod tests {
     /// Dedup by run id: the same run recorded twice (a results-pane re-mount) lands once.
     #[test]
     fn push_is_deduped_by_run_id() {
-        let mut h = History::load(Path::new("/nonexistent"), 100); // absent → empty
+        let mut h = History::load(Path::new("/nonexistent"), 100);
         let run = RunId::new();
         h.push(run, entry("SELECT 1"), 100);
-        // `record_run` guards on `seen` before pushing; simulate its check.
         assert!(h.seen.contains(&run));
         assert_eq!(h.entries.len(), 1);
     }

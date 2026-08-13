@@ -124,8 +124,6 @@ fn snapshot(ctx: &SessionContext) -> FunctionCatalog {
         .filter_map(|n| ctx.udwf(n).ok())
         .map(|u| window_sym(&u))
         .collect();
-    // `sorted` orders the *names*; the filter_map preserves that order, but keep the
-    // explicit sort so a future change to the pipeline can't silently unsort.
     scalar.sort_by(|a, b| a.name.cmp(&b.name));
     aggregate.sort_by(|a, b| a.name.cmp(&b.name));
     window.sort_by(|a, b| a.name.cmp(&b.name));
@@ -169,9 +167,6 @@ fn window_sym(udwf: &WindowUDF) -> FunctionSym {
         name: udwf.name().to_string(),
         kind: FnKind::Window,
         signatures: signatures(udwf.signature()),
-        // A window function's return type comes from `field(WindowUDFFieldArgs)` —
-        // it needs the concrete input fields, so there is no honest argument-free
-        // answer. Left unset rather than guessed.
         ret: None,
         description: udwf.documentation().map(|d| d.description.clone()),
         created: false,
@@ -209,7 +204,6 @@ where
     let args = match example {
         Some(a) if !a.is_empty() => a,
         _ if sig.type_signature.supports_zero_argument() => Vec::new(),
-        // No representative arguments — don't risk an unguarded resolver.
         _ => return None,
     };
     resolve(&args).ok().map(|t| short_type(&t))
@@ -239,8 +233,6 @@ fn render(ts: &TypeSignature) -> Vec<Vec<String>> {
         TS::Comparable(n) => repeat("comparable", *n),
         TS::OneOf(sigs) => sigs.iter().flat_map(render).collect(),
         TS::ArraySignature(a) => vec![vec![a.to_string()]],
-        // The function computes its own coercion — arity is genuinely unknown. No
-        // overload; `FunctionSym::doc`/signature help fall back to `name(…)`.
         TS::UserDefined => vec![],
     }
 }
@@ -266,7 +258,6 @@ fn short_type(t: &DataType) -> String {
         Struct(_) => "Struct".into(),
         Map(..) => "Map".into(),
         Dictionary(_, value) => short_type(value),
-        // Plain scalars (Utf8, Int64, Boolean, …) display short already.
         other => other.to_string(),
     }
 }

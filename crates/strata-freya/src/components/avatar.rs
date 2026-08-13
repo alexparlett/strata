@@ -97,10 +97,8 @@ mod tests {
         assert_eq!(initials_of("sales_daily"), "SD");
         assert_eq!(initials_of("sales-daily"), "SD");
         assert_eq!(initials_of("sales daily"), "SD");
-        // Only the first two words count, and a single word gives one letter.
         assert_eq!(initials_of("a_b_c"), "AB");
         assert_eq!(initials_of("sample"), "S");
-        // Nothing to read — a placeholder rather than an empty tile.
         assert_eq!(initials_of(""), "?");
         assert_eq!(initials_of("__"), "?");
     }

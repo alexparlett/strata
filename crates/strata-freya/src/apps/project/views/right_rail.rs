@@ -36,8 +36,6 @@ impl RightRail {
 
 impl Component for RightRail {
     fn render(&self) -> impl IntoElement {
-        // On `Chan::Layout` for the left rail's reason: a pane switch redresses the buttons, a
-        // resize drag (`Chan::LayoutSize`) must not.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let right = radio.read().layout.right;
         let background = use_roles().get(Role::SurfaceBackground);

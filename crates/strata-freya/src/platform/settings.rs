@@ -34,22 +34,12 @@ use crate::state::AppCtx;
 /// listener's), which is both how the callback learns *which* window asked and why this can
 /// be called from an event handler with no scope of its own.
 pub fn open_settings(platform: Platform, mut app: AppCtx) {
-    // The receiver is dropped: the work all happens inside the callback, and nothing here
-    // waits on it.
     drop(platform.post_callback(move |owner, ctx| {
-        // Checked against the renderer's own window map, not just the registry: the entry is
-        // added eagerly below, while its removal rides the window's `use_register_window`
-        // drop, which can only fire once that hook has resolved its id. A window that went
-        // before then would leave an entry naming nothing — and trusting it would focus
-        // nothing, pin nothing, and return, locking Settings out for the rest of the session.
-        // Treating a dangling entry as "not open" makes that self-healing.
         let open = app
             .windows
             .peek()
             .settings()
             .filter(|id| ctx.windows().contains_key(id));
-        // ⌘, pressed *in* the Settings window would otherwise pin it above itself, which
-        // AppKit answers by dropping the window out of the window list entirely.
         if open == Some(owner) {
             return;
         }
@@ -62,9 +52,6 @@ pub fn open_settings(platform: Platform, mut app: AppCtx) {
             }
             None => {
                 let id = ctx.launch_window(SettingsApp::window(app.clone()));
-                // Registered here rather than left to the window's own `use_register_window`,
-                // which can only learn its id a render and a round trip later: until then a
-                // second ⌘, would see no Settings window and open another.
                 register(app.windows, id, WindowKind::Settings);
                 id
             }
@@ -97,8 +84,6 @@ pub fn use_settings_pin(app: AppCtx) {
     let mut windows = app.windows;
     use_side_effect(move || {
         let registry = windows.read();
-        // No owner recorded yet is the frame between this window mounting and `open_settings`
-        // finishing, not a closed owner.
         if registry
             .settings_owner()
             .is_some_and(|id| !registry.is_open(id))

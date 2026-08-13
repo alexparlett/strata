@@ -29,7 +29,6 @@ use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvid
 use aws_types::os_shim_internal::{Env, Fs};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::*;
-// `list` hands back a stream, and [`reachable`] wants exactly its first item.
 use futures::stream::StreamExt;
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider};
 use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
@@ -43,40 +42,25 @@ use super::connect::{self, Registration};
 /// Build the object store `conn` describes and register it on `ctx`, so tables over its
 /// bucket can be registered and scanned.
 ///
-/// **All or nothing: on `Err`, nothing is registered for this bucket** — including anything an
-/// earlier pass registered, which is deregistered here rather than left behind. That is the
-/// same contract [`register_external`](super::catalog::register_external) keeps for a table
-/// (it deregisters before it re-infers, so a failed re-scan leaves the table absent), and it
-/// is what makes the outcome foldable onto a single `Reg` row: a connection cannot be both
-/// refused and live. Leaving the old store would produce exactly that — a row reading `Failed`
-/// over a bucket the engine still answers for.
+/// **All or nothing: on `Err`, nothing is registered for this bucket** — anything an earlier pass
+/// registered is deregistered here rather than left behind, which is what makes the outcome
+/// foldable onto a single `Reg` row. Leaving the old store would give a row reading `Failed` over a
+/// bucket the engine still answers for.
 ///
-/// So the credential chain is probed *before* the store goes in, not after. That probe is
-/// deliberate, and it is what the pane's status dot is made of. Without it a connection with
-/// no usable credentials registers perfectly happily and the diagnosis lands somewhere else
-/// entirely — on every table over the bucket, one opaque signing error each, rather than once
-/// on the thing that is actually wrong. It resolves the chain **once** and throws the answer
-/// away; the provider installed on the store resolves per request, so credentials that rotate
-/// (or an `aws sso login` in another terminal) keep working without anything here being
-/// re-run.
+/// So the credential chain is probed *before* the store goes in. Without that, a connection with no
+/// usable credentials registers happily and the diagnosis lands on every table over the bucket, one
+/// opaque signing error each. It resolves the chain **once** and throws the answer away; the
+/// provider on the store resolves per request, so rotating credentials keep working.
 ///
-/// **And then the bucket is asked, too** ([`reachable`]). That is a change of position: this
-/// function used to stop at the credential chain on the argument that asking the bucket costs a
-/// round trip per connection on every project open. It does, and it is worth it — the case that
-/// argument did not cover is a description that is *well-formed and wrong*, which no local check
-/// can see. A bucket named in the wrong region builds a perfectly good store, registers green,
-/// and fails every table under it. One request per connection at open buys a status that means
-/// what it says.
+/// **And then the bucket is asked, too** ([`reachable`]), which is a change of position: the case
+/// the round-trip argument did not cover is a description that is well-formed and *wrong*, which
+/// no local check can see.
 ///
-/// Idempotent: registering over an existing key replaces it, which is what a re-scan wants.
-///
-/// One thing it cannot clean up, because it is not told about it: a connection whose **bucket**
-/// was edited leaves the store registered under the *old* URL. That is an edit, and the edit
-/// gesture owns it (Connections 03) — nothing here ever sees the def it replaced.
+/// Idempotent: registering over an existing key replaces it, which is what a re-scan wants. One
+/// thing it cannot clean up, because it is never told about it: a connection whose bucket was
+/// edited leaves the store registered under the old URL, which the edit gesture owns.
 pub async fn connect(ctx: &SessionContext, conn: &ConnectionDef) -> Result<(), String> {
     let prepared = match prepare(conn).await {
-        // **And then ask the bucket.** See [`reachable`] — the step that makes a connection's row
-        // mean "this bucket answers" rather than "a store was constructed".
         Ok((url, store)) => match reachable(conn, &store).await {
             Ok(()) => Ok((url, store)),
             Err(why) => Err(why),
@@ -103,10 +87,6 @@ fn settle(
     connect::settle(
         ctx,
         prepared.map(|(url, store)| Registration::ObjectStore(url, store)),
-        // The URL is re-parsed rather than threaded through the error: a def refused *before*
-        // the URL was parsed never registered anything under it either, so the lookup simply
-        // misses. Deregistering errs when nothing was registered under this key, which is the
-        // ordinary case (a first pass, or a def that has never worked) and not a failure.
         || {
             if let Ok(url) = ObjectStoreUrl::parse(conn.url()) {
                 let _ = ctx.deregister_object_store(url.as_ref());
@@ -123,13 +103,7 @@ fn settle(
 /// a question about keying rather than about the network. Without the split, testing the keying
 /// meant reaching a real bucket.
 async fn prepare(conn: &ConnectionDef) -> Result<(ObjectStoreUrl, Arc<dyn ObjectStore>), String> {
-    // **The provider's own naming rules, checked from the def's own module** — the same call the
-    // connection editor makes, so a name refused at the field is refused here in the same words
-    // and a name this accepts is one the editor would have let through. A blank bucket, a name
-    // carrying a path and every rule below them are all this one answer.
     conn.provider.check_address(&conn.address)?;
-    // The client options are the def's other half, and refused on the same terms: a name
-    // `object_store` has never heard of would otherwise be dropped silently at build time.
     check_client_config(&conn.client_config)?;
     let url = ObjectStoreUrl::parse(conn.url()).map_err(|e| {
         format!(
@@ -144,80 +118,42 @@ async fn prepare(conn: &ConnectionDef) -> Result<(ObjectStoreUrl, Arc<dyn Object
 /// **Does this bucket actually answer?** One request, on the connection's own store, and the
 /// difference between a row that means something and a row that means a struct was built.
 ///
-/// This used to be deliberately absent, and the reasoning was explicit: [`connect`] asks the
-/// *host's chain* for a credential and never asks the bucket whether it is any good, because
-/// that is a round trip per connection on every project open. What that traded away turned out
-/// to be too much. `AmazonS3Builder` will happily construct a store for a bucket that does not
-/// exist in the region it was given — nothing in the description is checked against anything —
-/// so a mistyped region registered **green**, the pane showed a healthy connection, and every
-/// table over it then failed with `object_store`'s own bare-redirect message, which names no
-/// bucket, no region and no connection. The diagnosis was one clause long and landed on the
-/// wrong surface. A connection's status is worth a request.
+/// This was deliberately absent once, on the grounds that a probe is a round trip per connection on
+/// every project open. That traded away too much: `AmazonS3Builder` constructs a store for a bucket
+/// that does not exist in the region it was given, so a mistyped region registered **green** and
+/// every table over it failed with `object_store`'s bare-redirect message, which names no bucket,
+/// no region and no connection.
 ///
 /// **The first page of a listing, not a HEAD and not a whole listing.** `ObjectStore` has no
-/// head-bucket call, so a list is the cheapest thing the trait can express that the server has to
-/// resolve for real. It has to be `list`'s *stream*, taken once: `list_with_delimiter` reads
-/// like the cheaper call and is the more expensive one, because it drains the paginated stream to
-/// assemble a complete `ListResult` (`object_store` `client/list.rs`). Against the Hive lakes
-/// this exists for — tens of thousands of top-level `key=` folders — that is a round trip per
-/// thousand, per connection, on every project open and every whole-catalog re-scan. Pulling one
-/// item off `list` fetches one page and drops the rest unpolled.
+/// head-bucket call. It has to be `list`'s *stream* taken once: `list_with_delimiter` reads like
+/// the cheaper call and drains the paginated stream to assemble a complete `ListResult`, which
+/// against the Hive lakes this exists for is a round trip per thousand folders. An empty bucket
+/// ends the stream without yielding, which is a **pass**; only a `Some(Err(..))` is a refusal.
 ///
-/// An empty bucket ends the stream without yielding, which is a **pass**: nothing was there to
-/// find, and the request that established it succeeded. Only a `Some(Err(..))` is a refusal.
+/// **It refuses exactly one thing: a bucket that is not in the region it was given.** That is the
+/// fault no local check can see, and "may I list the root" is a far stronger demand than Strata
+/// makes — `connect` is `register_pass`'s first phase, so there is no table prefix to probe with. A
+/// prefix-scoped `s3:ListBucket` and a `GetObject`-only public bucket both answer 403 at the root
+/// while working perfectly, so refusing either would take a working project's every table down.
+/// Rejected credentials therefore still fail at the first table, exactly as before this probe.
 ///
-/// **It refuses exactly one thing: a bucket that is not in the region it was given.** Everything
-/// else the listing can answer — including every flavour of "no" — registers, and is left to the
-/// table that actually reads a path.
+/// **Matched on the message, because `object_store` gives us nothing else.** The crate classifies
+/// statuses into `PermissionDenied` / `NotFound` / … in `client/retry.rs`, but the S3 list path
+/// never reaches it: `aws/client.rs` routes only two variants through that mapping and sends
+/// `ListRequest` to `_ => Generic`. `RetryError` is `pub(crate)`, so `status()` cannot be
+/// downcast to either. A first version matched on the variants and was dead code in every arm;
+/// MinIO caught it. The sentence matched is one `object_store` defines as a literal.
 ///
-/// That is narrower than it first looks like it should be, and the narrowness is the point twice
-/// over.
-///
-/// **It is the fault this exists for.** A wrong region is the case no local check can see: the
-/// bucket name is valid, the credentials resolve, the store builds, and S3 answers a 301 carrying
-/// no `Location` header, which reaches the user as a sentence naming no bucket, no region and no
-/// connection. Nothing else that a root listing can tell us is worth a refusal.
-///
-/// **And "may I list the root" is a far stronger demand than Strata makes.** `connect` is
-/// `register_pass`'s **first** phase, so no table has registered and there is no prefix to probe
-/// with — a root listing is simply the only question available, not the right one. An
-/// `s3:ListBucket` conditioned on `s3:prefix: ["team/*"]` is AWS's own documented way to hand
-/// somebody a folder and answers **403 at the root** while `s3://lake/team/events/` reads
-/// perfectly; a published dataset granting `GetObject` and not `ListBucket` does the same, and a
-/// single-file source over it never lists at all. Refusing either would take a working project's
-/// every table down with the connection — a worse fault than the one being caught.
-///
-/// So rejected credentials still fail at the first table, which is exactly where they failed
-/// before this probe existed: this declines a *new* win rather than losing an old one.
-///
-/// **Matched on the message, because `object_store` gives us nothing else to match on.** This is
-/// the part worth checking before trusting: the crate *does* classify statuses into
-/// `PermissionDenied` / `NotFound` / … (`client/retry.rs`, `RetryError::error`), but the S3 list
-/// path never reaches it — `aws/client.rs`'s `From<Error> for crate::Error` routes only
-/// `CompleteMultipartRequest` and `DeleteObjectsRequest` through that mapping and sends every
-/// other variant, `ListRequest` included, to `_ => Generic`. So a 403, a 404 and a bare redirect
-/// arrive here as the same variant, and `RetryError` is `pub(crate)` so its `status()` cannot be
-/// reached by downcast either. A first version of this function matched on the variants and was
-/// dead code in every arm; MinIO caught it. Matching one distinctive sentence is the honest
-/// remaining option, and it is a sentence `object_store` defines as a literal
-/// (`RequestError::BareRedirect`).
-///
-/// **HTTP is exempt, and not out of laziness.** `object_store`'s HTTP store lists over WebDAV
-/// `PROPFIND`, which most origins serving files do not implement (MinIO included — see
-/// `tests/object_store_minio.rs`, where it is why the HTTP arm reads a single object). Probing
-/// one by listing would refuse working connections for a verb their server was never going to
-/// answer, which is a worse lie than the one this function exists to remove. An HTTP connection
-/// names a whole origin and its table names the object, so the table's own registration is where
-/// its reachability is genuinely tested.
+/// **HTTP is exempt, and not out of laziness.** Its store lists over WebDAV `PROPFIND`, which most
+/// file origins do not implement (MinIO included), so probing one would refuse working connections
+/// for a verb their server was never going to answer. An HTTP connection names a whole origin and
+/// its table names the object, so the table's own registration tests its reachability.
 async fn reachable(conn: &ConnectionDef, store: &Arc<dyn ObjectStore>) -> Result<(), String> {
     if matches!(conn.provider, Provider::Http) {
         return Ok(());
     }
-    // One page, then dropped: `next()` polls the paginated stream once, and the stream is not
-    // polled again. An exhausted stream (`None`) is an empty bucket, which answered fine.
     match store.list(None).next().await {
         Some(Err(e)) if is_bare_redirect(&e) => Err(wrong_region(conn)),
-        // Everything else — an object, an empty bucket, a 403, a 404 — registers. See above.
         _ => Ok(()),
     }
 }
@@ -249,8 +185,6 @@ fn wrong_region(conn: &ConnectionDef) -> String {
             conn.address.trim(),
             s3.region.trim()
         ),
-        // No other provider takes a region, so none can be redirected for naming the wrong one;
-        // the generic wording is here so the function is total rather than because it is reachable.
         _ => format!("'{}' did not answer.", conn.url()),
     }
 }
@@ -290,10 +224,6 @@ pub fn disconnect(ctx: &SessionContext, url: &str) {
 /// list would have been. What the *connection* does with a name it cannot resolve is
 /// [`profile_credentials`]'s answer, which is the one that reaches a row.
 pub async fn aws_profiles() -> Vec<String> {
-    // `Default::default()` is `EnvConfigFiles` — the standard pair of profile files, resolved
-    // through `env` so the two override variables are honoured. Named by inference rather than
-    // by path: `aws-config`'s own alias for the type is deprecated in favour of one that would
-    // cost a second direct dependency on `aws-runtime` for a word.
     let profiles = aws_config::profile::load(&Fs::real(), &Env::real(), &Default::default(), None)
         .await
         .map(|set| set.profiles().map(str::to_string).collect::<Vec<_>>());
@@ -444,9 +374,6 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
     let bucket = conn.address.trim();
     match &conn.provider {
         Provider::S3(s3) => {
-            // Region is not optional and cannot be inferred: `AmazonS3Builder` silently
-            // defaults to `us-east-1` (arrow-rs#2795), which resolves to a real endpoint
-            // serving a different bucket's worth of nothing. Refused rather than defaulted.
             let region = s3.region.trim();
             if region.is_empty() {
                 return Err("This S3 connection needs a region.".into());
@@ -456,12 +383,6 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                 .with_region(region);
             let endpoint = s3.endpoint.trim();
             if !endpoint.is_empty() {
-                // **Refused by name, because reqwest refuses it namelessly.** `ClientOptions`
-                // builds its client `https_only(!allow_http)`, so a plain-`http` endpoint without
-                // the toggle fails every request with "HTTP error: builder error" — no host, no
-                // scheme, nothing to act on. The HTTP provider derives its answer from the scheme
-                // the user typed; this one has a control of its own, so the honest thing is to say
-                // which control. (Cost an afternoon once, on the connection editor's own tests.)
                 if endpoint.starts_with("http://") && !s3.allow_http {
                     return Err(format!(
                         "The endpoint '{endpoint}' is plain HTTP. Turn on 'Allow plain HTTP' for \
@@ -473,7 +394,6 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                     .with_allow_http(s3.allow_http);
             }
             builder = match &s3.auth {
-                // No chain at all — unsigned requests against a public bucket.
                 S3Auth::Anonymous => builder.with_skip_signature(true),
                 S3Auth::Ambient => builder.with_credentials(ambient_credentials(region).await?),
                 S3Auth::Profile { name } => {
@@ -484,9 +404,6 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                     builder.with_credentials(profile_credentials(region, profile).await?)
                 }
             };
-            // **Last, so an explicit option wins.** `allow_http` is the one key both halves can
-            // reach (the endpoint toggle above sets it), and the user's own table is the more
-            // specific statement of the two.
             for (key, value) in client_options(conn) {
                 builder = builder.with_config(AmazonS3ConfigKey::Client(key), value);
             }
@@ -498,21 +415,12 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
         Provider::Gcs(gcs) => {
             let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
             builder = match &gcs.auth {
-                // Application Default Credentials, which the builder resolves itself: the
-                // `GOOGLE_APPLICATION_CREDENTIALS` file, then the gcloud ADC file, then the
-                // GCE/GKE metadata server. The last of those is installed without a request,
-                // so an ambient GCS connection on a machine with no credentials at all
-                // registers cleanly and fails at read time — the one arm here whose status
-                // cannot be known without asking the bucket, and it is not worth a request.
                 GcsAuth::Ambient => builder,
                 GcsAuth::ServiceAccount { path } => {
                     let path = path.trim();
                     if path.is_empty() {
                         return Err("This GCS connection needs a service-account file.".into());
                     }
-                    // The **path**. `with_service_account_key` takes inline JSON and is the
-                    // one call in this module's vocabulary that would put a private key in
-                    // our hands; it is not used anywhere and must not be.
                     builder.with_service_account_path(path)
                 }
                 GcsAuth::Anonymous => builder.with_skip_signature(true),
@@ -525,17 +433,7 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
                 .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
         }
-        // A public origin: no credentials to resolve, and nothing to get wrong but the URL —
-        // whose scheme is the def's own, so a plain-`http` origin is reached as one.
-        // The one builder that takes `ClientConfigKey` directly; the two above wrap it in their
-        // own config enum, and all three land on the same `ClientOptions`.
         Provider::Http => {
-            // **Plain `http` is allowed exactly when the address asks for it.** `ClientOptions`
-            // builds a reqwest client with `https_only(!allow_http)`, so without this every
-            // request to an `http://` origin fails before it leaves the process, with a
-            // "builder error" that names nothing. It is derived rather than offered as a
-            // control because the user has already said which they meant, in the scheme: a
-            // toggle beside it could only disagree with the URL above it.
             let insecure = conn.address.trim().starts_with("http://");
             let mut builder = HttpBuilder::new()
                 .with_url(conn.url())
@@ -548,11 +446,6 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
                 .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
         }
-        // A database connection registers a catalog, not an object store, and
-        // [`Engine::connect`] routes one to [`db`](super::db) before it can arrive here.
-        // Answered rather than `unreachable!()` because a dispatch that ever went wrong should
-        // be a refused connection with a row saying so, not a panic taking the window's engine
-        // with it.
         Provider::Postgres(_) => Err(format!(
             "'{}' is a database connection, not an object store.",
             conn.url()
@@ -573,7 +466,6 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
 /// different one, and the connection's own region is the answer the user gave.
 async fn ambient_credentials(region: &str) -> Result<AwsCredentialProvider, String> {
     let config = aws_config::defaults(BehaviorVersion::latest())
-        // `Region` needs an owned, 'static string; the borrow is the caller's field.
         .region(Region::new(region.to_string()))
         .load()
         .await;
@@ -599,9 +491,6 @@ async fn ambient_credentials(region: &str) -> Result<AwsCredentialProvider, Stri
 /// `role_arn`, `sso_session`, `credential_process` — because that is what the profile says to
 /// do. What it will not do is fall back to somebody else's identity.
 async fn profile_credentials(region: &str, profile: &str) -> Result<AwsCredentialProvider, String> {
-    // The documented way to give a standalone provider what it needs for the profiles that
-    // make network calls (SSO, assume-role): a `ProviderConfig` carrying the region, with the
-    // default HTTPS client and sleep implementation left to resolve themselves.
     let config =
         ProviderConfig::without_region().with_region(Some(Region::new(region.to_string())));
     let provider = ProfileFileCredentialsProvider::builder()
@@ -738,8 +627,6 @@ mod tests {
                 }),
                 client_config: Default::default(),
             },
-            // HTTP's address is the whole origin, scheme and all — it is what the user typed
-            // and what the registry keys on, with nothing composed in between.
             ConnectionDef {
                 address: "http://aserver:8484".into(),
                 provider: Provider::Http,
@@ -747,12 +634,9 @@ mod tests {
             },
         ] {
             connect_unprobed(&ctx, &conn).await.expect("registers");
-            // The whole contract: a source path under the bucket now resolves to a store.
             let source = format!("{}/data/x.parquet", conn.url());
             assert!(reaches(&ctx, &source), "{source}");
         }
-        // …and only that bucket. A neighbouring one is still unreachable, which is what makes
-        // the def's identity meaningful.
         assert!(!reaches(&ctx, "s3://other-lake/x.parquet"));
     }
 
@@ -796,7 +680,6 @@ mod tests {
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "ambient-secret");
         std::env::set_var("AWS_SESSION_TOKEN", "");
 
-        // Ambient is the host's whole chain, and the environment is its first arm.
         let ambient = ambient_credentials("eu-west-2")
             .await
             .expect("the ambient chain resolves");
@@ -805,8 +688,6 @@ mod tests {
         assert_eq!(credential.secret_key, "ambient-secret");
         assert_eq!(credential.token, None);
 
-        // The profile is that profile — *even though* the environment would have answered, and
-        // answered with something else. This is the assertion the original code failed.
         let named = profile_credentials("eu-west-2", "readonly")
             .await
             .expect("the named profile resolves");
@@ -814,14 +695,11 @@ mod tests {
         assert_eq!(credential.key_id, "AKIAPROFILE");
         assert_eq!(credential.secret_key, "profile-secret");
 
-        // A profile that is not in the file is refused, rather than falling back to the
-        // environment and registering green — the whole point of the probe.
         let missing = profile_credentials("eu-west-2", "no-such-profile")
             .await
             .expect_err("refused");
         assert!(missing.contains("no-such-profile"), "{missing}");
 
-        // …and a connection over a resolving chain registers like any other.
         let ctx = SessionContext::new();
         connect_unprobed(
             &ctx,
@@ -861,7 +739,6 @@ mod tests {
         connect_unprobed(&ctx, &good).await.expect("registers");
         assert!(reaches(&ctx, "s3://acme-lake/x.parquet"));
 
-        // The same bucket, now described by a def that cannot build a store.
         let broken = s3(
             "acme-lake",
             S3Store {
@@ -944,7 +821,6 @@ mod tests {
                 },
                 "spaces",
             ),
-            // A scheme is half of an HTTP address, so an origin without one is not one.
             (
                 ConnectionDef {
                     address: "aserver:8484".into(),
@@ -970,12 +846,9 @@ mod tests {
                 .name
                 .parse()
                 .unwrap_or_else(|_| panic!("object_store does not know '{}'", key.name));
-            // Round-trips, so the name we store is the one it reads back — not a synonym.
             assert_eq!(parsed.as_ref(), key.name);
             assert!(!key.what.is_empty(), "{} has no description", key.name);
         }
-        // The two deliberate omissions, so removing them stays a decision rather than an
-        // oversight: `allow_http` is the S3 endpoint toggle's, and nothing here uploads.
         for absent in ["allow_http", "default_content_type"] {
             assert!(
                 absent.parse::<ClientConfigKey>().is_ok(),
@@ -1063,11 +936,9 @@ mod tests {
             e.contains("plain HTTP") && e.contains("Allow plain HTTP"),
             "{e}"
         );
-        // …and with the toggle on it is exactly the connection the MinIO test drives.
         connect_unprobed(&ctx, &conn(true))
             .await
             .expect("registers");
-        // An https endpoint needs no toggle.
         let mut secure = conn(false);
         if let Provider::S3(s3) = &mut secure.provider {
             s3.endpoint = "https://s3.example.net".into();
@@ -1144,10 +1015,7 @@ mod tests {
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                // Read whatever the client sends before answering, or it sees the write as a
-                // reset connection rather than as a response.
                 let _ = stream.read(&mut [0; 1024]);
-                // No `Location`, which is the whole point.
                 let _ = stream
                     .write_all(b"HTTP/1.1 301 Moved Permanently\r\nContent-Length: 0\r\n\r\n");
             }
@@ -1181,7 +1049,6 @@ mod tests {
         let e = connect(&ctx, &conn).await.expect_err("refused");
         assert!(e.contains("'eu-west-2'"), "{e}");
         assert!(e.contains("'acme-lake'"), "{e}");
-        // And a refused connection leaves nothing registered behind it.
         assert!(!reaches(&ctx, "s3://acme-lake/x.parquet"));
     }
 }

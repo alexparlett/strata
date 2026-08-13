@@ -67,30 +67,19 @@ pub struct ProjectMenu;
 impl Component for ProjectMenu {
     fn render(&self) -> impl IntoElement {
         let mut open = use_state(|| false);
-        // The app-globals from the window root: the shared open path needs them, and the
-        // window handle has to be taken here rather than inside a spawned task.
         let app = consume_context::<AppCtx>();
         let opener = consume_context::<OpenCtx>();
         let platform_handle = use_hook(Platform::get);
-        // Everything the dropdown paints is a root colour — the accent, and the text ramp — so
-        // it reads the roles through the normal hook rather than inventing header-only theme
-        // fields for colours the palette already names. The rows' tiles are `Avatar`'s theme and
-        // the separators are `Divider::menu`'s.
         let roles = use_roles();
 
-        // This window's project — `ProjChan::Meta` is exactly "the identity changed".
         let project = use_radio::<ProjectState, ProjChan>(ProjChan::Meta);
         let (active_name, active_path) = {
             let p = project.read();
             (p.name.clone(), p.root.to_string_lossy().into_owned())
         };
 
-        // Two subscriptions, one read: a window opening or closing anywhere moves the open set,
-        // and opening a project also re-orders the recents. Both change what this menu lists.
         let config = use_config(ConfigChan::Recents);
         let open_set = use_config(ConfigChan::Open);
-        // Both handles are read: a radio subscribes in `read()`, so taking one without
-        // reading it leaves that channel unable to wake this menu.
         let _ = open_set.read();
         let (open_rows, recent_rows) = {
             let cfg = config.read();
@@ -99,7 +88,6 @@ impl Component for ProjectMenu {
                 .iter()
                 .map(|path| ProjectRow::for_open(&cfg, path))
                 .collect();
-            // A project that's open is listed above; the recents section is what's *only* recent.
             let recent_rows: Vec<ProjectRow> = cfg
                 .recent_projects
                 .iter()
@@ -112,7 +100,6 @@ impl Component for ProjectMenu {
             (open_rows, recent_rows)
         };
 
-        // Built by folding the two lists in — the `Menu` is never held in a mutable variable.
         let menu = Menu::new()
             .min_width(Size::px(MENU_WIDTH))
             .on_close(move |()| open.set(false))
@@ -176,9 +163,6 @@ impl Component for ProjectMenu {
             )
         };
 
-        // The comp's ghost trigger: transparent until hover (the `flat_button` dress), folder
-        // glyph in the accent, the project name, and the ⌄ affordance. The pointer-down stop is
-        // what keeps a press on it from dragging the window (the bar is the drag region).
         let trigger = Button::new()
             .flat()
             .height(Size::px(30.))
@@ -210,8 +194,6 @@ impl Component for ProjectMenu {
         )
         .bottom()
         .align_start()
-        // A few pixels off the trigger, so the card reads as its own surface rather than growing
-        // out of the button.
         .offset(4.)
         .maybe_child(open().then_some(menu))
     }
@@ -247,10 +229,6 @@ fn project_row(
         .padding(Gaps::new(SP_3, SP_4, SP_3, SP_4))
         .on_press(move |_| {
             if !current {
-                // Through the shared path: the open preference decides the window, an
-                // already-open project is focused, the stored path is normalised (a legacy
-                // `.strata` entry names the project, not its metadata dir), and a recent
-                // whose folder is gone is dropped from the list instead of opened.
                 if let Some(root) = platform::resolve_recent(app.config, &path) {
                     opener.request(platform_handle.clone(), app.clone(), root);
                 }

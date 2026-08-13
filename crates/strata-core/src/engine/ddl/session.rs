@@ -2,51 +2,35 @@
 //! `PREPARE` / `DEALLOCATE` over DataFusion's own prepared-plan store.
 //! `docs/STATEMENTS_SPEC.md` §6.5.
 //!
-//! Everything here dies with the engine, and every report says so, because the report is the one
-//! place the user learns a statement's scope (spec §8).
+//! Everything here dies with the engine, and every report says so, because the report is where the
+//! user learns a statement's scope.
 //!
-//! **`SET` and `RESET` never run natively**, and the two reasons are opposite halves of the same
-//! rule — Settings stays the durable config authority:
+//! **`SET` and `RESET` never run natively**, so Settings stays the durable config authority: native
+//! `SET` applies `datafusion.runtime.*` **live**, bypassing the `restart_owed` discipline, and
+//! native `RESET` restores *DataFusion's* default rather than the Settings one — so a user who set
+//! `batch_size` in Settings, typed `SET`, then typed `RESET` would land on 8192 with their own
+//! setting silently gone.
 //!
-//! - Native `SET` applies `datafusion.runtime.*` **live**, rebuilding the `RuntimeEnv` under the
-//!   session (`context/mod.rs`'s `set_runtime_variable`). That is precisely the discipline
-//!   `restart_owed` exists to hold: a runtime key is a launch value, changed by restarting the
-//!   engine and by nothing else.
-//! - Native `RESET` puts a key back to **DataFusion's** default, not to the value Settings names
-//!   for it — so a user who set `batch_size` in Settings, typed `SET`, then typed `RESET` would
-//!   land on 8192 with their own setting silently gone.
-//!
-//! So a `SET` is applied through the same `ConfigOptions::set` call `Engine::set_config` uses and
-//! recorded in [`SessionScope`]'s overlay; a `RESET` drops the overlay entry and re-applies the
-//! **Settings baseline**. The overlay is engine-wide — every tab and every agent read sees it,
-//! because they all plan against the one `SessionState` — and it wins for its keys until a `RESET`
-//! or a restart: a Settings Apply over an overlaid key records the new baseline and leaves the
-//! live value alone (`Engine::set_config`), which is what makes "the last thing you typed is what
-//! is in force" true without a precedence table. A restart drops the overlay silently, which is
-//! the same sentence read the other way round.
+//! A `SET` therefore goes through the same `ConfigOptions::set` call `Engine::set_config` uses and
+//! is recorded in [`SessionScope`]'s overlay; a `RESET` drops the entry and re-applies the Settings
+//! baseline. The overlay is engine-wide and wins for its keys until a `RESET` or a restart — a
+//! Settings Apply over an overlaid key records the baseline and leaves the live value alone, which
+//! makes "the last thing you typed is in force" true with no precedence table.
 //!
 //! Four key classes are refused rather than overlaid, each toward the surface that owns it:
-//! `is_owned_key` (Strata names its own catalog and schema), `datafusion.runtime.*` (a restart),
-//! and the two the app reads from the *Settings store* rather than from the session —
-//! `datafusion.format.*` (the grid formatter and the chart read's cache identity) and
-//! `datafusion.sql_parser.dialect` (the language service's own snapshot). A session value in
-//! either leaves two layers answering differently about the same buffer.
+//! `is_owned_key`, `datafusion.runtime.*` (a restart), and the two the app reads from the *Settings
+//! store* rather than the session — `datafusion.format.*` and `datafusion.sql_parser.dialect`,
+//! where a session value would leave two layers answering differently about one buffer.
 //!
-//! **`PREPARE` and `DEALLOCATE` do run natively** — DataFusion owns the prepared plan, and
-//! `EXECUTE` then rides the ordinary snapshot pipeline (`sql::read_policy`). What is ours is the
-//! fence and the mirror. The fence is `PREPARE`'s: `SQLOptions::verify_plan` descends into a
-//! `Prepare` node's input but an `Execute` node has no inputs, so a DML/DDL body has to be refused
-//! at `PREPARE` or it never is (the router refuses a non-query body off the parsed statement; the
-//! options triple here is the second gate). The mirror exists because
-//! `SessionState::prepared_plans` is `pub(crate)` — DataFusion has no public enumeration — and
-//! completion has to offer the names.
+//! **`PREPARE` and `DEALLOCATE` do run natively**, because DataFusion owns the prepared plan. Ours
+//! are the fence and the mirror. The fence is `PREPARE`'s: `verify_plan` descends into a `Prepare`
+//! node's input and an `Execute` has none, so a DML/DDL body is refused at `PREPARE` or never. The
+//! mirror exists because `prepared_plans` is `pub(crate)` and completion has to offer the names.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::datatypes::DataType;
-// For `ConfigOptions::reset` — a `ConfigField` method, where `set` is an inherent one. `reset`
-// takes the **full** `datafusion.x.y` key, exactly as `set` does.
 use datafusion::config::ConfigField;
 use datafusion::logical_expr::{LogicalPlan, Statement};
 use datafusion::prelude::{SQLOptions, SessionContext};
@@ -109,10 +93,6 @@ pub async fn set(
     stmt: DFStatement,
     scope: &SessionScope,
 ) -> Result<StatementOutcome, String> {
-    // Planned rather than read off the AST, because the plan is where a `SET` becomes a
-    // `(key, value)` pair at all: DataFusion's planner is what refuses scope modifiers and
-    // `HIVEVAR`, folds `SET TIMEZONE` onto `datafusion.execution.time_zone`, lower-cases the key
-    // and renders the value. Planning executes nothing.
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
@@ -123,11 +103,6 @@ pub async fn set(
     };
     refuse_reserved_key(&set.variable)?;
 
-    // The same two calls `Engine::set_config` makes, so the two ways an option moves cannot land
-    // differently — and DataFusion's own rejection of an unknown key or a bad value is the error
-    // the user reads. The refresh is half of applying a setting, not a flourish: without it
-    // `SET datafusion.execution.time_zone` would move `SHOW` and leave `now()` in the zone the
-    // engine was built with (see [`refresh_config_dependent_udfs`]).
     {
         let state = ctx.state_ref();
         let mut state = state.write();
@@ -189,12 +164,8 @@ pub async fn reset(
             None => options.reset(&reset.variable),
         }
         .map_err(|e| e.to_string())?;
-        // As in `set`, and for the same reason: DataFusion's own `reset_variable` refreshes here
-        // too, and a `RESET` that moved `SHOW` without moving `now()` would be the same silence.
         refresh_config_dependent_udfs(&mut state);
     }
-    // After the apply, not before: a key DataFusion refuses leaves the session exactly as it was,
-    // overlay included, so a failed `RESET` is not a half-reset.
     scope.overlay.lock().unwrap().remove(&reset.variable);
 
     Ok(StatementOutcome {
@@ -257,26 +228,16 @@ pub async fn prepare(
         ));
     };
     let name = prepare.name.clone();
-    // The types DataFusion resolved — the declared list when the statement carried one, otherwise
-    // what it inferred from the placeholders. Taken from the plan rather than the statement, since
-    // an inferred list only exists after planning.
     let params: Vec<DataType> = prepare
         .fields
         .iter()
         .map(|f| f.data_type().clone())
         .collect();
 
-    // **The fence, and the only place it can be.** `verify_plan` descends into a `Prepare` node's
-    // input, so the prepared query is judged under the read path's own triple here; an `Execute`
-    // node has no inputs, so nothing downstream can judge it again. The router already refuses a
-    // non-query body off the parsed statement (`Blocked::PrepareNonQuery`) — this catches what
-    // only a plan can name, exactly as the `INSERT` and `COPY` arms do.
     statements_only()
         .verify_plan(&plan)
         .map_err(|e| e.to_string())?;
 
-    // Storing the plan is `execute_logical_plan`'s own `Prepare` arm — optimizer pass, arity
-    // check against the declared types, and the duplicate-name error we deliberately keep.
     ctx.execute_logical_plan(plan)
         .await
         .map_err(|e| e.to_string())?;
@@ -285,8 +246,6 @@ pub async fn prepare(
     Ok(StatementOutcome {
         message: format!("Prepared '{name}' for this session"),
         count: None,
-        // Nothing persists, but `EXECUTE {name}` resolves now and did not a moment ago — and
-        // diagnostics and completion both resolve against the engine.
         effect: Some(StoreEffect::PreparedChanged),
     })
 }
@@ -313,8 +272,6 @@ pub async fn deallocate(
         .verify_plan(&plan)
         .map_err(|e| e.to_string())?;
 
-    // DataFusion answers "Prepared statement 'p' does not exist" for a name it does not hold, and
-    // that error is the whole reason the mirror is written after the dispatch and never before it.
     ctx.execute_logical_plan(plan)
         .await
         .map_err(|e| e.to_string())?;
@@ -511,9 +468,6 @@ mod tests {
         );
         assert_eq!(live(&eng, "datafusion.execution.batch_size").await, "4096");
 
-        // A `datafusion.*` key the Settings catalogue names no default for — Settings offers
-        // `ENGINE_KEYS`, but any key may be hand-typed. DataFusion's own default is the baseline
-        // for exactly those, so the `RESET` is DataFusion's too.
         let custom = "datafusion.optimizer.filter_null_join_keys";
         statement(&eng, &format!("SET {custom} = true"))
             .await
@@ -539,11 +493,6 @@ mod tests {
     async fn keys_the_app_reads_from_settings_refuse_toward_settings() {
         let eng = engine(&[]);
         let cases = [
-            // Every key `config::is_owned_key` names, not a representative one: it is a match
-            // list rather than something enumerable, so the only way this stays honest is to
-            // spell each out. A native `RESET datafusion.catalog.default_schema` would re-point
-            // name resolution at a schema that was never created — the failure that list exists
-            // to prevent — so the `RESET` half matters at least as much as the `SET` half.
             ("datafusion.catalog.default_catalog", Blocked::SetOwned),
             ("datafusion.catalog.default_schema", Blocked::SetOwned),
             ("datafusion.sql_parser.collect_spans", Blocked::SetOwned),
@@ -560,8 +509,6 @@ mod tests {
                 );
             }
         }
-        // The catalog and schema still resolve, so every registered name still does — and spans
-        // still collect, so the editor's diagnostics still carry them.
         assert_eq!(
             live(&eng, "datafusion.catalog.default_catalog").await,
             CATALOG
@@ -574,9 +521,6 @@ mod tests {
             live(&eng, "datafusion.sql_parser.collect_spans").await,
             "true"
         );
-        // And the planner still parses by the dialect Settings named — which is the whole point
-        // of that last row: the language service reads this key from Settings, so the session
-        // moving underneath it is a disagreement nothing would report.
         assert_eq!(live(&eng, "datafusion.sql_parser.dialect").await, "generic");
         assert!(!eng.restart_owed(), "and nothing owes a restart");
     }
@@ -604,12 +548,10 @@ mod tests {
             "1024",
             "the session value survives a Settings Apply"
         );
-        // …and the Apply is what the RESET then lands on, because it moved the baseline.
         statement(&eng, "RESET datafusion.execution.batch_size")
             .await
             .expect("reset");
         assert_eq!(live(&eng, "datafusion.execution.batch_size").await, "2048");
-        // Once the overlay lets the key go, Settings owns it again.
         eng.set_config(
             [(
                 "datafusion.execution.batch_size".to_string(),

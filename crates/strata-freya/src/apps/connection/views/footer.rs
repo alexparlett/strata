@@ -59,14 +59,7 @@ impl Component for Footer {
         let platform = use_hook(Platform::get);
 
         let connecting = matches!(*ctx.status.read(), Status::Connecting(_));
-        // The project window's driver **drops** a request raised while a pass is already in
-        // flight, and nothing retries it — so pressing Save then would leave the row `Loading`
-        // for good. The sidebar's ↻ answers this by disabling itself for the duration; so does
-        // the Configure window's Save; so does this. Subscribes, so the button comes back by
-        // itself when the pass settles.
         let scanning = catalog.read().is_scanning();
-        // What the *draft* can answer, then the one thing only the store can (a URL another
-        // connection already holds), and last the one nobody can — see [`save_note`].
         let note = save_note(
             ctx.draft
                 .read()
@@ -78,8 +71,6 @@ impl Component for Footer {
         let cancel = {
             Button::new()
                 .height(Size::px(ACTION_HEIGHT))
-                // Always available: a pass in flight is the project window's, and it answers on
-                // the pane's row whether this window is here to watch or not.
                 .on_press(move |_: Event<PressEventData>| platform.close_current_window())
                 .child(Control::new("Cancel"))
         };
@@ -109,9 +100,6 @@ impl Component for Footer {
                     .spacing(SP_4)
                     .padding(FOOTER_PADDING)
                     .background(win.background)
-                    // Why the button is off, rather than an unexplained dead control. A
-                    // *connection* failure is not shown here — it is a sentence the engine wrote,
-                    // and it has its own block at the end of the body.
                     .child(
                         rect().width(Size::flex(1.)).maybe_child(
                             note.filter(|_| !connecting).map(|why| {
@@ -186,8 +174,6 @@ fn save(
 ) {
     let def = ctx.draft.peek().def();
     let url = def.url();
-    // The URL this window opened on, when the edit has moved off it — a changed bucket *or* a
-    // changed provider, since the URL is both.
     let moved_from = ctx
         .target
         .peek()
@@ -195,9 +181,6 @@ fn save(
         .filter(|old| *old != url)
         .map(str::to_string);
 
-    // The write and the persist are one step, and the persist is checked. `upsert_connection`
-    // puts the row back in `Reg::Loading`, which is already the state this window renders as
-    // busy.
     let landed = {
         let mut p = project.write_channel(ProjChan::Connections);
         if let Some(old) = &moved_from {
@@ -206,13 +189,6 @@ fn save(
         p.upsert_connection(def);
         persisted_defs(&p, report)
     };
-    // The store write above has already happened, so the row exists either way and **must** be
-    // registered either way: returning here would leave it in `Reg::Loading` with nothing left to
-    // answer it — a permanent spinner in the pane. So the pass is asked for below whatever the
-    // persist said; what the failure changes is only what this window claims.
-    //
-    // `persisted_defs` has already logged the cause, in the project window where the user will
-    // look for it. Saying so here too would be the same failure twice.
     if !landed {
         ctx.status.set(Status::Failed(
             "The connection is registered, but the project file could not be written, so it will \
@@ -222,19 +198,11 @@ fn save(
     } else {
         ctx.status.set(Status::Connecting(url.clone()));
     }
-    // **The window is now editing what it just wrote.** Without this a second Save — after a
-    // refused connection, say — measures `moved_from` against the URL the window *opened* on, so
-    // the row the first Save created is never removed and the project keeps a phantom connection
-    // under the intermediate URL.
     {
         let mut target = ctx.target;
         target.set(ConnectionTarget::Edit(url.clone()));
     }
 
-    // A moved identity leaves the engine still holding a store under the old URL, which the scan
-    // pass cannot know about — it registers the defs, and this one no longer has a def. Dropping
-    // it is the one engine call this window makes; `register_pass` is additive by contract, so
-    // nothing else ever would.
     if let Some(old) = &moved_from {
         engine.disconnect(old);
         log_event(

@@ -19,18 +19,12 @@
 //! Neither half is a JSON→Arrow decoder — arrow still builds every array. Feed it **bytes**
 //! (`Decoder::decode`), not `Decoder::serialize`: this crate builds `serde_json` with
 //! `arbitrary_precision`, which encodes every `Number` as `{"$serde_json::private::Number": …}`,
-//! and arrow walks that as a struct and rejects it. The round trip through text is one
-//! allocation per batch and sidesteps serde's representation entirely.
-//!
-//! Verified end to end against the real `sample/config.json`: 62MB, one record, 19 columns and
-//! 241,425 nested fields, inferred in ~0.5s and decoded in ~0.3s.
-//!
-//! # The read path
+//! and arrow walks that as a struct and rejects it.
 //!
 //! [`format`] is the `FileFormat` / `FileSource` / `FileOpener` that puts these on DataFusion's
-//! read path, selected by the `SourceFormat::Json` arm of `register_external`. The swap point
-//! sits *inside* DataFusion's `JsonOpener::open`, so none of that plumbing could be inherited
-//! from `JsonSource`.
+//! read path, selected by `register_external`'s `SourceFormat::Json` arm. The swap point sits
+//! *inside* DataFusion's `JsonOpener::open`, so none of that plumbing could be inherited from
+//! `JsonSource`.
 
 pub mod format;
 pub mod infer;
@@ -133,8 +127,6 @@ mod tests {
             ]
         })]);
         assert_eq!(batch.num_rows(), 1);
-        // Reaching in through two list levels is what the JSON accessors are for; here it is
-        // enough that arrow built the batch at all, which it cannot do without the stringify.
         assert_eq!(batch.num_columns(), 1);
     }
 
@@ -175,8 +167,6 @@ mod tests {
         )
         .expect("arrow's");
 
-        // Field *order* differs by construction — ours is a BTreeMap so a schema is stable
-        // across runs, arrow's is a HashMap. Compare as sets of (name, type).
         let norm = |s: &datafusion::arrow::datatypes::Schema| {
             let mut v: Vec<(String, String)> = s
                 .fields()

@@ -9,38 +9,29 @@
 //! since a re-root or an engine restart frees those while leaving the window open
 //! ([`crate::platform::owner`]).
 //!
-//! Where it differs from Export is **single-instance per target**. Export deliberately has no
-//! such rule because each of its windows carries a different run. A Configure window carries a
-//! *def*, and two windows on one def would both `upsert_table` and both persist, so the second
-//! would silently revert the first — the same reason two windows cannot share a project.
+//! Where it differs from Export is **single-instance per target**: each Export window carries a
+//! different run, while a Configure window carries a *def*, and two on one def would both
+//! `upsert_table` and both persist, so the second would silently revert the first.
 //!
-//! **A table reads from the local disk or from one of the project's object stores** (W7 · 04).
-//! That is the LOCATION toggle the canvas opens with, and behind its second answer the TYPE /
-//! CONNECTION pair (`views::location`) — an explicit choice, never inferred from a typed path.
-//! What it changes below is the source list: one bucket-relative path wearing the connection's
-//! bucket as a prefix, in place of the browsable local list (`views::paths`). The def records the
-//! connection's URL and nothing else about it, and `register::table_spec` composes the two — so
-//! the engine needs nothing new, the connection's store having gone in ahead of every table.
+//! **A table reads from the local disk or from one of the project's object stores.** That is the
+//! LOCATION toggle, and behind its second answer the TYPE / CONNECTION pair (`views::location`) —
+//! an explicit choice, never inferred from a typed path. It changes the source list below to one
+//! bucket-relative path. The def records the connection's URL and nothing else about it, and
+//! `register::table_spec` composes the two.
 //!
-//! **No theme of its own.** A window is not a component: its chrome — body, rules, panels,
-//! text — is the app's role vocabulary, and everything form-shaped is the shared `form`
-//! theme. A per-window block of sixteen fields that all resolve to the same handful of roles is
-//! four blocks to keep in step for one reskin, which is the drift a shared vocabulary exists to
-//! prevent. (The three windows that still carry one predate this and should follow.)
+//! **No theme of its own.** A window is not a component: its chrome is the app's role vocabulary
+//! and everything form-shaped is the shared `form` theme. A per-window block of sixteen fields
+//! resolving to the same handful of roles is four blocks to keep in step for one reskin.
 //!
-//! **Closing discards the draft, deliberately without asking.** Nothing here is written until
-//! Save, so a close costs a form rather than data — and that stays true mid-registration, where
-//! the pass belongs to the project window's scan driver and answers on the catalog row whether
-//! this window is still watching or not. A dirty-close confirm was considered and declined.
+//! **Closing discards the draft, deliberately without asking.** Nothing is written until Save, so a
+//! close costs a form rather than data — true mid-registration too, where the pass belongs to the
+//! project window's scan driver and answers on the catalog row either way.
 //!
-//! **Save does not register anything itself.** It writes the def, persists it, and asks the
-//! project window's one scan driver for a pass over that table
-//! ([`refresh_table`](crate::apps::project::state::refresh_table)) — the same pass project open
-//! and the sidebar's ↻ use. So there is one implementation of "make the engine match the defs",
-//! the per-def event-log entries come from it as they always have, and a failure lands on the
-//! catalog row wearing P3-07's message. This window then *watches* its row: `Loading` is the
-//! validating state, `Ready` closes it, `Failed` keeps it open with the reason. A reconciliation
-//! over shared state, not a second registration path.
+//! **Save does not register anything itself.** It writes the def, persists it, and asks the project
+//! window's one scan driver for a pass over that table — the same pass project open and the
+//! sidebar's ↻ use. This window then *watches* its row: `Loading` is validating, `Ready` closes it,
+//! `Failed` keeps it open with the reason. A reconciliation over shared state, not a second
+//! registration path.
 
 #[cfg(test)]
 mod interaction;
@@ -214,9 +205,6 @@ impl ConfigureCtx {
     /// Clearing the failure here means no control has to remember to: a message describes the
     /// draft that produced it, so any change to the draft makes it a lie.
     pub fn edit(mut self, f: impl FnOnce(&mut ConfigureDraft)) {
-        // A registration is in flight for the def as it was written; the window closes on its
-        // answer, so a change accepted now would be silently discarded. Refusing keeps the form
-        // honest about what it is about to become.
         if self.status.peek().busy() {
             return;
         }
@@ -277,16 +265,11 @@ impl ConfigureApp {
         connections: ConnectionRequest,
         owner: WindowId,
     ) -> WindowConfig {
-        // Match the theme's window body so a resize doesn't flash the default white — through
-        // `peek_selection`, since Settings may be previewing a theme right now.
         let background = {
             let sel = peek_selection(app.config, app.preview);
             let id = sel.effective(strata_core::theme::os_is_dark());
             window_background(app.themes.get_or_default(&id))
         };
-        // The close hold, built here because it has to be readable from **both** sides: the
-        // component mirrors this window's status into it, and the `on_close` hook below is
-        // winit's own and has no component tree to consult.
         let close_hold = Arc::new(AtomicBool::new(false));
         let hook_hold = close_hold.clone();
         WindowConfig::new_app(ConfigureApp {
@@ -302,31 +285,16 @@ impl ConfigureApp {
             owner,
             close_hold,
         })
-        // **The native close button and ⌘Q come through here, and nothing else stops them.**
-        // `process_close_request` takes a window's `on_close` and defaults to
-        // `CloseDecision::Close` when there is none, and `platform::quit_windows` requests a
-        // close on *every* window — so without this hook a create in flight would be dropped by
-        // the red button or by ⌘Q, exactly as it would by Esc, leaving a published spool no def
-        // points at. The parameter annotations keep the closure generic over
-        // `RendererContext`'s lifetime, as `close_bridge`'s does.
         .with_on_close(move |_ctx: RendererContext<'_>, _id: WindowId| {
             match hook_hold.load(Ordering::Relaxed) {
-                // No dialog and nothing to drain: the window is already saying "Creating…" and
-                // it closes itself the moment the fold lands.
                 true => CloseDecision::KeepOpen,
                 false => CloseDecision::Close,
             }
         })
         .with_title("Table configuration")
-        // The OS title is hidden (this window draws its own bar), so it names the *kind* of
-        // window rather than the table: `with_title` takes a `&'static str`, and the real name —
-        // "New table" / "Configure events" — is on the bar the user is actually looking at.
         .with_size(620., 640.)
-        // Below this the source-path toolbar and the delimiter pill stop fitting on one row.
         .with_min_size(480., 420.)
         .with_background(background)
-        // The 50px strip centres macOS's 16px buttons at y = 17; AppKit's default origin is
-        // (7, 6), so the inset is the difference.
         .with_traffic_light_inset(9., 11.)
         .with_window_attributes(move |attrs, _| {
             attrs
@@ -339,16 +307,12 @@ impl ConfigureApp {
 
 impl App for ConfigureApp {
     fn render(&self) -> impl IntoElement {
-        // The window-root steps every app takes: this window's theme derived from the shared
-        // settings, and the app-globals into context.
         use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
         use_provide_context({
             let app = self.app.clone();
             move || app
         });
-        // The project window's catalog store, its scan request and its log — shared, not
-        // forked, so what this window writes is what that window shows.
         let project = self.project;
         use_share_radio(move || project);
         let rescan = self.rescan;
@@ -359,22 +323,12 @@ impl App for ConfigureApp {
             let engine = self.engine.clone();
             move || engine
         });
-        // Both halves provided **individually**, because `use_report` consumes them that way —
-        // the pair travels as one value and is unpacked here, so a consumer in this window reads
-        // exactly what one in the project window does.
         let report = self.report;
         use_provide_context(move || report.log);
         use_provide_context(move || report.faults);
-        // The project window's connection-editor slot, so the CONNECTION picker's
-        // *New connection…* is the same request the pane's own `+` makes.
         let connections = self.connections;
         use_provide_context(move || connections);
 
-        // Join the live window registry, so a second Configure on this table focuses this
-        // window rather than opening another — and point the menubar here as a **panel** while
-        // this window is focused. Without that the menubar kept the owner project window's
-        // File menu, and Close Project (and its ⇧⌘W) closed *this* window while naming the
-        // project. Esc is how a Configure window closes.
         let owner = self.owner;
         let target = self.target.clone();
         use_register_window(
@@ -387,30 +341,16 @@ impl App for ConfigureApp {
             },
             MenuScope::Panel,
         );
-        // …and close with the *subtree* the four handles above belong to, not merely with the
-        // window that owns it: a re-root and an engine restart both drop them while leaving that
-        // window open under the same id.
         use_owner_pin(self.app.clone(), owner, self.subtree.clone());
 
         let ctx = use_provide_context({
             let target = self.target.clone();
             let project = self.project;
             move || {
-                // Seeded from the def this window opened on, field by field, so opening an
-                // existing table and pressing Save without touching anything writes back the
-                // def that was already there.
                 let draft = match target.editing() {
                     None => ConfigureDraft::default(),
-                    // **No blank fallback** (AGENTS.md §1). A window titled "Configure events"
-                    // whose draft is an empty New-table form still reports `events` as its
-                    // rename source, so its first Save deregisters a table it never showed. A
-                    // row that is gone between the open and the first render is a fault, not a
-                    // state to render.
                     Some(name) => {
                         let store = project.peek();
-                        // The project's connections, so a def that names one opens on that
-                        // connection's provider — which is the connection's fact, not the
-                        // table's (see `ConfigureDraft::of`).
                         let connections: Vec<_> =
                             store.connections.iter().map(|c| c.def.clone()).collect();
                         store
@@ -434,12 +374,7 @@ impl App for ConfigureApp {
             }
         });
 
-        // The registration this window is waiting on, watched on the catalog store rather than
-        // awaited: the pass belongs to the project window's driver, and its answer arrives on
-        // the row. See the module doc.
         use_watch_registration(ctx);
-        // Mirror the one predicate into the flag winit reads, so the red button and ⌘Q refuse on
-        // exactly the terms Esc and Cancel do (see [`ConfigureApp::close_hold`]).
         let close_hold = self.close_hold.clone();
         use_side_effect(move || {
             close_hold.store(ctx.status.read().holds_window(), Ordering::Relaxed);
@@ -455,26 +390,12 @@ impl App for ConfigureApp {
             .vertical()
             .content(Content::Flex)
             .background(win.background)
-            // The window's ambient text colour, like every other window root's: runs that don't
-            // name one inherit it rather than Freya's base-theme default.
             .color(text)
             .child(TitleBar)
             .child(ConfigureBody)
             .child(Footer)
-            // Esc and ⌘Q. Deliberately the LAST child — same-name global listeners fire in
-            // document order, so anything a view mounts outranks this.
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
-                    // Esc closes — except while this window is running a create of its own.
-                    // The def is written only by Save, so there is nothing to undo, and a
-                    // *registration* in flight belongs to the project window's scan driver, which
-                    // lands its answer on the catalog row whether this window is watching or not;
-                    // refusing to close for that would only mean a window that cannot be
-                    // dismissed if the pass never answers. An internal table's create is the one
-                    // piece of work that is **this** window's (`Status::Creating`): the fold that
-                    // makes it durable runs after the task's await, and the spool is already
-                    // published by rename before it, so closing now would leave a data directory
-                    // nothing points at. The key is still consumed, so it does not fall through.
                     Command::Cancel => {
                         if !ctx.status.peek().holds_window() {
                             platform.close_current_window();

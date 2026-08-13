@@ -1,24 +1,18 @@
 //! `describe_table`'s bounded schema projection (AA-07) — the walk, the path drill-down and
 //! the name search over a def's `ColumnInfo` tree.
 //!
-//! A schema is not small: the reference fixture infers to 19 top-level columns carrying
-//! 241,425 nested fields at depth 13, one of them a struct of 19,311 keys — and the old
-//! projection recursed over all of it into JSON on every call. The discipline here is the
-//! value encoder's (`strata-core`'s `engine::serialize`, INVARIANTS "A view of a value is
-//! bounded where the value is *encoded*"), restated for a schema tree: a byte budget decides
-//! whether an answer is cut, width sampling decays with depth when it is, and every elided
-//! set replaced by a stated count. The convention the whole answer keeps: **a describe answer
-//! with no counting fields in it is a complete answer.**
+//! A schema is not small — the reference fixture infers to 19 top-level columns carrying 241,425
+//! nested fields at depth 13 — so the discipline is the value encoder's, restated for a schema
+//! tree: a byte budget decides whether an answer is cut, width sampling decays with depth when it
+//! is, and every elided set is replaced by a stated count. The convention the whole answer keeps:
+//! **a describe answer with no counting fields in it is a complete answer.**
 //!
-//! The constants are this module's own rather than shared with the value encoder, because
-//! that one bounds *values* for a UI preview and this one bounds a *schema projection for a
-//! model* — same discipline, different budgets, and a shared constant would couple two
-//! surfaces that tune independently.
+//! The constants are this module's own rather than the value encoder's: same discipline, different
+//! budgets, and a shared constant would couple two surfaces that tune independently.
 //!
-//! It lives in `strata-agent` rather than `strata-core` because its output is
-//! [`ColumnWire`], a wire shape core must not know; and beside `wire.rs` rather than in it
-//! because the walk plus the search plus the budget loop is an algorithm with its own tests,
-//! not a projection line.
+//! In `strata-agent` rather than `strata-core` because its output is [`ColumnWire`], a wire shape
+//! core must not know; beside `wire.rs` rather than in it because the walk plus the search plus the
+//! budget loop is an algorithm with its own tests.
 
 use serde_json::to_string;
 use strata_model::ColumnInfo;
@@ -196,7 +190,6 @@ fn schema_view(
     let rendered = bounded_forest(&w.shown);
 
     Ok(match node {
-        // Unaddressed: the top-level columns are the window.
         None => DescribeResult {
             columns: rendered,
             columns_total: w.page.map(|_| w.total),
@@ -204,8 +197,6 @@ fn schema_view(
             page_size: w.page_size,
             ..answer
         },
-        // Addressed: the answer is the node itself, its children the window — so a path to a
-        // leaf answers as the leaf (name, type, stats), never as an empty list.
         Some(node) => DescribeResult {
             columns: vec![ColumnWire {
                 name: node.name.clone(),
@@ -586,7 +577,6 @@ mod tests {
         assert!(root.children.len() < 2000);
         let bytes = to_string(&result.columns).unwrap().len();
         assert!(bytes <= SCHEMA_BUDGET, "{bytes} > {SCHEMA_BUDGET}");
-        // The untouched sibling column is still there, complete.
         assert_eq!(result.columns[1].name, "channel");
     }
 
@@ -836,7 +826,6 @@ mod tests {
     /// the page is sized for that.
     #[test]
     fn a_match_page_fits_the_budget_at_the_fixtures_worst_shape() {
-        // A chain 12 deep of UUID-named structs, fanning out to UUID-named leaves.
         let mut level: Vec<ColumnInfo> = (0..60)
             .map(|i| leaf(&format!("00000000-aaaa-0000-{i:04}-000000000000")))
             .collect();

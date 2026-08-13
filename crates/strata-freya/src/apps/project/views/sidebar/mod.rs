@@ -89,26 +89,11 @@ impl Component for Sidebar {
             roles.get(Role::TextPlaceholder),
         );
 
-        // The catalog filter lives in the header beside the refresh button, but its consumer is
-        // the tree below — so the shell owns the signal and hands it down.
         let filter = use_state(String::new);
-        // The leading run's measured width, so the filter can get out of the way before it is too
-        // narrow to type in (P5-06 rule 3: shrink, then hide). Local and per-mount — a fold
-        // verdict is derived state, like `components::toolbar`'s.
-        //
-        // The fixed run either side of it (↻ and the pinned ×) is the same whichever branch wins,
-        // so the measurement cannot oscillate between them.
         let mut leading_w = use_state(|| f32::INFINITY);
         let roomy = *leading_w.read() >= CATALOG_FILTER_MIN;
 
         let leading = match pane {
-            // `Content::Flex` + a `Size::flex` field, *not* `Size::fill()`: fill takes the whole
-            // parent width regardless of its siblings, so the filter ate the row and pushed ↻
-            // out of the panel (the same trap `SidebarRow` documents). Flex distributes what is
-            // left after the button's fixed 24px.
-            // Below `CATALOG_FILTER_MIN` the field is dropped for the pane's name: an input too
-            // narrow to read a word in is worse than none, and its magnifier was drawing over the
-            // ↻ beside it. ↻ and the collapse × keep their room either way.
             SidebarPane::Catalog if !roomy => label("CATALOG", label_color).into_element(),
             SidebarPane::Catalog => rect()
                 .width(Size::flex(1.))
@@ -128,7 +113,6 @@ impl Component for Sidebar {
                     .width(Size::flex(1.)),
                 )
                 .into_element(),
-            // Beside its name, an ⓘ: what a connection *is* has no other place to be said (W7).
             SidebarPane::Connections => label("CONNECTIONS", label_color)
                 .spacing(SP_3)
                 .child(ConnectionsHint)
@@ -149,8 +133,6 @@ impl Component for Sidebar {
                     .header()
                     .height(SIDEBAR_HEADER_HEIGHT)
                     .padding(SP_4)
-                    // The pane's own run flexes, so the row distributes rather than hugs — else
-                    // the collapse × is the thing that gets pushed out.
                     .leading(
                         rect()
                             .width(Size::flex(1.))
@@ -164,8 +146,6 @@ impl Component for Sidebar {
                             .child(leading),
                         0.,
                     )
-                    // Re-scan folds into the `⋯` before the collapse × does, because × is pinned.
-                    // The palette offers the same scan, so a folded row loses nothing.
                     .maybe(pane == SidebarPane::Catalog, |bar| {
                         bar.item(ToolbarItem::Custom {
                             width: HEADER_CONTROL,
@@ -173,8 +153,6 @@ impl Component for Sidebar {
                             folded: None,
                         })
                     })
-                    // Add connection — the Connections pane's own header action, folding on the
-                    // same terms as the catalog's ↻.
                     .maybe(pane == SidebarPane::Connections, |bar| {
                         bar.item(ToolbarItem::Custom {
                             width: HEADER_CONTROL,
@@ -182,8 +160,6 @@ impl Component for Sidebar {
                             folded: None,
                         })
                     })
-                    // Pinned: it is how the user gets out of a squeezed panel, so it outranks
-                    // everything the header could otherwise show.
                     .pinned(
                         Button::new()
                             .flat()
@@ -316,29 +292,16 @@ mod tests {
             (PANEL_WIDTH, 700.).into(),
             move |r| {
                 r.provide_root_context(EngineCtx::default);
-                // Catalog · CatalogRescan · CatalogSelection — the three context signals
-                // the pane's header and rows consume (`state/catalog.rs`).
                 r.provide_root_context(|| State::create(CatalogState::Settled(0)));
                 let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
-                // The catalog rows' menu handles (P3-06): the app config behind "View table"'s
-                // LIMIT, and the drop- / profile-confirm slots. Nothing here opens a menu — they
-                // only have to be reachable, since every row gathers them on render.
                 r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
                 r.provide_root_context(|| State::create(None::<DropTarget>));
                 r.provide_root_context(|| State::create(None::<ProfileTarget>));
-                // The Configure-window request slot (P4-11): the TABLES `+` and the row menus
-                // set it, and the project root's launcher — not mounted here — acts on it.
                 r.provide_root_context(|| State::create(None::<ConfigureTarget>));
-                // …and the connection-editor request slot (W7 · 03), which the CONNECTIONS
-                // header's `+` and the empty state's CTA set on identical terms.
                 r.provide_root_context(|| State::create(None::<ConnectionTarget>));
-                // Where the catalog's row menus report the one action that writes
-                // `project.json` inline (the saved-query rename, P4-15).
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));
-                // The window's conversations (AS-04): the catalog row menus' **Ask about this**
-                // pins into the open one, so the handle is gathered with the rest.
                 r.provide_root_context(|| State::create(Chats::new(Pick::default())));
                 r.provide_root_context(move || {
                     RadioStation::<SessionState, Chan>::create({
@@ -444,7 +407,6 @@ mod tests {
                 b.min_x,
                 b.max_x
             );
-            // Both trail the filter, at the right-hand end of the header.
             assert!(
                 b.max_x > PANEL_WIDTH / 2.,
                 "the controls trail the filter: {b:?}"
@@ -461,11 +423,7 @@ mod tests {
         runner.sync_and_update();
         runner.sync_and_update();
 
-        // The header's content box: the panel less its horizontal padding.
         let content = PANEL_WIDTH - 2. * HEADER_PAD;
-        // The widest run in the header that isn't the header row itself — the filter and the
-        // wrapper it flexes inside. With `fill` this is the whole content box; with `flex` it
-        // stops short of the ↻ beside it.
         let widest = header_content(&runner)
             .into_iter()
             .map(|b| b.width)
@@ -500,9 +458,6 @@ mod tests {
             "laid out past the {PANEL_WIDTH}px panel edge: {overflowing:?}"
         );
 
-        // Both fixed 24×24 controls — the `+` then the pinned × — at full size and on screen.
-        // Counted by **position**, not by node: the `+` carries a `TooltipContainer`, which
-        // nests several boxes of its own at the same origin, where the catalog's bare ↻ does not.
         let mut controls = header_controls(&runner);
         controls.dedup_by(|a, b| (a.min_x - b.min_x).abs() < 0.5);
         assert_eq!(

@@ -117,9 +117,6 @@ impl QueryCapability for RunQuery {
     async fn run(&self, spec: &QuerySpec) -> Result<QueryOutcome, String> {
         let engine = &self.0;
         match spec.mode {
-            // `run`, not `query`: the press is one statement of unknown kind, and classifying
-            // it is the engine's (ED-02). A `SELECT` reaches the same `query` call it always
-            // did, one match arm further in.
             QueryMode::Run => engine
                 .run(
                     spec.tab.into(),
@@ -240,7 +237,6 @@ mod tests {
         let tail = block_on(pages.run(&read)).expect("page 2");
         assert_eq!(tail.rows.len(), 1);
 
-        // Sorted read over the whole snapshot.
         let sorted = PageSpec {
             snapshot,
             page: 1,
@@ -260,8 +256,6 @@ mod tests {
         let (run, mut spec) = spec(&engine, QueryMode::Run);
         spec.sql = "CREATE DATABASE d".into();
 
-        // `.err().expect(…)` rather than `expect_err`, which would need `Debug` on the outcome
-        // — and a derived one would put a whole `RecordBatch` behind a `{:?}`.
         let err = block_on(run.run(&spec)).err().expect("refused");
         assert_eq!(err, Blocked::CreateDatabase.editor_message());
     }

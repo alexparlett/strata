@@ -55,15 +55,10 @@ pub fn tab_context_menu(
     closer: TabCloser,
     config: ConfigStation,
 ) -> Menu {
-    // Built from an event handler (no reactive context), so this `read` is a peek: the reopen
-    // stack can't change while this transient menu is up (reopening dismisses it), so the state
-    // at open time is the state for its whole life.
     let can_reopen = !radio.read().closed.is_empty();
 
     Menu::new()
         .min_width(Size::px(HINT_MENU_WIDTH))
-        // Rename → just flip the tab into rename mode. The tab reacts (seeds the draft + focuses the
-        // input) in its own scope, so it survives this menu closing.
         .child(
             MenuButton::new()
                 .on_press(move |_| {
@@ -84,8 +79,6 @@ pub fn tab_context_menu(
         .child(
             MenuButton::new()
                 .on_press(move |_| {
-                    // Through the shared gate — the T2 confirm when this tab's query
-                    // is in flight.
                     closer.close(radio, config, id);
                     ContextMenu::close();
                 })

@@ -1,41 +1,26 @@
 //! **The runnable statement** — the assistant's one way to hand the user SQL to execute, as a
 //! tool rather than as a formatting convention.
 //!
-//! ## Why a tool
+//! **Why a tool.** Most SQL an assistant writes is *explanation*; only some of it is an offer, and
+//! the transcript has to tell those apart or it puts a Run press on fragments. A tagged markdown
+//! fence was built and withdrawn: prompt-taught formatting is followed unevenly, least reliably by
+//! exactly the small local models the Ollama entry exists for. A tool is taught by its **schema**,
+//! and it buys what a fence structurally cannot — the statement is checked *before* the card
+//! appears, against the **editor's** policy rather than the agent's, because the card runs in the
+//! user's editor under their capability.
 //!
-//! An assistant investigating data writes SQL constantly, and most of it is *explanation*: the
-//! clause it changed, the join it rejected, a fragment under discussion. Only some of it is an
-//! offer — "here is the statement, run it". The transcript has to tell those apart, or it puts
-//! a Run press on fragments and buries the one statement the user actually wants.
+//! That check is `validate`'s, so a card carries what the editor would not underline — deliberately
+//! **not** a promise that the statement parses. `Engine::validate` keeps three silences on purpose
+//! (an incomplete trailing statement, an unresolved column where the resolver's scope is
+//! incomplete, a `;`-separated batch judged one statement at a time), each right for a live buffer
+//! and each letting something through here; the Run press answers for the rest in the editor's own
+//! words. Closing the gap needs a parse the vocabulary does not expose, recorded in the AS-02 task
+//! file rather than papered over.
 //!
-//! The first shape built for this was a tagged markdown fence, and it was withdrawn. A fence is
-//! taught only by a paragraph of system prompt, and prompt-taught formatting is followed
-//! unevenly — least reliably by exactly the small local models the Ollama roster entry exists
-//! for. **A tool is taught by its schema**, which is the channel a model follows best and the
-//! one it cannot get syntactically wrong. It also buys something a fence structurally cannot:
-//! the statement is checked *before* the card appears — against the **editor's** policy, not the
-//! agent's, because the card runs in the user's editor under their capability (see [`offer`]).
-//!
-//! **What that check is, exactly**: it is `validate`'s, so a card carries only what the editor
-//! would accept without a squiggle. It is deliberately *not* a promise that the statement
-//! parses. `Engine::validate` keeps three silences on purpose — an incomplete trailing statement
-//! is mid-edit grace rather than a fault, an unresolved column is suppressed where the
-//! resolver's scope is incomplete, and a `;`-separated batch is judged one statement at a time
-//! though Run takes only one. Each is right for a live editor buffer and each lets something
-//! through here. The honest statement is the one this module makes: what a card carries is what
-//! the editor would not underline, and the Run press answers for the rest in the editor's own
-//! words. Closing the gap needs a parse the vocabulary does not expose (`classify_one` is the
-//! engine's, behind a `SessionContext` no tool holds) — recorded in the AS-02 task file rather
-//! than papered over with a claim the code does not keep.
-//!
-//! ## Why it is not on the router
-//!
-//! It never reaches `#[tool_router]`, so `tools/list` is unchanged and no MCP client is offered
-//! a tool that would do nothing for it — an MCP client has no transcript to draw a card in.
-//! [`StrataTools::manifest`](crate::StrataTools::manifest) stays derived from the router; the
-//! loop offers *the manifest plus this*. That is one vocabulary with one presentation tool on
-//! the transport that has a presentation, not a second vocabulary: nothing here touches
-//! [`Host`], the engine or a query session. Its whole effect is that the user sees a card.
+//! **Why it is not on the router.** An MCP client has no transcript to draw a card in, so
+//! `tools/list` is unchanged and [`StrataTools::manifest`](crate::StrataTools::manifest) stays
+//! derived from the router; the loop offers *the manifest plus this*. Nothing here touches
+//! [`Host`], the engine or a query session — its whole effect is that the user sees a card.
 
 use rmcp::handler::server::common::schema_for_input;
 use rmcp::model::JsonObject;
@@ -86,17 +71,8 @@ pub fn spec() -> ToolSpec {
                       statement is checked before the card appears, and you are told what is \
                       wrong with it if it does not check out."
             .into(),
-        // Generated, never hand-written: the schema a model is shown and the struct that
-        // parses its answer are then the same thing by construction. **Through rmcp's own
-        // `schema_for_input`**, which is what the ten go through — it strips the top-level
-        // `title`/`description` schemars adds from the Rust type's name, so the model is not
-        // handed ten normalized schemas and one carrying `"title": "OfferParams"`, and any
-        // conformance rmcp adds on an upgrade reaches all eleven.
         input_schema: schema_for_input::<OfferParams>()
             .map(|schema| Value::Object(JsonObject::clone(&schema)))
-            // Only reachable for a params type whose schema root is not an object, which this
-            // one is by construction — and a tool advertised with no schema is worse than a
-            // loud stop. The spec test walks this path.
             .expect("offer_sql's params must have an object schema"),
     }
 }
@@ -127,8 +103,6 @@ pub struct Offered {
 pub async fn offer<H: Host>(tools: &StrataTools<H>, scope: &Scope, arguments: Value) -> Offered {
     let params: OfferParams = match from_value(arguments) {
         Ok(params) => params,
-        // The same sentence the other ten get, from the same place: a model that misuses one
-        // tool's schema must not be taught a different recovery by the eleventh.
         Err(e) => {
             return Offered {
                 sql: None,
@@ -151,8 +125,6 @@ pub async fn offer<H: Host>(tools: &StrataTools<H>, scope: &Scope, arguments: Va
         })
         .await;
     let faults: Vec<String> = match checked {
-        // The project could not even be resolved: the taxonomy's own message, which names the
-        // recovery. Not a statement fault, so it is reported as itself.
         Err(e) => {
             return Offered {
                 sql: None,
@@ -274,8 +246,6 @@ mod tests {
         let offered = offer(&tools, &Scope::default(), json!({ "sql": sql })).await;
         assert_eq!(offered.sql.as_deref(), Some(sql), "{}", offered.answer);
 
-        // ...and running it as the agent is still refused, by the gate that has always been
-        // in front of dispatch.
         let session = tools
             .open_query_session(
                 crate::host::AgentIdentity::assistant(),

@@ -83,7 +83,6 @@ impl Component for Toolbar {
         let win = window_theme();
         let error = tones().error;
         let ctx = use_consume::<ConfigureCtx>();
-        // Subscribes: remove is disabled on a list with nothing but the row it always keeps.
         let removable = ctx.draft.read().columns.len() > 1;
 
         rect()
@@ -95,8 +94,6 @@ impl Component for Toolbar {
                     .outlined()
                     .color(win.icon_color)
                     .on_press(move |_| {
-                        // Seeded from the current selection, like the paths toolbar: an edit
-                        // refused while a registration is in flight leaves `at` untouched.
                         let mut selected = ctx.selected_column;
                         let mut at = *selected.peek();
                         ctx.edit(|draft| at = draft.add_column());
@@ -107,8 +104,6 @@ impl Component for Toolbar {
                 ToolButton::new(IconName::Minus, "Remove column")
                     .outlined()
                     .color(error)
-                    // A table needs a column, so the last row is emptied rather than removed —
-                    // and the button says so by being off once that is all it could do.
                     .enabled(removable)
                     .on_press(move |_| {
                         let mut selected = ctx.selected_column;
@@ -129,9 +124,6 @@ impl Component for ColumnList {
     fn render(&self) -> impl IntoElement {
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
-        // The faults and the verdicts are resolved **here**, once, and carried to the rows as
-        // props — the paths list's rule: a row that read the draft itself would subscribe to the
-        // whole of it and wake on every keystroke in the name box.
         let (count, selected, faults, verdicts) = {
             let draft = ctx.draft.read();
             let probes = ctx.probes.read();
@@ -140,7 +132,6 @@ impl Component for ColumnList {
                 .iter()
                 .map(|column| match probes.get(column.sql_type()) {
                     Some(Ok(dtype)) => Some(dtype.clone()),
-                    // An `Err` is a fault below; `None` is the answer not being back yet.
                     _ => None,
                 })
                 .collect();
@@ -171,14 +162,10 @@ impl Component for ColumnList {
                 ColumnRow {
                     index,
                     selected: index == selected,
-                    // A fault outranks a verdict, and covers every kind of it — the form's own
-                    // sentences and the planner's refusal alike — so a row has one mark.
                     fault: faults.get(&index).cloned(),
                     verdict: verdicts.get(index).cloned().flatten(),
                     key: DiffKey::None,
                 }
-                // Keyed by position, and the row syncs both ways against the draft — see
-                // `ColumnRow`, and `paths::PathRow`, which this is.
                 .key(index),
             );
         }
@@ -215,18 +202,10 @@ impl Component for ColumnRow {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
         let form = form_theme();
-        // Resolved unconditionally, **not** inside the match below: these are theme-consuming
-        // hooks, and a hook that runs only on one arm is a hook called conditionally (AGENTS.md
-        // §3 — it panics the moment a row acquires a fault).
         let error = tones().error;
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
-        // Both boxes own their buffers and the traffic runs **both ways**, for `PathRow`'s
-        // reason: the list is keyed by position, so removing a row above this one *keeps* this
-        // scope and changes what it should show. `reported` is what keeps the two directions from
-        // fighting — in state rather than captured, since `use_side_effect` builds its closure
-        // once.
         let (initial_name, initial_type) = {
             let draft = ctx.draft.peek();
             let column = draft.columns.get(index).cloned().unwrap_or_default();
@@ -243,8 +222,6 @@ impl Component for ColumnRow {
         });
         let mut type_reported = use_state(move || initial_type);
 
-        // Focus selects the row, because `Input` stops the press from reaching `TableRow` — the
-        // paths list's finding, and the reason Remove would otherwise act on the wrong row.
         let name_field = use_a11y();
         let type_field = use_a11y();
         let name_focus = use_focus(name_field);
@@ -257,7 +234,6 @@ impl Component for ColumnRow {
             }
         });
 
-        // Out: what was typed reaches the draft.
         use_side_effect(move || {
             let typed = name.read().clone();
             if typed == *name_reported.peek() {
@@ -274,8 +250,6 @@ impl Component for ColumnRow {
             type_reported.set(typed.clone());
             ctx.edit(move |draft| draft.set_column_type(index, typed));
         });
-        // In: a value this row did not type reaches the box — a row above it removed, or the
-        // whole list reseeded.
         use_side_effect(move || {
             let draft = ctx.draft.read();
             let column = draft.columns.get(index).cloned().unwrap_or_default();
@@ -296,9 +270,6 @@ impl Component for ColumnRow {
             true => win.row_selected_background,
             false => Color::TRANSPARENT,
         };
-        // What the row says about itself: its fault, or the type it resolves to, or nothing while
-        // the planner has not answered — a verdict that appeared and vanished per keystroke would
-        // be worse than a beat's wait.
         let (detail, detail_color) = match (&self.fault, &self.verdict) {
             (Some(why), _) => (why.clone(), error),
             (None, Some(dtype)) => (dtype.clone(), form.hint_color),
@@ -311,9 +282,6 @@ impl Component for ColumnRow {
                 .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                 .main_align(Alignment::Start)
                 .child(
-                    // A flex row *inside* the cell: a `TableCell` lays its children out under
-                    // `Content::Normal`, where a flexing box takes a share rather than the
-                    // remainder (AGENTS.md §3).
                     rect()
                         .expanded()
                         .horizontal()

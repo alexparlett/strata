@@ -47,8 +47,6 @@ pub struct SystemPane;
 impl Component for SystemPane {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SettingsCtx>();
-        // Read in a block: the guard has to be gone before anything below takes a write one on
-        // the same `State`.
         let (reopen, default_dir, open_pref, confirm_close, check_updates, max_history) = {
             let draft = ctx.draft.read();
             (
@@ -75,26 +73,14 @@ impl Component for SystemPane {
                     })),
             )
             .child(
-                Anchor::DefaultDir
-                    .row()
-                    // A plain folder box, and deliberately not one that resolves what it is
-                    // given the way `platform::pick_project_folder` does: this is where the
-                    // picker *starts*, which need not hold a project at all — it is usually
-                    // the folder projects get made in.
-                    .child(
-                        // The canvas's placeholder is `~/data`; the example here is absolute
-                        // instead, and the difference is not cosmetic. Every consumer hands
-                        // this string to the picker's `set_directory` as-is — nothing expands
-                        // a leading `~` — so an example in that form is one the app would
-                        // silently ignore, from a field whose own browse button only ever
-                        // writes absolute paths.
-                        PathField::folder(default_dir)
-                            .placeholder("/Users/you/data")
-                            .dialog_title("Default project directory")
-                            .on_change(move |dir: String| {
-                                ctx.edit(|s| s.default_project_dir = dir);
-                            }),
-                    ),
+                Anchor::DefaultDir.row().child(
+                    PathField::folder(default_dir)
+                        .placeholder("/Users/you/data")
+                        .dialog_title("Default project directory")
+                        .on_change(move |dir: String| {
+                            ctx.edit(|s| s.default_project_dir = dir);
+                        }),
+                ),
             )
             .child(
                 Anchor::OpenPref
@@ -124,8 +110,6 @@ impl Component for SystemPane {
                     })),
             )
             .child(
-                // Saturating, not `as`: a hand-edited config holding more than a u32 should show
-                // the biggest number the field can offer, not wrap round to a small one.
                 Anchor::HistoryLimit.row().child(
                     NumberField::new(
                         max_history.try_into().unwrap_or(NO_HISTORY_CAP),
@@ -162,9 +146,6 @@ impl Component for OpenPrefControl {
                 .on_press(move |_| set(value))
         };
 
-        // The form layout, and a hug-content parent for it — the same pair the data-display
-        // pane's density pill needs: the pill hugs its segments, so dropped straight into the
-        // row's fill-width column it would stretch across the pane.
         rect().horizontal().child(
             SegmentedToggle::new()
                 .form()

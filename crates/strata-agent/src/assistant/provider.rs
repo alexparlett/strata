@@ -1,62 +1,31 @@
 //! **The provider seam** — which brain answers a send, and the one table every surface reads
 //! that from.
 //!
-//! Three surfaces have to agree about providers and none of them may restate the others:
-//! Settings maintains the roster (AS-03 — which brains exist, their endpoints, their keys),
-//! a chat conversation holds the pick (AS-04 — which entry, which model, what effort), and
-//! this module turns a resolved pick into a `genai` client. So the kinds, their labels, their
-//! key policy, their base-URL policy and **which effort rungs they offer** are one table
-//! ([`PROVIDERS`]), and a form that offers a field the table does not declare is a form that
-//! does not compile against it.
+//! Three surfaces have to agree about providers and none may restate the others: Settings
+//! maintains the roster, a conversation holds the pick, and this module turns a resolved pick into
+//! a `genai` client. So the kinds, their labels, their key and base-URL policy and **which effort
+//! rungs they offer** are one table ([`PROVIDERS`]), and a form that offers a field the table does
+//! not declare does not compile against it.
 //!
-//! ## The kind is a token below; the knowledge is here
+//! [`ProviderKind`] and [`Effort`] live in `strata_core::ai` because they are what
+//! [`Settings`](strata_core::config::Settings) persists; the accessors here ([`info`], [`label`],
+//! [`efforts`]) are free functions for that reason, and a kind added without a row is still a
+//! build error.
 //!
-//! [`ProviderKind`] and [`Effort`] live in `strata_core::ai`, because they are what
-//! [`Settings`](strata_core::config::Settings) persists and this crate depends *up* onto that
-//! one. Nothing else moved: the table is still one table, [`info`] is still one exhaustive
-//! match, and a kind added without a row is still a build error. What changed is only that the
-//! accessors are free functions ([`info`], [`label`], [`efforts`]) rather than inherent methods
-//! on a type this crate does not define.
+//! [`Selection`] is plain data handed in with every send — nothing here reads Settings or holds a
+//! client between turns, which is the whole of "several chat panes, each on its own provider": two
+//! conversations disagreeing is two values, not a mode.
 //!
-//! ## The pick is per send, so a window is not a mode
+//! **Effort is offered per model, and mapped per model by `genai`.** Whether the control exists is
+//! the kind's [`Efforts`] rule ("will the pinned `genai` actually send an effort for this model"),
+//! and a [`Selection`] that sets a rung the model has no menu for is refused rather than silently
+//! ignored. What a rung *means* is `genai`'s, already mapped per model at the pinned version. The
+//! rules are name fragments, so they fall behind what providers ship — which is why
+//! [`Efforts::Only`] is **default-closed**: falling behind costs a knob, never a refused request.
 //!
-//! [`Selection`] is plain data handed in with every send. Nothing here reads Settings, holds
-//! a client between turns, or remembers what the last conversation chose — which is the whole
-//! of "several chat panes, each on its own provider, model and effort": two conversations
-//! disagreeing is two [`Selection`] values, not a mode somewhere. The def/runtime split, one
-//! layer down from where the app applies it.
-//!
-//! ## Effort is offered per **model**, and mapped per model by `genai`
-//!
-//! Reasoning effort is not a portable knob: OpenAI spells it `reasoning_effort`, Anthropic as
-//! an `output_config.effort` or a thinking budget depending on the model, Gemini as a
-//! `thinkingLevel` or a `thinkingBudget`, and Ollama not at all. Nor is it a property of the
-//! *provider*: `claude-opus-4-5` takes an effort and `claude-sonnet-4-5` does not, `gpt-5`
-//! does and `gpt-4o` does not. So the split is:
-//!
-//! - **Whether the control is offered is a property of the model**, decided by the kind's
-//!   [`Efforts`] rule in the table, asked through [`efforts`]. A model with no
-//!   rungs gets no menu, and a [`Selection`] that sets one anyway is refused rather than
-//!   silently ignored. What belongs in a rule is "will the pinned `genai` actually send an
-//!   effort for this model" — for Anthropic that is the modern Claude families, for OpenAI the
-//!   reasoning models (`reasoning_effort` is not a field `gpt-4o` accepts), for Gemini the
-//!   thinking ones. Each row says which and why.
-//! - **What a rung means for a model that has one is `genai`'s**, verified at the pinned
-//!   version: its Anthropic adapter already gates `xhigh` and `max` per model, and its Gemini
-//!   adapter already knows `gemini-3` takes a thinking *level* where 2.5 takes a *budget*.
-//!   Restating that here would be a second copy of a mapping that already exists.
-//!
-//! The rules are name fragments mirroring what the pinned `genai` recognizes, so they fall
-//! behind what the providers ship — which is why [`Efforts::Only`] is **default-closed**:
-//! falling behind costs a knob the user cannot reach yet, never a menu whose settings the
-//! provider refuses. A `genai` bump is the moment to revisit them.
-//!
-//! ## One construction site
-//!
-//! [`Brain::resolve`] is the only place a `genai::Client` is built, and it either builds one
-//! or names the field that is missing and the pane it is set in ([`SelectionError`]) — with
-//! no network attempt either way, which is what lets the chat pane degrade honestly (AS-04)
-//! instead of reporting a timeout for an empty box.
+//! [`Brain::resolve`] is the only place a `genai::Client` is built, and it either builds one or
+//! names the missing field and the pane it is set in ([`SelectionError`]) — with no network attempt
+//! either way, so the chat pane degrades honestly instead of reporting a timeout for an empty box.
 
 use std::env;
 use std::fmt;
@@ -144,21 +113,17 @@ pub struct Rungs {
 /// **Which models of a kind offer which reasoning rungs** — the rule, per kind, in the table.
 ///
 /// Reasoning is a *model* capability, not a provider one: `claude-opus-4-5` takes an effort and
-/// `claude-sonnet-4-5` does not, `gpt-5` does and `gpt-4o` does not. A per-kind answer is wrong
-/// in both directions — it hides a control that works, or offers one that breaks the turn. And
-/// the answer is a **set of rungs** rather than a yes/no, because the vendors disagree about the
-/// top of the ladder and `genai` resolves that disagreement silently.
+/// `claude-sonnet-4-5` does not. A per-kind answer is wrong in both directions — it hides a control
+/// that works, or offers one that breaks the turn — and the answer is a **set of rungs** rather
+/// than a yes/no, because the vendors disagree about the top of the ladder.
 ///
 /// **[`Only`](Efforts::Only) is default-closed**, which is the safety argument for keeping name
-/// lists at all: they will fall behind what the providers ship, and falling behind must cost a
-/// knob the user cannot reach yet — an omission they can report — rather than a menu whose
-/// settings the provider refuses. It is not a *complete* argument, because `contains` also
-/// over-matches, which is what [`Rungs::except`] is for.
+/// lists at all: they fall behind what providers ship, and falling behind must cost a knob the user
+/// can report rather than a menu whose settings the provider refuses. Not a *complete* argument,
+/// because `contains` also over-matches — that is what [`Rungs::except`] is for.
 ///
-/// These lists mirror what the **pinned** `genai` will actually send. They are not a mirror of
-/// its matching *mechanism*: at 0.7 it parses Anthropic names into family and version and keeps
-/// `contains` only as its unparseable-name fallback. A `genai` bump is the moment to revisit
-/// them.
+/// These lists mirror what the **pinned** `genai` will actually send, not its matching *mechanism*.
+/// A `genai` bump is the moment to revisit them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Efforts {
     /// No model of this kind has one. Ollama's API carries no such field at all.
@@ -242,27 +207,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "Anthropic",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("ANTHROPIC_API_KEY"),
-        // **A rung is offered only where it cannot turn thinking on.** genai 0.7 maps an
-        // effort to `output_config.effort`, and for a model that supports *adaptive* thinking
-        // and has it off by default that field is what enables thinking — after which the
-        // model answers with a thinking block genai's Anthropic streamer captures but does not
-        // put back on the next request, and Anthropic rejects a tool round whose assistant
-        // turn has lost it. So the control would work exactly once per conversation and then
-        // fail every turn that calls a tool, which is most of them here.
-        //
-        // That leaves two safe groups, and they are safe for opposite reasons:
-        //
-        // - `claude-opus-4-5` supports an effort and **not** adaptive thinking, so the field
-        //   tunes an answer and enables nothing. Three rungs: genai clamps `xhigh`/`max` to
-        //   `"high"` for this adapter, and a footer naming a rung that was not sent is the
-        //   thing this table exists to prevent.
-        // - Sonnet 5, Opus 5, Fable and Mythos think **already**, by default or always. The
-        //   round-trip either works for them or Anthropic tool use is broken there with or
-        //   without us, so a rung changes depth and not kind. genai gives these the newer
-        //   effort vocabulary, `max` included.
-        //
-        // Excluded on the first rule: `claude-opus-4-6`, `-4-7`, `-4-8`, `claude-sonnet-4-6`.
-        // They are adaptive and default-off, which is precisely the fatal combination.
         efforts: Efforts::Only(&[
             Rungs {
                 models: &["claude-opus-4-5"],
@@ -282,27 +226,11 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "OpenAI",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("OPENAI_API_KEY"),
-        // OpenAI's reasoning models. `reasoning_effort` is not a field the others accept, so
-        // offering it for `gpt-4o` would be a menu whose every setting is an error. The
-        // Responses models (`gpt-5`, `codex`) round-trip their reasoning item because
-        // `Brain::resolve` sets `capture_reasoning_content`.
-        //
-        // Three rungs, not five: genai passes an effort **verbatim** to this adapter rather
-        // than clamping it, and `"max"` is not a value OpenAI's API accepts from any model —
-        // it would be a rung that turns every send into a 400. `xhigh` is real but only on the
-        // newest codex model, and one model's rung is not worth a row that goes stale silently.
-        //
-        // `except` is the over-match half. `contains` is deliberately loose so a dated or
-        // suffixed name still matches, and that same looseness claims the *non*-reasoning
-        // variants that share a prefix: `gpt-5-chat-latest` is the non-reasoning chat model,
-        // and `o1-mini`/`o1-preview` predate `reasoning_effort` and reject it.
         efforts: Efforts::Only(&[Rungs {
             models: &["gpt-5", "gpt-6", "codex", "o1", "o3", "o4"],
             except: &["-chat", "o1-mini", "o1-preview"],
             rungs: KEYWORDS,
         }]),
-        // Nominal. `gpt-5` and the codex models speak the Responses API and the rest speak
-        // chat completions, which is a per-model fork `adapter()` asks genai to make.
         adapter: AdapterKind::OpenAI,
     },
     Provider {
@@ -310,13 +238,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "Gemini",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("GEMINI_API_KEY"),
-        // The thinking models: genai sends `thinkingLevel` for `gemini-3`/`gemma-4` and a
-        // `thinkingBudget` for the rest, and a model with no thinking config refuses both.
-        // Gemini's streamer captures thought signatures unconditionally and genai puts them
-        // back, so a tool round is safe here.
-        //
-        // Three rungs: genai has no `thinkingLevel` above `"high"` and folds `xhigh` and `max`
-        // into it, so the two extra rungs would be distinct labels for one request.
         efforts: Efforts::Only(&[Rungs {
             models: &["gemini-2.5", "gemini-3", "gemma-4"],
             except: &[],
@@ -329,17 +250,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "DeepSeek",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("DEEPSEEK_API_KEY"),
-        // **Sent verbatim, and verified for nothing — so nothing is offered.** This kind is a
-        // `impl_pass_through_adapter!` onto `OpenAIAdapter`, whose
-        // `insert_openai_reasoning_effort` writes whatever rung it is given straight onto the
-        // body with no per-model gate at all. So a rung offered here is a rung the provider
-        // either takes or 400s on, and which of the two is a fact about DeepSeek's API that
-        // genai's source cannot answer.
-        //
-        // An **empty** `Only` rather than `Never`, because the two say different things and the
-        // difference is what a later row is added against: `Never` is Ollama's and Cohere's
-        // claim that the API carries no such field, while this says the field is sent and no
-        // family has been verified to accept it. Default-closed does the rest.
         efforts: Efforts::Only(&[]),
         adapter: AdapterKind::DeepSeek,
     },
@@ -348,8 +258,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "Groq",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("GROQ_API_KEY"),
-        // Pass-through onto `OpenAIAdapter`, same as DeepSeek — the rung reaches the wire
-        // unexamined, and Groq's hosted models are a moving set nothing here can verify.
         efforts: Efforts::Only(&[]),
         adapter: AdapterKind::Groq,
     },
@@ -358,9 +266,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "xAI",
         base_url: BaseUrl::Provider,
         key: KeyUse::Env("XAI_API_KEY"),
-        // Pass-through onto `OpenAIAdapter`, same as DeepSeek. Note the suffix guard covers
-        // this kind (`strips_effort_suffix`) for exactly that reason: `grok-4-max` would
-        // otherwise be sent as `grok-4`.
         efforts: Efforts::Only(&[]),
         adapter: AdapterKind::Xai,
     },
@@ -369,8 +274,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "Ollama",
         base_url: BaseUrl::Editable("http://localhost:11434/"),
         key: KeyUse::Unused,
-        // Ollama's API carries no reasoning-effort field and genai's adapter sends none, so
-        // the control would be a menu that changes nothing whatever model is named.
         efforts: Efforts::Never,
         adapter: AdapterKind::Ollama,
     },
@@ -379,9 +282,6 @@ pub const PROVIDERS: [Provider; 8] = [
         label: "OpenAI-compatible",
         base_url: BaseUrl::Required,
         key: KeyUse::Anonymous,
-        // The one kind whose models we cannot know: the endpoint is the user's own, so they
-        // are the authority on whether it reasons. Nothing is sent unless a rung is picked,
-        // and an endpoint that rejects the field says so in its own words.
         efforts: Efforts::Always,
         adapter: AdapterKind::OpenAI,
     },
@@ -449,19 +349,15 @@ impl Provider {
     /// form (AS-03), on `Provider::check_address`'s precedent: two places that judge an
     /// address differently is a form that accepts what the client then refuses.
     ///
-    /// Normalizing the trailing slash is the load-bearing half. Every adapter joins its path
-    /// onto this — Ollama by `format!("{base}api/chat")`, the OpenAI family through
-    /// `Url::join` — so `http://host/v1` reaches `http://host/chat/completions` (join replaces
+    /// Normalizing the trailing slash is the load-bearing half: adapters join their path onto this,
+    /// so without it `http://host/v1` reaches `http://host/chat/completions` (`Url::join` replaces
     /// the last segment) and `http://localhost:11434` reaches `http://localhost:11434api/chat`.
-    /// Both fail as a connection error naming a URL the user never typed.
     ///
-    /// **The slash goes on the parsed URL's path, never on the raw text.** A base URL may carry
-    /// a query — genai's OpenAI adapter supports exactly that, lifting the query off before it
-    /// joins and putting it back after — and appending to the text would put the slash inside
-    /// the query instead, so `https://gw.example/v1?api-version=2024-02-01` would reach
-    /// `https://gw.example/chat/completions?api-version=2024-02-01%2F`: the `/v1` eaten and the
-    /// version corrupted. That is the same failure this function exists to prevent, arrived at
-    /// from the other side.
+    /// **The slash goes on the parsed URL's path, never on the raw text.** A base URL may carry a
+    /// query, so appending to the text would put the slash inside it —
+    /// `https://gw.example/v1?api-version=2024-02-01` reaching
+    /// `https://gw.example/chat/completions?api-version=2024-02-01%2F`, the `/v1` eaten and the
+    /// version corrupted.
     pub fn check_base_url(url: &str) -> Result<String, String> {
         let url = url.trim();
         if url.is_empty() {
@@ -697,23 +593,10 @@ fn credential(
         (KeyUse::Env(_) | KeyUse::Anonymous, Some(key)) => {
             Ok(Some(AuthData::Key(key.expose().to_string())))
         }
-        // Only the variable's *name* is handed to genai, which reads it per request — so the key
-        // is never cached in a value of ours. Its presence still has to be checked here, because
-        // "the key is missing" must be answerable before a socket opens rather than as a 401
-        // three seconds later.
-        //
-        // A variable holding only whitespace is **absent**, the same reading the model and
-        // base-URL boxes get: `export ANTHROPIC_API_KEY=` in a shell profile, or a value that
-        // came out of a here-doc with its newline, is a box the user has already cleared, and
-        // answering it with a 401 sends them looking at their account. Only the presence test
-        // copies — the key itself is still read by `genai` per request from the variable's name,
-        // never onto our heap.
         (KeyUse::Env(var), None) => match env::var(var) {
             Ok(value) if !value.trim().is_empty() => Ok(Some(AuthData::from_env(var))),
             _ => Err(SelectionError::NoKey { kind, env: var }),
         },
-        // No key, and no variable to fall back to. An empty bearer is what a local endpoint
-        // expects and what a real one answers 401 to, in its own words.
         (KeyUse::Anonymous, None) => Ok(Some(AuthData::Key(String::new()))),
     }
 }
@@ -742,10 +625,6 @@ pub async fn list_models(
     let endpoint = address(kind, base_url).map_err(|e| e.to_string())?;
     let auth = credential(kind, key).map_err(|e| e.to_string())?;
 
-    // The adapter with no model to ask about: `Provider::adapter` forks the OpenAI kind on the
-    // model name, and there is no model here. Chat completions is the right side of that fork
-    // for listing — both OpenAI adapters `GET {base}models`, and `OpenAIResp` reaches the same
-    // shared implementation.
     let adapter = info(kind).adapter;
     let mut config = ProviderConfig::default();
     if let Some(endpoint) = endpoint {
@@ -838,14 +717,6 @@ impl Brain {
                 })
             }
             Some(_) => {}
-            // **A model name that reads as an effort is refused, not silently rewritten.**
-            // With no explicit effort the Anthropic and OpenAI adapters parse a trailing
-            // `-<keyword>` off the name, take it as the reasoning setting and send the
-            // *prefix* as the model — so `qwen3-max` on a compatible endpoint quietly queries
-            // `qwen3`, at a different price and a different quality, with nothing on screen
-            // saying so. The keyword list is `genai`'s own (right down to which names it
-            // protects), asked here rather than copied, so this cannot fall out of step with
-            // the parse it is guarding.
             None if strips_effort_suffix(adapter) => {
                 if let (Some(read_as), sent) = ReasoningEffort::from_model_name(model) {
                     return Err(SelectionError::ModelReadsAsEffort {
@@ -883,49 +754,13 @@ impl Brain {
         }
 
         let mut options = ChatOptions::default()
-            // The turn appends the assistant's own message to the conversation from these,
-            // rather than from the deltas it forwarded — genai's concatenation is the one
-            // that also carries tool calls and the thought signatures Gemini 3 requires back.
             .with_capture_content(true)
             .with_capture_tool_calls(true);
 
-        // **Not a display option — it is what makes reasoning survive a tool round.** On
-        // genai's OpenAI Responses adapter this flag is what inserts
-        // `include: ["reasoning.encrypted_content"]` on the request *and* what makes its
-        // streamer record the thought signatures; without it a gpt-5 tool loop re-sends
-        // `function_call` items with no reasoning item in front of them, which OpenAI either
-        // refuses or answers having discarded the model's chain of thought every round.
-        // Gemini's streamer captures signatures unconditionally, which is why the gap was
-        // invisible from that side.
-        //
-        // Asked of the model rather than set flat, because on Gemini it also turns on
-        // `includeThoughts`, and a model with no thinking config refuses that field outright.
-        // "Does this model reason" is a question the table already answers — a model with a
-        // rung to offer is a model that reasons — so this reads that answer rather than
-        // growing a second list to keep in step with it.
         if !provider.efforts.rungs(model).is_empty() {
             options = options.with_capture_reasoning_content(true);
         }
 
-        // **The cache the rest of the design is arranged around.** Two decisions exist to keep
-        // a request's prefix byte-identical across a conversation — the manifest is sorted
-        // (`StrataTools::manifest`) and pinned context rides the user's message rather than
-        // the system prompt (`Ask::message`) — and both bought nothing until a breakpoint was
-        // actually asked for. Request-level is the right level: genai places it on the
-        // **static prefix**, the tools plus system block, which is exactly the part those two
-        // decisions hold still. Message-level breakpoints stay unused; a rolling one over the
-        // transcript is a separate question with its own cost, and this is the one that pays
-        // on every turn of every conversation.
-        //
-        // **Anthropic only**, because that is the only adapter where the option means what
-        // this reasoning says. genai reads the same field for the OpenAI family as a
-        // `prompt_cache_retention: "in_memory"` on the request body — a field OpenAI itself
-        // takes and an arbitrary compatible endpoint may well 400 on, in exchange for a
-        // caching mode nobody here asked for. On Gemini and Ollama it is dropped. Sending it
-        // to all five would be one comment justifying four different behaviours.
-        //
-        // Needs genai 0.7 — 0.6.5 ignored request-level cache control for Anthropic outright,
-        // which is why the pin moved.
         if adapter == AdapterKind::Anthropic {
             options = options.with_cache_control(CacheControl::Ephemeral);
         }
@@ -936,9 +771,6 @@ impl Brain {
 
         Ok(Brain {
             client: builder.build(),
-            // A `ModelIden` rather than a bare name, so nothing is inferred from spelling:
-            // `AdapterKind::from_model` falls back to Ollama for an unrecognized name, which
-            // for a roster entry that names a provider explicitly would be a silent misroute.
             model: ModelIden::new(adapter, model.to_string()),
             options,
         })
@@ -970,9 +802,6 @@ mod tests {
     /// The table is the vocabulary, so every kind must have exactly one row and find it.
     #[test]
     fn every_kind_has_its_own_row() {
-        // The whole property: a kind's row is *its* row. A mis-indexed arm in `info` would
-        // hand out another provider's env var and effort ladder, and this is what catches it.
-        // `all()` reads the table, so there is no second list to check it against.
         for kind in all() {
             assert_eq!(info(kind).kind, kind);
         }
@@ -1053,7 +882,6 @@ mod tests {
     #[test]
     fn the_ladder_is_offered_per_model_not_per_provider() {
         let anthropic = ProviderKind::Anthropic;
-        // Thinking already on, or always on: a rung changes depth, not kind.
         for model in [
             "claude-opus-5-0",
             "claude-sonnet-5",
@@ -1062,12 +890,7 @@ mod tests {
         ] {
             assert_eq!(efforts(anthropic, model), LADDER, "{model}");
         }
-        // An effort, and no adaptive thinking for it to enable — but genai clamps the top two
-        // rungs to "high" for this adapter, so offering them would name a rung nothing sent.
         assert_eq!(efforts(anthropic, "claude-opus-4-5"), KEYWORDS);
-        // **Adaptive thinking, off by default.** Setting an effort turns it on, and genai
-        // never returns the thinking block — so the control would work once and then fail
-        // every tool round after it.
         for model in [
             "claude-opus-4-6",
             "claude-opus-4-7",
@@ -1079,13 +902,10 @@ mod tests {
         assert!(efforts(anthropic, "claude-sonnet-4-5").is_empty());
         assert!(efforts(anthropic, "claude-haiku-4-5").is_empty());
 
-        // Three rungs everywhere else: OpenAI has no `max` at all and genai forwards ours
-        // verbatim; Gemini has no thinking level above `high` and folds the top two into it.
         let openai = ProviderKind::OpenAi;
         assert_eq!(efforts(openai, "gpt-5.2"), KEYWORDS);
         assert_eq!(efforts(openai, "o3-mini"), KEYWORDS);
         assert!(efforts(openai, "gpt-4o").is_empty());
-        // The over-match half: these all contain a name in the list and reject the control.
         for model in ["gpt-5-chat-latest", "o1-mini", "o1-preview"] {
             assert!(efforts(openai, model).is_empty(), "{model}");
         }
@@ -1123,12 +943,10 @@ mod tests {
         );
         assert!(said.contains("reasoning effort"), "and the way out: {said}");
 
-        // With a rung picked, genai never parses the name — so the full name is sent.
         let picked = compatible.with_effort(Effort::High);
         let brain = Brain::resolve(&picked, &pool()).expect("an effort keeps the whole name");
         assert_eq!(brain.model().model_name.as_str(), "qwen3-max");
 
-        // Ollama's adapter does no such parse, so a name it can serve is not refused for it.
         let ollama = Selection::new(ProviderKind::Ollama, "qwen3-max");
         assert!(Brain::resolve(&ollama, &pool()).is_ok());
     }
@@ -1160,7 +978,6 @@ mod tests {
             "an arbitrary endpoint is not sent a field genai turns into prompt_cache_retention"
         );
 
-        // No rungs, so nothing to capture and nothing to ask Gemini for.
         let flash = Brain::resolve(
             &Selection::new(ProviderKind::Gemini, "gemini-2.0-flash")
                 .with_key(Secret::new("k").unwrap()),
@@ -1186,8 +1003,6 @@ mod tests {
     /// menu whose settings the provider refuses.
     #[test]
     fn an_unrecognized_model_is_closed_not_open() {
-        // Every kind with a rule at all, read off the table rather than listed: a kind added
-        // with a rule that turns out to be open is exactly what this is here to catch.
         for kind in all().filter(|kind| !matches!(info(*kind).efforts, Efforts::Always)) {
             assert!(
                 efforts(kind, "some-model-shipped-next-quarter").is_empty(),
@@ -1216,7 +1031,6 @@ mod tests {
             "Ollama 'qwen3:14b' has no reasoning effort setting."
         );
 
-        // And the message names the *model*, because that is what the user would change.
         let sonnet = Selection::new(ProviderKind::Anthropic, "claude-sonnet-4-5")
             .with_key(Secret::new("sk-test").unwrap())
             .with_effort(Effort::High);
@@ -1227,7 +1041,6 @@ mod tests {
             Some("Anthropic 'claude-sonnet-4-5' has no reasoning effort setting.".to_string())
         );
 
-        // The model of the same kind that does support one resolves with the rung set.
         let opus = Selection::new(ProviderKind::Anthropic, "claude-opus-4-5")
             .with_key(Secret::new("sk-test").unwrap())
             .with_effort(Effort::High);

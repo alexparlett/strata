@@ -1,10 +1,8 @@
-//! Catalog references and row descriptors: which [`CatalogKind`] section a row is in,
-//! what a pending removal ([`RemoveKind`] / [`RemoveTarget`]) targets, and a [`ColRef`]
-//! that names one column. Also the persisted **catalog definitions** ([`TableDef`] /
-//! [`ViewDef`] / [`SavedQuery`]) — exactly what `.strata/project.json` stores, nothing
-//! more. What registration *learns* about a def (columns, row counts, status, profiles)
-//! is runtime state and lives with the UI's project store, wrapped around these — not
-//! here as skipped fields.
+//! Catalog references and row descriptors, plus the persisted **catalog definitions**
+//! ([`TableDef`] / [`ViewDef`] / [`SavedQuery`]) — exactly what `.strata/project.json` stores.
+//!
+//! What registration *learns* about a def (columns, row counts, status, profiles) is runtime state
+//! and lives in the project store wrapped around these, never here as skipped fields.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
@@ -31,19 +29,13 @@ pub enum CatalogKind {
     Query,
 }
 
-/// A reference to one column in the catalog — **what kind of thing owns it, its owner's
-/// name, and its path within it**. Each part earns its place:
+/// A reference to one column in the catalog: what kind of thing owns it, its owner's name, and its
+/// **path** within it.
 ///
-/// - **kind** — tables and views are separate collections. Without it, resolving a
-///   reference means searching both and hoping the name only lands in one.
-/// - **path**, not a name — `["address", "city"]`. A name alone can't say *which* `city`,
-///   the top-level one or the one inside `address`, and the sidebar renders both. Keying
-///   by name meant a nested column resolved to an unrelated top-level one.
-///
-/// A struct rather than a `"view::orders.address.city"` URN for the same reason the path
-/// is a `Vec`: names come from the user's files and may contain dots, `::`, or anything
-/// else. A string that has to be parsed back is a bug waiting to be rediscovered (cf.
-/// `ident` vs `col` in [`crate::profile`]).
+/// A path rather than a name because a name alone cannot say *which* `city`, the top-level one or
+/// the one inside `address`, and the sidebar renders both. A struct rather than a
+/// `"view::orders.address.city"` URN because names come from the user's files and may contain dots
+/// or `::`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ColRef {
     /// `Table` or `View` — says which collection owns it, so resolving is one lookup.
@@ -67,10 +59,6 @@ impl ColRef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Catalog definitions (persisted to `.strata/project.json`)
-// ---------------------------------------------------------------------------
-
 /// Accept partition columns as either the legacy name-only `["year","month"]`
 /// (→ typed `Utf8`) or the current typed `[["year","Int32"], …]` form, so old project
 /// files keep loading. Serialization always emits the typed form.
@@ -92,10 +80,6 @@ where
         })
         .collect())
 }
-
-// ---------------------------------------------------------------------------
-// Source format + its read options
-// ---------------------------------------------------------------------------
 
 /// Whole-file compression wrapping a text source. Read-effective for CSV and JSON; parquet and
 /// Arrow carry their compression *inside* the file, so neither offers this.
@@ -141,11 +125,9 @@ impl FileCompression {
 
 /// Which JSON layout the file is in.
 ///
-/// **Both are readable** (DataFusion 54's `JsonFormat::with_newline_delimited`), which is why
-/// this is an option rather than a rule the reader enforces. One caveat rides with
-/// [`Array`](Self::Array): DataFusion cannot range-split such a file, and `JsonSource` does not
-/// declare that, so a file over `datafusion.optimizer.repartition_file_min_size` (10 MB) fails
-/// its *scan* with a `NotImplemented`. Loud, self-describing, and only above that size.
+/// One caveat rides with [`Array`](Self::Array): DataFusion cannot range-split such a file and
+/// `JsonSource` does not declare that, so a file over `repartition_file_min_size` (10 MB) fails its
+/// *scan* with a `NotImplemented`. Loud, self-describing, and only above that size.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum JsonShape {
@@ -158,17 +140,10 @@ pub enum JsonShape {
 
 /// How a CSV source is read.
 ///
-/// **Every field here reaches the read path**, in both halves of it — inference and scan. That
-/// is the bar, and it excluded three options that look available and are not:
-///
-/// - `null_regex` (a "NULL value" text) is wired into `CsvFormat`'s *inference* only;
-///   `CsvSource::builder` never puts it on the reader. Setting it re-types a column and then
-///   fails the scan parsing the very token it was told was null — strictly worse than leaving
-///   it off, where the column simply infers as text.
-/// - `terminator` is the mirror image: wired at scan, absent from inference, so the schema and
-///   the rows would be read by different rules.
-/// - `double_quote`, `quote_style`, `null_value`, the date/time formats, the whitespace pair
-///   and `compression_level` are the **writer's**; no read path references them.
+/// **Every field here reaches both halves of the read path** — inference and scan. That bar
+/// excluded `null_regex` (inference only, so setting it re-types a column and then fails the scan),
+/// `terminator` (scan only, so schema and rows would be read by different rules), and the writer's
+/// options, which no read path references.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
 pub struct CsvRead {
@@ -183,9 +158,8 @@ pub struct CsvRead {
     /// Allow line breaks inside quoted fields. Costs the parallel file split
     /// (`CsvSource::supports_repartitioning`), which is why it is off by default.
     pub newlines_in_values: bool,
-    /// Read files whose rows (or whose *schemas*, across paths) have different column counts:
-    /// the union of the columns found, padded with nulls. Without it a ragged file — or one
-    /// path with a column the others lack — fails the register outright.
+    /// Read files whose rows (or whose *schemas*, across paths) have different column counts: the
+    /// union of the columns found, padded with nulls. Without it a ragged file fails the register.
     pub truncated_rows: bool,
     /// Rows scanned to infer types. `None` = the engine's default; `Some(0)` means "read
     /// everything as text" (DataFusion's own `disable_inference` arm).
@@ -216,28 +190,22 @@ impl Default for CsvRead {
 #[serde(default)]
 pub struct JsonRead {
     pub shape: JsonShape,
-    /// Records scanned to infer the schema. **`None` = scan every record**, which is the default
-    /// and is deliberate: the reader exists to notice a type conflict, and a capped scan that
-    /// misses one types the column wrong and then fails at *query* time on a table the catalog
-    /// called healthy (`engine::json_poly::format::infer_schema`).
+    /// Records scanned to infer the schema. **`None` = scan every record**, the default: the
+    /// reader exists to notice a type conflict, and a capped scan that misses one types the column
+    /// wrong and then fails at *query* time on a table the catalog called healthy.
     ///
-    /// `Some(0)` is refused by the engine — it would infer a schema with no columns — so the
-    /// Configure pane spends 0 as its "scan everything" sentinel and writes `None` for it.
+    /// `Some(0)` is refused by the engine, so the Configure pane spends 0 as its "scan everything"
+    /// sentinel and writes `None` for it.
     pub infer_rows: Option<usize>,
     pub compression: FileCompression,
 }
 
-/// **A table's reader, and the options that reader takes** — one field, not a format string
-/// beside an options bag.
-///
-/// The two are not independent: a [`CsvRead`] means nothing to the parquet reader, and a def
-/// carrying both would have a state where they disagree — a delimiter set on a parquet table,
-/// silently ignored, and shown by whatever surface renders the options. Here the format *is* the
-/// options, so that state cannot be written down.
+/// **A table's reader, and the options that reader takes** — one field, not a format string beside
+/// an options bag, so a delimiter set on a parquet table is a state that cannot be written down.
 ///
 /// [`Unknown`](Self::Unknown) is not a fallback: it is a def naming a reader this build does not
-/// have (a legacy `"avro"`), kept so one such row cannot stop the whole project file loading, and
-/// failing loudly at its own registration rather than being read as something else.
+/// have, kept so one such row cannot stop the whole project file loading, and failing loudly at its
+/// own registration rather than being read as something else.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SourceFormat {
@@ -290,13 +258,10 @@ impl SourceFormat {
 
 /// Write a format the way it will read back.
 ///
-/// The four readers emit the tagged form. [`Unknown`](SourceFormat::Unknown) emits the **bare
-/// string** it arrived as — which it has to, twice over. Serde cannot serialize an internally
-/// tagged *newtype* variant holding a string at all (it fails at runtime, which would have made
-/// every `save_defs` of a project containing one legacy `avro` def fail, taking the whole
-/// project file with it). And it is the honest form anyway: a def this build cannot read should
-/// come back out of `project.json` exactly as it went in, so a Strata save never mangles a
-/// table some other tool wrote.
+/// The four readers emit the tagged form; [`Unknown`](SourceFormat::Unknown) emits the **bare
+/// string** it arrived as. Serde cannot serialize an internally tagged newtype variant holding a
+/// string at all, so the derived impl would fail every `save_defs` of a project containing one —
+/// and it is the honest form anyway, so a Strata save never mangles a table another tool wrote.
 fn se_format<S>(format: &SourceFormat, s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -327,14 +292,10 @@ where
 
 /// **Whose files a table def points at** (ED-04) — a flag on [`TableDef`], not a second type.
 ///
-/// The two origins share one namespace, one list in `project.json` and one catalog section,
-/// because they are the same kind of thing to everything that reads a def: a name over a set of
-/// files in a format. What differs is who owns the files, and that answers exactly three
-/// questions — may a write statement target it, does dropping it delete data, and can Configure
-/// edit it. Splitting the type would have every reader match on two shapes to ask nothing.
-///
-/// A def written before this field existed is [`External`](Self::External), which is what every
-/// def was.
+/// Both origins share one namespace, one list in `project.json` and one catalog section, because
+/// they are the same kind of thing to everything that reads a def. The flag answers exactly three
+/// questions: may a write statement target it, does dropping it delete data, can Configure edit it.
+/// A def written before this field existed is [`External`](Self::External).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TableOrigin {
@@ -362,19 +323,17 @@ pub struct TableDef {
     /// The reader and its options — see [`SourceFormat`].
     #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
-    /// **Which object store [`sources`](Self::sources) are read from** (W7 · 04), as the
+    /// **Which object store [`sources`](Self::sources) are read from**, as the
     /// [`ConnectionDef::url`](crate::ConnectionDef::url) that identifies it — `s3://acme-lake`.
-    /// `None` is the local disk, which is what every def was before this field existed.
+    /// `None` is the local disk.
     ///
-    /// A *reference*, not a copy of the connection: the bucket, its provider and where its
-    /// credentials come from all belong to the connection, and duplicating any of it here would
-    /// be two statements of one fact that can disagree. The URL rather than the bucket for the
-    /// reason the registry keys on it — `s3://lake` and `gs://lake` are two different stores over
-    /// one bucket name.
+    /// A *reference*, not a copy: the bucket, its provider and its credentials belong to the
+    /// connection. The URL rather than the bucket for the reason the registry keys on it —
+    /// `s3://lake` and `gs://lake` are two stores over one bucket name.
     ///
-    /// It is the **one** field that says a table is remote, so the two halves cannot contradict
-    /// each other: a source is bucket-relative exactly when this is `Some`, and
-    /// `strata_core::project::resolve_source` is the single place that composes the two.
+    /// The **one** field that says a table is remote: a source is bucket-relative exactly when this
+    /// is `Some`, and `strata_core::project::resolve_source` is the single place that composes the
+    /// two.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<String>,
     pub sources: Vec<String>,
@@ -404,8 +363,6 @@ mod format_tests {
 
     #[test]
     fn a_legacy_def_registers_exactly_as_it_did_before_read_options_existed() {
-        // The whole point of matching DataFusion's defaults: nothing about an existing
-        // project's tables changes because this field arrived.
         let csv = CsvRead::default();
         assert!(csv.header);
         assert_eq!(csv.delimiter, ',');
@@ -438,8 +395,7 @@ mod format_tests {
         assert_eq!(round.format, def.format);
     }
 
-    /// A def written before origins existed is external — which is what every def was — and an
-    /// internal one round-trips, because `project.json` is how it survives a restart.
+    /// A def written before origins existed is external, and an internal one round-trips.
     #[test]
     fn an_origin_defaults_to_external_and_round_trips() {
         assert_eq!(
@@ -459,9 +415,8 @@ mod format_tests {
         assert_eq!(parse(&json), def);
     }
 
-    /// A def written before connections existed reads from the **local disk**, which is what
-    /// every def did; a remote one round-trips, and a local one writes no key at all — so a
-    /// project file gains nothing until a table is actually pointed at a bucket.
+    /// A def written before connections existed reads from the **local disk**; a remote one
+    /// round-trips, and a local one writes no key at all.
     #[test]
     fn a_connection_defaults_to_the_local_disk_and_round_trips() {
         assert_eq!(
@@ -491,9 +446,6 @@ mod format_tests {
 
     #[test]
     fn an_unreadable_format_survives_a_save_as_the_string_it_arrived_as() {
-        // Serde cannot serialize an internally tagged newtype variant holding a string, so the
-        // derived impl would fail here — and `save_defs` serializes the whole `ProjectDefs`, so
-        // one such def would block every write of that project file.
         let def = TableDef {
             name: "legacy".into(),
             format: SourceFormat::Unknown("avro".into()),
@@ -509,8 +461,6 @@ mod format_tests {
 
     #[test]
     fn an_unreadable_format_is_kept_verbatim_rather_than_read_as_parquet() {
-        // A legacy `avro` def must not quietly become a parquet table — one row that cannot
-        // register is recoverable, a table read with the wrong reader is not.
         let def = parse(r#"{"name":"t","format":"avro","sources":["/data"]}"#);
         assert_eq!(def.format, SourceFormat::Unknown("avro".into()));
         assert_eq!(def.format.name(), "avro");
@@ -539,18 +489,18 @@ mod format_tests {
     }
 }
 
-/// A saved, query-backed catalog view definition (a real DataFusion `CREATE VIEW`).
-/// Views are addressed by `name` — that *is* their engine/SQL identity.
+/// A saved, query-backed catalog view definition (a real DataFusion `CREATE VIEW`). Addressed by
+/// `name` — that *is* its engine/SQL identity.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct ViewDef {
     pub name: String,
     pub sql: String,
 }
 
-/// A named SQL snippet stored in the project — distinct from a [`ViewDef`] (which is a
-/// real DataFusion view). Re-opened in a query tab, not queryable by name — so unlike a
-/// view, its `name` is only a label, and identity is the stable `id` (what a tab's
-/// save-target origin holds; renaming can't dangle it). Files written before ids get one
+/// A named SQL snippet stored in the project, re-opened in a query tab and not queryable by name.
+///
+/// So unlike a [`ViewDef`], its `name` is only a label and identity is the stable `id`, which a
+/// tab's save-target origin holds and a rename cannot dangle. Files written before ids get one
 /// minted per load; it sticks on the next save.
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct SavedQuery {

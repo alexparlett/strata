@@ -84,8 +84,6 @@ fn title_bar_press(
             let _ = window.drag_window();
         }),
         PressEventType::Double => {
-            // Decide the direction from the mirrored state (up to date, and readable here —
-            // unlike inside the renderer callback), then mark it as ours before dispatching.
             let filling = !*is_filled.peek();
             filled_by_app.set(filling);
             Platform::get().with_window(None, move |window| window.set_maximized(filling));
@@ -108,8 +106,6 @@ pub struct WindowDragStrip {
 
 impl Component for WindowDragStrip {
     fn render(&self) -> impl IntoElement {
-        // The unfill-clears-the-mark rule, same as the full bar's: leaving fill by any route
-        // makes a later user-side fill persistable again.
         let is_filled = Platform::get().is_maximized;
         let mut filled_by_app = self.filled_by_app;
         use_side_effect(move || {
@@ -127,19 +123,12 @@ impl Component for WindowDragStrip {
 
 impl Component for HeaderBar {
     fn render(&self) -> impl IntoElement {
-        // Only the bar's own surface is themed here. Its content — the switcher's accent glyph,
-        // the dropdown's text ramp — is root palette colours read through the normal hook, and
-        // its avatars / separators are the shared `Avatar` and `Divider::menu` components.
         let HeaderBarTheme {
             background,
             border_fill,
             color,
         } = get_theme!(&self.theme, HeaderBarThemePreference, "header_bar");
 
-        // The window's live fill state (the fork's mirror of winit's `is_maximized`). Leaving
-        // fill by *any* route — our double-press, the OS, dragging the window out of a tile —
-        // clears our mark, so a later user-side fill is never mistaken for ours and stays
-        // persistable.
         let is_filled = Platform::get().is_maximized;
         let mut filled_by_app = self.filled_by_app;
         use_side_effect(move || {
@@ -148,20 +137,12 @@ impl Component for HeaderBar {
             }
         });
 
-        // The two window buttons, each titled with its command's *live* chord — so a rebind
-        // repaints the tooltip. The search button raises the command palette (P6-01) through the
-        // slot the project root provides, exactly as ⌘K does; the gear opens Settings.
         let search_title = use_hint_title("Search", Command::CommandPalette);
         let settings_title = use_hint_title("Settings", Command::OpenSettings);
         let mut palette = use_consume::<PaletteOpen>();
-        // The Settings window is opened through the shared path, which needs this window's
-        // platform handle (that is how it learns *which* window asked, so it can pin itself
-        // above this one) and the app-globals.
         let platform = use_hook(Platform::get);
         let app = use_consume::<AppCtx>();
 
-        // The brand: the app mark in a rounded, clipped tile (the SVG is square and paints its
-        // own colours), then the wordmark in the scale's Title role — ui 600 14.5, the comp's.
         let brand = rect()
             .horizontal()
             .cross_align(Alignment::Center)
@@ -176,9 +157,6 @@ impl Component for HeaderBar {
             )
             .child(Title::new("Strata"));
 
-        // A 30×30 action button wearing the standard `button` dress — which *is* the comp's
-        // `c-elev` fill + `c-border2` hairline + muted glyph. The pointer-down stop is what keeps
-        // a press on it from dragging the window.
         let action = |icon: IconName, size: f32| {
             Button::new()
                 .width(Size::px(30.))
@@ -215,13 +193,10 @@ impl Component for HeaderBar {
             .content(Content::Flex)
             .padding(Gaps::new(0., SP_4, 0., TRAFFIC_LIGHT_GUTTER))
             .spacing(SP_4)
-            // Drag / double-press-to-fill: on the bar itself, so it covers the whole strip except
-            // the controls that opt out above.
             .on_pointer_down(title_bar_press(is_filled, self.filled_by_app))
             .child(brand)
             .child(Divider::vertical().length(Size::px(20.)).color(border_fill))
             .child(ProjectMenu)
-            // Flexible spacer — pins the cluster to the right edge.
             .child(rect().height(Size::px(1.)).width(Size::flex(1.)))
             .child(cluster);
 

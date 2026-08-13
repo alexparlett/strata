@@ -101,9 +101,6 @@ impl Divider {
 
 impl Component for Divider {
     fn render(&self) -> impl IntoElement {
-        // Hooks run unconditionally and the fallback is chosen only *after* — a plain rule is
-        // the `border` role's colour, a menu's is the menu card's hairline (so it reads on that
-        // elevated surface in every theme, rather than each menu naming a colour).
         let sheet_border = use_roles().get(ThemeRole::Border);
         let menu_border = get_theme!(
             &None::<MenuContainerThemePartial>,
@@ -117,9 +114,6 @@ impl Component for Divider {
         });
         let t = Size::px(self.thickness);
         let base = rect().margin(self.margin).background(color);
-        // A fixed `px` thickness holds even in a `Content::Flex` parent, so no min is needed — and a
-        // *min* on the thickness is actively wrong: it lets flex distribution grow the line (that's what
-        // thickened the menu rules from 1px). The length axis fills (or whatever `length` set).
         if self.vertical {
             base.width(t).height(self.length.clone())
         } else {

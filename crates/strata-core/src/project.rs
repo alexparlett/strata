@@ -128,17 +128,11 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut defs: ProjectDefs = from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    // **Migrated on the way in**, before anything reads one: an HTTP connection written before
-    // its address carried a scheme stored the authority alone, and would now read as a URL with
-    // none. This is the one place project defs come off disk, so it is the one place that has to
-    // know (`ConnectionDef::migrated` is the rule).
     defs.connections = defs
         .connections
         .into_iter()
         .map(ConnectionDef::migrated)
         .collect();
-    // Connections sort on their address, which *is* their name (`ConnectionDef`): the same
-    // ordering rule, over the field that carries identity here.
     defs.connections
         .sort_by(|a, b| name_ord(&a.address, &b.address));
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
@@ -154,8 +148,6 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
 /// last good file rather than a truncated one.
 pub fn save_defs(root: &Path, defs: &ProjectDefs) -> Result<(), String> {
     let dir = strata_dir(root);
-    // Every arm names its path, like the loads: these strings reach the load-fault dialog
-    // (a scaffold that fails is a failed open), where a bare OS error names no file.
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     tidy_strata_dir(&dir);
     let path = dir.join(PROJECT_JSON);
@@ -259,7 +251,6 @@ pub fn load_session(root: &Path) -> Result<Option<SessionSnapshot>, SessionLoadE
             )))
         }
     };
-    // Past the read, everything is the file's fault, not the filesystem's.
     let text = String::from_utf8(bytes)
         .map_err(|e| SessionLoadError::Corrupt(format!("{}: {e}", path.display())))?;
     from_str(&text)
@@ -333,25 +324,18 @@ pub fn save_history(root: &Path, entries: &[HistoryEntry]) -> Result<(), String>
 /// newest). Absent file → empty (a project with no runs yet); a corrupt *line* is skipped, not
 /// fatal — one bad append can't lose the whole log.
 ///
-/// **Distinct, not merely last-N.** The log is append-only, so re-running one query writes a
-/// line every time; a plain keep-last-N would then hand back a window of the same statement
-/// repeated, and the cap — the user's `max_history`, "how many recent queries to keep" — would
-/// silently mean something else. So repeats collapse to their **newest** occurrence
-/// ([`collapse_sql`] is the key, shared with the History drawer's preview so two kept entries can
-/// never render identically), and the cap counts what is left.
+/// **Distinct, not merely last-N.** The log is append-only, so a plain keep-last-N would hand back
+/// a window of one statement repeated and the user's `max_history` would silently mean something
+/// else. Repeats collapse to their **newest** occurrence, keyed by [`collapse_sql`] — shared with
+/// the History drawer's preview, so two kept entries can never render identically.
 ///
-/// Compaction rides the same path: whenever anything was dropped — a duplicate, an overflowing
-/// entry or a corrupt line — the file is **rewritten** to exactly what was kept (`DESIGN_SPEC`:
-/// "rotate to bound size"), which is what stops an append-only log of one repeated query growing
-/// without bound.
+/// Compaction rides the same path: whenever anything was dropped the file is **rewritten** to
+/// exactly what was kept, which is what bounds an append-only log of one repeated query.
 ///
-/// The rewrite goes through [`write_atomic`], so it is all-or-nothing: a crash mid-rotation
-/// leaves the un-rotated log, never a truncated one. It is **not** locked against other writers,
-/// and that residual race is deliberate: every other writer opens the log `O_APPEND`
-/// ([`append_history`]), so an entry another window appends between this read and the rename
-/// lands in the file we then replace (now unlinked) and is lost. Bounded by design — only the
-/// runs completed in that millisecond, and only from history, which is regenerable. The
-/// alternative is a lock file every append has to take, which is not worth it here.
+/// The rewrite goes through [`write_atomic`], so a crash mid-rotation leaves the un-rotated log. It
+/// is **not** locked against other writers, and that residual race is deliberate: an entry another
+/// window appends between this read and the rename is lost. Bounded by design — only the runs
+/// completed in that millisecond, and only from history, which is regenerable.
 pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String> {
     let path = history_path(root);
     let text = match fs::read_to_string(&path) {
@@ -367,8 +351,6 @@ pub fn load_history(root: &Path, cap: usize) -> Result<Vec<HistoryEntry>, String
         .collect();
     let entries = newest_distinct(parsed, cap);
     if entries.len() != lines {
-        // Best-effort: a rewrite that fails just leaves the longer log, which the next load
-        // retries.
         let mut out = String::new();
         for entry in &entries {
             if let Ok(line) = to_string(entry) {
@@ -464,8 +446,6 @@ pub fn chat_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .filter(|path| {
-            // `.{name}.{pid}.{seq}.tmp` ends in `.tmp`, but a temp written *for* a chat document
-            // is named after it, so filter on the leading dot the temp name carries.
             !path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -515,15 +495,7 @@ pub fn clear_chats(root: &Path) -> Result<(), String> {
 fn tidy_strata_dir(dir: &Path) {
     ensure_gitignore(dir);
     sweep_stale_temps(dir);
-    // The same housekeeping one level down, for the other thing published by rename: a CTAS
-    // that was killed between spooling its Arrow files and renaming the directory into place
-    // leaves a `.tmp-…` under `tables/` (ED-04). Cheap — a `read_dir` of a directory holding
-    // one entry per internal table — and skipped entirely on the usual project, which has none.
     sweep_stale_temp_dirs(&dir.join(TABLES_DIR));
-    // And the other subdirectory published by rename: a conversation's document is written with
-    // `write_atomic`, whose temp lands *beside the target* — inside `chats/`, which the sweep of
-    // `.strata/` itself never reaches. One per interrupted write, and nothing else would ever
-    // remove them.
     sweep_stale_temps(&dir.join(CHATS_DIR));
 }
 
@@ -535,23 +507,13 @@ fn tidy_strata_dir(dir: &Path) {
 /// upgraded, which is what lets a new entry reach existing projects with no migration.
 ///
 /// `tables/` is the one entry that is not merely per-user noise: it is the design (ED-04). An
-/// internal table's **def** is committed like every other, and its data is not, so a colleague
-/// who clones the project gets the row and an honest "no data in this copy" against it.
+/// internal table's **def** is committed like every other and its data is not, so a colleague who
+/// clones the project gets the row and an honest "no data in this copy" against it.
 ///
-/// The names are literal but [`TEMP_GLOB`] is a pattern, and both are taken from the one
-/// place that defines them, because a gitignore line matches literally: `session.json` does
-/// not cover `session.json.corrupt`, and nothing here covers a temp whose name carries the
-/// writer's pid.
-///
-/// Rewritten atomically like the rest: it's a read-modify-write of a file the user may have
-/// added their own lines to, so a truncating write could lose them.
-///
-/// **A file that would not read is left alone**, which the atomic write alone does not cover.
-/// Absent is the ordinary case and reads as empty; a *failed* read is a file whose contents are
-/// still there and still unknown, and treating that as empty would rewrite it down to Strata's
-/// six lines — losing exactly what the paragraph above says this function preserves. Missing
-/// entries on a project whose `.gitignore` could not be read for a moment is the harmless half
-/// of the choice.
+/// Rewritten atomically, because it is a read-modify-write of a file the user may have added their
+/// own lines to. **A file that would not read is left alone**, which the atomic write does not
+/// cover: absent reads as empty, but a *failed* read is a file whose contents are still there and
+/// still unknown, and treating that as empty would rewrite it down to Strata's own lines.
 fn ensure_gitignore(dir: &Path) {
     let gi = dir.join(".gitignore");
     let existing = match fs::read_to_string(&gi) {
@@ -640,8 +602,6 @@ pub fn split_remote(location: &str) -> Option<(String, String)> {
     }
     let (authority, path) = match rest.split_once('/') {
         Some((authority, path)) => (authority, path),
-        // A bucket with nothing under it. Answered rather than refused, because "the location
-        // names no path inside the bucket" is the caller's sentence to write, not a parse failure.
         None => (rest, ""),
     };
     Some((format!("{scheme}://{authority}"), path.to_string()))
@@ -666,7 +626,6 @@ pub fn name_ord(a: &str, b: &str) -> Ordering {
     a.chars()
         .flat_map(char::to_lowercase)
         .cmp(b.chars().flat_map(char::to_lowercase))
-        // Names differing only in case still need a total order.
         .then_with(|| a.cmp(b))
 }
 
@@ -701,18 +660,12 @@ mod tests {
         let defs = scaffold(&root.0).unwrap();
         assert!(exists_at(&root.0));
         assert!(defs.name.starts_with("strata-project-test-scaffold"));
-        // Scaffolding is refused where a project already exists.
         assert!(scaffold(&root.0).is_err());
-        // The local, per-user files are gitignored from the start — including the copy a
-        // failed session restore keeps aside and the in-flight temp of an atomic write,
-        // neither of which the `session.json` line covers.
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert_eq!(
             gi,
             "session.json\nsession.json.corrupt\nhistory.jsonl\ntables/\nchats/\n.*.tmp\n"
         );
-        // `assert!` over `assert_eq!` here and below: the model types are serde
-        // vocabulary and deliberately don't derive `Debug`.
         let loaded = load_defs(&root.0).unwrap();
         assert!(loaded == defs);
     }
@@ -737,8 +690,6 @@ mod tests {
         let defs = load_defs(&root.0).unwrap();
         let urls: Vec<String> = defs.connections.iter().map(ConnectionDef::url).collect();
         assert_eq!(urls, ["s3://acme-lake", "https://example.com:8080"]);
-        // Every one of them is an address its provider will still accept, which is the whole
-        // point: the migration exists so an old file does not become an amber row.
         for conn in &defs.connections {
             assert!(conn.provider.check_address(&conn.address).is_ok());
         }
@@ -767,7 +718,6 @@ mod tests {
         let loaded = load_defs(&root.0).unwrap();
         let names: Vec<&str> = loaded.views.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names, ["Alpha", "midge", "zeta"]);
-        // Ids round-trip — a saved query keeps its identity across save/load.
         assert!(loaded.saved_queries == defs.saved_queries);
     }
 
@@ -776,7 +726,6 @@ mod tests {
         let root = TempRoot::new("legacy-ids");
         let dir = strata_dir(&root.0);
         fs::create_dir_all(&dir).unwrap();
-        // A pre-id file, as the old app wrote it.
         fs::write(
             dir.join("project.json"),
             r#"{ "name": "p", "saved_queries": [{ "name": "q", "sql": "select 1", "meta": "—" }] }"#,
@@ -784,7 +733,6 @@ mod tests {
         .unwrap();
         let loaded = load_defs(&root.0).unwrap();
         assert_eq!(loaded.saved_queries.len(), 1);
-        // Minted per load until saved; saving pins it.
         save_defs(&root.0, &loaded).unwrap();
         let again = load_defs(&root.0).unwrap();
         assert!(again.saved_queries[0].id == loaded.saved_queries[0].id);
@@ -811,7 +759,6 @@ mod tests {
     #[test]
     fn session_round_trips_and_absence_is_none_not_error() {
         let root = TempRoot::new("session");
-        // No file yet → Ok(None), a first-class state (a fresh / never-saved project).
         assert!(load_session(&root.0).unwrap().is_none());
 
         let t = tab("query 1", "SELECT 1");
@@ -828,14 +775,11 @@ mod tests {
             layout: Layout::default(),
         };
         save_session(&root.0, &snap).unwrap();
-        // (`SessionSnapshot` is serde vocabulary and doesn't derive `PartialEq` — check fields.)
         let loaded = load_session(&root.0).unwrap().unwrap();
         assert_eq!(loaded.tabs.len(), 2);
         assert_eq!(loaded.tabs[0].text, "SELECT 1");
         assert_eq!(loaded.active, Some(id));
         assert_eq!(loaded.window.unwrap().width, 800.0);
-        // The session file is gitignored the moment it's written (alongside its
-        // kept-aside corrupt copy, history, and any stranded write temp).
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert_eq!(
             gi,
@@ -855,7 +799,6 @@ mod tests {
     fn a_session_file_predating_a_tab_field_loads_with_its_default() {
         let root = TempRoot::new("session-old");
         let id = TabId::new();
-        // No `view`, no `chart`, no `layout`, no `window` — the shape before P2-07 and Rz2.
         let text = format!(
             r#"{{"tabs":[{{"id":"{}","name":"query 1","origin":"Scratch","text":"SELECT 1"}}],"active":"{}"}}"#,
             id.0, id.0
@@ -886,7 +829,6 @@ mod tests {
     #[test]
     fn history_appends_and_loads_in_file_order() {
         let root = TempRoot::new("history");
-        // Absent → empty, not an error.
         assert!(load_history(&root.0, 100).unwrap().is_empty());
 
         for i in 0..3 {
@@ -899,7 +841,6 @@ mod tests {
             ["SELECT 0", "SELECT 1", "SELECT 2"],
             "oldest → newest"
         );
-        // history.jsonl is gitignored alongside the session (upgraded in place).
         let gi = fs::read_to_string(strata_dir(&root.0).join(".gitignore")).unwrap();
         assert!(gi.lines().any(|l| l == "history.jsonl"));
     }
@@ -910,7 +851,6 @@ mod tests {
         for i in 0..10 {
             append_history(&root.0, &run(&format!("q{i}"), i)).unwrap();
         }
-        // A garbage line mid-file must be skipped, not abort the whole load.
         let path = history_path(&root.0);
         let mut text = fs::read_to_string(&path).unwrap();
         text.push_str("{ not json\n");
@@ -923,7 +863,6 @@ mod tests {
             ["q7", "q8", "q9"],
             "keeps the last `cap` valid entries"
         );
-        // Rotation rewrote the file down to the kept window (and dropped the garbage line).
         let after = load_history(&root.0, 100).unwrap();
         assert_eq!(after.len(), 3);
     }
@@ -953,8 +892,6 @@ mod tests {
             "and it is the newest run of it that survived"
         );
 
-        // The load compacted the file to exactly what it kept, so an append-only log of one
-        // repeated query can't grow without bound.
         let text = fs::read_to_string(history_path(&root.0)).unwrap();
         assert_eq!(text.lines().filter(|l| !l.trim().is_empty()).count(), 3);
     }
@@ -990,7 +927,6 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(!text.contains('\r'), "the writer must emit LF, never CRLF");
 
-        // Now hand it the CRLF version some other tool might leave behind.
         fs::write(&path, text.replace('\n', "\r\n")).unwrap();
         let loaded = load_history(&root.0, 100).unwrap();
         let sqls: Vec<&str> = loaded.iter().map(|r| r.sql.as_str()).collect();
@@ -1031,8 +967,6 @@ mod tests {
         assert!(!history_path(&root.0).exists());
         clear_history(&root.0).unwrap();
 
-        // …and the log comes back on the next run, rather than the project being left unable
-        // to record one.
         append_history(&root.0, &run("SELECT 2", 1)).unwrap();
         assert_eq!(load_history(&root.0, 100).unwrap().len(), 1);
     }
@@ -1043,7 +977,6 @@ mod tests {
     #[test]
     fn a_chat_is_one_document_and_the_directory_is_gitignored() {
         let root = TempRoot::new("chats");
-        // Absent → no conversations, not an error.
         assert!(chat_files(&root.0).unwrap().is_empty());
 
         let one = Uuid::new_v4();
@@ -1079,7 +1012,6 @@ mod tests {
         let root = TempRoot::new("chats-temp");
         let one = Uuid::new_v4();
         save_chat(&root.0, &one, "{}").unwrap();
-        // A temp named the way `write_atomic` names one, from a pid that is not ours.
         let stranded = chats_dir(&root.0).join(format!(".{one}.json.1.0.tmp"));
         fs::write(&stranded, b"half a document").unwrap();
         let old = SystemTime::now() - Duration::from_secs(3 * 60 * 60);
@@ -1093,7 +1025,6 @@ mod tests {
 
         save_chat(&root.0, &Uuid::new_v4(), "{}").unwrap();
         assert!(!stranded.exists(), "the temp was not swept");
-        // …and the real documents are untouched.
         assert_eq!(chat_files(&root.0).unwrap().len(), 2);
     }
 
@@ -1115,8 +1046,6 @@ mod tests {
         assert!(chat_files(&root.0).unwrap().is_empty());
         clear_chats(&root.0).unwrap();
 
-        // …and the store comes back on the next turn rather than the project being left unable
-        // to keep one.
         save_chat(&root.0, &one, "{}").unwrap();
         assert_eq!(chat_files(&root.0).unwrap().len(), 1);
     }
@@ -1134,8 +1063,6 @@ mod tests {
             load_session(&root.0),
             Err(SessionLoadError::Corrupt(_))
         ));
-        // Bytes that aren't even UTF-8 are damage too, not a failed read — the distinction
-        // `read_to_string` cannot make, which is why the load decodes the bytes itself.
         fs::write(dir.join("session.json"), [0x7b, 0xff, 0xfe]).unwrap();
         assert!(matches!(
             load_session(&root.0),
@@ -1209,8 +1136,6 @@ mod tests {
         let root = TempRoot::new("atomic-fail");
         let defs = scaffold(&root.0).unwrap();
         let dir = strata_dir(&root.0);
-        // Read-only `.strata/` — the temp can't be created, so the write fails before the
-        // rename (`create_dir_all` on an existing dir still succeeds).
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
         let res = save_defs(
             &root.0,
@@ -1233,8 +1158,6 @@ mod tests {
         use std::time::{Duration, SystemTime};
         let root = TempRoot::new("sweep-wiring");
         scaffold(&root.0).unwrap();
-        // Another process's temp (ours is never swept — it could be a write in flight),
-        // back-dated well past the staleness threshold.
         let stranded = strata_dir(&root.0).join(format!(
             ".session.json.{}.0.tmp",
             process::id().wrapping_add(1)
@@ -1274,7 +1197,6 @@ mod tests {
         );
         assert_eq!(relativize(root, "/proj/events"), "events");
         assert_eq!(relativize(root, "/elsewhere/x.csv"), "/elsewhere/x.csv");
-        // Round trip: what the engine gets resolves back to what the file stores.
         assert_eq!(
             relativize(root, &resolve_source(root, None, "sub/dir")),
             "sub/dir"
@@ -1292,7 +1214,6 @@ mod tests {
             resolve_source(root, s3, "events/2024/**/*.parquet"),
             "s3://acme-lake/events/2024/**/*.parquet"
         );
-        // One separator, wherever the user put theirs: a leading `/` means the bucket root.
         assert_eq!(
             resolve_source(root, s3, "/events/"),
             "s3://acme-lake/events/"
@@ -1301,7 +1222,6 @@ mod tests {
             resolve_source(root, Some("s3://acme-lake/"), "events/"),
             "s3://acme-lake/events/"
         );
-        // An HTTP connection is a whole origin, and composes exactly the same way.
         assert_eq!(
             resolve_source(root, Some("http://aserver:8484"), "data/a.csv"),
             "http://aserver:8484/data/a.csv"
@@ -1319,8 +1239,6 @@ mod tests {
             "s3://acme-lake/events/2024/**/*.parquet",
             "gs://lake/daily/",
             "http://aserver:8484/data/a.csv",
-            // A bucket with nothing under it: answered as an empty source, so the caller can say
-            // what is missing rather than a parse saying nothing at all.
             "s3://acme-lake",
         ] {
             let (url, source) = split_remote(location).expect("a scheme");
@@ -1334,8 +1252,6 @@ mod tests {
             split_remote("s3://acme-lake/events/"),
             Some(("s3://acme-lake".into(), "events/".into()))
         );
-        // A path is not a URL, and neither is a Windows drive letter — the separator is `://`,
-        // never a bare colon.
         assert_eq!(split_remote("/proj/events/"), None);
         assert_eq!(split_remote("events/2024"), None);
         assert_eq!(split_remote("C:\\data\\events"), None);

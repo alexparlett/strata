@@ -68,8 +68,6 @@ pub struct ViewMeta {
     pub aliases: Vec<String>,
 }
 
-// ---- external table registration ----
-
 /// Register (or **re**-register) one external table from its spec, returning its
 /// inferred schema + free metadata.
 ///
@@ -94,12 +92,6 @@ pub async fn register_external(
     use datafusion::datasource::file_format::FileFormat;
     use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 
-    // **The reserved namespace, backstopped at the funnel** (`docs/STATEMENTS_SPEC.md` §4). The
-    // router already refuses a `__snap_` target in a typed statement, but a def reaches here from
-    // three other directions — Table Config, a hand-edited `project.json`, a project written by
-    // an older build — and a table registered into that namespace would be invisible to every
-    // catalog reader (the schema provider hides the prefix) and would cost a *Run* the first
-    // time a snapshot wanted the same name.
     if is_snapshot_name(&spec.name) {
         return Err(Blocked::ReservedName.editor_message());
     }
@@ -114,16 +106,9 @@ pub async fn register_external(
         return Err("No source paths".into());
     }
 
-    // The reader, dressed in the def's own options — and **exhaustive**: a format with no
-    // reader in this build fails its registration by name. The arm this replaces was a
-    // `_ =>` fallthrough onto parquet, so a legacy `avro` def was read as parquet and said
-    // nothing about it.
     let fmt: Arc<dyn FileFormat> = match &spec.format {
         SourceFormat::Csv(o) => Arc::new(csv_format(o)?),
         SourceFormat::Json(o) => Arc::new(PolyJsonFormat::new(o.clone())),
-        // Not stock `ArrowFormat`: its `infer_stats` answers unknown, so an internal table —
-        // whose whole data set Strata wrote — could not say how many rows it holds. See
-        // [`StrataArrowFormat`].
         SourceFormat::Arrow => Arc::new(StrataArrowFormat::default()),
         SourceFormat::Parquet => Arc::new(ParquetFormat::default().with_skip_metadata(true)),
         SourceFormat::Unknown(name) => {
@@ -133,21 +118,8 @@ pub async fn register_external(
             ))
         }
     };
-    // The listing's filter is the format's extension **plus its compression suffix**: a
-    // gzipped CSV is `events.csv.gz`, and a filter of `.csv` matches none of them — which
-    // DataFusion reports as an empty location, with the files sitting right there.
     let ext = spec.format.extension();
     let ext = ext.as_str();
-    // `with_session_config_options` *before* any explicit option: it carries the
-    // session's `collect_statistics` (and `target_partitions`) onto the options and
-    // would otherwise clobber them.
-    //
-    // It is not optional. `ListingOptions::new` hardcodes `collect_stat: false`, and a
-    // hand-built `ListingTable` never picks the `datafusion.execution.collect_statistics`
-    // key up on its own — `ListingTableConfig::with_listing_options` does no such wiring.
-    // Without this, every footer statistic comes back `Absent` while the engine setting
-    // claims to be on. It's baked in at `try_new`, so a registered table can't be fixed after
-    // the fact — a re-scan is a re-registration through here, which is the only way it moves.
     let mut opts = ListingOptions::new(fmt)
         .with_session_config_options(&ctx.copied_config())
         .with_file_extension(ext);
@@ -169,31 +141,10 @@ pub async fn register_external(
         Err(e) => {
             tracing::error!("Failed to infer schema: {}", e);
             let raw = e.to_string();
-            // **The one question the message cannot answer on its own**, asked here because
-            // asking it is `async` and a message mapper is not: does the location actually hold
-            // files of this format, under names the partition columns did not match? See
-            // [`store_holds_ext`] — it costs a listing, only on the failure path, and only for a
-            // partitioned source whose listing came back empty.
             let holds = holds_under_partitions(ctx, spec, ext, &raw).await;
             return Err(register_error(spec, ext, &raw, holds));
         }
     };
-    // **The runtime's per-file statistics cache, handed to the table that needs it.**
-    //
-    // Without it `collected_statistics` is `None`, so `do_collect_statistics_and_ordering`
-    // misses every time and re-reads every file's footer — on **every scan**, because
-    // [`free_stats`] reaches it through `list_files_for_scan`, and on every registration,
-    // because that is what [`table_meta`] answers a row's count from. An internal table is one
-    // appended IPC file per `INSERT` (ED-05), and an `INSERT` asks for a re-scan, so file *k*'s
-    // arrival re-read *k* footers: quadratic in the number of writes, before anyone had queried
-    // anything.
-    //
-    // The `RuntimeEnv` builds a 20 MiB `DefaultFileStatisticsCache` by default and we never
-    // asked for it. **Not the same call as the list-files cache**, which `ENGINE_KEYS` defaults
-    // to `0` on purpose: that one answers "which files are there", and a re-scan means asking
-    // again. This one answers "what is in *this* file", keyed per object and invalidated by
-    // `is_valid_for` on size and mtime — so a re-listing still finds new files, a replaced file
-    // still re-reads, and only an unchanged file is spared.
     let table = ListingTable::try_new(config)
         .map_err(|e| register_error(spec, ext, &e.to_string(), None))?
         .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache());
@@ -205,8 +156,6 @@ pub async fn register_external(
 
     table_meta(ctx, spec.name.as_str()).await
 }
-
-// ---- Hive partition detection (P4-11) ----
 
 /// How many levels down the listing below will look.
 ///
@@ -287,8 +236,6 @@ async fn keys_in_store(ctx: &SessionContext, path: &str) -> Vec<String> {
         return Vec::new();
     };
     let Ok(store) = ctx.runtime_env().object_store(&url) else {
-        // The connection's `connect` never ran, or ran and was refused — a refused connection
-        // registers nothing at all (`store::connect` is all-or-nothing).
         tracing::info!("no partitions under '{path}': no object store is registered for it");
         return Vec::new();
     };
@@ -303,24 +250,13 @@ async fn keys_in_store(ctx: &SessionContext, path: &str) -> Vec<String> {
                 break;
             }
         };
-        // Sorted, so the level's key is the same on every run: a store's listing order is its
-        // own, and a level holding one stray non-partition prefix would otherwise answer
-        // differently each time.
         let mut prefixes = listed.common_prefixes;
         prefixes.sort();
         let found = prefixes.iter().find_map(|p| {
-            // The key is read out before `p` is cloned into the pair — a `Path`'s parts borrow it.
             let key = partition_key(p.parts().next_back()?.as_ref())?.to_string();
             Some((key, p.clone()))
         });
         let Some((key, next)) = found else {
-            // **Rendered here and nowhere else.** The decisive datum when a lake that *looks*
-            // partitioned finds nothing is what the store actually answered at this level — no
-            // prefixes at all (wrong path, or files with no folders under it) reads very
-            // differently from prefixes that are simply not `key=value`. Built inside this arm
-            // rather than beside the listing, because on the success path it is a `String` per
-            // folder, per level, that nothing ever reads: a first level holding twenty thousand
-            // prefixes allocated twenty thousand of them to throw away.
             let seen: Vec<String> = prefixes.iter().map(ToString::to_string).collect();
             tracing::info!(
                 "partition scan of '{path}' found no key=value folder at depth {depth} \
@@ -352,10 +288,6 @@ fn partition_key(segment: &str) -> Option<&str> {
 /// reader configured with the first byte of a multi-byte character splits fields in the middle
 /// of the next one.
 fn ascii_byte(what: &str, c: char) -> Result<u8, String> {
-    // **ASCII, not "fits in a u8".** `'é' as u32` is 0xE9, which converts to a byte quite
-    // happily — but 'é' is *encoded* as 0xC3 0xA9, so that byte appears nowhere in the file and
-    // is itself a UTF-8 lead byte, so the reader would split records mid-character. Only a
-    // character whose UTF-8 encoding is one byte can be one of these options.
     c.is_ascii()
         .then_some(c as u8)
         .ok_or_else(|| format!("The CSV {what} has to be a single-byte character, not '{c}'."))
@@ -387,18 +319,6 @@ fn csv_format(o: &CsvRead) -> Result<datafusion::datasource::file_format::csv::C
     }
     Ok(fmt)
 }
-
-// The JSON arm above is `json_poly::PolyJsonFormat`, not arrow's `JsonFormat`.
-//
-// Arrow's schema inference admits five type combinations and errors on every other pair, so a
-// field that is a string in one record and an object in the next fails the whole registration —
-// `Expected object json type, found: Array(Scalar({Utf8, Boolean}))`, naming neither the key nor
-// the file. Ours stringifies exactly those paths and infers everything else identically, so it is
-// a superset rather than a behaviour change (`json_poly::infer`, asserted against arrow's own
-// inference in that module's tests).
-//
-// The def's options are carried by the format itself, so there is no `json_format` dresser left:
-// `PolyJsonFormat::new` takes the whole `JsonRead`.
 
 /// Our compression vocabulary as DataFusion's.
 pub(super) fn compression(
@@ -434,8 +354,6 @@ fn listing_url(p: &str) -> Result<datafusion::datasource::listing::ListingTableU
     }
     ListingTableUrl::parse(&loc).map_err(|e| e.to_string())
 }
-
-// ---- registration failure messages (P3-07) ----
 
 /// The wrapper names DataFusion prepends as a failure crosses each crate boundary, in the
 /// spelling it writes them.
@@ -562,8 +480,6 @@ fn failing_location(raw: &str) -> Option<&str> {
         .nth(1)?
         .split_whitespace()
         .next()?;
-    // Exactly the one sentence-ending dot DataFusion adds — `trim_end_matches` would eat a
-    // trailing dot that belongs to the path itself.
     Some(token.strip_suffix('.').unwrap_or(token))
 }
 
@@ -587,19 +503,15 @@ const MISSING_SUFFIX: &str = "' not found";
 /// [`register_error`], and the same shape: one mapper that diagnoses, then [`readable`], which
 /// only unwraps.
 ///
-/// There is exactly one diagnosis, and it exists because a **cross-source view** is the one def
-/// whose dependency can disappear with nothing on our side to observe it. A workspace table's
-/// files are on a disk or in a bucket this app reads per scan, but a relation on a database
-/// server can be renamed or dropped by somebody else, and the first Strata hears of it is the
-/// next registration pass failing to plan the view. DataFusion's answer there — `table
-/// 'pg.public.orders' not found` — is true and reads like a bug in the SQL, when what happened is
-/// that the connection no longer has that relation.
+/// Exactly one diagnosis, because a **cross-source view** is the one def whose dependency can
+/// disappear with nothing on our side to observe it: a relation on a database server can be
+/// renamed by somebody else, and DataFusion's `table 'pg.public.orders' not found` reads like a bug
+/// in the SQL when the connection simply no longer has it.
 ///
-/// **The staleness this reports is bounded by the last connect, and that is the whole
-/// reconciliation.** A database connection's relation list is the connect-time enumeration
-/// (`engine::db`), so this sentence means "not in what the connection last told us", which is why
-/// the fix it names is a refresh rather than a promise about the server right now. Nothing polls,
-/// and nothing here asks the server: a ↻ re-runs the pass, which re-connects, which re-enumerates.
+/// **The staleness reported is bounded by the last connect**, which is the whole reconciliation: a
+/// connection's relation list is the connect-time enumeration, so this means "not in what the
+/// connection last told us" and the fix it names is a refresh. Nothing polls and nothing asks the
+/// server — a ↻ re-runs the pass, which re-connects.
 pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
     match missing_relation(ctx, raw) {
         Some(message) => message,
@@ -673,21 +585,18 @@ fn register_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -
 /// retry_timeout: 180s  - HTTP error: error sending request for url (…): connection refused
 /// ```
 ///
-/// That is what reads as a stack trace, and the whole of what the user needs is the tail. Peeling
-/// is **not** diagnosis — a layer name says where the message has been, never what happened — so
-/// this belongs on the pass-through path rather than among the mappers above, and what it hands
-/// back is still DataFusion's own words.
+/// Peeling is **not** diagnosis — a layer name says where the message has been, never what
+/// happened — so this belongs on the pass-through path rather than among the mappers above, and
+/// what it hands back is still DataFusion's own words.
 ///
-/// **Every literal here is checked against the crate that writes it**, named at each constant.
-/// The first version of this function was written from a doc comment instead
-/// (`store::is_bare_redirect`'s, since corrected) and matched three strings `object_store` has
-/// never emitted, so it stripped nothing at all on the one path it exists for — while its unit
-/// test, whose fixture had been written to match the code rather than copied from the crate,
-/// passed.
+/// **Every literal here is checked against the crate that writes it**, named at each constant. The
+/// first version was written from a doc comment instead and matched three strings `object_store`
+/// has never emitted, so it stripped nothing on the one path it exists for — while its unit test,
+/// whose fixture had been written to match the code rather than copied from the crate, passed.
 ///
-/// It loops because the layers nest, and it stops the moment it stops recognising one. Peeling
-/// everything away is treated as not recognising the message at all: a string that *is* only
-/// wrappers has no tail to keep, and the raw line is more use than an empty row.
+/// It loops because the layers nest, and stops the moment it stops recognising one. Peeling
+/// everything away counts as not recognising the message: the raw line is more use than an empty
+/// row.
 pub(crate) fn readable(raw: &str) -> String {
     let mut s = raw.trim();
     loop {
@@ -699,9 +608,6 @@ pub(crate) fn readable(raw: &str) -> String {
             s = rest;
             continue;
         }
-        // `Generic {store} error: …`, matched as a pattern — see [`STORE_PREFIX`]. The *first*
-        // ` error: ` is the wrapper's, because the format puts it immediately after the store
-        // name, and the name is bounded so the pattern cannot eat a sentence.
         if let Some(rest) = s.strip_prefix(STORE_PREFIX).and_then(|r| {
             let (store, rest) = r.split_once(STORE_SUFFIX)?;
             (store.split_whitespace().count() <= STORE_WORDS).then_some(rest)
@@ -709,8 +615,6 @@ pub(crate) fn readable(raw: &str) -> String {
             s = rest.trim_start();
             continue;
         }
-        // Only where `object_store` writes it — leading — so a message that merely *contains*
-        // ` - ` keeps it.
         if let Some((_, rest)) = s
             .strip_prefix(RETRY_PREFIX)
             .and_then(|r| r.split_once(RETRY_CAUSE))
@@ -741,17 +645,11 @@ pub(crate) fn readable(raw: &str) -> String {
 /// told apart by Arrow running out of input mid-record (a record that doesn't end on its
 /// line) versus rejecting what it read.
 fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
-    // Only a JSON table can have a JSON read problem. Without this, any failure whose text
-    // merely mentions `Json error:` would be rewritten into a confident "Cannot read … as
-    // JSON" for a table that isn't JSON — the mis-attribution this mapping exists to remove.
     let SourceFormat::Json(options) = &spec.format else {
         return None;
     };
     let detail = raw.split("Json error: ").nth(1)?;
     let name = &spec.name;
-    // Only worth suggesting while the def is still in the other shape. Told to read an array
-    // and still failing, the shape is not the problem, and repeating the advice would send the
-    // user to a setting that already says what it should.
     let fix = match options.shape {
         JsonShape::NewlineDelimited => {
             " Set the JSON shape to array in Table Config, or use newline-delimited JSON."
@@ -760,8 +658,6 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
     };
 
     if let Some(found) = detail.strip_prefix("Expected JSON record to be an object, found ") {
-        // Never the value itself — this is the arm whose text carried the whole parsed
-        // document. Only the type word, which ends at the first space or bracket.
         let kind = found
             .split([' ', '[', '{', '('])
             .next()
@@ -773,14 +669,6 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
             format!("Cannot read '{name}' as JSON: a top-level {kind} is not a record.{fix}")
         });
     }
-
-    // Note for anyone reading the history: main briefly translated arrow's
-    // `Expected object json type, found: …` family here, into "a field has more than one type
-    // across records". That message is unreachable on this branch — `engine::json_poly` replaced
-    // arrow's JSON inference outright and *handles* the conflict rather than failing on it, so
-    // nothing can produce the string. The arm was dropped in the merge rather than kept as a
-    // translation for an error that cannot occur (and a test over a hardcoded `raw` string that
-    // would pass forever regardless).
 
     let syntax = detail
         .strip_prefix("Not valid JSON: ")
@@ -808,16 +696,7 @@ fn json_shape_error(spec: &TableSpec, raw: &str) -> Option<String> {
 /// the first one. A path that is a glob, or that lives in an object store (W7), can't be
 /// resolved on disk and only gets what is certain: nothing matched it.
 fn no_files_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -> Option<String> {
-    // The location DataFusion named, and the guard that this mapping applies at all. `holds` is
-    // present only for the case that earned a listing — a partitioned **remote** source (see
-    // [`holds_under_partitions`]); everything else is `None` and the arms below decide for
-    // themselves, exactly as they did.
     let location = failing_location(raw)?;
-    // **An internal table's empty listing is a different fact entirely** (ED-04), and every
-    // sentence below would be a lie about it: the path is `.strata/tables/<slug>/`, which the
-    // user never typed, cannot fix, and did not lose — `tables/` is gitignored, so a colleague
-    // who clones the project gets the def and none of the data. Say that, and do not invite
-    // them to go and repair a path.
     if spec.internal {
         return Some(format!(
             "Table '{}' has no data in this copy of the project. An internal table's data is \
@@ -825,16 +704,9 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -
             spec.name
         ));
     }
-    // Falling back to the URL as DataFusion spelled it, when it names no source of ours — a
-    // normalization this build does not perform, or a path the def no longer carries.
     let path = failing_source(spec, raw).unwrap_or(location);
 
     if path.contains("://") || is_glob(path) {
-        // **A remote prefix was listed** for exactly this (`holds_under_partitions`), so the
-        // partition columns are blamed on the same terms as a local directory's: the files are
-        // there, or the walk could not settle it, and either way they are the likelier answer.
-        // A glob brings no listing (a pattern is not a place), so it keeps the one claim it can
-        // make.
         if !spec.partitions.is_empty() && holds != Some(false) && !is_glob(path) {
             return Some(partition_mismatch(spec, ext, path));
         }
@@ -846,8 +718,6 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -
         return Some(format!("No source at '{path}'."));
     }
     if on_disk.is_file() {
-        // `with_file_extension` is a suffix match, so this asks exactly what DataFusion
-        // asked when it skipped the file.
         return Some(if path.ends_with(ext) {
             format!("No files matched '{path}'.")
         } else {
@@ -857,13 +727,6 @@ fn no_files_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -
             )
         });
     }
-    // With no partition columns nothing was filtered, so DataFusion's empty listing is
-    // trustworthy and the directory can be called empty without looking. Only a partitioned
-    // spec earns the walk — measured case: files under an unkeyed `2024/` where a Hive
-    // partition needs `year=2024/`, where saying the directory holds nothing would repeat
-    // DataFusion's own falsehood with the files sitting right there. An inconclusive walk
-    // counts as "don't claim emptiness": on a lake big enough to exhaust the budget, the
-    // partition columns are the likelier answer, and they're the only claim still supported.
     if !spec.partitions.is_empty() && holds_ext(on_disk, ext) != Some(false) {
         return Some(partition_mismatch(spec, ext, path));
     }
@@ -912,8 +775,6 @@ fn holds_ext(dir: &Path, ext: &str) -> Option<bool> {
     }
     Some(false)
 }
-
-// ---- schema helpers ----
 
 /// What a view plan reads (D10): its **base tables** and the **names it inlines**.
 ///
@@ -966,9 +827,6 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     let _ = plan.apply_with_subqueries(|node| {
         match node {
             LogicalPlan::TableScan(scan) => {
-                // A source still carrying its own plan is a view that *didn't* inline —
-                // only reachable if filters were pushed at build time, which our path
-                // never does. Recording it would name the view instead of what it reads.
                 if scan.source.get_logical_plan().is_none() {
                     match in_workspace(&scan.table_name) {
                         true => tables.insert(scan.table_name.table().to_string()),
@@ -1040,12 +898,7 @@ async fn readers(
     };
     let target = fold_ident(name);
     let mut readers = Vec::new();
-    // `table_names()` is the provider's own sorted key list, so the report's order is stable
-    // without a sort of ours — and it already hides the result snapshots.
     for table in schema.table_names() {
-        // Nothing is left invalid by its own drop, and a view cannot read itself — but an alias
-        // shares a namespace with nothing, so `FROM orders AS v` inside `v` would otherwise
-        // report `v` as its own reader.
         if fold_ident(&table) == target {
             continue;
         }
@@ -1076,9 +929,6 @@ pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProf
         .map(|f| column_info(f))
         .collect();
     let (exprs, slots) = aggregates(&columns);
-    // Render *before* executing, from the same `Expr`s that are about to run, so "view
-    // as query" can't drift from the facts it produced. Not `plan_to_sql` on the whole
-    // plan: that inlines a view's body and names no view (see `profile_sql`).
     let sql = profile_sql(name, &exprs);
     let batches = df
         .aggregate(vec![], exprs)
@@ -1098,8 +948,6 @@ pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProf
 /// which the inspector renders as an absent row rather than a guess.
 pub(super) async fn table_meta(ctx: &SessionContext, name: &str) -> Result<TableMeta, String> {
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
-    // `|f| column_info(f)`, not `column_info`: `fields()` yields `&Arc<Field>` and the
-    // deref coercion to `&Field` only happens at a call site.
     let mut columns: Vec<ColumnInfo> = df
         .schema()
         .fields()
@@ -1115,26 +963,16 @@ pub(super) async fn table_meta(ctx: &SessionContext, name: &str) -> Result<Table
 async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]) -> Option<u64> {
     use datafusion::datasource::listing::ListingTable;
     let provider = ctx.table_provider(name).await.ok()?;
-    // Only a `ListingTable` has files whose footers can be read — a view has none.
     let lt = provider.downcast_ref::<ListingTable>()?;
     let state = ctx.state();
-    // `limit: None` — a limit would make the aggregate inexact.
     let stats = lt
         .list_files_for_scan(&state, &[], None)
         .await
         .ok()?
         .statistics;
     let rows = stats.num_rows.get_value().map(|n| *n as u64);
-    // Zip rather than index: DataFusion promises one entry per *table*-schema field, but
-    // a table with no files short-circuits to `file_schema`, which omits the partition
-    // columns — indexing would then misattribute every stat.
     for (col, cs) in columns.iter_mut().zip(stats.column_statistics.iter()) {
-        // Push only what's actually there — an absent fact is an absent row, not a
-        // blank one. Display order.
         let nulls = match cs.null_count.get_value() {
-            // `Exact(num_rows)` is *also* DataFusion's "no stats for this column"
-            // fallback, so an all-null column and an unknown one are indistinguishable.
-            // Say nothing; the profile answers it for real with a COUNT ... FILTER.
             Some(n) if Some(*n as u64) == rows => None,
             Some(n) => Some(Stat {
                 key: StatKey::Nulls,
@@ -1210,8 +1048,6 @@ pub fn column_info(field: &Field) -> ColumnInfo {
         dtype,
         nullable: field.is_nullable(),
         children: nested_children(field.data_type()),
-        // Filled by `free_stats` where the source has metadata to read; a nested child
-        // never gets any — footers describe leaves, and we don't traverse into them.
         stats: Vec::new(),
     }
 }
@@ -1269,7 +1105,6 @@ fn parse_dtype(label: &str) -> DataType {
 
 #[cfg(test)]
 mod tests {
-
     /// The message for a failure **nothing listed** — every case the sync mapper decides on its
     /// own. The listed case (a partitioned remote source, `holds_under_partitions`) is the MinIO
     /// test's, because it needs a store with objects in it to be a real answer.
@@ -1312,8 +1147,6 @@ mod tests {
         d
     }
 
-    // ---- Hive partition detection ----
-
     /// Detection now lists through the session's object store rather than `std::fs`, so these
     /// go through a real `SessionContext` — which for a local path is the store DataFusion
     /// registers for `file://`, the same code path a bucket will take.
@@ -1337,9 +1170,6 @@ mod tests {
 
     #[test]
     fn a_literal_partition_segment_is_a_root_and_declares_nothing() {
-        // The level is already consumed by the path, so declaring it registers a table that
-        // silently returns no rows at all — see `keys_in_pattern`. Nothing on disk here, so
-        // the store walk finds nothing either and the honest answer is "no columns".
         assert!(detect(&["/data/events/year=2024/month=03/"]).is_empty());
     }
 
@@ -1363,13 +1193,10 @@ mod tests {
 
     #[test]
     fn a_segment_whose_key_is_not_an_identifier_is_not_a_partition() {
-        // `=` shows up in perfectly ordinary names; only an identifier can become a column.
         assert!(detect(&["/data/a b=1/x.parquet"]).is_empty());
         assert!(detect(&["/data/=1/x.parquet"]).is_empty());
         assert!(detect(&["/data/2024=1/x.parquet"]).is_empty());
     }
-
-    // ---- JSON shapes ----
 
     /// A JSON spec already set to read whole-document arrays.
     fn array_spec(name: &str) -> TableSpec {
@@ -1384,7 +1211,6 @@ mod tests {
 
     #[test]
     fn a_pretty_printed_record_is_named_as_a_shape_problem() {
-        // The file is valid JSON; Arrow's own "Not valid JSON" is the wrong story.
         let raw = "Arrow error: Json error: Not valid JSON: EOF while parsing an object at line 1 column 1";
         assert_eq!(
             message(&spec("signups", &[], "json"), ".json", raw),
@@ -1421,8 +1247,6 @@ mod tests {
 
     #[test]
     fn a_table_already_reading_arrays_is_not_told_to_set_the_shape_it_has() {
-        // The advice is only a fix while the def is in the other shape. Repeating it here
-        // sends the user to a setting that already says what it should.
         let raw = "Arrow error: Json error: Expected JSON record to be an object, found Number 3";
         assert_eq!(
             message(&array_spec("nums"), ".json", raw),
@@ -1432,9 +1256,6 @@ mod tests {
 
     #[test]
     fn a_syntax_error_keeps_arrows_diagnosis() {
-        // A genuinely malformed file is *not* a shape problem, and Arrow's line:column is
-        // the useful part. Rewriting this into "must be newline-delimited" would be the
-        // same confident-but-wrong diagnosis this mapping exists to remove.
         let raw =
             "Arrow error: Json error: Not valid JSON: key must be a string at line 1 column 9";
         assert_eq!(
@@ -1468,8 +1289,6 @@ mod tests {
             &DataType::Utf8
         );
     }
-
-    // ---- empty listings ----
 
     /// DataFusion names the failing source as the **URL** it built, not the string the user
     /// typed, so every fake error here is built through `listing_url` — the same call the
@@ -1534,12 +1353,6 @@ mod tests {
 
     #[test]
     fn a_directory_that_does_hold_files_blames_the_partition_columns() {
-        // The measured case: `<dir>/2024/data.csv` declared with partition column `year`.
-        // Hive partitions must be `key=value/` directories, so an unkeyed `2024/` matches
-        // nothing and DataFusion calls the location empty — with the files right there.
-        // Depth mismatches do *not* land here: DataFusion pairs partition columns to
-        // directory levels positionally, so declaring two columns over a flat directory,
-        // or one over a two-level tree, simply registers.
         let dir = tmp("parts");
         let leaf = dir.join("2024");
         std::fs::create_dir_all(&leaf).unwrap();
@@ -1555,8 +1368,6 @@ mod tests {
 
     #[test]
     fn a_glob_only_claims_that_nothing_matched() {
-        // Through `no_files_at`, so the glob is recovered by the same URL lookup the real
-        // path takes — and the message quotes the user's own glob, not the URL.
         let g = format!("{}/**/*.parquet", tmp("glob").display());
         assert_eq!(
             message(&spec("t", &[&g], "parquet"), ".parquet", &no_files_at(&g)),
@@ -1621,8 +1432,6 @@ mod tests {
 
     #[test]
     fn a_source_whose_name_ends_in_a_dot_is_still_recovered() {
-        // DataFusion ends the sentence with a dot, so the URL of `report.` arrives as
-        // `…/report..`. Stripping every trailing dot would resolve to a different file.
         let dir = tmp("dotted");
         let odd = dir.join("report.");
         std::fs::write(&odd, "x").unwrap();
@@ -1639,8 +1448,6 @@ mod tests {
 
     #[test]
     fn a_json_error_on_a_non_json_table_is_not_rewritten_as_a_json_problem() {
-        // The table is parquet; whatever produced this text, "cannot read it as JSON" is a
-        // claim about a file that was never being read as JSON.
         let raw = "Arrow error: Json error: Not valid JSON: EOF while parsing an object at line 1 column 1";
         assert_eq!(
             message(&spec("events", &[], "parquet"), ".parquet", raw),
@@ -1650,9 +1457,6 @@ mod tests {
 
     #[test]
     fn an_unwalkable_directory_never_claims_to_be_empty() {
-        // `holds_ext` gives up past its entry budget. The caller must not turn "I stopped
-        // looking" into "there is nothing here" — on a partitioned spec the partition
-        // columns are the only claim still supported.
         let dir = tmp("huge");
         for i in 0..5_000 {
             std::fs::write(dir.join(format!("f{i}.txt")), "x").unwrap();
@@ -1683,8 +1487,6 @@ mod tests {
             format!("No source at '{m}'.")
         );
     }
-
-    // ---- pass-through ----
 
     #[test]
     fn an_unrecognised_failure_is_left_exactly_as_datafusion_wrote_it() {

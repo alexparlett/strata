@@ -8,22 +8,15 @@
 //! it. Picking files is multi-select — a table *is* many paths, and five files one dialog at a
 //! time is the same five rows with four more dialogs.
 //!
-//! ## An object-store table is **one** path, in the same list
+//! **An object-store table is one path, in the same list.** On a connection the section is singular
+//! throughout — `SOURCE PATH`, no toolbar, one row wearing the bucket as a non-editable prefix —
+//! because an object store has no file dialog and its paths are text. Still this list one row long
+//! rather than a second control: the row is where the two-way sync with the draft lives, and what
+//! actually goes is the toolbar and the empty state.
 //!
-//! On a connection (W7 · 04) the section is singular throughout — `SOURCE PATH`, no toolbar, one
-//! row wearing the bucket as a non-editable prefix — because a remote source is written against
-//! the connection's bucket and there is nothing to browse: an object store has no file dialog,
-//! and its paths are text.
-//!
-//! It is still this list, one row long, rather than a second control drawn beside it. The row is
-//! where the two-way sync between the box and the draft lives, and a canvas that draws a framed
-//! box in place of a one-row framed table is drawing the same thing: what actually goes is the
-//! toolbar (a control that would add rows the def cannot carry) and the empty state (a list that
-//! always holds exactly one row has none).
-//!
-//! That row is the draft's `remote_source` and the local list is its `local_sources` — two
-//! fields, projected by the LOCATION in play (`ConfigureDraft::path_at`), so the toggle swaps what
-//! these rows show without moving a path between two roots it means different things under.
+//! That row is the draft's `remote_source` and the local list is its `local_sources` — two fields
+//! projected by the LOCATION in play (`ConfigureDraft::path_at`), so the toggle swaps what these
+//! rows show without moving a path between two roots it means different things under.
 
 use freya::prelude::*;
 
@@ -72,20 +65,14 @@ pub struct SourcePaths;
 impl Component for SourcePaths {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
-        // One path on a connection, so the label, the explanation and the toolbar are all
-        // singular — see the module doc.
         let (remote, internal) = {
             let draft = ctx.draft.read();
             (draft.remote(), draft.internal())
         };
-        // A internal table brings no files at all, so this section has nothing to ask. Drawn as an
-        // empty box rather than unmounted, for the differ (`views::hive`'s rule).
         if internal {
             return rect().into_element();
         }
 
-        // The label line, its REQUIRED marker and its resolution tooltip are all the shared
-        // row's; this window contributes the toolbar and the list that go under them.
         Row::new(match remote {
             true => "SOURCE PATH",
             false => "SOURCE PATHS",
@@ -114,12 +101,8 @@ struct Toolbar;
 impl Component for Toolbar {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
-        // `error` is one of the four semantic tones, so it is read from the shared ramp wherever
-        // it appears rather than restated on a component theme.
         let error = tones().error;
         let ctx = use_consume::<ConfigureCtx>();
-        // Subscribes: remove is disabled on an empty list, which is the one thing the toolbar
-        // has to know about the list.
         let has_rows = ctx.draft.read().path_count() > 0;
 
         rect()
@@ -131,10 +114,6 @@ impl Component for Toolbar {
                     .outlined()
                     .color(win.icon_color)
                     .on_press(move |_| {
-                        // Seeded from the current selection, like the two handlers below: an
-                        // edit refused while a registration is in flight leaves `at` untouched,
-                        // and moving the highlight to row 0 for a row that was never added
-                        // would be the one piece of window state that ignores that refusal.
                         let mut selected = ctx.selected_path;
                         let mut at = *selected.peek();
                         ctx.edit(|draft| at = draft.add_path());
@@ -167,12 +146,6 @@ impl Component for BrowseButton {
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let mut open = use_state(|| false);
-        // **The picked request, not the picking.** A `MenuButton`'s press closes the menu, and
-        // `spawn` binds a task to the scope it is called from — which inside that handler is the
-        // item the press just unmounted, so the dialog was dropped before it was ever polled and
-        // nothing happened at all. The request crosses the scope boundary in state instead, and
-        // this component (which stays mounted when the menu goes) is what acts on it. The same
-        // reason the catalog's re-scan raises a counter rather than spawning its own pass.
         let mut request = use_state(|| None::<Pick>);
         use_side_effect(move || {
             let Some(kind) = *request.read() else {
@@ -236,8 +209,6 @@ enum Pick {
 /// Ask for paths and put them in the list at the selection. Spawned — the dialog waits on the
 /// user. Dismissing it is a decision, not a failure, so the list keeps what it had.
 fn pick(ctx: ConfigureCtx, kind: Pick) {
-    // Start where the selected row points, so browsing from a set path opens there rather than
-    // wherever the OS last left the panel.
     let start = {
         let draft = ctx.draft.peek();
         draft.path_at(draft.clamp_selection(*ctx.selected_path.peek()))
@@ -257,8 +228,6 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
                 .iter()
                 .map(|h| h.path().to_string_lossy().into_owned())
                 .collect(),
-            // A folder keeps its trailing separator: `ListingTableUrl` reads a path without one
-            // as a single file, and the engine's own normalization only sees what is stored.
             Pick::Folder => dialog
                 .pick_folder()
                 .await
@@ -295,11 +264,6 @@ impl Component for PathList {
     fn render(&self) -> impl IntoElement {
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
-        // The bucket and the mode are read **here**, once, and carried to the rows as props.
-        // They are the same for every row, and a row that read them itself would subscribe to
-        // the whole draft — waking all of them on every keystroke in the name box, for a value
-        // none of them saw change. This component already subscribes; a row only re-renders
-        // when one of its props actually differs.
         let (count, selected, prefix, remote) = {
             let draft = ctx.draft.read();
             (
@@ -333,8 +297,6 @@ impl Component for PathList {
                     remote,
                     key: DiffKey::None,
                 }
-                // Keyed by position, and the row syncs both ways against the draft — see
-                // `PathRow`.
                 .key(index),
             );
         }
@@ -344,6 +306,13 @@ impl Component for PathList {
 }
 
 /// One row of the table: a bare field in its only cell, filled when it is the selected row.
+///
+/// **The row owns its buffer and the traffic runs both ways**, which a one-way field cannot do
+/// here, because this row's value moves for two reasons that are not typing: a row above it is
+/// removed (the list is keyed by position, so index 0's scope is *kept* when the list shrinks, and
+/// a buffer seeded once would write the deleted path back over the survivor), and the browse picker
+/// sets it (that writes the draft, not the box). `reported` is what keeps the two directions from
+/// fighting — in state rather than captured, since `use_side_effect` builds its closure once.
 #[derive(PartialEq)]
 struct PathRow {
     index: usize,
@@ -370,21 +339,6 @@ impl Component for PathRow {
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
-        // The row owns its buffer, and the traffic runs **both ways** — which a one-way field
-        // cannot do here, because this row's value changes underneath it for two reasons that
-        // have nothing to do with typing:
-        //
-        // - **a row above it is removed.** The list is keyed by position, so the scope at index
-        //   0 is *kept* when the list shrinks; a buffer seeded once would then write the deleted
-        //   path back over the survivor.
-        // - **the browse picker sets it.** That writes the draft, not the box, so a
-        //   report-only field would leave the box showing the old path while the draft held the
-        //   new one.
-        //
-        // `reported` is what keeps the two directions from fighting: it tracks the last value
-        // this row and the draft agreed on, so neither effect acts on a change the other made.
-        // In state rather than captured — `use_side_effect` builds its closure once, so a
-        // captured comparison value freezes at the first render.
         let initial = ctx.draft.peek().path_at(index);
         let text = use_state({
             let initial = initial.clone();
@@ -392,11 +346,6 @@ impl Component for PathRow {
         });
         let mut reported = use_state(move || initial);
 
-        // `TableRow::on_press` selects the row, and **focus does too**: Freya's `Input`
-        // registers `on_focus_press` — sugar over `on_pointer_down` — and stops propagation, so
-        // the row's press never fires over the field itself. Clicking into a row to edit it
-        // would otherwise leave the toolbar pointing at whichever row was selected before, and
-        // Remove would delete that one.
         let field = use_a11y();
         let focus = use_focus(field);
         let mut selected = ctx.selected_path;
@@ -406,7 +355,6 @@ impl Component for PathRow {
             }
         });
 
-        // Out: what was typed reaches the draft.
         use_side_effect(move || {
             let path = text.read().clone();
             if path == *reported.peek() {
@@ -415,7 +363,6 @@ impl Component for PathRow {
             reported.set(path.clone());
             ctx.edit(move |draft| draft.set_path(index, path));
         });
-        // In: a value this row did not type reaches the box.
         use_side_effect(move || {
             let outer = ctx.draft.read().path_at(index);
             if outer == *reported.peek() {
@@ -431,11 +378,6 @@ impl Component for PathRow {
             false => Color::TRANSPARENT,
         };
 
-        // The chosen bucket, standing in front of the box as text rather than in it: what the
-        // user writes is the part they can change, and a prefix inside the field would be a
-        // prefix they could delete. Absent on the local disk, where the path is the whole
-        // address — and that absence is also what says this row is local, so the two never
-        // disagree.
         let form = form_theme();
         let prefix = self.prefix.clone();
         let remote = self.remote;
@@ -453,20 +395,12 @@ impl Component for PathRow {
                     .padding(Gaps::new(0., CELL_INSET, 0., CELL_INSET))
                     .main_align(Alignment::Start)
                     .child(
-                        // A flex row *inside* the cell, not the cell itself: a `TableCell` lays
-                        // its children out under `Content::Normal`, where a flexing box takes a
-                        // share rather than the remainder (AGENTS.md §3).
                         rect()
                             .expanded()
                             .horizontal()
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
                             .maybe_child(prefix.map(|prefix| {
-                                // Capped and ellipsized, because the prefix is laid out at its
-                                // natural width **before** the field divides what is left: an
-                                // HTTP connection is a whole origin, and a long host would
-                                // otherwise take the cell and leave nothing to type into. The
-                                // whole bucket is one row up in the picker either way.
                                 MonoValue::new(prefix)
                                     .color(form.hint_color)
                                     .max_width(Size::percent(PREFIX_MAX_PERCENT))
@@ -478,10 +412,6 @@ impl Component for PathRow {
                                     .bare()
                                     .width(Size::flex(1.))
                                     .height(Size::px(FIELD_HEIGHT))
-                                    // Only where there is no browse button to fill the box for
-                                    // you: a bucket-relative path has no shape the user can
-                                    // infer from the label, where a local one is a path they
-                                    // already know how to write (and usually pick).
                                     .maybe(remote, |field| {
                                         field.placeholder("events/2024/**/*.parquet")
                                     })

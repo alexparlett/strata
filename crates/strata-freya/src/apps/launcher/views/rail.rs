@@ -49,21 +49,13 @@ impl Component for LauncherRail {
             LauncherThemePreference,
             "launcher"
         );
-        // The Settings window is opened through the shared path, which needs both this
-        // window's platform handle (that is how it learns *which* window asked, so it can pin
-        // itself above this one) and the app-globals.
         let platform = use_hook(Platform::get);
         let app = use_consume::<AppCtx>();
         let roles = use_roles();
-        // Read, not peeked: this is the one surface that repaints as the updater learns
-        // something. The confirm slot beside it is this window's own — the status is
-        // app-global, the question is not.
         let status = app.updates;
         let ask = use_consume::<State<Option<UpdateAsk>>>();
         let affordance = Affordance::of(&status.read(), install_site());
 
-        // The brand: the app mark in a rounded, clipped tile (the SVG is square and paints
-        // its own colours), the wordmark in the scale's Title role, and the build under it.
         let brand = rect()
             .horizontal()
             .cross_align(Alignment::Center)
@@ -84,15 +76,6 @@ impl Component for LauncherRail {
                     .child(Meta::new(CURRENT).color(theme.label_color)),
             );
 
-        // The offer, under the brand rather than under the version run itself: the rail is
-        // 200px wide and the text column beside the 34px mark has no room for a sentence.
-        // Nothing renders at all for `Idle`, `UpToDate`, `Checking` or a failed check — the
-        // rail states the version and stops, exactly as it did before this task.
-        //
-        // The note is given a width so a long line wraps instead of hugging its content off the
-        // edge: a text run with no width never wraps, whatever its line cap. `fill` is only
-        // worth anything because the column below is `fill` too — a hugging parent would size
-        // itself from the brand row and this would wrap at *that*, half the rail's width.
         let note = affordance.note().map(|note| {
             Meta::new(note)
                 .color(theme.label_color)
@@ -103,8 +86,6 @@ impl Component for LauncherRail {
             Button::new()
                 .flat()
                 .compact()
-                // The launcher's ghost-action dress (the pane's OPEN), in the accent: one
-                // tone for the whole control, so the label cannot disagree with its box.
                 .theme_colors(
                     ButtonColorsThemePartial::default()
                         .color(roles.get(Role::Accent))
@@ -114,10 +95,6 @@ impl Component for LauncherRail {
                 .child(Control::new(label))
         });
 
-        // `fill`, not the hug this column would otherwise take: the note above is a `fill`
-        // child, and a `fill` child of a hugging parent fills whatever the *widest sibling*
-        // came to — here the brand row, about half the rail. The size has to land on the node
-        // the rail lays out (AGENTS.md §3), which is this wrapper.
         let brand = rect()
             .width(Size::fill())
             .vertical()
@@ -127,8 +104,6 @@ impl Component for LauncherRail {
             .maybe_child(note)
             .maybe_child(action);
 
-        // The current destination. `selected` outranks hover in the row's own dress, so the
-        // pill stays put under the pointer, which is what a "you are here" marker should do.
         let projects = SidebarRow::new()
             .auto_height()
             .padding(ROW_PADDING)
@@ -136,9 +111,6 @@ impl Component for LauncherRail {
             .active_background(theme.nav_background)
             .child(row_content(IconName::Folder, "Projects"));
 
-        // The gear (W1): the standalone Settings window, opened through
-        // `platform::open_settings` — so it is the same single instance ⌘, and the project
-        // header's gear reach, pinned above this window.
         let settings = SidebarRow::new()
             .auto_height()
             .padding(ROW_PADDING)
@@ -157,16 +129,12 @@ impl Component for LauncherRail {
                     .width(Size::flex(1.))
                     .height(Size::fill())
                     .vertical()
-                    // `Content::Flex` is what makes the spacer below actually flex — without
-                    // it a `Size::flex` child grows to the whole axis and pushes Settings
-                    // off the bottom.
                     .content(Content::Flex)
                     .background(theme.rail_background)
                     .padding(Gaps::new(SP_5, SP_4, SP_5, SP_4))
                     .spacing(SP_2)
                     .child(brand)
                     .child(projects)
-                    // Flexible spacer — pins Settings to the bottom.
                     .child(rect().width(Size::px(1.)).height(Size::flex(1.)))
                     .child(settings),
             )

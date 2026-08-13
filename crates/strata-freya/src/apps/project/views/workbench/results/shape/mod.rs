@@ -158,8 +158,6 @@ impl Component for ShapeCard {
         let mut slot = self.slot;
         let tab_name = session.read().name(self.target.tab);
 
-        // The one commit: open the composed query, unrun, in a tab the user owns — through
-        // the session's own open funnel, never a write to any existing buffer.
         let mut confirm = {
             let composed = composed.clone();
             let name = format!("{tab_name} · shaped");
@@ -175,12 +173,9 @@ impl Component for ShapeCard {
         };
         let mut confirm_press = confirm.clone();
 
-        // ---- the three sections ----
-
         let mut group_rows = Form::new();
         for (i, group) in held.groups.iter().enumerate() {
             group_rows = group_rows.child(match group.role {
-                // A dimension groups or it does not — the whole row is the toggle.
                 ChartRole::Dimension => {
                     let on = group.by == GroupBy::Exact;
                     Row::new(group.column.clone())
@@ -190,8 +185,6 @@ impl Component for ShapeCard {
                             flip_group(form, i);
                         }))
                 }
-                // A time column also offers its strides — sub-day only for a clock, which
-                // DataFusion refuses a day-or-wider `date_bin` over.
                 ChartRole::Instant | ChartRole::Clock => {
                     Row::new(group.column.clone()).child(group_select(form, i, group))
                 }
@@ -245,8 +238,6 @@ impl Component for ShapeCard {
                 .child(Eyebrow::new(label).color(roles.get(Role::TextLabel)))
                 .child(body)
         };
-
-        // ---- the card ----
 
         let header = rect()
             .width(Size::fill())
@@ -329,11 +320,6 @@ impl Component for ShapeCard {
             )
             .child(Divider::horizontal().color(roles.get(Role::Border)))
             .child(strip)
-            // Enter commits like the confirm button — the slot the modal base leaves open
-            // (`components::modal`) — on a node **after** every control in pre-order, so a
-            // focused `Select` toggling its list on Enter wins over the commit. A form with
-            // nothing picked composes nothing and the press is inert, exactly like the
-            // disabled button.
             .child(
                 rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
                     if matches!(&e.key, Key::Named(NamedKey::Enter)) {
@@ -560,11 +546,8 @@ mod tests {
                 "no {expected}: {texts:?}"
             );
         }
-        // The clock column offers no day-or-wider stride: its menu is closed here, but the
-        // row itself rendered.
         assert!(texts.iter().any(|t| t == "at"), "{texts:?}");
 
-        // Press the confirm.
         let area = runner
             .find(|node, element| {
                 Label::try_downcast(element)
@@ -595,7 +578,6 @@ mod tests {
             sql.contains("FROM (\nSELECT * FROM orders\n) AS q"),
             "{sql}"
         );
-        // Unrun and untouched: no request was set, and the original buffer is as it was.
         assert!(state.request(tab).is_none(), "nothing ran");
         assert_eq!(state.tabs[&tab].text(), "SELECT * FROM orders");
     }

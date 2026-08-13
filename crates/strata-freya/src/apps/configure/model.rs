@@ -174,12 +174,11 @@ pub struct ConfigureDraft {
     pub local_sources: Vec<String>,
     /// The **object store's** source path, of which a remote table has exactly one (spec §4).
     ///
-    /// A field of its own, kept like a format's options are across a format switch: the two
-    /// locations are written against different roots, so one list holding both would either lose
-    /// what was typed or carry `/data/events.parquet` under a bucket as though it were relative
-    /// to it. [`nonblank_sources`](Self::nonblank_sources) projects the one in play.
+    /// A field of its own, kept like a format's options are across a switch: the two locations are
+    /// written against different roots, so one list holding both would either lose what was typed
+    /// or carry `/data/events.parquet` under a bucket as though it were relative to it.
+    /// [`nonblank_sources`](Self::nonblank_sources) projects the one in play.
     pub remote_source: String,
-    // --- CSV ---
     pub csv_header: bool,
     pub csv_delimiter: String,
     pub csv_quote: String,
@@ -189,15 +188,12 @@ pub struct ConfigureDraft {
     pub csv_truncated: bool,
     pub csv_infer_rows: u32,
     pub csv_compression: FileCompression,
-    // --- JSON ---
     pub json_shape: JsonShape,
     pub json_infer_rows: u32,
     pub json_compression: FileCompression,
-    // --- Hive ---
     pub hive_on: bool,
     /// The partition columns and the type each is read as, outermost first.
     pub partitions: Vec<(String, String)>,
-    // --- Internal ---
     /// The declared columns of a table Strata will store (IT-01) — only meaningful on
     /// [`Where::Internal`], and kept across a flip away from it exactly as a connection and a
     /// format's options are.
@@ -277,9 +273,6 @@ impl Default for ConfigureDraft {
             name: String::new(),
             format: FormatId::Parquet,
             location: Where::Local,
-            // The picker's first provider, which is what an unset TYPE segment shows. It means
-            // nothing until LOCATION is flipped, and flipping it picks that provider's first
-            // connection.
             provider: ProviderId::S3,
             connection: None,
             local_sources: Vec::new(),
@@ -310,18 +303,15 @@ impl ConfigureDraft {
     /// The formats it *isn't* in keep their defaults, and so does the location it is not in: a
     /// def's sources belong to the one it names, and the other opens empty.
     ///
-    /// `connections` is the project's own list, and it is here for one field: the def names the
-    /// **connection** it reads through, and which provider serves that connection is the
-    /// connection's fact, not the table's — so the TYPE segment is resolved from it rather than
-    /// re-derived from the URL's scheme, which is the registry's word and deliberately has no
-    /// reader ([`strata_model::Provider`]). A def naming a connection this project no longer has
-    /// keeps the reference and opens on the first provider; `Save` is blocked until it is
-    /// re-pointed (`views::footer`), which is the same treatment a format with no reader gets.
+    /// `connections` is here for one field: which provider serves a connection is the connection's
+    /// fact rather than the table's, so the TYPE segment is resolved from it rather than re-derived
+    /// from the URL's scheme. A def naming a connection this project no longer has keeps the
+    /// reference and opens on the first provider, with `Save` blocked until it is re-pointed —
+    /// the same treatment a format with no reader gets.
     ///
-    /// A def naming a **database** connection gets that same treatment, and the filter below is
-    /// what gives it: a table reads files, the TYPE pill offers only
-    /// [`ProviderId::OBJECT_STORES`], and a draft opening on a provider the pill cannot render
-    /// would show no segment selected while the picker under it offered database URLs.
+    /// A def naming a **database** connection gets that treatment through the filter below: a table
+    /// reads files, so the TYPE pill offers only [`ProviderId::OBJECT_STORES`], and a draft opening
+    /// on a provider the pill cannot render would show no segment selected.
     pub fn of(def: &TableDef, connections: &[ConnectionDef]) -> Self {
         let provider = def
             .connection
@@ -366,9 +356,6 @@ impl ConfigureDraft {
             }
             SourceFormat::Json(o) => {
                 draft.json_shape = o.shape;
-                // `None` means **scan everything**, which the pane shows as 0 — not
-                // `DEFAULT_INFER_ROWS`. Seeding 1000 here is what made an unbounded def come
-                // back capped after a Save the user never meant as a change.
                 draft.json_infer_rows = o.infer_rows.unwrap_or(0) as u32;
                 draft.json_compression = o.compression;
             }
@@ -394,8 +381,6 @@ impl ConfigureDraft {
             Edit::JsonCompression(v) => self.json_compression = v,
         }
     }
-
-    // --- location ---
 
     /// The connection this draft's sources are relative to, or `None` for the local disk —
     /// exactly what [`TableDef::connection`] records.
@@ -439,11 +424,6 @@ impl ConfigureDraft {
         self.location = location;
         self.partitions.clear();
         match location {
-            // Nothing to settle: the paths, the format and the connection are all kept, exactly
-            // as a format's options are across a format switch. Internal simply stops *reading*
-            // them, and its own column list starts with one row to type into — an empty list
-            // would make the first gesture `+` rather than typing, which is the one thing the
-            // paths list can afford (Browse fills it from nothing) and this cannot.
             Where::Internal => {
                 if self.columns.is_empty() {
                     self.columns.push(ColumnDraft::default());
@@ -457,8 +437,6 @@ impl ConfigureDraft {
             }
         }
     }
-
-    // --- internal columns ---
 
     /// Append a blank column row and hand back its index — the paths toolbar's `add_path`, on the
     /// other list.
@@ -536,9 +514,6 @@ impl ConfigureDraft {
                 faults.insert(at, "Enter a column name.".to_string());
                 continue;
             }
-            // The engine's own identity, not a case-insensitive compare: `fold_ident` is what the
-            // create arm folds with, so the form refuses exactly the pairs it would. Folded once,
-            // so the lookup and the claim cannot be asked different questions.
             let folded = fold_ident(name);
             if let Some(first) = claimed.get(&folded) {
                 let message = duplicate_column(name);
@@ -613,8 +588,6 @@ impl ConfigureDraft {
     pub fn bucket_prefix(&self) -> Option<String> {
         self.store().map(|url| format!("{url}/"))
     }
-
-    // --- source paths ---
 
     /// The paths as the **engine** will see them: composed onto the chosen connection's bucket,
     /// or resolved against the project folder where a def's sources are stored project-relative.
@@ -703,7 +676,6 @@ impl ConfigureDraft {
         }
         let at = at.min(self.local_sources.len() - 1);
         self.local_sources.remove(at);
-        // Any path change invalidates a detected partition layout — see `set_paths`.
         self.partitions.clear();
         at.min(self.local_sources.len().saturating_sub(1))
     }
@@ -752,18 +724,6 @@ impl ConfigureDraft {
     /// `TableDef.partition_cols` has always been format-agnostic. Gating the section would hide
     /// a def's own stored columns the moment its format changed.
     pub fn may_partition(&self, root: &Path) -> bool {
-        // **Whatever is switched on stays reachable.** The section holds the only control that
-        // can switch it off, so hiding it while `hive_on` is true is a dead end: editing a
-        // partitioned table's path down to a single file clears the detected columns, the
-        // section disappears, and Save is blocked for ever by a switch the user can no longer
-        // see. A control the user can turn on is a control they can turn off.
-        //
-        // A def that already carries partition columns shows them for the same reason, whatever
-        // its paths look like from here — hiding the section would hide a value still being
-        // saved.
-        // A internal table has no directory layout to read columns out of, whatever was switched
-        // on before the LOCATION moved — and `set_location` cleared the columns on the way in,
-        // so there is nothing switched on to strand.
         if self.internal() {
             return false;
         }
@@ -796,8 +756,6 @@ impl ConfigureDraft {
         self.hive_on && self.partitions.iter().any(|(_, ty)| ty == "Utf8")
     }
 
-    // --- the def ---
-
     /// The reader and its options for the format in play — and *only* that format's.
     fn source_format(&self) -> SourceFormat {
         match &self.format {
@@ -817,15 +775,6 @@ impl ConfigureDraft {
             }),
             FormatId::Json => SourceFormat::Json(JsonRead {
                 shape: self.json_shape,
-                // **0 means scan every record** (`None`), not "no rows" — the engine refuses
-                // `Some(0)` outright because it would infer a schema with no columns.
-                //
-                // The sentinel matters more than it looks. This used to write `Some(..)`
-                // unconditionally, seeded at 1000, so opening Table Config on an unbounded def
-                // and pressing Save silently capped it: inference then saw 1000 clean records,
-                // typed a conflicted column as `Struct`, and every later SELECT failed at scan
-                // on a table the catalog called healthy. Nothing the user did looked like a
-                // change. CSV spends 0 the same way, on its own "read every column as text".
                 infer_rows: (self.json_infer_rows > 0).then_some(self.json_infer_rows as usize),
                 compression: self.json_compression,
             }),
@@ -861,12 +810,6 @@ impl ConfigureDraft {
                     .collect(),
             },
             partition_cols: self.effective_partitions(),
-            // Always external, and structurally so (ED-04): this window edits the sources,
-            // format and partition columns of a def that points at the user's own files, and an
-            // internal table has none of those to edit. The catalog row's menu therefore has no
-            // Configure item at all, and Configure's own post-save transition only ever lands on
-            // a *New* table — so an internal def cannot reach this draft, and a mood for one
-            // would be handling for a state nothing can produce.
             origin: TableOrigin::External,
         }
     }
@@ -879,9 +822,6 @@ impl ConfigureDraft {
         if self.name.trim().is_empty() {
             return Some("A table needs a name.".into());
         }
-        // A internal table stops here: it has no sources, no format and no partitions to be wrong
-        // about. What its columns can be wrong about is the *rows'* question, and the footer
-        // asks it — the planner's verdict per type is not something the draft holds.
         if self.internal() {
             return self
                 .declared_columns()
@@ -889,9 +829,6 @@ impl ConfigureDraft {
                 .is_none()
                 .then(|| "A table needs at least one column.".into());
         }
-        // Ahead of the path, because it is what the path is written against: there is nothing
-        // useful to type in a box whose bucket has not been chosen. The picker's own empty line
-        // says the rest — that this provider has no connections yet.
         if self.remote() && self.connection.is_none() {
             return Some("A remote table needs a connection to read through.".into());
         }
@@ -903,16 +840,10 @@ impl ConfigureDraft {
                 "'{name}' is not a format Strata can read. Choose another."
             ));
         }
-        // Partitioning on with nothing to partition on: the switch says the folder tree is
-        // being read as columns while the def would record a flat table. Either the detection
-        // found nothing or it has not answered yet; both are worth waiting for rather than
-        // saving a def that contradicts the control above it.
         if self.hive_on && self.partitions.is_empty() {
             return Some("No key=value folders were found in the source paths.".into());
         }
         if self.format == FormatId::Csv {
-            // The box's own complaint when it holds something that is not one character, and
-            // "it can't be empty" when it holds nothing.
             match one_char("delimiter", &self.csv_delimiter) {
                 Err(why) => return Some(why),
                 Ok(None) => return Some("The CSV delimiter can't be empty.".into()),
@@ -925,7 +856,6 @@ impl ConfigureDraft {
         None
     }
 
-    // --- import options ---
     /// The label over the import block.
     pub fn options_label(&self) -> String {
         format!("{} OPTIONS", self.format.label())
@@ -939,8 +869,6 @@ impl ConfigureDraft {
     /// the split would only be one more thing to open before a CSV's quote character can be
     /// reached, in a window whose whole subject is how a file is read.
     pub fn options(&self) -> Vec<Group<Edit>> {
-        // A internal table is written by Strata in its own format, so there is nothing to say
-        // about *reading* it — the format picker's answer is kept for a flip back to files.
         if self.internal() {
             return Vec::new();
         }
@@ -956,10 +884,6 @@ impl ConfigureDraft {
                 Group {
                     label: "HEADER ROW".into(),
                     hint: None,
-                    // Kept **inline**, unlike the two below: this sentence changes with the
-                    // switch, so it reports the current state rather than explaining the option
-                    // — which is a thing a hover tip cannot be, because it is not there to read
-                    // while you decide.
                     control: Control::Toggle {
                         on: self.csv_header,
                         edit: Edit::CsvHeader(!self.csv_header),
@@ -974,10 +898,6 @@ impl ConfigureDraft {
                 },
                 Group {
                     label: "DELIMITER".into(),
-                    // One free-text box rather than a pill of the four common separators plus a
-                    // custom slot: the export window asks the same question this way, and a
-                    // control that means one thing in one window should not mean another next
-                    // door. It also takes the escapes a pill cannot.
                     hint: Some("Field separator (use \\t for tab)"),
                     control: Control::Text(TextField {
                         value: self.csv_delimiter.clone(),
@@ -990,7 +910,6 @@ impl ConfigureDraft {
             FormatId::Json => vec![Group {
                 label: "SHAPE".into(),
                 hint: Some("How the records are laid out in the file"),
-                // A `Select`, like every other closed list of values in this window.
                 control: Control::Select {
                     options: [
                         (JsonShape::NewlineDelimited, "One record per line"),
@@ -1005,11 +924,6 @@ impl ConfigureDraft {
                     .collect(),
                 },
             }],
-            // **Nothing at all** for parquet and Arrow — not even a note saying so. A block
-            // headed PARQUET OPTIONS whose only content explains that there are none reads as a
-            // section that failed to load. (Export shows a note in the same position, but there
-            // it sits among real option groups; here it would be the whole block.) The parquet
-            // read options that *are* per-table are their own task.
             FormatId::Parquet | FormatId::Arrow | FormatId::Unknown(_) => Vec::new(),
         }
     }
@@ -1091,9 +1005,6 @@ impl ConfigureDraft {
                     hint: Some("Records scanned to infer the schema. 0 scans every record"),
                     control: Control::Num {
                         value: self.json_infer_rows,
-                        // 0 is "scan everything", the honest default for a reader whose job is
-                        // to notice type conflicts wherever they are — a capped scan that misses
-                        // one types the column wrong and fails at query time instead.
                         min: 0,
                         max: MAX_INFER_ROWS,
                         make: Make(Edit::JsonInferRows),
@@ -1241,8 +1152,6 @@ mod tests {
 
     #[test]
     fn parquet_and_arrow_show_no_import_block_at_all() {
-        // Not even a note: a block headed PARQUET OPTIONS whose only content says there are
-        // none reads as a section that failed to load.
         for format in [FormatId::Parquet, FormatId::Arrow] {
             let draft = ConfigureDraft {
                 format,
@@ -1336,8 +1245,6 @@ mod tests {
 
     #[test]
     fn a_def_round_trips_through_the_draft_unchanged() {
-        // Opening Configure on a table and pressing Save without touching anything must produce
-        // the def that was already there — the whole reason the draft is seeded field by field.
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::Csv(CsvRead {
@@ -1356,8 +1263,6 @@ mod tests {
             partition_cols: vec![("year".into(), "Int32".into())],
             origin: TableOrigin::External,
         };
-        // The Hive section is only offered for a path that resolves to many files; a def that
-        // already has partition columns keeps them regardless, which is what this asserts.
         let mut draft = ConfigureDraft::of(&def, &[]);
         draft.local_sources = vec!["/data/year=*/".into()];
         let round = draft.def(Path::new("/project"));
@@ -1470,9 +1375,6 @@ mod tests {
 
     #[test]
     fn a_partitioned_def_keeps_its_columns_when_its_sources_are_project_relative() {
-        // `sources` are stored relative to the *project* folder, so a filesystem probe from
-        // here answers about the process's working directory. Gating the saved value on it lost
-        // the columns of any table whose path did not happen to resolve.
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::Parquet,
@@ -1512,7 +1414,6 @@ mod tests {
             at = draft.remove_path(at);
         }
         assert_eq!((draft.local_sources.len(), at), (0, 0));
-        // Removing from an empty list is a no-op, not a panic.
         assert_eq!(draft.remove_path(0), 0);
         assert!(draft.local_sources.is_empty());
     }
@@ -1522,16 +1423,12 @@ mod tests {
         let mut draft = ConfigureDraft::default();
         draft.set_paths(0, vec!["/a".into(), "/b".into(), "/c".into()]);
         assert_eq!(draft.local_sources, vec!["/a", "/b", "/c"]);
-        // …replacing the row it was invoked on, not appending blindly.
         draft.set_paths(1, vec!["/x".into()]);
         assert_eq!(draft.local_sources, vec!["/a", "/x", "/c"]);
     }
 
     #[test]
     fn the_hive_switch_stays_reachable_once_it_is_on() {
-        // Otherwise: a partitioned table whose path is edited down to a single file clears its
-        // columns, the section (which holds the only switch) disappears, and `blocker` refuses
-        // Save for ever.
         let root = Path::new("/project");
         let mut draft = ConfigureDraft {
             local_sources: vec!["/data/one.parquet".into()],
@@ -1563,9 +1460,6 @@ mod tests {
 
     #[test]
     fn a_relative_source_is_asked_about_where_the_project_actually_is() {
-        // `sources` are stored relative to the project folder, so every filesystem question
-        // about one has to be resolved first — otherwise it is answered about the process's
-        // working directory, and a perfectly ordinary partitioned folder looks like a file.
         let draft = ConfigureDraft {
             local_sources: vec!["events/year=2024/".into()],
             ..Default::default()
@@ -1597,8 +1491,6 @@ mod tests {
             "Configure events"
         );
     }
-
-    // --- LOCATION (W7 · 04) ---------------------------------------------------------
 
     /// **The headline**: a table over a connection writes the connection's URL and a
     /// bucket-relative source, and that pair resolves to the address the engine reads.
@@ -1677,13 +1569,11 @@ mod tests {
         draft.set_provider(ProviderId::Gcs, &connections);
         assert_eq!(draft.connection.as_deref(), Some("gs://warehouse"));
 
-        // A second connection of the same provider is kept: the switch is a filter, not a reset.
         draft.set_provider(ProviderId::S3, &connections);
         draft.connection = Some("s3://cold-store".into());
         draft.set_provider(ProviderId::S3, &connections);
         assert_eq!(draft.connection.as_deref(), Some("s3://cold-store"));
 
-        // …and a provider with nothing to offer chooses nothing, which is what blocks Save.
         draft.set_provider(ProviderId::Http, &connections);
         assert_eq!(draft.connection, None);
         assert!(draft
@@ -1725,7 +1615,6 @@ mod tests {
         assert!(draft.remote());
         assert_eq!(draft.provider, ProviderId::Gcs);
         assert_eq!(draft.connection.as_deref(), Some("gs://warehouse"));
-        // Opening it and saving it back changes nothing — the round trip every seed owes.
         assert_eq!(draft.def(Path::new("/project")), def);
     }
 
@@ -1814,8 +1703,6 @@ mod internal_tests {
         assert!(draft.options().is_empty(), "nothing to say about reading");
         assert!(!draft.may_partition(Path::new("/tmp")));
         assert_eq!(draft.store(), None);
-        // The paths are **kept**, exactly as a connection and a format's options are across a
-        // switch: coming back to Local must not have forgotten them.
         assert_eq!(draft.local_sources, vec!["/data/t.parquet".to_string()]);
     }
 
@@ -1868,9 +1755,6 @@ mod internal_tests {
         assert_eq!(faults[&0], duplicate_column("region"));
         assert_eq!(faults[&1], duplicate_column("region"));
 
-        // A name the parser cannot read as one identifier is **verbatim** to the engine, so two
-        // spellings differing only in case are two columns — and the form must not refuse what
-        // the create would accept.
         let spaced = draft("t", &[("my col", "VARCHAR"), ("MY COL", "VARCHAR")]);
         assert!(spaced.column_faults(&probes).is_empty());
     }

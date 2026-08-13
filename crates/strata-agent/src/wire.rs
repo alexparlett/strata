@@ -1,20 +1,17 @@
 //! The **wire shapes** — what a tool takes and what it answers, as JSON.
 //!
-//! Kept apart from [`crate::host`]'s types on purpose. A host type models the states out of
-//! existence (four `Described` variants, no `Option` soup); a wire type is flat, with empty
-//! collections and absent facts omitted, because that is what reads well to a model and
-//! keeps a response small. The projections between them are the `from_*` functions here, so
-//! no tool assembles a response by hand.
+//! Kept apart from [`crate::host`]'s types on purpose: a host type models the states out of
+//! existence, while a wire type is flat with empty collections and absent facts omitted, because
+//! that is what reads well to a model. The projections between them are the `from_*` functions
+//! here, so no tool assembles a response by hand.
 //!
 //! Two conventions hold throughout:
 //!
-//! - **A cell is `null` or a string.** Rows arrive already formatted by the engine's
-//!   `CellFormat` — the same text the grid shows — so numbers come back as strings and a
-//!   null becomes JSON `null` rather than the configured NULL rendering, which is
-//!   presentation.
-//! - **A query-session handle is its `QuerySessionId` as text.** Not a parallel id scheme:
-//!   it is the session's own `Uuid` — the same one the engine uses as its `WsId` — so a
-//!   handle from `open_query_session` and one from `list_query_sessions` are the same thing.
+//! - **A cell is `null` or a string.** Rows arrive already formatted by the engine's `CellFormat`,
+//!   so numbers come back as strings and a null becomes JSON `null` rather than the configured NULL
+//!   rendering, which is presentation.
+//! - **A query-session handle is its `QuerySessionId` as text** — the session's own `Uuid`, the
+//!   same one the engine uses as its `WsId`, never a parallel id scheme.
 
 use std::sync::Arc;
 
@@ -40,10 +37,6 @@ pub type Columns = Arc<Vec<ColumnWire>>;
 pub fn columns(info: &[ColumnInfo]) -> Columns {
     Arc::new(info.iter().map(ColumnWire::from).collect())
 }
-
-// ---------------------------------------------------------------------------
-// Parameters
-// ---------------------------------------------------------------------------
 
 /// The disambiguator every project-scoped tool takes: a project's root path or its name.
 /// Only needed when more than one project is open — the error lists them.
@@ -179,10 +172,6 @@ pub struct Sort {
 fn yes() -> bool {
     true
 }
-
-// ---------------------------------------------------------------------------
-// Results
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ProjectsResult {
@@ -898,14 +887,11 @@ mod tests {
         let row = serde_json::to_value(&names_only.scalar[0]).unwrap();
         assert_eq!(row, serde_json::json!({"name": "fn_0"}), "names only");
 
-        // A narrowed set crosses back into full detail, and the total is the match count.
         let narrowed = functions_result(&big, Some("FN_1"));
         assert_eq!(narrowed.total, 11, "case-insensitive substring");
         assert!(narrowed.note.is_none());
         assert!(narrowed.scalar[0].description.is_some());
 
-        // A detailed row with no declared arity keeps an *empty* signatures list — absence
-        // means names-only and nothing else, so the two facts cannot read the same.
         let no_arity = FunctionCatalog {
             scalar: vec![FunctionSym {
                 name: "my_udf".into(),

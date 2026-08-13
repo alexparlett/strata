@@ -5,37 +5,25 @@
 //! the rest are the catalog — so an [`Entry`] is either a pointer into a static table or a name
 //! read off the store, never a copy of a def.
 //!
-//! Three rules the canvas settles and one that it doesn't.
-//!
 //! **Group order is fixed and empty groups vanish** — a result list whose sections move about as
 //! you type is one you cannot aim at.
 //!
-//! **An empty query hides COLUMNS.** Every other group is bounded by the project and worth
-//! offering cold; columns are thousands of rows that answer nothing until you have typed
-//! something (the canvas's `buildCmdk` does exactly this).
+//! **An empty query hides COLUMNS.** Every other group is bounded by the project and worth offering
+//! cold; columns are thousands of rows that answer nothing until you have typed something.
 //!
-//! **A word matches anywhere**, so "sales limit" and "limit sales" find the same row and neither
-//! has to be typed the way the label spells it — the rule the Settings window's search box already
-//! holds ([`crate::apps::settings::search`]), because a user who has learned one of this app's
-//! search boxes has learned the other.
+//! **A word matches anywhere**, so "sales limit" and "limit sales" find the same row — the rule the
+//! Settings search box already holds ([`crate::apps::settings::search`]), because a user who has
+//! learned one of this app's search boxes has learned the other.
 //!
-//! And the one the canvas leaves open: **the cap is per group, not overall — and only the catalog
-//! groups have one**. A global cap lets a common substring fill the whole list with columns and
-//! push the table you were after off the bottom, which is the failure the settings index avoids
-//! from the other side by indexing its named settings first. Per group, every section keeps a
-//! hearing.
+//! **The cap is per group, not overall — and only the catalog groups have one.** A global cap lets
+//! a common substring fill the list with columns and push the table you were after off the bottom.
+//! ACTIONS is uncapped because it is a fixed set defined in code rather than an unbounded
+//! project-scoped list: capping it once **hid a command**, when the registry grew to nine against a
+//! cap of eight and Settings… silently stopped being offered.
 //!
-//! ACTIONS is uncapped because it is not the same kind of list: the catalog groups are unbounded
-//! and project-scoped, while the commands are a fixed set defined in code. Capping them meant the
-//! palette **hid a command** — the registry grew to nine against a cap of eight and Settings…
-//! silently stopped being offered ([`Group::cap`]).
-//!
-//! ## Only top-level columns
-//!
-//! `ColumnInfo::children` is a tree, and a real `config.json` in this repo's own measurements
-//! carries 241,425 nested fields in 19 columns (AGENTS.md §2). Walking it to build a search index
-//! would be that same unbounded materialization in a new place, paid on every open. Views'
-//! columns are indexed as well as tables', because the sidebar lists both and a column is a column.
+//! **Only top-level columns.** `ColumnInfo::children` is a tree carrying 241,425 nested fields in
+//! this repo's own reference fixture, so walking it to build a search index would be that same
+//! unbounded materialization paid on every open. Views' columns are indexed as well as tables'.
 
 use strata_model::{CatalogKind, ColRef, Kind, SavedQuery};
 use uuid::Uuid;
@@ -236,9 +224,6 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
         });
     }
 
-    // Columns last, and only the top level — see the module doc. A def the engine refused still
-    // gets its own row above (that is what the catalog exists to show) but contributes no
-    // columns, because there is no schema behind it to name any.
     for table in &project.tables {
         let Reg::Ready(meta) = &table.reg else {
             continue;
@@ -252,8 +237,6 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
                 },
                 dtype: column.dtype.clone(),
                 kind: column.kind,
-                // `partition_cols` is `(name, arrow_type)` — the type is persisted so a reload
-                // doesn't re-detect it, and only the name identifies the column here.
                 part: table
                     .def
                     .partition_cols
@@ -275,7 +258,6 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
                 },
                 dtype: column.dtype.clone(),
                 kind: column.kind,
-                // A view has no partition keys of its own — those belong to the table under it.
                 part: false,
             });
         }
@@ -386,8 +368,6 @@ mod tests {
         ProjectState {
             name: "sales".to_string(),
             root: PathBuf::from("/data/sales"),
-            // The palette offers no connection rows: a bucket is not something you can run,
-            // open or jump to.
             connections: Vec::new(),
             tables: vec![
                 table(
@@ -533,7 +513,6 @@ mod tests {
         let mut expected = order.clone();
         expected.sort_by_key(|g| Group::ALL.iter().position(|x| x == g));
         assert_eq!(order, expected);
-        // A heading only exists where a row follows it, so every start is a real index.
         assert!(groups
             .groups
             .iter()
@@ -578,11 +557,8 @@ mod tests {
     #[test]
     fn rows_read_in_group_order_and_headings_point_into_them() {
         let groups = Index::new(&store()).search("");
-        // The first row is the first action, and the first heading sits above it.
         assert_eq!(groups.rows[0], Entry::Action(Action::ALL[0]));
         assert_eq!(groups.heading(0), Some(Group::Actions));
-        // Every row belongs to the heading most recently above it — which is what lets ↑↓ walk
-        // `rows` while the headings are drawn from `groups`.
         for (index, entry) in groups.rows.iter().enumerate() {
             let heading = groups
                 .groups

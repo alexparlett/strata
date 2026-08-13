@@ -78,9 +78,6 @@ impl Component for DrawerEmpty {
         let theme = get_theme!(&None::<DrawerThemePartial>, DrawerThemePreference, "drawer");
         let icon_color = self.icon_color.unwrap_or(theme.empty_color);
         let color = theme.empty_color;
-        // Centred *inside a scroll view*, not centred in a bare box (P5-06): a drawer dragged to
-        // its stub is shorter than the glyph plus its line of copy, and a centred box with no
-        // scroll paints the pair straight through the header above it.
         ScrollView::new().child(
             rect()
                 .expanded()

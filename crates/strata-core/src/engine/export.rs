@@ -290,10 +290,6 @@ fn select_sql(snap: &str, spec: &ExportSpec, schema: &Schema, ord: Option<&str>)
         sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
     }
     if let Scope::Page { page, page_size } = spec.scope {
-        // Saturating for `fetch_page`'s reason (see there): an overflowing multiply panics in
-        // debug and wraps to a plausible-but-wrong offset in release. This scope's numbers are
-        // the export window's own today, which is why it reads as pedantry — but the guarded
-        // copy's rationale is about the arithmetic, not about who supplies it.
         let offset = page.saturating_sub(1).saturating_mul(page_size);
         sql.push_str(&format!(" LIMIT {page_size} OFFSET {offset}"));
     }
@@ -440,8 +436,6 @@ fn partition_columns_have_no_nulls(
             .iter()
             .position(|f| f.name() == name)
             .ok_or_else(|| format!("Can't partition by '{name}': the result has no such column"))?;
-        // A missing entry is not "zero nulls" — it means the count is unavailable, which under
-        // the exact-zero rule is a reason to decline just as a positive count is.
         if stats.nulls.get(index).copied() != Some(0) {
             return Err(partition_null_refusal(name));
         }
@@ -452,16 +446,14 @@ fn partition_columns_have_no_nulls(
 /// Refuse any partition column the engine's own parser dialect doesn't read as a single
 /// bare word.
 ///
-/// `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option: DataFusion 54's
-/// COPY parser re-renders each one with `Ident::to_string()`, so a quoted name reaches the
-/// planner with its quotes still attached and matches no field. Bare is also case-preserving
-/// here (that parser doesn't normalise), so every name the tokenizer reads as one word
-/// round-trips — and one it doesn't simply can't be expressed, which is worth saying plainly
-/// instead of emitting a statement that fails with a parser message about a stray token.
+/// `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option: the COPY parser
+/// re-renders each with `Ident::to_string()`, so a quoted name reaches the planner with its quotes
+/// attached and matches no field. Bare is case-preserving here, so every name the tokenizer reads
+/// as one word round-trips and one it does not simply cannot be expressed — worth saying plainly
+/// rather than emitting a statement that fails on a stray token.
 ///
-/// Its own (sync) function rather than an inline check, because the resolved dialect is not
-/// `Send` and [`run_export`] is spawned onto the engine runtime — a `Box<dyn Dialect>` held
-/// across one of its awaits would not compile.
+/// Its own sync function rather than an inline check, because the resolved dialect is not `Send`
+/// and [`run_export`] is spawned onto the engine runtime.
 ///
 /// **Shared with the two typed statements that carry a `PARTITIONED BY`** — `ddl::copy`, which
 /// asks it of the very strings `CopyToStatement::partitioned_by` holds, and `ddl::external`,
@@ -557,9 +549,6 @@ mod tests {
 
     #[test]
     fn scope_all_reads_the_whole_snapshot_in_snapshot_order() {
-        // The snapshot file carries the ordinal; the SELECT names the user's columns
-        // explicitly and orders by the ordinal, so the file matches the grid without ever
-        // containing the bookkeeping.
         assert_eq!(
             select_sql(
                 "__snap_1",
@@ -608,11 +597,8 @@ mod tests {
     #[test]
     fn csv_single_char_options_are_sent_as_byte_values() {
         let opts = format_options(&Format::Csv(csv())).expect("csv options");
-        // ',' is 44 and '"' is 34 — never the characters themselves, so a digit delimiter
-        // can't be read as a control byte.
         assert!(opts.contains("'DELIMITER' '44'"), "{opts}");
         assert!(opts.contains("'QUOTE' '34'"), "{opts}");
-        // No escape was chosen, so the key is absent rather than sent empty.
         assert!(!opts.contains("ESCAPE"), "{opts}");
     }
 

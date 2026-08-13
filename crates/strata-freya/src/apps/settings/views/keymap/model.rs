@@ -141,7 +141,6 @@ mod test {
             rows.iter().map(|r| r.command).collect::<Vec<_>>(),
             COMMANDS.iter().map(|m| m.command).collect::<Vec<_>>()
         );
-        // Nothing is custom out of the box, and every row has its caps.
         assert!(rows.iter().all(|r| !r.custom && !r.unbound()));
         assert!(!has_overrides(&Settings::default()));
     }
@@ -157,8 +156,6 @@ mod test {
 
     #[test]
     fn a_fixed_row_never_reads_as_custom() {
-        // A hand-edited override of Esc is ignored, so the row shows `Esc` — and must not claim
-        // otherwise, since its reset control is gated off and could not clear the badge.
         let settings = Settings {
             keybinds: vec![KeyBind {
                 command: Command::Cancel,
@@ -172,7 +169,6 @@ mod test {
             .expect("Dismiss is a row");
         assert!(esc.fixed && !esc.custom);
         assert_eq!(esc.caps, vec!["Esc"]);
-        // Reset all is still offered, which is the only way to clear the stale entry.
         assert!(has_overrides(&settings));
     }
 
@@ -184,7 +180,6 @@ mod test {
                     command: Command::Find,
                     chord: Some(chord("g")),
                 },
-                // The state a reassignment leaves behind: overridden, and holding nothing.
                 KeyBind {
                     command: Command::NewTab,
                     chord: None,
@@ -204,12 +199,9 @@ mod test {
         assert!(find.custom && !find.unbound());
         assert_eq!(find.caps, vec!["⌘", "G"]);
 
-        // Custom *and* unbound: the row wears the badge and offers Add shortcut, which is the
-        // one combination that has to be expressible.
         let new_tab = row(Command::NewTab);
         assert!(new_tab.custom && new_tab.unbound());
 
-        // An untouched row is neither.
         let save = row(Command::SaveQuery);
         assert!(!save.custom && !save.unbound());
         assert!(has_overrides(&settings));
@@ -226,7 +218,6 @@ mod test {
         assert_eq!(capturing.capturing_command(), Some(Command::Find));
         assert!(capturing.capturing(Command::Find));
         assert!(!capturing.capturing(Command::NewTab));
-        // Capturing is not blocked — the states cannot overlap, which is why they are one value.
         assert_eq!(capturing.blocked(Command::Find), None);
 
         let blocked = Editing::Blocked(Blocked {
@@ -236,7 +227,6 @@ mod test {
             message: "⌘T is already assigned to 'New query tab'".to_string(),
         });
         assert!(blocked.blocked(Command::Find).is_some());
-        // Not under the row it would take the chord *from*.
         assert_eq!(blocked.blocked(Command::NewTab), None);
         assert!(!blocked.capturing(Command::Find));
     }

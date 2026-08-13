@@ -61,9 +61,6 @@ impl Component for PropTable {
         let list = rows.read();
         let errors = list.errors();
         let error_color = tones().error;
-        // The body's own scroll, driven so a row can reveal itself: a property added by the toolbar
-        // or named by the Settings search (P4-09) lands at the end of the list, which on a grid with
-        // a screenful of overrides is off the bottom — a selection nobody can see.
         let controller = use_scroll_controller(ScrollConfig::default);
 
         let mut body = TableBody::new();
@@ -201,13 +198,9 @@ impl Component for PropTableRow {
             let seed = self.value.clone();
             move || seed
         });
-        // The name box's id is ours, so the suggestions below can watch it take and lose focus.
         let a11y_id = use_a11y();
         let focus = use_focus(a11y_id);
 
-        // Push each box into the list. `peek`, so the effect depends on its box alone — and
-        // guarded, or the write would wake this row, whose effect would then run again and cost
-        // a second pass over the grid per keystroke.
         use_side_effect(move || {
             let typed = name.read().clone();
             if rows.peek().name_of(id).as_deref() != Some(typed.as_str()) {
@@ -223,19 +216,12 @@ impl Component for PropTableRow {
 
         let key = name.read().trim().to_string();
         let restart = is_restart_key(&key);
-        // One lookup for the whole row, matching what the inspector says about the same name.
-        // Three tones, because there are three answers: a key the catalogue doesn't know may
-        // simply be newer than this build (warning), while a reserved one is refused outright and
-        // the row is already carrying an error for it.
         let name_color = match KeyStatus::of(&key) {
             KeyStatus::Blank | KeyStatus::Known(_) => roles.get(Role::Text),
             KeyStatus::Custom => tones.warning,
             KeyStatus::Reserved => tones.error,
         };
 
-        // Suggestions are open exactly while the box has focus and the catalogue has something
-        // left to offer. Picking a name fills the box, which empties the list, which closes the
-        // panel — one condition, rather than an open flag to keep in step with it.
         let suggestions: Vec<(&'static str, &'static str)> = match focus() {
             Focus::Not => Vec::new(),
             _ => rows
@@ -254,22 +240,12 @@ impl Component for PropTableRow {
             );
         }
 
-        // Selection is the row's *only* fill, and it pins the hover fill to itself: a row that
-        // answers a press with a selection must not also light up as the pointer crosses it.
-        // Deliberately **not** striped — this is a settings list, not a results grid, and the
-        // canvas paints every unselected row the same. Banding here would compete with the one
-        // row state the surface actually has.
         let selected = rows.read().selected == Some(id);
         let fill = match selected {
             true => theme.table_selection_background,
             false => Color::TRANSPARENT,
         };
 
-        // Reveal the selected row — the same shape the tab strip reveals its active tab with. A
-        // freshly added row's area lands a frame after it is selected, so the effect watches
-        // *whether* we have one (a `Memo<bool>` only notifies when that flips) and then peeks it:
-        // torin re-emits `Sized` for every row on scroll, and re-revealing then would drag the
-        // selection back under the pointer. `scroll_to_item` is a no-op once the row is visible.
         let mut area = use_state(|| None::<Area>);
         let has_area = use_memo(move || area.read().is_some());
         let selected_now = use_reactive(&selected);
@@ -303,14 +279,7 @@ impl Component for PropTableRow {
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
                             .spacing(CELL_INSET - ERROR_STRIPE)
-                            // What the reveal above scrolls to. Measured on the name cell's body
-                            // rather than on the row, which is a `TableRow` and takes no element
-                            // events: it spans the row's full height, and the grid scrolls
-                            // vertically only, so the axis that matters is the one it reports.
                             .on_sized(move |e: Event<SizedEventData>| area.set(Some(e.area)))
-                            // The invalid marker. A painted rect and not a border: torin draws a
-                            // border inside bounds the box already fills (AGENTS.md §3), so it
-                            // would be the one edge you could not see.
                             .child(
                                 rect()
                                     .width(Size::px(ERROR_STRIPE))
@@ -322,8 +291,6 @@ impl Component for PropTableRow {
                             )
                             .child(
                                 Attached::new(
-                                    // The tone is set on the wrapper: `Input` paints no colour of
-                                    // its own, so its text takes the ambient one.
                                     rect().width(Size::flex(1.)).color(name_color).child(
                                         ValueField::new(name)
                                             .bare()

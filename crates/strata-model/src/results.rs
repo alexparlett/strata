@@ -1,6 +1,5 @@
 //! Query-results vocabulary: a formatted [`Cell`], a page of [`QueryOutput`], and the
 //! [`SnapshotId`] identifying the immutable result snapshot a Run materialized.
-//! Produced by the engine, stored by [`crate::runs`], rendered by the grid.
 
 use super::ColumnInfo;
 
@@ -12,10 +11,9 @@ pub struct Cell {
     pub null: bool,
 }
 
-/// The identity of one materialized result snapshot (`docs/SNAPSHOT_SPEC.md` §2): the
-/// Run's request id, unique per engine for the life of the process — so a re-run of the
-/// same SQL is a *different* snapshot, and every read keyed by this id targets a fixed,
-/// immutable result set.
+/// The identity of one materialized result snapshot (`docs/SNAPSHOT_SPEC.md` §2): unique per engine
+/// for the life of the process, so a re-run of the same SQL is a *different* snapshot and every
+/// read keyed by this id targets a fixed, immutable result set.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct SnapshotId(pub u64);
 

@@ -159,7 +159,6 @@ mod tests {
         let ChartData::Table { axis, series } = block_on(charts.run(&spec)).expect("chart") else {
             panic!("a Rows read answers a table");
         };
-        // The order the query produced them in, not sorted (CHART_SPEC §1.6).
         assert_eq!(axis.labels, ["b", "a", "c"]);
         assert_eq!(
             series,

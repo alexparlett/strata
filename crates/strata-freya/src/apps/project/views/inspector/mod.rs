@@ -107,28 +107,15 @@ impl Component for Inspector {
     fn render(&self) -> impl IntoElement {
         let layout = use_radio::<SessionState, Chan>(Chan::Layout);
         let selection = use_catalog_selection();
-        // **One source for every colour this panel paints.** The `inspector` theme owns them,
-        // including the surface and the rule under the header — the sheet is reached for only
-        // where a value is *semantic* (success / warning / error), and nothing here is. Reading
-        // `colors.border` as well would have been the same value under a second name.
         let theme = get_theme!(&self.theme, InspectorThemePreference, "inspector");
 
         let selected = selection.read().clone();
-        // The selection says which collection owns it, so the panel listens on **that** section's
-        // channel: with a table column selected, a view registering never wakes it.
-        //
-        // Switching selection re-points the antenna, but does *not* drop the old subscription —
-        // `Radio::subscribe_if_not` adds this reactive context to the new channel's listener set
-        // and nothing removes it from the previous one (`freya-radio/src/hooks/use_radio.rs`).
-        // So a panel that has inspected both kinds ends up woken by either. Harmless (the render
-        // re-derives from whatever the selection now is), but don't read this as a guarantee.
         let channel = match selected.as_ref().map(|c| c.kind) {
             Some(CatalogKind::View) => ProjChan::Views,
             _ => ProjChan::Tables,
         };
         let project = use_radio::<ProjectState, ProjChan>(channel);
 
-        // Resolve against the store and drop the read guard before any element is built.
         let inspected = selected.as_ref().map(|col| inspect(&project.read(), col));
 
         let body = match inspected {
@@ -138,8 +125,6 @@ impl Component for Inspector {
                 theme: theme.clone(),
             }
             .into_element(),
-            // A row mid-re-scan has no verdict yet, so the panel says so rather than showing the
-            // facts it had a moment ago as if they still stood.
             Some(Inspected::Loading) => note("Loading…", theme.note_color),
             Some(Inspected::Failed(reason)) => note(reason, theme.note_color),
             Some(Inspected::Gone(reason)) => note(reason, theme.note_color),
@@ -154,11 +139,6 @@ impl Component for Inspector {
                     .width(Size::fill())
                     .height(Size::px(RIGHT_PANE_HEADER_HEIGHT))
                     .horizontal()
-                    // `Content::Flex` with a flexing title, not `SpaceBetween` with two hugging
-                    // clusters (P5-06): `Content::Normal` never shrinks anything and `Overflow`
-                    // defaults to painting outside the box, so a narrow panel had the title and
-                    // the × drawn over each other. The title gives up its width and ellipsizes;
-                    // the × is pinned, because it is how the user escapes the squeeze.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
                     .spacing(SP_3)
@@ -183,12 +163,6 @@ impl Component for Inspector {
                     ),
             )
             .child(Divider::horizontal().color(theme.border_fill))
-            // The header holds still; only the body scrolls, so the panel's own title and its
-            // collapse stay reachable however long a struct's field list runs.
-            //
-            // The body is floored at `PANE_BODY_MIN_W` and the panel clips what will not fit:
-            // without it, a narrow panel gave the scan card's copy less room than one word and it
-            // wrapped to a column of single letters (P5-06).
             .child(
                 ScrollView::new().child(
                     rect()

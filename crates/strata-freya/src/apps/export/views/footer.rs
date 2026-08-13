@@ -45,7 +45,6 @@ impl Component for Footer {
         let status = ctx.status.read().clone();
         let writing = status == Status::Writing;
 
-        // What the export will actually write — the scope's own count, not the grid's.
         let meta = {
             let draft = ctx.draft.read();
             let target = ctx.target.read();
@@ -64,8 +63,6 @@ impl Component for Footer {
             meta
         };
 
-        // A failure replaces the row count: it is the more important thing on the strip, and
-        // the window is the only place that can explain it.
         let left: Element = match &status {
             Status::Failed(message) => Path::new(message.clone())
                 .color(error)
@@ -125,8 +122,6 @@ fn run_export(mut ctx: ExportCtx, engine: EngineCtx, log: LogCtx, platform: Plat
     let suggested = draft.suggested_name(&target);
 
     spawn(async move {
-        // A partitioned export builds a tree, so it needs a folder to build it in; every other
-        // format writes one file and needs its name.
         let picked = if partitioned {
             rfd::AsyncFileDialog::new()
                 .set_title("Choose a folder for the partitioned export")
@@ -141,13 +136,10 @@ fn run_export(mut ctx: ExportCtx, engine: EngineCtx, log: LogCtx, platform: Plat
                 .await
                 .map(|handle| handle.path().to_path_buf())
         };
-        // Dismissing the dialog is a decision, not a failure — nothing to report.
         let Some(path) = picked else {
             return;
         };
 
-        // The spec is built here, after the destination is known, so a bad delimiter is
-        // reported before anything is written rather than as a `COPY` parse error.
         let spec = match draft.spec(&target, path.to_string_lossy().into_owned()) {
             Ok(spec) => spec,
             Err(why) => {
@@ -158,9 +150,6 @@ fn run_export(mut ctx: ExportCtx, engine: EngineCtx, log: LogCtx, platform: Plat
 
         ctx.status.set(Status::Writing);
         match engine.export(target.snapshot, spec).await {
-            // Done. The confirmation goes to the **project window's** event log (P3-13), not
-            // here: this window closes itself, so a line shown in it would vanish with it —
-            // and an export is a write the user asked for, which is exactly what that log is.
             Ok((path, rows)) => {
                 log_event(
                     log,
@@ -169,13 +158,6 @@ fn run_export(mut ctx: ExportCtx, engine: EngineCtx, log: LogCtx, platform: Plat
                 );
                 platform.close_current_window();
             }
-            // A failure is recorded *and* kept on screen: the log says it happened, the footer
-            // says what to do about it, and the window stays so the user can change something
-            // and retry without rebuilding the whole spec.
-            //
-            // A stopped call is not a fault (`stopped_on_purpose`) — nothing cancels an export
-            // today, but the engine can still settle `CANCELLED` if its runtime goes down with
-            // the window, and reporting that as an error would be a lie.
             Err(why) => {
                 if !stopped_on_purpose(&why) {
                     log_event(log, LogLevel::Error, format!("Export failed: {why}"));

@@ -29,32 +29,13 @@ use crate::platform::windows::{register, WindowKind};
 /// both how the callback learns *which* window asked and why this can be called from an event
 /// handler with no scope of its own.
 pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
-    // The receiver is dropped: the work happens inside the callback and nothing waits on it.
     drop(platform.post_callback(move |owner, ctx| {
-        // Focus-if-open, on this window's own target. Peeked inside the callback rather than
-        // read at the call site, so the answer is the registry as it is *now* — the press that
-        // opened the menu and the press that chose the item are different moments.
-        // Checked against the renderer's own window map, not just the registry: an entry is
-        // added eagerly below, while its removal rides the window's `use_register_window` drop,
-        // so a window that went before that hook resolved its id would leave an entry naming
-        // nothing. Treating a dangling entry as "not open" makes that self-healing — the same
-        // guard Settings needs, for the same reason.
         let open = launch
             .app
             .windows
             .peek()
             .by_id()
             .iter()
-            // **Keyed by owner *and* target.** A target names a def, and a def belongs to one
-            // project — two windows on different projects can both hold a table called `events`,
-            // and matching on the name alone hands the second one the first project's def and
-            // then writes to its store. One owner window shows one project, so the owner is what
-            // says which — the project itself is not matched here, and does not need to be: a
-            // window whose owner has since re-rooted has already had its close *requested* by its
-            // pin ([`crate::platform::owner`]), a cycle before any press can arrive, so it is
-            // never a candidate by the time this runs. Note that is event ordering and **not** the
-            // dangling-entry filter below, which tests the renderer's live window map and so still
-            // contains a window whose close is merely queued.
             .find(|(_, kind)| {
                 matches!(kind, WindowKind::Configure { owner: o, target }
                     if *o == owner && *target == launch.target)
@@ -80,9 +61,6 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             launch.connections,
             owner,
         ));
-        // Registered here rather than left to the window's own `use_register_window`, which can
-        // only learn its id a render and a round trip later — until then the window would be
-        // invisible to the focus-if-open check above, so two quick presses would open two.
         register(
             launch.app.windows,
             id,

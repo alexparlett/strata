@@ -60,8 +60,6 @@ async fn the_chart_draws_the_result_in_its_own_order() {
     assert_eq!(series[0].name, "amount");
     assert_eq!(series[0].values, vec![Some(30.0), Some(20.0), Some(10.0)]);
 
-    // The chart is a read, not a consumption: the same snapshot still pages, in the same
-    // order.
     let (rows, _) = eng.fetch_page(snap, 1, 10, None).await.expect("page");
     let grid: Vec<&str> = rows.iter().map(|r| r[0].text.as_str()).collect();
     assert_eq!(grid, vec!["eu", "us", "ap"], "chart and grid agree");
@@ -134,8 +132,6 @@ async fn scatter_returns_points_and_refuses_over_cap() {
         )
         .await
         .expect("chart");
-    // As a SET: `ChartData::Points` promises no order (a scatter draws marks, not a
-    // sequence), and pinning one here would lend the scan an order the type disclaims.
     let ChartData::Points(mut points) = data else {
         panic!("expected points, got {data:?}")
     };
@@ -201,7 +197,6 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     let eng = Arc::new(Engine::new(Default::default()));
     let snap = snapshot(&eng).await;
 
-    // amount is exactly 10 x qty in the fixture, so the fit is the line itself.
     let fit = eng
         .trend(snap, "qty".into(), "amount".into())
         .await
@@ -212,7 +207,6 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     assert!((fit.r2 - 1.).abs() < 1e-9, "{fit:?}");
     assert_eq!(fit.n, 3);
 
-    // One row is no line — absent, never an error the user has to dismiss.
     let (out, _) = eng
         .query(WsId(2), RunTag(1), "SELECT 1.0 AS x, 2.0 AS y".into(), 10)
         .await

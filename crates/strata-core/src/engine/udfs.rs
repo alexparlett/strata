@@ -1,53 +1,35 @@
 //! Strata's own SQL built-ins (QE-01): the four functions that make an object-keyed `Struct`
 //! enumerable and walkable.
 //!
-//! [`json_poly`](super::json_poly) infers **every** JSON object as a `Struct`, keys unioned across
-//! the file — there is no `Map` arm anywhere — so the shape a config document actually has (an
-//! object keyed by UUID, thousands of same-shaped values under it) arrives as a struct with
-//! thousands of fields, and DataFusion's struct vocabulary is entirely literal: `get_field` and dot
-//! access take a key written into the SQL. Nothing in the built-in set answers "which keys does
-//! **this row** have", and nothing indexes by a key computed from elsewhere in the row.
+//! [`json_poly`](super::json_poly) infers every JSON object as a `Struct` with keys unioned across
+//! the file, and DataFusion's struct vocabulary is entirely literal — `get_field` and dot access
+//! take a key written into the SQL. Nothing built in answers "which keys does *this row* have", and
+//! nothing indexes by a computed key.
 //!
-//! The four are Arrow-side first, JSON text only as the fallback:
+//! Arrow-side first, JSON text only as the fallback: [`StructKeys`] reads the null bitmaps, so no
+//! value is touched; [`StructEntries`] pairs each key with its value, still typed, so
+//! `unnest(struct_entries(s))` walks the map; [`StructGet`] indexes by a **computed** key, the one
+//! thing `get_field` cannot do; [`ToJson`] serializes anything to JSON text.
 //!
-//! - [`StructKeys`] reads the null bitmaps. No value is touched and nothing is serialized, which
-//!   is what makes it affordable on the wide struct that motivated it.
-//! - [`StructEntries`] pairs each key with its value, still typed Arrow, so
-//!   `unnest(struct_entries(s))` walks the map end to end and ordinary struct access continues
-//!   from there.
-//! - [`StructGet`] indexes by a **computed** key, which is the one thing `get_field` cannot do.
-//! - [`ToJson`] serializes any value to JSON text — the escape hatch the two `V`-typed functions
-//!   refuse toward, and the input `datafusion-functions-json`'s accessors speak.
+//! **The shape rule, and why only two have it.** `struct_entries` and `struct_get` return one Arrow
+//! type per call, so a heterogeneous struct is refused **at planning time**, by name, pointing at
+//! `to_json`. Keys are keys and text is text, so the other two need no such rule.
 //!
-//! **The shape rule, and why only two of them have it.** `struct_entries` and `struct_get` return
-//! *one* Arrow type per call, so they need the struct's fields to agree on one; a heterogeneous
-//! struct is refused **at planning time**, by name, pointing at `to_json`. `struct_keys` has no
-//! such requirement (keys are keys) and neither does `to_json` (text is text).
+//! **What a null means here.** A key absent from a record is a *null field* in that row, which is
+//! what makes the bitmap read the honest per-row answer — and also means an explicit `null` and an
+//! absent key cannot be told apart. The loss is at inference rather than here.
 //!
-//! **What a null means here.** `json_poly` unions keys across the file, so a key absent from a
-//! record is a *null field* in that row — which is what makes the null-bitmap read the honest
-//! per-row answer. It also means a source-level explicit `null` and an absent key are the same
-//! Arrow null and cannot be told apart. Each function's description says so, in the same words,
-//! and the loss is at inference rather than here: the spike below measured `cast_to_variant` — a
-//! format that *can* carry the difference — dropping the null fields too.
+//! **A key, not a path.** `struct_get` matches one key exactly; two levels down is two calls.
+//! `datafusion-variant` took the other road, and its own path parser documents where that ends —
+//! a `List` overload for keys containing dots. A key in a keyed map is data, not an expression.
 //!
-//! **A key, not a path.** `struct_get` takes one key and matches it exactly; two levels down is
-//! two calls. `datafusion-variant` took the other road, and its own path parser documents where
-//! that ends: it carries a `List` overload specifically "for keys that contain dots such as OTEL
-//! attribute keys like `http.response.status_code`". A key in a keyed map is data, not an
-//! expression.
-//!
-//! **Why these and not [`datafusion-variant`](https://github.com/datafusion-contrib/datafusion-variant)**
-//! (the spike this task opened with; the evidence is in `.claude/tasks/`). Its published release
-//! resolves a *second* DataFusion into the graph — 52 and arrow 57, beside our 54 and 58.3 — and
-//! carries no key-enumeration function at all; only its unreleased git HEAD builds against our
-//! pin. Against the fixture that HEAD does work, computed path and per-row keys included, with no
-//! shape-unification rule — a capability these four genuinely lack. What decided it is the result
-//! side and the cost: a Variant column reaches the app as
-//! `Struct{metadata: BinaryView, value: BinaryView}`, which the grid, the inspector and export
-//! each render as hex, and a keys-only read of a 5,000-key struct measured 58.7ms against 19.75µs
-//! for the bitmap walk. These four return `List`, `Struct` and `Utf8` — types every one of those
-//! readers already has an arm for, which is a requirement and not a coincidence.
+//! **Why these and not `datafusion-variant`** (the spike this task opened with; evidence in
+//! `.claude/tasks/`). Its published release resolves a second DataFusion into the graph and carries
+//! no key-enumeration function; only its unreleased HEAD builds against our pin, and that does work
+//! against the fixture. What decided it is the result side and the cost: a Variant column arrives as
+//! `Struct{metadata: BinaryView, value: BinaryView}`, which the grid, inspector and export each
+//! render as hex, and a keys-only read of a 5,000-key struct measured 58.7ms against 19.75µs for
+//! the bitmap walk. These four return types every reader already has an arm for.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,16 +66,13 @@ const NULL_NOTE: &str =
 
 /// Register Strata's built-ins into `ctx`.
 ///
-/// Called from `build_context` beside `datafusion_functions_json::register_all`, for the same
-/// reason and on the same terms: these belong to the engine rather than to a table, and one call
-/// is the whole integration — `functions::snapshot` walks the live registry, so completion,
+/// One call is the whole integration: `functions::snapshot` walks the live registry, so completion,
 /// signature detail, the docs panel and the agent's `list_functions` follow with no further wiring.
 ///
-/// A name already in the registry is **shadowed silently** by `SessionContext::register_udf`,
-/// which returns nothing, so the registry is asked first: taking a DataFusion built-in's name
-/// would replace it for the whole session with no way to put it back. Warned rather than fatal for
-/// the same reason the JSON crate's registration is: the failure names itself on the first query
-/// that wanted the function.
+/// A name already in the registry is **shadowed silently** by `register_udf`, which returns
+/// nothing, so the registry is asked first — taking a built-in's name would replace it for the
+/// session with no way to put it back. Warned rather than fatal, because the failure names itself
+/// on the first query that wanted the function.
 pub fn register(ctx: &SessionContext) {
     let udfs = [
         ScalarUDF::from(StructKeys::new()),
@@ -125,16 +104,14 @@ fn struct_fields<'a>(function: &str, dtype: &'a DataType) -> Result<&'a Fields> 
 /// The one value **field** a struct's values share, or the plan-time refusal naming the two that
 /// disagree and the way out.
 ///
-/// **Nullability is not a disagreement.** Two fields that differ only in whether they admit nulls
-/// hold the same values, so they unify to the more permissive of the two — recursively, because a
-/// `Struct`'s and a `List`'s nullability live *inside* their `DataType`. Anything else is a genuine
-/// difference with no single Arrow answer, and the caller is sent to [`ToJson`], which has one.
+/// **Nullability is not a disagreement**: two fields differing only in whether they admit nulls
+/// hold the same values, so they unify to the more permissive — recursively, because a `Struct`'s
+/// and a `List`'s nullability live *inside* their `DataType`. Anything else has no single Arrow
+/// answer, and the caller is sent to [`ToJson`], which has one.
 ///
-/// A **field**, not a type, because [`JSON_TEXT_KEY`] rides on the field: a keyed object whose
-/// values are all conflict-state text is one struct where the mark is the difference between
-/// `to_json(struct_get(…))` handing back a document and handing back a document inside a string.
-/// What survives is what every field agrees on, which is the only thing that can honestly be said
-/// of the merged value.
+/// A **field**, not a type, because [`JSON_TEXT_KEY`] rides on the field: it is the difference
+/// between `to_json(struct_get(…))` handing back a document and handing back one inside a string.
+/// What survives is what every field agrees on.
 fn unified_value_field(function: &str, fields: &Fields) -> Result<FieldRef> {
     let dtype = unified_value_type(function, fields)?;
     let mut metadata = fields

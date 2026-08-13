@@ -125,8 +125,6 @@ impl PropRows {
         for (name, value) in overrides {
             self.push(name.clone(), value.clone());
         }
-        // `push` selects what it adds, which is right for a row the user asked for and wrong
-        // for a whole list arriving at once.
         self.selected = None;
     }
 
@@ -439,7 +437,6 @@ mod tests {
         assert_eq!(rows.rows().len(), 1, "and none was made for it");
         assert_eq!(rows.to_map(), before, "the draft is untouched");
 
-        // A name typed with space around it is the same property, so the reveal finds it.
         let padded = rows.push(
             format!("  {}  ", "datafusion.explain.format"),
             String::new(),
@@ -591,9 +588,6 @@ mod tests {
                 .expect("row")
                 .status()
         };
-        // The conflation this type exists to prevent: reserved is recognised *and* refused, so a
-        // surface reading it as "custom" tells the user the engine "may decline" a key it is
-        // certain to.
         assert_eq!(status(reserved), KeyStatus::Reserved);
         assert_eq!(status(custom), KeyStatus::Custom);
         assert!(matches!(status(known), KeyStatus::Known(def) if def.key == BATCH));

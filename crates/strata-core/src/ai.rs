@@ -2,33 +2,20 @@
 //! and what a new chat starts with.
 //!
 //! This module holds the persisted **tokens** and nothing that knows how to talk to a provider.
-//! The knowledge — which `genai` adapter serves a kind, which models of it offer a reasoning
-//! control, what a base URL has to look like — is one table in `strata_agent::assistant::
-//! provider`, next to the `genai` pin it is verified against. The split is forced and it is
-//! also right: `strata-agent` depends on *this* crate (for [`crate::secret`]), so a type
-//! [`crate::config::Settings`] has to name cannot live up there, and a serde token has no
-//! business knowing about an HTTP adapter either way.
+//! That knowledge is one table in `strata_agent::assistant::provider`, next to the `genai` pin it
+//! is verified against — a split that is forced (`strata-agent` depends on this crate) and also
+//! right, since a serde token has no business knowing about an HTTP adapter.
 //!
-//! **A provider entry carries what addresses the provider and nothing about what it is asked.**
-//! No model, no effort: those are a conversation's, picked in the chat pane and seeded from
-//! [`Ai::default_model`] / [`Ai::default_effort`]. That is the def/runtime split applied to the
-//! assistant — the same line `ConnectionDef` draws when a connection names a bucket and a
-//! *table* names the connection.
+//! **A provider entry carries what addresses the provider and nothing about what it is asked.** No
+//! model, no effort: those are a conversation's, seeded from [`Ai::default_model`] /
+//! [`Ai::default_effort`]. The def/runtime split applied to the assistant.
 //!
-//! ## One list, keyed by kind
-//!
-//! **A provider's identity is its kind.** Anthropic is Anthropic; there is no second one,
-//! nothing to name and nothing to rename. So [`Ai::providers`] is keyed by [`ProviderKind`], and
-//! a kind absent from the map is one the user has never enabled — which is the same thing its
-//! toggle says, rather than a second copy of it.
-//!
-//! That includes [`ProviderKind::OpenAiCompatible`], which was briefly a *list* of named,
-//! id-keyed endpoints so that several could exist at once. Withdrawn: gateways exist to
-//! multiplex (`LiteLLM` and its kind put many backends behind one OpenAI-compatible address), so
-//! a second multiplexer here would sit in front of a solved problem while costing a sum-typed
-//! identity that every surface downstream — the composer's picker, a chat's selection, the
-//! transcript — would have had to carry. One row, addressed by its base URL, and the model list
-//! the gateway reports is what distinguishes what is behind it.
+//! **A provider's identity is its kind**, so [`Ai::providers`] is keyed by [`ProviderKind`] and a
+//! kind absent from the map is one the user has never enabled. That includes
+//! [`ProviderKind::OpenAiCompatible`], which was briefly a *list* of named endpoints and was
+//! withdrawn: gateways exist to multiplex, so a second multiplexer here would sit in front of a
+//! solved problem while costing a sum-typed identity every surface downstream would carry. One row,
+//! addressed by its base URL, with the gateway's own model list distinguishing what is behind it.
 
 use std::collections::BTreeMap;
 
@@ -347,9 +334,6 @@ mod tests {
             "something key-shaped reached the config text: {written}"
         );
 
-        // The marker *does* travel — otherwise the key could never be found again. Asked by
-        // serializing the reference itself rather than formatting it: `SecretRef` has no
-        // `Display`, which is the same austerity `Secret` gets and is worth keeping.
         let marker = serde_json::to_string(&key).unwrap();
         let marker = marker.trim_matches('"');
         assert!(
@@ -357,8 +341,6 @@ mod tests {
             "the reference has to travel, or the key is unreachable: {written}"
         );
 
-        // And it comes back as the same reference, which is what makes the round trip a
-        // reference round trip rather than a re-mint.
         let read: Ai = serde_json::from_str(&written).unwrap();
         assert_eq!(read, ai);
         assert_eq!(

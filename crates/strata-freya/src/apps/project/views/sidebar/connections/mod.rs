@@ -1,60 +1,30 @@
 //! The **Connections** sidebar pane (W7 · U3) — the object stores this project reads from, and
 //! whether each one actually resolved.
 //!
-//! Built to the canvas (`Strata.dc.html`, `data-pane="connections"`) and
-//! `docs/CONNECTIONS_SPEC.md` §1.
+//! **One row, one status slot — the catalog entry row's**: badge, name, a trailing status glyph, ⋮.
+//! A row the engine accepted is clean; a row it refused wears the warning triangle, with the
+//! engine's reason on the popover in full. It was a two-line row first, with the status spelled
+//! underneath, and that line is gone because at sidebar width a real refusal ellipsizes to about
+//! four words while costing the bucket half the row.
 //!
-//! ## One row, one status slot — the catalog entry row's
+//! The glyph reports [`ConnRow::reg`] and nothing else — `engine::store::connect` already resolves
+//! the chain and probes the bucket, so a second liveness check here would re-ask a question the
+//! pass has answered. `Reg::Loading` reports nothing until the wait outlasts `PROGRESS_HOLD`, and
+//! the slot holds its last settled verdict across that gap so a ↻ does not blink a triangle off and
+//! back.
 //!
-//! A connection row is a catalog row: badge, name, a trailing status glyph, ⋮. A row the engine
-//! accepted is **clean**; a row it refused wears the warning triangle, and the engine's reason
-//! is on the triangle's popover in full.
+//! **The row is not clickable; its actions are the menu.** A connection is a thing you look at, not
+//! a thing you open, so Edit and Forget come from the ⋮ or a right-click — both building the same
+//! [`connection_menu`], which is what keeps the two triggers from drifting.
 //!
-//! It was a two-line row first, with a green/amber dot and the status spelled underneath. The
-//! second line is gone because it could not do the one job it existed for: at sidebar width
-//! "The AWS profile 'analytics' resolved no credentials: the credential provider was not
-//! enabled" ellipsizes to about four words, which tells the user nothing and costs the bucket
-//! half the row. The whole sentence on hover is worth more than a quarter of it in place — the
-//! same trade the catalog row made, reached the same way.
+//! **Collapsing the pane strands nothing.** This subtree unmounts mid-gesture as a matter of
+//! routine, so it holds no local state and **Forget sets the confirm slot and stops** — the dialog
+//! at the window root owns the mutation, the persist and the `Engine::disconnect`. A task spawned
+//! from a handler here would belong to a scope the collapse tears down before its first poll.
 //!
-//! What the glyph reports is [`ConnRow::reg`] and nothing else: `engine::store::connect` already
-//! resolves the credential chain once *before* registering and throws the answer away, and the
-//! whole reason it does so is to make this one slot mean something. A second liveness check here
-//! would be a request to the bucket answering a question the pass has already answered.
-//!
-//! `Reg::Loading` reports nothing until the wait outlasts `PROGRESS_HOLD`, then spins — and the
-//! slot holds its last settled verdict across that gap, so a ↻ does not blink a triangle off and
-//! back. That hold earns its keep here more than on a table: a table registers by reading local
-//! metadata, while a connection may resolve a chain that reaches SSO, ECS or IMDS over the
-//! network.
-//!
-//! ## The row is not clickable; its actions are the menu
-//!
-//! Per the spec: a connection is a thing you look at, not a thing you open. Edit and Forget come
-//! from the ⋮ (or a right-click), exactly as a catalog row's do — which is also what keeps the
-//! two triggers from drifting, since both build the same [`connection_menu`].
-//!
-//! ## Collapsing the pane strands nothing
-//!
-//! The shell mounts `Sidebar` only while `layout.sidebar` is `Some`, and the rail's
-//! `toggle_pane` collapses on a press of the pane already showing (the VS Code model the spec
-//! asks for) — so this whole subtree unmounts mid-gesture as a matter of routine, and comes
-//! back subscribed to the same store rather than to a copy of it.
-//!
-//! Nothing here owns work that would die with it. The pane holds no local state at all (a row's
-//! status is the store's, not a cached verdict), and **Forget sets the confirm slot and stops**:
-//! the dialog at the window root owns the store mutation, the persist and the
-//! `Engine::disconnect` behind it. That is the same reason the catalog's ↻ raises a request
-//! instead of spawning its own pass — a task spawned from a handler in here belongs to a scope
-//! the collapse tears down before the future is ever polled.
-//!
-//! ## Add and Edit set a slot; the editor window is the project root's
-//!
-//! All three gestures that open the editor — the header's `+`, the empty state's CTA and a row's
-//! *Edit connection* — do one thing: set [`ConnectionRequest`]. `ConnectionLauncher` at the
-//! project root opens the window, because that is where the app-globals, the engine and this
-//! window's log actually live, and a sidebar row has no business holding any of them. Exactly
-//! the split Configure makes, and the same reason Forget only sets the confirm slot.
+//! **Add and Edit set a slot; the editor window is the project root's.** All three gestures set
+//! [`ConnectionRequest`] and `ConnectionLauncher` opens the window, because that is where the
+//! app-globals, the engine and the log live. The split Configure makes.
 
 #[cfg(test)]
 mod interaction;
@@ -160,9 +130,6 @@ impl Component for Connections {
         let theme = get_theme!(&self.theme, ConnectionsThemePreference, "connections");
         let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
 
-        // Cloned out, so the store's read guard drops before any element is built. The `url` is
-        // the row's identity everywhere — the menu's Forget target, and what the engine's answer
-        // was addressed by — while the def carries what the row renders.
         let rows: Vec<(String, ConnectionDef, Status)> = radio
             .read()
             .connections
@@ -178,8 +145,6 @@ impl Component for Connections {
             .expanded()
             .child(
                 ScrollView::new().child(
-                    // Floored at `PANE_BODY_MIN_W`, with the panel clipping the remainder — the
-                    // catalog's and Agents' rule (P5-06).
                     rect()
                         .width(Size::fill())
                         .min_width(Size::px(PANE_BODY_MIN_W))
@@ -228,29 +193,12 @@ impl Component for ConnectionRow {
     }
 
     fn render(&self) -> impl IntoElement {
-        // One `tones()` read per render, its own documented contract.
         let tones = tones();
         let actions = use_connection_actions(tones);
 
-        // **The status slot holds still**, the catalog entry row's rule and mechanism. A settled
-        // answer applies at once; the gap while the pass is out keeps whatever the slot last
-        // showed, for `PROGRESS_HOLD`. Without it a ↻ blinks a refused row's triangle off and
-        // back, and the empty slot in between reads as "connected" — a claim the row cannot make
-        // while it has no answer.
-        //
-        // The hold matters more here than on a table. A table registers by reading local
-        // metadata; a connection resolves a credential chain that may reach SSO, ECS or IMDS
-        // over the network, so this is the slowest answer in the pass and the one most worth
-        // spinning about once it outlasts the hold.
         let waiting = self.status == Status::Loading;
-        // **Whether, not why.** The reason used to be cloned out here and hung on the tooltip;
-        // now the tooltip is [`REFUSED`] and only the fact is read, so carrying the string would
-        // be a clone of the engine's whole sentence on every render of every failed row — and a
-        // full string compare in the `use_side_effect_with_deps` below, where a bool does.
         let refused = matches!(self.status, Status::Refused(_));
 
-        // Whether the wait has outlasted the hold. Re-armed on every entry into and exit from
-        // the wait, so a re-scan of a row that was already waiting does not blink its spinner.
         let waited = use_state(|| false);
         let pending = use_state(|| None::<TaskHandle>);
         use_side_effect_with_deps(&waiting, move |waiting| {
@@ -268,7 +216,6 @@ impl Component for ConnectionRow {
             }
         });
 
-        // The verdict to keep showing through the gap: the last one that actually settled.
         let held = use_state(|| false);
         use_side_effect_with_deps(&(waiting, refused), move |(waiting, refused)| {
             if !waiting {
@@ -277,16 +224,6 @@ impl Component for ConnectionRow {
             }
         });
 
-        // One slot, at most one glyph in it, with the words only on hover — and a settled,
-        // connected row is clean. The status *text* is deliberately gone: it was the engine's
-        // reason ellipsized to nothing in a sidebar-width row, which said strictly less than the
-        // triangle does and cost the bucket half its width. Each glyph declares its message as
-        // an **a11y label** too, so the explanation is not mouse-only.
-        //
-        // The **reason** is gone from the tooltip for the same reason the text went from the row:
-        // it did not fit, and a diagnosis clipped mid-clause is worse than none, because the
-        // clause that survives reads like the whole answer. So this slot says *that* the
-        // connection failed and where the words are; see [`REFUSED`].
         let status = match (waiting && waited(), if waiting { held() } else { refused }) {
             (true, _) => Some(
                 tip(CONNECTING).child(CircularLoader::new().size(STATUS_DOT).a11y_alt(CONNECTING)),
@@ -303,8 +240,6 @@ impl Component for ConnectionRow {
             (false, false) => None,
         };
 
-        // One menu, two triggers (right-click the row, or press its ⋮) — a fresh snapshot each
-        // time it opens, like the catalog's.
         let build_menu = {
             let url = self.url.clone();
             move || connection_menu(&actions, url.clone())
@@ -314,22 +249,14 @@ impl Component for ConnectionRow {
         SidebarRow::new()
             .height(ROW_HEIGHT)
             .padding(Gaps::new(0., SP_2, 0., SP_3))
-            // No `on_press`: the row is not clickable (spec §1 — Edit is menu-only), which is
-            // also what leaves the whole row free as the context-menu surface.
             .on_context_menu(move |_: Event<PressEventData>| {
                 ContextMenu::open(menu_for_row());
             })
             .child(
-                // `Display`, not a label function here: the Configure window's connection
-                // picker (W7 · 04) has to name providers the same way, and the badge is only
-                // the first surface to ask. `S3` / `GCS` / `HTTP` — the product's name, never
-                // `Provider::scheme`'s URL word.
                 Badge::tag(self.def.provider.to_string(), self.theme.provider_color)
                     .outlined()
                     .height(16.),
             )
-            // The bucket absorbs the slack and truncates, so the status run and the ⋮ stay
-            // visible however long it is named — the catalog entry row's arrangement exactly.
             .child(
                 MonoValue::new(self.def.address.clone())
                     .color(self.theme.bucket_color)
@@ -455,10 +382,6 @@ impl Component for ConnectionsHint {
             ConnectionsThemePreference,
             "connections"
         );
-        // What a connection is, and the one thing about it a user is most likely to get wrong.
-        // Deliberately **not** "the Configure window picks one": that control is Connections
-        // 04's and is not in the build, so the sentence would send the reader to a surface that
-        // does not exist. Add it back with the control.
         TooltipContainer::new(Tooltip::new_text(
             "Object stores this project reads from - s3://, gs://, http(s)://. Credentials \
              resolve from this machine's own configuration; Strata never stores a key.",
@@ -517,8 +440,6 @@ impl Component for Empty {
         let editor = use_consume::<ConnectionRequest>();
         rect()
             .width(Size::fill())
-            // The pane returns this *instead of* its scrolling body, so it carries the same
-            // floor itself (P5-06).
             .min_width(Size::px(PANE_BODY_MIN_W))
             .vertical()
             .cross_align(Alignment::Center)
@@ -548,8 +469,6 @@ impl Component for Empty {
                 .wrap()
                 .align(TextAlign::Center),
             )
-            // The canvas's primary call to action — the header's `+` by another name, and the
-            // one the reader is actually looking at while this state is on screen.
             .child(
                 Button::new()
                     .on_press(move |_: Event<PressEventData>| {

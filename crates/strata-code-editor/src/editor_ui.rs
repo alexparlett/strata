@@ -163,10 +163,6 @@ impl CodeEditor {
 }
 
 impl Component for CodeEditor {
-    // The editor's whole surface: the resolved type metrics, the completion popup's state and
-    // measurement plumbing, the pointer/key handling, and the gutter + lines tree. Vendored from
-    // upstream and kept close to it on purpose, so carving it up here would be divergence for a
-    // line count rather than for a reader.
     #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let CodeEditor {
@@ -198,15 +194,12 @@ impl Component for CodeEditor {
             || { EditorSyntaxTheme::light().into() }
         );
 
-        // The effective type: the `code_editor` theme's, unless the builder overrode it.
         let font_size = font_size.unwrap_or(theme.font_size);
         let font_weight = font_weight.unwrap_or(theme.font_weight);
         let font_family: Cow<'static, str> =
             font_family.unwrap_or_else(|| Cow::Owned(theme.font_family.clone()));
         let line_height = line_height.unwrap_or(theme.line_height);
 
-        // Seed the metrics with the resolved type at mount — the editor owns its measurement
-        // (callers don't know the theme's font). Edits re-measure through `process`.
         use_hook({
             let mut editor = editor.clone();
             let font_family = font_family.clone();
@@ -215,22 +208,12 @@ impl Component for CodeEditor {
             }
         });
 
-        // Completion popup state (created before the scroll controller so its
-        // on-scroll callback can close the popup — a wheel/scrollbar move detaches
-        // the anchor from the text, and closing is the predictable answer).
         let completion = use_state(CompletionState::default);
-        // Measurement plumbing: the editor's own window-space rect (anchor origin),
-        // the popup's rect (outside-press detection), and each row's rect
-        // (keyboard scroll-into-view). torin re-emits `Sized` on scroll, so these
-        // stay fresh without any manual bookkeeping.
         let editor_area = use_state(|| None::<Area>);
         let popup_area = use_state(|| None::<Area>);
         let row_areas = use_state(Vec::<Option<Area>>::new);
         let popup_scroll = use_scroll_controller(ScrollConfig::default);
 
-        // Keyboard navigation reveals the selected row: keyed on the *index* memo —
-        // never the row areas themselves (scroll re-emits them; peeking avoids the
-        // loop, exactly the tab-strip idiom).
         let selected_index = use_memo(move || completion.read().open.as_ref().map(|o| o.selected));
         use_side_effect({
             let mut popup_scroll = popup_scroll;
@@ -286,14 +269,8 @@ impl Component for CodeEditor {
         let line_height = (font_size * line_height).floor();
         let lines_len = editor_data.metrics.syntax_blocks.len();
 
-        // The editor's viewport size — the flip/clamp bounds for the hover popup.
         let viewport = use_state(|| (0.0f32, 0.0f32));
 
-        // The diagnostics hover popup: only while the pointer sits on a decorated
-        // span (`hover`, maintained by the per-line pointer handlers), showing every
-        // diagnostic covering that spot. Pointer off the span / out of the editor /
-        // a new validation pass → gone. Opens bottom-right of the pointer; flips
-        // above near the bottom edge and to the pointer's left near the right edge.
         let hover = editor_data.hover.clone();
         let hover_msgs: Vec<(DecorationSeverity, String)> = hover
             .as_ref()
@@ -306,14 +283,6 @@ impl Component for CodeEditor {
                     .collect()
             })
             .unwrap_or_default();
-        // Built eagerly (the scroll-view closure below consumes `theme`). Absolute
-        // offsets resolve against the parent's *inner* (padded) area — the same
-        // origin the line rows stack from — so coordinates are line offset + the
-        // current scrolls, no padding term. Flip/clamp works off estimated panel
-        // metrics — layout hasn't run yet, and a few px of slack is invisible at
-        // tooltip scale.
-        // Suppressed while the completion popup is open (design rule — the two
-        // overlays would collide at the caret line).
         let diagnostics_panel: Option<Element> = hover
             .filter(|_| !hover_msgs.is_empty() && completion.read().open.is_none())
             .map(|h| {
@@ -326,8 +295,7 @@ impl Component for CodeEditor {
                 } else {
                     PANEL_MAX_W
                 };
-                let text_w_cap = panel_w_cap - 46.0; // dot + spacing + padding + border
-                // Estimated wrapped size (~6.5px per char at 12px UI type).
+                let text_w_cap = panel_w_cap - 46.0;
                 let (mut est_w, mut est_h) = (0.0f32, 14.0f32);
                 for (_, message) in &hover_msgs {
                     let text_w = message.chars().count() as f32 * 6.5;
@@ -388,10 +356,6 @@ impl Component for CodeEditor {
                     .into_element()
             });
 
-        // The completion popup — 300×≤224 with 30px rows (the committed design),
-        // anchored at the **word start** so it never slides while the word's tail is
-        // typed. Overlay layer + global position: escapes the editor pane and paints
-        // above the results split; flip-up + horizontal clamp against the window.
         let completion_popup: Option<Element> = completion.read().open.as_ref().map(|open| {
             const POPUP_W: f32 = 480.0;
             const MAX_H: f32 = 224.0;
@@ -404,8 +368,6 @@ impl Component for CodeEditor {
             let origin = (*editor_area.read())
                 .map(|a| (a.min_x(), a.min_y()))
                 .unwrap_or((0.0, 0.0));
-            // The root rect pads 12px vertically; local line math is relative to the
-            // padded inner area, so add it back for window space.
             let local_x = editor_data.scrolls.0 as f32
                 + gutter_offset
                 + open.anchor_col_chars as f32 * char_width;
@@ -427,11 +389,9 @@ impl Component for CodeEditor {
             let rows = open.items.iter().enumerate().map(|(i, item)| {
                 let kind_color = theme.completion_kind(item.kind);
                 let mut chip_tint = kind_color;
-                chip_tint = chip_tint.with_a(36); // ~14% — the design's glyph-chip tint
+                chip_tint = chip_tint.with_a(36);
                 rect()
                     .horizontal()
-                    // Flex content so the spacer below actually expands — without it
-                    // the detail column collapses onto the label.
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
                     .width(TorinSize::fill())
@@ -502,8 +462,6 @@ impl Component for CodeEditor {
                             .max_width(TorinSize::px(200.)),
                     )
                     .child(rect().width(TorinSize::flex(1.)))
-                    // Capped + single-line so a long signature can't collide with the
-                    // name — a guaranteed gap between them.
                     .maybe_child(item.detail.clone().map(|detail| {
                         label()
                             .text(detail)
@@ -567,13 +525,6 @@ impl Component for CodeEditor {
                 let key = e.key.clone();
                 let modifiers = e.modifiers;
 
-                // ---- completion, part 1: claim keys while the popup is open + the
-                // manual trigger. Runs before the app's pre-key gate and before any
-                // editor processing; `prevent_default` also cancels the derived
-                // global events (Esc must not cancel a running query, Enter must
-                // not fire ⌘↵-adjacent bindings), and returning here means the
-                // editor never sees the key (no newline on accept, no indent on
-                // Tab, no caret move on ↑/↓).
                 if let Some(provider) = &on_completions {
                     let plain = !modifiers
                         .intersects(Modifiers::META | Modifiers::CONTROL | Modifiers::ALT);
@@ -591,8 +542,6 @@ impl Component for CodeEditor {
                                 completion.write().step(-1);
                                 return;
                             }
-                            // Accept only unmodified — a chorded Enter (⌘↵ Run)
-                            // belongs to the app's keymap, popup or no popup.
                             Key::Named(NamedKey::Enter | NamedKey::Tab) if plain => {
                                 e.prevent_default();
                                 e.stop_propagation();
@@ -613,9 +562,6 @@ impl Component for CodeEditor {
                             _ => {}
                         }
                     }
-                    // ⌃Space / ⌘Space — by physical code, so keyboard layouts can't
-                    // hide it. (⌘Space usually belongs to Spotlight; it works where
-                    // the user has remapped that.)
                     if e.code == Code::Space
                         && modifiers.intersects(Modifiers::META | Modifiers::CONTROL)
                     {
@@ -645,7 +591,7 @@ impl Component for CodeEditor {
                 editor.write_if(|mut editor| {
                     let lines_jump = (line_height * LINES_JUMP_ALT as f32).ceil() as i32;
                     let min_height = -(lines_len as f32 * line_height) as i32;
-                    let max_height = 0; // TODO, this should be the height of the viewport
+                    let max_height = 0;
                     let current_scroll = editor.scrolls.1;
 
                     let events = match &key {
@@ -694,9 +640,6 @@ impl Component for CodeEditor {
                     changed
                 });
 
-                // ---- completion, part 2: react to what the key did — in the same
-                // frame, synchronously (the provider is a pure in-process function;
-                // there is nothing to debounce and nothing that can arrive stale).
                 if let Some(provider) = &on_completions {
                     let (rev_after, cursor_after) = {
                         let d = editor.peek();
@@ -704,10 +647,6 @@ impl Component for CodeEditor {
                     };
                     let was_open = completion.peek().open.is_some();
                     if rev_after != rev_before {
-                        // What the key means for the popup is the trigger table's
-                        // call; what the new position *offers* (including nothing —
-                        // mid-literal `1.`, strings, comments) is entirely the
-                        // provider's. The editor makes no grammar judgments.
                         match trigger_after_edit(&key, modifiers, was_open) {
                             TriggerDecision::Recompute => recompute_completion(
                                 &editor,
@@ -723,8 +662,6 @@ impl Component for CodeEditor {
                             TriggerDecision::None => {}
                         }
                     } else if was_open && cursor_after != cursor_before {
-                        // Caret-only move (←/→, Home/End): refilter while it stays
-                        // within the anchor word, close the moment it leaves.
                         if caret_within_anchor(&editor, &completion) {
                             recompute_completion(
                                 &editor,
@@ -747,8 +684,6 @@ impl Component for CodeEditor {
             let font_family = font_family.clone();
             let mut completion = completion;
             move |e: Event<PointerEventData>| {
-                // A press anywhere but the popup dismisses it. A press *on* a row
-                // accepted already — non-global handlers run before globals.
                 if completion.peek().open.is_some() {
                     let p = e.global_location();
                     let inside = popup_area
@@ -769,8 +704,6 @@ impl Component for CodeEditor {
             }
         };
 
-        // Leaving the editor entirely must drop the hover popup — the per-line move
-        // handlers only fire while the pointer is still over some line.
         let on_pointer_leave = {
             let mut editor = editor.clone();
             move |_: Event<PointerEventData>| {
@@ -796,7 +729,6 @@ impl Component for CodeEditor {
                 let mut editor_area = editor_area;
                 move |e: Event<SizedEventData>| {
                     viewport.set((e.area.size.width, e.area.size.height));
-                    // Window-space origin for the completion popup's global position.
                     editor_area.set(Some(e.area));
                 }
             })
@@ -828,12 +760,10 @@ impl Component for CodeEditor {
     }
 }
 
-/// Snapshot the buffer + caret, run the provider, and open/refresh the popup from
-/// the result — synchronously, in the caller's frame. An empty result closes it.
-/// Selection resets to the top on every refilter (predictable; the VS Code policy).
-/// `fresh_only` opens only when the provider reports an empty replace span
-/// (`caret..caret` — a fresh position with nothing typed): the accept-chain's
-/// gate, derived from the provider's own answer, no grammar sniffing here.
+/// Snapshot the buffer + caret, run the provider, and open/refresh the popup from the result —
+/// synchronously, in the caller's frame. An empty result closes it, and selection resets to the top
+/// on every refilter (the VS Code policy). `fresh_only` opens only when the provider reports an
+/// empty replace span: the accept-chain's gate, derived from the provider's own answer.
 fn recompute_completion(
     editor: &Writable<CodeEditorData>,
     completion: &mut State<CompletionState>,
@@ -852,8 +782,6 @@ fn recompute_completion(
         caret_byte,
         manual,
     });
-    // Provider invariant: every item in one response shares the same replace span
-    // (the partial word under the caret).
     debug_assert!(
         items.windows(2).all(|w| w[0].replace == w[1].replace),
         "completion items must share one replace span"
@@ -887,14 +815,10 @@ fn recompute_completion(
     completion.write().open = open;
 }
 
-/// Apply the selected candidate: replace its byte span (converted to the editor's
-/// UTF-16 space) with the insert text — one undo step, caret at the insert's end —
-/// then close and **re-ask the provider**. If the caret landed at a fresh position
-/// (empty replace span — after `FROM `, inside `sum(`), the popup chains straight
-/// into the next offer (the DataGrip flow); if it landed at a word end (a plain
-/// identifier accept) or somewhere the provider offers nothing (`LIMIT `, `AS `),
-/// it stays closed. The gate is the provider's own answer — the editor never
-/// inspects the inserted text.
+/// Apply the selected candidate: replace its byte span (converted to the editor's UTF-16 space)
+/// with the insert text — one undo step, caret at the insert's end — then close and **re-ask the
+/// provider**, so a caret at a fresh position chains into the next offer. The gate is the
+/// provider's own answer; the editor never inspects the inserted text.
 fn accept_completion(
     editor: &mut Writable<CodeEditorData>,
     completion: &mut State<CompletionState>,

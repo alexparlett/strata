@@ -5,33 +5,24 @@
 //! `row` is how one result looks; and this file is the surface — the always-mounted ⌘K node, the
 //! overlay card it raises, and the `command_palette` theme both wear.
 //!
-//! ## The chord node and the overlay are different nodes
+//! **The chord node and the overlay are different nodes.** [`CommandPalette`] is mounted for the
+//! project's whole life and draws one thing when closed: the rect carrying the ⌘K listener. Only
+//! [`PaletteOverlay`] is conditional, which is what resets the query and the active row per open by
+//! construction. Two nodes rather than one because an element holds one handler per event name, and
+//! the overlay needs a `GlobalKeyDown` barrier of its own.
 //!
-//! [`CommandPalette`] is mounted for the project's whole life and draws **one** thing when closed:
-//! the rect carrying the ⌘K listener. Only [`PaletteOverlay`] is conditional, which is what makes
-//! the query and the active row reset per open by construction rather than by remembering to clear
-//! them. They are two nodes rather than one because an element holds one handler per event name
-//! (AGENTS.md §3), and the overlay needs a `GlobalKeyDown` barrier of its own.
+//! Nothing on the always-mounted node subscribes to a store: a palette that re-rendered the project
+//! root on every keystroke in every tab would be an expensive way to draw nothing.
 //!
-//! Nothing on the always-mounted node subscribes to a store — [`use_palette_ctx`] hands out
-//! stations, and the `Radio` beside them only listens when it is `read()` in a render, which
-//! nothing here does. A palette that re-rendered the project root on every keystroke in every tab
-//! would be an expensive way to draw nothing.
-//!
-//! ## The search field owns the keyboard
-//!
-//! Freya's `Input` `stop_propagation`s **and** `prevent_default`s every key but Enter/Escape/Tab,
-//! and `prevent_default` on `KeyDown` cancels the derived `GlobalKeyDown` — so with the field
-//! focused a global listener sees nothing. That is not a problem to route around, it is what makes
-//! the palette a genuine modal barrier while it is open (better than `Dialog`, whose own docs note
-//! it is not focus containment). But it means ↑↓, Enter, Escape and ⌘K have to be handled *in*
-//! `on_pre_key_down`, before the field processes them — see [`PaletteKey`].
+//! **The search field owns the keyboard.** Freya's `Input` `stop_propagation`s *and*
+//! `prevent_default`s every key but Enter/Escape/Tab, and `prevent_default` on `KeyDown` cancels
+//! the derived `GlobalKeyDown` — which is what makes the palette a genuine modal barrier, but also
+//! means ↑↓, Enter, Escape and ⌘K have to be handled in `on_pre_key_down` (see [`PaletteKey`]).
 //!
 //! **Swallowing a chord is not the default; it has to be done.** `freya-edit` inserts a
-//! `Key::Character` whatever modifiers are held — only the six `EditBindings` chords are consumed
-//! ahead of it — so a barrier that merely lets unrecognised keys through would have ⌘S type an
-//! "s" into the query rather than doing nothing. [`PaletteKey::Inert`] is what closes that, and
-//! it is also why editing chords are deliberately *not* swallowed: ⌘A and ⌘V belong to the field.
+//! `Key::Character` whatever modifiers are held, so a barrier that let unrecognised keys through
+//! would have ⌘S type an "s" into the query. [`PaletteKey::Inert`] closes that — and it is why
+//! editing chords are deliberately *not* swallowed: ⌘A and ⌘V belong to the field.
 
 mod model;
 mod row;
@@ -61,11 +52,6 @@ use crate::components::typography::{InputTypography, Meta, MonoValue};
 use crate::keymap::{chord_from_event, on_command};
 use crate::state::{use_config, use_config_station, ConfigChan};
 
-// `%[no_ext]`, unlike the other surface themes here: the default arm generates a
-// `…ThemePartialExt` impl **for a struct of the same name**, expecting it to carry a `theme`
-// field for per-instance overrides. There is exactly one palette and nothing overrides its dress,
-// so it skips that the way `type_palette` and `keycap` do — and the component below keeps the
-// name it should have.
 define_theme!(
     %[no_ext]
     %[component]
@@ -146,13 +132,6 @@ impl Component for CommandPalette {
         let config = use_config_station();
         let mut open = self.open;
 
-        // **Acting happens here, not in the overlay** — and that is a correctness requirement,
-        // not tidiness. Running an entry dismisses the palette in the same handler, so a command
-        // that `spawn`s (Save query as view awaits `create_view`) would have its task bound to a
-        // scope Freya is about to tear down, and a scope's tasks are dropped before they are ever
-        // polled. This node is mounted for the project's whole life, so the task outlives the
-        // card. The same reason `close::use_engineless_close` reaches for `spawn_forever` and the
-        // catalog's row menus hand their scan to the window root.
         let ctx = use_palette_ctx();
         let run = EventHandler::new(move |entry: Entry| {
             perform(&ctx, &entry);
@@ -160,9 +139,6 @@ impl Component for CommandPalette {
         });
 
         rect()
-            // ⌘K **toggles** — what `COMMANDS` calls it and what the canvas does. Closing it this
-            // way only reaches here when focus is outside the card; the field's own pre-handler
-            // takes the chord otherwise (module doc).
             .on_global_key_down(on_command(config, Command::CommandPalette, move || {
                 let showing = *open.peek();
                 open.set(!showing);
@@ -190,19 +166,8 @@ impl Component for PaletteOverlay {
     fn render(&self) -> impl IntoElement {
         let theme = palette_theme();
         let config_station = use_config_station();
-        // One subscription for every row's shortcut hint: a rebind while the palette is open
-        // repaints them all, and no row has to subscribe on its own.
         let settings = use_config(ConfigChan::Settings);
 
-        // **The offer is a snapshot**, taken once at mount and filtered per keystroke — the same
-        // trade the catalog's row menus make. Acting on a palette dismisses it, so there is no
-        // window in which a stale row can be pressed. The `Index` carries each entry's searchable
-        // text already lowercased, so a keystroke costs a substring scan and nothing else.
-        //
-        // Behind an `Rc` because `use_hook` **clones its stored value on every render** — and this
-        // one is every column in the project. Without it a keystroke would deep-copy the whole
-        // index, on the thread that draws every window (AGENTS.md §2); with it the per-render cost
-        // is a refcount bump and the only copies made are the few dozen rows that actually matched.
         let project = use_radio_station::<ProjectState, ProjChan>();
         let offer = use_hook(move || Rc::new(Index::new(&project.peek())));
 
@@ -212,23 +177,13 @@ impl Component for PaletteOverlay {
 
         let results = offer.search(&query.read());
         let rows = &results.rows;
-        // Clamp rather than trust: a keystroke can shorten the list under an index that was
-        // valid a frame ago.
         let current = (*active.read()).min(rows.len().saturating_sub(1));
 
-        // `State` is `Copy`, so these stay copyable closures every handler below can take by
-        // value — no `Rc`, and no capture that would freeze at the first render.
         let open = self.open;
         let close = move || {
             let mut open = open;
             open.set(false);
         };
-        // Enter runs whatever ↑↓ left lit; a press runs the row that was pressed. **One path**,
-        // held as an `EventHandler` so the key handler and every row share the same one — and it
-        // only *addresses* the row, handing it to the owner above to act on and dismiss.
-        //
-        // Nothing to run is nothing to do: a query that matched no rows must not dismiss the
-        // palette, or a typo throws the search away instead of letting it be corrected.
         let run = {
             let rows = rows.clone();
             let owner = self.run.clone();
@@ -238,7 +193,6 @@ impl Component for PaletteOverlay {
                 }
             })
         };
-        // The list this steps over is the one built just above — no need to be told its length.
         let len = rows.len();
         let step = move |delta: isize| {
             if len == 0 {
@@ -269,13 +223,10 @@ impl Component for PaletteOverlay {
                         PaletteKey::Down => step(1),
                         PaletteKey::Up => step(-1),
                         PaletteKey::Pick => run.call(current),
-                        // A keystroke re-narrows the list, so the lit row goes back to the top
-                        // — the canvas's `onCmdkInput`.
                         PaletteKey::Typed => {
                             let mut active = active;
                             active.set(0);
                         }
-                        // Neither of these changes the list, so neither moves the lit row.
                         PaletteKey::Caret | PaletteKey::Inert => {}
                     }
                 }),
@@ -284,7 +235,6 @@ impl Component for PaletteOverlay {
             .child(
                 ScrollView::new_controlled(controller)
                     .height(Size::flex(1.))
-                    // ↑↓ move the lit row, never the viewport: the row scrolls itself into view.
                     .scroll_with_arrows(false)
                     .child(match results.is_empty() {
                         true => NoMatches.into_element(),
@@ -297,19 +247,12 @@ impl Component for PaletteOverlay {
                                 let mut active = active;
                                 active.set(i);
                             });
-                            // One walk over the flat rows, dropping in a heading wherever a group
-                            // begins — the same order ↑↓ step in, so `index` *is* the row's place
-                            // in the list without a second counter to keep in step.
                             let settings = settings.read();
                             for (index, entry) in rows.iter().enumerate() {
                                 if let Some(group) = results.heading(index) {
                                     body = body.child(GroupHead { group });
                                 }
                                 body = body.child(Reveal {
-                                    // Keyed on **what the row is**, not where it sits: the list
-                                    // is rebuilt on every keystroke, so an index key would slide
-                                    // one entry's measured area onto whichever entry landed in
-                                    // its slot next.
                                     key: entry.id(),
                                     active: index == current,
                                     controller,
@@ -334,9 +277,6 @@ impl Component for PaletteOverlay {
         rect()
             .layer(Layer::Overlay)
             .position(Position::new_global())
-            // The barrier for the case the card does *not* have focus — the field's own
-            // pre-handler covers the ordinary one (module doc). Esc still closes here, so a
-            // palette can never be left up with no way out but the mouse.
             .on_global_key_down({
                 let station = config_station;
                 move |e: Event<KeyboardEventData>| {
@@ -436,21 +376,13 @@ impl Component for SearchRow {
                         .on_pre_key_down(move |e: Event<KeyboardEventData>| {
                             let chord = chord_from_event(&e);
                             let command = chord.and_then(|c| resolve(&config.peek().settings, &c));
-                            // Both of the palette's own chords go through `resolve` rather than
-                            // being matched literally, so it answers to whatever the user has
-                            // bound — and so this and the overlay's barrier decide the same way.
                             let key = match (command, &e.key) {
                                 (Some(Command::CommandPalette), _) => PaletteKey::Toggle,
                                 (Some(Command::Cancel), _) => PaletteKey::Dismiss,
                                 (_, Key::Named(NamedKey::ArrowDown)) => PaletteKey::Down,
                                 (_, Key::Named(NamedKey::ArrowUp)) => PaletteKey::Up,
                                 (_, Key::Named(NamedKey::Enter)) => PaletteKey::Pick,
-                                // Somebody else's command: swallowed, never typed — see
-                                // `PaletteKey::Inert`. An **editing** chord is exempt, because it
-                                // is the field's own (⌘A selects the query, ⌘V pastes into it).
                                 (Some(cmd), _) if !cmd.is_edit() => PaletteKey::Inert,
-                                // Moving the caret is the field's, and changes no text — so it
-                                // reaches the field but leaves the lit row where it is.
                                 (
                                     _,
                                     Key::Named(
@@ -460,12 +392,6 @@ impl Component for SearchRow {
                                         | NamedKey::End,
                                     ),
                                 ) => PaletteKey::Caret,
-                                // Text the field is about to take: characters, and the two keys
-                                // that delete. Everything else named — Tab, PageUp, a function
-                                // key, and the bare modifiers a chord folds to `None` for — has
-                                // no text in it and must not re-home the lit row (holding Shift
-                                // to type a capital would jump to the top before the character
-                                // arrived).
                                 (
                                     _,
                                     Key::Character(_)
@@ -473,11 +399,8 @@ impl Component for SearchRow {
                                 ) => PaletteKey::Typed,
                                 _ => PaletteKey::Inert,
                             };
-                            // Only the two the field acts on go through to it.
                             let to_field = matches!(key, PaletteKey::Typed | PaletteKey::Caret);
                             on_key.call(key);
-                            // Consumed either way: while the palette is open no chord belongs to
-                            // the window behind it.
                             e.stop_propagation();
                             e.prevent_default();
                             to_field
@@ -562,10 +485,6 @@ struct Footer;
 impl Component for Footer {
     fn render(&self) -> impl IntoElement {
         let theme = palette_theme();
-        // **A known divergence**: the canvas pitches these key glyphs one step brighter than a
-        // row's mono detail (`--c-muted` against `--c-muted2`). They take `sub_color` rather than
-        // earning a field of their own — a legend glyph and a row's second fact are the same
-        // kind of thing, and one step is not worth a token every theme has to author.
         let key = theme.sub_color;
         let legend = |cap: &str, what: &str| {
             rect()
@@ -603,17 +522,11 @@ fn shortcut(entry: &Entry, settings: &Settings) -> Option<String> {
 fn perform(ctx: &PaletteCtx, entry: &Entry) {
     match entry {
         Entry::Action(action) => action.run(ctx),
-        // A table row and a view row both **open the data**, which is what pressing that row in
-        // the sidebar does. (The design prototype opened a view's SQL instead; editing the query
-        // behind a view is a different, more advanced gesture, and it stays where the canvas
-        // itself puts it — the row's own menu.)
         Entry::Table { name, .. } | Entry::View { name, .. } => view_row(&ctx.catalog, name),
         Entry::Query { id, .. } => open_saved_query(&ctx.catalog, *id),
         Entry::Column { col, .. } => {
             let mut selection = ctx.selection;
             selection.set(Some(col.clone()));
-            // Selecting a column is also how the inspector reopens once collapsed — the same
-            // pair the catalog's own column rows write.
             let mut session = ctx.catalog.session;
             session
                 .write_channel(Chan::Layout)

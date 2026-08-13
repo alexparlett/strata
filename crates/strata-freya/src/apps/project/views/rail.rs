@@ -38,14 +38,10 @@ impl ActivityRail {
 
 impl Component for ActivityRail {
     fn render(&self) -> impl IntoElement {
-        // Subscribe on `Chan::Layout` — a collapse / pane switch re-renders the rail's active
-        // dress, but a resize drag (on `Chan::LayoutSize`) does not.
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
         let layout = radio.read().layout;
         let background = use_roles().get(Role::SurfaceBackground);
 
-        // A rail toggle: 40×38, `on` derived from the layout, a press routing to `toggle`
-        // (a fn pointer — `toggle_pane` / `toggle_drawer` for the chosen pane / tab).
         let button =
             move |icon: IconName, title: &str, active: bool, toggle: fn(&mut SessionState)| {
                 ToggleButton::new()
@@ -68,7 +64,6 @@ impl Component for ActivityRail {
             .content(Content::Flex)
             .padding((SP_3, 0.))
             .spacing(SP_1)
-            // Top group — the sidebar's tool panes.
             .child(button(
                 IconName::Database,
                 "Catalog",
@@ -81,9 +76,7 @@ impl Component for ActivityRail {
                 layout.sidebar == Some(SidebarPane::Connections),
                 |s| s.toggle_pane(SidebarPane::Connections),
             ))
-            // Flexible spacer pushes the diagnostics group to the bottom.
             .child(rect().width(Size::px(1.)).height(Size::flex(1.)))
-            // Bottom group — the drawer's diagnostics tabs. Problems wears the error count.
             .child(
                 rect()
                     .width(Size::px(40.))
@@ -140,27 +133,21 @@ impl Component for ProblemsBadge {
         let errors =
             session.read().error_count() + project_error_count(&tables.read(), &faults.read());
         let roles = use_roles();
-        // Semantic: the badge is the app-wide error tone wherever it appears (AGENTS.md §3).
         let (background, color, ring) = (
             tones().error,
             roles.get(Role::TextOnAccent),
             roles.get(Role::SurfaceBackground),
         );
 
-        // Nothing to say: no pill, not an empty one (canvas `sc-if hasProblems`).
         if errors == 0 {
             return rect();
         }
         rect()
-            // Pinned over the button's top-right corner, the way the grid header's resize grip
-            // pins to its cell — an explicit offset, not fill-plus-alignment.
             .position(Position::new_absolute().top(1.).right(1.))
             .min_width(Size::px(BADGE))
             .height(Size::px(BADGE))
-            // A pill, so off the radius scale by design: half the extent (`metrics::pill`).
             .corner_radius(pill(BADGE))
             .background(background)
-            // The canvas's 2px ring, so the pill reads clear of the glyph beneath it.
             .border(
                 Border::new()
                     .width(2.)

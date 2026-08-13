@@ -152,40 +152,29 @@ pub(super) fn continuation_keywords(clause: Clause) -> Vec<&'static str> {
         Clause::Limit | Clause::Offset => {
             v.extend(ladder_after(clause));
         }
-        // `DESCRIBE t` is complete — nothing follows. `EXECUTE p` / `DEALLOCATE p` likewise:
-        // what may follow an `EXECUTE`'s name is its arguments, and no keyword opens those.
         Clause::Describe | Clause::Execute => {}
-        // The object word comes next.
         Clause::Create => {
             v.extend(["TABLE", "EXTERNAL TABLE", "VIEW", "FUNCTION", "OR REPLACE"]);
         }
         Clause::Drop => {
             v.extend(["TABLE", "VIEW", "FUNCTION"]);
         }
-        // The named object's body opens with `AS`.
         Clause::CreateTable | Clause::CreateView | Clause::Prepare => {
             v.push("AS");
         }
-        // One list serves both after-name and after-format — a re-offered `STORED AS`
-        // is the same accepted noise as `LEFT |` (COMPLETION_SPEC §10).
         Clause::CreateExternal => {
             v.extend(["STORED AS", "LOCATION", "PARTITIONED BY", "OPTIONS"]);
         }
-        // No `LANGUAGE`: SQL is the only accepted value and the default.
         Clause::CreateFunction => {
             v.extend(["RETURNS", "RETURN"]);
         }
-        // `DROP TABLE t` is complete — nothing follows.
         Clause::DropTable | Clause::DropView | Clause::DropFunction => {}
-        // After the target; `INSERT |` wanting `INTO` is served by the `INSERT INTO`
-        // lead phrase (COMPLETION_SPEC §10).
         Clause::Insert => {
             v.extend(["SELECT", "VALUES"]);
         }
         Clause::Copy => {
             v.extend(["TO", "STORED AS", "PARTITIONED BY", "OPTIONS"]);
         }
-        // `=` is punctuation and `SET k = v` is complete.
         Clause::SetOption => {}
         Clause::Start | Clause::Restart | Clause::Unknown => {
             v.extend(ladder_after(Clause::Select));
@@ -253,12 +242,10 @@ pub(super) const CORE_KEYWORDS: &[&str] = &[
 /// full single-word `ALL_KEYWORDS` set. Query-only; every word here must be a keyword
 /// we *don't* block below, so the phrase and its parts stay consistent.
 pub(super) const MULTI_WORD: &[&str] = &[
-    // clauses
     "GROUP BY",
     "ORDER BY",
     "PARTITION BY",
     "UNION ALL",
-    // joins (incl. DataFusion's semi/anti/natural — see the SELECT reference)
     "INNER JOIN",
     "LEFT JOIN",
     "RIGHT JOIN",
@@ -272,7 +259,6 @@ pub(super) const MULTI_WORD: &[&str] = &[
     "RIGHT SEMI JOIN",
     "LEFT ANTI JOIN",
     "RIGHT ANTI JOIN",
-    // predicates
     "IS NULL",
     "IS NOT NULL",
     "NOT IN",
@@ -292,7 +278,6 @@ pub(super) const MULTI_WORD: &[&str] = &[
 /// `CREATE` leads `CREATE TABLE` and `CREATE EXTERNAL TABLE` as well as
 /// `CREATE DATABASE`, so the refusal is carried by `DATABASE`/`SCHEMA` alone.
 pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
-    // create / drop / alter surface
     "DATABASE",
     "SCHEMA",
     "ALTER",
@@ -303,14 +288,12 @@ pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
     "TEMPORARY",
     "TEMP",
     "UNLOGGED",
-    // data mutation
     "UPDATE",
     "DELETE",
     "MERGE",
     "UPSERT",
     "OVERWRITE",
     "VACUUM",
-    // transactions / permissions
     "GRANT",
     "REVOKE",
     "COMMIT",
@@ -321,7 +304,6 @@ pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
     "TRANSACTION",
     "LOCK",
     "UNLOCK",
-    // schema objects
     "CONSTRAINT",
     "REFERENCES",
     "INDEX",

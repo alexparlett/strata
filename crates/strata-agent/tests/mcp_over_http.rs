@@ -58,7 +58,6 @@ async fn serve(tag: &str) -> (AgentServer, String) {
         reg: RegState::Ready,
     }]);
 
-    // Port 0: the OS picks, so concurrent test binaries never collide on a fixed one.
     let server = AgentServer::start(0, TOKEN.into(), MockHost::new(vec![project]))
         .expect("the agent server binds");
     let url = format!("http://{}{MCP_PATH}", server.addr());
@@ -73,8 +72,6 @@ async fn a_client_lists_the_tools_and_calls_them() {
     );
     let client = ().serve(transport).await.expect("the client initializes against the server");
 
-    // The whole vocabulary is advertised, and the instructions the handler carries reach the
-    // client's view of the server.
     let mut names: Vec<String> = client
         .list_all_tools()
         .await
@@ -108,7 +105,6 @@ async fn a_client_lists_the_tools_and_calls_them() {
         info.instructions
     );
 
-    // A project-scoped read, over the wire, as structured content.
     let tables = client
         .call_tool(CallToolRequestParams::new("list_tables"))
         .await
@@ -117,7 +113,6 @@ async fn a_client_lists_the_tools_and_calls_them() {
     let structured = tables.structured_content.expect("structured content");
     assert_eq!(structured["entries"][0]["name"], "people");
 
-    // Open a query session, run in it, and read the second page back — the full agent loop.
     let opened = client
         .call_tool(CallToolRequestParams::new("open_query_session"))
         .await
@@ -161,7 +156,6 @@ async fn a_client_lists_the_tools_and_calls_them() {
         .expect("structured content");
     assert_eq!(page["rows"], json!([["2"]]));
 
-    // A refusal is a tool result the model can read and recover from, not a protocol fault.
     let refused = client
         .call_tool(
             CallToolRequestParams::new("run").with_arguments(
@@ -218,8 +212,6 @@ async fn a_request_without_the_token_is_401_before_any_tool_runs() {
         .unwrap();
     assert_eq!(wrong.status(), 401);
 
-    // And a path that is not the MCP endpoint is a 404 even with the token — the auth check
-    // comes first, so this proves the routing rather than the guard.
     let elsewhere = http
         .get(format!("http://{}/", url.split('/').nth(2).unwrap()))
         .header("authorization", format!("Bearer {TOKEN}"))
@@ -276,8 +268,6 @@ async fn discover_call(
         .await
         .unwrap();
 
-    // A success streams back as SSE and a transport-level refusal as plain JSON, so take
-    // whichever frame carries the JSON-RPC envelope.
     let frame: serde_json::Value = serde_json::from_str(&text)
         .ok()
         .or_else(|| {
@@ -318,7 +308,6 @@ async fn a_sessionless_client_keeps_one_agent_across_requests() {
         .expect("a query-session handle")
         .to_string();
 
-    // The call that used to fail. A fresh agent per request would answer not-found here.
     let ran = discover_call(
         &http,
         &url,
@@ -332,7 +321,6 @@ async fn a_sessionless_client_keeps_one_agent_across_requests() {
     assert_eq!(ran["structuredContent"]["status"], "ok");
     assert_eq!(ran["structuredContent"]["total"], 2);
 
-    // And the result is still this agent's to page, three requests later.
     let page = discover_call(
         &http,
         &url,
@@ -345,7 +333,6 @@ async fn a_sessionless_client_keeps_one_agent_across_requests() {
     assert_ne!(page["isError"], json!(true), "{page}");
     assert_eq!(page["structuredContent"]["rows"], json!([["2"]]));
 
-    // The session is listed as its own, which is the same fact from the other side.
     let listed = discover_call(&http, &url, 4, "list_query_sessions", json!({}), claude).await;
     assert_eq!(
         listed["structuredContent"]["query_sessions"][0]["query_session"],
@@ -381,9 +368,6 @@ async fn sessionless_clients_are_told_apart_by_what_they_say_they_are() {
         .unwrap()
         .to_string();
 
-    // A different client that *did* introduce itself gets its own agent: it sees nothing, and
-    // reaching for the handle directly is the plain not-found a made-up one gets — never "that
-    // belongs to someone else", which would confirm the session exists.
     let other = Some(("some-other-client", "9.9"));
     let listed = discover_call(&http, &url, 2, "list_query_sessions", json!({}), other).await;
     assert_eq!(
@@ -402,11 +386,6 @@ async fn sessionless_clients_are_told_apart_by_what_they_say_they_are() {
     .await;
     assert_eq!(reached["isError"], json!(true), "{reached}");
 
-    // **A client that names itself nothing is refused the session-scoped tools outright**,
-    // rather than pooled into a shared anonymous agent. There is nothing to tell two such
-    // clients apart by, and one AgentId behind two processes is the whole of both isolation
-    // checks defeated — each would list, page and close the other's sessions. The refusal
-    // names the fix, and the read-only tools keep working.
     for tool in ["list_query_sessions", "open_query_session"] {
         let anonymous = discover_call(&http, &url, 4, tool, json!({}), None).await;
         assert_eq!(anonymous["isError"], json!(true), "{tool}: {anonymous}");
@@ -420,7 +399,6 @@ async fn sessionless_clients_are_told_apart_by_what_they_say_they_are() {
         "the read-only tools still answer an un-introduced client: {catalog}"
     );
 
-    // The client that owns it still does.
     let mine = discover_call(
         &http,
         &url,
@@ -444,7 +422,6 @@ async fn dropping_the_server_stops_listening() {
     let addr = server.addr();
     drop(server);
 
-    // The runtime shuts down in the background, so give the listener a moment to go.
     for _ in 0..50 {
         if TcpStream::connect(addr).await.is_err() {
             return;

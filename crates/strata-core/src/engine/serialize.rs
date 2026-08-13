@@ -4,22 +4,19 @@
 //! uniformly:
 //!
 //! - **CSV/TSV** → `arrow-csv`'s writer.
-//! - **JSON** → [`PrettyJsonWriter`]: arrow-json's `ArrayWriter` encodes (nested
-//!   `struct`/`list`/`map` stay real JSON), then the whole document is pretty-printed at once by
-//!   `serde_json` — fully indented, structurally valid by construction.
-//! - **Markdown** → [`MarkdownWriter`] here (buffers rows, pads + right-aligns numerics on
-//!   `close`), same trait as the others.
+//! - **JSON** → [`PrettyJsonWriter`]: arrow-json's `ArrayWriter` encodes, then the whole document
+//!   is pretty-printed at once by `serde_json` — structurally valid by construction.
+//! - **Markdown** → [`MarkdownWriter`] here, buffering rows and right-aligning numerics on `close`.
 //!
-//! CSV/TSV/Markdown can't represent nesting, so nested columns are first flattened to compact
-//! JSON strings ([`flatten_nested`]) — which round-trips, unlike an Arrow debug blob.
+//! CSV/TSV/Markdown cannot represent nesting, so nested columns flatten to compact JSON strings
+//! ([`flatten_nested`]), which round-trips unlike an Arrow debug blob.
 //!
-//! The **views** onto a nested value read a different path: [`cell_preview_json`] is *bounded*
-//! (P2-24), and bounded at the encoder rather than afterwards — a whole-value serialization is
-//! what froze the record view for a second or two on a document-shaped row. See its docs.
+//! The **views** onto a nested value read a different path: [`cell_preview_json`] is bounded at the
+//! encoder rather than afterwards, because a whole-value serialization is what froze the record
+//! view on a document-shaped row.
 //!
-//! This module produces **text**; the clipboard side effect lives with the UI (the Freya app
-//! commits via `freya::clipboard`, the same per-window provider its text inputs use), so callers
-//! hand `write_batch` / `write_selection` any `io::Write` sink — typically a `Vec<u8>`.
+//! This module produces **text**; the clipboard side effect lives with the UI, so callers hand
+//! `write_batch` / `write_selection` any `io::Write` sink.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -75,8 +72,8 @@ impl<W: Write> RecordBatchWriter for PrettyJsonWriter<W> {
 
     fn close(self) -> Result<(), ArrowError> {
         let PrettyJsonWriter { sink, mut buf } = self;
-        buf.finish()?; // close the JSON array
-        let bytes = buf.into_inner(); // the complete compact document
+        buf.finish()?;
+        let bytes = buf.into_inner();
         let value: Value =
             from_slice(&bytes).map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
         to_writer_pretty(sink, &value).map_err(|e| ArrowError::ExternalError(Box::new(e)))
@@ -92,9 +89,6 @@ pub fn write_batch<W: Write>(
     w: W,
 ) -> Result<(), ArrowError> {
     match fmt {
-        // JSON keeps nesting — arrow-json emits real nested objects/arrays. [`PrettyJsonWriter`]
-        // reuses arrow's `ArrayWriter` for the encoding and pretty-prints the whole document on
-        // close; types/decimals stay exact (arrow renders them, serde_json only reformats).
         TextFormat::Json => drive(PrettyJsonWriter::new(w), batch),
         TextFormat::Tsv | TextFormat::Csv => {
             let flat = flatten_nested(batch)?;
@@ -171,7 +165,7 @@ const PREVIEW_DEPTH: usize = 3;
 /// A **bounded** pretty-JSON view of one cell's value (column `col`, row `row` of `batch`) — the
 /// record view's nested (`struct`/`list`/`map`) blocks and the nested-cell modal.
 ///
-/// The bound is the point (P2-24). A row of `config.json` holds 241,425 nested fields across 19
+/// The bound is the point. A row of the reference fixture holds 241,425 nested fields across 19
 /// struct columns; serializing one whole took a second or two, and the surfaces reading it show
 /// about ten lines. So this **never materializes the value**: it walks the Arrow arrays to
 /// [`PREVIEW_DEPTH`] levels, **samples** each container's entries ([`items_at`]) and counts the
@@ -191,22 +185,17 @@ const PREVIEW_DEPTH: usize = 3;
 ///
 /// The shape of that output is the whole design, and two earlier versions got it wrong. It
 /// collapses the **value**, never its parent — `"contentBlocks": { … 19311 keys … }` discards the
-/// level the reader is on, which is why entries are sampled rather than the container counted (the
-/// same call IntelliJ makes when it folds a value and still lists its siblings). And the depth is
-/// **fixed**: chasing the deepest level that fits the budget walks five levels down one branch of a
-/// wide document, because on such a document the deepest uniform level that fits is a narrow one.
-/// Cost is the budget, not the document.
+/// level the reader is on — which is why entries are sampled rather than the container counted.
+/// And the depth is **fixed**: chasing the deepest level that fits the budget walks five levels
+/// down one branch of a wide document. Cost is the budget, not the document.
 ///
-/// Leaves are encoded by arrow-json's own [`make_encoder`], so a number, decimal or timestamp
-/// reads exactly as the copy path renders it; strings and binaries are clipped first, since they
-/// are the one leaf that can be arbitrarily large. Nulls are **explicit** (`"k": null`), matching
-/// [`row_pretty_json`] rather than arrow-json's eliding default — a preview is for reading, and a
-/// field that is missing and a field that is null are different facts.
+/// Leaves go through arrow-json's own [`make_encoder`], so a number or timestamp reads exactly as
+/// the copy path renders it; strings and binaries are clipped first. Nulls are **explicit**, since
+/// a field that is missing and a field that is null are different facts.
 ///
-/// `None` when the cell is null or out of range, or when the value holds a type arrow-json cannot
-/// encode (a union — the engine renders those as text upstream, `json_unions_as_text`): the caller
-/// shows the display cell's text instead. The **complete** value stays reachable through the
-/// grid's Copy as JSON, which is not on a render path.
+/// `None` when the cell is null or out of range, or holds a type arrow-json cannot encode (a union,
+/// which the engine renders as text upstream): the caller shows the display cell's text instead.
+/// The complete value stays reachable through the grid's Copy as JSON, which is not a render path.
 pub fn cell_preview_json(batch: &RecordBatch, col: usize, row: usize) -> Option<String> {
     let field = batch.schema_ref().fields().get(col)?.clone();
     let array = batch.columns().get(col)?;
@@ -232,9 +221,7 @@ fn preview_json(field: &FieldRef, array: &dyn Array, idx: usize, budget: usize) 
         };
         match p.value(field, array, idx, 0) {
             Ok(()) => return Some(p.out),
-            // Too wide at this depth; try one level shallower.
             Err(Halt::Budget) => {}
-            // A type arrow-json refuses; the unbounded path fails on it too.
             Err(Halt::Unsupported) => return None,
         }
     }
@@ -314,8 +301,6 @@ impl Preview {
         }
         match array.data_type() {
             DataType::Struct(fields) => {
-                // Empty before the depth limit: an empty container *is* its own summary, and
-                // `{ … 0 keys … }` is a count of nothing standing where `{}` belongs.
                 if fields.is_empty() {
                     return self.push("{}");
                 }
@@ -340,8 +325,6 @@ impl Preview {
                 self.indent(depth)?;
                 self.push("}")
             }
-            // Every list flavour narrows to "the items at this index" — an O(1) Arrow slice, so
-            // a 5171-item list costs nothing to *measure* and only its rendered items to show.
             DataType::List(f) => self.items(f, &array.as_list::<i32>().value(idx), depth),
             DataType::LargeList(f) => self.items(f, &array.as_list::<i64>().value(idx), depth),
             DataType::ListView(f) => self.items(f, &array.as_list_view::<i32>().value(idx), depth),
@@ -352,8 +335,6 @@ impl Preview {
                 self.items(f, &array.as_fixed_size_list().value(idx), depth)
             }
             DataType::Map(entries, _) => self.map(entries, array.as_map(), idx, depth),
-            // Everything else is a leaf — including a dictionary or run-end encoding, whose
-            // values our readers only ever produce as scalars.
             _ => self.leaf(field, array, idx),
         }
     }
@@ -442,12 +423,6 @@ impl Preview {
         }
         let options = EncoderOptions::default();
         let mut encoder = make_encoder(field, array, &options).map_err(|_| Halt::Unsupported)?;
-        // Ask the *encoder*, not the array. An all-null column infers as `DataType::Null`, whose
-        // nulls are **logical** — `Array::is_null` reports false for every index of it because
-        // there is no physical null buffer to consult, and `NullEncoder::encode` is
-        // `unreachable!()`. arrow's own writer avoids that by testing nullity through the encoder
-        // it built; a walk that calls `encode` directly has to do the same, and deferring to it
-        // covers every such type instead of naming the one we tripped over.
         if encoder.is_null(idx) {
             return self.push("null");
         }
@@ -515,7 +490,6 @@ pub fn row_pretty_json(batch: &RecordBatch, row: usize) -> Option<String> {
         w.write(&one).ok()?;
         w.finish().ok()?;
     }
-    // arrow-json emits `[{...}]`; pull the single row object out and indent it.
     let arr: Value = from_slice(&buf).ok()?;
     to_string_pretty(arr.get(0)?).ok()
 }
@@ -645,7 +619,6 @@ fn flatten_nested(batch: &RecordBatch) -> Result<RecordBatch, ArrowError> {
     if !nested.iter().any(|&n| n) {
         return Ok(batch.clone());
     }
-    // One ndjson pass gives every cell's type-aware JSON value.
     let mut buf = Vec::new();
     {
         let mut jw = LineDelimitedWriter::new(&mut buf);
@@ -803,7 +776,6 @@ mod tests {
     /// collapsing, and not a bare count where there was room for content.
     #[test]
     fn an_oversized_container_shows_entries_then_counts_the_rest() {
-        // The list sits at depth 1, so its cap is `items_at(1)`.
         let shown = items_at(1);
         let json = preview_of(&document_batch(5171), PREVIEW_BYTES);
         assert!(

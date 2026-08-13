@@ -130,8 +130,6 @@ impl ChildrenExt for SidebarRow {
 
 impl Component for SidebarRow {
     fn render(&self) -> impl IntoElement {
-        // Geometry rides a per-instance theme override; the colours stay the shared `sidebar_item`
-        // theme's, so a row can't quietly invent its own hover fill.
         let theme = SideBarItemThemePartial::new()
             .padding(self.padding)
             .corner_radius(CornerRadius::new_all(self.radius))
@@ -141,8 +139,6 @@ impl Component for SidebarRow {
             None => theme,
         };
 
-        // `Content::Flex` so a `Size::flex` child (the truncating name) actually distributes —
-        // without it the row hugs its content and pushes its trailing run out of the panel.
         let content = rect()
             .width(Size::fill())
             .map(self.height, |el, h| el.height(Size::px(h)))
@@ -166,9 +162,6 @@ impl Component for SidebarRow {
 
         let row = Activable::new(item).active(self.selected);
 
-        // Unwrapped unless the row actually wants a context menu, so the common case adds no
-        // layout node. `Content::Fit` + no size of its own: the wrapper is the row's own box,
-        // and `SideBarItem` already fills the pane's width.
         match &self.on_context_menu {
             None => row.into_element(),
             Some(handler) => {

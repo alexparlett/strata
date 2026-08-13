@@ -8,32 +8,21 @@
 //! Both read [`offers`], so the two surfaces cannot drift about what may be mentioned or how a
 //! name is matched.
 //!
-//! ## The inline list is driven from the field, not from itself
+//! **The inline list is driven from the field, not from itself.** [`Mentions`] is that state, and
+//! the composer's `Input` hands it the arrow keys, Enter/Tab and Escape. The field never gives up
+//! focus: a focused `Input` owns the keyboard, so a list holding it would be a list nothing can
+//! narrow. A press in the list and Enter on it are one method ([`Mentions::accept`]).
 //!
-//! [`Mentions`] is that state, and the composer's `Input` hands it the arrow keys, Enter/Tab and
-//! Escape. The field never gives up focus: a focused `Input` owns the keyboard (AGENTS.md §3), so
-//! a list holding it would be a list nothing can narrow. A press in the list and Enter on it are
-//! one method ([`Mentions::accept`]) for the same reason ⌘S and typed view DDL are one funnel.
+//! **A completion is an edit at the caret, not at the end of the buffer.** [`token`] reads the `@…`
+//! run the caret sits in and hands back its **span** — the same shape as the SQL editor's
+//! `CompletionItem::replace`, accepted the same way. One rule, two surfaces. This is what
+//! `Input::caret` in the fork exists for: the first version pinned the token to the end of the
+//! buffer, so a mention typed mid-sentence stopped completing once the sentence carried on. An `@`
+//! the user has typed *past* still stops matching, because that is when they meant it as prose.
 //!
-//! ## A completion is an edit at the caret, not at the end of the buffer
-//!
-//! [`token`] reads the `@…` run the caret sits in, and hands back its **span** — the same shape
-//! as the SQL editor's `CompletionItem::replace`, and accepted the same way: replace that span,
-//! put the caret after what was inserted (`CodeEditorData::replace_range`). One rule, two
-//! surfaces, rather than a second answer to the same question.
-//!
-//! This is what `Input::caret` in the fork exists for. The first version had no caret to read, so
-//! the token was pinned to the end of the buffer and a mention typed mid-sentence stopped
-//! completing the moment the sentence carried on past it. An `@` the user has typed *past* still
-//! stops matching — whitespace between the `@` and the caret ends it — because that is when they
-//! meant it as prose.
-//!
-//! ## What can be mentioned
-//!
-//! The catalog **from the store** (AGENTS.md §2 — the catalog *is* `ProjectState`, never a
-//! query), plus the query tab the user is looking at. Not a settled result: its rows live in that
-//! run's own query entry, which no store here can read — the results toolbar pins that one,
-//! because it is the surface that has it.
+//! **What can be mentioned** is the catalog *from the store* — never a query — plus the query tab
+//! the user is looking at. Not a settled result: its rows live in that run's own query entry, which
+//! no store here can read, so the results toolbar pins that one.
 
 use std::ops::Range;
 
@@ -97,8 +86,6 @@ pub fn token(text: &str, caret: usize) -> Option<Token<'_>> {
     if !starts_word || typed.chars().any(char::is_whitespace) {
         return None;
     }
-    // The tail of the tag past the caret belongs to the span but not to the question: the user is
-    // editing a name that is already there.
     let tail = text[caret..]
         .find(char::is_whitespace)
         .unwrap_or(text.len() - caret);
@@ -216,8 +203,6 @@ pub fn offers(store: &ProjectState, session: &SessionState, matching: &str) -> V
         .chain(tables)
         .chain(views)
         .chain(saved)
-        // The same case-insensitive substring the catalog filter uses, so a mention narrows the
-        // way the sidebar does.
         .filter(|offer| contains_lowercased(&offer.name, matching))
         .collect()
 }
@@ -263,7 +248,6 @@ impl Mentions {
     pub fn offered(&self, store: &ProjectState, session: &SessionState) -> Vec<Offer> {
         let text = self.text.read();
         let caret = byte_of(&text, *self.caret.read());
-        // Lowercased once here, because `contains_lowercased` takes an already-folded needle.
         let Some(typed) =
             asking(&text, caret, *self.dismissed.read()).map(|token| token.typed.to_lowercase())
         else {
@@ -391,8 +375,6 @@ impl Component for MentionPicker {
         let mut mentions = self.mentions;
         let theme = self.theme.clone();
 
-        // Nothing matches: no popup. An empty card hovering over the transcript would be a
-        // control that says nothing and covers something.
         if self.offered.is_empty() {
             return rect();
         }
@@ -400,8 +382,6 @@ impl Component for MentionPicker {
         let at = mentions.at(self.offered.len());
         rect().child(
             self.offered.iter().enumerate().fold(
-                // **A press outside puts the list away**, which a bare floating card has no way to
-                // notice: the token is still being typed, so nothing else here would close it.
                 Menu::new()
                     .min_width(Size::px(MENU_W))
                     .on_close(move |()| mentions.dismiss()),
@@ -409,8 +389,6 @@ impl Component for MentionPicker {
                     let picked = offer.clone();
                     menu.child(
                         MenuButton::new()
-                            // The keyboard's row reads as the pressed one, so arrowing down the list
-                            // and hovering it look the same.
                             .selected(row_at == at)
                             .on_press(move |_| mentions.accept(&picked))
                             .child(row(offer, &theme)),
@@ -454,8 +432,6 @@ impl Component for AttachPicker {
         };
 
         let body = matched.iter().fold(
-            // A hairline between rows, not a gap — off the spacing scale on purpose, like
-            // the canvas's own `gap: 1px` lists.
             rect().width(Size::fill()).vertical().spacing(HAIRLINE),
             |body, offer| {
                 let anchor = offer.anchor.clone();
@@ -478,7 +454,6 @@ impl Component for AttachPicker {
             .background(theme.card_background)
             .border(Border::new().width(1.).fill(theme.card_border_fill))
             .corner_radius(R_2)
-            // A painted border is not laid out, so the inset carries it (AGENTS.md §3).
             .padding(Gaps::new_all(SP_3))
             .spacing(SP_2)
             .child(
@@ -496,7 +471,6 @@ impl Component for AttachPicker {
                 )
                 .width(Size::fill()),
             )
-            // Nothing to offer says so, rather than scrolling an empty body.
             .child(match matched.is_empty() {
                 true => Meta::new("Nothing matches.")
                     .color(theme.meta_color)
@@ -518,10 +492,6 @@ impl Component for AttachPicker {
         .top()
         .align_start()
         .offset(6.)
-        // **Inside a `Menu`**, which is what dismisses it on an outside press — the tab strip's
-        // overflow search is the same card in the same wrapper for the same reason. A bare
-        // floating card has no backdrop, so pressing away from it (especially after focusing the
-        // search box) left it up with nothing to close it.
         .maybe_child(open().then(|| Menu::new().on_close(move |()| open.set(false)).child(card)))
     }
 }

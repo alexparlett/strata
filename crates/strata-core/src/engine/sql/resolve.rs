@@ -142,7 +142,6 @@ async fn prefetch(ctx: &SessionContext, stmt: &SqlStatement, normalize: bool) ->
                     .map(|f| f.name().clone())
                     .collect(),
             ),
-            // A provider error is not proof of absence — only `table_exist` is.
             Err(_) => match ctx.table_exist(table_ref) {
                 Ok(false) => SchemaEntry::Missing,
                 _ => SchemaEntry::Opaque,
@@ -181,8 +180,6 @@ fn resolve_statement(
         complete: r.complete,
     }
 }
-
-// ---- scope model -----------------------------------------------------------
 
 /// What is known about a relation's output columns.
 #[derive(Clone)]
@@ -246,8 +243,6 @@ impl<'p> Scope<'p> {
     }
 }
 
-// ---- the walk --------------------------------------------------------------
-
 struct Resolver<'a> {
     schemas: &'a SchemaMap,
     normalize: bool,
@@ -281,10 +276,6 @@ impl Resolver<'_> {
     /// Resolve a CTE body and push its name + output columns onto the CTE stack.
     fn cte(&mut self, cte: &Cte, recursive: bool, outer: Option<&Scope>) {
         let name = cte.alias.name.value.clone();
-        // Under `WITH RECURSIVE` the CTE's own name is in scope in its body —
-        // register it as unknowable (not missing) before walking. A plain WITH
-        // must *not* pre-register: `WITH t AS (SELECT … FROM t)` reads the real
-        // table `t`, and shadowing it here would hide its columns from the body.
         if recursive {
             self.ctes.push((name.clone(), Cols::Unknown));
         }
@@ -335,10 +326,6 @@ impl Resolver<'_> {
             relations,
             aliases: Vec::new(),
         };
-        // A draft with no relations anywhere in the chain has nothing to resolve
-        // against — every column check in this select stays quiet (the no-FROM
-        // grace, at the layer that understands nesting). Subqueries below still
-        // resolve their own scopes.
         let checkable = !scope.chain_is_empty();
         if s.from.is_empty() && !checkable {
             self.complete = false;
@@ -410,7 +397,6 @@ impl Resolver<'_> {
     }
 
     fn order_by_expr(&mut self, obe: &OrderByExpr, scope: &Scope, checkable: bool) {
-        // Ordinals (`ORDER BY 1`) are positions, not names.
         if !matches!(obe.expr, Expr::Value(_)) {
             self.expr(&obe.expr, scope, true, checkable);
         }
@@ -422,7 +408,6 @@ impl Resolver<'_> {
             TableFactor::Table {
                 name, alias, args, ..
             } => {
-                // A table function call: its output shape is the engine's business.
                 if args.is_some() {
                     relations.push(Rel {
                         binding: binding_of(alias, name),
@@ -440,9 +425,6 @@ impl Resolver<'_> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
-                // The subquery sees the relations bound so far — exact for LATERAL,
-                // merely quieter for a non-lateral (whose sibling refs the planner
-                // rejects itself, with `complete` still true).
                 let tmp = Scope {
                     parent: outer,
                     relations: relations.clone(),
@@ -460,8 +442,6 @@ impl Resolver<'_> {
                 alias,
             } => {
                 if alias.is_some() {
-                    // An aliased join tree re-exposes columns under one name —
-                    // uncommon; treat as unknowable rather than model it.
                     relations.push(Rel {
                         binding: alias.as_ref().map(|a| a.name.value.clone()),
                         cols: Cols::Unknown,
@@ -473,7 +453,6 @@ impl Resolver<'_> {
                     self.table_factor(&join.relation, relations, outer);
                 }
             }
-            // UNNEST, JsonTable, PIVOT, … — shapes the resolver doesn't model.
             _ => relations.push(Rel {
                 binding: None,
                 cols: Cols::Unknown,
@@ -486,7 +465,6 @@ impl Resolver<'_> {
     fn relation_cols(&mut self, name: &ObjectName) -> Cols {
         if let [part] = name.0.as_slice() {
             if let Some(id) = part.as_ident() {
-                // Innermost CTE of that name wins.
                 if let Some((_, cols)) = self
                     .ctes
                     .iter()
@@ -531,15 +509,11 @@ impl Resolver<'_> {
                         }
                     }
                 }
-                // Qualified wildcards and computed items get engine display names —
-                // don't guess them.
                 _ => return Cols::Unknown,
             }
         }
         Cols::Known(cols)
     }
-
-    // ---- expressions -------------------------------------------------------
 
     /// Walk a function call's four expression-bearing parts: its arguments, the `OVER` window
     /// spec, a `FILTER` clause, and `WITHIN GROUP`.
@@ -660,11 +634,6 @@ impl Resolver<'_> {
                     self.expr(e, scope, allow_aliases, checkable);
                 }
             }
-            // `c.address['zip']`, `tags[1]` — a subscript/field chain. The leading
-            // identifier path resolves like a compound identifier (`address` = a
-            // column, `c.address` = alias.column); everything past it is struct
-            // field access the schema doesn't describe — quiet. Computed subscript
-            // expressions still carry column refs and are walked.
             Expr::CompoundFieldAccess { root, access_chain } => {
                 let mut path: Vec<&Ident> = Vec::new();
                 match root.as_ref() {
@@ -683,8 +652,6 @@ impl Resolver<'_> {
                         [q, c] => {
                             self.check_qualified(&[(*q).clone(), (*c).clone()], scope, checkable);
                         }
-                        // Longer paths are ambiguous with schema-qualified names —
-                        // the planner's to judge.
                         _ => {}
                     }
                 }
@@ -711,11 +678,6 @@ impl Resolver<'_> {
                 self.expr(left, scope, allow_aliases, checkable);
                 self.expr(right, scope, allow_aliases, checkable);
             }
-            // The long tail of Expr variants: check its flat identifiers in this
-            // same scope — unless the subtree carries a shape the flat visit
-            // would mis-read: a subquery (needs scope threading) or a field-access
-            // chain (its root is a path head, not a bare column). Stay quiet
-            // there; the planner still covers it fail-fast.
             other => {
                 if contains_unwalkable(other) {
                     return;
@@ -741,8 +703,6 @@ impl Resolver<'_> {
             }
         }
     }
-
-    // ---- the checks --------------------------------------------------------
 
     /// A bare column reference: flag only when the whole scope chain is fully
     /// known and nothing — column, legal alias, outer scope — matches.
@@ -780,7 +740,7 @@ impl Resolver<'_> {
         }
         let (qualifier, column) = (&parts[0], &parts[1]);
         if scope.chain_has_column(&qualifier.value) {
-            return; // struct-field access on a real column
+            return;
         }
         match scope.chain_binding(&qualifier.value) {
             Some(rel) => match &rel.cols {
@@ -832,8 +792,6 @@ impl Resolver<'_> {
         }
     }
 
-    // ---- spans / output ----------------------------------------------------
-
     /// A sqlparser AST span (1-based line/col, relative to the statement slice)
     /// as a byte range into the full buffer. `None` for the empty-span sentinel
     /// synthesized nodes carry.
@@ -857,8 +815,6 @@ impl Resolver<'_> {
             .push(diag(Severity::Error, message, span, self.sql));
     }
 }
-
-// ---- small helpers ---------------------------------------------------------
 
 /// The explicit column list of a table alias (`AS x(a, b)`), if one was written.
 fn alias_cols(alias: &TableAlias) -> Option<Cols> {
@@ -977,7 +933,6 @@ mod tests {
 
     #[test]
     fn struct_field_access_stays_quiet() {
-        // `address.city` where `address` is a column, not a relation.
         let r = run_with("SELECT address.city FROM s", &[("s", &["address"])]);
         assert!(
             r.diags.is_empty(),
@@ -1032,13 +987,8 @@ mod tests {
 
     #[test]
     fn non_recursive_cte_reads_the_real_table_it_shadows() {
-        // A plain WITH does not see its own name — `FROM t` in the body is the
-        // *table* t, so its columns stay fully checkable.
         let sql = "WITH t AS (SELECT missing FROM t) SELECT missing FROM t";
         let r = run_with(sql, &[("t", &["id", "name"])]);
-        // The body's `missing` is a real fault against the table; the outer
-        // `missing` then resolves against the CTE's projection (which *is*
-        // `missing`) — exactly one diagnostic.
         assert_eq!(
             r.diags.len(),
             1,
@@ -1054,7 +1004,6 @@ mod tests {
 
     #[test]
     fn alias_column_lists_rename() {
-        // `t AS x(a, b)` rebinds the columns — the schema names are shadowed.
         let sql = "SELECT x.id FROM t AS x(a, b)";
         let r = run_with(sql, &[("t", &["id", "name"])]);
         assert_eq!(r.diags.len(), 1);

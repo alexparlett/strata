@@ -20,8 +20,6 @@ use crate::components::metrics::{SP_1, SP_2, SP_3, SP_4};
 use crate::components::type_palette::{kind_color, type_palette};
 use crate::components::typography::{Meta, MonoValue};
 
-// Content auto-fit (double-click a resize grip): a char-count estimate, à la the Dioxus
-// `col_autofit`.
 /// Mono char-width estimate.
 const AUTOFIT_CHAR_W: f32 = 7.6;
 /// What a fit adds to the measured text: a cell's own horizontal inset, both sides — off the same
@@ -40,8 +38,6 @@ const AUTOFIT_PAD: f32 = 2. * SP_4 + SP_2;
 /// grip double-click that asks for it, never per render: fitting every column on every header
 /// render made a resize drag O(rows × cols) per pointer move.
 fn autofit_width(data: &GridData, ci: usize) -> f32 {
-    // Indexed, not defended: `ci` comes from enumerating this same page's columns, so an
-    // out-of-range index is a bug to surface, never a state to smooth over.
     let mut max_len = data.columns[ci].name.chars().count() + 3;
     for row in &data.rows {
         if let Some(cell) = row.get(ci) {
@@ -76,10 +72,7 @@ pub struct HeaderRow {
 impl Component for HeaderRow {
     fn render(&self) -> impl IntoElement {
         let theme = &self.theme;
-        // The shared type palette supplies the dtype-label hues (named `palette` — the sort
-        // arrow's own fill is the unrelated `arrow` field below).
         let palette = type_palette();
-        // The resolved column window — the same value the body rows read (`row.rs`).
         let win = *self.col_window.read();
         let widths = self.widths.read();
         let col_w = |ci: usize| widths.get(ci).copied().unwrap_or(self.seed_w);
@@ -107,7 +100,6 @@ impl Component for HeaderRow {
                 on_secondary: None,
                 key: DiffKey::None,
             });
-        // Leading spacer — the off-window columns' extent, mirroring the body rows.
         header = header.child(rect().width(Size::px(win.lead)).height(Size::fill()));
         for (ci, col) in self
             .data
@@ -141,15 +133,9 @@ impl Component for HeaderRow {
                     active_bg: theme.header_active_background,
                     key: DiffKey::None,
                 }
-                // Keyed by the column, like the body cells: a window shift matches the
-                // survivors' scopes across positions (hover state stays put) — see the
-                // body cells' note in `row.rs` on what the key does and does not buy.
                 .key(ci),
             );
         }
-        // Trailing spacer, then the dead space: keeps the last column's resize grip clear
-        // of the content's right edge so it stays reachable, and gives somewhere to drag
-        // when widening the last column.
         header = header.child(rect().width(Size::px(win.tail)).height(Size::fill()));
         header.child(
             rect()
@@ -206,19 +192,12 @@ impl Component for HeaderCell {
         let mut hovered = use_state(|| false);
         let sel = self.sel;
         let index = self.index;
-        // Read the selection reactively so this header re-renders when any column selection changes
-        // (activating this one *and* deactivating the previously-selected one).
         let active = sel.sel.read().cols().contains(&index);
         let name_color = if active {
             self.active_color
         } else {
             self.name_color
         };
-        // The sort chevron (Rz6): up = asc, down = desc / unsorted. Unsorted is invisible
-        // until the header is hovered (the comp's faint-on-hover reveal — the button stays
-        // mounted so the name row's layout never shifts); the sorted column's stays lit in
-        // the accent. A press cycles asc → desc → clear; `stop_propagation` on the down so
-        // grabbing it never selects the column (the Dioxus `col-sort` contract).
         let sort = self.sort;
         let dir = sort.dir(index);
         let sort_icon = if dir == Some(true) {
@@ -238,8 +217,6 @@ impl Component for HeaderCell {
             .height(Size::px(HEADER_H))
             .direction(Direction::Horizontal)
             .content(Content::Flex)
-            // Selected column → accent name + active background; the column's *body* cells carry the
-            // selection fill. Hover still shows on an unselected column.
             .maybe(active, |el| el.background(self.active_bg))
             .maybe(hovered(), |el| el.background(self.hover_bg))
             .on_pointer_down(move |e: Event<PointerEventData>| {
@@ -343,10 +320,6 @@ impl Component for ColGrip {
 
         let mut clicking = use_state(|| false);
         let mut hovering = use_state(|| false);
-        // The column window can unmount this grip while it is the hovered node (a wheel-pan
-        // with the pointer stationary): its `on_pointer_leave` then never fires, and the
-        // ColResize cursor it set would stay stranded app-wide. The drop is the leave that
-        // unmounting swallows.
         use_drop(move || {
             if *hovering.peek() || *clicking.peek() {
                 Cursor::set(CursorIcon::default());
@@ -354,9 +327,6 @@ impl Component for ColGrip {
         });
         let mut origin_x = use_state(|| 0.0f32);
         let mut start_w = use_state(|| 0.0f32);
-        // Auto-scroll we've *intentionally* applied during this drag (px) — tracked here rather than
-        // read live from the controller, so shrinking (which clamps the scroll offset) can't feed back
-        // into the width and make the drag jerky.
         let mut scroll_accum = use_state(|| 0.0f32);
 
         let on_pointer_enter = move |_| {
@@ -375,8 +345,6 @@ impl Component for ColGrip {
             }
             e.stop_propagation();
             e.prevent_default();
-            // Double-click → auto-fit the column to its content, and don't start a resize drag. (Checked
-            // here, not via `on_press`, because the `prevent_default` above suppresses the press event.)
             if EventsCombos::pressed(e.global_location()).is_double() {
                 let fit = autofit_width(&data, index);
                 if let Some(slot) = widths.write().get_mut(index) {
@@ -387,7 +355,6 @@ impl Component for ColGrip {
             origin_x.set(e.global_location().x as f32);
             start_w.set(widths.read().get(index).copied().unwrap_or(seed_w));
             scroll_accum.set(0.0);
-            // Freeze the content width at the current natural span for the duration of the drag.
             hold_w.set(GUTTER_W + widths.read().iter().sum::<f32>() + TRAIL_W);
             clicking.set(true);
         };
@@ -397,23 +364,14 @@ impl Component for ColGrip {
             }
             e.prevent_default();
             let x = e.global_location().x as f32;
-            // Width follows the cursor plus the scroll we've intentionally auto-scrolled this drag
-            // (`scroll_accum`) — never the live controller offset. Reading the live offset made dragging
-            // left jerky: narrowing shrinks the content, the scroll view clamps its offset, and that
-            // clamp fed back into the width. The accumulator only moves when *we* edge-scroll below.
             let new = (start_w() + (x - origin_x()) + scroll_accum()).clamp(MIN_COL_W, MAX_COL_W);
             if let Some(slot) = widths.write().get_mut(index) {
                 *slot = new;
             }
-            // Raise the held width to the drag's high-water mark, so shrinking a column doesn't shrink
-            // the scroll extent mid-drag (the trailing flex grows to fill the difference instead).
             let nat = GUTTER_W + widths.read().iter().sum::<f32>() + TRAIL_W;
             if nat > hold_w() {
                 hold_w.set(nat);
             }
-            // Auto-scroll when the cursor nears a viewport edge (Freya's scroll-x grows to reveal
-            // *earlier* content, so nudge it down at the right edge). Each nudge shifts the content by
-            // `EDGE_STEP`, so fold that back into the width via the accumulator (`accum -= step`).
             let vp = *viewport.peek();
             let step = if x > vp.max_x() - EDGE_MARGIN {
                 -EDGE_STEP
@@ -432,7 +390,6 @@ impl Component for ColGrip {
         let on_global_pointer_press = move |_: Event<PointerEventData>| {
             if clicking() {
                 clicking.set(false);
-                // Release the hold: the content settles from the frozen high-water back to the live span.
                 hold_w.set(0.0);
                 if !hovering() {
                     Cursor::set(CursorIcon::default());

@@ -1,58 +1,38 @@
 //! The app-global **model listings** — what each provider last reported, for as long as the
 //! app is installed rather than as long as a window is open.
 //!
-//! **Why app-global.** Two surfaces pick a model from this list and neither owns it: Settings
-//! ▸ AI ▸ Chat picks what a new chat starts on, and the chat pane's composer picks per
-//! conversation (AS-04). A list held by the Settings window would be empty in the project
-//! window, and a list held by either would be empty at the next launch — which is the failure
-//! the satellite exists to remove, since a `Select` whose only content arrives from a network
-//! call is an empty `Select` every time the app starts.
+//! **App-global** because two surfaces pick from this list and neither owns it: Settings ▸ AI ▸
+//! Chat picks what a new chat starts on, and the composer picks per conversation. A list held by
+//! either window would be empty in the other and empty at the next launch.
 //!
-//! **Disk is a startup input**, exactly as it is for the config store: [`create_global_listings`]
-//! reads the file once in `main` and after that this slot is the truth. [`write_listings`] is
-//! the only thing that writes it.
+//! **Disk is a startup input**, exactly as for the config store: [`create_global_listings`] reads
+//! the file once in `main`, [`write_listings`] is the only writer.
 //!
-//! Distinct from [`Probes`], which is *not* persisted and must not be: a probe is the state of
-//! a request the user made minutes ago, and a "verified" restored from disk at launch would be
-//! a claim nothing had checked. A listing is the answer that request returned, which stays true
-//! until the address or the credential moves.
+//! Distinct from [`Probes`], which is *not* persisted and must not be: a probe is the state of a
+//! request the user made minutes ago, and a "verified" restored from disk would be a claim nothing
+//! had checked. A listing is the answer that request returned.
 //!
-//! # Asking a provider what it serves ([`refresh`])
+//! **[`refresh`] is the whole mechanism** — the Test press in Settings' Configure dialog and the
+//! staleness kick a model picker makes when it opens are both calls into it. There is no separate
+//! ping and there does not need to be: listing a provider's models is a live request with the
+//! configured credential, which is what a connection test proves. Here rather than in Settings,
+//! because the composer needs the same funnel with no `SettingsCtx` in reach, and the in-flight
+//! guard, the two keeps and the retraction rule are exactly what a second copy would get subtly
+//! different.
 //!
-//! There is no ping in `genai` and there does not need to be: listing a provider's models is a
-//! live request against its endpoint with its configured credential, which is exactly what a
-//! connection test proves, and its answer is exactly what a model picker needs. A separate
-//! reachability probe would be a second round trip proving strictly less, and two results that
-//! could disagree about one provider.
+//! What comes back is kept in two places that are **not** two caches: the **names** go to the
+//! app-global satellite because they outlive this window and this run of the app, and the
+//! **outcome** stays in a [`Probes`] slot owned by whichever window asked. So the probe carries a
+//! count and never a list — a [`Probe::Verified`] holding the names again is the second cache this
+//! design avoids.
 //!
-//! [`refresh`] is the whole mechanism, and every gesture that fetches a list is a call into it:
-//! the Test press in Settings' Configure dialog, and the staleness kick a model picker makes
-//! when it opens — in Settings ▸ AI ▸ Chat, and in the chat pane's composer footer (AS-04).
-//! **Here rather than in Settings**, which is where it was first written: the composer needs the
-//! same funnel with no `SettingsCtx` anywhere in reach, and the in-flight guard, the two keeps
-//! and the retraction rule are exactly the parts a second copy would get subtly different.
+//! **Editing a credential retracts both** through `SettingsCtx::forget_provider`, in one line, so
+//! neither can be dropped without the other: a "verified" beside a retyped key is a claim about a
+//! request that was never made.
 //!
-//! What comes back is kept in two places that are not two caches:
-//!
-//! - the **names** go to the app-global listings satellite, because they outlive this window and
-//!   this run of the app — a picker fed only by a live call is empty at every launch;
-//! - the **outcome** stays in a [`Probes`] slot owned by whichever window asked, because "a
-//!   request is in flight", "it came back" and "it failed, and here is what the provider said"
-//!   are facts about a request the user just made.
-//!
-//! So the probe carries a count and never a list. A [`Probe::Verified`] holding the names again
-//! would be the second cache this design is arranged to avoid, and the two could disagree.
-//!
-//! **Editing a credential retracts both.** A "verified" beside a key that has since been retyped
-//! is a claim about a request that was never made — the same "only real facts" rule the row's
-//! subline follows — and the names it returned describe an endpoint nobody would call now.
-//! `SettingsCtx::forget_provider` is that retraction, in one line, so neither can be dropped
-//! without the other.
-//!
-//! The work runs on a thread of its own ([`crate::task::offload`]), because a keystore read and
-//! an HTTP round trip are both things the render thread must never wait on. What drives the
-//! request is `provider::list_models_blocking` — over in the crate that owns `genai`, so a
-//! runtime and an HTTP client are never things this frontend has to carry.
+//! The work runs on a thread of its own ([`crate::task::offload`]) — a keystore read and an HTTP
+//! round trip are both things the render thread must never wait on — driven by
+//! `provider::list_models_blocking`, over in the crate that owns `genai`.
 
 use std::collections::BTreeMap;
 
@@ -256,19 +236,15 @@ pub fn needs_asking(listings: ModelListings, probes: ProviderProbes, kind: Provi
 /// gestures in one frame cannot both get past it.
 ///
 /// **It spawns the task itself, and on the window rather than on the caller.** A plain `spawn`
-/// binds the future to the scope that made it, so a dialog closed mid-test or a pane navigated
-/// away from would drop the request and leave the probe reading `Testing` for the rest of the
-/// window's life — a row saying "testing…" about nothing, and a kind no further refresh can get
-/// past its own guard. The request belongs to the window, whose state it settles into: it must
-/// outlive the surface that asked and die with the window, which is exactly `spawn_forever`'s
-/// scope. That is also why this is not an `async fn` the caller awaits — the lifetime rule and
-/// the guard belong together in the funnel, where no new call site can forget either.
+/// binds the future to the scope that made it, so a dialog closed mid-test would drop the request
+/// and leave the probe reading `Testing` for the rest of the window's life — a row saying
+/// "testing…" about nothing, and a kind no further refresh can get past its own guard. The request
+/// belongs to the window, which is `spawn_forever`'s scope; that is also why this is not an
+/// `async fn` the caller awaits, so no new call site can forget the lifetime rule or the guard.
 ///
 /// **Returns the request**, so a caller that later decides the answer is unwanted can stop it
-/// arriving rather than only dropping it once it has landed (Settings' Configure dialog
-/// retraction — a settle that outruns a Cancel would write the listing back over it). `None`
-/// means the guard swallowed the call: a request for this kind was already in flight, and the
-/// handle for *that* one belongs to whoever started it.
+/// arriving rather than only dropping it once it has landed. `None` means the guard swallowed the
+/// call, and the handle for the in-flight one belongs to whoever started it.
 pub fn refresh(listings: ModelListings, probes: ProviderProbes, ask: Ask) -> Option<TaskHandle> {
     let kind = ask.kind;
     let mut probes = probes;
@@ -281,9 +257,6 @@ pub fn refresh(listings: ModelListings, probes: ProviderProbes, ask: Ask) -> Opt
         let settled = match run(ask).await {
             Ok(models) => {
                 let count = models.len();
-                // **The names first, then the outcome.** The satellite is what a picker reads,
-                // so writing it before the probe means the count and the list can never be seen
-                // disagreeing in a repaint between the two.
                 write_listings(listings, |listings| listings.set(kind, models));
                 Probe::Verified { count }
             }
@@ -300,10 +273,6 @@ pub fn refresh(listings: ModelListings, probes: ProviderProbes, ask: Ask) -> Opt
 /// The provider's own words on a failure, already bounded by `list_models`.
 async fn run(ask: Ask) -> Result<Vec<String>, String> {
     let answer = offload(move || {
-        // The key is read here, on the worker, and lives exactly as long as the request. A
-        // keystore call blocks — which is the other half of why this is not on the render
-        // thread — and a `SecretRef` that resolves to nothing is not an error: it means no key
-        // is set, which `list_models` then answers for the kind in its own words.
         let key = match ask.typed {
             Some(typed) => Some(typed),
             None => match ask.stored.as_ref().map(SecretRef::get) {
@@ -320,8 +289,6 @@ async fn run(ask: Ask) -> Result<Vec<String>, String> {
 
     match answer {
         Some(answer) => answer,
-        // The thread never answered — it could not start, or it panicked. Neither is a fact
-        // about the provider, so this must not claim to have reached one.
         None => Err("The test could not be run.".into()),
     }
 }

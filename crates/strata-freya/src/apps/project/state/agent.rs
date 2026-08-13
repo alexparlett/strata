@@ -59,17 +59,11 @@ pub fn use_agent_bridge(agent: AgentCtx, root: PathBuf, name: String) {
     let engine = use_consume::<EngineCtx>();
     let log = use_consume::<LogCtx>();
     let agents = use_consume::<AgentsCtx>();
-    // A handle, not a subscription. The driver is a task, and a task has no reactive scope,
-    // so its `read`s are peek-equivalent — the same thing the diagnostics driver relies on.
-    // The channel named here therefore decides nothing.
     let project = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
 
     let registration = use_hook({
         let directory = Arc::clone(&agent.directory);
         move || {
-            // The engine goes to the directory as a bare `Arc` — the **data plane**, called
-            // from the server's own runtime, so `fetch_page` / `validate` / `functions` and
-            // an agent's own run never queue behind a repaint.
             let (id, asks, notices) = directory.register(root, name, engine.arc());
             spawn(drive(asks, notices, engine, project, agents, log));
             id
@@ -89,12 +83,6 @@ async fn drive(
     log: LogCtx,
 ) {
     loop {
-        // **Not `biased`.** Polling asks first every iteration would starve the notice
-        // channel under a sustained stream of tool calls — settles never applied, agents
-        // never retracted, their workspaces never cleaned up — and it buys nothing: the
-        // ordering it looks like it protects is already structural, because the directory
-        // awaits the `RunStarting` *reply* before it touches the engine, so a settle notice
-        // cannot exist until its ask has been handled.
         tokio::select! {
             Some(ask) = asks.recv() => answer(ask, &engine, project, &mut agents, log),
             Some(notice) = notices.recv() => apply(notice, &engine, &mut agents, log),
@@ -124,11 +112,7 @@ fn answer(
         }
         AgentAsk::OpenQuerySession { agent, reply } => {
             let session = QuerySessionId::new();
-            // The satellite hands back whatever the per-agent cap displaced, so a session it
-            // has stopped showing does not go on holding an engine workspace.
             let evicted = agents.write().opened(&agent, session);
-            // `held`, not `agents`: this is attribution for the event log, and the assistant
-            // is left out of the pane's *listing* only, never out of the record.
             let named = agents
                 .read()
                 .held()
@@ -155,24 +139,7 @@ fn answer(
                 let _ = reply.send(Err(AgentError::no_such_query_session(session)));
                 return;
             }
-            // **Always, on both arms.** The same teardown a tab close reaches through the
-            // root's tab-diff effect: abort whatever is in flight and retire the workspace's
-            // snapshot. `close_query_session` promises the agent that "a run still in flight
-            // in it is cancelled", and that promise is about a run the engine is really
-            // executing — deferring it because the satellite says `Running` would let a
-            // runaway scan burn to completion with no way left to stop it, since the handle
-            // stops answering here.
-            //
-            // What it deliberately does not do is raise the T2 confirm — that dialog asks the
-            // *user* whether to destroy work, and neither answer suits a tool call. Nor does
-            // it need to: this is the agent's own session, so there is nobody else's work in
-            // it.
             engine.cleanup_ws(session.into());
-            // `Closed::WhenItSettles` still defers the *row*, and a second `cleanup_ws` with
-            // it — see `Closed`. That is the AA-03c race: this call can land between a run's
-            // `RunStarting` and its `engine.query`, where the abort above finds nothing to
-            // abort because the engine has not been handed the work yet, and the dispatch
-            // then registers on a `WsId` nothing holds. The settle is what sweeps it.
             let _ = reply.send(Ok(()));
         }
         AgentAsk::RunStarting {
@@ -184,8 +151,6 @@ fn answer(
                 let _ = reply.send(Err(AgentError::no_such_query_session(session)));
                 return;
             }
-            // Read before the write, because the caller has to be told which run to name
-            // when it settles.
             let seq = agents.read().next_run();
             agents.write().run_started(agent, session);
             let _ = reply.send(Ok(seq));
@@ -203,24 +168,15 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
             seq,
             outcome,
         } => {
-            // A settle that finishes a session closed mid-dispatch hands the session back,
-            // and the teardown its close deferred happens here — see `Closed`.
             let retire = agents.write().run_settled(agent, session, seq, outcome);
             if let Some(session) = retire {
                 engine.cleanup_ws(session.into());
             }
         }
         AgentNotice::AgentGone(agent) => {
-            // **Peeked before writing.** The retraction is broadcast to every window, and
-            // `State::write` notifies every subscriber *before* handing back the guard — so
-            // writing first would re-render the pane and the rail badge in windows that never
-            // heard of this agent, once per disconnect and once per transport schema probe.
             if !agents.peek().knows(agent) {
                 return;
             }
-            // Read before the write takes the row away — and off `held`, not `agents`, for
-            // the reason the open entry gives: the assistant is left out of the pane's
-            // *listing* only, never out of the record.
             let gone = agents
                 .peek()
                 .held()
@@ -234,10 +190,6 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
                 log,
                 LogLevel::Info,
                 match gone {
-                    // **The assistant never dialled in, so it cannot disconnect.** Its
-                    // "connection" is its own mount inside this window, and reporting that as
-                    // a disconnect describes a client that was never there — the same reason
-                    // the close confirm names it as itself.
                     Some((named, true)) => format!("{named} stopped"),
                     Some((named, false)) => format!("{named} disconnected"),
                     None => "An agent disconnected".to_string(),
@@ -247,20 +199,11 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
     }
 }
 
-// --- the projections --------------------------------------------------------
-//
-// Free functions over the stores rather than steps inside the driver, so the mapping is
-// testable against a store built by hand with no renderer and no window: the loop above is
-// then only the ordering (read, write, reply), which is the half a test cannot reach anyway.
-
 /// The catalog as the sidebar shows it: tables, then views, then saved queries.
 fn catalog(project: &ProjectState) -> Vec<CatalogEntry> {
     let tables = project.tables.iter().map(|row| CatalogEntry::Table {
         name: row.def.name.clone(),
         format: row.def.format.name().to_string(),
-        // As stored. A relative entry is the user's own text and stays that way — resolving
-        // it is the registration pass's business, and a listing that silently absolutized
-        // paths would describe a def nobody wrote.
         sources: row.def.sources.clone(),
         reg: reg_state(&row.reg),
     });
@@ -347,16 +290,10 @@ fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError>
 /// for it deserves the authority rather than the observation.
 fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessionInfo> {
     agents
-        // `held`, not `agents`: this answers `list_query_sessions` for the agent that asked,
-        // and the assistant must see its own sessions. The pane's listing is the only thing
-        // that leaves it out.
         .held()
         .find(|a| a.id == agent)
         .into_iter()
         .flat_map(|a| a.sessions.iter())
-        // A session the agent has already closed is not one it holds, whatever is still
-        // finishing inside it — listing a tombstone would offer back a handle every other
-        // tool answers not-found for.
         .filter(|session| !session.closing)
         .map(|session| QuerySessionInfo {
             session: session.id,
@@ -506,8 +443,6 @@ mod tests {
         assert_eq!(rows, Some(42));
         assert_eq!(columns.len(), 2);
 
-        // DataFusion folds unquoted identifiers, so the catalog's own case-insensitive
-        // compare is what an agent's spelling is matched with.
         assert!(matches!(
             describe(&project, "ORDERS"),
             Ok(Described::Table { .. })
@@ -574,14 +509,11 @@ mod tests {
 
         let listed = sessions(&agents, mine.id, &engine);
         assert_eq!(listed.len(), 2, "the other agent's session is not listed");
-        // Oldest session first, the order the agent opened them in.
         assert_eq!(listed[0].session, empty);
         assert!(matches!(listed[0].state, QuerySessionState::Empty));
-        // Nothing is executing on this engine, so a session that has run has settled.
         assert_eq!(listed[1].session, used);
         assert!(matches!(listed[1].state, QuerySessionState::Settled));
 
-        // And an agent this window has never heard of gets an empty list, not an error.
         assert!(sessions(&agents, AgentId::new(), &engine).is_empty());
     }
 }
