@@ -722,6 +722,9 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
 - **Formatting is the `fmt` skill, never `cargo fmt --all`** — `--all` includes local path deps, so
   it reformats the fork (measured once: 344 files, 4006 deletions, none intended, and invisible in
   `git submodule status`).
+- **Every worktree builds into its own `target/`; the machine-wide cache is sccache, never a
+  shared `CARGO_TARGET_DIR`** — the shared dir serialized sessions on cargo's build lock and
+  accumulated 335 GB; the dev profile's `debug = "line-tables-only"` is part of the same decision.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
 - **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the

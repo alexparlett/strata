@@ -96,6 +96,10 @@ inefficient_to_string = "warn"
 # and apply workspace-wide.
 [profile.dev]
 opt-level = 1
+# Full debuginfo for a DataFusion-sized dep tree costs hundreds of GB of target
+# dir and dominates link time; line tables keep file:line backtraces, which is
+# what this project actually debugs with.
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3

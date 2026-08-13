@@ -41,6 +41,20 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   path, then update again). And every worktree has its **own** `crates/freya` checkout: when
   editing fork files by absolute path, confirm the path goes through *your* worktree, not the main
   repo's copy.
+- **Every worktree builds into its own `target/`; the machine-wide cache is sccache, never a
+  shared `CARGO_TARGET_DIR`.** A shared target dir was tried and withdrawn: cargo's coarse
+  build-directory lock serializes concurrent sessions outright, worktrees at different commits
+  churn each other's workspace-crate fingerprints, and the dir accumulated 335 GB because cargo
+  never garbage-collects artifacts keyed by dead metadata hashes. Instead `~/.cargo/config.toml`
+  sets `build.rustc-wrapper = sccache` (machine config, not repo config — a committed
+  `.cargo/config.toml` would break CI and any machine without sccache), so registry dependencies
+  (DataFusion, arrow, skia-safe) compile once per machine and a fresh worktree's first build
+  mostly cache-hits. Path deps — the strata crates and the fork — build incrementally per
+  worktree and pass through sccache uncached, which is what keeps edit-rebuild fast. The dev
+  profile carries `debug = "line-tables-only"` for the same reason: full debuginfo for a
+  DataFusion-sized tree dominates target size and link time, and line tables keep the `file:line`
+  backtraces this project debugs with. Do not set `CARGO_TARGET_DIR` in a session's settings, and
+  don't re-litigate the shared dir without rereading this entry.
 
 ## Git, worktrees, and verification
 
