@@ -155,11 +155,18 @@ impl TableRow {
 pub struct ViewInfo {
     /// The autocomplete symbol catalog (P2-04); the inspector reads it too (Phase 3).
     pub columns: Vec<ColumnInfo>,
-    /// The base tables it reads (transitive — the planner inlines nested views). Read by
-    /// [`ProjectState::view_problem`] (P3-04) and, from the other direction, by
+    /// The **workspace** base tables it reads (transitive — the planner inlines nested views).
+    /// Read by [`ProjectState::view_problem`] (P3-04) and, from the other direction, by
     /// [`ProjectState::dependent_views`] (P3-05); profile invalidation takes the same list
     /// (P3-09).
     pub deps: Vec<String>,
+    /// The relations it reads in a **database connection's** catalog, qualified
+    /// (`pg.public.orders`) — the engine's [`ViewMeta::remote`], kept apart from `deps` for the
+    /// reason it is kept apart there: every question `deps` answers is asked of the project's
+    /// own rows, and a remote relation has none. It is not a missing dependency, it is not a
+    /// table any drop can name, and the only thing that knows whether it still exists is the
+    /// connection.
+    pub remote_deps: Vec<String>,
     /// The views it reads (transitive), resolved from the engine's raw aliases. The view
     /// half of the drop warning: `deps` is base tables *by construction*, so it can answer
     /// "which views read this table" but never "which views read this view" (`DEV_TASKS` D10
@@ -532,6 +539,7 @@ impl ProjectState {
             v.reg = Reg::Ready(ViewInfo {
                 columns: meta.columns,
                 deps: meta.tables,
+                remote_deps: meta.remote,
                 view_deps,
             });
             v.profile = None;
@@ -565,6 +573,14 @@ impl ProjectState {
     ///   (the planner inlines nested views at creation), so this reaches through a
     ///   view-of-a-view, and it catches a table dropped **after** the view registered
     ///   cleanly, which raises no event of its own.
+    ///
+    /// A cross-source view's **remote** reads ([`ViewInfo::remote_deps`]) are deliberately not
+    /// checked here, and the reason is what this check *is*: a reconciliation against the
+    /// project's own rows. A relation in a database connection's catalog has no row, so every
+    /// answer this loop could give about one would be "not in the catalog" — a triangle on every
+    /// working cross-source view. Whether the connection still has it is the connection's
+    /// answer, and it lands the only way it can: the view fails to re-plan at the next
+    /// registration pass, in `catalog::view_error`'s words.
     ///
     /// Note what the triangle does *not* claim. Verified against DataFusion 54: dropping a
     /// base table does **not** break the view's live plan — that plan captured each source
@@ -1050,6 +1066,7 @@ mod tests {
             ViewMeta {
                 columns: Vec::new(),
                 tables: vec!["orders".into()],
+                remote: Vec::new(),
                 aliases: Vec::new(),
             },
         );
@@ -1182,6 +1199,7 @@ mod tests {
         ViewMeta {
             columns: Vec::new(),
             tables: deps.iter().map(|d| (*d).to_string()).collect(),
+            remote: Vec::new(),
             aliases: Vec::new(),
         }
     }
@@ -1312,6 +1330,7 @@ mod tests {
         ViewMeta {
             columns: Vec::new(),
             tables: tables.iter().map(|d| (*d).to_string()).collect(),
+            remote: Vec::new(),
             aliases: views.iter().map(|d| (*d).to_string()).collect(),
         }
     }
@@ -1406,6 +1425,7 @@ mod tests {
         p.views[0].reg = Reg::Ready(ViewInfo {
             columns: Vec::new(),
             deps: Vec::new(),
+            remote_deps: Vec::new(),
             view_deps: vec!["orders_daily".into()],
         });
         assert_eq!(

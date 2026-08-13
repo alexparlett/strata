@@ -111,7 +111,10 @@ flowchart LR
   providers for identity and visibility only; lifecycle is intercepted in front of `ctx.sql`,
   because a sync `register_table` with no caller identity can neither spool a CTAS nor authorize a
   `DROP`. The **workspace** catalog is one catalog with one flat, bare-name schema; a database
-  connection registers a sibling catalog beside it, with as many schemas as the server has.
+  connection registers a sibling catalog beside it, with as many schemas as the server has. A name
+  qualified into one of those is read like any other and **managed by nothing** — v1 is read-only
+  against a database — and one predicate (`providers::in_workspace`) draws that line for both the
+  statement gate and the `__snap_` reserved namespace.
 
 The statement surface and its policy tables are [STATEMENTS_SPEC.md](STATEMENTS_SPEC.md).
 

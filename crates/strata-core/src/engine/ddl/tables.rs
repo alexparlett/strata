@@ -95,7 +95,7 @@ pub async fn create(
         temporary: _,
     } = create;
 
-    let name = bare_name(&name, WHAT)?;
+    let name = bare_name(ctx, &name, WHAT)?;
     let mut seen = Vec::new();
     for field in input.schema().fields() {
         let folded = fold_ident(field.name());
@@ -262,6 +262,11 @@ fn not_a_column_type(typed: &str) -> String {
 /// table inserted into a thousand times is a thousand files and every scan lists them all.
 /// `DROP TABLE` plus a `CREATE TABLE AS SELECT * FROM t` is the compaction story until a task
 /// owns one.
+///
+/// The gate is in two halves and the **catalog** is the first: a relation inside a database
+/// connection is not a table whose data Strata could ever own, so [`bare_name`] refuses it before
+/// [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about it, and
+/// the answer every other arm gives — naming the connection — is the honest one here too.
 pub async fn insert(
     ctx: &SessionContext,
     stmt: DFStatement,
@@ -278,7 +283,7 @@ pub async fn insert(
             StmtKind::Insert.label()
         ));
     };
-    let name = bare_name(&dml.table_name, WHAT)?;
+    let name = bare_name(ctx, &dml.table_name, WHAT)?;
     if !internal.contains(&name) {
         return Err(Blocked::InsertExternal.editor_message());
     }
@@ -328,7 +333,7 @@ pub async fn drop_statement(
         ctx,
         root,
         internal,
-        &bare_name(&drop.name, WHAT)?,
+        &bare_name(ctx, &drop.name, WHAT)?,
         drop.if_exists,
     )
     .await

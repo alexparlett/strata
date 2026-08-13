@@ -27,7 +27,7 @@ use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{CreateTableOptions, CreateView, Statement as SqlStatement};
 use datafusion::sql::TableReference;
 
-use crate::engine::catalog::{column_info, dependents_of_view, plan_deps, readable, ViewMeta};
+use crate::engine::catalog::{column_info, dependents_of_view, plan_deps, view_error, ViewMeta};
 use crate::engine::query::is_snapshot_name;
 use crate::engine::sql::{Blocked, StmtKind};
 use crate::engine::{fold_ident, quote_ident};
@@ -45,22 +45,33 @@ const WHAT: &str = "Views";
 /// file), so it goes through [`quote_ident`] rather than straight into the statement — which is
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
+///
+/// A failure comes back through [`view_error`], the table funnel's `register_error` from the
+/// other side: one diagnosis — a relation a database connection no longer has — in front of the
+/// same unwrapping a refused *table* gets. A view's failure lands in the same Problems list, one
+/// row below its cause, so a view carrying DataFusion's wrapper stack beside a table that has had
+/// it peeled would read as two faults worded by two apps. Both halves are no-ops on a message
+/// they do not recognise, which is most of them.
 pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewMeta, String> {
     if is_snapshot_name(name) {
         return Err(Blocked::ReservedName.editor_message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    let df = ctx.sql(&stmt).await.map_err(|e| readable(&e.to_string()))?;
+    let df = ctx
+        .sql(&stmt)
+        .await
+        .map_err(|e| view_error(ctx, &e.to_string()))?;
     let _ = df.collect().await;
     let t = ctx
         .table(TableReference::bare(fold_ident(name)))
         .await
-        .map_err(|e| readable(&e.to_string()))?;
+        .map_err(|e| view_error(ctx, &e.to_string()))?;
     let deps = plan_deps(t.logical_plan());
     let columns = t.schema().fields().iter().map(|f| column_info(f)).collect();
     Ok(ViewMeta {
         columns,
         tables: deps.tables,
+        remote: deps.remote,
         aliases: deps.aliases,
     })
 }
@@ -90,7 +101,7 @@ pub async fn create_statement(
     let SqlStatement::CreateView(view) = s.as_ref() else {
         return Err(not_a_view(StmtKind::CreateView));
     };
-    let (name, sql) = definition(view)?;
+    let (name, sql) = definition(ctx, view)?;
 
     let replacing = match existing(ctx, &name).await {
         Some(TableType::View) if !view.or_replace => {
@@ -142,7 +153,7 @@ pub async fn drop_statement(
             StmtKind::DropView.label()
         ));
     };
-    let name = bare_name(&dropping.name, WHAT)?;
+    let name = bare_name(ctx, &dropping.name, WHAT)?;
     match existing(ctx, &name).await {
         Some(TableType::View) => {}
         Some(_) => return Err(format!("'{name}' is a table. Use DROP TABLE")),
@@ -175,7 +186,7 @@ pub async fn drop_statement(
 /// permanent one. A clause sqlparser learns later is therefore a compile error here rather than a
 /// promise Strata quietly breaks, which is the rule the router's wildcard-free match keeps from
 /// the other end.
-fn definition(view: &CreateView) -> Result<(String, String), String> {
+fn definition(ctx: &SessionContext, view: &CreateView) -> Result<(String, String), String> {
     let CreateView {
         or_alter,
         or_replace: _,
@@ -225,7 +236,7 @@ fn definition(view: &CreateView) -> Result<(String, String), String> {
     if name.0.len() > 3 {
         return Err(elsewhere(WHAT));
     }
-    let name = bare_name(&TableReference::parse_str(&name.to_string()), WHAT)?;
+    let name = bare_name(ctx, &TableReference::parse_str(&name.to_string()), WHAT)?;
     Ok((name, query.to_string()))
 }
 

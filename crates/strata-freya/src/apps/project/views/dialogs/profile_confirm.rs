@@ -329,6 +329,7 @@ mod tests {
             ViewMeta {
                 columns: vec![col("day")],
                 tables: vec!["events".into()],
+                remote: Vec::new(),
                 aliases: Vec::new(),
             },
         );

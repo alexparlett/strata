@@ -164,11 +164,19 @@ profiling) sit on the tree.
   Known friction accepted for v1: Postgres-heavy sessions qualify every name; the fix if it
   bites is a `USE`-shaped session default-catalog gesture (a session feature over config keys
   we currently fence as owned — its own small follow-up, not a def-model change).
-- **Read-only against the database in v1.** `INSERT` already gates on `Engine::is_internal`;
-  every DDL arm that resolves a target refuses a name inside a database connection's catalog
-  **by name** (DB-03); the agent's capability is unchanged. Write-back
-  (`read_write_table_provider` exists in the crate) is a possible follow-up workstream, not a
-  seam to pre-build.
+- **Read-only against the database in v1.** ✅ **built (DB-03, 2026-08-13).** Every DDL arm that
+  resolves a target refuses a name inside a database connection's catalog **by name** — one
+  sentence, minted once in `ddl::bare_name`, which every such arm already went through;
+  `INSERT` reaches it before `Engine::is_internal`, since ownership is not a question to ask
+  about a remote relation. The agent's capability is unchanged (verified: the new refusals are
+  all at dispatch, which the agent never reaches). Write-back (`read_write_table_provider` exists
+  in the crate) is a possible follow-up workstream, not a seam to pre-build.
+  Three corrections came out of building it, each recorded in DB-03's own file: the `__snap_`
+  namespace is the **workspace catalog's** and the predicate says so (`is_snapshot_ref`); a
+  view's dependencies are **two lists**, workspace scans bare and remote scans qualified, or a
+  cross-source view is indistinguishable from a workspace table of the same bare name; and a
+  relation that vanishes server-side is a **reconciliation** with its staleness bound stated
+  where the message is built (`catalog::view_error`).
 - **`jsonb` (and unknown exotic types) map to text, not to a refusal.**
   `UnsupportedTypeAction::String`: a `jsonb` column arrives as `Utf8` JSON text, which the app's
   own Postgres-style accessors (`json_get`/`->`/`->>` over Utf8) already handle — the default
@@ -230,7 +238,7 @@ profiling) sit on the tree.
 |---|---|---|---|
 | DB-01 | Federation groundwork in `build_context` | ✅ | — |
 | DB-02 | The Postgres arm: model, secrets, pool, catalog provider, registration | ✅ | DB-01 |
-| DB-03 | Statement policy over remote catalogs | ⬜ | DB-02 |
+| DB-03 | Statement policy over remote catalogs | ✅ | DB-02 |
 | DB-04 | The connection editor's Postgres form | ⬜ | DB-02 |
 | DB-05 | The data-sources tree: the catalog pane redesigned | ⬜ | DB-02, DB-04 |
 | DB-06 | Gestures + completion over the tree | ⬜ | DB-05 |

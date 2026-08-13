@@ -109,7 +109,7 @@ pub async fn create(
     if name.0.len() > 3 {
         return Err(elsewhere(WHAT));
     }
-    let name = bare_name(&TableReference::parse_str(&name.to_string()), WHAT)?;
+    let name = bare_name(ctx, &TableReference::parse_str(&name.to_string()), WHAT)?;
     let format = read_format(&file_type, &name, &options)?;
     let (connection, source) = source_of(root, &location, connections)?;
     let partitions = partition_cols(ctx, &columns, &table_partition_cols)?;

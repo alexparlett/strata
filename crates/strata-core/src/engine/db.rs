@@ -43,7 +43,7 @@ use datafusion_table_providers_postgres::PostgresTableFactory;
 use secrecy::SecretString;
 use tokio::task::spawn_blocking;
 
-use strata_model::{check_catalog_name, parse_pg_address, ConnectionDef, PgStore};
+use strata_model::{check_catalog_name, parse_pg_address, ColumnInfo, ConnectionDef, PgStore};
 
 use super::connect::{self, Registration};
 use super::fold_ident;
@@ -178,6 +178,25 @@ pub struct SchemaListingView {
     /// Empty for [`SchemaVisibility::EnabledButMissing`] — there is nothing to list.
     pub relations: Vec<Relation>,
     pub visibility: SchemaVisibility,
+}
+
+/// One relation inside a database connection's catalog, as a surface outside the engine sees
+/// it — [`Engine::describe_remote`](super::Engine::describe_remote)'s answer.
+///
+/// Deliberately not a [`TableMeta`](super::TableMeta): that is what a *registration* learned
+/// about a def, and a remote relation has no def, no sources and no free row count. What it has
+/// is an address, a connection it belongs to, and the schema the connection reports — which is
+/// the whole of what a describe can honestly say about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteRelation {
+    /// The catalog the connection registered, in that connection's own spelling.
+    pub connection: String,
+    /// The relation's address inside the database, `schema.table`.
+    pub relation: String,
+    /// Whether the server calls it a view — a view or a materialized view
+    /// ([`Relation::table_type`]), which the listing already knows and answers for free.
+    pub view: bool,
+    pub columns: Vec<ColumnInfo>,
 }
 
 /// Whether a schema is one the connection shows, and whether the server has it.

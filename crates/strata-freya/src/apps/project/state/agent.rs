@@ -225,6 +225,11 @@ fn catalog(project: &ProjectState) -> Vec<CatalogEntry> {
 /// A **saved query is not describable**, and falls through to the same not-found as a name
 /// nothing owns: it is a string the user parked, not an object the engine holds, so it has no
 /// schema to report and no registration state to be in. `list_tables` is where it appears.
+///
+/// A view's `reads` carries **both** halves of its dependencies. The store keeps `deps` and
+/// `remote_deps` apart because the questions *it* asks differ — only one is checkable against
+/// the project's rows — but a cross-source view reads a remote relation as truly as a workspace
+/// table, and an agent asking what a view reads is owed the whole answer, qualified names and all.
 fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError> {
     if let Some(row) = project
         .tables
@@ -259,7 +264,7 @@ fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError>
                 name: row.def.name.clone(),
                 sql: row.def.sql.clone(),
                 columns: info.columns.clone(),
-                reads: info.deps.clone(),
+                reads: info.deps.iter().chain(&info.remote_deps).cloned().collect(),
             },
             Reg::Failed(error) => Described::Failed {
                 name: row.def.name.clone(),
@@ -383,6 +388,7 @@ mod tests {
             ViewMeta {
                 columns: vec![column("id")],
                 tables: vec!["orders".into()],
+                remote: Vec::new(),
                 aliases: Vec::new(),
             },
         );

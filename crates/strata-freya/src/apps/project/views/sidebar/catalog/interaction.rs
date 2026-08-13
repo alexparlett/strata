@@ -153,6 +153,7 @@ fn project() -> ProjectState {
         ViewMeta {
             columns: vec![col("total", DataType::Int64)],
             tables: vec!["archive".into()],
+            remote: Vec::new(),
             aliases: Vec::new(),
         },
     );
@@ -161,6 +162,7 @@ fn project() -> ProjectState {
         ViewMeta {
             columns: vec![col("day", DataType::Date32)],
             tables: vec!["orders".into()],
+            remote: Vec::new(),
             aliases: Vec::new(),
         },
     );
@@ -169,6 +171,7 @@ fn project() -> ProjectState {
         ViewMeta {
             columns: vec![col("region", DataType::Utf8)],
             tables: Vec::new(),
+            remote: Vec::new(),
             aliases: Vec::new(),
         },
     );

@@ -16,6 +16,7 @@ use strata_model::{
 
 use crate::engine::arrow_stats::StrataArrowFormat;
 use crate::engine::json_poly::PolyJsonFormat;
+use crate::engine::providers::in_workspace;
 use crate::engine::query::is_snapshot_name;
 use crate::engine::sql::Blocked;
 use crate::engine::{fold_ident, CATALOG, SCHEMA};
@@ -51,15 +52,18 @@ pub struct TableSpec {
     pub internal: bool,
 }
 
-/// What creating a view learned: its columns and what it reads (D10). `tables` /
+/// What creating a view learned: its columns and what it reads (D10). `tables` / `remote` /
 /// `aliases` come straight from [`PlanDeps`] — `aliases` is raw (view inlines mixed
 /// with table-alias / CTE noise); the caller keeps only the names that are actually
 /// views.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewMeta {
     pub columns: Vec<ColumnInfo>,
-    /// Base tables the view scans.
+    /// Workspace base tables the view scans, by bare name (see [`PlanDeps::tables`]).
     pub tables: Vec<String>,
+    /// Base relations it scans in a database connection's catalog, qualified
+    /// (see [`PlanDeps::remote`]).
+    pub remote: Vec<String>,
     /// Every `SubqueryAlias` name in its plan (see [`PlanDeps::aliases`]).
     pub aliases: Vec<String>,
 }
@@ -487,6 +491,65 @@ fn failing_source<'a>(spec: &'a TableSpec, raw: &str) -> Option<&'a str> {
     source_paths(spec).find(|p| listing_url(p).is_ok_and(|u| u.to_string() == url))
 }
 
+/// DataFusion's own sentence for a name that resolved to no provider, in the spelling it writes
+/// it: `plan_datafusion_err!("table '{name}' not found")`
+/// (`datafusion-54.0.0/src/execution/session_state.rs:1961`), where `name` is the **resolved**
+/// three-part reference. Split in two because the name sits between them and carries no quotes
+/// of its own — `ResolvedTableReference`'s `Display` writes `catalog.schema.table` plain.
+const MISSING_PREFIX: &str = "table '";
+const MISSING_SUFFIX: &str = "' not found";
+
+/// A view's failure, in the terms of the thing to fix — the view funnel's counterpart to
+/// [`register_error`], and the same shape: one mapper that diagnoses, then [`readable`], which
+/// only unwraps.
+///
+/// There is exactly one diagnosis, and it exists because a **cross-source view** is the one def
+/// whose dependency can disappear with nothing on our side to observe it. A workspace table's
+/// files are on a disk or in a bucket this app reads per scan, but a relation on a database
+/// server can be renamed or dropped by somebody else, and the first Strata hears of it is the
+/// next registration pass failing to plan the view. DataFusion's answer there — `table
+/// 'pg.public.orders' not found` — is true and reads like a bug in the SQL, when what happened is
+/// that the connection no longer has that relation.
+///
+/// **The staleness this reports is bounded by the last connect, and that is the whole
+/// reconciliation.** A database connection's relation list is the connect-time enumeration
+/// (`engine::db`), so this sentence means "not in what the connection last told us", which is why
+/// the fix it names is a refresh rather than a promise about the server right now. Nothing polls,
+/// and nothing here asks the server: a ↻ re-runs the pass, which re-connects, which re-enumerates.
+pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
+    match missing_relation(ctx, raw) {
+        Some(message) => message,
+        None => readable(raw),
+    }
+}
+
+/// The relation `raw` says is missing, when it is one inside a **live database connection's**
+/// catalog — `None` for every other failure, workspace names included, where DataFusion's own
+/// wording already names something the user can look at in the catalog pane.
+///
+/// Only the first segment of the resolved name is read, because the catalog is the only part
+/// this has to judge; the rest is the relation's own address inside the database, which the
+/// sentence prints back whole. A catalog name cannot contain a `.` — `PgStore::check_catalog`
+/// admits only `[A-Za-z_][A-Za-z0-9_]*` — so that split cannot land mid-name.
+fn missing_relation(ctx: &SessionContext, raw: &str) -> Option<String> {
+    let name = raw
+        .split_once(MISSING_PREFIX)
+        .and_then(|(_, rest)| rest.split_once(MISSING_SUFFIX))
+        .map(|(name, _)| name)?;
+    let folded = fold_ident(name.split_once('.').map(|(catalog, _)| catalog)?);
+    if folded == CATALOG {
+        return None;
+    }
+    let connection = ctx
+        .catalog_names()
+        .into_iter()
+        .find(|registered| fold_ident(registered) == folded)?;
+    Some(format!(
+        "'{name}' is not in the database connection '{connection}'. Refresh the catalog to \
+         re-read the database"
+    ))
+}
+
 /// Translate a registration failure into something the user can act on.
 ///
 /// Only failures we actually recognise are rewritten; anything else passes through as
@@ -731,12 +794,26 @@ fn holds_ext(dir: &Path, ext: &str) -> Option<bool> {
 ///   children, so a view with `WHERE id IN (SELECT id FROM other)` would silently drop
 ///   `other` — and a *missed* dependency is the failure that matters: a stale profile
 ///   nobody invalidates, or an entry dropped without warning.
-/// - **`.table()`, not `to_string()`.** A `TableReference` renders as written — `t`
-///   here, `public.t` there — so `to_string()` yields two keys for one thing. The engine
-///   owns a single schema, so the bare name is the identity.
+/// - **`.table()`, not `to_string()` — for a workspace scan.** A `TableReference` renders as
+///   written — `t` here, `public.t` there — so `to_string()` would yield two keys for one
+///   thing, and the workspace catalog has a single schema, which makes the bare name the
+///   identity. A scan of a **database connection's** catalog is the opposite case and is
+///   recorded whole, in [`remote`](PlanDeps::remote).
 pub struct PlanDeps {
-    /// Base tables scanned — for profile invalidation and the table-drop warning.
+    /// Workspace base tables scanned, by bare name — for profile invalidation and the
+    /// table-drop warning.
     pub tables: Vec<String>,
+    /// Base relations scanned in a database connection's catalog, **qualified**
+    /// (`pg.public.orders`).
+    ///
+    /// A second list rather than more entries in [`tables`](PlanDeps::tables), because the two
+    /// answer different questions and only one of them is checkable against the project's defs.
+    /// Folding a remote scan into `tables` by its bare component — which is what this did before
+    /// the DB workstream — makes `pg.public.orders` indistinguishable from a workspace table
+    /// called `orders`: dropping that table then names a view that never read it, the view's own
+    /// missing-dependency check cries wolf over a relation the store has no row for, and a
+    /// forget of the connection matches nothing anywhere.
+    pub remote: Vec<String>,
     /// Every `SubqueryAlias` name, which for an inlined sub-view is the view's own name.
     /// Raw: also includes plain table aliases (`FROM t AS x`) and CTE names, since those
     /// are indistinguishable from a view inline in the plan. The UI keeps only the ones
@@ -749,12 +826,16 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::logical_expr::LogicalPlan;
     let mut tables = BTreeSet::new();
+    let mut remote = BTreeSet::new();
     let mut aliases = BTreeSet::new();
     let _ = plan.apply_with_subqueries(|node| {
         match node {
             LogicalPlan::TableScan(scan) => {
                 if scan.source.get_logical_plan().is_none() {
-                    tables.insert(scan.table_name.table().to_string());
+                    match in_workspace(&scan.table_name) {
+                        true => tables.insert(scan.table_name.table().to_string()),
+                        false => remote.insert(scan.table_name.to_string()),
+                    };
                 }
             }
             LogicalPlan::SubqueryAlias(a) => {
@@ -766,6 +847,7 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     });
     PlanDeps {
         tables: tables.into_iter().collect(),
+        remote: remote.into_iter().collect(),
         aliases: aliases.into_iter().collect(),
     }
 }
@@ -1531,5 +1613,134 @@ mod tests {
     fn a_dash_mid_message_is_not_a_retry_wrapper() {
         let raw = "Arrow error: column 'order - id' is not nullable";
         assert_eq!(message(&spec("t", &[], "parquet"), ".parquet", raw), raw);
+    }
+}
+
+/// **Dependency recording across sources** (DB-03) — the half of `plan_deps` a database
+/// connection changed, and the collision it exists to prevent.
+#[cfg(test)]
+mod cross_source_tests {
+    use std::collections::BTreeMap;
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+    use crate::engine::providers::fake_database;
+    use crate::engine::{build_context, fold_ident};
+
+    /// A session with a workspace table `orders`, a connection `pg` whose catalog holds its own
+    /// `orders`, and nothing else. The shared bare name is the fixture's whole point.
+    ///
+    /// A **registered batch**, never a view standing in for one: the planner inlines a view at
+    /// plan-build time, so a view named `orders` leaves a `SubqueryAlias` and no `TableScan` at
+    /// all — a fixture that would make every assertion below vacuously pass.
+    async fn session() -> SessionContext {
+        let ctx = build_context(&BTreeMap::new());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("total", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::new_empty(schema);
+        ctx.register_batch("orders", batch)
+            .expect("workspace table");
+        fake_database(&ctx, "pg", &["orders"]);
+        ctx
+    }
+
+    /// What one view reads, as the plan reports it.
+    async fn deps(ctx: &SessionContext, sql: &str) -> PlanDeps {
+        let plan = ctx.sql(sql).await.expect("plans");
+        plan_deps(plan.logical_plan())
+    }
+
+    /// A remote scan is recorded **qualified**, a workspace scan **bare**, and a cross-source
+    /// plan carries one of each — which is the whole fix: recorded by bare component, the two
+    /// sides of this join would be one indistinguishable `orders`.
+    ///
+    /// The second half asserts the other direction: the workspace's own longer spellings are not
+    /// remote, and do not become a second key for a table already recorded under its bare name.
+    #[tokio::test]
+    async fn a_remote_scan_is_recorded_qualified() {
+        let ctx = session().await;
+        let mixed = deps(
+            &ctx,
+            "SELECT o.total FROM orders o JOIN pg.public.orders r ON o.id = r.id",
+        )
+        .await;
+        assert_eq!(mixed.tables, vec!["orders".to_string()]);
+        assert_eq!(mixed.remote, vec!["pg.public.orders".to_string()]);
+        let spelled = deps(&ctx, "SELECT id FROM strata.public.orders").await;
+        assert_eq!(spelled.tables, vec!["orders".to_string()]);
+        assert!(spelled.remote.is_empty());
+    }
+
+    /// And the reader question keys off the split: dropping the workspace `orders` names the
+    /// view that reads it and not the one that reads the connection's.
+    #[tokio::test]
+    async fn a_remote_reader_is_not_a_dependent_of_the_workspace_table() {
+        let ctx = session().await;
+        for (name, sql) in [
+            ("local_reader", "SELECT id FROM orders"),
+            ("remote_reader", "SELECT id FROM pg.public.orders"),
+        ] {
+            ctx.sql(&format!("CREATE VIEW {name} AS {sql}"))
+                .await
+                .expect("plans")
+                .collect()
+                .await
+                .expect("created");
+        }
+        assert_eq!(
+            dependent_views(&ctx, "orders").await,
+            vec!["local_reader".to_string()],
+            "the remote reader reads 'pg.public.orders', which is not this table"
+        );
+    }
+
+    /// The one diagnosis [`view_error`] makes, and the two it declines to: a workspace name
+    /// keeps DataFusion's words, because the catalog pane has a row for it and that is a better
+    /// thing to be pointed at than a refresh, and so does a catalog nothing registered, where
+    /// there is no connection to name.
+    #[tokio::test]
+    async fn a_missing_remote_relation_names_its_connection() {
+        let ctx = session().await;
+        assert_eq!(
+            view_error(
+                &ctx,
+                "Error during planning: table 'pg.public.gone' not found"
+            ),
+            "'pg.public.gone' is not in the database connection 'pg'. Refresh the catalog to \
+             re-read the database"
+        );
+        assert_eq!(
+            view_error(
+                &ctx,
+                "Error during planning: table 'strata.public.gone' not found"
+            ),
+            "Error during planning: table 'strata.public.gone' not found"
+        );
+        assert_eq!(
+            view_error(
+                &ctx,
+                "Error during planning: table 'nosuch.public.gone' not found"
+            ),
+            "Error during planning: table 'nosuch.public.gone' not found"
+        );
+    }
+
+    /// The catalog list answers case-insensitively and prints the spelling it was registered
+    /// under — the same rule `StrataCatalogList` keeps for resolution, applied to the sentence.
+    #[tokio::test]
+    async fn the_connection_is_named_as_it_was_registered() {
+        let ctx = build_context(&BTreeMap::new());
+        fake_database(&ctx, "Sales", &["orders"]);
+        assert_eq!(fold_ident("Sales"), "sales");
+        assert!(view_error(
+            &ctx,
+            "Error during planning: table 'sales.public.gone' not found"
+        )
+        .contains("'Sales'"));
     }
 }
