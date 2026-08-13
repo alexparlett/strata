@@ -176,6 +176,10 @@ impl Component for TablesSection {
         // TABLES leads the pane, so it drops the inter-section gap the others carry — and it is
         // the section that can gain a row, so it carries the New-table action (P4-11). VIEWS and
         // QUERIES are made by saving a query, not by a form, so neither has one.
+        //
+        // **One press, one window** — the Configure window answers every way a table is made,
+        // including a memory table (IT-01), which is a third LOCATION in that form rather than a
+        // second surface reached through a menu here.
         let actions = use_catalog_actions();
         CatalogSection::new("TABLES", names.len(), self.theme.clone())
             .first()

@@ -388,6 +388,25 @@ impl ProjectState {
         }
     }
 
+    /// Why `name` cannot be taken, if something already has it — [`name_in_use`](Self::name_in_use)
+    /// as the sentence a form shows.
+    ///
+    /// One wording, because two surfaces ask this: the Configure window's footer (P4-11) and the
+    /// empty-table panel (IT-01). A name is free or it is not, and a user who saw the two
+    /// surfaces disagree about how to say so would reasonably wonder whether they were being
+    /// told the same thing.
+    pub fn name_taken(&self, name: &str) -> Option<String> {
+        let kind = self.name_in_use(name)?;
+        Some(format!(
+            "'{name}' is already the name of a {}.",
+            match kind {
+                CatalogKind::Table => "table",
+                CatalogKind::View => "view",
+                CatalogKind::Query => "saved query",
+            }
+        ))
+    }
+
     // --- registration landing (the engine's answers, folded onto the rows) ----------
 
     /// Land a connected object store on its row (W7).

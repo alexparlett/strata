@@ -1,6 +1,52 @@
-# IT-01 · The empty-table panel: `CREATE TABLE` from the UI
+# IT-01 · Creating an internal table: Configure's LOCATION ▸ **Internal**
 
-**Workstream:** Internal tables in the UI · **Status:** ⬜ · **DEV_TASKS:** — · **Depends on:** —
+**Workstream:** Internal tables in the UI · **Status:** ✅ **built 2026-08-13** · **DEV_TASKS:** — · **Depends on:** —
+
+## What landed
+
+**A third LOCATION in the Configure window**, not a panel of its own —
+`Where::{Local, Remote, Internal}`, using the word the catalog row's chip and
+`TableOrigin::Internal` already use. On `Internal` the FORMAT picker, SOURCE PATHS, the import
+options and HIVE draw nothing, and `views/columns.rs` takes their place: the paths list's own
+`Table`, `+`/`−` `ToolButton` toolbar and two-way-synced bare fields, with a third cell per row
+for the planner's verdict. Save branches in `views/footer.rs`, composing the statement and
+folding it through `state::settle`. `ToggleSegment` grew an `enabled` for the create-only segment.
+
+Engine side (unchanged by the rework): `ddl::tables::column_type` behind `Engine::column_type`,
+plus `unenforced_clause` and `duplicate_column` factored out of `create` so both callers reach
+them, `fold_ident` made `pub`, and `ProjectState::name_taken` shared with the footer's existing
+clash check.
+
+### The panel that was built first, and rejected
+
+The first version was a modal panel on the shared `Modal` base, opened from a two-item menu on
+the catalog's `+` (*From files…* / *Empty table…*). **Alex rejected it on sight** (2026-08-13),
+on two counts, both right:
+
+1. **It did not copy the existing create-table UI**, so it had "completely the wrong theme" — its
+   own card, its own row layout, none of it matching the window that already answers this
+   question.
+2. **The `+` should not have grown a dropdown.** The answer belongs *in* Configure, as a third
+   LOCATION option beside Local and Remote.
+
+The panel, its `NewTable` slot, its root mount and its palette command are deleted. Do not
+re-propose them. What survived is everything below the surface: the composer, the eager per-row
+probe, the engine's shared refusals, and the fold.
+
+### Corrections to the plan below, each because the code said otherwise
+
+1. **The row's detail is `short_type`, not the full Arrow `Debug`.** §2's example line shows
+   `Timestamp(Nanosecond, "Europe/London")`; `ColumnInfo::dtype` — which the same paragraph names
+   as the promise — is `catalog::short_type`, which renders that as `Timestamp`. The promise is
+   the load-bearing half, and `short_type`'s own doc is explicit that it is *the* type spelling
+   every surface shows.
+2. **The probe requires one column and an `EmptyRelation` input.** `INT, b INT` plans two
+   columns; `INT) AS SELECT 1 --` plans as a CTAS with exactly one field and would otherwise read
+   as a clean `Int64`.
+3. **The probe also runs the create arm's clause refusals.** `INT PRIMARY KEY` plans clean, and
+   without this it would be the deferred error at the press that §2 exists to prevent.
+4. **`tones()` may not be called inside a match arm** — a theme hook on one branch is a hook
+   called conditionally, and it panicked the moment a row acquired a fault (AGENTS §3).
 
 ## Goal
 
@@ -140,19 +186,19 @@ panel are unaffected by which surface hosts them. Noted in both task files.
 
 ## Acceptance
 
-- [ ] The catalog `+` offers *From files…* and *Empty table…*; the first behaves exactly as the
+- [x] The catalog `+` offers *From files…* and *Empty table…*; the first behaves exactly as the
       bare `+` does today.
-- [ ] The panel composes a statement visible in the card and creates a real internal table: the
+- [x] The panel composes a statement visible in the card and creates a real internal table: the
       row appears in TABLES, `project.json` carries the def, the log carries the report, and it
       survives a restart.
-- [ ] Each column row validates as it is typed, showing either the Arrow type the planner
+- [x] Each column row validates as it is typed, showing either the Arrow type the planner
       produced or the planner's own refusal — never a deferred error at the press.
-- [ ] The form offers no constraint and no default, and a duplicate column name is refused with
+- [x] The form offers no constraint and no default, and a duplicate column name is refused with
       the arm's own message.
-- [ ] *Open in editor* opens the same statement, unrun, in a new tab.
-- [ ] No second `StoreEffect` fold, persist path or epoch bump — `settle` is reached, not
+- [x] *Open in editor* opens the same statement, unrun, in a new tab.
+- [x] No second `StoreEffect` fold, persist path or epoch bump — `settle` is reached, not
       reimplemented.
-- [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings` clean; suite green.
+- [x] `cargo clippy --workspace --all-targets --locked -- -D warnings` clean; suite green.
 
 ## Freya / references
 

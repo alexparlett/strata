@@ -25,6 +25,10 @@ paints, never where truth lives.
   survive re-homing). Expansion state is pane-local: **two** `use_state(HashSet<String>)`
   sets keyed `"{kind}::{name}"` (mod.rs:105-109) — already kind-qualified; a tree
   generalizes the key to a stable **node path**.
+- **The TABLES `+` is unchanged by IT-01** (landed 2026-08-13): it is still one press setting
+  `ConfigureTarget::New`. Creating a table Strata stores is a third LOCATION *inside* that
+  window (Local · Remote · Internal), not a second gesture here — a menu on the `+` was built
+  and rejected. So this task moves one press, as it always did.
 - **The fork ships the tree** (corrected in review — do not hand-roll one):
   `freya::components::{Tree, TreeItem, Disclosure}` + `TreeConfig`
   (`crates/freya/crates/freya-components/src/tree.rs`) — virtualized over

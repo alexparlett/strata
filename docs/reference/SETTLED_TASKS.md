@@ -486,3 +486,67 @@ and `docs/CHART_SPEC.md`.
   comparison, period delta, gap-fill, sampling) fell with the palette placement, and
   candlestick remains an ordinary future-mark candidate on the Tier B pattern if it is ever
   asked for. Do not rebuild them as palette commands.
+
+## Internal tables in the UI (IT)
+
+**IT-01 (creating an internal table)** is ✅ — the last verb on an internal table to gain a
+gesture. What it settled:
+
+**It is a third LOCATION in the Configure window, not a surface of its own.** Local · Remote ·
+**Internal**, using the word the catalog row's chip and `TableOrigin::Internal` already use.
+Creating a table Strata stores is the same question that window asks about every other table —
+what is it called, what is in it — with a different answer to *where*, so it belongs in that
+control. On `Internal` the FORMAT picker, SOURCE PATHS, the import options and HIVE all draw
+nothing (each answers a question about files this table does not have), and a **COLUMNS** list
+takes their place, built from the paths list's own `Table`, `+`/`−` toolbar and
+two-way-synced bare fields. The segment is shown and inert on an *edit*: a table that already has
+files cannot be turned into one Strata stores without discarding the def that points at them.
+
+**A modal panel behind a two-item menu on the catalog's `+` was built first and rejected** (Alex,
+2026-08-13), on two counts: it asked the same question on a second surface, and it wore a dress
+that matched nothing else in the app. The `+` is one press to the one window again. Do not
+re-propose the panel.
+
+**The type field is free text, probed per row against the planner, eagerly.** Deriving a picker
+from Arrow was investigated first and rejected on evidence: DataFusion ships no Arrow → SQL
+inverse, `convert_simple_data_type` is many-to-one, and the same spelling reaches *different*
+Arrow types depending on session config (`map_string_types_to_utf8view`, `execution.time_zone`).
+So nothing is authored: `Engine::column_type` plans `CREATE TABLE __strata_probe (c <typed>)` —
+executing nothing — and the row's third cell shows the Arrow type the create will actually
+produce, in `short_type`'s spelling, which is the one the grid header and the inspector show.
+**Eager is the requirement, not a nicety**: deferring to Save means filling eight rows and hunting
+for the one that was wrong. The probe therefore also runs the create arm's own clause refusals (a
+`PRIMARY KEY` typed into the box plans clean), requires the planned schema to hold exactly one
+field (`INT, b INT` plans two), and requires the plan's input to be an `EmptyRelation` — a value
+that closes the declaration and brings a query (`INT) AS SELECT 1 --`) plans as a CTAS with one
+field and would otherwise read as a clean `Int64`.
+
+**The refusals are the engine's, reached rather than restated.** `duplicate_column` and
+`unenforced_clause` moved out of `ddl::tables::create` so the form and the create arm cannot say
+different things about one rule; `fold_ident` became `pub` so the form refuses exactly the pairs
+the create would (a case-insensitive compare refuses `"my col"` beside `"MY COL"`, which the
+create accepts); and `ProjectState::name_taken` is the name-clash sentence, shared with the
+footer's existing check. What the form authors is only what a *form* can be wrong about: a row
+with no name, a row with no type, a table with no name, a table with no columns.
+
+**Save composes a statement and folds it; it writes no def.** On `Internal` the footer dispatches
+`Engine::run` on a **minted** `WsId` and hands the report to `state::settle` — the window's one
+statement fold, never a second `apply`, persist path or epoch bump — because the spool that gives
+the table its data has no def to be written from. It keeps the existing wait:
+`Status::Registering(name)` reads "Validating…", and `use_watch_registration` closes the window
+when that row lands `Ready`, which the fold makes true in the same breath.
+
+**A create in flight holds the window shut** — `Status::Creating`, a state apart from
+`Registering` precisely because it answers a different question about closing. The fold runs
+after the spawned task's await and `ddl::tables::create` publishes its spool by rename before
+its own last await, so a window dismissed mid-create leaves a data directory nothing points at
+and nothing sweeps. Cancel and Esc both read `Status::holds_window`, so they cannot disagree.
+`Registering` is not held: that pass belongs to the project window's scan driver and answers on
+the catalog row regardless. The predicate is also mirrored into an `Arc<AtomicBool>` the window's
+`with_on_close` hook reads — the native traffic-light button and ⌘Q go through winit's
+`process_close_request`, which closes unconditionally without a hook, so gating only the in-app
+presses left two doors open. (Both found in review of #154.)
+
+**`ToggleSegment` grew an `enabled`** for the create-only segment: shown and faded rather than
+absent, because a segment that vanished would change the control's shape and the answer is still
+worth knowing about. It gates the handler rather than going `interactive(false)`.
