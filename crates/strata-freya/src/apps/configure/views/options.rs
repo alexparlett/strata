@@ -88,7 +88,7 @@ mod tests {
                     draft: State::create(ConfigureDraft {
                         format: FormatId::Csv,
                         name: "t".into(),
-                        sources: vec!["/data".into()],
+                        local_sources: vec!["/data".into()],
                         ..Default::default()
                     }),
                     target: State::create(ConfigureTarget::New),
