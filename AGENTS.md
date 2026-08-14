@@ -869,6 +869,10 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
   -D warnings` then `cargo test --workspace --locked`, on **macOS**, with `submodules: true`,
   asserting the gitlink **before** compiling. `-D warnings` is scoped to the clippy invocation;
   the toolchain step's `rustflags: ''` stays, so a dependency's warning cannot fail the build.
+  Both Rust jobs sit behind a `changes` gate **job** (never a workflow-level `paths` filter,
+  which would strand a future required check) listing what the build actually reads —
+  `crates/**`, the manifests, `themes/**`, `assets/**`, `ci.yml` — so a docs-only diff
+  compiles nothing and skips the container queue.
 - **Only the tests that need the container runtime queue for it, and the split is a test target.**
   Two jobs: `containers` runs each container binary entire (`--test object_store_minio --test
   postgres_federation`, so a test added to either needs no workflow edit) and carries the queue,

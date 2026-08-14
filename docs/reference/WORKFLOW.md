@@ -270,6 +270,19 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   apply `-D warnings` to the dependency builds too, and a warning in DataFusion is not a fact about
   this repo. That override was originally a note that denying warnings needed two long-standing
   warnings resolved first; both were, in the change that added this gate.
+  Both Rust jobs run **only when the diff could have moved the build**: the workflow opens with a
+  `changes` gate (`dorny/paths-filter`) and `test` and `containers` are `needs` + `if` on its
+  answer, so a docs-only change — `.claude/`, `docs/`, markdown — compiles nothing and never takes
+  a turn on the account's one container worker. The relevant set is what the build actually
+  *reads*, not `*.rs`: `crates/**` (the fork gitlink included), the manifests and `clippy.toml`,
+  `themes/**` and `assets/**` (pulled from the repo root by `include_str!`/`include_bytes!` — the
+  theme JSONs, the schema `schema_in_sync` compares, the fonts), and `ci.yml` itself, because a CI
+  change must prove CI still works. It is a gate **job**, deliberately not a workflow-level
+  `paths` filter: a path-skipped workflow creates no check runs at all, so the day a required
+  status check is added to `main`, docs-only PRs would wait forever on a check that never reports —
+  a skipped *job* reports as skipped and satisfies the requirement. And it fails loud in the right
+  direction: if the gate itself errors, the Rust jobs are skipped but the run is red, so a broken
+  filter can never read as a green run over unreviewed Rust.
 - **Only the tests that need the container runtime queue for it, and the split is a test target.**
   Everything the shared container worker forces on a job — the repo-wide queue below, the cloud
   agent, the release step, the capacity retry — was being paid for by the whole suite, when two
