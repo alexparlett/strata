@@ -644,7 +644,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   is bound **before** the match, never resolved in its scrutinee: a `peek` guard in a match head
   outlives the arm, and the check writes that state.
   The card's words are `Report::of`, one pure match over the status, and its action is
-  `Affordance::action` pressed through `press` — so it can offer nothing the rail would not. What
+  `Affordance::action` pressed through `press` — so it can offer nothing the rail would not. A
+  staged update is asked about **once**: when the download the card started lands, that card
+  *becomes* the restart question rather than growing a press that raises it. What
   changed is the release's **own Markdown**, carried on the offer from the check that already read
   it (`update::Offer::notes`, on all three offer states, and on through `Affordance::Restart` to
   the restart card, which is the first sight of it when the download came from the rail) and drawn

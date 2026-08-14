@@ -182,6 +182,10 @@ What landed:
   the card cannot pair a tick with a failure. The subject is `Affordance::note` (one vocabulary
   with the rail) and the single accent action is `Affordance::action` through `press`, so the card
   offers nothing the rail would not and a download started in it reports progress in place.
+- **A staged update is asked about once** (caught while driving the local server): the report
+  card had grown a *Restart to update* press that raised the restart card, which asks the same
+  question a second time and says nothing new. `report_card` delegates to `restart_card` on
+  `Affordance::Restart`, so the card that started the download becomes the restart question.
 - **The changelog**, asked for in the same pass: `update::Offer::notes` carries GitHub's release
   body (already read by the check, normalized line endings, `null` parsed as `Option`) through all
   three offer states — and on through `Affordance::Restart` to the **restart** card, which is the
