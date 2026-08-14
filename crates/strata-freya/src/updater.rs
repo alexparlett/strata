@@ -393,10 +393,31 @@ fn restart_card(
 /// it, and a download started from it reports its own progress. The words are [`Report`]'s and
 /// the action is [`Affordance`]'s: pressing it is [`press`], the same funnel the rail's action
 /// uses, so this card can offer nothing the rail would not.
+///
+/// **A staged update is asked about once.** When the download this card started lands, the offer
+/// becomes [`Affordance::Restart`] and the card *becomes* the restart question rather than
+/// growing a press that raises it: "restart to update" followed by "restart now?" is one
+/// question asked twice, and the second card would say nothing the first had not.
 fn report_card(ask: AskSlot, status: UpdateStatus, roles: RoleColors, tones: Tones) -> Element {
     let mut ask = ask;
     let update = status.read().clone();
     let offer = Affordance::of(&update, install_site());
+    if let Affordance::Restart {
+        version,
+        page_url,
+        notes,
+    } = &offer
+    {
+        return restart_card(
+            ask,
+            status,
+            roles,
+            tones,
+            version.clone(),
+            page_url.clone(),
+            notes.clone(),
+        );
+    }
     let report = Report::of(&update, &offer, tones);
 
     let offered = offer.action();
@@ -1093,6 +1114,31 @@ mod tests {
         assert!(
             !notes.iter().any(|t| t.contains("Shape panel")),
             "the changelog outlived the offer: {notes:?}"
+        );
+    }
+
+    /// **A staged update is asked about once.** The card that started the download *becomes* the
+    /// restart question when it lands — "restart to update", then "restart now?", is one
+    /// question twice, and the second card would say nothing the first had not.
+    ///
+    /// The site is `Unbundled` in a test binary, so this drives the card through
+    /// [`restart_card`] directly: what it pins is that the two cards are one body, so the report
+    /// card cannot grow a second press back.
+    #[test]
+    fn the_staged_card_asks_the_restart_question_itself() {
+        let (mut runner, (mut ask, _)) = runner();
+        open(&mut runner, &mut ask, restart_ask());
+
+        let texts = texts(&runner);
+        assert_eq!(texts[0], "Restart to update");
+        assert!(
+            texts.iter().any(|t| t == "Restart now"),
+            "the staged card did not ask its own question: {texts:?}"
+        );
+        assert_eq!(
+            texts.iter().filter(|t| *t == "Restart to update").count(),
+            1,
+            "'Restart to update' is the title; a second one is a press that re-asks: {texts:?}"
         );
     }
 

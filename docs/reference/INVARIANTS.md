@@ -2248,6 +2248,12 @@ Things that must not regress. Each was fought for once already.
   and the rail describe one update in one vocabulary; and the one accent action is
   `Affordance::action` pressed through `press` — this card can offer nothing the rail would not,
   and a download started in it reports its own progress in place.
+  **And a staged update is asked about once.** When that download lands the offer becomes
+  `Affordance::Restart`, and the card the user is already looking at *becomes* the restart
+  question — it does not grow a press that raises a second card. "Restart to update" followed by
+  "restart now?" is one question asked twice, and the second card would say nothing the first had
+  not; `report_card` delegates to `restart_card`, so the two are one body rather than two that
+  have to be kept saying the same thing.
   **What changed is the release's own Markdown, rendered by the viewer the app already has.**
   `update::Offer::notes` is GitHub's release body, carried by the check that already read it
   (never a second request) with its line endings normalized, since a `\r` reaches the text shaper
