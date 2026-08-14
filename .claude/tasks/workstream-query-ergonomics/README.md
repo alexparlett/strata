@@ -34,7 +34,7 @@ not (dynamic access to a *heterogeneous* struct), and the revisit condition are 
 | QE-03 | [`describe_table` shape collapse for keyed siblings](QE-03-describe-shape-collapse.md) | 10 | ✅ |
 | QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ✅ |
 | QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ✅ |
-| QE-06 | [Deep-JSON guidance + the upstream ledger](QE-06-guidance-and-ledger.md) | 3, 4, 5, 7, 8, 9 | ⬜ |
+| QE-06 | [Deep-JSON guidance + the upstream ledger](QE-06-guidance-and-ledger.md) | 3, 4, 5, 7, 8, 9 | ✅ |
 | QE-07 | [Bound every schema surface: shared collapse + derived depth](QE-07-schema-bound.md) | follow-on from 10 | ⬜ |
 | QE-08 | [The catalog pane survives a keyed struct](QE-08-catalog-pane-bound.md) | follow-on from 10 | ⬜ |
 
@@ -111,26 +111,58 @@ The pin is structural: DataFusion is held at **54** by `datafusion-table-provide
 even an upstream fix arrives only when that whole set bumps. Recorded here so nobody
 re-diagnoses these from scratch; revisit the list at the next DF bump.
 
-3. **UNION ALL branch count = open file count** — each branch is an independent scan; ~96
-   branches over one JSON source exhausts fds (`EMFILE`). Upstream: no shared/materialised
-   scan for repeated references. **Workaround that exists today:** materialise once with an
-   internal table (`CREATE TABLE t AS …`) and query that — one spool file, no re-scan
-   per branch. QE-06 writes this down where users will find it.
-4. **`json_get_json` output won't unify in a recursive CTE** — its `arrow.json` extension
-   metadata fails union unification against plain Utf8 ("field metadata differs");
-   `CAST(x AS VARCHAR)` is optimised away, `x || ''` is the only spelling that works.
-   Upstream (`datafusion-functions-json` / DF's unifier). **Mitigated by QE-01:** `to_json`
-   returns plain Utf8 with no extension metadata.
-5. **Dot access fails on an unnested struct alias** (`r.p` → "Invalid qualifier r";
-   `r['p']` works) — upstream planner inconsistency. Workaround is the bracket spelling.
+Every **refusal and workaround** below was re-run against this build in QE-06 (2026-08-14), and
+three of them had inherited a wrong workaround from the field reports; those corrections are the
+entries, not footnotes to them. What was *not* re-run is called out where it sits — item 3's
+fd exhaustion is still the field report's, because reproducing it needs the 96-branch query and
+the 62 MB source, not a unit-scale fixture.
+
+3. **A UNION ALL branch is its own scan** — measured: three branches over one table plan three
+   `DataSourceExec` nodes, so ~96 branches over one JSON source re-parse it 96 times. The
+   `EMFILE` that follows is **the field report's, not re-run here** — it needs that query
+   against the 62 MB source, and nothing at fixture scale exhausts fds. Upstream: no shared or
+   materialised scan for repeated references. **Workaround:** materialise once with an internal
+   table (`CREATE TABLE t AS …`) and query that. **Corrected:** it does not reduce the *number*
+   of scans — the union still plans one per branch — it makes each one a read of an already
+   parsed Arrow spool instead of a re-parse of the source. The spool is one file per CTAS
+   output partition (1 and 4 observed, for a one-row and a four-partition create), so it is
+   fewer files than the source only when the source is a multi-file listing — which is why this
+   is a parse saving first and an fd saving only sometimes.
+4. **A `json_get_json` result will not unify against plain text across a recursive CTE's
+   branches** — its `arrow.json` extension metadata fails the projection check
+   ("field metadata differs"). **Corrected:** the mismatch is *between branches*, not a
+   property of the function — a CTE whose seed and recursive term both call it plans fine,
+   and one where only one side does fails in whichever direction the metadata sits.
+   `x || ''` strips the metadata; `CAST(x AS VARCHAR)` and `arrow_cast(x, 'Utf8')` were both
+   re-checked and do **not**, so the spelling has to go on every branch that calls a json
+   function. Upstream (`datafusion-functions-json` / DF's unifier). **Mitigated by QE-01:**
+   `to_json` returns plain Utf8 with no extension metadata.
+5. **A FROM-clause `UNNEST` alias has no addressable fields** — `SELECT r.p FROM t,
+   UNNEST(t.arr) AS r` fails with "No field named r.p. Valid fields are …
+   r.\"UNNEST(outer_ref(t.arr))\"", with or without an outer reference (a literal
+   `FROM UNNEST([…]) AS r` fails the same way; only `SELECT *` gets the column out). The
+   report's own wording, "Invalid qualifier r", **does not reproduce** in any shape tried —
+   worth saying upstream, because it suggests the report came from a different version or a
+   different query. **Corrected: the bracket spelling does not work either**
+   ("No field named r"), and a column alias (`AS r(v)`) trips a DataFusion internal-error
+   assertion in the federation optimizer rule. The workaround is to **unnest in the select
+   list of a subquery** — `SELECT r.p FROM (SELECT unnest(arr) AS r FROM t)` — where both
+   `r.p` and `r['p']` resolve.
 6. *(ours — QE-02, built: `regexp_extract_all`)*
-7. **`string_agg(DISTINCT x, d ORDER BY y)` unsupported** — DISTINCT and ORDER BY each work
-   alone, not together. Upstream aggregate limitation; no clean workaround (a pre-deduped
-   subquery with its own ordering is the usual dodge).
+7. **`string_agg(DISTINCT x, d ORDER BY y)` is refused** — "In an aggregate with DISTINCT,
+   ORDER BY expressions must appear in argument list". **Corrected: the error names the
+   workaround and it works** — `string_agg(DISTINCT s, ',' ORDER BY s)` runs; only ordering
+   by a *different* column is unsupported, for which a pre-deduped subquery carrying its own
+   ordering is the dodge. Upstream aggregate limitation.
 8. **`UNNEST` in FROM can't reference nested outer columns** ("Nested identifiers are not
-   yet supported for OuterReferenceColumn") — upstream; the subquery-projection rewrite is
-   the workaround.
+   yet supported for OuterReferenceColumn") — upstream. The subquery-projection rewrite is
+   the workaround, and it has to land in a **select-list** unnest: projecting the nested
+   column out and then unnesting it in FROM clears this error only to hit item 5.
 9. *(already a key — see settled facts; guidance lands in QE-06)*
+   Re-verified: an unquoted mixed-case struct field is "Field contentvariants not found in
+   struct", the quoted spelling resolves, and `SET`/`RESET` of
+   `datafusion.sql_parser.enable_ident_normalization` turn the folding off and back on for
+   the session.
 
 Feedback items 1, 2, 6, 10, 11, 12 are the six tasks. Nothing here is filed upstream yet; if
 any of 3/4/5/7/8 blocks a user again, filing the issue against DataFusion (or
