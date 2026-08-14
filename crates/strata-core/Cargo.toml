@@ -75,6 +75,13 @@ futures = "0.3"
 # trait — the attribute has to be applied by the same crate version DataFusion used, and it is
 # already in the graph via DataFusion itself.
 async-trait = "0.1"
+# `engine::udfs`: the compiled pattern `regexp_extract_all` caches (QE-02). Named because the
+# UDF spells `Regex` itself — and it is the **same** `Regex` DataFusion's own
+# `functions::regex::compile_regex` returns, which is the whole reason that function can be
+# reused rather than reimplemented with a second cache and a second error wording. Already in
+# the graph (DataFusion's regexp family is built on it, via its default `regex_expressions`
+# feature) and version-unified with it, so this costs a line and no build.
+regex = "1"
 # `config`/`theme`/`plan` persist + (de)serialize.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }

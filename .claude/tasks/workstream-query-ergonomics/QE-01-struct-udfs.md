@@ -1,6 +1,6 @@
 # QE-01 · Struct UDFs: `struct_keys`, `struct_entries`, `struct_get`, and the `to_json` fallback
 
-**Workstream:** Query ergonomics · **Status:** ⬜ · **Depends on:** nothing
+**Workstream:** Query ergonomics · **Status:** ✅ · **Depends on:** nothing
 
 ## Goal
 

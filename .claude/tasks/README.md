@@ -217,13 +217,16 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   **Workstream done.** Hand-rolled rather than Sparkle, deliberately; the workstream README
   records the settled decisions.
 - **Query ergonomics**
-  ([`workstream-query-ergonomics/`](workstream-query-ergonomics/README.md), QE) — ⬜ **all
-  six tasks open, planned 2026-08-13** from field feedback on deep object-keyed JSON (the
-  `sample/config.json` shape) queried through the agent surface. Two engine UDF tasks —
+  ([`workstream-query-ergonomics/`](workstream-query-ergonomics/README.md), QE) — planned
+  2026-08-13 from field feedback on deep object-keyed JSON (the `sample/config.json` shape)
+  queried through the agent surface; **the two engine UDF tasks are ✅ and QE-03..06 are ⬜**.
+  The UDFs are `engine::udfs`, one `register` call:
   the struct family `struct_keys`/`struct_entries`/`struct_get`/`to_json` (QE-01, the whole
   fix for the dynamic-key story: enumeration off the null bitmaps and access by computed
   key, Arrow-side first, JSON text only as the heterogeneous-shape fallback), and
-  `regexp_extract_all` (QE-02) — then three agent-surface tasks: `describe_table`
+  `regexp_extract_all` (QE-02 — every match where DataFusion's `regexp_match` returns the
+  first, so `unnest(regexp_extract_all(…))` replaces the recursive-CTE walk). Then three
+  agent-surface tasks: `describe_table`
   collapsing N same-shaped UUID-keyed siblings into one counted shape (QE-03), the stateless
   idle sweep's 5-minute TTL raised and stated to the model (QE-04), and result export as the
   spec's reserved first **curated write**, its permission model decided (Alex, 2026-08-13:
