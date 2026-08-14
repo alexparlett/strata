@@ -48,7 +48,9 @@ manage: iterate scratch work in one session, and park a result you will refer
 back to in its own, because a new run in a session replaces the previous
 result. You may hold twenty; opening a twenty-first closes your oldest idle
 one, so read a parked result back before it is that old, and close sessions you
-are finished with.
+are finished with. A session you have not used for 30 minutes may also be
+retired. 'list_query_sessions' is what you still hold; opening a session again
+and re-running is cheap, so re-run rather than assuming an old handle resolves.
 
 'run' executes exactly the SQL you send: one statement, no LIMIT injected, the
 result fully materialized. On a large table, bound the query yourself with a

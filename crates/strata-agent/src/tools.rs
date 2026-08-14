@@ -131,12 +131,28 @@ struct LastRun {
 /// How long a **stateless** agent may go unheard from before it is retracted.
 ///
 /// Only the discover lifecycle needs this: every other path has a connection whose end is an
-/// event, so its agent is retracted by a `Drop` rather than by a clock. Matched to rmcp's own
-/// `SessionConfig::keep_alive`, which reaps an abandoned HTTP session on the same terms and
-/// for the same reason — there is no other signal — so the two do not disagree about how long
-/// a quiet client stays listed. Long enough that an agent thinking between tool calls is
-/// never dropped mid-investigation.
-pub const STATELESS_IDLE: Duration = Duration::from_secs(300);
+/// event, so its agent is retracted by a `Drop` rather than by a clock.
+///
+/// **Thirty minutes, because the five it replaces were parity with something that does not
+/// govern this branch.** The old value matched rmcp's `SessionConfig::keep_alive`, which reaps
+/// a *session worker* whose channel has gone quiet
+/// (`transport::streamable_http_server::session::local`) — the lifecycle whose agents are
+/// already retracted by a `Drop`, so the figure was borrowed from the one path that never
+/// needed it. A stateless request holds no rmcp state at all between calls (`get_service()`
+/// per request, dropped when the response is written), so this sweep is the only bound there
+/// and there is nothing on rmcp's side for it to agree with.
+///
+/// What five minutes cost in the field was query sessions retired mid-investigation, each
+/// taking the result the user was about to promote. The `Busy` guard re-stamps `seen` when a call
+/// *finishes*, so what this clock actually measures is the gap between calls — a model
+/// reasoning over a large result, or a person reading one, is not an absent client, and the
+/// server cannot tell the difference.
+///
+/// The leak it exists to bound is still bounded, and by the same things as before: what one
+/// quiet agent holds is capped by `MAX_REMEMBERED_RUNS` and by the per-agent session cap,
+/// and a client that has genuinely gone is still reaped rather than kept for the window's
+/// life.
+pub const STATELESS_IDLE: Duration = Duration::from_secs(30 * 60);
 
 /// Which agent a call is being made as.
 ///
@@ -480,8 +496,10 @@ impl<H: Host> StrataTools<H> {
     /// **A poll, because nothing on our side can observe the fact** (AGENTS.md §2): a client
     /// on the discover lifecycle has no connection, so its departure is not an event anywhere
     /// — there is no socket close, no `DELETE`, and no value whose drop means anything. The
-    /// staleness is therefore bounded and stated rather than hidden: such an agent stays on
-    /// the roster for at most `ttl` after its last call, and never longer.
+    /// staleness is therefore bounded and stated rather than hidden — and the bound is `ttl`
+    /// **plus one caller's polling interval**, because retraction can only land on a tick:
+    /// [`crate::server::SWEEP_INTERVAL`] is half the window, so such an agent stays on the
+    /// roster for between one and one and a half `ttl`s after its last call, and never longer.
     ///
     /// Driven by whichever transport can afford a timer — the HTTP server's own runtime
     /// (`crate::server`). Stopping is [`retire_all`](Self::retire_all)'s job, **not** this one
@@ -1041,7 +1059,9 @@ impl<H: Host> StrataTools<H> {
     /// Open a query session and return its handle: a place your queries run in sequence,
     /// each replacing the last. It is yours, not one of the user's editor tabs — nothing you
     /// do here disturbs what they are working on. Where Strata's window is open, the user can
-    /// see what you run and promote any query you ran into their own editor.
+    /// see what you run and promote any query you ran into their own editor. A session you
+    /// have not used for 30 minutes may be retired: list_query_sessions is what you still
+    /// hold, and opening a session again and re-running is cheap.
     #[tool(name = "open_query_session")]
     async fn open_query_session_tool(
         &self,
@@ -1131,6 +1151,7 @@ mod tests {
     use strata_core::engine::{RunTag, TableSpec, WsId, CANCELLED};
     use strata_model::SourceFormat;
 
+    use crate::assistant::SYSTEM;
     use crate::host::{CatalogEntry, Described, QuerySessionState, RegState};
     use crate::mock::{MockHost, MockProject};
     use crate::wire::{EntryWire, Mode, QuerySessionStateWire, Sort, StateWire};
@@ -1528,6 +1549,38 @@ mod tests {
                 "another agent's session is simply not there: {reached:?}"
             );
         }
+    }
+
+    /// **The bound a model plans against is the constant that enforces it.** Three surfaces
+    /// state the idle window in prose — this tool description, the assistant's system prompt
+    /// and `docs/AGENT_ACCESS_SPEC.md` — and a doc comment cannot interpolate a `Duration`, so
+    /// the agreement is checked rather than generated. Two of the three are readable from here;
+    /// the spec is prose the same edit has to carry.
+    ///
+    /// The wording is deliberately "may be retired": the sweep is the *stateless* branch's, and
+    /// a connected client's sessions live until its connection drops. A ceiling is honest for
+    /// both, a promise of retirement would be false for one of them, and the description is one
+    /// text that reaches every caller.
+    #[test]
+    fn the_stated_idle_bound_is_the_constant() {
+        let minutes = STATELESS_IDLE.as_secs() / 60;
+        let stated = format!("{minutes} minutes");
+
+        let tools = StrataTools::new(MockHost::new(Vec::new()));
+        let open = tools
+            .manifest()
+            .into_iter()
+            .find(|spec| spec.name == "open_query_session")
+            .expect("the router offers open_query_session");
+        assert!(
+            open.description.contains(&stated),
+            "the tool description states the window: {}",
+            open.description
+        );
+        assert!(
+            SYSTEM.contains(&stated),
+            "the assistant's system prompt states the same window"
+        );
     }
 
     /// **The idle sweep never takes an agent with a call in flight**, and that is what makes

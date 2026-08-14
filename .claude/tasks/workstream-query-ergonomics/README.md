@@ -32,7 +32,7 @@ not (dynamic access to a *heterogeneous* struct), and the revisit condition are 
 | QE-01 | [Struct UDFs: `struct_keys`, `struct_entries`, `struct_get`, `to_json`](QE-01-struct-udfs.md) | 1, 2 (mitigates 4) | ✅ |
 | QE-02 | [`regexp_extract_all` UDF](QE-02-regexp-extract-all.md) | 6 | ✅ |
 | QE-03 | [`describe_table` shape collapse for keyed siblings](QE-03-describe-shape-collapse.md) | 10 | ✅ |
-| QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ⬜ |
+| QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ✅ |
 | QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ⬜ |
 | QE-06 | [Deep-JSON guidance + the upstream ledger](QE-06-guidance-and-ledger.md) | 3, 4, 5, 7, 8, 9 | ⬜ |
 | QE-07 | [Bound every schema surface: shared collapse + derived depth](QE-07-schema-bound.md) | follow-on from 10 | ⬜ |
@@ -81,11 +81,13 @@ storage refused, no overwrite), not a consent gate.
   16 KB and the depth/width sampling ladder. The fix is not a bigger page — it is QE-03's
   shape collapse, which the feedback itself names as "the real win".
 - Agent sessions die five ways; the two that match "expired mid-investigation" are the
-  **5-minute stateless idle sweep** (`STATELESS_IDLE`, `tools.rs:155` — `Caller::Stateless`
-  only; connected clients are retracted by `Drop`) and the **20-sessions-per-agent cap**
-  (`agents.rs:65`, oldest non-running evicted). `read_page` deliberately does not pin
-  (AGENTS.md), so an expired session's result is gone by design; the lever is the TTL and the
-  stated bound, not a pin.
+  **stateless idle sweep** (`STATELESS_IDLE` — `Caller::Stateless` only; connected clients
+  are retracted by `Drop`) and the **20-sessions-per-agent cap** (`agents.rs:65`, oldest
+  non-running evicted). `read_page` deliberately does not pin (AGENTS.md), so an expired
+  session's result is gone by design; the lever is the TTL and the stated bound, not a pin.
+  QE-04 moved that TTL 5 min → 30 min and stated it in the tool description, `system.md` and
+  the spec; the 5 was parity with rmcp's `SessionConfig::keep_alive`, which governs the
+  *session* lifecycle this sweep does not serve.
 - Export from the agent is deliberately absent, and the spec reserves its shape:
   "**Curated writes** … arrive as new, separately permissioned tools; `run` never loosens"
   (docs/AGENT_ACCESS_SPEC.md:437-439). QE-05 is that reserved task — with the permission
