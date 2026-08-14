@@ -2,14 +2,21 @@
 //! **AUTHENTICATION** and whatever that mode refers to, then S3's **REGION** and **ENDPOINT**,
 //! then the standing note about where credentials actually come from.
 //!
+//! A database replaces the address box with **URL** and **DATABASE** — the two halves of
+//! `ConnectionDef::address`, split here because a server and the database on it are two things
+//! Postgres names separately — and follows them with **CATALOG**, **USER**, **PASSWORD** and
+//! **SSL MODE**. CATALOG is the odd one out and says so: it is Strata's prefix for the
+//! connection, not anything the server has.
+//!
 //! Built from `components::form` — a [`Form`] of [`Row`]s (AGENTS.md §3), so the label register,
 //! the `REQUIRED` markers and the rhythm between rows are the app's rather than this window's.
 //!
 //! **Which rows exist depends on the provider, and only on the provider.** HTTP is anonymous by
 //! construction and has no region, so it shows the authority box and nothing else; GCS has no
-//! region or endpoint. Rows are not shipped disabled: a control that cannot mean anything for the
-//! chosen provider is not a control (the same call the Configure window makes about its LOCATION
-//! toggle).
+//! region or endpoint; a database has no region, endpoint, auth mode or client options, because
+//! those are object-store vocabulary. Rows are not shipped disabled: a control that cannot mean
+//! anything for the chosen provider is not a control (the same call the Configure window makes
+//! about its LOCATION toggle).
 //!
 //! **A field's error is not painted on the field.** The canvas reddens the region box and writes
 //! a line under it; here the one thing that says why Save is off is the footer, and it is the
@@ -19,10 +26,10 @@
 
 use freya::prelude::*;
 use strata_core::engine::store::ClientKey;
-use strata_model::ProviderId;
+use strata_model::{PgPassword, PgSslMode, ProviderId};
 
 use crate::apps::connection::model::{GcsAuthId, S3AuthId};
-use crate::apps::connection::ConnectionCtx;
+use crate::apps::connection::{ConnectionCtx, PasswordRow};
 use crate::components::divider::Divider;
 use crate::components::form::{
     form_theme, Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP,
@@ -46,6 +53,12 @@ const QUALIFIER_GAP: f32 = SP_4;
 const REGION_WIDTH: f32 = 180.;
 /// The profile picker (canvas `width: 220px`).
 const PROFILE_WIDTH: f32 = 220.;
+/// The database boxes whose value is a short, known-shaped word rather than free text — at the
+/// region box's width, which is the same judgement about the same kind of value. USER is not one
+/// of them: it sits beside PASSWORD, which fills, and two credential boxes of different widths
+/// read as a mistake.
+const CATALOG_WIDTH: f32 = REGION_WIDTH;
+const SSL_WIDTH: f32 = REGION_WIDTH;
 /// The client-option table, in the two list editors' own numbers: the properties grid's header
 /// strip and cell inset, a row tall enough to hold a field, and the source-path list's toolbar gap
 /// and stack gap. The key column is fixed because an option name is a known width and the value is
@@ -81,8 +94,17 @@ impl Component for Fields {
 
         let scope = provider.label();
         let mut form = Form::new()
-            .child(ProviderPicker { key: DiffKey::None }.key(format!("provider·{scope}")))
-            .child(Authority { key: DiffKey::None }.key(format!("authority·{scope}")));
+            .child(ProviderPicker { key: DiffKey::None }.key(format!("provider·{scope}")));
+        form = match provider {
+            ProviderId::Postgres => form
+                .child(PgUrl { key: DiffKey::None }.key(format!("url·{scope}")))
+                .child(PgDatabase { key: DiffKey::None }.key(format!("database·{scope}")))
+                .child(CatalogName { key: DiffKey::None }.key(format!("catalog·{scope}")))
+                .child(UserField { key: DiffKey::None }.key(format!("user·{scope}")))
+                .child(PasswordField { key: DiffKey::None }.key(format!("password·{scope}")))
+                .child(Ssl { key: DiffKey::None }.key(format!("ssl·{scope}"))),
+            _ => form.child(Authority { key: DiffKey::None }.key(format!("authority·{scope}"))),
+        };
         if matches!(provider, ProviderId::S3 | ProviderId::Gcs) {
             form = form.child(Auth { key: DiffKey::None }.key(format!("auth·{scope}")));
         }
@@ -107,12 +129,9 @@ impl Component for Fields {
 /// **PROVIDER** — explicit, never inferred from a typed URL scheme (spec §1). The one control
 /// that decides which of the rows below exist.
 ///
-/// **[`ProviderId::OBJECT_STORES`] until DB-04 builds the database form.** The `Postgres` arm
-/// exists on the model and in the engine (DB-02), but this window has no rows for a catalog
-/// name, a user, an SSL mode or a password yet — so offering it would be a picker option that
-/// produces a def nothing here can fill in or correct. A def that already names one still opens
-/// and round-trips (`ConnectionDraft` carries its settings verbatim); what is missing is the
-/// ability to *choose* it, and that arrives with the fields, in the task that owns them.
+/// [`ProviderId::ALL`], because this is the picker that constant is for. The narrower question —
+/// which connection a set of *files* reads through — belongs to the Configure window's LOCATION
+/// pill, which is what [`ProviderId::OBJECT_STORES`] answers.
 #[derive(PartialEq)]
 struct ProviderPicker {
     key: DiffKey,
@@ -134,7 +153,7 @@ impl Component for ProviderPicker {
         let current = ctx.draft.read().provider;
 
         let mut pill = SegmentedToggle::new().form();
-        for id in ProviderId::OBJECT_STORES {
+        for id in ProviderId::ALL {
             pill = pill.child(
                 ToggleSegment::text(id.label())
                     .selected(id == current)
@@ -169,11 +188,17 @@ impl Component for Authority {
 
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
-        let (label, http, placeholder) = {
+        let (label, hint, placeholder) = {
             let draft = ctx.draft.read();
             (
                 draft.address_label(),
-                draft.provider == ProviderId::Http,
+                match draft.provider {
+                    ProviderId::Http => Some(
+                        "The whole origin, scheme included. A path belongs to the table that \
+                         reads it",
+                    ),
+                    _ => None,
+                },
                 match draft.provider {
                     ProviderId::Http => "https://aserver:8484",
                     _ => "my-bucket",
@@ -193,17 +218,392 @@ impl Component for Authority {
             text.set_if_modified(stored);
         });
 
-        Row::new(label)
+        Row::new(label).required().map(hint, Row::hint).child(
+            ValueField::new(text)
+                .width(Size::fill())
+                .placeholder(placeholder),
+        )
+    }
+}
+
+/// **URL** — the server, `host:port`. The port is never assumed: a def reading `db.internal`
+/// while it means `:5432` shows one thing and connects to another.
+///
+/// Half of `ConnectionDef::address`, which stays one `host:port/database` string — the two boxes
+/// are a form split, so `parse_pg_address` remains the only parse of that grammar.
+#[derive(PartialEq)]
+struct PgUrl {
+    key: DiffKey,
+}
+
+impl KeyExt for PgUrl {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for PgUrl {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let text = use_state({
+            let initial = ctx.draft.peek().pg_server().to_string();
+            move || initial
+        });
+        use_side_effect(move || {
+            let mut text = text;
+            let typed = text.read().clone();
+            ctx.edit(move |draft| draft.set_pg_server(typed));
+            let stored = ctx.draft.peek().pg_server().to_string();
+            text.set_if_modified(stored);
+        });
+
+        Row::new("URL")
             .required()
-            .maybe(http, |row| {
-                row.hint(
-                    "The whole origin, scheme included. A path belongs to the table that reads it",
-                )
-            })
+            .hint("The server, as you would dial it. The port is not assumed")
             .child(
                 ValueField::new(text)
                     .width(Size::fill())
-                    .placeholder(placeholder),
+                    .placeholder("localhost:5432"),
+            )
+    }
+}
+
+/// **DATABASE** — the database on that server, which is the other half of the address and the
+/// thing Postgres itself calls a database.
+#[derive(PartialEq)]
+struct PgDatabase {
+    key: DiffKey,
+}
+
+impl KeyExt for PgDatabase {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for PgDatabase {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let text = use_state({
+            let initial = ctx.draft.peek().pg_database().to_string();
+            move || initial
+        });
+        use_side_effect(move || {
+            let mut text = text;
+            let typed = text.read().clone();
+            ctx.edit(move |draft| draft.set_pg_database(typed));
+            let stored = ctx.draft.peek().pg_database().to_string();
+            text.set_if_modified(stored);
+        });
+
+        Row::new("DATABASE")
+            .required()
+            .hint("One database per connection. Two databases on one server are two connections")
+            .child(
+                ValueField::new(text)
+                    .width(Size::fill())
+                    .placeholder("appdb"),
+            )
+    }
+}
+
+/// **CATALOG** — the prefix Strata addresses this connection by, since SQL cannot address
+/// `postgres://host:5432/analytics`.
+///
+/// Strata's name for the connection rather than anything the server has: `PgStore::catalog`, the
+/// top of `catalog.schema.table`. The user's choice, not derived from [`PgDatabase`], because two
+/// servers' `analytics` would derive one prefix. What it may be is `PgStore::check_catalog` plus
+/// the project-wide clash the footer asks `check_catalog_name` about, so the field and the
+/// registration cannot disagree.
+#[derive(PartialEq)]
+struct CatalogName {
+    key: DiffKey,
+}
+
+impl KeyExt for CatalogName {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for CatalogName {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let text = use_state({
+            let initial = ctx.draft.peek().pg.catalog.clone();
+            move || initial
+        });
+        use_side_effect(move || {
+            let catalog = text.read().clone();
+            ctx.edit(move |draft| draft.pg.catalog = catalog);
+        });
+
+        Row::new("CATALOG")
+            .required()
+            .hint(
+                "The catalog prefix Strata queries this connection by: 'pg' makes a table \
+                   'pg.public.orders'",
+            )
+            .child(
+                ValueField::new(text)
+                    .width(Size::px(CATALOG_WIDTH))
+                    .placeholder("pg"),
+            )
+    }
+}
+
+/// **USER** — the role this connection logs in as, and half its identity: two roles over one
+/// database are two connections, with two sets of visible schemas. Its own row rather than
+/// userinfo in the address box, which the address rules refuse, since a
+/// `postgres://reader:hunter2@…` pasted into one box would put a password in the committed
+/// `project.json`.
+#[derive(PartialEq)]
+struct UserField {
+    key: DiffKey,
+}
+
+impl KeyExt for UserField {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for UserField {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let text = use_state({
+            let initial = ctx.draft.peek().pg.user.clone();
+            move || initial
+        });
+        use_side_effect(move || {
+            let user = text.read().clone();
+            ctx.edit(move |draft| draft.pg.user = user);
+        });
+
+        Row::new("USER")
+            .required()
+            .hint(
+                "The role to log in as. Part of the connection's identity, so changing it is a \
+                   different connection",
+            )
+            .child(ValueField::new(text).width(Size::fill()))
+    }
+}
+
+/// **PASSWORD** — the one control here whose state is about *this machine* rather than the def.
+///
+/// The settings window's API-key marker is honest because it minted the reference when it stored
+/// one; a committed expectation says nothing about the machine reading it, so this row reports
+/// the mount probe ([`PasswordRow`]) instead. The two clearing gestures are kept apart for the
+/// same reason: *remove from this machine* is local, while *this connection uses no password*
+/// edits the shared def and would break the colleague who has one.
+///
+/// They stack rather than sitting side by side, because both are offered at once and their two
+/// sentences are wider than this window at its minimum size — and a torin child paints outside
+/// its box rather than clipping.
+#[derive(PartialEq)]
+struct PasswordField {
+    key: DiffKey,
+}
+
+impl KeyExt for PasswordField {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for PasswordField {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let form = form_theme();
+        let ctx = use_consume::<ConnectionCtx>();
+        let mut revealed = use_state(|| false);
+
+        let text = ctx.password;
+        use_side_effect(move || {
+            let typed = !text.read().trim().is_empty();
+            if typed {
+                let mut removed = ctx.password_removed;
+                removed.set(false);
+            }
+            let expected = *ctx.password_expected.read();
+            let now = match typed {
+                true => PgPassword::Keystore,
+                false => expected,
+            };
+            ctx.edit(move |draft| draft.pg.password = now);
+        });
+
+        let row = PasswordRow::of(
+            *ctx.password_expected.read(),
+            !ctx.password.read().trim().is_empty(),
+            *ctx.password_removed.read(),
+            &ctx.password_probe.read(),
+        );
+
+        Row::new("PASSWORD")
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(SP_3)
+                    .content(Content::Flex)
+                    .child(
+                        ValueField::new(text)
+                            .width(Size::flex(1.))
+                            .masked(!*revealed.read()),
+                    )
+                    .child(
+                        ToolButton::new(
+                            IconName::Eye,
+                            match *revealed.read() {
+                                true => "Hide the password",
+                                false => "Show the password",
+                            },
+                        )
+                        .outlined()
+                        .on_press(move |_: Event<PressEventData>| {
+                            let shown = *revealed.peek();
+                            revealed.set(!shown);
+                        }),
+                    ),
+            )
+            .child(qualifier(
+                rect()
+                    .width(Size::fill())
+                    .vertical()
+                    .spacing(SP_3)
+                    .child(
+                        Prose::new(row.note())
+                            .color(form.hint_color)
+                            .width(Size::fill())
+                            .wrap(),
+                    )
+                    .child(
+                        rect()
+                            .vertical()
+                            .cross_align(Alignment::Start)
+                            .spacing(TOOL_GAP)
+                            .maybe_child(row.offers_removal().then(|| {
+                                Button::new()
+                                    .flat()
+                                    .on_press(move |_: Event<PressEventData>| {
+                                        let mut removed = ctx.password_removed;
+                                        let mut text = text;
+                                        text.set(String::new());
+                                        removed.set(true);
+                                    })
+                                    .child(Control::new("Remove from this machine"))
+                            }))
+                            .maybe_child(row.offers_disuse().then(|| {
+                                Button::new()
+                                    .flat()
+                                    .on_press(move |_: Event<PressEventData>| {
+                                        let mut expected = ctx.password_expected;
+                                        let mut removed = ctx.password_removed;
+                                        let mut text = text;
+                                        text.set(String::new());
+                                        expected.set(PgPassword::None);
+                                        removed.set(true);
+                                        ctx.edit(|draft| draft.pg.password = PgPassword::None);
+                                    })
+                                    .child(Control::new("This connection uses no password"))
+                            })),
+                    ),
+            ))
+    }
+}
+
+/// **SSL MODE** and its **ROOT CERTIFICATE** — libpq's vocabulary in libpq's spellings, because
+/// the value is handed to the driver as written. The certificate row is shown for the two
+/// verifying modes only and is optional there: blank means the driver's own trust store.
+#[derive(PartialEq)]
+struct Ssl {
+    key: DiffKey,
+}
+
+impl KeyExt for Ssl {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for Ssl {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let mode = ctx.draft.read().pg.sslmode;
+
+        let options: Vec<Element> = PgSslMode::ALL
+            .into_iter()
+            .map(|option| {
+                MenuItem::new()
+                    .selected(option == mode)
+                    .on_press(move |_| ctx.edit(move |draft| draft.pg.sslmode = option))
+                    .child(MonoValue::new(option.as_str()))
+                    .into()
+            })
+            .collect();
+
+        Row::new("SSL MODE")
+            .hint("Handed to the driver as written. 'prefer' encrypts when the server offers it")
+            .child(
+                rect()
+                    .width(Size::px(SSL_WIDTH))
+                    .height(Size::px(FIELD_HEIGHT))
+                    .child(
+                        Select::new()
+                            .selected_item(MonoValue::new(mode.as_str()))
+                            .children(options),
+                    ),
+            )
+            .maybe_child(mode.verifies().then(|| qualifier(RootCertificate)))
+    }
+}
+
+/// **ROOT CERTIFICATE** — the certificate the two verifying modes read, as a path and never as
+/// the file's contents ([`ServiceAccountFile`]'s rule). Optional: blank is the machine's own
+/// trust store, which is the whole answer for a managed server behind a public CA.
+#[derive(PartialEq)]
+struct RootCertificate;
+
+impl Component for RootCertificate {
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let cert = ctx.draft.read().pg.sslrootcert.clone();
+
+        Row::new("ROOT CERTIFICATE")
+            .hint("Blank uses this machine's own trust store")
+            .child(
+                PathField::file(cert, &["pem", "crt", "cer"])
+                    .placeholder("/path/to/root.pem")
+                    .dialog_title("Choose a root certificate")
+                    .on_change(move |path: String| {
+                        ctx.edit(|draft| draft.pg.sslrootcert = path);
+                    }),
             )
     }
 }

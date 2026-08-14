@@ -35,6 +35,15 @@ the bolded lead sentence there is verbatim the bolded lead here, so it greps.
     (`use_radio_station::<ProjectState>`), not params-for-tests.
 - **No over-engineering.** Private/internal app: use `pub` freely, don't hand-annotate visibility
   per field on struct-literal-built components (the linter widens them back anyway).
+- **Doc comments only, one line or a short paragraph.** No inline `//` inside a body: a comment
+  explaining a step is a step that wants extracting or renaming, and one narrating the obvious goes
+  stale where the code cannot. A doc comment earns its lines by saying what the reader cannot get
+  from the code — a decision, a constraint, a failure it prevents — so most items get one line and
+  a handful get a paragraph. It is about the **code**, never about the task file, the review that
+  asked for it, or the session that wrote it: "corrected in review", "DB-04 adds this", "as the
+  task says" are all facts about a conversation the next reader was not in. Repo-level history
+  belongs in `.claude/tasks/` and `docs/reference/SETTLED_TASKS.md`, which is where a rule with a
+  story behind it is already recorded.
 - **A path is qualified in the `use` and nowhere else.** Import the **item** and refer to it by its
   bare name; a qualified path in a signature, a body or a match arm is the smell, and so is
   importing a *module* to qualify through — `use crate::platform::{self, WindowKind}` plus

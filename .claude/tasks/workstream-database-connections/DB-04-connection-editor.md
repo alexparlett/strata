@@ -1,6 +1,53 @@
 # DB-04 · The connection editor's Postgres form
 
-**Workstream:** Database connections · **Status:** ⬜ · **Depends on:** DB-02
+**Workstream:** Database connections · **Status:** ✅ · **Depends on:** DB-02
+
+## Built (2026-08-13)
+
+The picker offers `ProviderId::ALL`, `ConnectionDraft::of`'s clamp is gone, and the arm's rows are
+URL · DATABASE · CATALOG · USER · PASSWORD · SSL MODE (+ ROOT CERTIFICATE for the two verifying
+modes). Spec updated; `docs/CONNECTIONS_SPEC.md` "The connection editor".
+
+**The address is split, and each row means one thing** (settled with Alex after the first build,
+in two passes). The Build below put `host:port/database` in one box called SERVER beside a
+CATALOG NAME box, which made two rows read as "the database" and only one of them be. So: the
+address box becomes **URL** (`host:port`) and **DATABASE** (`appdb`) — a *form* split over the
+one stored `ConnectionDef::address`, via `ConnectionDraft::pg_server`/`pg_database`, so the def
+and `parse_pg_address` are untouched — and `PgStore::catalog` keeps the name **CATALOG**, with a
+hint saying it is the catalog *prefix* Strata queries by rather than anything the server has.
+(`catalog` is the federation engines' word — Trino and Athena both use it — which is why it was
+there; `pg_catalog` being a Postgres system schema is why the hint has to say which is meant.)
+
+**The reason a catalog prefix is needed at all is the next task.** Alex's ask — "we want users to
+be able to write `select * from orders`, not `select * from pg.public.orders` every time" — is
+**DB-09**, filed rather than folded in here: it needs `providers::in_workspace` to *resolve* a
+bare name against a session-scoped current database instead of assuming the workspace, and
+without that a view over a bare `orders` records a workspace dependency while reading Postgres.
+
+**Three corrections to the Build below, each because the code said otherwise.**
+
+1. **SSL defaults to `prefer`, not `verify-full`.** DB-02 landed `PgSslMode::default() = Prefer`
+   as libpq's own default, the spec's def table says so, and a test pins it. The form seeds from
+   `PgStore::default()` rather than overriding it, so nothing here restates a default.
+2. **`secret::forget_derived` does not exist**, as this file's own Current state already recorded:
+   a forget is `SecretRef::derived(…).delete()`.
+3. **The keystore work is Save's, not `def()`-assembly time.** `blocker` builds a def per
+   keystroke, so a keystore call there is a blocking platform call — on macOS a Keychain prompt —
+   per frame. `views::footer::password_ops` plans the operations purely (migrate → put/delete) and
+   Save runs them on a `task::offload` worker **in front of** the store write, under a new
+   `Status::Storing`, so a keystore that refuses writes nothing. `Storing` is its own status
+   because `Connecting(url)` is what `use_watch_connection` reads: set before the store write it
+   would find an edited connection's existing `Ready` row and close the window over a save that
+   had not happened.
+
+**The rename test lives in the container suite, not here.** `postgres_federation.rs`'s
+`reconnect_and_disconnect` already re-connects the same URL under a new catalog name and asserts
+the old name stops resolving — which is the assertion Build 2 asks for, in the only place that can
+make it. An editor interaction test cannot run a registration pass, and the rule that no UI test
+dials out stands.
+
+**Left to DB-05, as the seam below says:** the `PG` badge and status display, Forget's
+database-connection wording and its keystore-entry deletion, and the schema picker.
 
 ## Goal
 
