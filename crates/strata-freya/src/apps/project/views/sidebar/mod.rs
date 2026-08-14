@@ -1,29 +1,30 @@
-//! The left **sidebar**: the frame (P3-01), the catalog pane that fills it (P3-02), and the
-//! Connections pane (W7) beside it.
+//! The left **sidebar**: the frame (P3-01) and the data-sources tree that fills it (P3-02 · W7 ·
+//! DB-05).
+//!
+//! One pane, because there is one question: what data do I have. The tree answers it for the
+//! project's own catalog and for every connection beside it, so the Connections pane that used to
+//! sit next to this one is gone and the rail has one fewer toggle.
 //!
 //! The shell owns the header row and the collapse (×); what sits to the left of the × is the
-//! active pane's, per the design canvas — the catalog puts its **filter + refresh** there (there
-//! is no "CATALOG" label; the filter field is the header), while Connections keeps a section
-//! label with an ⓘ beside it and adds its own `+`. The body below the divider is the pane
-//! itself.
+//! pane's, per the design canvas — there is no "CATALOG" label, the filter field *is* the header,
+//! and the `+` (a new connection) and ↻ (a re-scan) follow it. The body below the divider is the
+//! tree itself.
 
 mod catalog;
-mod connections;
 
 use freya::components::{CircularLoader, Input};
 use freya::prelude::*;
 use freya::radio::use_radio;
-use strata_model::SidebarPane;
 
 use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
 /// The catalog's actions, on through to the command palette — see the catalog's own module.
 pub use self::catalog::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
-pub use self::connections::ConnectionsThemePreference;
-use self::connections::{AddConnectionButton, Connections, ConnectionsHint};
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{
     refresh_catalog, use_catalog, use_catalog_rescan, Chan, SessionState,
 };
+use crate::apps::project::views::ConnectionRequest;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{HEADER_CONTROL, SIDEBAR_HEADER_HEIGHT, SP_3, SP_4};
@@ -31,14 +32,14 @@ use crate::components::toolbar::{Toolbar, ToolbarItem};
 use crate::components::typography::{Eyebrow, InputTypography};
 use crate::theme::{use_roles, Role};
 
-/// A pane header that is just its name — every pane but the catalog, whose filter field *is*
-/// its header. `Size::flex` for the shell's reason: the row distributes, so a `fill` label
-/// would push the collapse × off the panel.
+/// A pane header that is just its name — what the tree falls back to when the filter field has
+/// too little room to be worth showing. `Size::flex` for the shell's reason: the row distributes,
+/// so a `fill` label would push the collapse × off the panel.
 ///
 /// The name sits in a flexing, clipping cell of its own rather than straight in the row. Flex
 /// sizes the *wrapper*, but a text child still hugs, and `Overflow` defaults to painting outside
-/// the box — so at a narrow width the name drew over the ⓘ beside it and then over the collapse ×
-/// (P5-06). Anything the caller adds after it keeps its room.
+/// the box — so at a narrow width the name drew over the controls beside it and then over the
+/// collapse × (P5-06). Anything the caller adds after it keeps its room.
 fn label(text: &'static str, color: Color) -> Rect {
     rect()
         .width(Size::flex(1.))
@@ -55,14 +56,14 @@ fn label(text: &'static str, color: Color) -> Rect {
         )
 }
 
-/// The width of the header's **leading run** below which the catalog's filter field is dropped
-/// rather than squeezed.
+/// The width of the header's **leading run** below which the filter field is dropped rather than
+/// squeezed.
 ///
 /// Measured on the leading run itself, so this is the room the field would actually get — not the
-/// gross row width, from which the ↻, the pinned × and their gaps still have to come off. It was
-/// briefly both: the probe moved onto the flex wrapper when the header became a `Toolbar` while
-/// the threshold stayed calibrated for the row, which dropped the filter at panel widths with
-/// ~112px going spare.
+/// gross row width, from which the controls, the pinned × and their gaps still have to come off.
+/// It was briefly both: the probe moved onto the flex wrapper when the header became a `Toolbar`
+/// while the threshold stayed calibrated for the row, which dropped the filter at panel widths
+/// with ~112px going spare.
 ///
 /// Below this the field has too little left to read a table name back in. Filtering stays
 /// reachable through the command palette.
@@ -80,7 +81,6 @@ impl Sidebar {
 impl Component for Sidebar {
     fn render(&self) -> impl IntoElement {
         let radio = use_radio::<SessionState, Chan>(Chan::Layout);
-        let pane = radio.read().layout.sidebar.unwrap_or(SidebarPane::Catalog);
         let roles = use_roles();
         let (bg, border, label_color, faint) = (
             roles.get(Role::SurfaceRaised),
@@ -93,9 +93,9 @@ impl Component for Sidebar {
         let mut leading_w = use_state(|| f32::INFINITY);
         let roomy = *leading_w.read() >= CATALOG_FILTER_MIN;
 
-        let leading = match pane {
-            SidebarPane::Catalog if !roomy => label("CATALOG", label_color).into_element(),
-            SidebarPane::Catalog => rect()
+        let leading = match roomy {
+            false => label("DATA", label_color).into_element(),
+            true => rect()
                 .width(Size::flex(1.))
                 .horizontal()
                 .content(Content::Flex)
@@ -105,7 +105,7 @@ impl Component for Sidebar {
                 .child(
                     InputTypography::mono(
                         Input::new(filter)
-                            .placeholder("Filter catalog…")
+                            .placeholder("Filter data sources…")
                             .compact()
                             .leading(Icon::new(IconName::Search).color(faint).size(13.))
                             .width(Size::flex(1.)),
@@ -113,15 +113,6 @@ impl Component for Sidebar {
                     .width(Size::flex(1.)),
                 )
                 .into_element(),
-            SidebarPane::Connections => label("CONNECTIONS", label_color)
-                .spacing(SP_3)
-                .child(ConnectionsHint)
-                .into_element(),
-        };
-
-        let body = match pane {
-            SidebarPane::Catalog => Catalog::new(filter).into_element(),
-            SidebarPane::Connections => Connections::new().into_element(),
         };
 
         rect()
@@ -146,19 +137,15 @@ impl Component for Sidebar {
                             .child(leading),
                         0.,
                     )
-                    .maybe(pane == SidebarPane::Catalog, |bar| {
-                        bar.item(ToolbarItem::Custom {
-                            width: HEADER_CONTROL,
-                            inline: RefreshButton.into_element(),
-                            folded: None,
-                        })
+                    .item(ToolbarItem::Custom {
+                        width: HEADER_CONTROL,
+                        inline: AddConnectionButton.into_element(),
+                        folded: None,
                     })
-                    .maybe(pane == SidebarPane::Connections, |bar| {
-                        bar.item(ToolbarItem::Custom {
-                            width: HEADER_CONTROL,
-                            inline: AddConnectionButton.into_element(),
-                            folded: None,
-                        })
+                    .item(ToolbarItem::Custom {
+                        width: HEADER_CONTROL,
+                        inline: RefreshButton.into_element(),
+                        folded: None,
                     })
                     .pinned(
                         Button::new()
@@ -174,13 +161,41 @@ impl Component for Sidebar {
                     ),
             )
             .child(Divider::horizontal().color(border))
-            .child(body)
+            .child(Catalog::new(filter))
     }
 }
 
-/// The catalog header's **↻ re-scan** (P3-03): ask for a re-infer of every table's schema from
-/// its def and a re-create of the views over what that found — see
-/// [`refresh_catalog`].
+/// The header's **+** — a new connection, which is now a top-level node of this tree.
+///
+/// **It folds under panel pressure** (`ToolbarItem::Custom { folded: None }`, the ↻'s terms). Its
+/// two other entry points are the tree's own empty state and the command palette's *New
+/// connection…*, which is what makes the fold cost nothing.
+#[derive(PartialEq)]
+struct AddConnectionButton;
+
+impl Component for AddConnectionButton {
+    fn render(&self) -> impl IntoElement {
+        let editor = use_consume::<ConnectionRequest>();
+        TooltipContainer::new(Tooltip::new_text("Add connection"))
+            .position(AttachedPosition::Bottom)
+            .child(
+                Button::new()
+                    .flat()
+                    .width(Size::px(HEADER_CONTROL))
+                    .height(Size::px(HEADER_CONTROL))
+                    .on_press(move |_: Event<PressEventData>| {
+                        let mut editor = editor;
+                        editor.set(Some(ConnectionTarget::New));
+                    })
+                    .child(Icon::new(IconName::Plus).size(14.)),
+            )
+    }
+}
+
+/// The header's **↻ re-scan** (P3-03): ask for a re-connect of every connection, a re-infer of
+/// every table's schema from its def, and a re-create of the views over what that found — see
+/// [`refresh_catalog`]. On a database connection the re-connect *is* the refresh: its schemas and
+/// relations are the connect-time enumeration.
 ///
 /// Its own component so the scan flag's subscription lives here rather than on the sidebar shell,
 /// which would re-render the whole pane header twice per scan for a button swap.
@@ -190,7 +205,7 @@ impl Component for Sidebar {
 ///
 /// The press only bumps the window's re-scan counter; the pass itself is spawned by the driver at
 /// the window root. A task spawned from this handler would belong to *this* scope, and collapsing
-/// the sidebar mid-scan would cancel a pass the whole catalog is waiting on.
+/// the sidebar mid-scan would cancel a pass the whole tree is waiting on.
 #[derive(PartialEq)]
 struct RefreshButton;
 
@@ -202,8 +217,8 @@ impl Component for RefreshButton {
 
         Button::new()
             .flat()
-            .width(Size::px(24.))
-            .height(Size::px(24.))
+            .width(Size::px(HEADER_CONTROL))
+            .height(Size::px(HEADER_CONTROL))
             .enabled(!scanning)
             .on_press(move |_| refresh_catalog(rescan))
             .child(if scanning {
@@ -216,8 +231,8 @@ impl Component for RefreshButton {
 
 /// Header **layout** tests: the pane header's controls must lay out *inside* the panel.
 ///
-/// These exist because they didn't. The header is a horizontal row of a flexible run (the catalog
-/// filter) plus fixed 24px controls (↻ re-scan, collapse ×), and the row was hugging its content
+/// These exist because they didn't. The header is a horizontal row of a flexible run (the filter)
+/// plus fixed 24px controls (`+`, ↻ re-scan, collapse ×), and the row was hugging its content
 /// instead of distributing it — a `Size::fill()` filter takes the whole parent width regardless of
 /// its siblings, so the trailing controls were pushed past the panel edge and clipped. The refresh
 /// button shipped with P3-02 and was invisible until P3-03 went looking for it.
@@ -238,10 +253,9 @@ mod tests {
 
     use super::*;
     use crate::apps::configure::ConfigureTarget;
-    use crate::apps::connection::ConnectionTarget;
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
-    use crate::apps::project::views::{DropTarget, ProfileTarget};
+    use crate::apps::project::views::{DropTarget, ProfileTarget, SchemasRequest};
     use crate::state::ConfigStation;
     use crate::theme::strata_theme;
 
@@ -276,17 +290,11 @@ mod tests {
         Sidebar::new()
     }
 
-    /// The sidebar mounted over the contexts its shell + catalog pane consume, plus the re-scan
-    /// counter handed back so a test can see what ↻ did. The engine is real but never asked
-    /// anything: there is no scan *driver* here — that lives at the window root — so pressing ↻
-    /// raises a request and nothing else, which is exactly the button's whole contract.
+    /// The sidebar mounted over the contexts its shell + tree consume, plus the re-scan counter
+    /// handed back so a test can see what ↻ did. The engine is real but never asked anything:
+    /// there is no scan *driver* here — that lives at the window root — so pressing ↻ raises a
+    /// request and nothing else, which is exactly the button's whole contract.
     fn runner() -> (TestingRunner, State<ScanRequest>) {
-        runner_on(SidebarPane::Catalog)
-    }
-
-    /// The same shell with `pane` already selected — the state the rail's toggle leaves behind,
-    /// seeded rather than clicked so a header test measures one layout and not a transition.
-    fn runner_on(pane: SidebarPane) -> (TestingRunner, State<ScanRequest>) {
         TestingRunner::new(
             app,
             (PANEL_WIDTH, 700.).into(),
@@ -300,15 +308,12 @@ mod tests {
                 r.provide_root_context(|| State::create(None::<ProfileTarget>));
                 r.provide_root_context(|| State::create(None::<ConfigureTarget>));
                 r.provide_root_context(|| State::create(None::<ConnectionTarget>));
+                r.provide_root_context(|| State::create(None::<String>) as SchemasRequest);
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));
                 r.provide_root_context(|| State::create(Chats::new(Pick::default())));
                 r.provide_root_context(move || {
-                    RadioStation::<SessionState, Chan>::create({
-                        let mut s = SessionState::default();
-                        s.toggle_pane(pane);
-                        s
-                    })
+                    RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });
                 r.provide_root_context(|| {
                     RadioStation::<ProjectState, ProjChan>::create(ProjectState::from_defs(
@@ -322,13 +327,14 @@ mod tests {
         )
     }
 
-    /// The header's two fixed 24×24 controls, left to right: ↻ then the collapse ×.
+    /// The header's three fixed 24×24 controls, left to right: `+`, ↻, then the collapse ×.
     fn header_controls(runner: &TestingRunner) -> Vec<Box2> {
         let mut controls: Vec<_> = header_content(runner)
             .into_iter()
             .filter(|b| (b.width - CONTROL).abs() < 0.5 && (b.height - CONTROL).abs() < 0.5)
             .collect();
         controls.sort_by(|a, b| a.min_x.total_cmp(&b.min_x));
+        controls.dedup_by(|a, b| (a.min_x - b.min_x).abs() < 0.5);
         controls
     }
 
@@ -384,11 +390,11 @@ mod tests {
         );
     }
 
-    /// Both of the header's fixed 24×24 controls — ↻ re-scan and the collapse × — are on screen,
-    /// side by side in the 48px header. Counting them is what catches the case the bounds test
-    /// can't: a squeezed-to-nothing control has no area to overflow with.
+    /// All three of the header's fixed 24×24 controls — `+`, ↻ re-scan and the collapse × — are
+    /// on screen, side by side in the 48px header. Counting them is what catches the case the
+    /// bounds test can't: a squeezed-to-nothing control has no area to overflow with.
     #[test]
-    fn both_header_controls_are_present_and_on_screen() {
+    fn every_header_control_is_present_and_on_screen() {
         let (mut runner, _) = runner();
         runner.sync_and_update();
         runner.sync_and_update();
@@ -397,8 +403,8 @@ mod tests {
 
         assert_eq!(
             controls.len(),
-            2,
-            "expected the ↻ and × controls at their full 24×24: {controls:?}"
+            3,
+            "expected the +, ↻ and × controls at their full 24×24: {controls:?}"
         );
         for b in &controls {
             assert!(
@@ -414,11 +420,11 @@ mod tests {
         }
     }
 
-    /// The filter takes the slack rather than the whole row: it must leave room for ↻ beside it.
-    /// This is the `Size::flex` vs `Size::fill` distinction the header got wrong — with `fill` the
-    /// field spans the full content box and the button is pushed off the end.
+    /// The filter takes the slack rather than the whole row: it must leave room for the controls
+    /// beside it. This is the `Size::flex` vs `Size::fill` distinction the header got wrong — with
+    /// `fill` the field spans the full content box and the buttons are pushed off the end.
     #[test]
-    fn the_filter_leaves_room_for_the_refresh_button() {
+    fn the_filter_leaves_room_for_the_header_controls() {
         let (mut runner, _) = runner();
         runner.sync_and_update();
         runner.sync_and_update();
@@ -432,54 +438,16 @@ mod tests {
         assert!(widest > 0., "the header laid out nothing");
         assert!(
             widest <= content - CONTROL,
-            "the filter run ({widest}px) must leave the {CONTROL}px ↻ room inside the {content}px \
-             content box"
+            "the filter run ({widest}px) must leave the {CONTROL}px controls room inside the \
+             {content}px content box"
         );
-    }
-
-    /// The **Connections** header lays out inside the panel too — its own arm, its own controls
-    /// (the label, the ⓘ beside it, the `+`, and the pinned ×), and until now no coverage at all.
-    ///
-    /// Worth its own test rather than trusting the catalog's: these tests exist because the
-    /// catalog's ↻ shipped laid out past the panel edge and stayed invisible for a whole task,
-    /// and the `+` added beside this label is the same kind of fixed control in the same row.
-    #[test]
-    fn the_connections_header_is_laid_out_inside_the_panel() {
-        let (mut runner, _) = runner_on(SidebarPane::Connections);
-        runner.sync_and_update();
-        runner.sync_and_update();
-
-        let overflowing: Vec<_> = areas(&runner)
-            .into_iter()
-            .filter(|b| b.width > 0. && b.max_x > PANEL_WIDTH + 0.5)
-            .collect();
-        assert!(
-            overflowing.is_empty(),
-            "laid out past the {PANEL_WIDTH}px panel edge: {overflowing:?}"
-        );
-
-        let mut controls = header_controls(&runner);
-        controls.dedup_by(|a, b| (a.min_x - b.min_x).abs() < 0.5);
-        assert_eq!(
-            controls.len(),
-            2,
-            "expected the + and × controls at their full 24×24: {controls:?}"
-        );
-        for b in &controls {
-            assert!(
-                b.min_x >= 0. && b.max_x <= PANEL_WIDTH,
-                "control at {}..{} is outside 0..{PANEL_WIDTH}",
-                b.min_x,
-                b.max_x
-            );
-        }
     }
 
     /// Pressing ↻ raises a re-scan **request** — and that is all it does. The pass belongs to the
     /// window root's driver (`use_init_project`), because a task spawned from this handler would
-    /// be cancelled the moment the sidebar collapses, stranding every catalog row in
-    /// `Reg::Loading`. So the button's whole contract is this counter, and the test drives it the
-    /// way the user does rather than calling `refresh_catalog` directly.
+    /// be cancelled the moment the sidebar collapses, stranding every tree row in `Reg::Loading`.
+    /// So the button's whole contract is this counter, and the test drives it the way the user
+    /// does rather than calling `refresh_catalog` directly.
     #[test]
     fn pressing_refresh_raises_a_rescan_request() {
         let (mut runner, rescan) = runner();
@@ -491,7 +459,7 @@ mod tests {
             "nothing asked for yet"
         );
 
-        let refresh = header_controls(&runner)[0];
+        let refresh = header_controls(&runner)[1];
         let point = (
             ((refresh.min_x + refresh.max_x) / 2.) as f64,
             (SIDEBAR_HEADER_HEIGHT / 2.) as f64,

@@ -272,24 +272,56 @@ this machine's keystore owes the password, on a worker, so a keystore that refus
 A **catalog-name** move with an unchanged URL needs nothing of Save's: `db::connect` replaces on
 re-connect, and the whole-catalog pass is what re-connects.
 
-## The Connections pane
+## The data-sources tree
 
-A sidebar pane beside the Catalog, reached from the activity rail (clicking the active pane
-collapses the sidebar). Each row is a catalog-style row:
+One sidebar pane (DB-05), reached from the activity rail (clicking it again collapses the
+sidebar). It answers "what data do I have" for the project's catalog and its connections
+together — the separate Connections pane it replaced is gone, and so is the rail toggle beside
+it.
 
-- a **provider badge** (`Provider::to_string()` — `S3` / `GCS` / `HTTP`, and `PG` since DB-04,
-  which the pane renders unpolished until DB-05's data-sources tree absorbs it),
-- the bucket (or origin),
-- a **status glyph**: nothing when connected, a spinner while the registration pass is out, or a
-  warning triangle whose hover shows the engine's refusal in full. The status *is* the connect
-  outcome — no separate liveness poll, no request to the bucket.
-- a trailing **⋮** menu (also right-click) with **Edit** and **Forget**. The row itself is not
-  clickable: a connection is a thing you look at, not a thing you open.
+Top level is **data sources**:
 
-The header's `+`, the empty state's CTA and a row's Edit all open the editor window. **Forget has
-a consequence**, since table defs can name the connection: the confirm lists the tables whose
-sources read through it and the views behind those, then removes the def and deregisters the
-store.
+- the **project workspace**, first and open by default, labelled with the project's own name and
+  addressed as `strata`. It is not a "files provider": it is the catalog Strata's federating
+  engine defines, so file tables, internal tables, views, saved queries — and a **cross-source**
+  view joining workspace files onto `pg.…` — all nest under it. Its children are the flat pane's
+  TABLES · VIEWS · QUERIES groups verbatim: same rows, same `Reg` status slots, same menus, same
+  expansion to columns, and the TABLES `+` still opens Configure on a new table;
+- one node per **database connection**, opening onto its enabled schemas, then Tables and Views
+  groups split by the listing's own `relkind`, then its relations. All of it is
+  `Engine::db_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
+  the network — so collapse and re-open cost nothing and ↻, which re-connects, is the refresh. A
+  schema the def enables and the server does not have renders as its own failed node naming that
+  fact. A relation is a leaf: its columns are an introspection, and the surface that reads them
+  (and can select one) is DB-07's inspector;
+- one node per **object-store connection**, opening onto the workspace defs that read through it
+  as **links** — pressing one opens the def's ancestors and brings its own row into view, rather
+  than offering a second editable copy of it.
+
+Every connection node carries a **provider badge** (`Provider::to_string()` — `S3` / `GCS` /
+`HTTP` / `PG`), its address, a **status glyph** (nothing when connected, a spinner once the wait
+outlasts the progress hold, or a warning triangle carrying the engine's own refusal, clipped to
+what a tooltip holds and naming Problems for the rest), and a trailing **⋮** menu (also
+right-click): **Edit**, **Schemas…** on a database, **Forget**. Pressing the row opens it; its
+actions are the menu.
+
+**Schemas…** is a picker over the same `db_listing` answer, so the tree, the picker and
+completion cannot disagree about what a connection shows. Its write is display-only, so it edits
+the def **in place** (`ProjectState::update_connection_def`) and keeps the row's registration —
+going through `upsert_connection` would leave a `Reg::Loading` that only a whole-catalog re-scan
+could answer. A connection that is not live has no enumeration to offer: the picker then lists
+the def's own schemas and says so.
+
+The header's `+`, the empty state's row and a node's Edit all open the editor window. **Forget's
+consequence differs by kind**, and the confirm carries which kind it is rather than looking it
+up: an object store's readers are the tables whose sources name it and the views behind those; a
+database's are the views whose plans scan through its catalog (`ViewInfo::remote_deps`), since no
+def can name a database. Confirming removes the def, deregisters the store or catalog, and — for
+a database — deletes the derived keystore entry the def expected.
+
+One filter spans the tree. A node survives it if its own name matches or any descendant's does;
+the workspace's three groups are the stated exception, staying put with their counts following
+the filter, because a count of `0` is what says the filter found nothing there.
 
 ## Registration order
 

@@ -8,6 +8,9 @@
 
 use std::time::Duration;
 
+use async_io::Timer;
+use freya::prelude::*;
+
 /// 2px — hairline gap, icon-to-text micro spacing.
 pub const SP_1: f32 = 2.;
 /// 4px — tight inset, chip padding.
@@ -145,3 +148,33 @@ pub const SETTINGS_FIELD_WIDTH: f32 = 130.;
 /// hold on work the user just started with nothing to show yet: a first profile says so at once, or
 /// the press looks like it missed.
 pub const PROGRESS_HOLD: Duration = Duration::from_millis(400);
+
+/// Has `active` lasted long enough to be worth reporting? The [`PROGRESS_HOLD`] rule as a hook,
+/// so the surfaces that observe it cannot drift.
+///
+/// `false` until the wait outlasts the hold, and back to `false` the instant it ends — most work
+/// lands well inside, so the ordinary case is a surface that simply appears rather than one that
+/// flickers a spinner on the way in. The timer is armed per transition and **cancelled** when the
+/// wait ends, or a settled row would spin one hold later.
+///
+/// Here rather than beside either caller because there are two: the data-sources tree's row
+/// status slot and the inspector's scan zone had grown byte-identical copies.
+pub fn use_progress_hold(active: bool) -> bool {
+    let waited = use_state(|| false);
+    let pending = use_state(|| None::<TaskHandle>);
+    use_side_effect_with_deps(&active, move |active| {
+        let mut waited = waited;
+        let mut pending = pending;
+        if let Some(task) = pending.write().take() {
+            task.cancel();
+        }
+        waited.set_if_modified(false);
+        if *active {
+            pending.set(Some(spawn(async move {
+                Timer::after(PROGRESS_HOLD).await;
+                waited.set_if_modified(true);
+            })));
+        }
+    });
+    active && waited()
+}

@@ -25,7 +25,8 @@ pub use configure_launch::{ConfigureLauncher, ConfigureRequest};
 pub use connection_launch::{ConnectionLauncher, ConnectionRequest};
 pub use dialogs::{
     use_profile_actions, ChatConfirm, ChatDrop, CloseConfirm, DropConfirm, DropTarget, OpenPrompt,
-    ProfileActions, ProfileConfirm, ProfileTarget, ProjectLoadFailed,
+    ProfileActions, ProfileConfirm, ProfileTarget, ProjectLoadFailed, SchemasPicker,
+    SchemasRequest,
 };
 pub use drawer::DrawerThemePreference;
 pub use header::{HeaderBar, HeaderBarThemePreference, WindowDragStrip};
@@ -34,13 +35,13 @@ pub use keeper::RequestKeepers;
 pub use loading::ProjectLoading;
 pub use palette::{CommandPalette, CommandPaletteThemePreference, PaletteOpen};
 pub use shell::Shell;
+pub use sidebar::CatalogThemePreference;
 /// The catalog's actions, for the window's command registry ([`commands`](super::commands)): a
 /// palette row that opens a table, a view or a saved query performs the catalog's own gesture,
 /// so the two cannot generate different SQL or bind a tab to a different [`Origin`].
 ///
 /// [`Origin`]: strata_model::Origin
 pub use sidebar::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
-pub use sidebar::{CatalogThemePreference, ConnectionsThemePreference};
 /// The editor's shared actions, for the window's command registry
 /// ([`commands`](super::commands)): the palette's Run and Save-as-view rows are the same
 /// presses ⌘↵ and the Eye button make, gate included.

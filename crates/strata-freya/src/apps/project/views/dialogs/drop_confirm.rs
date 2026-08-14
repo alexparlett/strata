@@ -20,19 +20,33 @@
 //! D10/D11). So the warning says exactly what the catalog row will say afterwards: these
 //! views are flagged, and they will not survive a reopen.
 //!
-//! **A connection's dependents are its tables, and then the views over those** (W7 · 04) — the
-//! other dependency direction, and a different question: nothing reads an object store *by name*,
-//! so a connection has no readers in the SQL namespace at all. What it has is the defs that name
-//! it ([`ProjectState::tables_over`]) and everything reading one of those
-//! ([`ProjectState::views_over`]), which is the reading a table drop already reports. Still "left
-//! invalid", because that is what happens: the defs survive, still naming the bucket, and it is
-//! the next registration that has nothing to read.
+//! **A connection's dependents depend on what kind of connection it is** (W7 · 04 · DB-05), and
+//! the split is the same one the two kinds make everywhere else. An **object store** has no
+//! readers in the SQL namespace at all: nothing reads a bucket *by name*, so what it has is the
+//! defs that name it ([`ProjectState::tables_over`]) and everything reading one of those
+//! ([`ProjectState::views_over`]) — the reading a table drop already reports. A **database** is
+//! the other way round: no def can name one, because its relations are discovered rather than
+//! declared, so its only readers are the views whose plans scan through it
+//! ([`ProjectState::views_reading`]). Still "left invalid" in both cases, because that is what
+//! happens: the defs survive, still naming the connection, and it is the next registration that
+//! has nothing to read.
+//!
+//! ## What a forget does not touch
+//!
+//! **A database's stored password stays in the keystore.** DB-05 asked for it to be deleted here,
+//! and that was wrong: the slot is [derived](strata_core::secret::SecretRef::derived) from the
+//! connection's URL and nothing else, so it is *shared* by every project on this machine that
+//! names the same database. Forgetting a connection in one project would silently take the
+//! password out from under the others, which would then fail their next pass with the server's
+//! own `password authentication failed` and nothing naming the cause. An orphan keystore entry
+//! costs nothing and is the user's to clear, from the connection editor's own password field —
+//! the only surface that knows whether they still want it.
 
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
 use strata_core::engine::drop_intent;
-use strata_model::{CatalogKind, TableOrigin};
+use strata_model::{CatalogKind, ProviderId, TableOrigin};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -78,15 +92,26 @@ pub enum DropTarget {
         id: Uuid,
         name: String,
     },
-    /// A connection, by its `ConnectionDef::url()` — `s3://acme-lake` (W7).
-    Connection(String),
+    /// A connection, by its `ConnectionDef::url()` — `s3://acme-lake`,
+    /// `postgres://reader@db:5432/analytics` (W7 · DB-05) — **with its provider**, carried from
+    /// the row for [`Table`](Self::Table)'s reason: by the time this copy renders, answering it
+    /// would take a lookup that can fail, and the wrong default tells the user nothing in the
+    /// *bucket* is deleted about a database.
+    ///
+    /// The [`ProviderId`] rather than a "is it a database" flag, so a fifth provider is a compile
+    /// error in every arm that words this card instead of a silent `false` that promises the
+    /// wrong thing about whatever it turns out to be.
+    Connection {
+        url: String,
+        provider: ProviderId,
+    },
 }
 
 impl DropTarget {
     /// The row's name, as the title shows it.
     pub fn name(&self) -> &str {
         match self {
-            DropTarget::View(name) | DropTarget::Connection(name) => name,
+            DropTarget::View(name) | DropTarget::Connection { url: name, .. } => name,
             DropTarget::Table { name, .. } | DropTarget::Query { name, .. } => name,
         }
     }
@@ -100,7 +125,7 @@ impl DropTarget {
             DropTarget::Table { .. } => Some(CatalogKind::Table),
             DropTarget::View(_) => Some(CatalogKind::View),
             DropTarget::Query { .. } => Some(CatalogKind::Query),
-            DropTarget::Connection(_) => None,
+            DropTarget::Connection { .. } => None,
         }
     }
 
@@ -113,7 +138,7 @@ impl DropTarget {
             DropTarget::Table { .. } => "Drop table",
             DropTarget::View(_) => "Drop view",
             DropTarget::Query { .. } => "Delete query",
-            DropTarget::Connection(_) => "Forget connection",
+            DropTarget::Connection { .. } => "Forget connection",
         }
     }
 
@@ -133,9 +158,14 @@ impl DropTarget {
             DropTarget::Query { .. } => {
                 "Removes this saved query from the project. Any open tab keeps its SQL."
             }
-            DropTarget::Connection(_) => {
-                "Removes the object store from this project. Nothing in the bucket is deleted."
-            }
+            DropTarget::Connection {
+                provider: ProviderId::Postgres,
+                ..
+            } => "Removes the database connection. Nothing in the database is deleted.",
+            DropTarget::Connection {
+                provider: ProviderId::S3 | ProviderId::Gcs | ProviderId::Http,
+                ..
+            } => "Removes the object store from this project. Nothing in the bucket is deleted.",
         }
     }
 
@@ -145,7 +175,7 @@ impl DropTarget {
             DropTarget::Table { .. } => "table",
             DropTarget::View(_) => "view",
             DropTarget::Query { .. } => "query",
-            DropTarget::Connection(_) => "connection",
+            DropTarget::Connection { .. } => "connection",
         }
     }
 }
@@ -157,7 +187,7 @@ fn past(target: &DropTarget) -> &'static str {
         DropTarget::Table { .. } => "Dropped table",
         DropTarget::View(_) => "Dropped view",
         DropTarget::Query { .. } => "Deleted query",
-        DropTarget::Connection(_) => "Forgot connection",
+        DropTarget::Connection { .. } => "Forgot connection",
     }
 }
 
@@ -251,7 +281,22 @@ impl Component for DropConfirm {
         };
 
         let (dependents, consequence) = match (&target, target.kind()) {
-            (DropTarget::Connection(url), _) => {
+            (
+                DropTarget::Connection {
+                    url,
+                    provider: ProviderId::Postgres,
+                },
+                _,
+            ) => {
+                let catalog = project.peek().database_catalog(url);
+                let behind = match catalog {
+                    Some(catalog) => views.read().views_reading(&catalog),
+                    None => Vec::new(),
+                };
+                let line = consequence(behind.len(), target.noun());
+                (behind, line)
+            }
+            (DropTarget::Connection { url, .. }, _) => {
                 let over = project.peek().tables_over(url);
                 let behind = views.read().views_over(&over);
                 let line = forget_consequence(over.len(), behind.len());
@@ -472,7 +517,7 @@ fn drop_row(
                 catalog_settled(catalog);
             });
         }
-        DropTarget::Connection(url) => {
+        DropTarget::Connection { url, .. } => {
             let landed = {
                 let mut p = project.write_channel(ProjChan::Connections);
                 let taken = p.remove_connection(url);
@@ -533,8 +578,8 @@ mod tests {
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
     use strata_model::{
-        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
-        TableOrigin, ViewDef,
+        ConnectionDef, GcsStore, Origin, PgStore, Provider, S3Store, SavedQuery, SourceFormat,
+        TableDef, TableOrigin, ViewDef,
     };
 
     use super::*;
@@ -1200,6 +1245,71 @@ mod tests {
         assert!(slot.peek().is_none(), "and closed the dialog");
     }
 
+    /// A **database** forget says something different, and names different dependents (DB-05).
+    ///
+    /// Different copy, because "nothing in the bucket is deleted" is not a sentence about a
+    /// database — which is why the target carries what kind of thing it is rather than looking it
+    /// up here. And different dependents, because no `TableDef` can name a database: what breaks
+    /// is the views whose plans scan through its catalog, off the qualified half of a view's
+    /// dependency record.
+    #[test]
+    fn forgetting_a_database_names_the_views_that_read_through_it() {
+        let (mut runner, (mut slot, _, project, ..)) = runner("forget-db");
+        {
+            let mut p = project;
+            let mut write = p.write_channel(ProjChan::Connections);
+            write.upsert_connection(ConnectionDef {
+                address: "db.internal:5432/analytics".into(),
+                provider: Provider::Postgres(PgStore {
+                    catalog: "analytics".into(),
+                    user: "reader".into(),
+                    ..Default::default()
+                }),
+                client_config: Default::default(),
+            });
+            write.view_registered(
+                "orders_daily",
+                ViewMeta {
+                    columns: Vec::new(),
+                    tables: vec!["orders".into()],
+                    remote: vec!["analytics.public.customers".into()],
+                    aliases: Vec::new(),
+                },
+            );
+        }
+        let url = "postgres://reader@db.internal:5432/analytics";
+        open(
+            &mut runner,
+            &mut slot,
+            DropTarget::Connection {
+                url: url.into(),
+                provider: ProviderId::Postgres,
+            },
+        );
+
+        assert!(texts(&runner)
+            .iter()
+            .any(|t| t.contains("Nothing in the database is deleted")));
+        assert!(
+            texts(&runner)
+                .iter()
+                .any(|t| t == "1 view reads this connection and will be left invalid:"),
+            "the view scanning through its catalog is named: {:?}",
+            texts(&runner)
+        );
+        assert!(texts(&runner).iter().any(|t| t == "orders_daily"));
+
+        click_action(&mut runner, "Forget connection");
+        assert!(
+            !project
+                .peek()
+                .connections
+                .iter()
+                .any(|c| c.def.url() == url),
+            "confirming forgot it"
+        );
+    }
+
     /// **Forget** is the same confirm on a fourth target: it names the connection by its
     /// `url()`, warns about nothing (an object store is not in the SQL namespace, so nothing can
     /// read it by name), and confirming takes exactly that connection out of the project.
@@ -1212,7 +1322,10 @@ mod tests {
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection("gs://lake".into()),
+            DropTarget::Connection {
+                url: "gs://lake".into(),
+                provider: ProviderId::Gcs,
+            },
         );
 
         assert_eq!(title(&runner), "Forget connection gs://lake");
@@ -1252,7 +1365,10 @@ mod tests {
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection("s3://lake".into()),
+            DropTarget::Connection {
+                url: "s3://lake".into(),
+                provider: ProviderId::S3,
+            },
         );
 
         assert!(
@@ -1293,7 +1409,10 @@ mod tests {
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection("s3://lake".into()),
+            DropTarget::Connection {
+                url: "s3://lake".into(),
+                provider: ProviderId::S3,
+            },
         );
 
         click_action(&mut runner, "Forget connection");

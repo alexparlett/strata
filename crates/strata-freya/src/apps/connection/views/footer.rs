@@ -28,7 +28,7 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::engine::db::PG_PASSWORD;
+use strata_core::engine::db::password_ref;
 use strata_core::secret::{migrate_derived, Secret, SecretError, SecretRef};
 use strata_model::{check_catalog_name, ConnectionDef, Provider};
 
@@ -207,21 +207,23 @@ fn password_ops(
     typed: &str,
     removed: bool,
 ) -> Vec<PasswordOp> {
-    let slot = |def: &ConnectionDef| SecretRef::derived(PG_PASSWORD, &def.url());
     let was = previous.filter(|def| matches!(def.provider, Provider::Postgres(_)));
     let mut ops = Vec::new();
 
-    let Provider::Postgres(_) = next.provider else {
-        ops.extend(was.map(|def| PasswordOp::Delete(slot(def))));
+    let Some(slot) = password_ref(next) else {
+        ops.extend(was.and_then(password_ref).map(PasswordOp::Delete));
         return ops;
     };
 
-    if let Some(old) = was.filter(|def| def.url() != next.url()) {
-        ops.push(PasswordOp::Migrate(slot(old), slot(next)));
+    if let Some(old) = was
+        .filter(|def| def.url() != next.url())
+        .and_then(password_ref)
+    {
+        ops.push(PasswordOp::Migrate(old, slot.clone()));
     }
     match Secret::new(typed) {
-        Some(secret) => ops.push(PasswordOp::Put(slot(next), secret)),
-        None if removed => ops.push(PasswordOp::Delete(slot(next))),
+        Some(secret) => ops.push(PasswordOp::Put(slot, secret)),
+        None if removed => ops.push(PasswordOp::Delete(slot)),
         None => {}
     }
     ops
@@ -378,7 +380,7 @@ mod tests {
     }
 
     fn slot(def: &ConnectionDef) -> SecretRef {
-        SecretRef::derived(PG_PASSWORD, &def.url())
+        password_ref(def).expect("a database def owns a keystore slot")
     }
 
     /// **Nothing typed, nothing moved, nothing pressed is no keystore call at all**, so an

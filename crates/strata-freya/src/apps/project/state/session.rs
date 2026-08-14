@@ -998,8 +998,6 @@ mod tests {
 
         s.toggle_pane(SidebarPane::Catalog);
         assert_eq!(s.layout.sidebar, None);
-        s.toggle_pane(SidebarPane::Connections);
-        assert_eq!(s.layout.sidebar, Some(SidebarPane::Connections));
         s.toggle_pane(SidebarPane::Catalog);
         assert_eq!(s.layout.sidebar, Some(SidebarPane::Catalog));
         s.close_sidebar();
@@ -1060,7 +1058,7 @@ mod tests {
     fn snapshot_round_trips_layout() {
         let mut s = SessionState::default();
         s.open_named("a", "SELECT 1".into(), Origin::Scratch);
-        s.toggle_pane(SidebarPane::Connections);
+        s.close_sidebar();
         s.open_right_pane(RightPane::Chat);
         s.toggle_drawer(DrawerTab::Events);
         s.set_sidebar_w(333.0);
@@ -1068,7 +1066,10 @@ mod tests {
 
         let restored =
             SessionState::from_snapshot(s.snapshot()).expect("non-empty snapshot restores");
-        assert_eq!(restored.layout.sidebar, Some(SidebarPane::Connections));
+        assert_eq!(
+            restored.layout.sidebar, None,
+            "a collapsed sidebar restarts collapsed"
+        );
         assert_eq!(restored.layout.right, Some(RightPane::Chat));
         assert_eq!(restored.layout.drawer, Some(DrawerTab::Events));
         assert_eq!(restored.layout.sidebar_w, 333.0);

@@ -30,10 +30,12 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use freya::radio::RadioChannel;
-use strata_core::engine::{TableMeta, ViewMeta};
+use strata_core::engine::{fold_ident, TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_core::register::view_order;
-use strata_model::{CatalogKind, ColumnInfo, ConnectionDef, SavedQuery, TableDef, ViewDef};
+use strata_model::{
+    CatalogKind, ColumnInfo, ConnectionDef, Provider, SavedQuery, TableDef, ViewDef,
+};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -46,9 +48,10 @@ pub enum ProjChan {
     /// Project identity: name / root path. Subscribed by the header's project switcher (a
     /// rename / re-open re-labels the trigger); the window title joins it with P4-13.
     Meta,
-    /// The remote object stores (W7) — its own channel for the same reason the sections
-    /// have theirs: connecting a bucket must not wake the TABLES section, and the sidebar's
-    /// Connections pane is a separate pane, not a section of the catalog.
+    /// The project's connections (W7 · DB-02) — object stores *and* databases, on their own
+    /// channel for the same reason the sections have theirs: connecting one must not wake the
+    /// TABLES section. Since DB-05 they are nodes of the data-sources tree rather than a pane
+    /// beside it, which changes who subscribes and not why the channel is separate.
     Connections,
     Tables,
     Views,
@@ -733,6 +736,56 @@ impl ProjectState {
             .collect()
     }
 
+    /// The catalog name a **database** connection registers under, from the def alone — `None`
+    /// for a URL this project has no connection for, and for one that is not a database.
+    ///
+    /// The def's own spelling rather than the engine's registered name: this is asked by a Forget
+    /// confirm, which has to work whether or not the connection ever connected, and the two only
+    /// differ by whitespace the engine trims.
+    pub fn database_catalog(&self, url: &str) -> Option<String> {
+        self.connections
+            .iter()
+            .find(|c| c.def.url() == url)
+            .and_then(|c| match &c.def.provider {
+                Provider::Postgres(pg) => Some(pg.catalog.trim().to_string()),
+                _ => None,
+            })
+    }
+
+    /// The views that read through the database connection registered as `catalog` — its
+    /// dependents, and the whole of them.
+    ///
+    /// The **other** half of a view's dependency record ([`ViewInfo::remote_deps`]), which is why
+    /// DB-03 kept the two apart: `deps` is bare names checkable against this project's rows, and a
+    /// remote scan has no row to check. Matched on the qualified name's **first part**, folded,
+    /// because that part is the catalog and a catalog name is a SQL identifier — where a
+    /// connection's own key, a URL, is matched verbatim everywhere else here.
+    ///
+    /// **Bounded by what the last pass recorded**, and the confirm's wording has to live with it:
+    /// only a view the engine *created* has a `remote_deps` list, so a view the same broken
+    /// connection already failed reports nothing here. That is the case a Forget is most likely to
+    /// be reached from, and there is no second source — a failed view's plan was never built, so
+    /// nothing on our side knows what it read. `tables_over` has no such gap because a table names
+    /// its connection in the def itself.
+    ///
+    /// Alphabetical and each named once: a view reading three of the connection's relations is one
+    /// broken view.
+    pub fn views_reading(&self, catalog: &str) -> Vec<String> {
+        let wanted = fold_ident(catalog);
+        self.views
+            .iter()
+            .filter(|v| {
+                v.reg.ready().is_some_and(|info| {
+                    info.remote_deps
+                        .iter()
+                        .filter_map(|dep| dep.split('.').next())
+                        .any(|part| fold_ident(part) == wanted)
+                })
+            })
+            .map(|v| v.def.name.clone())
+            .collect()
+    }
+
     /// The views left invalid **behind** those tables, alphabetically and each named once —
     /// the second half of a forget's consequence (W7 · 04).
     ///
@@ -999,6 +1052,48 @@ impl ProjectState {
         self.connections.insert(at, ConnRow::new(def));
     }
 
+    /// What the registration pass has said about the connection `url` names, in the terms a row
+    /// renders: whether it is still waiting, and the refusal if it settled on one.
+    ///
+    /// A projection rather than the value itself, because `Reg` is deliberately not `Clone` (see
+    /// [`remove_view`](Self::remove_view)) and a row reads its store out of the guard before
+    /// building any element. Beside [`table_problem`](Self::table_problem) and
+    /// [`view_problem`](Self::view_problem) so the three row kinds answer the same question the
+    /// same way; a URL this project holds no connection for reads as still waiting, which is what
+    /// a row mid-`upsert` is.
+    pub fn connection_problem(&self, url: &str) -> (bool, Option<String>) {
+        self.connections
+            .iter()
+            .find(|c| c.def.url() == url)
+            .map_or((true, None), |c| match &c.reg {
+                Reg::Loading => (true, None),
+                Reg::Ready(()) => (false, None),
+                Reg::Failed(why) => (false, Some(why.clone())),
+            })
+    }
+
+    /// Edit a connection's def **in place**, keeping the row's `Reg` — the schemas picker's
+    /// write, and the only one here that does not reset a row to `Loading`.
+    ///
+    /// Legitimate exactly because the field it exists for is **display-only**: registration
+    /// exposes every schema a database connection can reach and [`PgStore::schemas`] scopes what
+    /// Strata shows, so what the last pass answered about this connection is still true after
+    /// the write. Going through [`upsert_connection`](Self::upsert_connection) instead would
+    /// replace the row with a fresh `Reg::Loading` that only a whole-catalog re-scan could
+    /// answer: a permanent spinner over a change that touched no engine state.
+    ///
+    /// `edit` must not move the def's identity — the row keeps its slot and its key, so a URL or
+    /// address change here would leave the list sorted wrong and the engine registered under a
+    /// URL no def names. That edit is the connection editor's, and it goes through `upsert`.
+    ///
+    /// [`PgStore::schemas`]: strata_model::PgStore::schemas
+    pub fn update_connection_def(&mut self, url: &str, edit: impl FnOnce(&mut ConnectionDef)) {
+        let Some(row) = self.connections.iter_mut().find(|c| c.def.url() == url) else {
+            return;
+        };
+        edit(&mut row.def);
+    }
+
     /// Forget the connection registered under `url` — the store half of the pane's Forget
     /// (W7). Hands back the row and its slot, like [`remove_view`](Self::remove_view).
     ///
@@ -1021,7 +1116,7 @@ impl ProjectState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strata_model::{GcsAuth, GcsStore, Provider, S3Store, SourceFormat, TableOrigin};
+    use strata_model::{GcsAuth, GcsStore, PgStore, Provider, S3Store, SourceFormat, TableOrigin};
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
@@ -1957,5 +2052,122 @@ mod tests {
         let p = two_stores_one_bucket();
         assert!(p.registration_faults().is_empty());
         assert_eq!(p.registration_fault_count(), 0);
+    }
+
+    /// A **database** connection def, for the two questions only a database raises here.
+    fn pg(database: &str, schemas: &[&str]) -> ConnectionDef {
+        ConnectionDef {
+            address: format!("db.internal:5432/{database}"),
+            provider: Provider::Postgres(PgStore {
+                catalog: database.into(),
+                user: "reader".into(),
+                schemas: schemas.iter().map(ToString::to_string).collect(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        }
+    }
+
+    /// **The schemas picker's write keeps the row's verdict.** Going through `upsert_connection`
+    /// instead would drop a fresh `Reg::Loading` on a connection that is still connected, and
+    /// nothing short of a whole-catalog re-scan would ever answer it — a permanent spinner over a
+    /// change that touched no engine state.
+    #[test]
+    fn editing_a_connection_def_in_place_keeps_its_registration() {
+        let mut p = ProjectState::from_defs(
+            ProjectDefs {
+                name: "test".into(),
+                connections: vec![pg("analytics", &["public"])],
+                ..Default::default()
+            },
+            PathBuf::from("/tmp/strata-schemas-write"),
+        );
+        let url = p.connections[0].def.url();
+        p.connection_registered(&url);
+
+        p.update_connection_def(&url, |def| {
+            if let Provider::Postgres(store) = &mut def.provider {
+                store.schemas = vec!["public".into(), "warehouse".into()];
+            }
+        });
+
+        let row = &p.connections[0];
+        assert!(
+            matches!(row.reg, Reg::Ready(())),
+            "the verdict is untouched"
+        );
+        match &row.def.provider {
+            Provider::Postgres(store) => {
+                assert_eq!(store.schemas, ["public", "warehouse"]);
+            }
+            other => panic!("still a database: {other:?}"),
+        }
+        assert_eq!(p.connections.len(), 1, "edited in place, not inserted");
+    }
+
+    /// **A database's readers are views, matched on the qualified scan's catalog part.** No
+    /// `TableDef` can name a database — its relations are discovered rather than declared — so
+    /// this is the only dependency direction a Forget has to report, and it reads the half of a
+    /// view's record that is deliberately *not* checkable against the project's rows.
+    #[test]
+    fn views_reading_matches_the_catalog_part_and_folds_it() {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            connections: vec![pg("analytics", &["public"])],
+            views: vec![
+                ViewDef {
+                    name: "joined".into(),
+                    sql: "SELECT 1".into(),
+                },
+                ViewDef {
+                    name: "local_only".into(),
+                    sql: "SELECT 2".into(),
+                },
+                ViewDef {
+                    name: "elsewhere".into(),
+                    sql: "SELECT 3".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-views-reading"));
+        p.view_registered(
+            "joined",
+            ViewMeta {
+                columns: Vec::new(),
+                tables: vec!["orders".into()],
+                remote: vec!["ANALYTICS.public.customers".into()],
+                aliases: Vec::new(),
+            },
+        );
+        p.view_registered(
+            "local_only",
+            ViewMeta {
+                columns: Vec::new(),
+                tables: vec!["analytics".into()],
+                remote: Vec::new(),
+                aliases: Vec::new(),
+            },
+        );
+        p.view_registered(
+            "elsewhere",
+            ViewMeta {
+                columns: Vec::new(),
+                tables: Vec::new(),
+                remote: vec!["warehouse.public.orders".into()],
+                aliases: Vec::new(),
+            },
+        );
+
+        assert_eq!(
+            p.views_reading("analytics"),
+            ["joined"],
+            "the catalog name folds, and a workspace table sharing it is not a reader"
+        );
+        assert_eq!(
+            p.database_catalog(&p.connections[0].def.url()).as_deref(),
+            Some("analytics")
+        );
+        assert!(p.database_catalog("s3://lake").is_none());
     }
 }

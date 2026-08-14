@@ -1,7 +1,7 @@
-//! The catalog rows' **context menus** (P3-06) — one [`Menu`] per row kind, opened either by
-//! right-clicking the row or by pressing its ⋮ button. One item list per kind, built here, so the
-//! two triggers can't drift apart (the Dioxus sidebar had exactly this pair, sharing one
-//! `catalog_menu_items`).
+//! The tree rows' **context menus** (P3-06 · W7 · DB-05) — one [`Menu`] per row kind, opened
+//! either by right-clicking the row or by pressing its ⋮ button. One item list per kind, built
+//! here, so the two triggers can't drift apart (the Dioxus sidebar had exactly this pair, sharing
+//! one `catalog_menu_items`).
 //!
 //! **The actions are direct calls, not cache invalidations.** The store *is* the catalog, so there
 //! is no `FetchCatalog` query to invalidate: every item calls the engine and/or mutates
@@ -21,16 +21,18 @@
 use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_model::{CatalogKind, Origin, SavedQuery};
+use strata_model::{CatalogKind, Origin, ProviderId, SavedQuery};
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{
     persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Anchor, Catalog,
     CatalogRescan, Chan, ChatsCtx, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{
-    ask_about, use_profile_actions, ConfigureRequest, DropTarget, ProfileActions, ProfileTarget,
+    ask_about, use_profile_actions, ConfigureRequest, ConnectionRequest, DropTarget,
+    ProfileActions, ProfileTarget, SchemasRequest,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -425,6 +427,85 @@ pub fn open_saved_query(actions: &CatalogActions, id: Uuid) {
     session
         .write_channel(Chan::Tabs)
         .open_or_focus(&name, sql, Origin::SavedQuery(id));
+}
+
+/// The handles a **connection** row's menu acts through, gathered once per row — this module's
+/// [`CatalogActions`] shape, with only what a connection's three items need.
+#[derive(Clone, Copy)]
+pub struct ConnectionActions {
+    /// The remove-confirm slot provided at the window root. Setting it *is* Forget: the dialog
+    /// owns the store mutation, the persist, the keystore entry and the `Engine::disconnect`
+    /// behind it.
+    drop_target: State<Option<DropTarget>>,
+    /// The editor-window request slot, on the same terms: setting it *is* Edit, and
+    /// `ConnectionLauncher` at the project root opens the window.
+    editor: ConnectionRequest,
+    /// The schemas-picker slot, likewise — the picker is a dialog at the window root.
+    schemas: SchemasRequest,
+    /// The destructive tone, resolved here because a menu is built from an event handler, where
+    /// no hook — `use_theme` included — may run.
+    danger: Color,
+}
+
+/// Gather a connection row's action handles.
+pub fn use_connection_actions() -> ConnectionActions {
+    ConnectionActions {
+        drop_target: use_consume::<State<Option<DropTarget>>>(),
+        editor: use_consume::<ConnectionRequest>(),
+        schemas: use_consume::<SchemasRequest>(),
+        danger: tones().error,
+    }
+}
+
+/// A **connection** row's menu: edit it · pick its schemas · forget it.
+///
+/// Every item **sets a slot and stops** — the editor window, the schemas picker and the remove
+/// confirm are all the project root's, and a menu built inside an event handler can run no hook
+/// to reach what any of them needs.
+///
+/// *Schemas…* is absent on an object store rather than parked, for [`table_menu`]'s reason: a
+/// bucket has no schemas to scope, ever, where parking means "not this second".
+pub fn connection_menu(actions: &ConnectionActions, url: String, provider: ProviderId) -> Menu {
+    let actions = *actions;
+    Menu::new()
+        .min_width(Size::px(CONTEXT_MENU_WIDTH))
+        .child(
+            MenuButton::new()
+                .on_press({
+                    let url = url.clone();
+                    move |_| {
+                        let mut slot = actions.editor;
+                        slot.set(Some(ConnectionTarget::Edit(url.clone())));
+                        ContextMenu::close();
+                    }
+                })
+                .child(menu_row(IconName::Pencil, "Edit connection")),
+        )
+        .maybe_child((provider == ProviderId::Postgres).then(|| {
+            let url = url.clone();
+            MenuButton::new()
+                .on_press(move |_| {
+                    let mut slot = actions.schemas;
+                    slot.set(Some(url.clone()));
+                    ContextMenu::close();
+                })
+                .child(menu_row(IconName::Folder, "Schemas…"))
+                .into_element()
+        }))
+        .child(Divider::menu())
+        .child(
+            MenuButton::new()
+                .theme(MenuItemThemePartial::default().color(actions.danger))
+                .on_press(move |_| {
+                    let mut slot = actions.drop_target;
+                    slot.set(Some(DropTarget::Connection {
+                        url: url.clone(),
+                        provider,
+                    }));
+                    ContextMenu::close();
+                })
+                .child(menu_row(IconName::Trash, "Forget connection")),
+        )
 }
 
 /// Commit a saved-query rename: relabel the row and persist the defs, since a def mutation

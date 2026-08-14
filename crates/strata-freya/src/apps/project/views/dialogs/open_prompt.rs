@@ -17,9 +17,9 @@ use freya::prelude::*;
 
 use std::path::PathBuf;
 
-use crate::components::dialog::{Dialog, DialogHeader};
+use crate::components::dialog::{CheckboxRow, Dialog, DialogHeader};
 use crate::components::icon::IconName;
-use crate::components::metrics::{R_2, SP_2, SP_3, SP_4};
+use crate::components::metrics::SP_4;
 use crate::components::typography::{Control, Prose, Title};
 use crate::platform::OpenCtx;
 use crate::state::AppCtx;
@@ -81,18 +81,11 @@ impl Component for OpenPromptCard {
                 ),
         );
 
-        let checkbox_row = rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .spacing(SP_3)
-            .padding((SP_2, SP_3))
-            .corner_radius(R_2)
-            .on_press(move |_: Event<PressEventData>| {
+        let checkbox_row = CheckboxRow::new("Remember, don't ask again", *remember.read())
+            .on_toggle(move |_: Event<PressEventData>| {
                 let mut remember = remember;
                 remember.toggle();
-            })
-            .child(Checkbox::new().selected(*remember.read()).size(16.))
-            .child(Prose::new("Remember, don't ask again").color(roles.get(Role::TextPlaceholder)));
+            });
 
         Dialog::new()
             .on_dismiss(move |()| open.dismiss())

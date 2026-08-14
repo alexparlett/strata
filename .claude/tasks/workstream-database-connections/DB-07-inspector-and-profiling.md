@@ -53,6 +53,13 @@ because a remote table has no `ProjectState` row — the store grows nothing.
   free-tier row-estimate candidate — clearly labeled an estimate, and already in DB-02's
   connect-time listing query's reach).
 
+- **The tree's relation rows are leaves, and that is this task's to change** (DB-05, as built):
+  a relation draws no disclosure today because its columns are the same introspection this task
+  performs, and a column row under it could not be *selected* until `ColRef` widens here. So the
+  affordance arrives with the capability — `RelationRow` in
+  `views/sidebar/catalog/database.rs` grows its `Disclosure` and its column children in this
+  task, off the same read the inspector uses.
+
 ## Build
 
 1. **Selection** — widen the selection model in `strata-model` (the honest scope from

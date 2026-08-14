@@ -29,7 +29,7 @@ profiling) sit on the tree.
 - **A database connection is a fourth `Provider` arm, not a second kind of thing.** Same
   `ConnectionDef`, same `ConnRow`/`Reg<()>`, same editor window, same `register_pass`
   phase 1, same Forget confirm — the `TableOrigin` lesson. (Not "same pane": the Connections
-  pane retires with DB-05's tree; until then a Postgres row renders there unpolished.) The
+  pane retired with DB-05's tree, which gives a database node its own subtree.) The
   compile errors a fourth arm forces through `url()`, `check_address` and every `match` are
   the intended checklist — with two deliberate exceptions to keep in view:
   `ProviderId::ALL` is pinned by **test**, not the compiler, and the loops over it are where
@@ -113,7 +113,7 @@ profiling) sit on the tree.
   this machine…"), the same honest shape as an expired SSO session — and re-entering it
   touches nothing in git.
 - **The catalog pane is redesigned into one data-sources tree; the catalog *invariant* stands
-  untouched underneath it** (Alex, 2026-08-13 — this overturns this plan's first draft, which
+  untouched underneath it** (built, DB-05 ✅; Alex, 2026-08-13 — this overturns this plan's first draft, which
   tucked remote browsing into the Connections pane; that made remote tables second-class and
   wedged a second hierarchy under a flat pane). The reference UX is **DataGrip**: one tree
   whose top level is data sources — the **project workspace** (the def-driven tables / views /
@@ -240,7 +240,7 @@ profiling) sit on the tree.
 | DB-02 | The Postgres arm: model, secrets, pool, catalog provider, registration | ✅ | DB-01 |
 | DB-03 | Statement policy over remote catalogs | ✅ | DB-02 |
 | DB-04 | The connection editor's Postgres form | ✅ | DB-02 |
-| DB-05 | The data-sources tree: the catalog pane redesigned | ⬜ | DB-02, DB-04 |
+| DB-05 | The data-sources tree: the catalog pane redesigned | ✅ | DB-02, DB-04 |
 | DB-06 | Gestures + completion over the tree | ⬜ | DB-05 |
 | DB-07 | Column inspector + profiling for remote tables | ⬜ | DB-05 |
 | DB-08 | JSON accessors over remote columns: the pushdown rewrite | ⬜ | DB-02 |

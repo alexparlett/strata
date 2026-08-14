@@ -51,7 +51,7 @@ reuses a field the theme already has.
   (recommended: the dialogs are exactly the kind of surface the rule is for), but as an explicit
   step, sized as such.
 - `views/sidebar/mod.rs:87-92` reads five roles legitimately — the sidebar's groups live one
-  level down (`sidebar/catalog/mod.rs:53`, `sidebar/connections/mod.rs:81`).
+  level down (`sidebar/catalog/mod.rs`'s `Catalog` theme, which DB-05 widened to dress the tree's connection rows too).
 - The connection/configure windows' text reads are **P5-09's** to move (it adds the `window`
   text fields); do not re-home them here first.
 

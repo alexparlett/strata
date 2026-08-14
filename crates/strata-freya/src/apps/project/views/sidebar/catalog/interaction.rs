@@ -17,7 +17,8 @@ use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{
-    ColRef, ColumnInfo, Origin, RightPane, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+    CatalogKind, ColRef, ColumnInfo, ConnectionDef, Origin, PgStore, Provider, ProviderId,
+    RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
 };
 use uuid::Uuid;
 
@@ -25,11 +26,13 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
-use super::entry::{fold_plan, watched_scan, Folds};
+use super::entry::watched_scan;
+use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
 use super::*;
+use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
-use crate::apps::project::views::{DropTarget, ProfileTarget};
+use crate::apps::project::views::{DropTarget, ProfileTarget, SchemasRequest};
 use crate::components::metrics::PROGRESS_HOLD;
 use crate::components::metrics::ROW_ACTION;
 use crate::state::ConfigStation;
@@ -218,15 +221,22 @@ fn app() -> impl IntoElement {
 /// What the test holds onto: the filter slot to type into, the inspected-column slot, the
 /// session + project stores to assert against (and, for validity, to mutate), and the
 /// drop-confirm / profile-confirm slots the destructive and scanning items are supposed to set.
-type Handles = (
-    State<String>,
-    State<Option<ColRef>>,
-    RadioStation<SessionState, Chan>,
-    RadioStation<ProjectState, ProjChan>,
-    State<Option<DropTarget>>,
-    State<ScanRequest>,
-    State<Option<ProfileTarget>>,
-);
+///
+/// **Named fields, not a tuple.** It was a tuple, and every test destructured it positionally
+/// with a `..` somewhere — so adding a handle silently re-pointed a dozen of those bindings at
+/// the wrong slot, and the compiler only caught it where the types happened to differ.
+#[derive(Clone, Copy)]
+struct Handles {
+    filter: State<String>,
+    selection: State<Option<ColRef>>,
+    session: RadioStation<SessionState, Chan>,
+    store: RadioStation<ProjectState, ProjChan>,
+    drop_target: State<Option<DropTarget>>,
+    rescan: State<ScanRequest>,
+    profile_target: State<Option<ProfileTarget>>,
+    editor: State<Option<ConnectionTarget>>,
+    schemas: SchemasRequest,
+}
 
 /// A tall window so every row lays out (the pane's `ScrollView` keeps off-screen children in the
 /// tree, but height removes all doubt). The session starts with the inspector **closed**, so a
@@ -266,10 +276,13 @@ fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Ha
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
             r.provide_root_context(|| State::create(None::<ConfigureTarget>));
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
+            let editor = r.provide_root_context(|| State::create(None::<ConnectionTarget>));
+            let schemas =
+                r.provide_root_context(|| State::create(None::<String>)) as SchemasRequest;
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
             r.provide_root_context(|| State::create(Chats::new(Pick::default())));
-            (
+            Handles {
                 filter,
                 selection,
                 session,
@@ -277,7 +290,9 @@ fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Ha
                 drop_target,
                 rescan,
                 profile_target,
-            )
+                editor,
+                schemas,
+            }
         },
         1.,
     )
@@ -382,20 +397,30 @@ fn press_row_actions(runner: &mut TestingRunner, text: &str) {
     settle(runner);
 }
 
-/// Press the expand chevron of the nested column row named `name` — `back` pixels left of the
-/// name run's own left edge (the row's fixed lead-in; see the call site's arithmetic).
-fn expand_nested(runner: &mut TestingRunner, name: &str, back: f32) {
-    let area = runner
-        .find(|node, element| {
-            Label::try_downcast(element)
-                .filter(|l| l.text == name)
-                .map(|_| node.layout().area)
+/// Press the **disclosure arrow** of the row whose label is `name`.
+///
+/// Found by geometry rather than by a pixel offset from the label, because a tree's rows sit at
+/// different depths and the offset would then differ per row (the previous version of this helper
+/// carried a hand-measured `27.5` that any indent change silently invalidated). `TreeItem` lays a
+/// row out as one `INDENT`-wide box per level of depth, then the arrow's own box of the same
+/// width, then the content — so the arrow is the **rightmost** box of that width on the row's
+/// line.
+fn press_disclosure(runner: &mut TestingRunner, name: &str) {
+    let label = text_area(runner, name);
+    let mid_y = label.min_y() + label.height() / 2.;
+    let arrow = runner
+        .find_many(|node, _| {
+            let a = node.layout().area;
+            ((a.width() - INDENT).abs() < 0.5
+                && a.min_x() < label.min_x()
+                && a.min_y() <= mid_y
+                && a.max_y() >= mid_y)
+                .then_some(a)
         })
-        .unwrap_or_else(|| panic!("no column row {name:?} in the tree"));
-    let point = (
-        (area.min_x() - back) as f64,
-        (area.min_y() + area.height() / 2.) as f64,
-    );
+        .into_iter()
+        .max_by(|a, b| a.min_x().total_cmp(&b.min_x()))
+        .unwrap_or_else(|| panic!("no disclosure arrow on the {name:?} row"));
+    let point = ((arrow.min_x() + arrow.width() / 2.) as f64, mid_y as f64);
     runner.move_cursor(point);
     runner.click_cursor(point);
     settle(runner);
@@ -405,7 +430,8 @@ fn expand_nested(runner: &mut TestingRunner, name: &str, back: f32) {
 /// keeping only the matches in each — not just the section that happens to be first.
 #[test]
 fn filter_narrows_all_three_sections_at_once() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     for name in [
@@ -433,7 +459,8 @@ fn filter_narrows_all_three_sections_at_once() {
 /// folds unquoted identifiers, so a case-sensitive filter would be a trap.
 #[test]
 fn filter_folds_case_in_both_directions() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     type_filter(&mut runner, &mut filter, "ORD");
@@ -451,7 +478,8 @@ fn filter_folds_case_in_both_directions() {
 /// mutates it.
 #[test]
 fn clearing_the_filter_restores_every_row() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     type_filter(&mut runner, &mut filter, "zzz-nothing-matches");
@@ -476,7 +504,8 @@ fn clearing_the_filter_restores_every_row() {
 /// showing.
 #[test]
 fn section_counts_follow_the_filter() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     assert!(shows(&runner, "TABLES · 3"));
@@ -498,7 +527,8 @@ fn section_counts_follow_the_filter() {
 /// too). `city` is a column of `orders` and must not surface its table.
 #[test]
 fn filter_matches_def_names_not_columns() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     type_filter(&mut runner, &mut filter, "city");
@@ -513,7 +543,8 @@ fn filter_matches_def_names_not_columns() {
 /// result is a non-match, and the empty-state copy would be a lie.
 #[test]
 fn saved_query_empty_note_is_suppressed_while_filtering() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     assert!(!shows(&runner, "No saved queries yet"));
@@ -529,7 +560,8 @@ fn saved_query_empty_note_is_suppressed_while_filtering() {
 /// that was expanded before the filter was typed.
 #[test]
 fn filtering_hides_an_expanded_entrys_columns() {
-    let (mut runner, (mut filter, ..)) = runner();
+    let (mut runner, h) = runner();
+    let mut filter = h.filter;
     settle(&mut runner);
 
     click_text(&mut runner, "orders");
@@ -581,7 +613,9 @@ fn a_view_expands_to_its_columns_too() {
 /// inspector, which is how it reopens once collapsed.
 #[test]
 fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
-    let (mut runner, (_, selection, session, ..)) = runner();
+    let (mut runner, h) = runner();
+    let selection = h.selection;
+    let session = h.session;
     settle(&mut runner);
 
     assert!(selection.peek().is_none());
@@ -630,13 +664,12 @@ fn collapsing_a_section_hides_only_its_own_rows() {
 /// from a top-level `city` — the identity bug `ColRef`'s `Vec<String>` path exists to prevent.
 #[test]
 fn a_nested_field_selects_by_its_full_path() {
-    const CHEVRON_BACK_FROM_NAME: f32 = 27.5;
-
-    let (mut runner, (_, selection, ..)) = runner();
+    let (mut runner, h) = runner();
+    let selection = h.selection;
     settle(&mut runner);
 
     click_text(&mut runner, "orders");
-    expand_nested(&mut runner, "address", CHEVRON_BACK_FROM_NAME);
+    press_disclosure(&mut runner, "address");
 
     assert!(shows(&runner, "city"), "the struct expanded in place");
     click_text(&mut runner, "city");
@@ -690,7 +723,7 @@ fn wait_out_the_spinner_delay(runner: &mut TestingRunner) {
 /// join. Every settled row stays silent throughout, and none of it is text in the row any more,
 /// which is the point of the slot.
 ///
-/// The whole-list `assert_eq` also pins the **short** half of `entry::TIP_CHARS`: both of these
+/// The whole-list `assert_eq` also pins the **short** half of `row::TIP_CHARS`: both of these
 /// refusals are one sentence Strata wrote, so each is shown entire with nothing appended. The
 /// pointer to Problems appears only where something was actually left out
 /// (`a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store`).
@@ -729,7 +762,8 @@ fn failures_flag_at_once_but_a_wait_has_to_last_before_it_spins() {
 /// subscribes to TABLES as well as VIEWS.
 #[test]
 fn dropping_a_table_flags_the_views_that_read_it() {
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     settle(&mut runner);
 
     assert!(
@@ -759,7 +793,8 @@ fn a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store() {
     let long = format!("Registration failed: {}", "detail ".repeat(60).trim_end());
     assert!(long.chars().count() > 240, "the case only bites when long");
 
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     store
         .write_channel(ProjChan::Tables)
         .table_failed("users", long.clone());
@@ -795,7 +830,8 @@ fn a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store() {
 /// swapping one status for another.
 #[test]
 fn a_triangle_clears_when_the_row_registers() {
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     settle(&mut runner);
 
     assert!(status_labels(&runner)
@@ -823,7 +859,8 @@ fn a_triangle_clears_when_the_row_registers() {
 /// than a coincidence of when the test looked.
 #[test]
 fn a_row_answered_inside_the_delay_never_spins() {
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     settle(&mut runner);
 
     assert!(shows(&runner, "users"), "the def renders regardless");
@@ -860,7 +897,8 @@ fn spinners(runner: &TestingRunner) -> usize {
 /// instant ↻ is pressed.
 #[test]
 fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     settle(&mut runner);
     let broken = "No such file or directory (os error 2)";
     assert!(status_labels(&runner).iter().any(|l| l == broken));
@@ -888,7 +926,8 @@ fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
 /// holding a verdict we now know to be wrong would be worse than the blink.
 #[test]
 fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     settle(&mut runner);
 
     store.write_channel(ProjChan::Tables).reload_tables();
@@ -916,7 +955,8 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
 /// throughout — its wait never stopped, so re-arming it would blink the spinner instead.
 #[test]
 fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
-    let (mut runner, (.., mut store, _, _, _)) = runner();
+    let (mut runner, h) = runner();
+    let mut store = h.store;
     runner.sync_and_update();
     wait_out_the_spinner_delay(&mut runner);
     assert_eq!(
@@ -1006,6 +1046,10 @@ fn the_internal_badge_folds_before_the_name_truncates() {
 /// go lowest-rank first while the leading run is still whole, and the leading run ellipsizes only
 /// once they have all gone.
 ///
+/// The widths are re-tuned rather than preserved: the measured run is now the row's **content**
+/// alone, since a tree row's indent, chevron and ⋮ are laid out outside it. So there is no pinned
+/// tail in the arithmetic any more, and the same fold happens at a smaller number.
+///
 /// Least informative first: the badge (pure reinforcement — the icon's tint repeats it), then the
 /// entity icon (decoration, since the section header already says what kind the row is), then the
 /// status glyph (information, so it outranks both). The name is never folded and never floors —
@@ -1013,42 +1057,42 @@ fn the_internal_badge_folds_before_the_name_truncates() {
 #[test]
 fn the_row_folds_least_informative_first() {
     assert_eq!(
-        fold_plan(400., 100., true),
+        fold_plan(250., 100., true, ICON_SLOT),
         Folds {
             badge: true,
-            icon: true,
+            mark: true,
             status: true
         }
     );
     assert_eq!(
-        fold_plan(260., 100., true),
+        fold_plan(160., 100., true, ICON_SLOT),
         Folds {
             badge: false,
-            icon: true,
+            mark: true,
             status: true
         }
     );
     assert_eq!(
-        fold_plan(200., 100., true),
+        fold_plan(130., 100., true, ICON_SLOT),
         Folds {
             badge: false,
-            icon: false,
+            mark: false,
             status: true
         }
     );
     assert_eq!(
-        fold_plan(120., 100., true),
+        fold_plan(110., 100., true, ICON_SLOT),
         Folds {
             badge: false,
-            icon: false,
+            mark: false,
             status: false
         }
     );
     assert_eq!(
-        fold_plan(230., 140., false),
+        fold_plan(170., 140., false, ICON_SLOT),
         Folds {
             badge: false,
-            icon: false,
+            mark: false,
             status: true
         }
     );
@@ -1090,7 +1134,7 @@ fn the_name_goes_on_collapsing_once_the_row_has_folded() {
 fn a_folded_status_column_still_subscribes_to_the_scan() {
     let shown = Folds {
         badge: false,
-        icon: true,
+        mark: true,
         status: true,
     };
     let folded = Folds {
@@ -1109,7 +1153,8 @@ fn a_folded_status_column_still_subscribes_to_the_scan() {
 /// — so the subscription genuinely has nowhere else to live.
 #[test]
 fn a_folded_row_draws_no_status_glyph() {
-    let (mut runner, (_, _, _, mut store, ..)) = runner_sized(mixed_origins, 130.);
+    let (mut runner, h) = runner_sized(mixed_origins, 130.);
+    let mut store = h.store;
     settle(&mut runner);
 
     store
@@ -1295,7 +1340,8 @@ fn the_actions_button_opens_the_same_menu_as_a_right_click() {
 /// table must not start itself. The `LIMIT` is the row-limit setting.
 #[test]
 fn view_table_opens_a_select_star_tab_without_running_it() {
-    let (mut runner, (_, _, session, ..)) = settled();
+    let (mut runner, h) = settled();
+    let session = h.session;
     right_click_row(&mut runner, "orders");
 
     click_text(&mut runner, "View table");
@@ -1314,7 +1360,8 @@ fn view_table_opens_a_select_star_tab_without_running_it() {
 /// saving a new query — the `DEV_TASKS` "⌘S on a view saves a saved-query" bug, from the other end.
 #[test]
 fn edit_query_opens_the_views_sql_bound_to_the_view() {
-    let (mut runner, (_, _, session, ..)) = settled();
+    let (mut runner, h) = settled();
+    let session = h.session;
     right_click_row(&mut runner, "orders_daily");
 
     click_text(&mut runner, "Edit query");
@@ -1336,7 +1383,8 @@ fn edit_query_opens_the_views_sql_bound_to_the_view() {
 /// is what makes the rename below free.
 #[test]
 fn pressing_a_saved_query_row_opens_it_bound_by_id() {
-    let (mut runner, (_, _, session, ..)) = settled();
+    let (mut runner, h) = settled();
+    let session = h.session;
 
     click_text(&mut runner, "signup funnel");
 
@@ -1359,7 +1407,9 @@ fn pressing_a_saved_query_row_opens_it_bound_by_id() {
 /// deliberately no second drop path — this is the assertion that pins it.
 #[test]
 fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
-    let (mut runner, (_, _, _, store, drop_target, _, _)) = settled();
+    let (mut runner, h) = settled();
+    let store = h.store;
+    let drop_target = h.drop_target;
     right_click_row(&mut runner, "orders");
 
     click_text(&mut runner, "Drop table");
@@ -1381,7 +1431,9 @@ fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
 /// started by a stray press.
 #[test]
 fn profile_asks_the_cost_confirm_rather_than_scanning() {
-    let (mut runner, (_, _, _, store, _, _, profile_target)) = settled();
+    let (mut runner, h) = settled();
+    let store = h.store;
+    let profile_target = h.profile_target;
     right_click_row(&mut runner, "orders");
 
     click_text(&mut runner, "Profile table");
@@ -1398,7 +1450,8 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
         "and nothing is scanning yet"
     );
 
-    let (mut runner, (.., profile_target)) = settled();
+    let (mut runner, h) = settled();
+    let profile_target = h.profile_target;
     right_click_row(&mut runner, "orders_daily");
     click_text(&mut runner, "Profile view");
     assert_eq!(
@@ -1416,7 +1469,9 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
 /// disabled dress: what matters is that nothing is asked for.
 #[test]
 fn a_refused_row_is_not_offered_a_scan() {
-    let (mut runner, (_, _, _, store, _, _, profile_target)) = settled();
+    let (mut runner, h) = settled();
+    let store = h.store;
+    let profile_target = h.profile_target;
     assert_eq!(
         store.peek().tables[0].def.name,
         "events",
@@ -1445,7 +1500,8 @@ fn a_refused_row_is_not_offered_a_scan() {
 /// with no delay hold of its own.
 #[test]
 fn a_row_being_profiled_says_so_in_its_own_words() {
-    let (mut runner, (_, _, _, mut store, ..)) = settled();
+    let (mut runner, h) = settled();
+    let mut store = h.store;
     let profiling = |runner: &TestingRunner| {
         status_labels(runner)
             .iter()
@@ -1481,7 +1537,8 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
 /// returns the moment it settles.
 #[test]
 fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
-    let (mut runner, (_, _, _, mut store, ..)) = settled();
+    let (mut runner, h) = settled();
+    let mut store = h.store;
     wait_out_the_spinner_delay(&mut runner);
     store
         .write_channel(ProjChan::Tables)
@@ -1520,14 +1577,16 @@ fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
 /// all three row kinds — a saved query by `id`, because that is its identity.
 #[test]
 fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
-    let (mut runner, (.., drop_target, _, _)) = settled();
+    let (mut runner, h) = settled();
+    let drop_target = h.drop_target;
     right_click_row(&mut runner, "orders_daily");
     click_text(&mut runner, "Drop view");
     assert!(
         matches!(drop_target.peek().as_ref(), Some(DropTarget::View(n)) if n == "orders_daily")
     );
 
-    let (mut runner, (.., drop_target, _, _)) = settled();
+    let (mut runner, h) = settled();
+    let drop_target = h.drop_target;
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Delete query");
     assert!(
@@ -1544,7 +1603,8 @@ fn dropping_a_view_and_deleting_a_query_use_the_same_confirm_slot() {
 /// input, and the commit, are the row's own, so they outlive the menu that started them.
 #[test]
 fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
-    let (mut runner, (_, _, _, store, _, _, _)) = settled();
+    let (mut runner, h) = settled();
+    let store = h.store;
     right_click_row(&mut runner, "signup funnel");
 
     click_text(&mut runner, "Rename");
@@ -1582,7 +1642,8 @@ fn renaming_a_saved_query_commits_from_the_row_and_persists_by_id() {
 /// Escape abandons a rename outright — the row comes back wearing the name it had.
 #[test]
 fn escape_abandons_a_rename() {
-    let (mut runner, (_, _, _, store, _, _, _)) = settled();
+    let (mut runner, h) = settled();
+    let store = h.store;
     right_click_row(&mut runner, "signup funnel");
     click_text(&mut runner, "Rename");
 
@@ -1616,7 +1677,9 @@ fn escape_abandons_a_rename() {
 /// reason the sidebar's own ↻ test asserts a request rather than a scan.
 #[test]
 fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
-    let (mut runner, (.., store, _, rescan, _)) = settled();
+    let (mut runner, h) = settled();
+    let store = h.store;
+    let rescan = h.rescan;
     assert_eq!(
         *rescan.peek(),
         ScanRequest::default(),
@@ -1638,4 +1701,490 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
         matches!(store.peek().tables[1].reg, Reg::Ready(_)),
         "`orders` still wears the answer it had"
     );
+}
+
+/// The connection half of the tree (W7 · DB-05) — what the retired Connections pane's own suite
+/// asserted, re-expressed against the nodes that replaced it.
+///
+/// A **database** connection can be listed no further than this without a server: `db_listing`
+/// reads the connect-time enumeration, so an unconnected database has no schemas and the node is
+/// a leaf. What its subtree looks like over a real server is
+/// `strata-core/tests/postgres_federation.rs`, which drives the same scoped-and-tagged answer this
+/// tree reads.
+mod connections {
+    use super::*;
+
+    fn s3(bucket: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: bucket.into(),
+            provider: Provider::S3(S3Store {
+                region: "eu-west-2".into(),
+                auth: S3Auth::Ambient,
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        }
+    }
+
+    fn postgres(database: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: format!("db.internal:5432/{database}"),
+            provider: Provider::Postgres(PgStore {
+                catalog: database.into(),
+                user: "reader".into(),
+                schemas: vec!["public".into()],
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        }
+    }
+
+    /// A table read **through** a connection — what an object-store node's children link to.
+    fn over(name: &str, url: &str) -> TableDef {
+        TableDef {
+            name: name.into(),
+            format: SourceFormat::Parquet,
+            connection: Some(url.into()),
+            sources: vec![format!("{name}/")],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::External,
+        }
+    }
+
+    /// One connection of each kind, plus a table over the bucket so the object-store node has a
+    /// child to link with. `lake` has answered; the database has not been asked yet.
+    fn project() -> ProjectState {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: vec![over("events", "s3://lake")],
+            connections: vec![s3("lake"), postgres("analytics")],
+            ..Default::default()
+        };
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-connections"));
+        p.connection_registered("s3://lake");
+        p.table_registered(
+            "events",
+            TableMeta {
+                columns: vec![col("n", DataType::Int64)],
+                rows: Some(1),
+            },
+        );
+        p
+    }
+
+    fn tree() -> (TestingRunner, Handles) {
+        let (mut runner, handles) = runner_over(project);
+        settle(&mut runner);
+        (runner, handles)
+    }
+
+    /// Every connection is a top-level node, badged with its provider and named by its address —
+    /// both kinds, in one tree, which is the whole point of the merge. A database also carries
+    /// the catalog it is addressed by, from its **def**, so a collapsed row says it without the
+    /// listing a collapsed row has not fetched.
+    ///
+    /// Laid out wide, because the row's marks fold: the database's address is 26 characters, and
+    /// at the default 300px both its badge and its catalog label are correctly given up for the
+    /// name. What that fold does at width is
+    /// [`a_connection_row_folds_its_badge_before_its_address`].
+    #[test]
+    fn each_connection_is_a_node_badged_with_its_provider() {
+        let (mut runner, _) = runner_sized(project, 460.);
+        settle(&mut runner);
+
+        assert!(shows(&runner, "lake"), "the bucket is a node");
+        assert!(shows(&runner, "S3"), "badged with its provider");
+        assert!(
+            shows(&runner, "db.internal:5432/analytics"),
+            "and so is the database, by its address"
+        );
+        assert!(shows(&runner, "PG"));
+        assert!(
+            shows(&runner, "analytics"),
+            "with the catalog name it is addressed by: {:?}",
+            texts(&runner)
+        );
+    }
+
+    /// **A connection row folds on the same policy every row does**, and its mark is the catalog
+    /// label rather than an icon — so the plan has to budget that label's own width. Budgeting a
+    /// glyph's 22px for it (the first version) ellipsized the address while the plan believed
+    /// nothing more needed to fold, having already given up the badge to pay for it.
+    #[test]
+    fn a_connection_row_folds_its_badge_before_its_address() {
+        let (mut runner, _) = runner_sized(project, 460.);
+        settle(&mut runner);
+        assert!(shows(&runner, "PG"), "a wide pane keeps the badge");
+
+        let (mut runner, _) = runner_sized(project, 300.);
+        settle(&mut runner);
+        assert!(
+            !shows(&runner, "PG"),
+            "the badge goes so the address can stay whole: {:?}",
+            texts(&runner)
+        );
+        assert!(
+            shows(&runner, "db.internal:5432/analytics"),
+            "and the address is intact"
+        );
+    }
+
+    /// The workspace node is first and carries the **project's** name — it is the project's own
+    /// database, not a "files" provider, and that framing is what lets a cross-source view nest
+    /// under it.
+    #[test]
+    fn the_workspace_node_is_named_for_the_project() {
+        let (runner, _) = tree();
+
+        assert!(shows(&runner, "test"), "the project's name labels its node");
+        assert!(
+            shows(&runner, "strata"),
+            "with the catalog it is addressed by as its meta label"
+        );
+        assert!(
+            text_area(&runner, "test").min_y() < text_area(&runner, "lake").min_y(),
+            "the workspace comes before the connections"
+        );
+    }
+
+    /// A refusal reaches the row as the **engine's own words**, clipped to what a tooltip holds.
+    /// The Connections pane used to show a fixed "see Problems" pointer instead; the catalog
+    /// rows' rule (a limit belongs to the surface that has it) is the one that survives, so both
+    /// kinds of row now say as much as they can and name Problems only for the rest.
+    #[test]
+    fn a_refused_connection_carries_the_engines_reason() {
+        let (mut runner, h) = tree();
+        let mut store = h.store;
+
+        assert!(
+            !status_labels(&runner)
+                .iter()
+                .any(|l| l.contains("Received redirect")),
+            "a settled connection wears no glyph"
+        );
+
+        store
+            .write_channel(ProjChan::Connections)
+            .connection_failed(
+                "s3://lake",
+                "Received redirect without LOCATION, this normally indicates an incorrectly \
+             configured region"
+                    .into(),
+            );
+        settle(&mut runner);
+
+        assert!(
+            status_labels(&runner)
+                .iter()
+                .any(|l| l.contains("incorrectly configured region")),
+            "the row names the fix: {:?}",
+            status_labels(&runner)
+        );
+    }
+
+    /// An unanswered connection says nothing until the wait outlasts the hold — the same slot
+    /// semantics the catalog rows have, and now literally the same hook.
+    #[test]
+    fn an_unanswered_connection_states_nothing_until_the_hold_expires() {
+        let (mut runner, _) = tree();
+
+        assert!(
+            !status_labels(&runner).iter().any(|l| l == "Loading…"),
+            "the database has not been asked long enough to spin: {:?}",
+            status_labels(&runner)
+        );
+
+        wait_out_the_spinner_delay(&mut runner);
+        assert!(
+            status_labels(&runner).iter().any(|l| l == "Loading…"),
+            "once the wait lasts, it spins: {:?}",
+            status_labels(&runner)
+        );
+    }
+
+    /// Forget sets the shared confirm slot by the connection's **URL**, and says which kind of
+    /// thing it is — the confirm's copy turns on that, and a database's line must not promise
+    /// nothing in the *bucket* is deleted.
+    #[test]
+    fn forget_asks_the_confirm_by_url_and_says_what_kind_it_is() {
+        let (mut runner, h) = tree();
+
+        right_click_row(&mut runner, "lake");
+        click_text(&mut runner, "Forget connection");
+        assert_eq!(
+            *h.drop_target.peek(),
+            Some(DropTarget::Connection {
+                url: "s3://lake".into(),
+                provider: ProviderId::S3
+            })
+        );
+
+        right_click_row(&mut runner, "db.internal:5432/analytics");
+        click_text(&mut runner, "Forget connection");
+        assert_eq!(
+            *h.drop_target.peek(),
+            Some(DropTarget::Connection {
+                url: "postgres://reader@db.internal:5432/analytics".into(),
+                provider: ProviderId::Postgres
+            })
+        );
+    }
+
+    /// Edit sets the editor slot by the same URL — the row holds no editor of its own.
+    #[test]
+    fn edit_asks_for_the_editor_by_the_connections_url() {
+        let (mut runner, h) = tree();
+
+        right_click_row(&mut runner, "lake");
+        click_text(&mut runner, "Edit connection");
+
+        assert_eq!(
+            *h.editor.peek(),
+            Some(ConnectionTarget::Edit("s3://lake".into()))
+        );
+    }
+
+    /// **Schemas… is absent on an object store**, not parked: a bucket has no schemas to scope,
+    /// ever, where parking means "not this second".
+    #[test]
+    fn only_a_database_is_offered_its_schemas() {
+        let (mut runner, h) = tree();
+
+        right_click_row(&mut runner, "lake");
+        assert!(
+            !shows(&runner, "Schemas…"),
+            "a bucket has no schemas: {:?}",
+            texts(&runner)
+        );
+        click_text(&mut runner, "Edit connection");
+
+        right_click_row(&mut runner, "db.internal:5432/analytics");
+        assert!(shows(&runner, "Schemas…"));
+        click_text(&mut runner, "Schemas…");
+
+        assert_eq!(
+            *h.schemas.peek(),
+            Some("postgres://reader@db.internal:5432/analytics".into()),
+            "the picker is asked for by the connection's URL"
+        );
+    }
+
+    /// The ⋮ opens the same menu as a right-click, on a connection row too — the two triggers
+    /// share one builder so they cannot drift.
+    #[test]
+    fn the_actions_button_opens_the_same_menu_as_a_right_click() {
+        let (mut runner, _) = tree();
+
+        press_row_actions(&mut runner, "lake");
+        assert!(shows(&runner, "Edit connection"));
+        assert!(shows(&runner, "Forget connection"));
+    }
+
+    /// An object-store node opens onto the workspace defs reading through it, as **links** — and
+    /// pressing one reveals the def's own row, opening the ancestors it is under.
+    #[test]
+    fn an_object_stores_child_links_to_the_workspace_row() {
+        let (mut runner, _) = tree();
+
+        click_text(&mut runner, "TABLES · 1");
+        assert!(!shows(&runner, "events"), "the def's own row is put away");
+
+        click_text(&mut runner, "lake");
+        let link = text_area(&runner, "events");
+        assert!(
+            link.min_y() > text_area(&runner, "lake").min_y(),
+            "the link sits under the connection"
+        );
+
+        click_text(&mut runner, "events");
+        let rows: Vec<f32> = runner
+            .find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == "events")
+                    .map(|_| node.layout().area.min_y())
+            })
+            .into_iter()
+            .collect();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the def's row is back, beside the link that revealed it"
+        );
+    }
+
+    /// **A jump to a row that is already on screen still answers.** The reveal used to be a
+    /// layout handler, so opening ancestors that were already open changed no geometry, nothing
+    /// fired, and the request sat pending until an unrelated relayout moved the pane. Reading the
+    /// slot in an effect is what makes the already-visible case the ordinary one.
+    #[test]
+    fn a_jump_to_a_row_already_on_screen_clears_its_request() {
+        let (mut runner, _) = tree();
+
+        click_text(&mut runner, "lake");
+        assert!(
+            shows(&runner, "events"),
+            "both the link and the def's own row are on screen"
+        );
+
+        click_text(&mut runner, "events");
+        settle(&mut runner);
+
+        assert_eq!(
+            drawn(&runner, "events"),
+            2,
+            "the pane still draws both the link and the row it named: {:?}",
+            texts(&runner)
+        );
+    }
+
+    /// **A node kept by a descendant match opens itself.** Keeping the container and then hiding
+    /// the thing that saved it is worse than not keeping it: the user types a table name and gets
+    /// a collapsed connection row with no indication of which of its children matched.
+    ///
+    /// Connections start collapsed, so this is the only way a filter reaches them at all.
+    /// `events` is both a workspace table and the bucket's link to it, so this counts the runs
+    /// rather than asking whether the name is on screen at all.
+    fn drawn(runner: &TestingRunner, text: &str) -> usize {
+        texts(runner).iter().filter(|t| *t == text).count()
+    }
+
+    #[test]
+    fn a_filter_opens_the_node_the_match_is_under() {
+        let (mut runner, h) = tree();
+        let mut filter = h.filter;
+
+        assert_eq!(
+            drawn(&runner, "events"),
+            1,
+            "the workspace row only — the bucket starts collapsed"
+        );
+
+        type_filter(&mut runner, &mut filter, "events");
+        assert!(shows(&runner, "lake"), "the bucket survives on its table");
+        assert_eq!(
+            drawn(&runner, "events"),
+            2,
+            "and opens on the link that saved it: {:?}",
+            texts(&runner)
+        );
+
+        type_filter(&mut runner, &mut filter, "");
+        assert_eq!(
+            drawn(&runner, "events"),
+            1,
+            "clearing the filter restores the stored answer, which is closed"
+        );
+    }
+
+    /// **The workspace opens on a filter match too**, and it is the node most likely to hold one:
+    /// it was the one container that did not, so a collapsed workspace hid every table, view and
+    /// saved query the filter found.
+    #[test]
+    fn a_filter_opens_the_collapsed_workspace() {
+        let (mut runner, h) = tree();
+        let mut filter = h.filter;
+
+        click_text(&mut runner, "test");
+        assert!(!shows(&runner, "TABLES · 1"), "the workspace is put away");
+
+        type_filter(&mut runner, &mut filter, "events");
+        assert!(
+            shows(&runner, "TABLES · 1"),
+            "the groups are drawn for the match: {:?}",
+            texts(&runner)
+        );
+        assert_eq!(drawn(&runner, "events"), 2, "the row and the bucket's link");
+    }
+
+    /// **A press on a node the filter forced open cannot leave it open afterwards.** The press
+    /// writes the negation of what the row is *showing*, not a flip of set membership: flipping
+    /// membership on a force-open node stored closed *added* it, so a press that looked inert
+    /// silently expanded the node the moment the filter cleared.
+    ///
+    /// It stays open while the filter is on, and that is the intended half — collapsing away the
+    /// match the user just searched for would be the worse answer.
+    #[test]
+    fn a_press_while_the_filter_holds_a_node_open_does_not_expand_it() {
+        let (mut runner, h) = tree();
+        let mut filter = h.filter;
+
+        type_filter(&mut runner, &mut filter, "events");
+        assert_eq!(drawn(&runner, "events"), 2, "the bucket opened on its link");
+
+        click_text(&mut runner, "lake");
+        assert_eq!(
+            drawn(&runner, "events"),
+            2,
+            "the filter still holds it open, so the match stays visible"
+        );
+
+        type_filter(&mut runner, &mut filter, "");
+        assert_eq!(
+            drawn(&runner, "events"),
+            1,
+            "and it is closed once the filter clears, not expanded by a press that looked inert"
+        );
+    }
+
+    /// The same rule in the workspace: a group the user collapsed still shows what a filter found
+    /// under it, and goes back to collapsed when the filter clears.
+    #[test]
+    fn a_filter_opens_a_collapsed_workspace_group() {
+        let (mut runner, h) = tree();
+        let mut filter = h.filter;
+
+        click_text(&mut runner, "TABLES · 1");
+        assert!(!shows(&runner, "events"), "the group is put away");
+
+        type_filter(&mut runner, &mut filter, "events");
+        assert!(shows(&runner, "events"), "the match is drawn anyway");
+
+        type_filter(&mut runner, &mut filter, "");
+        assert!(!shows(&runner, "events"), "and put away again afterwards");
+    }
+
+    /// A filter narrows a connection away when neither it nor anything under it matched — the
+    /// tree's general rule, where the workspace's three groups are the stated exception.
+    #[test]
+    fn a_filter_narrows_connections_away_but_keeps_the_workspace_groups() {
+        let (mut runner, h) = tree();
+        let mut filter = h.filter;
+
+        type_filter(&mut runner, &mut filter, "analytics");
+        assert!(shows(&runner, "db.internal:5432/analytics"));
+        assert!(!shows(&runner, "lake"), "the bucket matched nothing");
+        assert!(
+            shows(&runner, "TABLES · 0"),
+            "the workspace groups stay, and their counts say what the filter found"
+        );
+
+        type_filter(&mut runner, &mut filter, "events");
+        assert!(
+            shows(&runner, "lake"),
+            "a bucket survives on a table that reads through it"
+        );
+    }
+
+    /// A project with no connections says what one is for and offers to add one. The header's `+`
+    /// is the same gesture and the palette's *New connection…* is the third, which is what lets
+    /// the header control fold under pressure.
+    #[test]
+    fn an_empty_project_offers_to_add_a_connection() {
+        fn no_connections() -> ProjectState {
+            ProjectState::from_defs(
+                ProjectDefs {
+                    name: "test".into(),
+                    ..Default::default()
+                },
+                PathBuf::from("/tmp/strata-tree-no-connections"),
+            )
+        }
+
+        let (mut runner, h) = runner_over(no_connections);
+        settle(&mut runner);
+
+        assert!(shows(&runner, "Add a connection"));
+        click_text(&mut runner, "Add a connection");
+        assert_eq!(*h.editor.peek(), Some(ConnectionTarget::New));
+    }
 }

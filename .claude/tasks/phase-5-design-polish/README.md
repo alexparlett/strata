@@ -12,7 +12,7 @@ the scopes below are the audited ones, not the ones the tasks were first filed w
 
 **Surfaces added since these tasks were first written** — all in scope for this phase: the chat
 pane (`views/chat/`), the connection editor window (`apps/connection/`), the Configure window
-(`apps/configure/`), the connections sidebar pane (`views/sidebar/connections/`), and
+(`apps/configure/`), the data-sources tree (`views/sidebar/catalog/`, which absorbed the connections pane in DB-05), and
 Settings ▸ AI (`apps/settings/views/ai/`).
 
 **Where the canvases live** (design handoff refreshed 2026-08-12): the chat pane and the inspector

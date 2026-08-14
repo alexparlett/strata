@@ -88,11 +88,13 @@ Things that must not regress. Each was fought for once already.
   handed back the same cut. It was not a hypothetical cut. An unreachable bucket reports past 240
   characters and names its cause in the **last** clause, so what survived was `object_store`'s
   retry bookkeeping and what went was the answer. The cap now lives at the tooltip
-  (`catalog::entry`'s `TIP_CHARS`), which shows a short refusal entire — most are one sentence
+  (`catalog::row`'s `TIP_CHARS`), which shows a short refusal entire — most are one sentence
   Strata wrote — and otherwise clips and names Problems, so the pointer appears exactly when
-  something was left out. The connections pane draws the line further and shows no reason at all
-  (its `REFUSED`), because a connection's refusal is always the engine's own prose; a catalog row's
-  is usually ours.
+  something was left out. A **connection** row is the same slot and the same rule since DB-05
+  folded the connections into the tree: it used to show a fixed "see Problems" pointer instead,
+  on the argument that a connection's refusal is always the engine's own prose where a catalog
+  row's is usually ours — but that is an argument about how *often* a message fits, and the cap
+  answers it per message.
 - **A wrapper is not a diagnosis, so peeling one is not diagnosing — but every literal you peel
   has to be read off the crate that writes it.** DataFusion and `object_store` prepend a name per
   crate boundary crossed, which is what makes a refusal read as a stack trace: `External error:
@@ -2036,7 +2038,11 @@ Things that must not regress. Each was fought for once already.
   shell). `ResizableContainer` owns live resizing — we persist only the last size. Keep panels
   **keyed** with fixed `.order()` so the `Workbench` subtree survives a sibling collapsing.
 - **Each edge of the shell offers one pane at a time, and a rail is what picks it.** The left side
-  is `Layout::sidebar: Option<SidebarPane>` (catalog · agents · connections); the right, since
+  is `Layout::sidebar: Option<SidebarPane>` — one variant since DB-05's data-sources tree absorbed
+  the connections pane (and the agents pane went with AA-03's surfaces), and it stays an enum:
+  `None` still means collapsed, the rail still toggles it, and `sidebar_pane`'s retired-name
+  tolerance is what keeps a `session.json` written while Connections was open from being moved
+  aside and costing the user every tab. The right, since
   AS-04, is `Layout::right: Option<RightPane>` — the column inspector **or** the chat, never both.
   Two independent flags would let a 1180px window carry two rails, a sidebar, two right panels and
   the drawer at once, which is the arrangement the canvas declares a minimum width to avoid; one

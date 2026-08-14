@@ -41,7 +41,8 @@ use crate::apps::project::state::{
 use crate::apps::project::views::{
     ChatConfirm, ChatDrop, CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher,
     DropConfirm, DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget,
-    ProjectLoadFailed, ProjectLoading, RequestKeepers, ShapeDialog, ShapeTarget, Shell,
+    ProjectLoadFailed, ProjectLoading, RequestKeepers, SchemasPicker, SchemasRequest, ShapeDialog,
+    ShapeTarget, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -510,6 +511,7 @@ impl Component for ProjectLoaded {
         let shape_target = use_provide_context(|| State::create(None::<ShapeTarget>));
         use_provide_context(|| State::create(None::<ConfigureTarget>));
         use_provide_context(|| State::create(None::<ConnectionTarget>));
+        let schemas_target: SchemasRequest = use_provide_context(|| State::create(None::<String>));
         let palette_open: PaletteOpen = use_provide_context(|| State::create(false));
 
         let radio = use_radio::<SessionState, Chan>(Chan::Tabs);
@@ -542,6 +544,9 @@ impl Component for ProjectLoaded {
             })
             .child(ShapeDialog {
                 target: shape_target,
+            })
+            .child(SchemasPicker {
+                target: schemas_target,
             })
             .child(CommandPalette { open: palette_open })
             .child(ConfigureLauncher)

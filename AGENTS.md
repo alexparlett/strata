@@ -371,7 +371,7 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **A refusal is stored whole; the surface that cannot hold it clips it, and says where the rest
   is.** A limit belongs to the surface that has it, never to the string every other surface reads —
   the engine's 240-char cap existed for a tooltip and clipped the Problems row and its copy button
-  with it. The cap is `catalog::entry`'s `TIP_CHARS` now.
+  with it. The cap is `catalog::row`'s `TIP_CHARS` now.
 - **A wrapper is not a diagnosis, so peeling one is not diagnosing — but read every literal off
   the crate that writes it.** `catalog::readable` strips DataFusion's crate-boundary names
   (`LAYERS`), `object_store`'s store wrapper (`STORE_WRAPPER`, a **format**, never a list of

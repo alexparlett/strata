@@ -63,10 +63,15 @@ pub struct SessionSnapshot {
 
 /// Which tool pane the left sidebar shows. The rail's top group selects it; `None` on
 /// [`Layout::sidebar`] means the sidebar is collapsed.
+///
+/// **One variant, and it stays an enum.** The data-sources tree (DB-05) absorbed the Connections
+/// pane, so the left edge has one pane to offer — but the edge still offers *a* pane, the rail
+/// still toggles it, and `None` still means collapsed. Collapsing this to a `bool` would spend
+/// [`sidebar_pane`]'s retired-name tolerance, which is what keeps a `session.json` written while
+/// Connections was open from being moved aside and costing the user every tab.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SidebarPane {
     Catalog,
-    Connections,
 }
 
 /// A stored layout value this build may no longer have a variant for — see [`sidebar_pane`] for the
@@ -326,13 +331,26 @@ mod tests {
 
     /// …and a pane this build does have is read as itself, while an explicit `null` still
     /// means the sidebar is collapsed.
+    ///
+    /// **Three answers, and they have to stay three.** With one live variant left, a test that
+    /// only checked "reads back as Catalog" would pass against a reader that had lost the
+    /// distinction entirely — the retired name and the known name would both be answering
+    /// `Catalog` for different reasons. So the retired name is asserted here too, beside the
+    /// known one and the explicit `null`, which is the only place the three are visible at once.
     #[test]
     fn a_stored_sidebar_pane_reads_back() {
-        let open: Layout = serde_json::from_str(r#"{"sidebar":"Connections"}"#).unwrap();
-        assert_eq!(open.sidebar, Some(SidebarPane::Connections));
+        let known: Layout = serde_json::from_str(r#"{"sidebar":"Catalog"}"#).unwrap();
+        assert_eq!(known.sidebar, Some(SidebarPane::Catalog), "read as itself");
+
+        let retired: Layout = serde_json::from_str(r#"{"sidebar":"Connections"}"#).unwrap();
+        assert_eq!(
+            retired.sidebar,
+            Some(SidebarPane::Catalog),
+            "a pane this build retired leaves the sidebar open on the default one"
+        );
 
         let collapsed: Layout = serde_json::from_str(r#"{"sidebar":null}"#).unwrap();
-        assert_eq!(collapsed.sidebar, None);
+        assert_eq!(collapsed.sidebar, None, "null is still collapsed");
     }
 
     /// A value that is not a pane name at all is **not** tolerated: it is corruption, and the

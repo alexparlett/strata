@@ -33,13 +33,15 @@
 //!
 //! Mount it only while the dialog is open — it renders no "closed" state of its own.
 
+use freya::components::Checkbox;
 use freya::prelude::*;
 
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::ACTION_HEIGHT;
-use crate::components::metrics::{R_2, R_4, SP_3, SP_4, SP_5, SP_6};
+use crate::components::metrics::{R_2, R_4, SP_2, SP_3, SP_4, SP_5, SP_6};
 use crate::components::modal::Modal;
+use crate::components::typography::Prose;
 use crate::theme::{use_roles, Role};
 
 /// The comps' card width — 420 for every confirm in the design.
@@ -102,6 +104,73 @@ impl Component for DialogHeader {
             )
     }
 }
+
+/// A dialog's **checkbox row** — the box, its label, and the whole row as the press target.
+///
+/// One component because three dialogs had spelled out the same six builder calls and the same
+/// 16px glyph, so retuning the inset or the box size was three edits in three files.
+///
+/// **Known hazard, shared by all three and not introduced here**: the row is pressable and the
+/// `Checkbox` inside it is a focus target, so Enter on a focused box fires this row's press
+/// *and* the dialog's confirm. Fixing that means moving the press onto the box (or onto the
+/// fork's `Tile`) and is a change to what every one of these dialogs does with the keyboard.
+#[derive(PartialEq)]
+pub struct CheckboxRow {
+    label: String,
+    selected: bool,
+    on_toggle: Option<EventHandler<Event<PressEventData>>>,
+    trailing: Option<Element>,
+}
+
+impl CheckboxRow {
+    pub fn new(label: impl Into<String>, selected: bool) -> Self {
+        Self {
+            label: label.into(),
+            selected,
+            on_toggle: None,
+            trailing: None,
+        }
+    }
+
+    pub fn on_toggle(mut self, on_toggle: impl Into<EventHandler<Event<PressEventData>>>) -> Self {
+        self.on_toggle = Some(on_toggle.into());
+        self
+    }
+
+    /// A mark at the row's trailing edge — the schemas picker's "not in the connection" warning.
+    pub fn trailing(mut self, trailing: impl IntoElement) -> Self {
+        self.trailing = Some(trailing.into_element());
+        self
+    }
+}
+
+impl Component for CheckboxRow {
+    fn render(&self) -> impl IntoElement {
+        let roles = use_roles();
+        rect()
+            .width(Size::fill())
+            .horizontal()
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(SP_3)
+            .padding((SP_2, SP_3))
+            .corner_radius(R_2)
+            .map(self.on_toggle.clone(), |el, handler| {
+                el.on_press(move |e: Event<PressEventData>| handler.call(e))
+            })
+            .child(Checkbox::new().selected(self.selected).size(CHECKBOX))
+            .child(
+                Prose::new(self.label.clone())
+                    .color(roles.get(Role::TextPlaceholder))
+                    .width(Size::flex(1.))
+                    .text_overflow(TextOverflow::Ellipsis),
+            )
+            .maybe_child(self.trailing.clone())
+    }
+}
+
+/// The box in a [`CheckboxRow`].
+const CHECKBOX: f32 = 16.;
 
 #[derive(PartialEq)]
 pub struct Dialog {
