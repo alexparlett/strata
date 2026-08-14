@@ -56,9 +56,11 @@ because a remote table has no `ProjectState` row — the store grows nothing.
 - **The tree's relation rows are leaves, and that is this task's to change** (DB-05, as built):
   a relation draws no disclosure today because its columns are the same introspection this task
   performs, and a column row under it could not be *selected* until `ColRef` widens here. So the
-  affordance arrives with the capability — `RelationRow` in
-  `views/sidebar/catalog/database.rs` grows its `Disclosure` and its column children in this
-  task, off the same read the inspector uses.
+  affordance arrives with the capability. The tree is virtualized since DB-05's follow-up, so that
+  is **two edits in the walk, not a row-local disclosure**: `connection.rs`'s `database()` gives a
+  relation `Node::branch(.., open, can_open, ..)` in place of today's `Node::leaf`, and pushes its
+  column rows after it, off the same read the inspector uses; `relation_row` in the same file only
+  draws what the walk decided.
 
 ## Build
 

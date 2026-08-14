@@ -1052,26 +1052,6 @@ impl ProjectState {
         self.connections.insert(at, ConnRow::new(def));
     }
 
-    /// What the registration pass has said about the connection `url` names, in the terms a row
-    /// renders: whether it is still waiting, and the refusal if it settled on one.
-    ///
-    /// A projection rather than the value itself, because `Reg` is deliberately not `Clone` (see
-    /// [`remove_view`](Self::remove_view)) and a row reads its store out of the guard before
-    /// building any element. Beside [`table_problem`](Self::table_problem) and
-    /// [`view_problem`](Self::view_problem) so the three row kinds answer the same question the
-    /// same way; a URL this project holds no connection for reads as still waiting, which is what
-    /// a row mid-`upsert` is.
-    pub fn connection_problem(&self, url: &str) -> (bool, Option<String>) {
-        self.connections
-            .iter()
-            .find(|c| c.def.url() == url)
-            .map_or((true, None), |c| match &c.reg {
-                Reg::Loading => (true, None),
-                Reg::Ready(()) => (false, None),
-                Reg::Failed(why) => (false, Some(why.clone())),
-            })
-    }
-
     /// Edit a connection's def **in place**, keeping the row's `Reg` — the schemas picker's
     /// write, and the only one here that does not reset a row to `Loading`.
     ///

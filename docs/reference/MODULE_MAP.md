@@ -643,28 +643,36 @@ src/apps/project/                the project window (Valin-shaped)
                                  filter field (which *is* the header — there is no label until it
                                  folds), the `+` that opens the connection editor, the ↻ re-scan,
                                  and the pinned collapse ×
-      catalog/                   P3-02 · W7 · DB-05 — the **data-sources tree**. Nested
-                                 components rather than one flat list, because each node
-                                 subscribes to its own `ProjChan` and a relation's subtree is
-                                 fetched only when it opens: mod (the pane, the `catalog` theme,
-                                 the filter, and `TreeCtx` — the pane-local open set keyed by
-                                 **node path**, the reveal slot and the scroller) · row (the
+      catalog/                   P3-02 · W7 · DB-05 — the **data-sources tree**, over the fork's
+                                 virtualized `Tree`: the pane walks the tree into a flat list of
+                                 visible rows and only the rows on screen are mounted, which is
+                                 what makes a Postgres schema (the one row count the server
+                                 controls) safe to open. mod (the pane, the `catalog` theme, the
+                                 filter, the walk's five subscriptions, the reveal-by-index
+                                 effect, the scroller, and `TreeCtx` — the pane-local open set
+                                 keyed by **node path**, the reveal slot and the rename slot +
+                                 its draft) ·
+                                 node (`Node`/`NodeKind` and `walk`: the whole tree's shape, as a
+                                 plain function of store + listings + filter + open set, rendering
+                                 nothing) · view (`TreeRow`, the **one** component every row is,
+                                 and the `RowCtx` its scope resolves — one type per row is what
+                                 keeps the differ's moves out of a scrolling window) · row (the
                                  shared shell over the fork's `TreeItem`: depth guides, the app's
                                  chevron in the disclosure slot, the ⋮, the secondary press, the
                                  status slot's hold-back and the fold plan) · workspace (the
-                                 project's own node, named for the project, over TABLES · VIEWS ·
-                                 QUERIES; the TABLES `+` is **one press to the Configure window**
-                                 — an internal table is a third LOCATION there (IT-01), not a
-                                 second surface reached through a menu) · entry (entry / column /
-                                 saved-query rows) · database (a connection's schemas → Tables and
-                                 Views groups → relations, all off `Engine::db_listing`; a
-                                 relation is a leaf until DB-07 can address its columns) · store
-                                 (an object store's node, whose children are **links** into the
-                                 workspace rows that read through it, plus the pane's one empty
-                                 state) · columns (flatten + tests) · menu (P3-06: one item list
-                                 per row kind, shared by right-click and the ⋮ so the two triggers
-                                 can't drift; Drop and Forget open the confirm, never drop) ·
-                                 interaction (tests)
+                                 workspace branch of the walk plus its three structural rows; the
+                                 TABLES `+` is **one press to the Configure window** — an internal
+                                 table is a third LOCATION there (IT-01), not a second surface
+                                 reached through a menu) · entry (entry / column / saved-query
+                                 rows) · connection (the connections branch of the walk and its
+                                 rows: one `connection_row` for both kinds, a database's schemas →
+                                 Tables and Views groups → relations off `Engine::db_listing`, an
+                                 object store's **links** into the workspace rows that read
+                                 through it, and the pane's one empty state; a relation is a leaf
+                                 until DB-07 can address its columns) · columns (flatten + tests)
+                                 · menu (P3-06: one item list per row kind, shared by right-click
+                                 and the ⋮ so the two triggers can't drift; Drop and Forget open
+                                 the confirm, never drop) · interaction (tests)
     inspector/                   P3-08/P3-09 — the selected column, and **only what was actually
                                  read or counted**: mod (frame + theme + the not-a-column
                                  states), model (resolve the ColRef path · the dynamic fact list ·

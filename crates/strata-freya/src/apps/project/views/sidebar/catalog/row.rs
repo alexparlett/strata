@@ -8,9 +8,18 @@
 //! the catalog theme's dress, and the secondary press: a built-in exposes `on_press` only, and a
 //! wrapper is where a right-click belongs anyway, so no row kind invents its own.
 //!
+//! **That wrapper is unconditional**, even on the six kinds with no menu to open. The tree is a
+//! virtualized window whose slots are reused, and a root that changed shape with the row would put
+//! two element kinds at one slot: the differ cannot pair those, so scrolling across the boundary
+//! would rebuild the whole `TreeItem` and drop its hover and keyboard focus with it.
+//!
 //! [`use_status`] and [`fold_plan`] live here rather than beside one row kind because a workspace
 //! entry, a database connection and an object store all wear the same status slot and the same
-//! ranked fold; the third caller is what turned two copies into one.
+//! ranked fold.
+//!
+//! **A row takes no reconciliation key**, which is why it offers no way to set one: the tree is a
+//! virtualized window whose children shift by one on every scroll step, so identity keys would make
+//! each step a list of moves. The window reconciles positionally instead (see `view::TreeRow`).
 
 use std::borrow::Cow;
 
@@ -92,7 +101,6 @@ pub struct Row {
     /// What sits outside it, at the row's trailing edge — the ⋮, on the rows that have one.
     trailing: Option<Element>,
     theme: CatalogTheme,
-    key: DiffKey,
 }
 
 impl Row {
@@ -108,7 +116,6 @@ impl Row {
             children: Vec::new(),
             trailing: None,
             theme,
-            key: DiffKey::None,
         }
     }
 
@@ -116,11 +123,6 @@ impl Row {
     pub fn disclosure(mut self, disclosure: Disclosure) -> Self {
         self.disclosure = disclosure;
         self
-    }
-
-    /// Open or closed from a flag — a container's ordinary case.
-    pub fn expanded(self, expanded: bool) -> Self {
-        self.disclosure(Disclosure::from_expanded(expanded))
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
@@ -163,12 +165,6 @@ impl Row {
 impl ChildrenExt for Row {
     fn get_children(&mut self) -> &mut Vec<Element> {
         &mut self.children
-    }
-}
-
-impl KeyExt for Row {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
     }
 }
 
@@ -220,22 +216,19 @@ impl Component for Row {
             .child(content)
             .maybe_child(self.trailing.clone());
 
-        match self.on_context_menu.clone() {
-            None => item.into_element(),
-            Some(handler) => rect()
-                .width(Size::fill())
-                .content(Content::Fit)
-                .on_secondary_down(move |e: Event<PressEventData>| {
-                    e.stop_propagation();
-                    handler.call(e);
-                })
-                .child(item)
-                .into_element(),
-        }
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        rect()
+            .width(Size::fill())
+            .content(Content::Fit)
+            .map(
+                self.on_context_menu.clone(),
+                |el, handler: EventHandler<Event<PressEventData>>| {
+                    el.on_secondary_down(move |e: Event<PressEventData>| {
+                        e.stop_propagation();
+                        handler.call(e);
+                    })
+                },
+            )
+            .child(item)
     }
 }
 
@@ -285,31 +278,56 @@ fn tip_text(reason: &str) -> String {
     }
 }
 
-/// What the row's status slot says, given that its registration is `waiting` and last settled on
-/// `problem` — **one hook, so the tree's three row kinds cannot drift**.
+/// What the row's status slot says, given that `owner`'s registration is `waiting` and last settled
+/// on `problem` — **one hook, so the tree's row kinds cannot drift**.
 ///
 /// The hold-back itself is [`use_progress_hold`]'s; what this adds is the other half of the rule:
-/// across that gap the slot **holds its last settled verdict**, so a ↻ over a row that stays
-/// broken does not blink its triangle off and back on.
-pub fn use_status(waiting: bool, problem: Option<String>) -> Option<StatusMark> {
+/// across that gap the slot **holds its last settled verdict**, so a ↻ over a row that stays broken
+/// does not blink its triangle off and back on.
+///
+/// **The held verdict is tagged with whose it is**, and `owner` is that tag — the row's node path,
+/// or `None` on the row kinds that have no status at all. The tree is virtualized, so a scope is a
+/// *slot*: scrolling hands this one a different row, and a verdict kept without saying whose it was
+/// would be shown against a row it was never about, indefinitely, since a waiting row never settles
+/// it. `None` is what stops the ten statusless kinds from *erasing* the tag as they pass through:
+/// they are not waiting, so an untagged write would look like a settled "nothing is wrong".
+///
+/// Two limits the tag does not lift, both of them consequences of one cell per slot. Two status
+/// rows sharing a slot overwrite each other's held verdict, so the second of them to be waiting
+/// shows no triangle until its registration answers. And the hold-back *timer* is the slot's, keyed
+/// on `waiting` alone: a statusless row passing through cancels it, so a row that has been loading
+/// for a long time serves the hold again on the way back in rather than spinning at once.
+pub fn use_status(
+    owner: Option<&str>,
+    waiting: bool,
+    problem: Option<String>,
+) -> Option<StatusMark> {
     let spinning = use_progress_hold(waiting);
 
-    let held = use_state(|| None::<String>);
-    use_side_effect_with_deps(&(waiting, problem.clone()), move |(waiting, problem)| {
-        if !waiting {
-            let mut held = held;
-            held.set_if_modified(problem.clone());
-        }
-    });
-
-    match (
-        spinning,
-        if waiting {
-            held.read().clone()
-        } else {
-            problem
+    let held = use_state(|| None::<(String, Option<String>)>);
+    use_side_effect_with_deps(
+        &(owner.map(str::to_string), waiting, problem.clone()),
+        move |(owner, waiting, problem)| {
+            let Some(owner) = owner else {
+                return;
+            };
+            if !*waiting {
+                let mut held = held;
+                held.set_if_modified(Some((owner.clone(), problem.clone())));
+            }
         },
-    ) {
+    );
+
+    let settled = match (owner, waiting) {
+        (Some(owner), true) => held
+            .read()
+            .as_ref()
+            .filter(|(whose, _)| whose == owner)
+            .and_then(|(_, verdict)| verdict.clone()),
+        _ => problem,
+    };
+
+    match (spinning, settled) {
         (true, _) => Some(StatusMark::Loading),
         (false, Some(reason)) => Some(StatusMark::Problem(reason)),
         (false, None) => None,
@@ -336,9 +354,18 @@ const STATUS_SLOT: f32 = STATUS_DOT + SP_3;
 /// retunes the fold with it.
 const MONO_ADVANCE: f32 = 0.6;
 
-/// The natural width of `name` in the row's mono face.
-pub fn name_width(name: &str) -> f32 {
-    name.chars().count() as f32 * scale().data_value.size * MONO_ADVANCE
+/// One character of the row's mono face, in pixels.
+///
+/// **A hook**, through [`scale`], which is why it is resolved once by the row component rather than
+/// by the row kinds that fold: a helper that reads the theme cannot be reached from a `match` arm
+/// without making the scope's hook count a function of which row it drew (see `view::TreeRow`).
+pub fn mono_advance() -> f32 {
+    scale().data_value.size * MONO_ADVANCE
+}
+
+/// The natural width of `name` in the row's mono face, at [`mono_advance`]'s pitch.
+pub fn name_width(name: &str, advance: f32) -> f32 {
+    name.chars().count() as f32 * advance
 }
 
 /// Which of the row's optional items survive at a given width.

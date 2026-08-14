@@ -716,6 +716,11 @@ Full text: [docs/reference/FREYA_UI.md](docs/reference/FREYA_UI.md).
   follow-up `on_press` — do double-click detection inside that same handler.
 - **`VirtualScrollView` memoizes its builder closure**, so captured snapshots go stale. Each child
   reads shared state reactively.
+- **A virtualized list is one component type per row, and a row's scope is a *slot*, not a row.**
+  Mixed types in the window hand one row's scope to another and the hook count hard fails; keys are
+  not the escape (a scroll step becomes a list of moves). A slot may remember its own width; a row's
+  own state is tagged with whose it is or lives on the pane. Check every helper a row reaches for
+  being a hook.
 - **A root-scoped task outlives the project subtree, so it asks before it writes one**
   (`State::is_alive` / `RadioStation::is_alive`, both fork additions). Cancelling on unmount is
   the other answer and the right one for work that should stop; a drop that is deleting data has
