@@ -196,7 +196,12 @@ struct SchemaListing {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaListingView {
     pub name: String,
-    /// Empty for [`SchemaVisibility::EnabledButMissing`] — there is nothing to list.
+    /// Filled only for [`SchemaVisibility::Live`]. There is nothing to list for an
+    /// [`EnabledButMissing`](SchemaVisibility::EnabledButMissing) schema, and nothing that reads
+    /// this *may* list a [`NotEnabled`](SchemaVisibility::NotEnabled) one — the tree drops those
+    /// before it draws, the picker reads only the name and the tag, and completion offers what
+    /// the connection shows. A schema's relation list is the **server's** to size, so cloning one
+    /// that every consumer discards is the one avoidable cost in this read.
     pub relations: Vec<Relation>,
     pub visibility: SchemaVisibility,
 }
@@ -357,12 +362,16 @@ pub(crate) fn listing(
     let mut views: Vec<SchemaListingView> = listing
         .schemas
         .iter()
-        .map(|(folded, schema)| SchemaListingView {
-            name: schema.name.clone(),
-            relations: schema.relations.values().cloned().collect(),
-            visibility: match enabled.contains(folded) {
-                true => SchemaVisibility::Live,
-                false => SchemaVisibility::NotEnabled,
+        .map(|(folded, schema)| match enabled.contains(folded) {
+            true => SchemaListingView {
+                name: schema.name.clone(),
+                relations: schema.relations.values().cloned().collect(),
+                visibility: SchemaVisibility::Live,
+            },
+            false => SchemaListingView {
+                name: schema.name.clone(),
+                relations: Vec::new(),
+                visibility: SchemaVisibility::NotEnabled,
             },
         })
         .collect();

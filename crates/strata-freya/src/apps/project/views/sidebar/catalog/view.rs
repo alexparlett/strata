@@ -111,7 +111,7 @@ impl Component for TreeRow {
             NodeKind::Link { name } => link_row(&at, name, &cx),
             NodeKind::Schema { name, missing } => schema_row(&at, name, *missing, &cx),
             NodeKind::RelGroup { views, count } => rel_group_row(&at, *views, *count, &cx),
-            NodeKind::Relation { name, view } => relation_row(&at, name, *view, &cx),
+            NodeKind::Relation(relation) => relation_row(&at, relation, &cx),
             NodeKind::AddConnection => add_connection_row(&at, &cx),
         };
 

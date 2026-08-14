@@ -145,6 +145,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
   over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
   path's refusals.
+- **A name is rendered into a statement by one of two renderers, and which one is decided by
+  whose identity the name is.** `engine::quote_ident` is fold-preserving (a workspace def's
+  registered identity); `sql::quote_verbatim` is case-preserving (a server's spelling), and
+  `sql::qualified` renders a dotted name segment by segment through it. Never reach for the
+  nearest helper — the wrong one is silently wrong in opposite directions. `export::quote_col`
+  is a third rule for a third reason.
 - **A `COPY … TO` may not land in storage Strata owns, and the gate is the *resolved* target.**
   The project's `.strata/` and the snapshot spool are refused; a stray file under an internal
   table's directory is read back as phantom rows by that table's next scan, and everywhere else on
@@ -834,6 +840,9 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
 - **Every worktree builds into its own `target/`; the machine-wide cache is sccache, never a
   shared `CARGO_TARGET_DIR`** — the shared dir serialized sessions on cargo's build lock and
   accumulated 335 GB; the dev profile's `debug = "line-tables-only"` is part of the same decision.
+  The cache delivers only with its 40 GB cap (the 10 GB default is smaller than one build and
+  thrashes: 32 min vs 4 min, measured) and a bounded idle timeout — a build frozen on trivial
+  crates is a wedged server; `sccache --stop-server` unwedges it now.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
 - **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the

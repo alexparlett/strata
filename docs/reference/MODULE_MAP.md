@@ -676,10 +676,14 @@ src/apps/project/                the project window (Valin-shaped)
                                  Tables and Views groups → relations off `Engine::db_listing`, an
                                  object store's **links** into the workspace rows that read
                                  through it, and the pane's one empty state; a relation is a leaf
-                                 until DB-07 can address its columns) · columns (flatten + tests)
+                                 until DB-07 can address its columns, and carries its rendered
+                                 three-part `address` because the walk is where the catalog and
+                                 the schema are still in hand) · columns (flatten + tests)
                                  · menu (P3-06: one item list per row kind, shared by right-click
                                  and the ⋮ so the two triggers can't drift; Drop and Forget open
-                                 the confirm, never drop) · interaction (tests)
+                                 the confirm, never drop; `select_sql`/`pin_view_sql` are DB-06's
+                                 composition funnel, shared by the workspace rows' View table and
+                                 a remote relation's Query / Pin as view…) · interaction (tests)
     inspector/                   P3-08/P3-09 — the selected column, and **only what was actually
                                  read or counted**: mod (frame + theme + the not-a-column
                                  states), model (resolve the ColRef path · the dynamic fact list ·

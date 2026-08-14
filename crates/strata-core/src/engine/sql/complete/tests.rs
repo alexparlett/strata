@@ -1251,3 +1251,150 @@ fn completions_resume_after_a_closed_string() {
     let items = at("SELECT 'x', s| FROM events");
     pos(&items, "status");
 }
+
+/// **Qualified names over a database connection** (DB-06) — the offer grows a catalog segment,
+/// then a schema segment, and stops where the network would begin.
+mod qualified {
+    use super::*;
+    use crate::engine::sql::symbols::{DatabaseSym, RelationSym, SchemaSym};
+
+    fn relation(name: &str, view: bool) -> RelationSym {
+        RelationSym {
+            name: name.into(),
+            view,
+        }
+    }
+
+    /// The fixture's catalog plus one live database, `pg`, with two enabled schemas. `orders`
+    /// deliberately shares a bare name with nothing in the workspace and `users` deliberately
+    /// does — the workspace fixture has a `users` table, which is what proves the two namespaces
+    /// are answered apart.
+    fn with_pg() -> Catalog {
+        catalog().with_databases(vec![DatabaseSym {
+            name: "pg".into(),
+            schemas: vec![
+                SchemaSym {
+                    name: "public".into(),
+                    relations: vec![
+                        relation("orders", false),
+                        relation("users", false),
+                        relation("big_orders", true),
+                        relation("Mixed Case", false),
+                    ],
+                },
+                SchemaSym {
+                    name: "analytics".into(),
+                    relations: vec![relation("sessions", false)],
+                },
+            ],
+        }])
+    }
+
+    /// A second connection that has never answered: a name from the def, and nothing under it.
+    fn unconnected() -> Catalog {
+        catalog().with_databases(vec![DatabaseSym {
+            name: "warehouse".into(),
+            schemas: Vec::new(),
+        }])
+    }
+
+    fn offer(sql_with_caret: &str, cat: &Catalog) -> Vec<Completion> {
+        let caret = sql_with_caret.find('|').expect("caret marker");
+        complete(&sql_with_caret.replace('|', ""), caret, cat, false)
+    }
+
+    #[test]
+    fn a_catalog_name_is_offered_at_a_relation_target() {
+        let items = offer("SELECT * FROM |", &with_pg());
+        let p = pos(&items, "pg");
+        assert_eq!(items[p].detail.as_deref(), Some("database"));
+        assert!(
+            pos(&items, "events") < p && pos(&items, "spenders") < p,
+            "a qualifier ranks behind everything that can stand alone: {:?}",
+            labels(&items)
+        );
+    }
+
+    #[test]
+    fn a_connection_that_has_not_answered_still_offers_its_name() {
+        let items = offer("SELECT * FROM ware|", &unconnected());
+        pos(&items, "warehouse");
+        assert!(
+            offer("SELECT * FROM warehouse.|", &unconnected()).is_empty(),
+            "and nothing under it"
+        );
+    }
+
+    #[test]
+    fn the_catalog_segment_offers_its_schemas() {
+        let items = offer("SELECT * FROM pg.|", &with_pg());
+        assert_eq!(labels(&items), vec!["public", "analytics"]);
+        assert_eq!(
+            items[pos(&items, "public")].detail.as_deref(),
+            Some("pg · schema")
+        );
+    }
+
+    #[test]
+    fn the_schema_segment_offers_its_relations() {
+        let items = offer("SELECT * FROM pg.public.|", &with_pg());
+        let p = pos(&items, "big_orders");
+        assert_eq!(items[p].kind, CompletionKind::View);
+        assert_eq!(items[p].detail.as_deref(), Some("view"));
+        assert_eq!(
+            items[pos(&items, "orders")].kind,
+            CompletionKind::Table,
+            "{:?}",
+            labels(&items)
+        );
+        absent(&items, "sessions");
+    }
+
+    #[test]
+    fn a_relation_whose_spelling_is_the_servers_inserts_quoted() {
+        let items = offer("SELECT * FROM pg.public.Mixed|", &with_pg());
+        assert_eq!(items[pos(&items, "Mixed Case")].insert, "\"Mixed Case\"");
+    }
+
+    /// The head of the chain decides the namespace, so a remote qualifier never answers with a
+    /// workspace table that happens to share the bare name — and a remote relation's columns are
+    /// an introspection, so the third segment offers nothing at all.
+    #[test]
+    fn a_remote_qualifier_is_never_answered_by_the_workspace() {
+        assert!(offer("SELECT pg.public.users.| FROM pg.public.users", &with_pg()).is_empty());
+        assert!(offer("SELECT * FROM pg.marketing.|", &with_pg()).is_empty());
+        let items = offer("SELECT users.| FROM users", &with_pg());
+        let mut columns = labels(&items);
+        columns.sort_unstable();
+        assert_eq!(
+            columns,
+            vec!["guid", "name", "user_id"],
+            "the workspace table"
+        );
+    }
+
+    /// One segment is what a relation or an alias is written as and a catalog never is, so an
+    /// in-scope name wins a collision there.
+    #[test]
+    fn a_single_segment_prefers_a_relation_in_scope() {
+        let clashing = catalog().with_databases(vec![DatabaseSym {
+            name: "users".into(),
+            schemas: vec![SchemaSym {
+                name: "public".into(),
+                relations: vec![relation("orders", false)],
+            }],
+        }]);
+        let items = offer("SELECT users.| FROM users", &clashing);
+        pos(&items, "guid");
+        absent(&items, "public");
+    }
+
+    /// Nothing about the qualified offer reaches the network — it is data on the snapshot, which
+    /// is what §7's "synchronous by construction" costs and buys.
+    #[test]
+    fn a_project_with_no_database_offers_exactly_what_it_did_before() {
+        assert!(catalog().databases.is_empty());
+        let items = offer("SELECT * FROM |", &catalog());
+        absent(&items, "pg");
+    }
+}

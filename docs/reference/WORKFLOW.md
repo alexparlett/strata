@@ -56,6 +56,30 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   backtraces this project debugs with. Do not set `CARGO_TARGET_DIR` in a session's settings, and
   don't re-litigate the shared dir without rereading this entry.
 
+  **The cache only delivers under two conditions, both machine config, both broken once**
+  (2026-08, a week of 30–50-minute worktree builds):
+  - **The size cap must exceed one build's artifact set.** sccache's 10 GB default is smaller
+    than one dev build of this tree, so the LRU evicted DataFusion as fast as it wrote it and a
+    "warm" cache never existed — every fresh worktree recompiled the heavy tail (sqlparser,
+    parquet, arrow, the datafusion family). The cap is 40 GB in
+    `~/Library/Application Support/Mozilla.sccache/config`; measured effect on an identical
+    fresh-worktree build: 32 min cold-and-thrashing → **4 min** warm. Cache keys were verified
+    stable across worktrees (identical `-C metadata`, byte-identical rlibs), so hits survive
+    any number of worktrees as long as `Cargo.lock` matches.
+  - **A wedged server must die fast.** The server can wedge (listening, answering nothing);
+    pending requests register no activity, so the *idle timeout* is what ends the hang — 600 s
+    by default, which read as a 10-minute freeze on `cfg-if`-class leaf crates at the start of
+    every build, and as "sccache died silently" whenever a session's 10-minute command timeout
+    killed the build first. `~/.cargo/config.toml` `[env]` now sets `SCCACHE_IDLE_TIMEOUT=60`
+    (bounds a wedge at ~1 min; a live compile counts as activity, so long Skia compiles are
+    safe) and `SCCACHE_ERROR_LOG`/`SCCACHE_LOG` so the next wedge leaves evidence in
+    `~/Library/Logs/sccache.log`. A build frozen on trivial crates is a wedged server:
+    `sccache --stop-server` unwedges it immediately.
+
+  With both in place the fresh-worktree floor is ~4 min, two-thirds of it the serial tail
+  `strata-core` → `strata-freya` + link — a fact about crate structure, not caching, and not
+  worth restructuring over at this size.
+
 ## Git, worktrees, and verification
 
 - **Formatting is the `fmt` skill, never `cargo fmt --all`.** `--all` means "all packages *and

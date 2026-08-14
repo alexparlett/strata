@@ -2337,3 +2337,52 @@ fn the_tree_lays_out_within_its_panel_at_stub_width() {
         "nothing may paint past the panel: {overflowing:?}"
     );
 }
+
+/// **The remote-relation gestures** (DB-06) — the statements they compose.
+///
+/// Unit tests rather than driven ones, and that is a limit of the fixture rather than a choice: a
+/// relation row exists only while `db_listing` answers, and that answer is the connect-time
+/// enumeration held beside a live pool, so the rendered pane cannot reach one without a server.
+/// What a real server does with these names is
+/// `strata-core/tests/postgres_federation.rs`, which runs the same
+/// [`qualified`](strata_core::engine::sql::qualified) rendering these templates wrap.
+mod gestures {
+    use super::super::menu::{pin_view_sql, select_sql};
+    use strata_core::engine::quote_ident;
+    use strata_core::engine::sql::qualified;
+
+    #[test]
+    fn a_query_reads_the_whole_relation_at_the_row_limit() {
+        let address = qualified(["pg", "public", "orders"]);
+        assert_eq!(
+            select_sql(&address, 100),
+            "SELECT *\nFROM pg.public.orders\nLIMIT 100;"
+        );
+        assert_eq!(
+            select_sql(&address, 0),
+            "SELECT *\nFROM pg.public.orders;",
+            "no limit means no clause, never `LIMIT 0`"
+        );
+    }
+
+    /// The two names in a `CREATE VIEW` belong to two different owners, and are rendered by two
+    /// different renderers because of it: the view is a workspace def, keyed by the folded name,
+    /// while the relation's spelling is the server's.
+    #[test]
+    fn pinning_folds_the_view_name_and_preserves_the_relations() {
+        let address = qualified(["pg", "public", "Orders"]);
+        assert_eq!(
+            pin_view_sql(&quote_ident("Orders"), &address),
+            "CREATE VIEW orders AS\nSELECT *\nFROM pg.public.\"Orders\";"
+        );
+    }
+
+    #[test]
+    fn a_name_a_statement_cannot_say_bare_is_quoted_per_segment() {
+        let address = qualified(["pg", "sales eu", "order"]);
+        assert_eq!(
+            select_sql(&address, 10),
+            "SELECT *\nFROM pg.\"sales eu\".\"order\"\nLIMIT 10;"
+        );
+    }
+}

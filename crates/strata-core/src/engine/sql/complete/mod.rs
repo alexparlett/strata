@@ -19,13 +19,13 @@ use crate::engine::config::{key_def, Kind as KeyKind, ENGINE_KEYS};
 use crate::engine::ddl::{option_keys_for, refuse_reserved_key, OptionKind, STORED_AS_FORMATS};
 use crate::engine::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
-    Clause, ColumnList, Context, ListSource, Role, LITERAL_WORDS, OPERAND_EXPECTING,
+    Clause, ColumnList, Context, ListSource, Role,
 };
+use crate::engine::sql::ident::quote_verbatim;
 use crate::engine::sql::lex::{
-    caret_extends_numeric_literal, caret_in_string_or_comment, is_reserved_in_name_position, lex,
-    literal_at, TokKind,
+    caret_extends_numeric_literal, caret_in_string_or_comment, lex, literal_at, TokKind,
 };
-use crate::engine::sql::symbols::{Catalog, PreparedSym, TableSym};
+use crate::engine::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, TableSym};
 use crate::engine::sql::FunctionSym;
 use strata_model::Kind;
 
@@ -82,7 +82,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
     let mut pool = Pool::new(&partial, manual);
 
     match &ca.context {
-        Context::Dot(rel) => push_dot_columns(&mut pool, &ca, catalog, rel, &replace),
+        Context::Dot(chain) => push_dot_items(&mut pool, &ca, catalog, chain, &replace),
         Context::At(clause, Role::Continuation) => {
             for (i, k) in continuation_keywords(*clause).into_iter().enumerate() {
                 pool.ordered(k, T_PRIMARY, i, || keyword(k, &replace, kw_space));
@@ -131,7 +131,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             for f in catalog.functions.all().filter(|f| f.created) {
                 pool.push(&f.name, T_PRIMARY, || Completion {
                     label: f.name.clone(),
-                    insert: ident_insert(&f.name),
+                    insert: quote_verbatim(&f.name),
                     kind: CompletionKind::Function,
                     detail: Some("session function".into()),
                     replace: replace.clone(),
@@ -241,6 +241,11 @@ fn push_list_columns(
 /// incomplete (loading registrations, scraped CTEs) and a typo must not empty the
 /// list. (`DESCRIBE` and `COPY` have no projection before the caret, so the boost is
 /// a no-op there.)
+///
+/// The database connections' **catalog names** ride at the end of the pool (DB-06): they are the
+/// first segment of a three-part name rather than a relation, so they rank behind everything that
+/// can stand alone, and a connection offers its name whether or not it is live — the name is the
+/// def's, and a connection nobody has reached is still what the query has to say.
 fn push_relation_targets(
     pool: &mut Pool,
     ca: &CaretAnalysis,
@@ -267,12 +272,68 @@ fn push_relation_targets(
         let ord = coverage(have) * 2 + written_rel(&t.name);
         pool.ordered(&t.name, T_PRIMARY, ord, || table_item(t, replace));
     }
+    for db in &catalog.databases {
+        pool.push(&db.name, T_SECONDARY, || database_item(db, replace));
+    }
 }
 
-/// The `Dot(rel)` pool: only columns of the qualified relation — inline relations
-/// (CTEs, derived-table aliases) first, then catalog. Sub-ranked by the composed
-/// column forces: type affinity when completing a comparison side, cross-side key
-/// likelihood at ON positions, written-demotion.
+/// The `Dot(chain)` pool — what is *inside* the qualifier the caret sits behind.
+///
+/// Two namespaces, and the chain's **head** decides which, because only one of them
+/// can be addressed by a catalog name at all. A head naming a database connection
+/// (DB-06) makes the whole chain remote: one segment offers that connection's
+/// enabled schemas, two offers the relations in a schema, and three offers
+/// **nothing** — a remote relation's columns are an introspection round trip, and
+/// the completion path does no I/O (§7). Anything else is the workspace, where the
+/// last segment names the relation (the single-namespace rule: `strata.public.t.` is
+/// `t`) and the pool is that relation's columns.
+///
+/// Reading the head rather than the tail is also what stops `pg.public.orders.` from
+/// answering with a *workspace* table that happens to be called `orders`.
+///
+/// The one place the workspace goes first is a **single** segment that names something
+/// in scope: `orders.` is that relation's columns even on a project whose connection
+/// is also called `orders`, because a one-segment qualifier is what a relation or an
+/// alias is written as and a catalog never is (DataFusion resolves a two-part name
+/// inside the default catalog, so a remote relation is always spelled with three).
+fn push_dot_items(
+    pool: &mut Pool,
+    ca: &CaretAnalysis,
+    catalog: &Catalog,
+    chain: &[String],
+    replace: &Range<usize>,
+) {
+    let [head, rest @ ..] = chain else {
+        return;
+    };
+    let named_here =
+        rest.is_empty() && (ca.inline_relation(head).is_some() || catalog.table(head).is_some());
+    match catalog.database(head).filter(|_| !named_here) {
+        None => push_dot_columns(pool, ca, catalog, rest.last().unwrap_or(head), replace),
+        Some(db) => match rest {
+            [] => {
+                for schema in &db.schemas {
+                    pool.push(&schema.name, T_PRIMARY, || {
+                        schema_item(&db.name, &schema.name, replace)
+                    });
+                }
+            }
+            [schema] => {
+                for relation in db.schema(schema).map(|s| &s.relations[..]).unwrap_or(&[]) {
+                    pool.push(&relation.name, T_PRIMARY, || {
+                        relation_item(relation, replace)
+                    });
+                }
+            }
+            _ => {}
+        },
+    }
+}
+
+/// The workspace half of [`push_dot_items`]: only columns of the qualified relation
+/// — inline relations (CTEs, derived-table aliases) first, then catalog. Sub-ranked
+/// by the composed column forces: type affinity when completing a comparison side,
+/// cross-side key likelihood at ON positions, written-demotion.
 fn push_dot_columns(
     pool: &mut Pool,
     ca: &CaretAnalysis,
@@ -593,42 +654,10 @@ fn options_literal_completions(
     Some(rank(pool))
 }
 
-/// Whether an identifier must be double-quoted to survive DataFusion's parser
-/// *and mean the column*: anything that isn't a plain lowercase `[a-z_][a-z0-9_]*`
-/// word, or that collides with a reserved keyword (`order`), **or** with the
-/// expression grammar's own vocabulary — a column named `null` inserted bare
-/// selects the literal (silently wrong data), one named `case` breaks the parse.
-/// The collision set is the union of every table the model already declares:
-/// parser-reserved ∪ [`OPERAND_EXPECTING`] ∪ [`LITERAL_WORDS`]. Merely-known
-/// keywords outside those — `name`, `status`, `plain` — stay unquoted.
-fn needs_quoting(name: &str) -> bool {
-    let plain = {
-        let mut chars = name.chars();
-        matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c == '_')
-            && name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    };
-    !plain
-        || is_reserved_in_name_position(name)
-        || OPERAND_EXPECTING
-            .iter()
-            .any(|w| w.eq_ignore_ascii_case(name))
-        || LITERAL_WORDS.iter().any(|w| w.eq_ignore_ascii_case(name))
-}
-
-fn ident_insert(name: &str) -> String {
-    if needs_quoting(name) {
-        format!("\"{}\"", name.replace('"', "\"\""))
-    } else {
-        name.to_string()
-    }
-}
-
 fn table_item(t: &TableSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: t.name.clone(),
-        insert: ident_insert(&t.name),
+        insert: quote_verbatim(&t.name),
         kind: if t.is_view {
             CompletionKind::View
         } else {
@@ -639,10 +668,52 @@ fn table_item(t: &TableSym, replace: &Range<usize>) -> Completion {
     }
 }
 
+/// A **database connection's catalog** at a relation-target position (DB-06) — the first segment
+/// of a qualified name, which is why its detail says what it is rather than what it holds:
+/// accepting it leaves a name that needs a `.` after it, and the row should say so.
+///
+/// `Table` is the nearest existing kind and the glyph reads right; the kind is a glyph, not a
+/// taxonomy (see [`cte_item`]).
+fn database_item(db: &DatabaseSym, replace: &Range<usize>) -> Completion {
+    Completion {
+        label: db.name.clone(),
+        insert: quote_verbatim(&db.name),
+        kind: CompletionKind::Table,
+        detail: Some("database".into()),
+        replace: replace.clone(),
+    }
+}
+
+/// One remote schema, offered after `catalog.` — the detail names the connection, because a
+/// schema called `public` is otherwise indistinguishable from every other connection's.
+fn schema_item(database: &str, name: &str, replace: &Range<usize>) -> Completion {
+    Completion {
+        label: name.to_string(),
+        insert: quote_verbatim(name),
+        kind: CompletionKind::Table,
+        detail: Some(format!("{database} · schema")),
+        replace: replace.clone(),
+    }
+}
+
+/// One remote relation, offered after `catalog.schema.`.
+fn relation_item(relation: &RelationSym, replace: &Range<usize>) -> Completion {
+    Completion {
+        label: relation.name.clone(),
+        insert: quote_verbatim(&relation.name),
+        kind: match relation.view {
+            true => CompletionKind::View,
+            false => CompletionKind::Table,
+        },
+        detail: Some(if relation.view { "view" } else { "table" }.into()),
+        replace: replace.clone(),
+    }
+}
+
 fn cte_item(name: &str, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),
-        insert: ident_insert(name),
+        insert: quote_verbatim(name),
         kind: CompletionKind::Table,
         detail: Some("cte".into()),
         replace: replace.clone(),
@@ -660,7 +731,7 @@ fn cte_item(name: &str, replace: &Range<usize>) -> Completion {
 fn prepared_item(p: &PreparedSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: p.name.clone(),
-        insert: ident_insert(&p.name),
+        insert: quote_verbatim(&p.name),
         kind: CompletionKind::Function,
         detail: Some(p.detail()),
         replace: replace.clone(),
@@ -670,7 +741,7 @@ fn prepared_item(p: &PreparedSym, replace: &Range<usize>) -> Completion {
 fn column_item(name: &str, detail: Option<&str>, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),
-        insert: ident_insert(name),
+        insert: quote_verbatim(name),
         kind: CompletionKind::Column,
         detail: detail.map(ToString::to_string),
         replace: replace.clone(),

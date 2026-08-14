@@ -77,12 +77,55 @@ impl PreparedSym {
     }
 }
 
+/// One **database connection's catalog**, as a qualified name's first segment (DB-06).
+///
+/// The two halves come from two places on purpose. The [`name`](Self::name) is the connection's
+/// def — so it is offered whether or not the connection is live, exactly as the tree draws a
+/// collapsed database node it has never reached. The [`schemas`](Self::schemas) are the
+/// connect-time enumeration, scoped by the def's enabled set
+/// ([`Engine::db_listing`](crate::engine::Engine::db_listing), the one visibility source), so a
+/// connection that has not answered offers its name and nothing under it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DatabaseSym {
+    pub name: String,
+    pub schemas: Vec<SchemaSym>,
+}
+
+impl DatabaseSym {
+    /// The schema this catalog spells `name`, case-insensitively as SQL resolves it.
+    pub fn schema(&self, name: &str) -> Option<&SchemaSym> {
+        self.schemas
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
+    }
+}
+
+/// One remote schema and the relations in it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SchemaSym {
+    pub name: String,
+    pub relations: Vec<RelationSym>,
+}
+
+/// One remote relation. **No columns**: reading them is an introspection round trip, and the
+/// completion path does no I/O (§7) — so a three-part qualifier completes no further.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RelationSym {
+    pub name: String,
+    /// Whether the server calls it a view — the completion row's glyph and detail.
+    pub view: bool,
+}
+
 /// A snapshot of everything the analysis layer resolves against, plus the engine setting it
 /// has to *read* the buffer with.
 #[derive(Clone, Default)]
 pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
+    /// The project's database connections, for the qualified offer (DB-06). Set through
+    /// [`with_databases`](Self::with_databases) rather than taken by [`build`](Self::build),
+    /// because a project with no database says nothing about them.
+    pub databases: Vec<DatabaseSym>,
     /// The engine's function catalog, **by handle**: the snapshot is rebuilt on every catalog
     /// epoch and the function set is by far its largest part, so it rides as the `Arc` the engine
     /// already holds rather than as a per-rebuild deep copy of every symbol.
@@ -123,10 +166,24 @@ impl Catalog {
         }
         Catalog {
             tables: out,
+            databases: Vec::new(),
             functions,
             prepared,
             dialect,
         }
+    }
+
+    /// The project's database connections — see [`DatabaseSym`].
+    pub fn with_databases(mut self, databases: Vec<DatabaseSym>) -> Self {
+        self.databases = databases;
+        self
+    }
+
+    /// The database connection addressed as `name`, case-insensitively as SQL resolves it.
+    pub fn database(&self, name: &str) -> Option<&DatabaseSym> {
+        self.databases
+            .iter()
+            .find(|d| d.name.eq_ignore_ascii_case(name))
     }
 
     pub fn table(&self, name: &str) -> Option<&TableSym> {
