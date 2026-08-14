@@ -126,7 +126,10 @@ src/state/updates.rs             UP-02 — the app-global **update status**: wha
                                  is parked in a process-global the next mount adopts, and the
                                  install intent is another one — the swap happens in `main` after
                                  `launch` returns. The mechanism itself is `strata_core::update`;
-                                 the surfaces are `src/updater.rs`
+                                 the surfaces are `src/updater.rs`. A dev build is pointed at a
+                                 local releases server with `STRATA_UPDATE_ORIGIN`
+                                 (`strata-core/examples/fake_releases.rs`) — the only way to see
+                                 any of this without cutting a release
 src/updater.rs                   UP-03 — the updater's **surfaces**, the half that belongs to no
                                  single window (so not an `apps/` folder, which is one per OS
                                  window). `Affordance::of(status, site)` is the one answer to "what
@@ -135,9 +138,13 @@ src/updater.rs                   UP-03 — the updater's **surfaces**, the half 
                                  dialog cannot each restate the rules: a dev build offers
                                  nothing, a release with no archive (or a bundle that cannot be
                                  replaced) degrades to the release page, a staged update is a
-                                 restart. `press` is the one gesture behind all four, each arm a
-                                 call into `state::updates`. `UpdateConfirm` is the restart
-                                 question — one component, mounted at both workspace window roots,
+                                 restart. `press` is the rail's gesture, each arm a
+                                 call into `state::updates`; `raise` is the menubar's, which
+                                 raises the report card and then checks, so a check that found
+                                 nothing still has an answer. `UpdateConfirm` is both cards —
+                                 the restart question and the report (`Report::of` for the report's
+                                 words, `Changelog` on both for the release's own Markdown in a
+                                 fixed scrolling well) — one component, at both workspace roots,
                                  over a **per-window** `AskSlot` (two project windows must not both
                                  raise it). `UpdateRequest` is the app-global App ▸ Check for
                                  Updates… records its press in: that item has no chord to

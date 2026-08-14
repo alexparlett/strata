@@ -20,12 +20,20 @@
 //! workspace window and its mount is the second wake. That matters most for a download, which ends
 //! in a verified bundle on disk that losing the answer would orphan.
 //!
+//! **A dev build can be pointed at a local server.** The mechanism is inert outside a bundle and
+//! there is never a newer release to hand, so the surfaces draw nothing in a `cargo run` — set
+//! `STRATA_UPDATE_ORIGIN` (debug builds only, `strata_core::update::local_origin`) and the whole
+//! ladder runs for real against `crates/strata-core/examples/fake_releases.rs`. Two things here
+//! have to answer differently while it is: [`install_site`], because a dev build has no bundle to
+//! light the surfaces up with, and [`install`], because there is nowhere to swap one in.
+//!
 //! **The install is a quit.** A running app's bundle is never mutated: the press records the swap
 //! in [`PENDING`] — a process-global, because it outlives every window and scope — and calls the
 //! ordinary [`quit`](crate::platform::quit), so every close confirm keeps its say. A cancelled quit
 //! clears the intent through [`abandon_install`], leaving the staged bundle and a `Ready` status.
 //! The swap happens in `main`, after `launch` returns and no window is left.
 
+use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -58,8 +66,8 @@ pub type UpdateStatus = State<Update>;
 /// What the updater last learned. One value for the whole app.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub enum Update {
-    /// Nothing has been asked yet. The surfaces show nothing at all for this — a version line,
-    /// and no talk of updates.
+    /// Nothing has been asked yet. The rail shows nothing at all for this — a version line, and
+    /// no talk of updates.
     #[default]
     Idle,
     Checking,
@@ -69,11 +77,16 @@ pub enum Update {
     Available {
         version: String,
         page_url: String,
+        /// What changed, in the release's own Markdown — see [`Asset`]'s neighbour
+        /// `update::Offer::notes`. It travels through all three offer states because the check
+        /// is the only thing that reads it and the dialog can be raised over any of them.
+        notes: String,
         asset: Option<Asset>,
     },
     Downloading {
         version: String,
         page_url: String,
+        notes: String,
         got: u64,
         /// What the server declared, which is not always something it knows.
         total: Option<u64>,
@@ -83,10 +96,12 @@ pub enum Update {
     Ready {
         version: String,
         page_url: String,
+        notes: String,
         staged: PathBuf,
     },
     /// Whatever went wrong, in its own words. Never nagged about — a failed check is a log line
-    /// and a quiet status, not chrome.
+    /// and a quiet status on the rail — but it is reported in the dialog of whoever asked for
+    /// the check by name.
     Failed {
         why: String,
     },
@@ -104,7 +119,10 @@ pub fn create_global_updates() -> UpdateStatus {
 /// is the only honest way to ask, and not something to do on every repaint.
 pub fn install_site() -> &'static Site {
     static SITE: OnceLock<Site> = OnceLock::new();
-    SITE.get_or_init(update::site)
+    SITE.get_or_init(|| match update::is_local() {
+        true => Site::Writable(env::temp_dir().join("strata-update-local/Strata.app")),
+        false => update::site(),
+    })
 }
 
 /// **Ask GitHub whether there is a newer release.**
@@ -136,6 +154,7 @@ pub fn check(status: UpdateStatus) {
             Ok(Check::Newer(offer)) => Update::Available {
                 version: offer.version,
                 page_url: offer.page_url,
+                notes: offer.notes,
                 asset: offer.asset,
             },
             Err(why) => failed(why),
@@ -156,17 +175,24 @@ pub fn download(status: UpdateStatus) {
         Update::Available {
             version,
             page_url,
+            notes,
             asset: Some(asset),
-        } => (version.clone(), page_url.clone(), asset.clone()),
+        } => (
+            version.clone(),
+            page_url.clone(),
+            notes.clone(),
+            asset.clone(),
+        ),
         _ => return,
     };
-    let (version, page_url, asset) = offered;
+    let (version, page_url, notes, asset) = offered;
     let Some(working) = Working::start() else {
         return;
     };
     status.set(Update::Downloading {
         version: version.clone(),
         page_url: page_url.clone(),
+        notes: notes.clone(),
         got: 0,
         total: Some(asset.size),
     });
@@ -183,6 +209,7 @@ pub fn download(status: UpdateStatus) {
             Ok(staged) => Update::Ready {
                 version,
                 page_url,
+                notes,
                 staged,
             },
             Err(why) => failed(why),
@@ -221,6 +248,13 @@ pub fn install(status: UpdateStatus) {
         Update::Ready { staged, .. } => staged.clone(),
         _ => return,
     };
+    if update::is_local() {
+        tracing::warn!(
+            "not installing {}: it came from a local origin",
+            staged.display()
+        );
+        return;
+    }
     let Site::Writable(target) = install_site() else {
         status.set(failed(
             "Strata cannot be replaced where it is installed. Open the release page to install \
@@ -294,10 +328,10 @@ pub fn use_updates(status: UpdateStatus, config: ConfigStation) {
 }
 
 /// **Whatever went wrong, recorded where it was learned.** The one way to build
-/// [`Update::Failed`], because the surfaces deliberately draw *nothing* for it (UP-03: the rail
-/// never nags and a failed check is not chrome) — so if this did not log, a refused signature
-/// and a finished download would be indistinguishable and there would be nothing to diagnose
-/// from. One funnel rather than a `tracing` call remembered at five sites, on the log's own
+/// [`Update::Failed`], because the rail deliberately draws *nothing* for it (UP-03: the rail
+/// never nags and a failed check is not chrome) and the report card is only up if somebody
+/// asked — so if this did not log, a refused signature and a finished download would be
+/// indistinguishable and there would be nothing to diagnose from. One funnel rather than a `tracing` call remembered at five sites, on the log's own
 /// rule: the fact is recorded by whoever observed it.
 fn failed(why: impl Into<String>) -> Update {
     let why = why.into();

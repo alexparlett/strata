@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The plist the fake_releases example puts in its pretend bundle. A real one is written by
+     scripts/bundle-macos.sh; this exists only so the staged folder looks like an application. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.alexparlett.strata</string>
+    <key>CFBundleName</key>
+    <string>Strata</string>
+    <key>CFBundleExecutable</key>
+    <string>strata</string>
+    <key>CFBundleShortVersionString</key>
+    <string>9.9.9</string>
+    <key>CFBundleVersion</key>
+    <string>9.9.9</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>

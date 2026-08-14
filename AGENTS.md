@@ -634,7 +634,23 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   *and* cannot call `press` (the renderer thread has no Freya context, so `spawn_forever`
   panics): it sets `AppCtx::update_request` and the focused window drains it from
   `use_file_menu`'s effect. Confirming asks only "restart now?" — the close confirms still get
-  their say. `Update::Failed` draws nothing, so `state::updates::failed` logs it.
+  their say. `Update::Failed` draws nothing on the rail, so `state::updates::failed` logs it.
+- **The rail is quiet because nobody asked it; the menubar item asked, so it is owed an answer —
+  including "nothing to install".** `updater::raise` is the menu's own thin match over the same
+  `Affordance`: it raises `UpdateAsk::Report` and *then* checks — **including over an offer it
+  already has**, because the item says *check* and a startup `Available` can be a release stale —
+  so the answer lands in the card the press opened. Three arms divert: a staged update (still the
+  restart question), a download in flight (report only) and a dev build (nothing). The affordance
+  is bound **before** the match, never resolved in its scrutinee: a `peek` guard in a match head
+  outlives the arm, and the check writes that state.
+  The card's words are `Report::of`, one pure match over the status, and its action is
+  `Affordance::action` pressed through `press` — so it can offer nothing the rail would not. What
+  changed is the release's **own Markdown**, carried on the offer from the check that already read
+  it (`update::Offer::notes`, on all three offer states, and on through `Affordance::Restart` to
+  the restart card, which is the first sight of it when the download came from the rail) and drawn
+  through the chat pane's `MarkdownViewer` in a fixed, scrollable well, at the type scale's small
+  sizes via the fork's `MarkdownViewer::theme`. Never a second Markdown dress, and never a card
+  that grows with the release.
 
 **Settings, keymap, input**
 

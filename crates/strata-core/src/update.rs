@@ -33,6 +33,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(debug_assertions)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use semver::Version;
@@ -102,6 +104,14 @@ pub struct Offer {
     /// The release page, always — this is what an offer degrades to when there is nothing to
     /// install or nowhere to install it.
     pub page_url: String,
+    /// **What changed**, as GitHub holds it: the release body, which is Markdown. Carried
+    /// rather than fetched a second time, because the check has already read it, and carried
+    /// **unparsed** — the surface that shows it (UP-03's report card) renders it with the app's
+    /// own Markdown viewer, so this crate does no Markdown work and this stays one string.
+    ///
+    /// Empty for a release with no body, which is the same nothing as a release note nobody
+    /// wrote: the card simply draws no panel.
+    pub notes: String,
     /// The update archive, or `None` for a release that carries none. **Not an error**: a
     /// release cut before UP-01, or one whose build failed halfway, is still a real release
     /// worth pointing at.
@@ -200,6 +210,16 @@ pub fn download_blocking(
             Err(why)
         }
     }
+}
+
+/// **Is the updater pointed at a local server?** — `STRATA_UPDATE_ORIGIN`, debug builds only,
+/// served by `examples/fake_releases.rs`.
+///
+/// The app asks because two things it owns have to answer differently while it is: a dev build
+/// has no install site, so the surfaces would draw nothing at all; and the swap has no bundle to
+/// put anywhere, so the install is refused rather than taken.
+pub fn is_local() -> bool {
+    local_origin().is_some()
 }
 
 /// **Where the running app is installed**, and whether it can be replaced there.
@@ -317,7 +337,39 @@ pub fn discard(app: &Path) {
 
 /// The endpoint the check reads. Built here so the slug is written once.
 fn releases_url() -> String {
-    format!("https://api.github.com/repos/{REPO}/releases?per_page={PER_PAGE}")
+    let origin = local_origin().unwrap_or("https://api.github.com");
+    format!("{origin}/repos/{REPO}/releases?per_page={PER_PAGE}")
+}
+
+/// **Where the releases come from, when it is not GitHub** — `STRATA_UPDATE_ORIGIN`, and only
+/// in a **debug** build.
+///
+/// The updater is inert outside a bundle and there is never a newer release to hand, so nothing
+/// downstream of the check can be looked at in a dev build. Pointing it at
+/// `http://127.0.0.1:8787` fixes that without a fake anywhere: the request, the JSON, the offer,
+/// the download and its progress are the shipping code, and only the *server* is local. The dev
+/// server is `examples/fake_releases.rs`.
+///
+/// The whole body is `cfg`'d out of a release build, so a shipped app reads no such variable and
+/// cannot be pointed anywhere — which is what makes an environment variable acceptable here, and
+/// what keeps [`verify`]'s relaxation below honest.
+fn local_origin() -> Option<&'static str> {
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+    #[cfg(debug_assertions)]
+    {
+        static ORIGIN: OnceLock<Option<String>> = OnceLock::new();
+        ORIGIN
+            .get_or_init(|| {
+                let origin = env::var("STRATA_UPDATE_ORIGIN").ok()?;
+                let origin = origin.trim().trim_end_matches('/').to_string();
+                tracing::warn!("reading releases from {origin}, not GitHub");
+                Some(origin)
+            })
+            .as_deref()
+    }
 }
 
 /// A current-thread runtime for the length of one call — `list_models_blocking`'s trade,
@@ -390,6 +442,12 @@ fn newest(body: &str, current: &Version) -> Result<Check, String> {
     Ok(Check::Newer(Offer {
         version: version.to_string(),
         page_url: release.html_url,
+        notes: release
+            .body
+            .unwrap_or_default()
+            .replace("\r\n", "\n")
+            .trim()
+            .to_string(),
         asset: release
             .assets
             .into_iter()
@@ -410,6 +468,11 @@ struct Release {
     #[serde(default)]
     draft: bool,
     html_url: String,
+    /// The release notes. `Option` rather than a defaulted `String` because GitHub sends the
+    /// field as `null` for a release with no body, which a `String` field would refuse to read
+    /// — and one such release in the list would blind the updater entirely.
+    #[serde(default)]
+    body: Option<String>,
     #[serde(default)]
     assets: Vec<ReleaseAsset>,
 }
@@ -517,7 +580,19 @@ fn bundle_in(stage: &Path) -> Result<PathBuf, String> {
 /// Order matters. The strict verify comes first because it is what seals everything else: the
 /// `Info.plist` read below is only worth trusting once the signature covering it has been
 /// checked.
+///
+/// **A local origin is the one thing that relaxes this**, and only in a debug build: a bundle
+/// the dev server made carries no Apple signature and never could, so a check pointed at
+/// `127.0.0.1` would stop at the first step and `Ready` would be unreachable on a developer's
+/// machine. The relaxation is keyed on [`local_origin`] rather than on a flag of its own, so it
+/// cannot be switched on for a bundle that came from GitHub, and it is `cfg`'d out of a release
+/// build with the origin itself. It says so in the log, loudly, because a skipped signature
+/// check is the one thing here worth never doing by accident.
 fn verify(app: &Path) -> Result<(), String> {
+    if let Some(origin) = local_origin() {
+        tracing::warn!("not verifying {}: it came from {origin}", app.display());
+        return Ok(());
+    }
     let checked = Command::new(CODESIGN)
         .arg("--verify")
         .arg("--deep")
@@ -648,13 +723,17 @@ mod tests {
     use super::*;
 
     /// A release list in GitHub's own shape, so the parse under test is the parse that runs.
+    ///
+    /// `r###` because a release body opens with a Markdown heading: the `"##` that starts one
+    /// would close an `r#` or an `r##` string.
     fn releases() -> &'static str {
-        r#"[
+        r###"[
           {
             "tag_name": "v0.4.0",
             "draft": false,
             "prerelease": true,
             "html_url": "https://github.com/alexparlett/strata/releases/tag/v0.4.0",
+            "body": "## What's new\r\n\r\n- Charts got a Shape panel\r\n",
             "assets": [
               {
                 "name": "Strata-0.4.0-universal.dmg",
@@ -675,7 +754,7 @@ mod tests {
             "html_url": "https://github.com/alexparlett/strata/releases/tag/v0.3.1",
             "assets": []
           }
-        ]"#
+        ]"###
     }
 
     fn check(body: &str, current: &str) -> Check {
@@ -699,6 +778,27 @@ mod tests {
         let asset = offer.asset.expect("the archive");
         assert_eq!(asset.name, "Strata-0.4.0-universal.app.zip");
         assert_eq!(asset.size, 111_166_586);
+    }
+
+    /// **The offer carries what changed, as written.** GitHub's body is Markdown and reaches
+    /// the surface unparsed — rendering it is the app's, not this crate's — but its line
+    /// endings are normalized here, because a `\r` reaches the text shaper as a glyph even
+    /// after the Markdown parser has had it. A release with no body,
+    /// which GitHub sends as `null`, is simply nothing to show; reading that field as a
+    /// `String` would refuse the whole list.
+    #[test]
+    fn the_offer_carries_the_release_notes_and_survives_a_release_with_none() {
+        let offer = offer(releases(), "0.3.1");
+        assert_eq!(
+            offer.notes, "## What's new\n\n- Charts got a Shape panel",
+            "the notes were rewritten or left with a carriage return"
+        );
+
+        let body = r#"[
+          {"tag_name": "v0.5.0", "draft": false, "prerelease": false, "body": null,
+           "html_url": "https://example.invalid/v0.5.0", "assets": []}
+        ]"#;
+        assert_eq!(self::offer(body, "0.3.1").notes, "");
     }
 
     /// **Never a version that is not strictly newer.** Equal is up to date, and older is up to

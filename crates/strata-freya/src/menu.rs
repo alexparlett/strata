@@ -49,7 +49,7 @@ use strata_core::keymap::effective_chord;
 use crate::apps::project::{window_geometry_blocking, ProjectApp};
 use crate::platform::{self, OpenCtx, OpenTarget, Windows};
 use crate::state::{install_site, use_config, AppCtx, ConfigChan};
-use crate::updater::{press, AskSlot};
+use crate::updater::{raise, AskSlot};
 
 /// A custom menubar item — the typed vocabulary the builder and the event handler
 /// share, so dispatch is an exhaustive `match`, not string comparison (the Dioxus
@@ -61,8 +61,8 @@ pub enum MenuCmd {
     Quit,
     /// Open the Settings window, pinned above the focused window.
     OpenSettings,
-    /// Ask GitHub for a newer release, and offer whatever the answer turns out to be
-    /// (`updater::press`).
+    /// Ask what the update situation is, and report whatever the answer turns out to be in the
+    /// focused window's dialog (`updater::raise`) — "nothing to install" included.
     CheckUpdates,
     /// Pick a project folder and open it.
     OpenProject,
@@ -593,7 +593,7 @@ pub fn use_file_menu(app: &AppCtx, scope: MenuScope) {
         if *asked.read() {
             if let Some(ask) = ask {
                 asked.set(false);
-                press(updates, ask);
+                raise(updates, ask);
             }
         }
         focused_open.set_if_modified(open);
