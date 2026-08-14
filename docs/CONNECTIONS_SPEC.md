@@ -293,7 +293,8 @@ Top level is **data sources**:
   the network — so collapse and re-open cost nothing and ↻, which re-connects, is the refresh. A
   schema the def enables and the server does not have renders as its own failed node naming that
   fact. A relation is a leaf: its columns are an introspection, and the surface that reads them
-  (and can select one) is DB-07's inspector;
+  (and can select one) is DB-07's inspector. What a relation row *does* is
+  [below](#gestures-on-a-remote-relation);
 - one node per **object-store connection**, opening onto the workspace defs that read through it
   as **links** — pressing one opens the def's ancestors and brings its own row into view, rather
   than offering a second editable copy of it.
@@ -331,6 +332,45 @@ whose row count is bounded by the project file: it is what makes a database node
 since `RELATIONS_QUERY` carries no `LIMIT` and one schema's relation list is the server's to
 decide. A jump from an object-store link is therefore answered by the target's **index** in that
 list rather than by its measured rectangle, because the row it names has usually not been built.
+
+### Gestures on a remote relation
+
+Two, and both **compose a statement into a new unrun tab** (DB-06) — the tree is where work
+starts, not where it runs; a full read of a remote table is not something to begin by pointing at
+a row:
+
+- **Query table / Query view** — `SELECT * FROM <catalog>.<schema>.<relation>` at the row-limit
+  setting, on the relation's double-press and on its ⋮. It is the workspace rows' *View table*
+  over a three-part name: one funnel (`select_sql`), so the two cannot disagree about the shape or
+  the `LIMIT`. A single press does nothing — the row is a leaf, so there is no disclosure for a
+  press to mean.
+- **Pin as view…** — `CREATE VIEW <relation> AS SELECT * FROM <catalog>.<schema>.<relation>`, for
+  the user to rename and run. This is the workstream's "make it a bare-named def" gesture, and
+  composing rather than executing is the point: the name is a guess (frequently the wrong one in a
+  workspace that already has an `orders`), and running the statement lands the def through the
+  view funnel that already exists. A gesture that created the view itself would have had to invent
+  a name, or refuse.
+
+The menu carries these two and nothing else. Everything the workspace rows offer beyond them is
+about a **def** — Configure edits one, Drop removes one, Refresh re-infers one — and a remote
+relation has none; the connection's own row is where its lifecycle lives.
+
+The two names in that `CREATE VIEW` are rendered by **two different renderers**, because they
+belong to two different owners: the relation's address goes through
+`sql::qualified`/`quote_verbatim`, which preserves the server's spelling segment by segment, and
+the view's name through `engine::quote_ident`, which folds — that being the identity the workspace
+store will key the def under. `docs/COMPLETION_SPEC.md` §6 states the pair.
+
+## Completion over a connection
+
+The editor offers a database's names as you type them (DB-06): a connection's **catalog name** at
+any relation-target position, its **enabled schemas** after `catalog.`, and its **relations** after
+`catalog.schema.`. The catalog name comes from the def, so a connection that has never answered
+still offers the name a query has to say; the schemas and relations come from `db_listing`, the
+same scoped-and-tagged answer the tree and the Schemas… picker read. A non-enabled schema is
+absent from the offer and still resolves if typed — visibility, not policy. Nothing on the
+completion path touches the network. The full rules, including where it deliberately stops (a
+remote relation's columns), are `docs/COMPLETION_SPEC.md` §2, §4 and §10.
 
 ## Registration order
 

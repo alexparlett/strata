@@ -158,7 +158,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
   ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
-  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 ✅ (2026-08-14), the rest open** —
+  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 ✅ (2026-08-14), the rest
+  open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
@@ -199,7 +200,16 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   not a declaration that the connection has no password). Save's keystore work — migrate, then
   put or delete — runs on a worker **in front of** the store write under a new `Status::Storing`,
   which its file records as the correction to "call it at `def()`-assembly time": `blocker`
-  assembles a def per keystroke.
+  assembles a def per keystroke. **DB-06 is in** — a relation row grew *Query table / Query
+  view* (double-press or ⋮) and *Pin as view…*, both composing into an **unrun** tab through
+  `view_row`'s own funnel, and completion grew the qualified offer: catalog names from the
+  store, schemas and relations from `Engine::db_listing`, nothing after a third segment (a
+  remote column list is an introspection). Three corrections in its file: the plan's
+  interior-swappable listing handle is **unnecessary** — DB-02 enumerates a whole database at
+  connect, so a listing only ever moves on a catalog epoch — a Forget did not bump that epoch and
+  now does, and `Context::Dot` carries the **whole** chain because the head is what picks the
+  namespace. It also settled the identifier-rendering rule now in AGENTS §2: two renderers,
+  chosen by whose identity a name is.
   Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
@@ -304,10 +314,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅,
-   DB-02 ✅, DB-03 ✅ and DB-04 ✅, so **DB-05 (the tree redesign, the heaviest task) and DB-08
-   are next**; DB-08 sits on DB-02 alone and needs nothing after it, so schedule it early. DB-06
-   and DB-07 close on the tree.
+1. **Database connections (DB)** — DB-01 through DB-06 are ✅, so **DB-07 (inspector +
+   profiling over remote tables) and DB-08 (the JSON-accessor pushdown rewrite) are next**;
+   DB-08 sits on DB-02 alone and needs nothing after it. DB-09 (a current database) closes.
 2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-05 are in, so QE-06 is next
    (its guidance names QE-01's functions), QE-07 follows QE-03's merge, and QE-08 waits for
    DB-05's tree.

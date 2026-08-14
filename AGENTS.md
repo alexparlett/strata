@@ -145,6 +145,12 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   table drop's own words (`ddl::left_invalid`) off the **aliases** half of `PlanDeps` — raw, so it
   over-reports on purpose — and never cascades. `Blocked::CreateView`/`DropView` stay as the agent
   path's refusals.
+- **A name is rendered into a statement by one of two renderers, and which one is decided by
+  whose identity the name is.** `engine::quote_ident` is fold-preserving (a workspace def's
+  registered identity); `sql::quote_verbatim` is case-preserving (a server's spelling), and
+  `sql::qualified` renders a dotted name segment by segment through it. Never reach for the
+  nearest helper — the wrong one is silently wrong in opposite directions. `export::quote_col`
+  is a third rule for a third reason.
 - **A `COPY … TO` may not land in storage Strata owns, and the gate is the *resolved* target.**
   The project's `.strata/` and the snapshot spool are refused; a stray file under an internal
   table's directory is read back as phantom rows by that table's next scan, and everywhere else on

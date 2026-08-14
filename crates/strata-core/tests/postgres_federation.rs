@@ -31,7 +31,7 @@ use std::{env, fs, process};
 
 use keyring_core::mock;
 use strata_core::engine::db::{SchemaVisibility, PG_PASSWORD};
-use strata_core::engine::{Engine, RunOutcome, RunTag, ViewMeta, WsId};
+use strata_core::engine::{sql, Engine, RunOutcome, RunTag, ViewMeta, WsId};
 use strata_core::project::ProjectDefs;
 use strata_core::register::{register_project, table_spec, RegOutcome};
 use strata_core::secret::{Secret, SecretRef};
@@ -249,6 +249,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .expect("the connection registers its catalog");
 
     enumeration(&engine, port).await;
+    qualified_offer(&engine, &conn).await;
     pushdown(&engine).await;
     let fixtures = env::temp_dir().join(format!("strata-pg-{}", process::id()));
     mixed_plan(&engine, &fixtures).await;
@@ -324,6 +325,76 @@ async fn enumeration(engine: &Engine, port: u16) {
         )
         .await,
         vec![vec!["5".to_string()], vec!["9".to_string()]]
+    );
+}
+
+/// **What completion offers for this connection, and that the name it hands over runs** (DB-06)
+/// — a phase of the test above.
+///
+/// The offer is unit-tested against a hand-built listing next door; what only a server can settle
+/// is that the two halves agree — that the names `Engine::database_syms` carries are the names
+/// the catalog actually resolves, rendered the way [`sql::qualified`] renders them. Which is also
+/// the tree gestures' half: they wrap this same address in `SELECT *` / `CREATE VIEW`.
+///
+/// The offers are compared **sorted**, because what only a server can pin is *which* names the
+/// offer holds; their ranking is `complete/tests.rs`'s and needs no server.
+async fn qualified_offer(engine: &Engine, conn: &ConnectionDef) {
+    let catalog = sql::Catalog::default().with_databases(engine.database_syms([conn]));
+    let offer = |sql: &str| {
+        let mut labels = sql::complete(sql, sql.len(), &catalog, false)
+            .into_iter()
+            .map(|c| c.label)
+            .collect::<Vec<_>>();
+        labels.sort();
+        labels
+    };
+
+    assert_eq!(
+        offer(&format!("SELECT * FROM {CATALOG}.")),
+        vec!["public".to_string()],
+        "the enabled schemas, and only those — `analytics` is on the server and off the def"
+    );
+    assert_eq!(
+        offer(&format!("SELECT * FROM {CATALOG}.public.")),
+        vec![
+            "big_orders".to_string(),
+            "customers".to_string(),
+            "orders".to_string()
+        ],
+        "every relation the listing holds, remote view included"
+    );
+    assert!(
+        offer(&format!("SELECT * FROM {CATALOG}.public.orders.")).is_empty(),
+        "a remote relation's columns are an introspection, so the chain stops here"
+    );
+
+    let address = sql::qualified([CATALOG, "public", "orders"]);
+    assert_eq!(
+        rows(
+            engine,
+            40,
+            &format!("SELECT * FROM {address} ORDER BY id LIMIT 1")
+        )
+        .await,
+        vec![vec![
+            "1".to_string(),
+            "10".to_string(),
+            "99".to_string(),
+            "{\"channel\": \"web\"}".to_string()
+        ]],
+        "the address the tree's gestures compose is one the engine runs"
+    );
+
+    let not_enabled = sql::qualified([CATALOG, "analytics", "sessions"]);
+    assert_eq!(
+        rows(
+            engine,
+            41,
+            &format!("SELECT minutes FROM {not_enabled} ORDER BY 1 LIMIT 1")
+        )
+        .await,
+        vec![vec!["5".to_string()]],
+        "a schema the def does not show still resolves — visibility, not policy"
     );
 }
 

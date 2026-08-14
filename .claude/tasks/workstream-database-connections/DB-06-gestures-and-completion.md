@@ -1,6 +1,6 @@
 # DB-06 · Gestures + completion over the tree
 
-**Workstream:** Database connections · **Status:** ⬜ · **Depends on:** DB-05
+**Workstream:** Database connections · **Status:** ✅ (built 2026-08-14) · **Depends on:** DB-05
 
 ## Goal
 
@@ -8,67 +8,93 @@ The tree becomes a place work starts, and the editor knows the remote names: a r
 node opens a query, pins as a view, and completion offers catalog-qualified names scoped to
 the enabled schemas.
 
-## Current state (verified 2026-08-13)
+## What was built
 
-- Completion pool: built from the catalog store + the engine's function catalog
-  (`docs/COMPLETION_SPEC.md`); no catalog-qualified names are offered today (`strata.public`
-  names are offered bare). The shape for carrying remote listings into the pool is the
-  **`Functions::catalog()` handle** (`engine/functions.rs:65` — a swappable
-  `Arc<FunctionCatalog>` the completion input carries, `engine/sql/symbols.rs:86-89`, no
-  deep copy per rebuild; `functions::snapshot` at functions.rs:111 is the *private rebuild*
-  behind it, not the handle). **The timing constraint is real** (corrected in review): the
-  completion input is rebuilt per **catalog epoch**, and expanding a tree node bumps no
-  epoch — so "the tree warms it" only works if the remote-listing handle is
-  interior-swappable *inside* an already-built input (an `Arc` whose contents the listing
-  warm replaces, exactly how a new `Arc<FunctionCatalog>` swap works), never by waiting for
-  the next epoch and never by bumping the epoch on expand (diagnostics key tab staleness
-  off the same counter — a bump would re-validate every open tab per tree click).
-- The editor-popup constraint (AGENTS §8): extend the **autocomplete** surface only; the
-  hover model is off-limits.
-- Promotion precedent: a statement lands in a **new** tab (`actions::open_sql`), never a
-  write into the user's buffer. **Quoting needs a decision, not a pointer** (corrected in
-  review — "the one helper" is three helpers with three semantics, none right): the
-  completion insert's `ident_insert`/`needs_quoting` are private to
-  `engine/sql/complete/mod.rs:717,732`; `engine::quote_ident` **lower-cases** a bare word
-  (mod.rs:2375 pins `"DailySales"` → `dailysales` — wrong for a remote relation whose case
-  is the server's); `export::quote_col` quotes unconditionally. This task **exports the
-  completion insert's case-preserving pair** from `strata-core` (one home, the same rule
-  the popup already applies) and renders qualified names segment-by-segment through it —
-  used by both gestures here and by DB-07's remote `profile_sql` fix.
-- Diagnostics need nothing: DB-03 verified remote names resolve through the registered
-  catalog (providers cached per table, so validation costs no network per keystroke).
+1. **The quoting pair has one home.** `strata_core::engine::sql::ident` — `needs_quoting`,
+   `quote_verbatim` and `qualified` (a dotted name rendered **segment by segment**, since
+   quoting `pg.public.orders` whole makes it a bare relation with dots in it). It is the
+   completion insert's own rule, lifted out of `complete/mod.rs`, which now calls it. The
+   module docs state the difference from `engine::quote_ident` (fold-preserving, for a name
+   whose identity is a workspace def's) and from `export::quote_col` (unconditional), so the
+   choice is made by whose identity the name is rather than by which helper was nearest.
+   `quote_ident` is now `pub` for the one surface that needs the *other* answer: Pin as view
+   names the def the store will key.
+2. **Query gesture** — a relation row's double-press or ⋮ *Query table* / *Query view*:
+   `SELECT * FROM <catalog>.<schema>.<relation>` at the row-limit setting, in a new unrun tab.
+   It is `view_row`'s own funnel widened, not a second copy: `menu::select_sql` composes for
+   both, and the workspace gesture now renders its own `FROM` through `quote_ident` (it
+   interpolated the raw def name before, so a def called `Sales 2024` composed a broken
+   statement). A press that is **not** a mouse press runs the gesture rather than failing the
+   double-test: wiring `on_press` is what makes the fork's `TreeItem` a tab stop with the `Link`
+   role, and a tab stop that answers no key is what that component's own comment warns against.
+3. **Pin as view** — ⋮ *Pin as view…*: `CREATE VIEW <relation> AS SELECT * FROM <address>`,
+   composed into an unrun tab. Running it lands the def through the view funnel that already
+   exists. It titles its tab with the **view being made** where Query titles one with the
+   relation being read, because `open_or_focus` finds a scratch tab by name *and* text: two
+   gestures asking for one name means the second never owns it, and its repeat press stacks
+   `… 2`, `… 3` — the very thing that funnel exists to prevent. `Remote` therefore carries the
+   three-part name **twice**, as an `address` (rendered, for the statement) and a `label`
+   (plain segments, for the title) — a tab strip should not show SQL quoting.
+4. **Completion** — `Catalog::databases` (a `DatabaseSym` per connection, built by
+   `Engine::database_syms`) carries the catalog name from the **def** and the schemas and
+   relations from **`Engine::db_listing`**. The offer: catalog names at relation-target
+   positions (secondary tier — a qualifier is not something that can stand alone), enabled
+   schemas after `catalog.`, relations after `catalog.schema.`, nothing after a third segment.
+5. **Docs** — `COMPLETION_SPEC` §2/§4/§6/§7/§10, `CONNECTIONS_SPEC`'s tree section (the two
+   gestures and a completion section).
 
-## Build
+## Corrections recorded while building
 
-1. **Query gesture** — a remote table/view node's double-press or ⋮ *Query*: a new tab with
-   `SELECT * FROM {catalog}.{schema}.{table} LIMIT 100`, identifiers quoted as needed.
-2. **Pin as view** — ⋮ *Pin as view…*: a new tab pre-filled with
-   `CREATE VIEW {table} AS SELECT * FROM {catalog}.{schema}.{table}` for the user to rename
-   and run — composing, never executing (the Shape-panel precedent: compose into an unrun
-   tab). This is the workstream's "make it a bare-named def" gesture, and it lands in the
-   store through the view funnel that already exists.
-3. **Completion** — the offer grows qualified names: connection catalog names always (from
-   the store); schema and table/view segments from `Engine::db_listing`'s scoped answer
-   (the one visibility source, DB-02) through the interior-swappable handle described in
-   Current state — so a listing warmed by the tree or a query reaches the *next* completion
-   pass without an epoch bump. **No dial-out from the completion path**: a schema not yet
-   listed is offered as a name but completes no children until warmed — state that bound,
-   and the swap mechanism, in COMPLETION_SPEC. Non-enabled schemas are not offered (they
-   still resolve if typed — visibility, not policy; DB-02).
-4. **Docs** — COMPLETION_SPEC's pool description; CONNECTIONS_SPEC's gestures.
+- **There is no warming step, so there is no interior-swappable handle.** This file's plan
+  required one, on the premise that a listing is fetched lazily as the tree opens a node and
+  so would arrive between catalog epochs. It is not: DB-02 enumerates a whole database — every
+  schema, every relation — in **one round trip at connect**, and `db_listing` reads that. A
+  listing therefore changes only at connect and disconnect, both of which are catalog-epoch
+  events, so the ordinary snapshot rebuild already sees it and the offer is plain data on the
+  `Catalog`. (What *is* lazy is the per-relation `TableProvider`, which is the column list —
+  and that is exactly the thing this task does not offer.) The timing constraint the plan
+  guarded against was real for the design it was written for; it does not exist in the one
+  that was built.
+- **A Forget did not bump the catalog epoch, and now does.** `engine.disconnect` takes a
+  catalog off the session, which is the discrete catalog mutation `catalog_settled` exists for
+  — without it, completion went on offering a forgotten database's names, and every open tab
+  kept whatever verdict it had against a catalog that no longer resolves. One line in the drop
+  confirm; it fixes the diagnostics half as much as this one.
+- **The chain's head picks the namespace, not its tail.** `Context::Dot` carries every segment
+  now (it carried the last one, alias-resolved). Reading the last segment alone made
+  `pg.public.` indistinguishable from a relation called `public`, and would have let
+  `pg.public.orders.` answer with the columns of a *workspace* table called `orders`. Alias
+  resolution stays scoped to a single segment: an alias binds one name, and a qualified address
+  has none.
+- **A listing no longer clones the schemas nothing shows.** `db::listing` tagged every schema
+  and cloned every schema's relations, and all three consumers then dropped the `NotEnabled`
+  ones — the tree before it draws, the picker reading only the name and the tag, completion
+  offering what the connection shows. A relation list is the *server's* to size, so
+  `SchemaListingView::relations` is now filled for a `Live` schema only. The tree pays this on
+  every walk and completion on every catalog epoch, so it was the one avoidable cost in the read.
+- **The workspace catalog is deliberately not offered as a qualifier** (`strata.` completes
+  nothing). Every workspace surface addresses its tables bare — the deepest naming assumption
+  in the app — and nothing in the UI spells the catalog name, so offering it would invent a
+  second way to say what already has one. Recorded in COMPLETION_SPEC §10 beside the other
+  deliberate silences.
 
-## Acceptance
+## Coverage
 
-- Both gestures produce runnable tabs against a container-backed connection; Pin as view,
-  once run, puts a bare-named row under the workspace node that survives reopen.
-- Typing `pg.` offers enabled schemas; after expanding `pg → public` in the tree (no rescan
-  in between), `pg.public.` offers the listed table/view names on the next completion pass;
-  a non-enabled schema name is absent from the offer but a typed query against it runs.
-- No completion-path network (assert by construction: the pool reads caches only).
-- Existing completion tests untouched; new ones cover the qualified offer.
+- `complete/tests.rs::qualified` — the offer at each segment, the catalog name's rank and
+  detail, a connection that has never answered offering its name and nothing under it, the
+  case-preserving insert, and the two negatives (a remote qualifier is never answered by the
+  workspace; a project with no database offers exactly what it did before).
+- `sql::ident` unit tests — the pair and the per-segment rendering.
+- `catalog::interaction::gestures` — the two statements the gestures compose, including the
+  two renderers in one `CREATE VIEW`. Unit tests rather than driven ones, and that is the
+  fixture's limit rather than a choice: a relation row exists only while `db_listing` answers,
+  which needs a live pool.
+- `tests/postgres_federation.rs::qualified_offer` — the container-backed half: the offered
+  names are the ones the catalog resolves, the composed address runs, and a non-enabled schema
+  is absent from the offer while still resolving when typed.
 
-## Files
+## Left for DB-07
 
-The completion pool module (per COMPLETION_SPEC) · `sidebar/catalog/` (menu entries) ·
-`workbench/editor/actions.rs` (tab-opening helpers) · `docs/{COMPLETION_SPEC,
-CONNECTIONS_SPEC}.md`.
+The relation row is still a leaf and its menu has two items. Columns, selection and Profile
+(with the remote expression set and a confirm that says the scan runs on the server) are that
+task's, and `sql::qualified` is what its remote `profile_sql` should render through.

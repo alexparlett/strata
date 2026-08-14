@@ -36,7 +36,9 @@ completion detail is the surviving surface.
 `Context` (context.rs) is two orthogonal dimensions, not a flat enum of cases:
 
 ```
-Context = Dot(resolved_relation)          — after `alias.` / `relation.`
+Context = Dot(chain)                      — after `alias.` / `relation.` /
+                                            `catalog.schema.` — every segment,
+                                            outermost first
         | At(Clause, Role)
 Clause  = Start | Restart
         | Select | From | On | Where | GroupBy | Having | Qualify
@@ -106,13 +108,33 @@ that source) and any other group (`OPTIONS`) a Binding; a `CREATE FUNCTION` body
 becomes an expression once a `RETURN` lies between the head and the caret
 (`RETURN |` and `RETURN price * |` are operands, `RETURN price |` a continuation).
 
-**Dot resolution** order: FROM/JOIN alias → inline relation (CTE, then a
-**derived-table alias** — `FROM (subquery) t` captures `t` + its scraped projection
-exactly like an inline CTE, resolvable but never offered as a FROM target) → catalog
-table/view. Unknown qualifier ⇒ empty — precision over noise. The analysis also
-carries the **governing clause for dot positions** (an `ON e.|` wants join-key
-ranking; a `SELECT e.|` doesn't) and the **comparand** (the column ref across a
-trailing comparison operator) for §5's affinity forces.
+**Dot resolution** — the qualifier is absorbed backwards through `name . name .` into
+the whole chain (the shape the `SET` dotted-key rule already reads), and the chain's
+**head** picks the namespace, because only one of the two can be addressed by a
+catalog name at all:
+
+- a head naming a **database connection** (DB-06) makes the chain remote: one segment
+  offers that connection's enabled schemas, two offers the relations in a schema,
+  three offers nothing (§10);
+- anything else is the workspace, where the **last** segment names the relation
+  (`strata.public.t.` is `t` — the single-namespace rule §4 states for column lists)
+  and resolution order is FROM/JOIN alias → inline relation (CTE, then a
+  **derived-table alias** — `FROM (subquery) t` captures `t` + its scraped projection
+  exactly like an inline CTE, resolvable but never offered as a FROM target) → catalog
+  table/view.
+
+Alias resolution applies to a **single** segment only: an alias binds one name, and a
+catalog-qualified address has none — and a single segment naming something in scope is
+the one place the workspace goes first, since that is what a relation or an alias is
+written as and a catalog never is (DataFusion resolves a two-part name inside the
+default catalog, so a remote relation is always spelled with three). Reading the head
+rather than the tail is what stops `pg.public.orders.` answering with a *workspace*
+table called `orders`. Unknown
+qualifier ⇒ empty — precision over noise. The replace span is never widened with the
+chain: an accept replaces the word being typed after the dot, never the qualifier that
+led to it. The analysis also carries the **governing clause for dot positions** (an
+`ON e.|` wants join-key ranking; a `SELECT e.|` doesn't) and the **comparand** (the
+column ref across a trailing comparison operator) for §5's affinity forces.
 
 ## 3. Grammar tables
 
@@ -159,7 +181,10 @@ the rank pipeline, `tests.rs` = the suite):
 |---|---|
 | `Start` operand | `QUERY_LEADS` then `STATEMENT_LEADS` (curated ord continues across the two), then gated keywords |
 | `Restart` operand | `QUERY_LEADS` only, then gated keywords |
-| `From`/`Describe`/`Copy` operand | relations only — CTEs, tables, views (projection-boosted, §5; for `COPY` the boost is a no-op) |
+| `From`/`Describe`/`Copy` operand | relations only — CTEs, tables, views (projection-boosted, §5; for `COPY` the boost is a no-op), then the **database connections' catalog names** at the secondary tier |
+| `Dot(catalog)` | that connection's enabled schemas, detail `<catalog> · schema` |
+| `Dot(catalog, schema)` | that schema's relations, `table` / `view` in the detail |
+| `Dot(catalog, schema, relation)` | **nothing** — a remote column list is a round trip (§10) |
 | `SetOption` operand, key | `ENGINE_KEYS` filtered by `refuse_reserved_key(k).is_ok()` — verbatim insert, detail = the key's `default`, `ENGINE_KEYS` order, kind `Column` (a glyph, not a taxonomy) |
 | `SetOption` operand, value (`set_key`) | the key's kind vocabulary: `Bool` ⇒ `true`/`false`, `Enum` ⇒ its options, else nothing — verbatim lowercase, no trailing space |
 | `DropTable` operand | tables and **not** views (`DROP VIEW` is the other statement) |
@@ -174,7 +199,7 @@ the rank pipeline, `tests.rs` = the suite):
 | any `Binding` position | **nothing** (a name is being invented) |
 | any expression operand | in-scope columns (0) → select-aliases (1, **only** in GROUP BY/ORDER BY/HAVING/QUALIFY — where SQL allows them) → functions (2) → relations-as-qualifiers + core keywords (3) |
 | any continuation | `continuation_keywords(clause)` in curated order (0): clause-internal ops + **the ladder strictly after the clause** — never backwards; the statement clauses carry their own short lists (`CREATE \|` the object words, `CREATE EXTERNAL TABLE t \|` its clauses, `COPY t \|` `TO` first, drop statements nothing) |
-| `Dot(rel)` | that relation's columns only |
+| `Dot(…, rel)` (workspace) | that relation's columns only |
 
 **The column-list rule** — one capability, not per-statement code, and **one
 decision**: `analyze_caret` resolves the list once onto `CaretAnalysis::column_list`,
@@ -189,6 +214,28 @@ the same `column_ord` composition a clause region's refs use — rank only, neve
 filter, exactly as a SELECT list demotes what it already projects. (A CET's
 `PARTITIONED BY` deliberately stays a Binding: its schema is inferred from files at
 registration, so there is no relation to resolve while typing — see §10.)
+
+**The qualified offer** (DB-06) — the three remote segments above come off
+`Catalog::databases`, one `DatabaseSym` per database connection, built by
+`Engine::database_syms` and carried on the snapshot like everything else. Its two
+halves come from two places on purpose: the **catalog name** is the connection's own
+def, so a connection that has never answered still offers the name a query has to say,
+while the **schemas and relations** are `Engine::db_listing`'s scoped-and-tagged
+answer — the one visibility source the tree and the schema picker read, so a
+non-enabled schema is absent from the offer without anything here re-deriving what
+"enabled" means. (Absent, not refused: a typed query naming one still resolves and
+runs. Visibility, not policy.) Only a `Live` schema is offered — one the def enables
+and the server does not have is a name that cannot resolve, and the tree's own row is
+where that is said. A catalog name ranks at the secondary tier at relation-target
+positions, behind everything that can stand alone: accepting it leaves a name that
+needs a `.` after it, which is what its `database` detail says.
+
+**Nothing in this reaches the network.** `db_listing` is the connect-time enumeration
+held beside the pool, so the snapshot carries plain data and §1's "synchronous by
+construction" is untouched. A listing changes only at connect and disconnect, both of
+which bump the catalog epoch the snapshot is rebuilt on — so there is no warming step
+and no interior-swappable handle here (the earlier plan assumed a lazily-listed
+catalog; DB-02 enumerates a database in one round trip at connect).
 
 **The `OPTIONS`-key carve-out** — the one exception to the string guard, scoped to
 exactly one position: the caret inside a single-quoted literal in **key position**
@@ -260,9 +307,17 @@ Column forces compose in one helper — `column_ord`: affinity-miss ×4, cross-k
 
 Per kind, uniformly:
 
-- **Identifiers** (tables/views/columns/CTEs): the name exactly; double-quoted only when
-  not a plain lowercase ident **or** when colliding with a *reserved* word (`order` →
-  `"order"`; merely-known keywords like `name`, `status`, `plain` stay bare).
+- **Identifiers** (tables/views/columns/CTEs/remote names): the name exactly;
+  double-quoted only when not a plain lowercase ident **or** when colliding with a
+  *reserved* word (`order` → `"order"`; merely-known keywords like `name`, `status`,
+  `plain` stay bare). The rule is `sql::ident` — `needs_quoting` + `quote_verbatim`,
+  which DB-06 lifted out of this module so the data-sources tree's gestures compose
+  their `FROM` through the same function, and `qualified` renders a dotted name
+  **segment by segment** through it. It is deliberately *not* `engine::quote_ident`,
+  which is fold-preserving (it renders `DailySales` as `dailysales`, the identity a
+  workspace def is registered under) — a name whose spelling belongs to a server needs
+  the case-preserving one. Pick by whose identity the name is; `export::quote_col`,
+  which quotes unconditionally, is a third rule for a third reason.
 - **Keywords**: canonical UPPER + **trailing space** (a keyword is always followed by
   something) — skipped when the buffer already has whitespace after the span.
 - **Functions**: `name(` — caret inside the parens.
@@ -288,8 +343,10 @@ gate — an explicit ask deserves the full vocabulary; nothing else widens.
 
 Performance model, sized against a 100-tables × 1000-columns catalog:
 
-- **The Catalog snapshot is memoized** (tab.rs): rebuilt only when the project store
-  changes (registration lands, view saved) — never per keystroke. The provider peeks it.
+- **The Catalog snapshot is memoized** (tab.rs): rebuilt only when the catalog epoch
+  moves (registration lands, view saved, a connection forgotten) — never per keystroke.
+  The provider peeks it. The remote listings ride it too (§4), so a database's names
+  cost one clone per epoch and nothing per keystroke.
 - **A candidate is matched before it is built** (`ranking::Pool`). Every pool used to be
   materialized whole and filtered afterwards, so a keystroke built 1600-2700 `Completion`s
   — three or four string allocations each — however few the partial could match, and the
@@ -453,6 +510,15 @@ is the half doing the real work. Neither is reached by rewriting the popup.
   `INSERT INTO` lead phrase rather than a continuation; VALUES tuples are Bindings
   (the content is the user's own data — unlike an INSERT **column list** or a COPY
   **partition list**, which name existing columns and are offered, see §4).
+- A **remote relation's columns** are not offered — `pg.public.orders.|` is silent.
+  Reading them means building the table provider, which is an introspection round trip,
+  and the provider is synchronous (§1). The column list is reachable through the
+  inspector instead (DB-07).
+- The **workspace catalog is not offered as a qualifier**: `strata.` completes nothing.
+  Every workspace surface addresses its tables bare — that is the deepest naming
+  assumption in the app — and nothing in the UI ever spells the catalog name, so
+  offering it would invent a second way to say what already has one. A typed
+  `strata.public.orders.` still dot-resolves through the last segment.
 - `CREATE EXTERNAL TABLE`'s `PARTITIONED BY (…)` stays a Binding even though COPY's
   is an operand: a CET's schema is inferred from files at registration, so the
   columns are simply not known while the statement is being typed — there is nothing

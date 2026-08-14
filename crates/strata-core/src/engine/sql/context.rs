@@ -81,9 +81,12 @@ pub enum Role {
 /// What the caret position expects — the completion provider keys off this.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Context {
-    /// After `alias.` / `relation.` → columns of the resolved relation (name held
-    /// here — resolution order: FROM/JOIN alias → CTE → catalog name).
-    Dot(String),
+    /// After `alias.` / `relation.` / `catalog.schema.` — the whole qualifier chain
+    /// before the caret, outermost segment first. A **single** segment is resolved
+    /// through the statement's aliases here (FROM/JOIN alias → CTE → catalog name);
+    /// the longer chains are a qualified name, and only a database connection's
+    /// catalog can say what is inside one, so their resolution is the pool's.
+    Dot(Vec<String>),
     /// A grammar position: governing clause + expected role.
     At(Clause, Role),
 }
@@ -1072,13 +1075,7 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         .map(|t| t.kind == TokKind::Punct && t.text == ".")
         .unwrap_or(false)
     {
-        let owner = prev2.map(|t| t.text.clone()).unwrap_or_default();
-        let resolved = aliases
-            .iter()
-            .find(|(a, _)| a.eq_ignore_ascii_case(&owner))
-            .map(|(_, t)| t.clone())
-            .unwrap_or(owner);
-        Context::Dot(resolved)
+        Context::Dot(dot_chain(&before, &aliases))
     } else if restarts_ladder(prev, prev2, prev_as, governing) {
         Context::At(Clause::Restart, Role::Operand)
     } else if prev_as
@@ -1113,6 +1110,38 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
         set_key,
         column_list,
         derived,
+    }
+}
+
+/// The qualifier chain the caret sits behind — the name segments before the trailing `.`,
+/// outermost first. `before` ends at that dot.
+///
+/// Absorbed backwards through `name . name .`, the shape the `SET` dotted-key rule reads for its
+/// own key chain, and for the same reason: a qualified name is one address, and reading only its
+/// last segment makes `pg.public.` indistinguishable from a relation called `public`. The
+/// [`replace`](CaretAnalysis::replace) span is deliberately **not** widened with it — an accept
+/// replaces the word being typed after the dot, never the qualifier that led to it.
+///
+/// A single segment is alias-resolved (`FROM events e` → `e.` is `events`); a longer chain is
+/// not, because an alias binds one name and a catalog-qualified address has none.
+fn dot_chain(before: &[&Tok], aliases: &[(String, String)]) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = before.len();
+    while i >= 2
+        && before[i - 1].kind == TokKind::Punct
+        && before[i - 1].text == "."
+        && is_name_like(before[i - 2])
+    {
+        parts.push(before[i - 2].text.clone());
+        i -= 2;
+    }
+    parts.reverse();
+    match parts.as_slice() {
+        [owner] => vec![aliases
+            .iter()
+            .find(|(alias, _)| alias.eq_ignore_ascii_case(owner))
+            .map_or_else(|| owner.clone(), |(_, relation)| relation.clone())],
+        _ => parts,
     }
 }
 
@@ -1490,11 +1519,25 @@ mod tests {
     #[test]
     fn dot_resolution_prefers_alias() {
         let ca = at("SELECT o.| FROM events o");
-        assert_eq!(ca.context, Context::Dot("events".into()));
+        assert_eq!(ca.context, Context::Dot(vec!["events".into()]));
         let ca = at("SELECT events.| FROM events");
-        assert_eq!(ca.context, Context::Dot("events".into()));
+        assert_eq!(ca.context, Context::Dot(vec!["events".into()]));
         let ca = at("SELECT x.| FROM events o");
-        assert_eq!(ca.context, Context::Dot("x".into()));
+        assert_eq!(ca.context, Context::Dot(vec!["x".into()]));
+    }
+
+    #[test]
+    fn a_qualified_dot_keeps_every_segment() {
+        let ca = at("SELECT * FROM pg.|");
+        assert_eq!(ca.context, Context::Dot(vec!["pg".into()]));
+        let ca = at("SELECT * FROM pg.public.|");
+        assert_eq!(ca.context, Context::Dot(vec!["pg".into(), "public".into()]));
+        let ca = at("SELECT pg.public.orders.| FROM pg.public.orders");
+        assert_eq!(
+            ca.context,
+            Context::Dot(vec!["pg".into(), "public".into(), "orders".into()]),
+        );
+        assert_eq!(ca.replace, 24..24, "the qualifier is read, never replaced");
     }
 
     #[test]

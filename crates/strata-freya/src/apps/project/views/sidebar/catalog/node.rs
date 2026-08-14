@@ -163,10 +163,7 @@ pub enum NodeKind {
         count: usize,
     },
     /// One relation inside a schema. A leaf: its columns are DB-07's.
-    Relation {
-        name: String,
-        view: bool,
-    },
+    Relation(Remote),
     /// The pane's empty state, on a project with no connections at all.
     AddConnection,
 }
@@ -193,6 +190,27 @@ pub struct Column {
     pub owner_kind: CatalogKind,
     pub owner: String,
     pub row: ColRow,
+}
+
+/// One relation inside a database connection's catalog, resolved (DB-06).
+///
+/// Both three-part forms are built **in the walk**, because that is where the catalog and the
+/// schema are still in hand — and because a gesture composing them from three fields is three
+/// chances to quote one of them wrong. They are two forms and not one: an
+/// [`address`](Self::address) is written into a statement and so carries whatever quoting
+/// `qualified` had to add, while a [`label`](Self::label) is read by a person and must not. What
+/// the row itself draws is still [`name`](Self::name): the tree says where a relation is by where
+/// it sits.
+#[derive(Clone, PartialEq)]
+pub struct Remote {
+    pub name: String,
+    /// `catalog.schema.relation` in the plain segments — a tab title, never SQL.
+    pub label: String,
+    /// `catalog.schema.relation` rendered by
+    /// [`sql::qualified`](strata_core::engine::sql::qualified), ready to interpolate into a
+    /// statement.
+    pub address: String,
+    pub view: bool,
 }
 
 /// A connection of either kind, resolved.
