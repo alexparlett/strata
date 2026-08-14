@@ -243,9 +243,15 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   spec's reserved first **curated write**, its permission model decided (Alex, 2026-08-13:
   always on, agent-supplied path — read access already hands over the data, so the fence is
   the write rules) (QE-05); QE-06 lands the guidance + workaround spellings where the model reads
-  them. The workstream README carries the **upstream ledger** — five reported gaps that are
-  DataFusion 54 behaviour (pinned by the federation crates), each with its workaround, so
-  nobody re-diagnoses them.
+  them. Two follow-ons were planned 2026-08-14 out of QE-03's review plus a probe of the
+  real 62 MB fixture: **QE-07** (the schema bound as a shared `strata-core` mechanism, the
+  describe ladder's depth derived rather than pinned, elided-shape counts, and the permanent
+  hand-run probe — with the record-vs-map question measured closed) and **QE-08** (the
+  catalog pane's cap + collapse rows, fixing the window-freezing `contentBlocks` expand —
+  deliberately scheduled **after DB-05's tree**, whose task file was not edited because that
+  build is an active session). The workstream README carries the **upstream ledger** — five
+  reported gaps that are DataFusion 54 behaviour (pinned by the federation crates), each
+  with its workaround, so nobody re-diagnoses them.
 - **Internal tables in the UI**
   ([`workstream-internal-tables-ui/`](workstream-internal-tables-ui/README.md), IT) — 🟡
   **IT-01 done, IT-02 open** — an internal table could until now be created **only** by typing
@@ -297,9 +303,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    DB-02 ✅, DB-03 ✅ and DB-04 ✅, so **DB-05 (the tree redesign, the heaviest task) and DB-08
    are next**; DB-08 sits on DB-02 alone and needs nothing after it, so schedule it early. DB-06
    and DB-07 close on the tree.
-2. **Query ergonomics (QE)** — six independent tasks; QE-01, QE-02 and QE-03 are in, so
-   QE-04 and QE-05 are next in either order and QE-06 lands last (its guidance names QE-01's
-   functions).
+2. **Query ergonomics (QE)** — eight tasks; QE-01, QE-02 and QE-03 are in, so QE-04 and
+   QE-05 are next in either order, QE-06 lands after them (its guidance names QE-01's
+   functions), QE-07 follows QE-03's merge, and QE-08 waits for DB-05's tree.
 3. **Internal tables in the UI (IT)** — the one remaining task, IT-02 (Save results as
    table); small, sits on nothing open.
 4. **Assistant memory (AM)** — seven tasks; AM-01 → AM-02 → AM-03 is the critical path to

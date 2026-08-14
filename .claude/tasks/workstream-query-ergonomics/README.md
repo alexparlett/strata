@@ -35,6 +35,8 @@ not (dynamic access to a *heterogeneous* struct), and the revisit condition are 
 | QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ⬜ |
 | QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ⬜ |
 | QE-06 | [Deep-JSON guidance + the upstream ledger](QE-06-guidance-and-ledger.md) | 3, 4, 5, 7, 8, 9 | ⬜ |
+| QE-07 | [Bound every schema surface: shared collapse + derived depth](QE-07-schema-bound.md) | follow-on from 10 | ⬜ |
+| QE-08 | [The catalog pane survives a keyed struct](QE-08-catalog-pane-bound.md) | follow-on from 10 | ⬜ |
 
 QE-03 landed the collapse the "real win" line named: past the byte budget, eight or more
 structurally identical sibling *containers* become one `<key>` entry with `keys_total` and
@@ -46,8 +48,21 @@ pages (or `keys_total` would be a fact about the page), and shape equality is *c
 (`ColumnInfo` derives `PartialEq`) with the hash only bucketing. It also moved `SCHEMA_DEPTH`
 3 → 5 behind a per-rung node cap, which is what puts `eligibilityRule` in the first answer.
 
+QE-07 and QE-08 were planned 2026-08-14, out of QE-03's review discussion plus a probe of
+the real 62 MB `config.json` (gitignored; symlinked into worktrees) and a window-freezing
+bug: expanding `contentBlocks` (19,311 keys) in the catalog pane hung the app to a
+force-kill. The probe's verdict, recorded in QE-07 so it is not re-derived: the keyed
+object fragments into **50 shapes, power-law distributed** — the 15 an answer shows cover
+93.6% — which vindicates `json_poly`'s Struct inference (a `Map` needs one value type; do
+not reopen record-vs-map) and makes the *presentation* bound the invariant: a surface that
+renders a schema bounds it. QE-07 promotes QE-03's collapse to a shared `strata-core`
+mechanism, derives the describe ladder's depth instead of pinning it at 5, and counts
+elided shapes; QE-08 lands the pane's cap + collapse rows **after DB-05's tree**, whose
+task file was deliberately not edited (active session).
+
 Dependencies: QE-01..05 are independent of each other. QE-06 references QE-01's function by
 name, so it lands last (or its guidance ships without that line and gains it with QE-01).
+QE-07 sits on QE-03's merge; QE-08 sits on DB-05 and (for its collapse half) QE-07.
 QE-05's permission model is **decided** (Alex, 2026-08-13): always available, agent-supplied
 path — read access already hands over the data, so the fence is the write rules (owned
 storage refused, no overwrite), not a consent gate.
