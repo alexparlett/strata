@@ -993,7 +993,13 @@ impl<H: Host> StrataTools<H> {
     /// or wide schema is bounded: elided children appear as counts, 'path' (name segments,
     /// exactly as an answer printed them) descends to any nested column, 'matching' finds
     /// fields by name substring anywhere in the tree and answers with their paths, and
-    /// 'page' reads more columns or matches. An answer with no totals in it is complete. A
+    /// 'page' reads more columns or matches. An answer with no totals in it is complete.
+    /// Where an object is keyed by data — thousands of same-shaped fields under UUID keys —
+    /// the keys collapse into one entry named `<key>`, carrying 'keys_total' (how many keys
+    /// share that shape) and 'key_examples' (a few of them, spelled as the file spells them).
+    /// `<key>` is a placeholder, not a field name: to descend into one of those keys, put a
+    /// real key from 'key_examples' in the path. A 'matching' row through a collapsed set is
+    /// likewise one row, with 'matched_keys' saying how many fields it stands for. A
     /// three-part name describes a relation in a database connection's catalog instead: its
     /// columns and types, and the connection it is in, with no def facts because it has none.
     #[tool(name = "describe_table", annotations(read_only_hint = true))]

@@ -7,12 +7,25 @@
 //! is, and every elided set is replaced by a stated count. The convention the whole answer keeps:
 //! **a describe answer with no counting fields in it is a complete answer.**
 //!
+//! Most of that size is one pathology: `engine::json_poly` infers every JSON object as a Struct,
+//! so an object keyed by data — the UUID-keyed map — becomes thousands of same-shaped schema
+//! fields. Past the budget those siblings **collapse** ([`slots`]): one representative shape
+//! under the placeholder name `<key>`, carrying how many keys share it and a few of their real
+//! names. It is JSON Schema's `additionalProperties` said in this tool's own vocabulary, and it
+//! is a *cutting* strategy — an answer that fits complete is never collapsed, because there the
+//! names are the information.
+//!
 //! The constants are this module's own rather than the value encoder's: same discipline, different
 //! budgets, and a shared constant would couple two surfaces that tune independently.
 //!
 //! In `strata-agent` rather than `strata-core` because its output is [`ColumnWire`], a wire shape
 //! core must not know; beside `wire.rs` rather than in it because the walk plus the search plus the
 //! budget loop is an algorithm with its own tests.
+
+use std::cmp::Reverse;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use serde_json::to_string;
 use strata_model::ColumnInfo;
@@ -24,12 +37,19 @@ use crate::wire::{
     MatchWire, PartitionWire, StatWire, StateWire,
 };
 
-/// The deepest rung of the sampling ladder ([`bounded_forest`]) — engaged only once the
-/// complete rendering is past the budget. A fixed depth alone was measured and rejected: at
-/// depth 3 with the width decay below, the fixture's 19,311-key struct emits ~26 KB from one
-/// column, and even depth 1 grazes the cap on UUID-named keys — which is why the ladder
-/// retries shallower and depth 0 is the unmeasured floor.
-const SCHEMA_DEPTH: usize = 3;
+/// The deepest rung of the sampling ladder ([`walk`]) — engaged only once the complete
+/// rendering is past the budget. A fixed depth alone was measured and rejected: at depth 3
+/// with the width decay below, the fixture's 19,311-key struct emits ~26 KB from one column,
+/// and even depth 1 grazes the cap on UUID-named keys — which is why the ladder retries
+/// shallower and depth 0 is the unmeasured floor.
+///
+/// It reaches past that 3 now because two things changed together. The collapse frees the
+/// width the keys were spending, and every rung is capped at [`NODE_CAP`] nodes as it is
+/// built — so a rung too deep to fit costs a bounded count instead of a quarter-million-node
+/// tree, and the ladder can afford to ask. Five is where `contentBlocks` → the key shape →
+/// `variants` → its element → `eligibilityRule` lands: the view the field feedback said would
+/// have told it the whole structure at once.
+const SCHEMA_DEPTH: usize = 5;
 
 /// How many children a container shows at `level` levels below the walk root — 15, then 7,
 /// then 3. The value encoder's decay, restated: depth exists to show shape, and a deep
@@ -57,8 +77,31 @@ const SCHEMA_BUDGET: usize = 16_384;
 
 /// The fewest bytes one rendered column can serialize to (`{"name":..,"dtype":..,
 /// "kind":..,"nullable":..}` with one-character names) — what lets a window's node count
-/// prove the complete rung cannot fit **before** the tree is built.
+/// prove a rendering cannot fit **before** the tree is built.
 const NODE_FLOOR: usize = 55;
+
+/// The most nodes any rendering could fit into [`SCHEMA_BUDGET`]. Past it the answer is over
+/// budget whatever its names are, so counting to here and stopping is never a rung refused
+/// that would have fit — it is only the build that is bounded. The complete rung proves it
+/// before building at all ([`plausibly_complete`]); a sampled rung, whose width and depth
+/// only the walk knows, counts as it goes.
+const NODE_CAP: usize = SCHEMA_BUDGET / NODE_FLOOR;
+
+/// The fewest same-shaped sibling containers that collapse into one representative. Low
+/// enough to catch a small keyed map, high enough that an ordinary record whose fields happen
+/// to share a shape — a `created`/`updated` pair of timestamps, three same-shaped addresses —
+/// is still printed field by field.
+const COLLAPSE_MIN: usize = 8;
+
+/// How many of a collapsed set's real keys the answer names. Enough to show what they look
+/// like and to hand 'path' something it accepts; the rest are reached by `matching`, and
+/// naming more would spend on data keys the budget the collapse just freed for shape.
+const KEY_EXAMPLES: usize = 3;
+
+/// The name a collapsed key set renders under. Not a field any file named — a file *could*
+/// name one this, which is why `keys_total` and not the spelling is what marks the entry —
+/// and not a path segment: 'path' takes one of the real keys beside it.
+const KEY_PLACEHOLDER: &str = "<key>";
 
 /// Source paths a describe answer lists before the count stands in. Far looser than
 /// `list_tables`' three — this answer is where that elision points — but not unbounded: a
@@ -186,15 +229,15 @@ fn schema_view(
         return Ok(searched(forest, path, needle, params.page, answer));
     }
 
-    let w = windowed(forest.iter().collect(), params.page, SCHEMA_PAGE);
-    let rendered = bounded_forest(&w.shown);
+    let walked = walk(forest, params.page);
+    let elided = (forest.len() > walked.columns.len()).then_some(forest.len());
 
     Ok(match node {
         None => DescribeResult {
-            columns: rendered,
-            columns_total: w.page.map(|_| w.total),
-            page: w.page,
-            page_size: w.page_size,
+            columns: walked.columns,
+            columns_total: elided,
+            page: walked.page,
+            page_size: walked.page_size,
             ..answer
         },
         Some(node) => DescribeResult {
@@ -203,47 +246,118 @@ fn schema_view(
                 dtype: node.dtype.clone(),
                 kind: node.kind.into(),
                 nullable: node.nullable,
-                children_total: w.page.map(|_| w.total),
-                children: rendered,
+                children_total: elided,
+                children: walked.columns,
+                keys_total: None,
+                key_examples: Vec::new(),
                 stats: node.stats.iter().map(StatWire::from).collect(),
             }],
             columns_total: None,
-            page: w.page,
-            page_size: w.page_size,
+            page: walked.page,
+            page_size: walked.page_size,
             ..answer
         },
     })
 }
 
-/// The windowed forest, rendered as deep as the budget allows.
+/// One page of the walk root's children, rendered — and how it was paged.
 ///
-/// The first rung is the **whole** subtree — the budget, not a depth, decides whether an
-/// answer is cut, so a small schema stays complete however deep it nests and carries no
-/// totals at all. That rung is guarded by a node count against [`NODE_FLOOR`]: a window
-/// whose nodes already outnumber the budget at the floor provably cannot fit, and building
-/// a quarter-million-node tree just to measure it was this module's own founding defect.
-/// Only past the budget does the ladder engage: attempted depth with width sampling,
-/// retried shallower, and depth 0 — the shown level with every child elided to a count —
-/// accepted unmeasured, so there is always something to show.
-fn bounded_forest(window: &[&ColumnInfo]) -> Vec<ColumnWire> {
-    if plausibly_complete(window) {
-        let full: Vec<ColumnWire> = window.iter().map(|c| ColumnWire::from(*c)).collect();
+/// The count the caller is owed is not in here: it is `forest.len()` against the entries
+/// shown, which is the one rule both arms of [`schema_view`] apply. A collapsed entry stands
+/// for many children and so shows fewer than the forest holds, exactly as an elided page does
+/// — which is why the same comparison covers both.
+struct Walked {
+    columns: Vec<ColumnWire>,
+    page: Option<usize>,
+    page_size: Option<usize>,
+}
+
+/// The forest, paged and rendered as deep as the budget allows.
+///
+/// The first rung is the **whole** subtree of one plain page — the budget, not a depth,
+/// decides whether an answer is cut, so a small schema stays complete however deep it nests
+/// and carries no totals at all. That rung is guarded by a node count against [`NODE_CAP`]:
+/// a window whose nodes already outnumber it provably cannot fit, and building a
+/// quarter-million-node tree just to measure it was this module's own founding defect.
+///
+/// That rung is measured over **one page**, so it is offered only where a page can be the
+/// whole answer. A forest longer than one page is already being cut, and a collapse available
+/// in it says more than any page of it does — 19,311 UUID keys holding a two-field record fit
+/// a page perfectly well, and answering with 50 of their names, 387 pages deep, is the
+/// pathology rather than a complete answer. So a forest that is both **paged and collapsible**
+/// skips the complete rung outright, and the cutting rule reads over the forest rather than
+/// over the window that happened to be asked for.
+///
+/// The collapse comes first in that cutting: [`slots`] over the **whole** forest, so a set's
+/// count is the set's and not this page's, and then the ladder — attempted depth with width
+/// sampling, retried shallower, and depth 0, the shown level with every child elided to a
+/// count, accepted unmeasured so there is always something to show. Paging is over slots from
+/// there on, which is what makes one collapsed page the whole answer rather than the first of
+/// 387.
+///
+/// A sampled rung is built against [`NODE_CAP`] and abandoned the moment it passes it, which
+/// is what lets the ladder start as deep as it does: an overrunning rung is one that could not
+/// have fitted anyway, so nothing is lost but the building of it.
+fn walk(forest: &[ColumnInfo], page: Option<usize>) -> Walked {
+    let sets = slots(forest);
+    let plain = windowed(forest.iter().collect(), page, SCHEMA_PAGE);
+    let cut = plain.page.is_some() && sets.len() < forest.len();
+    if !cut && plausibly_complete(&plain.shown) {
+        let full: Vec<ColumnWire> = plain.shown.iter().map(|c| ColumnWire::from(*c)).collect();
         if fits(&full) {
-            return full;
+            return Walked {
+                columns: full,
+                page: plain.page,
+                page_size: plain.page_size,
+            };
         }
     }
-    for depth in (1..=SCHEMA_DEPTH).rev() {
-        let rendered: Vec<ColumnWire> = window.iter().map(|c| subtree(c, 1, depth)).collect();
-        if fits(&rendered) {
-            return rendered;
-        }
+    let w = windowed(sets, page, SCHEMA_PAGE);
+    let rung = |depth| -> Option<Vec<ColumnWire>> {
+        let mut nodes = Nodes::default();
+        let rendered: Vec<ColumnWire> = w
+            .shown
+            .iter()
+            .map(|s| render(s, 1, depth, &mut nodes))
+            .collect();
+        (!nodes.past_cap()).then_some(rendered)
+    };
+    Walked {
+        columns: (1..=SCHEMA_DEPTH)
+            .rev()
+            .find_map(|depth| rung(depth).filter(|r| fits(r)))
+            .unwrap_or_else(|| {
+                let mut nodes = Nodes::default();
+                w.shown
+                    .iter()
+                    .map(|s| render(s, 1, 0, &mut nodes))
+                    .collect()
+            }),
+        page: w.page,
+        page_size: w.page_size,
     }
-    window.iter().map(|c| subtree(c, 1, 0)).collect()
+}
+
+/// The nodes a sampled rung has emitted, counted against [`NODE_CAP`].
+#[derive(Default)]
+struct Nodes(usize);
+
+impl Nodes {
+    /// Charge for one emitted node.
+    fn spend(&mut self) {
+        self.0 += 1;
+    }
+
+    /// Whether the rung is already too big to fit — which is both the reason to stop opening
+    /// children and the reason to throw the rung away.
+    fn past_cap(&self) -> bool {
+        self.0 > NODE_CAP
+    }
 }
 
 /// Whether the window's node count leaves the complete rendering any chance of fitting.
 fn plausibly_complete(window: &[&ColumnInfo]) -> bool {
-    let mut allowance = SCHEMA_BUDGET / NODE_FLOOR;
+    let mut allowance = NODE_CAP;
     window.iter().all(|c| counted_within(c, &mut allowance))
 }
 
@@ -256,17 +370,44 @@ fn counted_within(col: &ColumnInfo, allowance: &mut usize) -> bool {
     col.children.iter().all(|c| counted_within(c, allowance))
 }
 
-/// One column with `depth` levels of children below it, each level a sample with its total
-/// stated where it shows fewer.
-fn subtree(col: &ColumnInfo, level: usize, depth: usize) -> ColumnWire {
+/// One slot with `depth` levels below it: a child as itself, or a collapsed key set as its
+/// representative wearing the placeholder name and the two fields that say what it stands for.
+///
+/// The representative renders exactly as a real child does — the collapse decides *which*
+/// subtree is shown, never how deep, so the budget it frees is spent by the ladder above on
+/// depth for the shape that remains.
+fn render(slot: &Slot, level: usize, depth: usize, nodes: &mut Nodes) -> ColumnWire {
+    match slot {
+        Slot::One(col) => subtree(col, level, depth, nodes),
+        Slot::Keys(keys) => ColumnWire {
+            name: KEY_PLACEHOLDER.to_string(),
+            keys_total: Some(keys.len()),
+            key_examples: keys
+                .iter()
+                .take(KEY_EXAMPLES)
+                .map(|k| k.name.clone())
+                .collect(),
+            ..subtree(keys[0], level, depth, nodes)
+        },
+    }
+}
+
+/// One column with `depth` levels of children below it, each level collapsed then sampled,
+/// with its total stated where it shows fewer entries than the column has children — which a
+/// collapsed set always does, since it takes [`COLLAPSE_MIN`] children to make one.
+///
+/// It stops opening children once the rung is past [`NODE_CAP`], because from there the rung
+/// is being thrown away and every node built is waste.
+fn subtree(col: &ColumnInfo, level: usize, depth: usize, nodes: &mut Nodes) -> ColumnWire {
+    nodes.spend();
     let total = col.children.len();
-    let children: Vec<ColumnWire> = if depth == 0 {
+    let children: Vec<ColumnWire> = if depth == 0 || nodes.past_cap() {
         Vec::new()
     } else {
-        col.children
+        slots(&col.children)
             .iter()
             .take(schema_items(level))
-            .map(|c| subtree(c, level + 1, depth - 1))
+            .map(|s| render(s, level + 1, depth - 1, nodes))
             .collect()
     };
     ColumnWire {
@@ -276,8 +417,113 @@ fn subtree(col: &ColumnInfo, level: usize, depth: usize) -> ColumnWire {
         nullable: col.nullable,
         children_total: (total > children.len()).then_some(total),
         children,
+        keys_total: None,
+        key_examples: Vec::new(),
         stats: col.stats.iter().map(StatWire::from).collect(),
     }
+}
+
+/// One entry of a rendered child list: a child in its own right, or a set of same-shaped
+/// sibling containers standing under the first of them.
+enum Slot<'c> {
+    One(&'c ColumnInfo),
+    Keys(Vec<&'c ColumnInfo>),
+}
+
+/// A container's children as the entries an answer shows: every set of [`COLLAPSE_MIN`] or
+/// more identically-shaped siblings as one [`Slot::Keys`], largest set first, then everything
+/// else in document order. Collapsed first because the width sample above cuts from the end,
+/// and the shape a thousand keys share is worth more of that width than any one of them.
+///
+/// Two exclusions, both because the collapse trades names for shape and there has to be a
+/// shape to get: a **leaf** never joins a set (its name is the only thing it carries — that
+/// is what `children_total` already elides better), and a set is only ever recognised among
+/// enough siblings to have one.
+fn slots(children: &[ColumnInfo]) -> Vec<Slot<'_>> {
+    if children.len() < COLLAPSE_MIN {
+        return children.iter().map(Slot::One).collect();
+    }
+    let mut sets: Vec<Vec<usize>> = Vec::new();
+    let mut by_key: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, child) in children.iter().enumerate() {
+        if child.children.is_empty() {
+            continue;
+        }
+        let candidates = by_key.entry(shallow(child)).or_default();
+        let found = candidates
+            .iter()
+            .copied()
+            .find(|&s| same_shape(&children[sets[s][0]], child));
+        match found {
+            Some(s) => sets[s].push(i),
+            None => {
+                sets.push(vec![i]);
+                candidates.push(sets.len() - 1);
+            }
+        }
+    }
+    let mut collapsed: Vec<usize> = (0..sets.len())
+        .filter(|&s| sets[s].len() >= COLLAPSE_MIN)
+        .collect();
+    if collapsed.is_empty() {
+        return children.iter().map(Slot::One).collect();
+    }
+    collapsed.sort_by_key(|&s| Reverse(sets[s].len()));
+
+    let mut taken = vec![false; children.len()];
+    let mut out: Vec<Slot<'_>> = Vec::new();
+    for s in collapsed {
+        for &i in &sets[s] {
+            taken[i] = true;
+        }
+        out.push(Slot::Keys(sets[s].iter().map(|&i| &children[i]).collect()));
+    }
+    out.extend(
+        children
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !taken[*i])
+            .map(|(_, c)| Slot::One(c)),
+    );
+    out
+}
+
+/// Whether two columns are the same shape — everything but the name, read exhaustively so a
+/// field added to [`ColumnInfo`] cannot slip into a set unexamined. Names *below* the top
+/// count, and must: the representative prints them, and a set whose members disagreed about
+/// them would be one answer speaking for keys it does not describe.
+fn same_shape(a: &ColumnInfo, b: &ColumnInfo) -> bool {
+    let ColumnInfo {
+        name: _,
+        dtype,
+        kind,
+        role,
+        nullable,
+        children,
+        stats,
+    } = a;
+    *dtype == b.dtype
+        && *kind == b.kind
+        && *role == b.role
+        && *nullable == b.nullable
+        && *children == b.children
+        && *stats == b.stats
+}
+
+/// A cheap bucket key for [`slots`]: this column's own type facts plus its children's names
+/// and types, one level down. Deliberately **not** the whole subtree — a digest that decided
+/// membership would have to be trusted, where [`same_shape`] can simply check, and hashing a
+/// quarter-million fields per rung is the cost this module exists to avoid.
+fn shallow(col: &ColumnInfo) -> u64 {
+    let mut hash = DefaultHasher::new();
+    col.dtype.hash(&mut hash);
+    col.nullable.hash(&mut hash);
+    col.children.len().hash(&mut hash);
+    for child in &col.children {
+        child.name.hash(&mut hash);
+        child.dtype.hash(&mut hash);
+    }
+    hash.finish()
 }
 
 /// Whether a rendering serializes inside the budget.
@@ -304,12 +550,22 @@ fn resolve<'c>(columns: &'c [ColumnInfo], path: &[String]) -> Option<&'c ColumnI
 /// The refusal for a path that resolves nowhere. The path is rendered as the JSON array the
 /// parameter accepts back — never dot-joined, because names come from the user's files and
 /// may contain dots — and the recovery is this tool's own, not a listing tool's.
+///
+/// A path carrying the collapse placeholder gets its own recovery, because it is the one
+/// spelling this tool prints and does not accept back: the answer that printed it named real
+/// keys beside it, and that is the whole repair.
 fn no_such_column(table: &str, path: &[String]) -> AgentError {
     let shown = to_string(path).unwrap_or_default();
-    AgentError::NotFound(format!(
-        "No column {shown} in '{table}'. Call describe_table without 'path' to see the \
-         schema, or with 'matching' to find a field by name."
-    ))
+    let recovery = match path.iter().any(|segment| segment == KEY_PLACEHOLDER) {
+        true => format!(
+            "'{KEY_PLACEHOLDER}' stands for a set of same-shaped keys, not a field: put one \
+             of the 'key_examples' listed beside it in its place."
+        ),
+        false => "Call describe_table without 'path' to see the schema, or with 'matching' \
+                  to find a field by name."
+            .to_string(),
+    };
+    AgentError::NotFound(format!("No column {shown} in '{table}'. {recovery}"))
 }
 
 /// The 'matching' answer: every field whose name contains the needle, as paths, one
@@ -321,6 +577,12 @@ fn no_such_column(table: &str, path: &[String]) -> AgentError {
 /// 13-segment path for each of them, to answer with 25, is the same build-and-discard the
 /// walk's node gate exists to prevent. An empty needle is legal and matches everything —
 /// bounded like any other broad needle.
+///
+/// It collapses too, and that is where a needle like 'eligibilityRule' stops answering with
+/// 2,134 paths that differ in one segment: a field found under a collapsed set is **one row**
+/// through the placeholder, carrying how many real fields it stands for. So a row and a hit
+/// are no longer the same thing — the rows are what pages, `matched_total` is still every
+/// field matched.
 fn searched(
     forest: &[ColumnInfo],
     prefix: &[String],
@@ -331,12 +593,13 @@ fn searched(
     let at = page.unwrap_or(1).max(1);
     let mut window = Matches {
         skip: (at - 1).saturating_mul(MATCH_PAGE),
+        rows: 0,
         hits: 0,
         out: Vec::new(),
     };
     let mut trail: Vec<&str> = prefix.iter().map(String::as_str).collect();
-    search(forest, &mut trail, &needle.to_lowercase(), &mut window);
-    let more = window.out.len() < window.hits;
+    search(forest, &mut trail, &needle.to_lowercase(), &mut window, 1);
+    let more = window.out.len() < window.rows;
     DescribeResult {
         matches: window.out,
         matched_total: Some(window.hits),
@@ -346,35 +609,70 @@ fn searched(
     }
 }
 
-/// One page of matches being collected: every hit counted, paths built only in the window.
+/// One page of matches being collected: every row counted for the window, every field counted
+/// for the total, paths built only inside the window.
 struct Matches {
     skip: usize,
+    rows: usize,
     hits: usize,
     out: Vec<MatchWire>,
 }
 
-/// Depth-first, document order — deterministic, so a page of matches is a stable window.
-/// The paths carry the caller's own prefix, so a match under 'path' pastes straight back.
+impl Matches {
+    /// Record one row standing for `keys` real fields.
+    fn hit(&mut self, trail: &[&str], col: &ColumnInfo, keys: usize) {
+        if self.rows >= self.skip && self.out.len() < MATCH_PAGE {
+            self.out.push(MatchWire {
+                path: trail.iter().map(|s| (*s).to_string()).collect(),
+                dtype: col.dtype.clone(),
+                kind: col.kind.into(),
+                matched_keys: (keys > 1).then_some(keys),
+            });
+        }
+        self.rows += 1;
+        self.hits += keys;
+    }
+}
+
+/// Depth-first over the same slots the walk shows — collapsed sets first, then everything
+/// else in document order — deterministic, so a page of matches is a stable window. The paths
+/// carry the caller's own prefix, so a match under 'path' pastes straight back.
+///
+/// A collapsed set is searched in two halves, because only one of them is shared. The **keys**
+/// vary, so each is still tested by name and answers as itself — a caller searching for a key
+/// wants that key back, spelled as the file spells it. Everything **below** them is identical
+/// by construction, so it is searched once through the placeholder and every hit there stands
+/// for the whole set; `keys` carries that multiplier down, so nested sets multiply.
 fn search<'c>(
     forest: &'c [ColumnInfo],
     trail: &mut Vec<&'c str>,
     needle: &str,
     window: &mut Matches,
+    keys: usize,
 ) {
-    for col in forest {
-        trail.push(&col.name);
-        if name_matches(&col.name, needle) {
-            if window.hits >= window.skip && window.out.len() < MATCH_PAGE {
-                window.out.push(MatchWire {
-                    path: trail.iter().map(|s| (*s).to_string()).collect(),
-                    dtype: col.dtype.clone(),
-                    kind: col.kind.into(),
-                });
+    for slot in slots(forest) {
+        match slot {
+            Slot::One(col) => {
+                trail.push(&col.name);
+                if name_matches(&col.name, needle) {
+                    window.hit(trail, col, keys);
+                }
+                search(&col.children, trail, needle, window, keys);
+                trail.pop();
             }
-            window.hits += 1;
+            Slot::Keys(set) => {
+                for &key in &set {
+                    trail.push(&key.name);
+                    if name_matches(&key.name, needle) {
+                        window.hit(trail, key, keys);
+                    }
+                    trail.pop();
+                }
+                trail.push(KEY_PLACEHOLDER);
+                search(&set[0].children, trail, needle, window, keys * set.len());
+                trail.pop();
+            }
         }
-        search(&col.children, trail, needle, window);
-        trail.pop();
     }
 }
 
@@ -455,6 +753,8 @@ mod tests {
         for absent in [
             "children_total",
             "columns_total",
+            "keys_total",
+            "matched_keys",
             "matched_total",
             "sources_total",
             "page",
@@ -552,36 +852,279 @@ mod tests {
         assert_eq!(matches.matched_total, Some(60));
     }
 
-    /// The config shape: one struct column of thousands of keys. The complete rendering is
-    /// past the budget — proven by the node gate before any tree is built — so the ladder
-    /// engages: a sampled window of children, each elision a stated count, and the whole
-    /// answer still inside the budget.
-    #[test]
-    fn an_oversized_tree_is_sampled_with_every_elision_counted() {
-        let blocks = col(
-            "contentBlocks",
+    /// The keys of the config shape, built as the fixture has them: one struct column whose
+    /// children are thousands of UUIDs carrying one repeated record.
+    fn keyed(name: &str, keys: usize, shape: &dyn Fn(usize) -> Vec<ColumnInfo>) -> ColumnInfo {
+        col(
+            name,
             Kind::Struct,
-            (0..2000)
+            (0..keys)
                 .map(|i| {
                     col(
                         &format!("00000000-0000-0000-0000-{i:012}"),
                         Kind::Struct,
-                        (0..12).map(|j| leaf(&format!("field_{j}"))).collect(),
+                        shape(i),
                     )
                 })
                 .collect(),
-        );
+        )
+    }
+
+    /// **The config shape.** One struct column of thousands of same-shaped UUID keys, past
+    /// the budget — proven by the node gate before any tree is built. The answer is the one
+    /// view the field feedback asked for: a single representative shape, the key count, a few
+    /// real keys to descend by, and the record itself rendered under it.
+    #[test]
+    fn keyed_siblings_collapse_to_one_counted_shape() {
+        let blocks = keyed("contentBlocks", 2000, &|_| {
+            (0..12).map(|j| leaf(&format!("field_{j}"))).collect()
+        });
         let result = describe_result(table(vec![blocks, leaf("channel")]), &ask()).unwrap();
         let root = &result.columns[0];
+        assert_eq!(root.children.len(), 1, "one shape, not a page of keys");
         assert_eq!(root.children_total, Some(2000), "elided keys are counted");
-        assert!(root.children.len() < 2000);
+
+        let shape = &root.children[0];
+        assert_eq!(shape.name, "<key>");
+        assert_eq!(shape.keys_total, Some(2000));
+        assert_eq!(
+            shape.key_examples,
+            vec![
+                "00000000-0000-0000-0000-000000000000",
+                "00000000-0000-0000-0000-000000000001",
+                "00000000-0000-0000-0000-000000000002",
+            ],
+            "and real keys to descend by"
+        );
+        assert_eq!(
+            shape.children[0].name, "field_0",
+            "the record it stands for"
+        );
+        assert_eq!(shape.children_total, Some(12));
+
         let bytes = to_string(&result.columns).unwrap().len();
         assert!(bytes <= SCHEMA_BUDGET, "{bytes} > {SCHEMA_BUDGET}");
         assert_eq!(result.columns[1].name, "channel");
     }
 
+    /// **The view the feedback asked for**, at the fixture's own width: describing the table
+    /// answers `contentBlocks` → the shape its 19,311 keys share → `variants` → its element →
+    /// `eligibilityRule`, in one call, inside the budget. That is the collapse and the ladder
+    /// together — the keys stop spending the width, and the depth the width was buying goes
+    /// to the shape instead.
+    #[test]
+    fn the_whole_structure_arrives_in_one_answer() {
+        let blocks = keyed("contentBlocks", 19_311, &|_| {
+            vec![
+                leaf("name"),
+                col(
+                    "variants",
+                    Kind::List,
+                    vec![col(
+                        "element",
+                        Kind::Struct,
+                        vec![leaf("eligibilityRule"), leaf("weight")],
+                    )],
+                ),
+            ]
+        });
+        let result = describe_result(table(vec![blocks, leaf("channel")]), &ask()).unwrap();
+        let shape = &result.columns[0].children[0];
+        assert_eq!(shape.keys_total, Some(19_311));
+        let variants = shape
+            .children
+            .iter()
+            .find(|c| c.name == "variants")
+            .unwrap();
+        let element = &variants.children[0];
+        assert_eq!(element.name, "element");
+        let leaves: Vec<&str> = element.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(leaves, vec!["eligibilityRule", "weight"]);
+
+        let bytes = to_string(&result.columns).unwrap().len();
+        assert!(bytes <= SCHEMA_BUDGET, "{bytes} > {SCHEMA_BUDGET}");
+    }
+
+    /// The same width with no shape to share: the collapse finds nothing, and the answer is
+    /// the sampled window it always was, every elision a stated count.
+    #[test]
+    fn siblings_of_distinct_shapes_are_sampled_not_collapsed() {
+        let blocks = keyed("contentBlocks", 2000, &|i| {
+            (0..12).map(|j| leaf(&format!("field_{i}_{j}"))).collect()
+        });
+        let result = describe_result(table(vec![blocks]), &ask()).unwrap();
+        let root = &result.columns[0];
+        assert_eq!(root.children_total, Some(2000));
+        assert!(root.children.len() < 2000);
+        assert!(
+            root.children.iter().all(|c| c.keys_total.is_none()),
+            "nothing shares a shape, so nothing collapses"
+        );
+        assert_eq!(
+            root.children[0].name,
+            "00000000-0000-0000-0000-000000000000"
+        );
+        let bytes = to_string(&result.columns).unwrap().len();
+        assert!(bytes <= SCHEMA_BUDGET, "{bytes} > {SCHEMA_BUDGET}");
+    }
+
+    /// The collapse is a *cutting* strategy. A schema of same-shaped siblings that fits comes
+    /// back complete, names and all — because there the names are the information, and an
+    /// answer with no counting fields in it must stay a complete answer.
+    #[test]
+    fn same_shaped_siblings_that_fit_are_never_collapsed() {
+        let blocks = keyed("contentBlocks", 10, &|_| vec![leaf("id"), leaf("label")]);
+        let result = describe_result(table(vec![blocks]), &ask()).unwrap();
+        let json = to_string(&result).unwrap();
+        assert!(!json.contains("<key>"), "{json}");
+        assert!(!json.contains("keys_total"), "{json}");
+        assert_eq!(result.columns[0].children.len(), 10);
+    }
+
+    /// A run of leaves never collapses, however wide: a leaf carries nothing but its name, so
+    /// a shape standing for two hundred of them would trade the whole answer for nothing.
+    /// `children_total` already elides them, and better.
+    #[test]
+    fn a_wide_run_of_leaves_is_never_collapsed() {
+        let flat = col(
+            "row",
+            Kind::Struct,
+            (0..400).map(|i| leaf(&format!("f{i:03}"))).collect(),
+        );
+        let result = describe_result(table(vec![flat]), &ask()).unwrap();
+        let root = &result.columns[0];
+        assert_eq!(root.children_total, Some(400));
+        assert_eq!(root.children[0].name, "f000", "names, not a placeholder");
+        assert!(
+            root.children.iter().all(|c| c.keys_total.is_none()),
+            "a leaf never joins a set"
+        );
+    }
+
+    /// Mixed children collapse per shape, largest set first — the width sample cuts from the
+    /// end, and a set of three hundred deserves that width more than any one key does. What
+    /// is left over follows in document order, still named.
+    #[test]
+    fn mixed_shapes_collapse_per_set_largest_first() {
+        let mut children: Vec<ColumnInfo> = Vec::new();
+        children.push(leaf("version"));
+        children.extend((0..100).map(|i| col(&format!("b{i}"), Kind::Struct, vec![leaf("p")])));
+        children.extend((0..300).map(|i| {
+            col(
+                &format!("a{i}"),
+                Kind::Struct,
+                vec![leaf("x"), leaf("y"), leaf("z")],
+            )
+        }));
+        children.push(col("odd", Kind::Struct, vec![leaf("only")]));
+
+        let result =
+            describe_result(table(vec![col("mixed", Kind::Struct, children)]), &ask()).unwrap();
+        let shown = &result.columns[0].children;
+        assert_eq!(shown[0].keys_total, Some(300), "the largest set leads");
+        assert_eq!(shown[0].children[0].name, "x");
+        assert_eq!(shown[1].keys_total, Some(100));
+        assert_eq!(shown[1].children[0].name, "p");
+        let rest: Vec<&str> = shown[2..].iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            rest,
+            vec!["version", "odd"],
+            "too few to be a set, so still named, in document order"
+        );
+    }
+
+    /// Describing the keyed struct itself — the drill-down the feedback took — answers the
+    /// same one shape, and the count is the *struct's*, never this page's.
+    #[test]
+    fn a_keyed_struct_addressed_by_path_answers_one_shape() {
+        let blocks = keyed("contentBlocks", 2000, &|_| {
+            (0..12).map(|j| leaf(&format!("field_{j}"))).collect()
+        });
+        let result = describe_result(
+            table(vec![blocks]),
+            &DescribeTableParams {
+                path: Some(vec!["contentBlocks".into()]),
+                ..ask()
+            },
+        )
+        .unwrap();
+        let root = &result.columns[0];
+        assert_eq!(root.name, "contentBlocks");
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].keys_total, Some(2000));
+        assert_eq!(root.children_total, Some(2000));
+        assert_eq!(result.page, None, "one shape is the whole answer");
+    }
+
+    /// A page of a keyed struct is not a complete answer, however comfortably it fits. With a
+    /// small record under each key, 50 UUID names render well inside the budget — and
+    /// answering with them, 387 pages deep, is the pathology rather than completeness. The
+    /// cutting rule reads over the forest, so this collapses exactly as it does when the same
+    /// struct is reached from its parent.
+    #[test]
+    fn a_page_of_a_keyed_struct_is_not_a_complete_answer() {
+        let blocks = keyed("contentBlocks", 19_311, &|_| {
+            vec![leaf("name"), leaf("enabled")]
+        });
+        let result = describe_result(
+            table(vec![blocks]),
+            &DescribeTableParams {
+                path: Some(vec!["contentBlocks".into()]),
+                ..ask()
+            },
+        )
+        .unwrap();
+        let root = &result.columns[0];
+        assert_eq!(root.children.len(), 1, "one shape, not 50 of 19,311 names");
+        assert_eq!(root.children[0].keys_total, Some(19_311));
+        assert_eq!(root.children_total, Some(19_311));
+        assert_eq!(result.page, None, "and no 387 pages behind it");
+    }
+
+    /// The placeholder is the one spelling this tool prints and will not accept back, so the
+    /// refusal names the repair the answer already carried.
+    #[test]
+    fn the_placeholder_is_refused_as_a_path_segment_with_its_repair() {
+        let blocks = keyed("contentBlocks", 2000, &|_| vec![leaf("id")]);
+        let Err(AgentError::NotFound(message)) = describe_result(
+            table(vec![blocks]),
+            &DescribeTableParams {
+                path: Some(vec!["contentBlocks".into(), "<key>".into()]),
+                ..ask()
+            },
+        ) else {
+            panic!("expected a not-found refusal");
+        };
+        assert!(message.contains("key_examples"), "{message}");
+    }
+
+    /// And a real key resolves straight through the collapsed level — which is what the
+    /// examples beside the placeholder are for.
+    #[test]
+    fn a_real_key_resolves_through_a_collapsed_level() {
+        let blocks = keyed("contentBlocks", 2000, &|_| vec![leaf("eligibilityRule")]);
+        let result = describe_result(
+            table(vec![blocks]),
+            &DescribeTableParams {
+                path: Some(vec![
+                    "contentBlocks".into(),
+                    "00000000-0000-0000-0000-000000001234".into(),
+                ]),
+                ..ask()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result.columns[0].name,
+            "00000000-0000-0000-0000-000000001234"
+        );
+        assert_eq!(result.columns[0].children[0].name, "eligibilityRule");
+    }
+
     /// A tree so wide at every level that even one sampled level is past the budget lands
-    /// on the floor: every child elided to a count, the shown level always rendered.
+    /// on the floor: every child elided to a count, the shown level always rendered. Every
+    /// field name here is distinct, so no two subtrees share a shape and the collapse has
+    /// nothing to offer — the floor is what is left.
     #[test]
     fn the_floor_always_renders_the_shown_level() {
         let columns: Vec<ColumnInfo> = (0..50)
@@ -594,7 +1137,7 @@ mod tests {
                             col(
                                 &format!("00000000-1111-0000-{j:04}-000000000000"),
                                 Kind::Struct,
-                                vec![leaf("x")],
+                                vec![leaf(&format!("x_{i}_{j}"))],
                             )
                         })
                         .collect(),
@@ -850,6 +1393,78 @@ mod tests {
         assert_eq!(result.page_size, Some(MATCH_PAGE));
         let bytes = to_string(&result.matches).unwrap().len();
         assert!(bytes <= SCHEMA_BUDGET, "{bytes} > {SCHEMA_BUDGET}");
+    }
+
+    /// The search collapses too, and this is the row the feedback wanted: one path through
+    /// the placeholder, the ×N stated on it, and `matched_total` still every field it stands
+    /// for — not 2,000 UUID paths, 25 to a page.
+    #[test]
+    fn a_field_under_a_collapsed_set_answers_as_one_counted_row() {
+        let blocks = keyed("contentBlocks", 2000, &|_| {
+            vec![col(
+                "variants",
+                Kind::List,
+                vec![col(
+                    "element",
+                    Kind::Struct,
+                    vec![leaf("eligibilityRule"), leaf("weight")],
+                )],
+            )]
+        });
+        let result = describe_result(
+            table(vec![blocks]),
+            &DescribeTableParams {
+                matching: Some("eligibilityRule".into()),
+                ..ask()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.matches.len(), 1, "one shape, not one row per key");
+        assert_eq!(
+            result.matches[0].path,
+            vec![
+                "contentBlocks".to_string(),
+                "<key>".to_string(),
+                "variants".to_string(),
+                "element".to_string(),
+                "eligibilityRule".to_string(),
+            ]
+        );
+        assert_eq!(result.matches[0].matched_keys, Some(2000));
+        assert_eq!(
+            result.matched_total,
+            Some(2000),
+            "every field it stands for"
+        );
+        assert_eq!(result.page, None, "one row is the whole answer");
+    }
+
+    /// The keys of a collapsed set are the half that varies, so a needle over *them* is
+    /// answered key by key, each spelled as the file spells it — a caller searching for a key
+    /// is searching for exactly that.
+    #[test]
+    fn a_search_for_the_keys_themselves_still_names_them() {
+        let blocks = keyed("contentBlocks", 2000, &|_| vec![leaf("id")]);
+        let result = describe_result(
+            table(vec![blocks]),
+            &DescribeTableParams {
+                matching: Some("000000000042".into()),
+                ..ask()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.matched_total, Some(1));
+        assert_eq!(
+            result.matches[0].path,
+            vec![
+                "contentBlocks".to_string(),
+                "00000000-0000-0000-0000-000000000042".to_string(),
+            ]
+        );
+        assert_eq!(
+            result.matches[0].matched_keys, None,
+            "one key is one field, not a set"
+        );
     }
 
     #[test]

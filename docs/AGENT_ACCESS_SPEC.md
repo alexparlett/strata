@@ -69,7 +69,7 @@ ambiguity rather than guessing.
 |---|---|
 | `list_projects` | The open projects: name and root. |
 | `list_tables(matching?, page?)` | The catalog **as the app shows it**: tables, views and saved queries, each with its source and registration state (`ready` / `failed` with the failure message / `pending`). The answer states its total; `matching` filters by name substring and `page` windows 50 entries at a time. A view row carries a one-line SQL preview (the full text is `describe_table`'s); a saved query's SQL stays whole, because no other tool returns it. `databases` names the catalogs the project's database connections registered — their relations are not entries and are read by three-part name. |
-| `describe_table(name, path?, matching?, page?)` | One table or view: columns and types, nested fields, Hive partition columns, sources and format, plus the row count and column statistics the source reports for free. Only facts that were read — nothing is scanned or estimated. The schema is **bounded** (see below): `path` descends to a nested column, `matching` finds fields by name anywhere in the tree and answers with their paths, `page` reads more columns or matches. A three-part name describes a relation in a database connection's catalog instead: its columns and the connection it is in, with no def facts because it has none. |
+| `describe_table(name, path?, matching?, page?)` | One table or view: columns and types, nested fields, Hive partition columns, sources and format, plus the row count and column statistics the source reports for free. Only facts that were read — nothing is scanned or estimated. The schema is **bounded** (see below): `path` descends to a nested column, `matching` finds fields by name anywhere in the tree and answers with their paths, `page` reads more columns or matches, and a set of same-shaped fields under data keys collapses to one `<key>` entry with `keys_total` and `key_examples`. A three-part name describes a relation in a database connection's catalog instead: its columns and the connection it is in, with no def facts because it has none. |
 | `list_functions(matching?)` | The engine's live function registry. What is registered is what exists — there is no second list to drift. The answer states its total; a set of 30 or fewer is full detail (signatures, returns, docs), a larger one is names only, and `matching` narrows by name substring back into detail. |
 | `validate(sql)` | Lints, the read-only policy, and a dry plan against the real catalog, without executing. The cheap way to find a typo before spending a run. |
 | `open_query_session()` | Mints a query session for the calling agent and returns its handle. |
@@ -103,6 +103,21 @@ Rules that hold across the vocabulary:
   past 100 with the total stated. A `path` that resolves nowhere is refused with the path
   rendered as the JSON array the parameter takes — never dot-joined, because field names
   come from the user's files and may contain dots.
+- **A set of fields keyed by data collapses to the one shape they share** (QE-03). JSON has no
+  map type in Arrow's inference — `engine::json_poly` reads every object as a Struct — so an
+  object keyed by UUIDs arrives as thousands of same-shaped *schema* fields, which is most of
+  what the byte budget above exists to survive. Past that budget, eight or more structurally
+  identical siblings (identical below their own names, stats included, and never leaves —
+  a leaf carries nothing but its name) render as **one** entry named `<key>`, carrying
+  `keys_total` and a few `key_examples`. It is JSON Schema's `additionalProperties` said in the
+  tool's own vocabulary, and it is a *cutting* strategy: an answer that fits complete is never
+  collapsed, because there the names are the information. `<key>` is the one spelling the tool
+  prints and will not take back — `path` takes a real key, and the refusal says so. `matching`
+  collapses the same way: a field found under a collapsed set is one row through the
+  placeholder with `matched_keys` on it, while `matched_total` still counts every field it
+  stands for, so `contentBlocks.<key>.variants[].eligibilityRule ×19311` replaces 19,311 paths
+  read 25 to a page. The keys themselves are the half that varies, so a needle over *them* is
+  still answered key by key, spelled as the file spells them.
 - **`list_tables` answers from the app's own catalog, never DataFusion introspection.**
   Introspection would surface the engine's internal `__snap_*` result snapshots and hide defs
   whose registration failed — precisely the rows the catalog exists to show. A table that is
