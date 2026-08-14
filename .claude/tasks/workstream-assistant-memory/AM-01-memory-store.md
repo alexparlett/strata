@@ -16,7 +16,7 @@ searched and reopened from a test with nothing else built.
   modules are `ai, config, engine, keymap, models, project, register, secret, theme, update,
   util` — this module sits beside `models.rs`, whose doc (models.rs:7-12) states the satellite
   rule being followed: a cached/derived artifact is never a config field.
-- Satellite path helpers live in `project.rs` (`history_path:278`, `chats_dir:404`);
+- Satellite path helpers live in `project.rs` (`history_path:278`, `chats_dir:405`);
   `ensure_gitignore` (:517) writes `.strata/.gitignore`'s entry list; `tidy_strata_dir` (:495)
   sweeps `write_atomic` temps — Lance manages its own directory contents, so it needs a
   gitignore line but **no** temp-sweep entry.

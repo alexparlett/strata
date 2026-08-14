@@ -39,6 +39,12 @@ the facts.
   the `Arc<Memories>` slot mounts beside it.
 - `Facts` (`dispatch.rs:71`) carries each step's `{sql, rows, elapsed_ms, stopped}` — the
   exchange rendering reads the turn's blocks, not re-measured data.
+- **Naming trap**: "memory" already means something else in this exact scope — `Chat::memory`
+  is the `Arc<Mutex<Conversation>>` turn history (`state/chat.rs:266`), locally bound as
+  `memory` in `chat_send.rs:171-179` and passed as `Assistant::send`'s `conversation`. The
+  workstream's handle is the *store*; name every binding for it `memories` /
+  `Arc<Memories>`, never `memory`, so the two vocabularies cannot be confused at the one
+  call site that holds both.
 
 ## Build
 

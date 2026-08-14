@@ -31,7 +31,7 @@ goes stale by the same mechanism (AM-01's null-on-text-change rule).
   task, no `offload` needed). A press that closes its own surface must not own the spawned
   work (AGENTS §3's scope-bound-task rule): deletes/edits record intent in a `State`, a
   `use_side_effect` in the pane's scope performs them.
-- The chat theme is `views/chat/mod.rs`'s `define_theme!` (:57); the panel dresses from it
+- The chat theme is `views/chat/mod.rs`'s `define_theme!` (:55); the panel dresses from it
   (a surface with its own component theme reads that theme, not the roles).
 
 ## Build

@@ -27,7 +27,10 @@ static `system.md` section that teaches the model both halves.
 - `Assistant::send(tools, selection, scope, conversation, ask)` (`mod.rs:100`) — grows
   `recall: Option<Arc<Memories>>` (strata-agent already depends on strata-core). `None` for
   memoryless callers; the existing tests pass unchanged — an honest absent, not a shaped
-  signature (AGENTS §1).
+  signature (AGENTS §1). The parameter is named `recall` and its bindings `memories`, never
+  `memory` — that name is taken in this signature's own neighbourhood by the
+  `Arc<Mutex<Conversation>>` turn history (`Chat::memory`, `state/chat.rs:266`, bound as a
+  local `memory` in `chat_send.rs:171-179`), which is an unrelated concept.
 - `system.md` (`turn.rs:54`) is byte-identical every request by design — the new section is
   **constant text**, present whether or not recall returned anything this send.
 - AA-07's rule for list answers: bounded, **totals stated** — an answer with no totals reads
