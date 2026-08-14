@@ -1,6 +1,6 @@
 # DB-05 · The data-sources tree: the catalog pane redesigned
 
-**Workstream:** Database connections · **Status:** ⬜ · **Depends on:** DB-02, DB-04
+**Workstream:** Database connections · **Status:** ✅ (2026-08-14) · **Depends on:** DB-02, DB-04
 
 ## Goal
 
@@ -162,3 +162,95 @@ paints, never where truth lives.
 `crates/strata-freya/src/apps/project/state/project.rs` (`update_connection_def`,
 jump-to-def support) · `docs/CONNECTIONS_SPEC.md` ·
 `docs/reference/{MODULE_MAP, FREYA_UI, INVARIANTS}.md`.
+
+---
+
+## As built (2026-08-14)
+
+Everything above shipped, with four corrections worth recording.
+
+**The fork's `Tree` wrapper is not used; its row vocabulary is.** The pane composes `TreeItem`,
+`Disclosure` and `TreeConfig` — themed once, with the app's own chevron through `TreeItem::arrow`
+— as **nested components** under the catalog's existing `ScrollView`, rather than through `Tree`.
+`Tree` is `VirtualScrollView` over a flat list of *visible* rows, so it needs the row count
+synchronously; this tree's rows fetch as they open (a status glyph subscribes, a Profile
+dispatches, a remote relation would introspect), and answering the count would mean mirroring
+those query results into a pane-local map — the "never a mirror on a store" rule, one surface
+along. Nesting also keeps the per-`ProjChan` subscriptions the flat pane had, which a
+root-built row list would have collapsed into one. `Tree` stays where its contract fits: the
+results record view.
+
+**One fork change came with it** (AGENTS §6): `TreeItem` is now every row in this pane, so it
+gained the `Link` role, tab stop and keyboard focus ring that `SideBarItem` already carried,
+both following whether the row is pressable — plus the `focus_border_fill` theme field the ring
+needs. **The gitlink is not committed and the fork is not pushed**; that is owed before this
+merges.
+
+**A relation is a leaf.** Build §3 asked for columns under it; they are DB-07's, along with the
+`ColRef` widening that would let one be selected. A column row the tree can draw but not address
+is a row with nothing behind it, and the fetch that fills it is the same introspection the
+inspector performs — noted in DB-07's file.
+
+**`secret::forget_derived` resolved to `engine::db::password_ref`.** A bare alias over
+`SecretRef::delete` would have been the redundant half; what was actually missing was one place
+that answers *which* keystore slot a connection def owns. The editor's `password_ops` and the
+Forget arm both go through it now, so the derivation is written once.
+
+Two smaller notes. `SidebarPane` keeps its enum with one variant, because `sidebar_pane`'s
+retired-name tolerance is what stops an old `session.json` costing the user every tab — its test
+now asserts the known name, the retired name and `null` together, since with one variant a test
+that only checked the known one would pass against a reader that had lost the distinction. And a
+connection row's refusal now carries the engine's own words clipped to `TIP_CHARS`, replacing the
+Connections pane's fixed "see Problems" pointer: the newer rule (a limit belongs to the surface
+that has it) supersedes, and both kinds of row now say as much as they can hold.
+
+The fold thresholds were re-tuned rather than preserved, as the task allowed: the measured run is
+the row's **content** alone, since a tree row's indent, chevron and ⋮ lay out outside it, so there
+is no pinned tail in the arithmetic. The interaction suite's positional `Handles` tuple became a
+struct in the same change — every test destructured it with a `..`, so adding a handle silently
+re-pointed a dozen bindings.
+
+## What a max-effort review changed (2026-08-14)
+
+Ten adversarial finder angles over the finished diff; fifteen findings, thirteen applied.
+
+**Three hook-order panics.** `StoreNode` called `use_state` and `name_width` (a hook, through
+`scale()` → `use_theme()`) *after* its filter's early return, and `DatabaseNode` did the same with
+`name_width` alone — so a connection node whose first render was narrowed away allocated fewer
+hooks than its next one asked for, and Freya hard-fails on that. The schemas picker had the same
+shape from the other end: `tones()` is a hook and was called twice **inside the per-row closure**,
+making the picker's hook count a function of how many schemas the server had dropped. All three are
+hoisted; the rule is now stated on `StoreNode`'s own doc.
+
+**The filter never opened what it kept.** A node survived on a descendant match and then hid the
+match, which is worse than not keeping it — and connections start collapsed, so a filter reached
+them not at all. Build §1's "auto-expanding hits" is implemented now, at all four container kinds,
+and `TreeCtx::is_open`'s doc says which half the caller owns.
+
+**The jump was a layout handler.** Answering a reveal from the target row's `on_sized` meant a row
+already on screen never fired one, and the request then went off at the next unrelated relayout.
+It is an effect over the reveal slot and the row's last measured area, and it scrolls to the
+**row's** area rather than the wrapper's, so an expanded entry lands on its name and not on the
+bottom of its column block.
+
+**Two smaller mistakes about what a row knows.** A connected database drew no chevron while
+collapsed, because `live` was derived from a listing the node only fetched once it was already
+open — it reads the `Reg` now, and takes its catalog label from the def. And `fold_plan`'s third
+slot was budgeted at an icon's width while a database row spends it on a variable-width catalog
+name; the slot is `mark` now and its width is the caller's, `0.` on a row that draws none.
+
+**The schemas picker's Cancel did not discard**, since the dialog is mounted for the window's life
+and the draft was only re-seeded on a *different* connection. Closing drops the seed.
+
+**One finding could not be applied.** `SavedQueryRow` is the only row in the tree still unkeyed:
+keying it crashes the fork's reconciler on the one gesture the key exists for — a rename re-sorts
+the list, the keyed row moves, and `Tree::apply_mutations` unwraps a `moved` node its parent no
+longer holds (`freya-core/src/tree.rs:332`). `EntryRow` and `ColumnRow` are keyed, which is what
+stops a filtered-out row handing its status glyph and hover state to the row that shuffles up.
+**That differ bug is owed a fork fix**, and until it lands this one list reconciles positionally.
+
+**Left as known cost:** `Engine::db_listing` deep-clones a connection's whole relation enumeration
+per call, and an open schema clones its relations again per group. The call is now gated on
+`connected && (open || filtering)`, so a collapsed or unconnected node pays nothing, but a large
+database still pays per render while open or while a filter is being typed. Sharing the listing by
+`Rc` down the subtree is the fix and it is not in this change.

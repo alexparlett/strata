@@ -11,6 +11,7 @@ mod drop_confirm;
 mod load_failed;
 mod open_prompt;
 mod profile_confirm;
+mod schemas;
 
 pub use chat_confirm::{ChatConfirm, ChatDrop};
 pub use close_confirm::CloseConfirm;
@@ -18,3 +19,4 @@ pub use drop_confirm::{DropConfirm, DropTarget};
 pub use load_failed::ProjectLoadFailed;
 pub use open_prompt::OpenPrompt;
 pub use profile_confirm::{use_profile_actions, ProfileActions, ProfileConfirm, ProfileTarget};
+pub use schemas::{SchemasPicker, SchemasRequest};

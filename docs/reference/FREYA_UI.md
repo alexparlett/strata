@@ -31,6 +31,18 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   dense data, and on a form it only competes with the one row state the surface has. The Keymap
   grid (P4-08) is the second table in that window and takes the same answer to every one of these
   questions, down to the row height — one table dress per window, not one per pane.
+  The sidebar's data-sources tree (DB-05) takes the same answer at the row level: it is the fork's
+  `TreeItem` / `Disclosure` / `TreeConfig`, themed by the `catalog` component theme and given the
+  app's own chevron through `TreeItem::arrow`, with the one gap it had — a pressable row's `Link`
+  role, tab stop and focus ring, which `SideBarItem` already carried — fixed in the fork rather
+  than around it. What it does **not** use is the `Tree` wrapper, and that is a scope call rather
+  than a preference: `Tree` is `VirtualScrollView` over a flat list of visible rows, so it needs
+  the row count up front, and this tree's rows fetch as they open (a status glyph subscribes, a
+  scan dispatches, a remote relation introspects). Answering the count would mean mirroring those
+  query results into a pane-local map, which is the one thing the state rules forbid — so the rows
+  compose as nested components under the pane's own `ScrollView`, and `Tree` stays where its
+  contract fits (the results record view).
+
   A **dashed** edge was the one thing neither table could get from anywhere: torin fills the region
   between an outer and an inner rounded rect, and a filled region cannot carry a pattern, so
   `BorderStyle::Dashed` strokes the outline's centreline with a Skia dash effect instead

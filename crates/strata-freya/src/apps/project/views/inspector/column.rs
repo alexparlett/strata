@@ -19,7 +19,6 @@
 //! data; a bar drawn from anything else here would be the fabrication this panel exists to
 //! avoid. Recorded in the P3-09 task file and `DEV_TASKS` D4.
 
-use async_io::Timer;
 use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::query::QueryStateData;
@@ -42,7 +41,7 @@ use crate::components::badge::Badge;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{
-    ACTION_HEIGHT, HAIRLINE, PROGRESS_HOLD, R_2, R_3, R_XS, SP_1, SP_2, SP_3, SP_4, SP_5, SP_6,
+    use_progress_hold, ACTION_HEIGHT, HAIRLINE, R_2, R_3, R_XS, SP_1, SP_2, SP_3, SP_4, SP_5, SP_6,
 };
 use crate::components::tones::tones;
 use crate::components::type_palette::{kind_color, type_palette, TypePaletteTheme};
@@ -381,22 +380,7 @@ impl Component for ScannedStatistics {
         });
 
         let running = matches!(state, Scan::Running);
-        let announced = use_state(|| false);
-        let pending = use_state(|| None::<TaskHandle>);
-        use_side_effect_with_deps(&running, move |running| {
-            let mut announced = announced;
-            let mut pending = pending;
-            if let Some(task) = pending.write().take() {
-                task.cancel();
-            }
-            announced.set_if_modified(false);
-            if *running {
-                pending.set(Some(spawn(async move {
-                    Timer::after(PROGRESS_HOLD).await;
-                    announced.set_if_modified(true);
-                })));
-            }
-        });
+        let announced = use_progress_hold(running);
 
         let kind = self.facts.owner_kind();
         let owner = self.facts.owner.clone();
@@ -439,7 +423,7 @@ impl Component for ScannedStatistics {
             )
         };
 
-        match shown(&state, previous.as_ref(), *announced.read()) {
+        match shown(&state, previous.as_ref(), announced) {
             Shown::FirstScan => zone(&self.facts, t, None, Some(running_row(t, SCANNING, cancel))),
             Shown::ReScan(profile) => settled(profile, Some(running_row(t, RESCANNING, cancel))),
             Shown::Facts(profile) => settled(profile, None),

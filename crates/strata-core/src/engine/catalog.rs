@@ -561,7 +561,7 @@ fn missing_relation(ctx: &SessionContext, raw: &str) -> Option<String> {
 /// cut mid-clause. An unreachable bucket reports well past 240 characters and names its cause in
 /// the last clause, so the cut kept the bookkeeping and threw away the answer.
 ///
-/// The limit now lives with the surface that has it (`catalog::entry`'s `TIP_CHARS`, which says
+/// The limit now lives with the surface that has it (`catalog::row`'s `TIP_CHARS`, which says
 /// where the rest is), and what leaves here is whole.
 fn register_error(spec: &TableSpec, ext: &str, raw: &str, holds: Option<bool>) -> String {
     if let Some(m) = json_shape_error(spec, raw) {

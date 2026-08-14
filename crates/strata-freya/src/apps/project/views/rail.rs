@@ -2,13 +2,15 @@
 //! `ActivityRail.dc.html` / `Strata.dc.html` `data-rg="rail"`, RustRover-style).
 //!
 //! Two groups of icon toggles over the panel `surface_primary`: the top group selects the
-//! sidebar's tool pane (Catalog · Connections), the bottom group the drawer's tab
+//! sidebar's tool pane (Data), the bottom group the drawer's tab
 //! (Problems · Events · History). Each button is a standard [`ToggleButton`] (reusing the
 //! `toggle_button` theme, whose transparent-rest / accent-soft-active dress already matches the
 //! rail), sized to the rail's 40×38. Its `on` state is *derived* from the layout — the single source of truth —
 //! and a press routes through the layout store's toggle (`onRailPane` / `onOpen*` semantics):
-//! open the pane/tab, or collapse it if it's already the active one. The Connections **button**
-//! lives here; its sidebar pane content is W7.
+//! open the pane/tab, or collapse it if it's already the active one.
+//!
+//! The top group is one button since DB-05: the data-sources tree answers for the project's
+//! catalog *and* its connections, so the Connections toggle beside it had nothing left to select.
 
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -66,15 +68,9 @@ impl Component for ActivityRail {
             .spacing(SP_1)
             .child(button(
                 IconName::Database,
-                "Catalog",
+                "Data",
                 layout.sidebar == Some(SidebarPane::Catalog),
                 |s| s.toggle_pane(SidebarPane::Catalog),
-            ))
-            .child(button(
-                IconName::Connections,
-                "Connections",
-                layout.sidebar == Some(SidebarPane::Connections),
-                |s| s.toggle_pane(SidebarPane::Connections),
             ))
             .child(rect().width(Size::px(1.)).height(Size::flex(1.)))
             .child(

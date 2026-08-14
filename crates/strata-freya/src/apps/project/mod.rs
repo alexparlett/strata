@@ -61,7 +61,7 @@ pub use views::ConnectionRequest;
 pub use views::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     ChartThemePreference, ChatThemePreference, CommandPaletteThemePreference,
-    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
+    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };

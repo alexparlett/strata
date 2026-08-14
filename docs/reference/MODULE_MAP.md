@@ -209,9 +209,11 @@ src/components/                  shared component library
                                  fixed sizes more than one surface agrees on (tool button, title
                                  bar, panel headers, table rows). P5-03's shared durations land
                                  here beside `PROGRESS_HOLD`
-  sidebar_row.rs                 the left pane's row shell: a preset over Freya's `SideBarItem`
+  sidebar_row.rs                 the launcher rail's row shell: a preset over Freya's `SideBarItem`
                                  (+ `Activable` for selection), so hover/selected dress and a11y
-                                 are shared by the catalog and, later, connections (W7)
+                                 come from one place. The project sidebar's rows left for the
+                                 fork's `TreeItem` with DB-05's tree, which carries the same
+                                 states plus depth guides and a disclosure slot
   tones.rs                       the four semantic tones (success · info · warning · error) read
                                  off the roles as **one** shared hook — the only place that reads
                                  them; three surfaces had grown three copies of the four-slot read
@@ -576,8 +578,11 @@ src/apps/project/                the project window (Valin-shaped)
     dialogs/                     the window's modal dialogs, mounted early so their key barrier
                                  precedes every feature listener: close_confirm (T2) ·
                                  drop_confirm (P3-05 — every removal that destroys project work,
-                                 the Connections pane's Forget included: one card, one
-                                 `DropTarget`, one event) · open_prompt (the This/New question) ·
+                                 a connection's Forget included: one card, one `DropTarget`, one
+                                 event) · schemas (DB-05 — the database connection's
+                                 **Schemas…** picker, over `db_listing`'s own tagged answer;
+                                 display-only, so it writes the def in place and keeps the row's
+                                 `Reg`) · open_prompt (the This/New question) ·
                                  profile_confirm (P3-10 — and `ProfileActions`, the one entry
                                  point every "profile this" trigger calls) · load_failed
                                  (P4-01 — not a barrier over features but the whole fault arm:
@@ -615,10 +620,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  model + effort pick · send-becomes-stop), mention.rs (the `@`
                                  picker over the catalog **store**)
     rail.rs                      the 48px activity rail: two `ToggleButton` groups — the top
-                                 picks the sidebar pane (Catalog · Connections), the
-                                 bottom the drawer tab (Problems · Events · History). `on` is
-                                 *derived* from the layout, the single source of truth; a press
-                                 routes through the layout store's toggle
+                                 picks the sidebar pane (Data, one button since DB-05 gave the
+                                 tree the connections too), the bottom the drawer tab (Problems ·
+                                 Events · History). `on` is *derived* from the layout, the single
+                                 source of truth; a press routes through the layout store's toggle
     configure_launch.rs          P4-11 — the slot a "Configure…" trigger sets and the one place
                                  that acts on it: a row's ⋮ menu is built inside an event handler
                                  where no hook may run, so the trigger sets `ConfigureTarget` and
@@ -634,33 +639,32 @@ src/apps/project/                the project window (Valin-shaped)
       project_menu.rs            the project switcher: trigger + Open… / open set / recents
                                  dropdown; every row opens through the window's `OpenCtx`
     sidebar/
-      mod.rs                     sidebar shell — pane-specific header (the catalog's filter +
-                                 refresh row, Connections' label + ⓘ + `+`) over the active pane
-      catalog/                   P3-02: mod (pane + sections), section, entry (entry/column/
-                                 saved-query rows), columns (flatten + tests), menu (P3-06: one
-                                 item list per row kind, shared by right-click and the ⋮ so the
-                                 two triggers can't drift; Drop opens the confirm, never drops),
-                                 interaction (tests). The TABLES `+` is **one press to the
-                                 Configure window** — an internal table is a third LOCATION
-                                 there (IT-01), not a second surface reached through a menu
-      connections/               W7 — the project's object stores: mod (pane + theme + the
-                                 header's ⓘ and `+`, one row per `ConnRow`), interaction (tests).
-                                 **The catalog entry row's shape**: badge, bucket, one trailing
-                                 status slot, ⋮. A row that registered is clean; a refused one
-                                 wears the warning triangle with the engine's reason on its
-                                 popover, in full — a two-line row spelling that reason under
-                                 the bucket ellipsized it to four useless words. What the slot
-                                 reports is the registration outcome, never a probe of its own:
-                                 `connect` resolves the chain once and throws the answer away so
-                                 this slot can mean something. `Loading` states nothing until the
-                                 wait outlasts `PROGRESS_HOLD`, then spins, holding the last
-                                 settled verdict across the gap.
-                                 The row is **not** clickable (the doc's "The Connections pane" section); Edit and Forget are the
-                                 ⋮ / right-click menu, and Forget sets the shared remove
-                                 confirm's `DropTarget::Connection(url)` — the dialog owns the
-                                 store mutation, the persist and `Engine::disconnect`. Add and
-                                 Edit set `ConnectionRequest` and stop, on the same terms: the
-                                 editor window is `ConnectionLauncher`'s at the project root
+      mod.rs                     sidebar shell — one pane, so the header is the tree's: the
+                                 filter field (which *is* the header — there is no label until it
+                                 folds), the `+` that opens the connection editor, the ↻ re-scan,
+                                 and the pinned collapse ×
+      catalog/                   P3-02 · W7 · DB-05 — the **data-sources tree**. Nested
+                                 components rather than one flat list, because each node
+                                 subscribes to its own `ProjChan` and a relation's subtree is
+                                 fetched only when it opens: mod (the pane, the `catalog` theme,
+                                 the filter, and `TreeCtx` — the pane-local open set keyed by
+                                 **node path**, the reveal slot and the scroller) · row (the
+                                 shared shell over the fork's `TreeItem`: depth guides, the app's
+                                 chevron in the disclosure slot, the ⋮, the secondary press, the
+                                 status slot's hold-back and the fold plan) · workspace (the
+                                 project's own node, named for the project, over TABLES · VIEWS ·
+                                 QUERIES; the TABLES `+` is **one press to the Configure window**
+                                 — an internal table is a third LOCATION there (IT-01), not a
+                                 second surface reached through a menu) · entry (entry / column /
+                                 saved-query rows) · database (a connection's schemas → Tables and
+                                 Views groups → relations, all off `Engine::db_listing`; a
+                                 relation is a leaf until DB-07 can address its columns) · store
+                                 (an object store's node, whose children are **links** into the
+                                 workspace rows that read through it, plus the pane's one empty
+                                 state) · columns (flatten + tests) · menu (P3-06: one item list
+                                 per row kind, shared by right-click and the ⋮ so the two triggers
+                                 can't drift; Drop and Forget open the confirm, never drop) ·
+                                 interaction (tests)
     inspector/                   P3-08/P3-09 — the selected column, and **only what was actually
                                  read or counted**: mod (frame + theme + the not-a-column
                                  states), model (resolve the ColRef path · the dynamic fact list ·

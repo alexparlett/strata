@@ -1,12 +1,15 @@
-//! One **sidebar row** — the shared shell behind every row in the left pane: the catalog's
-//! tables, views, columns and saved queries (P3-02), and the connections list (W7).
+//! One **sidebar row** — the launcher rail's row shell.
 //!
-//! Most of them are clickable and one is not. A connection row has no `on_press` at all (its
-//! actions are the ⋮ menu, `CONNECTIONS_SPEC.md` §1), and `SideBarItem` used to announce it as
-//! a focusable `Link` regardless — a tab stop with a focus ring that no key could activate.
-//! Fixed **in the fork**, not around it: role and focusability now follow whether the item is
-//! pressable. Hover still paints on both, because a row you can right-click is a row worth
-//! marking under the pointer.
+//! It served the project sidebar's catalog and connections rows too until DB-05 turned that pane
+//! into a tree, whose rows are the fork's `TreeItem`: the same hover / selected / focus states
+//! plus the depth guides and disclosure slot a tree needs, which this preset has no notion of.
+//! What both shells share is where their states come from — a component theme in the fork rather
+//! than a token on the consuming surface.
+//!
+//! Not every row is clickable, and `SideBarItem` used to announce one as a focusable `Link`
+//! regardless — a tab stop with a focus ring that no key could activate. Fixed **in the fork**,
+//! not around it: role and focusability follow whether the item is pressable. Hover still paints
+//! on both, because a row you can right-click is a row worth marking under the pointer.
 //!
 //! It is a thin preset over Freya's [`SideBarItem`], not a component of our own, because that
 //! already carries everything the rows genuinely share:

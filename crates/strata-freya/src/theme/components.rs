@@ -23,9 +23,9 @@ use crate::apps::launcher::LauncherThemePreference;
 use crate::apps::project::{
     CancelButtonThemePreference, CatalogThemePreference, CellViewThemePreference,
     ChartThemePreference, ChatThemePreference, CommandPaletteThemePreference,
-    ConnectionsThemePreference, DataGridThemePreference, DrawerThemePreference,
-    ExplainPlanThemePreference, HeaderBarThemePreference, InspectorThemePreference,
-    RecordViewThemePreference, StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
+    DataGridThemePreference, DrawerThemePreference, ExplainPlanThemePreference,
+    HeaderBarThemePreference, InspectorThemePreference, RecordViewThemePreference,
+    StatusBarThemePreference, TabBarThemePreference, TabThemePreference,
 };
 use crate::apps::settings::SettingsThemePreference;
 use crate::components::avatar::AvatarThemePreference;
@@ -560,10 +560,13 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             column_color: role(Role::TextMuted),
             meta_color: role(Role::TextDisabled),
             rail_fill: role(Role::Border),
+            row_hover_fill: role(Role::GhostElementHover),
+            row_selected_fill: role(Role::GhostElementSelected),
             table_color: role(Role::EntityTable),
             internal_color: role(Role::EntityTableInternal),
             view_color: role(Role::EntityView),
             query_color: role(Role::EntityQuery),
+            provider_color: role(Role::Accent),
             part_color: role(Role::Accent),
             part_background: role(Role::AccentBadge),
             warn_color: role(Role::Warning),
@@ -605,17 +608,6 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             paragraph_size: Preference::Specific(12.5),
             code_font_size: Preference::Specific(11.0),
             table_font_size: Preference::Specific(11.5),
-        },
-    );
-    th.set(
-        "connections",
-        ConnectionsThemePreference {
-            provider_color: role(Role::Accent),
-            bucket_color: role(Role::Text),
-            hint_color: role(Role::TextDisabled),
-            empty_background: role(Role::SurfaceBackground),
-            empty_border_fill: role(Role::BorderControl),
-            empty_color: role(Role::TextPlaceholder),
         },
     );
     th.set(

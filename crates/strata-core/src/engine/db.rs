@@ -55,6 +55,20 @@ use crate::secret::SecretRef;
 /// have to land on the same slot.
 pub const PG_PASSWORD: &str = "pg-password";
 
+/// The keystore slot `conn` owns, if it owns one — **the one place the derivation is written**,
+/// so the editor's put, the pool's read and a Forget's delete cannot address different entries.
+///
+/// `None` for every provider that keeps no secret. Nothing is stored on the def: the reference is
+/// recomputed from the connection's URL each time one is needed ([`SecretRef::derived`]), which is
+/// what keeps a machine-local id out of the committed `project.json` — and what makes a Forget
+/// able to clean up from the def it is about to remove.
+pub fn password_ref(conn: &ConnectionDef) -> Option<SecretRef> {
+    match conn.provider {
+        strata_model::Provider::Postgres(_) => Some(SecretRef::derived(PG_PASSWORD, &conn.url())),
+        _ => None,
+    }
+}
+
 /// One relation the server told us about at connect: its own spelling, and what kind it is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Relation {
@@ -68,12 +82,19 @@ pub struct Relation {
 }
 
 impl Relation {
+    /// Whether the server calls this a view — a view or a materialized view. The one place the
+    /// server's letters are read, so the data-sources tree's Tables / Views split and
+    /// DataFusion's own answer cannot disagree about a materialized view.
+    pub fn is_view(&self) -> bool {
+        matches!(self.relkind.as_str(), "v" | "m")
+    }
+
     /// What DataFusion calls this relation — the answer `information_schema.tables` and
     /// `SHOW TABLES` print.
     fn table_type(&self) -> TableType {
-        match self.relkind.as_str() {
-            "v" | "m" => TableType::View,
-            _ => TableType::Base,
+        match self.is_view() {
+            true => TableType::View,
+            false => TableType::Base,
         }
     }
 }

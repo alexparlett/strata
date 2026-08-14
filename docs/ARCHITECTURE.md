@@ -166,8 +166,8 @@ is [FREYA_STATE_ARCHITECTURE.md](FREYA_STATE_ARCHITECTURE.md).
 Every OS window is its own Freya tree with its own state; nothing reactive is shared across
 windows except the app-global config store and the theme registry.
 
-- The **project window** is the workspace: two 48px rails, a sidebar (catalog / connections /
-  agents), the tabbed workbench, a right pane (column inspector *or* the assistant's chat — the
+- The **project window** is the workspace: two 48px rails, a sidebar (the data-sources
+  tree — the project's own catalog and its connections in one tree), the tabbed workbench, a right pane (column inspector *or* the assistant's chat — the
   right rail picks one) and the drawer. One project per window; opening a project that is already
   windowed focuses it — that decision lives in one pure function.
 - The **launcher** shows when no project is open and closes when one does.

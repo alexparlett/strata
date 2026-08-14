@@ -4,8 +4,13 @@
 //!
 //! Two identifiers, deliberately distinct:
 //!
-//! - **`key`** — `"{owner}::{a.b.c}"`, the expansion-set key. Display-only: it only has to be
-//!   unique per row, and a collision would merely expand the wrong twig.
+//! - **`key`** — the tree's expansion key *and* the row's reconciliation key, so it has to be
+//!   **injective**, not merely unique-in-practice. A plain dotted join is neither: a struct `a`
+//!   with a child `b` and a flat column literally named `a.b` produce one string, which shares one
+//!   entry in the expansion set and — since the fix that keyed these rows — trips Freya's
+//!   duplicate-sibling-key panic. So each segment is escaped before it is joined ([`segment`]),
+//!   and the owner is separated by `::` rather than the `/` that joins node paths, so a table
+//!   named `orders/id` cannot address `orders`'s `id` column.
 //! - **`path`** — the `Vec<String>` that, with the owner, *is* the column's identity
 //!   ([`ColRef`](strata_model::ColRef)). Not a dotted string: names come from the user's files and
 //!   may contain dots, so a string that has to be parsed back is a bug waiting to be rediscovered.
@@ -15,9 +20,10 @@ use std::collections::HashSet;
 use strata_model::{ColumnInfo, Kind};
 
 /// One flattened, visible column row.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ColRow {
-    /// Expansion-set key (`"{owner}::{a.b.c}"`) — display-only, see the module docs.
+    /// The tree's expansion key and this row's reconciliation key — injective over `path`, see
+    /// the module docs.
     pub key: String,
     /// Path within the owner (`["address", "city"]`); a top-level column is one segment.
     pub path: Vec<String>,
@@ -32,9 +38,19 @@ pub struct ColRow {
     pub is_expanded: bool,
 }
 
-/// Walk `cols` into the visible rows under `owner`, appending to `out`. `parent` is the path of
-/// the column being descended into (empty at the top level), `parts` the owner's partition
-/// columns, `expanded` the set of expansion keys currently open.
+/// One path segment, escaped so the join that follows is reversible: a backslash doubles and a
+/// dot is backslash-escaped, so `["a", "b"]` and `["a.b"]` can no longer produce one string.
+///
+/// Escaping rather than a separator no name may contain, because "no name may contain it" is the
+/// assumption this key was built on and it was wrong — these names come from the user's files and
+/// from a remote server.
+fn segment(name: &str) -> String {
+    name.replace('\\', "\\\\").replace('.', "\\.")
+}
+
+/// Walk `cols` into the visible rows under `owner`, appending to `out`. `owner` is the owning
+/// row's **node path**, `parent` the path of the column being descended into (empty at the top
+/// level), `parts` the owner's partition columns, `expanded` the tree's expansion set.
 pub fn flatten_cols(
     owner: &str,
     parent: &[String],
@@ -47,7 +63,13 @@ pub fn flatten_cols(
     for c in cols {
         let mut path = parent.to_vec();
         path.push(c.name.clone());
-        let key = format!("{owner}::{}", path.join("."));
+        let key = format!(
+            "{owner}::{}",
+            path.iter()
+                .map(|s| segment(s))
+                .collect::<Vec<_>>()
+                .join(".")
+        );
         let has_children = !c.children.is_empty();
         let is_expanded = has_children && expanded.contains(&key);
         out.push(ColRow {
@@ -93,7 +115,7 @@ mod tests {
     fn flatten(cols: &[ColumnInfo], parts: &[(String, String)], expanded: &[&str]) -> Vec<ColRow> {
         let exp: HashSet<String> = expanded.iter().map(ToString::to_string).collect();
         let mut out = Vec::new();
-        flatten_cols("orders", &[], 0, cols, parts, &exp, &mut out);
+        flatten_cols("ws/tables/orders", &[], 0, cols, parts, &exp, &mut out);
         out
     }
 
@@ -116,21 +138,25 @@ mod tests {
             col("address", vec![field("city", vec![])]),
             col("id", vec![]),
         ];
-        let rows = flatten(&cols, &[], &["orders::address"]);
+        let rows = flatten(&cols, &[], &["ws/tables/orders::address"]);
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["address", "city", "id"], "depth-first, in place");
         assert_eq!(rows[1].depth, 1);
         assert_eq!(rows[1].path, vec!["address", "city"]);
-        assert_eq!(rows[1].key, "orders::address.city");
+        assert_eq!(rows[1].key, "ws/tables/orders::address.city");
     }
 
     #[test]
     fn nesting_recurses_only_through_expanded_ancestors() {
         let cols = vec![col("a", vec![field("b", vec![field("c", vec![])])])];
-        let rows = flatten(&cols, &[], &["orders::a.b"]);
+        let rows = flatten(&cols, &[], &["ws/tables/orders::a.b"]);
         assert_eq!(rows.len(), 1, "a closed ancestor hides the whole branch");
 
-        let rows = flatten(&cols, &[], &["orders::a", "orders::a.b"]);
+        let rows = flatten(
+            &cols,
+            &[],
+            &["ws/tables/orders::a", "ws/tables/orders::a.b"],
+        );
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["a", "b", "c"]);
         assert_eq!(rows[2].depth, 2);
@@ -143,12 +169,36 @@ mod tests {
             col("address", vec![field("city", vec![])]),
             col("city", vec![]),
         ];
-        let rows = flatten(&cols, &[], &["orders::address"]);
+        let rows = flatten(&cols, &[], &["ws/tables/orders::address"]);
         let nested = &rows[1];
         let top = &rows[2];
         assert_eq!(nested.name, top.name);
         assert_ne!(nested.path, top.path);
         assert_ne!(nested.key, top.key);
+    }
+
+    /// **The key is injective over the path**, which it has to be: it is the row's
+    /// reconciliation key as well as its expansion key, and two siblings sharing one is a panic
+    /// in Freya's differ, not a mis-expanded twig. A struct `a` holding `b` and a flat column
+    /// literally named `a.b` are the case a plain dotted join collapses.
+    #[test]
+    fn a_dotted_column_name_cannot_collide_with_a_nested_path() {
+        let cols = vec![col("a", vec![field("b", vec![])]), col("a.b", vec![])];
+        let rows = flatten(&cols, &[], &["ws/tables/orders::a"]);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["a", "b", "a.b"]);
+
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "ws/tables/orders::a",
+                "ws/tables/orders::a.b",
+                "ws/tables/orders::a\\.b"
+            ],
+            "the flat column's dot is escaped, so it is a different key from a.b nested"
+        );
+        assert_ne!(rows[1].key, rows[2].key);
     }
 
     #[test]
@@ -158,7 +208,7 @@ mod tests {
             col("nested", vec![field("year", vec![])]),
         ];
         let parts = vec![("year".to_string(), "Int32".to_string())];
-        let rows = flatten(&cols, &parts, &["orders::nested"]);
+        let rows = flatten(&cols, &parts, &["ws/tables/orders::nested"]);
         assert!(rows[0].is_part, "the top-level partition column is flagged");
         assert!(
             !rows[2].is_part,

@@ -9,7 +9,7 @@ A final surface-by-surface audit of the Freya app against the `.dc.html` canvase
 Part-1 "align vs build" pass, redone for the Freya build.
 
 ## The surface walk-list (current tree, 2026-08-12)
-Launcher · header/rail(s) · sidebar (catalog **and connections** panes) · editor/tabs · results
+Launcher · header/rail(s) · sidebar (the **data-sources tree**, which absorbed the connections pane in DB-05) · editor/tabs · results
 grid/toolbar/status/chart/explain · inspector · **chat pane** · drawer (events/history/problems) ·
 dialogs · command palette · settings (**incl. Settings ▸ AI**) · export · configure window ·
 **connection editor window**.
