@@ -439,6 +439,11 @@ fn alive(catalog: Catalog, report: ReportCtx) -> bool {
 /// The policy is "roll back what can be rolled back", not "mutations are atomic": `save_view`
 /// cannot, because `CREATE OR REPLACE VIEW` has already succeeded on the engine. The Problems
 /// drawer's `Project` scope carries the other half either way.
+///
+/// **A Forget bumps the catalog epoch**, because `Engine::disconnect` takes a catalog off the
+/// session — the discrete catalog mutation [`catalog_settled`] exists for. Without it a query
+/// naming the forgotten database keeps whatever verdict it last had, and completion goes on
+/// offering names nothing resolves.
 fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
@@ -531,9 +536,6 @@ fn drop_row(
                 return;
             }
             engine.disconnect(url);
-            // A forget takes a catalog off the session — the discrete catalog mutation
-            // `catalog_settled` is for. Without it, a query naming the forgotten database keeps
-            // whatever verdict it last had, and completion keeps offering names nothing resolves.
             catalog_settled(catalog);
         }
         DropTarget::Query { id, .. } => {

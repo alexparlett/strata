@@ -96,19 +96,7 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
     let listing = (connected && (open.is_open(&path) || filtering))
         .then(|| engine.db_listing(def))
         .flatten();
-    // The name relations are addressed by rides with them, because it is the *registered* one and
-    // an unlisted connection has neither: no listing, no schemas, no relation to address.
-    let (registered, schemas): (String, Vec<SchemaListingView>) = match listing {
-        Some((registered, schemas)) => (
-            registered,
-            schemas
-                .into_iter()
-                .filter(|s| s.visibility != SchemaVisibility::NotEnabled)
-                .filter(|s| !filtering || survives(s, needle))
-                .collect(),
-        ),
-        None => (String::new(), Vec::new()),
-    };
+    let (registered, schemas) = shown_schemas(listing, needle);
 
     let named =
         matches(&def.address, needle) || catalog.as_deref().is_some_and(|c| matches(c, needle));
@@ -190,6 +178,31 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
                 )
             }));
         }
+    }
+}
+
+/// What a connection's listing leaves the tree: the name its relations are addressed by, and the
+/// schemas it shows.
+///
+/// The two travel together because the name is the **registered** one, and a connection with no
+/// listing has neither — no listing, no schemas, and so no relation to address. That is what makes
+/// the empty name safe rather than a fallback: nothing reads it unless a schema survives to carry a
+/// relation, and none can.
+fn shown_schemas(
+    listing: Option<(String, Vec<SchemaListingView>)>,
+    needle: &str,
+) -> (String, Vec<SchemaListingView>) {
+    let filtering = !needle.is_empty();
+    match listing {
+        Some((registered, schemas)) => (
+            registered,
+            schemas
+                .into_iter()
+                .filter(|s| s.visibility != SchemaVisibility::NotEnabled)
+                .filter(|s| !filtering || survives(s, needle))
+                .collect(),
+        ),
+        None => (String::new(), Vec::new()),
     }
 }
 

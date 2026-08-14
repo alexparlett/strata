@@ -335,10 +335,11 @@ async fn enumeration(engine: &Engine, port: u16) {
 /// is that the two halves agree — that the names `Engine::database_syms` carries are the names
 /// the catalog actually resolves, rendered the way [`sql::qualified`] renders them. Which is also
 /// the tree gestures' half: they wrap this same address in `SELECT *` / `CREATE VIEW`.
+///
+/// The offers are compared **sorted**, because what only a server can pin is *which* names the
+/// offer holds; their ranking is `complete/tests.rs`'s and needs no server.
 async fn qualified_offer(engine: &Engine, conn: &ConnectionDef) {
     let catalog = sql::Catalog::default().with_databases(engine.database_syms([conn]));
-    // Sorted, because what is being pinned here is *which* names the offer holds; their ranking
-    // is `complete/tests.rs`'s and needs no server.
     let offer = |sql: &str| {
         let mut labels = sql::complete(sql, sql.len(), &catalog, false)
             .into_iter()
