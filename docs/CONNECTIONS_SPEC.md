@@ -218,33 +218,67 @@ A **child window** of the project window (`crates/strata-freya/src/apps/connecti
 def. Its rows, top to bottom — and which rows exist depends on the provider, and only on the
 provider (a control that cannot mean anything for the chosen provider is not shipped disabled):
 
-1. **PROVIDER** — segmented pill, S3 / GCS / HTTP.
-2. **The address box** — bucket for S3/GCS, whole origin URL for HTTP.
-3. **AUTHENTICATION** (S3 and GCS only) — the mode pill plus whatever it refers to. The S3
+1. **PROVIDER** — segmented pill, S3 / GCS / HTTP / PG (`ProviderId::ALL`, since this is the
+   picker that constant is for; the Configure window's LOCATION pill asks the narrower
+   `OBJECT_STORES` question).
+2. **The address box** — BUCKET for S3/GCS, URL for HTTP. A database has no single address box:
+   it splits `ConnectionDef::address` into **URL** (`host:port`) and **DATABASE** (`appdb`),
+   because a server and the database on it are two things Postgres names separately. The stored
+   def is still one `host:port/database` string, so `parse_pg_address` remains the only parse of
+   that grammar.
+3. **CATALOG**, **USER**, **PASSWORD**, **SSL MODE** (PG only), in that order. CATALOG is
+   `PgStore::catalog`, the prefix Strata queries the connection by (`pg` makes
+   `pg.public.orders`) — Strata's name for the connection, not anything the server has, and its
+   hint says so. It is the user's choice rather than derived from DATABASE, because two servers'
+   `analytics` would derive one prefix. Making it unnecessary for everyday queries is
+   **DB-09** (a current database, so unqualified names resolve). The
+   certificate path under SSL MODE appears for the two verifying modes and is optional there
+   (blank is the machine's own trust store). There is no SCHEMAS row: schema enablement is a
+   tree-node gesture (DB-05), where the live enumeration already sits and where one picker serves
+   New and Edit alike — a second surface for the same list is two controls that can disagree.
+4. **AUTHENTICATION** (S3 and GCS only) — the mode pill plus whatever it refers to. The S3
    profile is picked from a `Select` over the machine's own configuration
    (`Engine::aws_profiles` reads the section headers of `~/.aws/config` and `~/.aws/credentials`
    — names only, nothing from a profile's body).
-4. **REGION** and **ENDPOINT** (S3 only). A new connection opens with a **blank** region —
+5. **REGION** and **ENDPOINT** (S3 only). A new connection opens with a **blank** region —
    `us-east-1` is the placeholder, never the value, because a seeded `us-east-1` is exactly the
    silent builder default in the user's handwriting. Blank blocks Save and says why.
-5. **CLIENT OPTIONS** — the key/value table, edited as rows and committed as a map.
-6. A standing note saying where credentials actually come from — the no-secrets rule, stated in
-   the window that would otherwise look like the place to type a key.
+6. **CLIENT OPTIONS** (object stores only) — the key/value table, edited as rows and committed as
+   a map. A database speaks no HTTP, so the row and its validator are gated together.
+7. A standing note saying where credentials actually come from — per provider, and for PG the one
+   that says the password is this machine's keystore's and a colleague enters their own.
 
 A field's error lives in the **footer**, not on the field: one value both disables Save and
-explains it, so the form cannot hold two accounts of its own validity.
+explains it, so the form cannot hold two accounts of its own validity. Two of those the draft
+cannot answer alone, and both read the project's stored defs beside it — the URL clash, and a
+catalog name another database connection holds (`check_catalog_name`).
+
+**The PASSWORD row reports this machine, not the def.** The settings window's API-key marker is
+honest because it minted the reference when it stored one; a def carries only the *expectation*,
+so the row probes the local keystore once at mount and shows one of: no password expected, stored
+on this machine, expected but not stored here, still asking, or the keystore's own refusal. The
+two clearing gestures are deliberately separate presses — *remove from this machine* deletes the
+local entry and leaves `PgPassword::Keystore` standing, while *this connection uses no password*
+edits the shared def to `PgPassword::None`. Conflating them means one person casually breaking
+every colleague who has a password. There is no mode pill: a password is optional, so absence is
+a state rather than a mode.
 
 Save writes the def, persists the project, **deregisters the old URL itself** when the edit moved
-the bucket or the provider (nothing downstream ever sees the def it replaced), and asks for a
-whole-catalog registration pass; the window then watches its own row and closes when the
-connection settles.
+the bucket, the provider or a database's user (nothing downstream ever sees the def it replaced),
+and asks for a whole-catalog registration pass; the window then watches its own row and closes
+when the connection settles. A database connection has one step in front of all of that: whatever
+this machine's keystore owes the password, on a worker, so a keystore that refuses writes nothing
+— a migration when the identity moved (`secret::migrate_derived`), then the put or the delete.
+A **catalog-name** move with an unchanged URL needs nothing of Save's: `db::connect` replaces on
+re-connect, and the whole-catalog pass is what re-connects.
 
 ## The Connections pane
 
 A sidebar pane beside the Catalog, reached from the activity rail (clicking the active pane
 collapses the sidebar). Each row is a catalog-style row:
 
-- a **provider badge** (`S3` / `GCS` / `HTTP`),
+- a **provider badge** (`Provider::to_string()` — `S3` / `GCS` / `HTTP`, and `PG` since DB-04,
+  which the pane renders unpolished until DB-05's data-sources tree absorbs it),
 - the bucket (or origin),
 - a **status glyph**: nothing when connected, a spinner while the registration pass is out, or a
   warning triangle whose hover shows the engine's refusal in full. The status *is* the connect

@@ -3,7 +3,9 @@
 //! **This is the only thing in the window that writes anything.** Cancel just closes; nothing is
 //! committed until Save.
 //!
-//! Save does four things and registers none of them itself:
+//! A database connection has a fifth step, and it comes **first**: whatever this machine's
+//! keystore owes the password ([`password_ops`]). A def claiming `PgPassword::Keystore` over a
+//! keystore that refused the write is a connection nothing can log in with.
 //!
 //! 1. writes the def onto the shared project store — removing the row it is **moving from**
 //!    first, when the edit changed the bucket or the provider and therefore the connection's
@@ -26,6 +28,9 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
+use strata_core::engine::db::PG_PASSWORD;
+use strata_core::secret::{migrate_derived, Secret, SecretError, SecretRef};
+use strata_model::{check_catalog_name, ConnectionDef, Provider};
 
 use crate::apps::connection::{ConnectionCtx, ConnectionTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
@@ -39,6 +44,7 @@ use crate::components::metrics::ACTION_HEIGHT;
 use crate::components::metrics::{SP_4, SP_5};
 use crate::components::typography::{Control, Path};
 use crate::components::window::window_theme;
+use crate::task::offload;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
 const FOOTER_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
@@ -58,13 +64,18 @@ impl Component for Footer {
         let report = use_report();
         let platform = use_hook(Platform::get);
 
-        let connecting = matches!(*ctx.status.read(), Status::Connecting(_));
+        let busy = match *ctx.status.read() {
+            Status::Storing => Some("Saving…"),
+            Status::Connecting(_) => Some("Connecting…"),
+            Status::Idle | Status::Failed(_) => None,
+        };
         let scanning = catalog.read().is_scanning();
         let note = save_note(
             ctx.draft
                 .read()
                 .blocker()
-                .or_else(|| url_clash(ctx, project)),
+                .or_else(|| url_clash(ctx, project))
+                .or_else(|| catalog_clash(ctx, project)),
             scanning,
         );
 
@@ -78,14 +89,11 @@ impl Component for Footer {
         let save = Button::new()
             .filled()
             .height(Size::px(ACTION_HEIGHT))
-            .enabled(!connecting && note.is_none())
+            .enabled(busy.is_none() && note.is_none())
             .on_press({
                 move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), report)
             })
-            .child(Control::new(match connecting {
-                true => "Connecting…",
-                false => "Save",
-            }));
+            .child(Control::new(busy.unwrap_or("Save")));
 
         rect()
             .width(Size::fill())
@@ -102,7 +110,7 @@ impl Component for Footer {
                     .background(win.background)
                     .child(
                         rect().width(Size::flex(1.)).maybe_child(
-                            note.filter(|_| !connecting).map(|why| {
+                            note.filter(|_| busy.is_none()).map(|why| {
                                 Path::new(why).color(form.hint_color).max_lines(2).wrap()
                             }),
                         ),
@@ -148,6 +156,83 @@ fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) 
         .then(|| format!("'{url}' is already a connection in this project."))
 }
 
+/// The other blocker the draft cannot see: a **catalog name** another database connection in this
+/// project already registers under.
+///
+/// `check_catalog_name` rather than a comparison written here, so the field refuses what
+/// `engine::db::connect` refuses, in the same words. It folds, unlike [`url_clash`] beside it,
+/// because a catalog name is a SQL identifier. The set is the project's *stored* defs where the
+/// engine's is what is live — a connection that failed to connect reserves nothing.
+fn catalog_clash(
+    ctx: ConnectionCtx,
+    project: RadioStation<ProjectState, ProjChan>,
+) -> Option<String> {
+    let def = ctx.draft.read().def();
+    let existing: Vec<ConnectionDef> = project
+        .peek()
+        .connections
+        .iter()
+        .map(|c| c.def.clone())
+        .collect();
+    check_catalog_name(&existing, &def).err()
+}
+
+/// One thing Save owes this machine's keystore. A list rather than a verdict because the *order*
+/// is the content of the answer: a migration has to reach the new slot before a put lands on it.
+#[derive(Clone, PartialEq, Debug)]
+enum PasswordOp {
+    /// The identity moved, so the derived reference moved with it.
+    Migrate(SecretRef, SecretRef),
+    Put(SecretRef, Secret),
+    /// *Remove from this machine*, the "uses no password" edit, or a connection that is no longer
+    /// a database — in which case nothing would ever name the entry again.
+    Delete(SecretRef),
+}
+
+/// Plan a save of `next` over `previous`, the def as this window opened it.
+///
+/// Pure, and called from Save rather than from `def()`: `blocker` assembles a def per keystroke,
+/// so a keystore write there would be a platform call — on macOS a Keychain prompt — per frame.
+fn password_ops(
+    previous: Option<&ConnectionDef>,
+    next: &ConnectionDef,
+    typed: &str,
+    removed: bool,
+) -> Vec<PasswordOp> {
+    let slot = |def: &ConnectionDef| SecretRef::derived(PG_PASSWORD, &def.url());
+    let was = previous.filter(|def| matches!(def.provider, Provider::Postgres(_)));
+    let mut ops = Vec::new();
+
+    let Provider::Postgres(_) = next.provider else {
+        ops.extend(was.map(|def| PasswordOp::Delete(slot(def))));
+        return ops;
+    };
+
+    if let Some(old) = was.filter(|def| def.url() != next.url()) {
+        ops.push(PasswordOp::Migrate(slot(old), slot(next)));
+    }
+    match Secret::new(typed) {
+        Some(secret) => ops.push(PasswordOp::Put(slot(next), secret)),
+        None if removed => ops.push(PasswordOp::Delete(slot(next))),
+        None => {}
+    }
+    ops
+}
+
+/// Carry out `ops` in order, stopping at the first refusal. Blocking, so it runs on a worker; a
+/// keystore that refuses is reported and the save does not happen, never answered by writing the
+/// password somewhere else.
+fn run_password_ops(ops: &[PasswordOp]) -> Result<(), SecretError> {
+    for op in ops {
+        match op {
+            PasswordOp::Migrate(from, to) => migrate_derived(from, to)?,
+            PasswordOp::Put(slot, secret) => slot.put(secret)?,
+            PasswordOp::Delete(slot) => slot.delete()?,
+        }
+    }
+    Ok(())
+}
+
 /// Write the def, persist it, drop what the old URL registered, and ask for the pass. See the
 /// module doc.
 ///
@@ -166,6 +251,56 @@ fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) 
 /// seconds to 308. A UI test that dials out to a bucket nobody owns is a bad trade for a refusal
 /// arriving a second earlier.
 fn save(
+    mut ctx: ConnectionCtx,
+    project: RadioStation<ProjectState, ProjChan>,
+    rescan: CatalogRescan,
+    engine: EngineCtx,
+    report: ReportCtx,
+) {
+    let def = ctx.draft.peek().def();
+    let previous = ctx.target.peek().editing().and_then(|url| {
+        project
+            .peek()
+            .connections
+            .iter()
+            .find(|c| c.def.url() == url)
+            .map(|row| row.def.clone())
+    });
+    let ops = password_ops(
+        previous.as_ref(),
+        &def,
+        &ctx.password.peek(),
+        *ctx.password_removed.peek(),
+    );
+    if ops.is_empty() {
+        commit(ctx, project, rescan, engine, report);
+        return;
+    }
+
+    ctx.status.set(Status::Storing);
+    spawn(async move {
+        let landed = offload(move || run_password_ops(&ops)).await;
+        match landed {
+            Some(Ok(())) => commit(ctx, project, rescan, engine, report),
+            Some(Err(why)) => ctx.status.set(Status::Failed(format!(
+                "The password could not be written to this machine's keystore, so nothing was \
+                 saved. {why}"
+            ))),
+            None => ctx.status.set(Status::Failed(
+                "The password could not be written to this machine's keystore: a worker did not \
+                 answer. Nothing was saved."
+                    .into(),
+            )),
+        }
+    });
+}
+
+/// The rest of Save, once this machine's keystore is in the state the def is about to claim.
+///
+/// Split out rather than inlined behind an `await`, so a save with no password work stays
+/// synchronous: made asynchronous for everyone, the interaction tests that press this button
+/// would assert a frame that has not happened yet.
+fn commit(
     mut ctx: ConnectionCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
@@ -217,7 +352,131 @@ fn save(
 
 #[cfg(test)]
 mod tests {
-    use super::save_note;
+    use strata_model::{PgPassword, PgStore, S3Store};
+
+    use super::*;
+
+    fn pg(address: &str, user: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: address.into(),
+            provider: Provider::Postgres(PgStore {
+                catalog: "warehouse".into(),
+                user: user.into(),
+                password: PgPassword::Keystore,
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        }
+    }
+
+    fn slot(def: &ConnectionDef) -> SecretRef {
+        SecretRef::derived(PG_PASSWORD, &def.url())
+    }
+
+    /// **Nothing typed, nothing moved, nothing pressed is no keystore call at all**, so an
+    /// ordinary Save never raises a Keychain prompt for a password nobody touched.
+    #[test]
+    fn a_save_that_touches_no_password_asks_the_keystore_nothing() {
+        let def = pg("db:5432/analytics", "reader");
+        assert_eq!(password_ops(Some(&def), &def, "", false), []);
+        assert_eq!(
+            password_ops(None, &def, "  ", false),
+            [],
+            "blank is nothing"
+        );
+
+        let s3 = ConnectionDef {
+            address: "acme-lake".into(),
+            provider: Provider::S3(S3Store::default()),
+            client_config: Default::default(),
+        };
+        assert_eq!(password_ops(Some(&s3), &s3, "hunter2", true), []);
+    }
+
+    /// **An identity move migrates the entry, and the migration comes before the put.** The
+    /// reference is derived from the URL, so an edit to the address or the user moves the slot;
+    /// run the other way round, a save that moved the identity *and* typed a new password would
+    /// carry the old one over it.
+    #[test]
+    fn a_moved_identity_migrates_before_anything_lands_on_the_new_slot() {
+        let old = pg("db:5432/analytics", "reader");
+        let new = pg("db:5432/analytics", "writer");
+        assert_eq!(
+            password_ops(Some(&old), &new, "", false),
+            [PasswordOp::Migrate(slot(&old), slot(&new))]
+        );
+
+        let ops = password_ops(Some(&old), &new, "hunter2", false);
+        assert_eq!(
+            ops,
+            [
+                PasswordOp::Migrate(slot(&old), slot(&new)),
+                PasswordOp::Put(slot(&new), Secret::new("hunter2").unwrap()),
+            ]
+        );
+
+        let moved_address = pg("db:5433/analytics", "reader");
+        assert_eq!(
+            password_ops(Some(&old), &moved_address, "", false),
+            [PasswordOp::Migrate(slot(&old), slot(&moved_address))],
+            "the address is the other half of the identity"
+        );
+    }
+
+    /// **A typed password is trimmed to nothing or stored, never both** — `Secret::new`'s fork, so
+    /// a cleared box cannot become an empty stored password.
+    #[test]
+    fn a_typed_password_is_stored_under_the_connections_own_slot() {
+        let def = pg("db:5432/analytics", "reader");
+        assert_eq!(
+            password_ops(Some(&def), &def, " hunter2 ", false),
+            [PasswordOp::Put(slot(&def), Secret::new("hunter2").unwrap())]
+        );
+        assert_eq!(
+            password_ops(Some(&def), &def, "hunter2", true),
+            [PasswordOp::Put(slot(&def), Secret::new("hunter2").unwrap())],
+            "typing over a pending removal is the password you meant"
+        );
+    }
+
+    /// **Every way of abandoning a password deletes this machine's entry**, including switching
+    /// the provider away from the database arm — which drops `PgPassword` from the def entirely,
+    /// so nothing would ever name that slot again.
+    #[test]
+    fn an_abandoned_password_is_deleted_from_this_machine() {
+        let def = pg("db:5432/analytics", "reader");
+        assert_eq!(
+            password_ops(Some(&def), &def, "", true),
+            [PasswordOp::Delete(slot(&def))],
+            "remove from this machine"
+        );
+
+        let unused = ConnectionDef {
+            provider: Provider::Postgres(PgStore {
+                catalog: "warehouse".into(),
+                user: "reader".into(),
+                password: PgPassword::None,
+                ..Default::default()
+            }),
+            ..def.clone()
+        };
+        assert_eq!(
+            password_ops(Some(&def), &unused, "", true),
+            [PasswordOp::Delete(slot(&def))],
+            "this connection uses no password — the same slot, since the identity did not move"
+        );
+
+        let s3 = ConnectionDef {
+            address: "acme-lake".into(),
+            provider: Provider::S3(S3Store::default()),
+            client_config: Default::default(),
+        };
+        assert_eq!(
+            password_ops(Some(&def), &s3, "", false),
+            [PasswordOp::Delete(slot(&def))],
+            "and the slot deleted is the one the old def named, not the new URL's"
+        );
+    }
 
     #[test]
     fn an_actionable_blocker_outranks_the_re_scan() {

@@ -16,10 +16,10 @@ use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
+use strata_model::{ConnectionDef, PgPassword, PgSslMode, PgStore, Provider, ProviderId, S3Store};
 
 use super::views::{ConnectionBody, Footer, OPTION_KEY_WIDTH};
-use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, Status};
+use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, PasswordProbe, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{CatalogState, Log, PersistFaults, ProjChan, ProjectState, ScanRequest};
 use crate::theme::strata_theme;
@@ -65,6 +65,9 @@ type Handles = (
 );
 
 /// The editor over `draft`, opened on `target`, against its own scratch project.
+///
+/// No keystore is opened: the window's password probe is a root `use_hook` and the root is not
+/// mounted, so `password_probe` is seeded with the answer that read would have parked.
 fn runner(
     tag: &'static str,
     target: ConnectionTarget,
@@ -84,11 +87,15 @@ fn runner(
                 RadioStation::<ProjectState, ProjChan>::create(project(&root))
             });
             let ctx = r.provide_root_context(|| ConnectionCtx {
+                password_expected: State::create(draft.pg.password),
                 draft: State::create(draft.clone()),
                 target: State::create(target.clone()),
                 status: State::create(Status::Idle),
                 profiles: State::create(Some(Vec::new())),
                 selected_option: State::create(None),
+                password: State::create(String::new()),
+                password_removed: State::create(false),
+                password_probe: State::create(PasswordProbe::Absent),
             });
             (ctx, project, rescan)
         },
@@ -410,6 +417,240 @@ fn clicking_into_either_box_of_an_option_row_selects_it() {
     runner.click_cursor(point);
     settle(&mut runner);
     assert_eq!(*ctx.selected_option.peek(), Some(ids[0]));
+}
+
+/// **The database arm's rows are its own, and none of the object stores' are** — a region, an
+/// endpoint, an auth pill and a client-options table cannot mean anything for a database.
+///
+/// Driven through the picker rather than mounted on a Postgres draft, because reaching this arm
+/// at all is half the deliverable: the picker iterated `OBJECT_STORES` while the rows did not
+/// exist, and nothing else would have said so.
+#[test]
+fn a_database_has_the_database_rows_and_none_of_the_object_stores() {
+    let (mut runner, (ctx, ..)) = runner("pg-rows", ConnectionTarget::New, s3_draft());
+    settle(&mut runner);
+
+    click_lowest(&mut runner, "PG");
+    assert_eq!(ctx.draft.peek().provider, ProviderId::Postgres);
+
+    for row in ["URL", "DATABASE", "CATALOG", "USER", "PASSWORD", "SSL MODE"] {
+        assert!(shows(&runner, row), "{row}: {:?}", texts(&runner));
+    }
+    for row in [
+        "BUCKET",
+        "REGION",
+        "ENDPOINT",
+        "AUTHENTICATION",
+        "CLIENT OPTIONS",
+    ] {
+        assert!(!shows(&runner, row), "{row} is object-store vocabulary");
+    }
+    assert!(
+        !shows(&runner, "ROOT CERTIFICATE"),
+        "'prefer' does not verify, so there is nothing for a certificate to do"
+    );
+
+    ctx.edit(|draft| draft.pg.sslmode = PgSslMode::VerifyFull);
+    settle(&mut runner);
+    assert!(shows(&runner, "ROOT CERTIFICATE"), "{:?}", texts(&runner));
+
+    click_lowest(&mut runner, "S3");
+    assert!(shows(&runner, "REGION"));
+    assert!(!shows(&runner, "DATABASE"));
+    assert!(!shows(&runner, "CATALOG"));
+}
+
+/// **A database's blockers block, and the footer is where they are said** — including the one the
+/// draft cannot answer on its own, a catalog name another connection in this project holds.
+#[test]
+fn a_database_draft_is_blocked_and_explained_beside_the_button() {
+    let draft = ConnectionDraft {
+        provider: ProviderId::Postgres,
+        address: "db.internal:5432/analytics".into(),
+        pg: PgStore {
+            user: "reader".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (mut runner, (ctx, mut project, rescan)) =
+        runner("pg-blocked", ConnectionTarget::New, draft);
+    settle(&mut runner);
+
+    assert!(
+        shows(&runner, "This connection has no catalog name."),
+        "{:?}",
+        texts(&runner)
+    );
+    click_lowest(&mut runner, "Save");
+    assert_eq!(project.peek().connections.len(), 1, "nothing was written");
+    assert_eq!(rescan.peek().seq, 0);
+
+    {
+        let mut p = project.write_channel(ProjChan::Connections);
+        p.upsert_connection(ConnectionDef {
+            address: "other:5432/sales".into(),
+            provider: Provider::Postgres(PgStore {
+                catalog: "warehouse".into(),
+                user: "reader".into(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        });
+    }
+    ctx.edit(|draft| draft.pg.catalog = "WAREHOUSE".into());
+    settle(&mut runner);
+
+    let said = texts(&runner);
+    assert!(
+        said.iter()
+            .any(|t| t.contains("is already the catalog name")
+                && t.contains("postgres://reader@other:5432/sales")),
+        "a folded clash against another connection: {said:?}"
+    );
+
+    ctx.edit(|draft| draft.pg.catalog = "pg".into());
+    settle(&mut runner);
+    click_lowest(&mut runner, "Save");
+    assert_eq!(rescan.peek().seq, 1, "and it saves once the name is free");
+}
+
+/// **A password typed into a new connection reaches the def as an expectation and nothing more.**
+/// The value is bound for this machine's keystore, which no test opens; what is asserted is the
+/// half that is the def's.
+#[test]
+fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine() {
+    let draft = ConnectionDraft {
+        provider: ProviderId::Postgres,
+        address: "db.internal:5432/analytics".into(),
+        pg: PgStore {
+            catalog: "pg".into(),
+            user: "reader".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (mut runner, (ctx, ..)) = runner("pg-password", ConnectionTarget::New, draft);
+    settle(&mut runner);
+
+    assert_eq!(ctx.draft.peek().pg.password, PgPassword::None);
+    assert!(
+        shows(&runner, "This connection signs in without a password."),
+        "{:?}",
+        texts(&runner)
+    );
+
+    let mut typed = ctx.password;
+    typed.set("hunter2".into());
+    settle(&mut runner);
+    assert_eq!(
+        ctx.draft.peek().pg.password,
+        PgPassword::Keystore,
+        "typing one is what makes the def expect one"
+    );
+    assert!(shows(
+        &runner,
+        "This password goes into this machine's keystore when you save."
+    ));
+
+    typed.set(String::new());
+    settle(&mut runner);
+    assert_eq!(
+        ctx.draft.peek().pg.password,
+        PgPassword::None,
+        "and clearing the box puts back what the def said, rather than leaving a committed \
+         expectation nothing holds"
+    );
+}
+
+/// **The two clearing gestures are two presses, and only one of them edits the def.** Made
+/// casually on a machine with no entry, "this connection uses no password" breaks the colleague
+/// who has one, so it is never what a removal does.
+#[test]
+fn removing_a_password_from_this_machine_is_not_declaring_the_connection_has_none() {
+    let draft = ConnectionDraft {
+        provider: ProviderId::Postgres,
+        address: "db.internal:5432/analytics".into(),
+        pg: PgStore {
+            catalog: "pg".into(),
+            user: "reader".into(),
+            password: PgPassword::Keystore,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (mut runner, (ctx, ..)) = runner(
+        "pg-forget",
+        ConnectionTarget::Edit("postgres://reader@db.internal:5432/analytics".into()),
+        draft,
+    );
+    let mut probe = ctx.password_probe;
+    probe.set(PasswordProbe::Stored);
+    settle(&mut runner);
+
+    assert!(
+        shows(
+            &runner,
+            "A password is stored on this machine. Type a new one to replace it."
+        ),
+        "{:?}",
+        texts(&runner)
+    );
+
+    click_lowest(&mut runner, "Remove from this machine");
+    assert_eq!(
+        ctx.draft.peek().pg.password,
+        PgPassword::Keystore,
+        "the connection still expects one, so other machines keep theirs"
+    );
+    assert!(*ctx.password_removed.peek());
+
+    click_lowest(&mut runner, "This connection uses no password");
+    assert_eq!(
+        ctx.draft.peek().pg.password,
+        PgPassword::None,
+        "this one is a def edit, and it is the only one that is"
+    );
+    assert!(
+        *ctx.password_removed.peek(),
+        "and it drops this machine's entry too, which nothing would name again"
+    );
+}
+
+/// **This machine's answer is not the def's**: a committed `PgPassword::Keystore` says a password
+/// is expected, not that this machine holds one.
+#[test]
+fn the_password_row_says_what_this_machine_holds() {
+    let draft = ConnectionDraft {
+        provider: ProviderId::Postgres,
+        address: "db.internal:5432/analytics".into(),
+        pg: PgStore {
+            catalog: "pg".into(),
+            user: "reader".into(),
+            password: PgPassword::Keystore,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (mut runner, (ctx, ..)) = runner("pg-probe", ConnectionTarget::New, draft);
+    let mut probe = ctx.password_probe;
+
+    for (answer, said) in [
+        (PasswordProbe::Asking, "Checking this machine's keystore…"),
+        (
+            PasswordProbe::Stored,
+            "A password is stored on this machine. Type a new one to replace it.",
+        ),
+        (
+            PasswordProbe::Absent,
+            "This connection expects a password and none is stored on this machine. Enter it \
+             here.",
+        ),
+    ] {
+        probe.set(answer);
+        settle(&mut runner);
+        assert!(shows(&runner, said), "{said:?}: {:?}", texts(&runner));
+    }
 }
 
 /// A URL another connection already holds is refused, because `upsert_connection` replaces on it

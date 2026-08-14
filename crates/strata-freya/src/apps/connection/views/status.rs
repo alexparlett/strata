@@ -9,6 +9,9 @@
 //! The failure text is whatever the engine returned. `engine::store` writes those messages for
 //! every caller — "This S3 connection needs a region", "The AWS profile 'analytics' resolved no
 //! credentials: …" — and this window must not grow a second set.
+//!
+//! `Status::Storing` draws nothing: the footer's button already says "Saving…", and these blocks
+//! are the engine's voice.
 
 use freya::components::CircularLoader;
 use freya::prelude::*;
@@ -38,6 +41,7 @@ impl Component for StatusBlock {
 
         match status {
             Status::Idle => rect(),
+            Status::Storing => rect(),
             Status::Connecting(url) => rect()
                 .width(Size::fill())
                 .horizontal()

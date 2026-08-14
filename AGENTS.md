@@ -48,6 +48,9 @@ editing fork code, and §6 here for how the fork relates to the app.
   Never shape a production signature or add an `Option` to satisfy a test — build the test's store
   inline and pull deps from context.
 - **No over-engineering.** Private app: use `pub` freely; don't hand-annotate per-field visibility.
+- **Doc comments only, one line or a short paragraph.** No inline `//` inside a body — extract or
+  rename instead. A doc comment says what the reader cannot get from the code, and it is about the
+  code, never about the task, the review or the conversation that produced it.
 - **A path is qualified in the `use` and nowhere else.** Import the *item*, use its bare name;
   importing a module to qualify through is the same rule broken. Exceptions: visibility modifiers,
   intra-doc links, and the `std` aliases whose module segment disambiguates (`io::Result`). On a

@@ -1,6 +1,7 @@
-//! The **connection editor** (W7 · 03 / design `Connections.dc.html`) — add a remote object
-//! store to this project, or edit one: its provider, its bucket, and where that provider's
-//! credentials are to be found.
+//! The **connection editor** (W7 · 03 / design `Connections.dc.html`) — add a remote source to
+//! this project, or edit one: its provider, its address, and where that provider's credentials
+//! are to be found. Four providers, three of them object stores and one a **database** (DB-04),
+//! which is a fourth segment on the same pill rather than a surface of its own.
 //!
 //! **A window, not a modal**, and the Configure window's shape throughout. The canvas is a
 //! 480 × 588 frame with traffic lights, a drag bar and its own footer, so this is a child window
@@ -13,10 +14,17 @@
 //! windows on one def would both `upsert_connection` and both persist, so the second would
 //! silently revert the first.
 //!
-//! **Nothing here holds a secret, and there is no field that could.** The auth controls choose
-//! between the host's own chain, a named `~/.aws` profile and a service-account key **file
-//! path** — [`strata_model::S3Auth`] and [`strata_model::GcsAuth`] have no variant carrying a
-//! key, so a form built from them cannot grow one by accident.
+//! **No secret reaches the def, and the object-store arms have no field that could.** Their auth
+//! controls choose between the host's own chain, a named `~/.aws` profile and a service-account
+//! key **file path** — [`strata_model::S3Auth`] and [`strata_model::GcsAuth`] have no variant
+//! carrying a key, so a form built from them cannot grow one by accident.
+//!
+//! **A database password is the one secret this window handles, and it never touches the draft.**
+//! A server has no host-side credential chain to defer to, so the box exists; it writes this
+//! machine's OS keystore under a reference derived from the connection's URL, while the def
+//! records only the expectation ([`strata_model::PgPassword`]). The typed text lives on
+//! [`ConnectionCtx::password`] for the window's lifetime, the settings window's rule for provider
+//! keys one surface along.
 //!
 //! **No theme of its own** (Configure's rule): the chrome is `components::window`, everything
 //! form-shaped is the shared `form` theme, and the semantic tones come through `tones()`.
@@ -32,10 +40,11 @@
 //! keeps it open carrying the engine's own reason — worth staying open for here more than anywhere
 //! else, because that reason describes the very field the user still has in front of them.
 //!
-//! **An edit that moves the bucket or the provider moves the connection's identity**, and the
-//! store registered under the old URL survives it: `engine::store::connect` only ever sees the
-//! def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the same
-//! `Engine::disconnect` call Forget makes.
+//! **An edit that moves the address, the provider or a database's user moves the connection's
+//! identity**, and what the old URL registered survives it: `engine::store::connect` only ever
+//! sees the def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the
+//! same `Engine::disconnect` call Forget makes — and for a database that move takes the keystore
+//! entry with it, since the reference is derived from the URL.
 //!
 //! **Closing discards the draft, deliberately without asking** — nothing is written until Save,
 //! so a close costs a form rather than data (Configure settled this; a dirty-close confirm was
@@ -51,6 +60,9 @@ use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
+use strata_core::engine::db::PG_PASSWORD;
+use strata_core::secret::SecretRef;
+use strata_model::{PgPassword, ProviderId};
 
 use crate::apps::connection::views::{use_watch_connection, ConnectionBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
@@ -61,9 +73,10 @@ use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{quit, use_owner_pin, use_register_window, Subtree, WindowKind};
 use crate::state::{use_share_config, AppCtx};
+use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
-pub use model::{ConnectionDraft, ConnectionTarget};
+pub use model::{ConnectionDraft, ConnectionTarget, PasswordProbe, PasswordRow};
 
 /// Everything a press of the pane's `+`, its empty-state CTA or a row's **Edit connection**
 /// needs, resolved where the stores and the DI handles both live and carried to the trigger as a
@@ -108,6 +121,13 @@ impl PartialEq for ConnectionLaunch {
 pub enum Status {
     /// Waiting for the user.
     Idle,
+    /// A password is going into (or out of) this machine's keystore, before anything is written.
+    ///
+    /// Its own state rather than a flag beside [`Connecting`](Self::Connecting), which means "a
+    /// pass is out for this URL" and is what `use_watch_connection` acts on: set before the store
+    /// write it would read an edited connection's existing `Ready` row and close the window over
+    /// a save that had not happened.
+    Storing,
     /// The def is written and a registration pass is in flight for this URL. The window watches
     /// that row: `Ready` closes it, `Failed` brings the engine's reason back here.
     Connecting(String),
@@ -136,6 +156,21 @@ pub struct ConnectionCtx {
     /// on a row would count as an edit and clear the engine's failure message out from under a
     /// user who was still reading it.
     pub selected_option: State<Option<u64>>,
+    /// **The PASSWORD box's text** — window-lifetime, in memory, and nowhere near the draft
+    /// (`apps/settings/views/ai/keys.rs`'s rule: a secret has nowhere in a def to live). A
+    /// `String` because that is what the box binds; it is wrapped in a `Secret` at the moment it
+    /// is written.
+    pub password: State<String>,
+    /// **What the def expects with the box empty**, which is why `pg.password` cannot also be the
+    /// seed: clearing the box has to put back what the def said, and a value the box overwrites
+    /// has forgotten it. A stray keystroke would otherwise commit an expectation nothing holds.
+    pub password_expected: State<PgPassword>,
+    /// A pending delete of this machine's entry, from either press that abandons it. Separate
+    /// from [`password_expected`](Self::password_expected) because that is where the two presses
+    /// part: a removal leaves the expectation standing, so other machines keep their own.
+    pub password_removed: State<bool>,
+    /// What this machine's keystore said about the entry the def expects.
+    pub password_probe: State<PasswordProbe>,
 }
 
 impl ConnectionCtx {
@@ -148,7 +183,7 @@ impl ConnectionCtx {
     /// each control: `use_side_effect` builds its closure once, so a captured comparison value
     /// freezes at the first render and reverting a field silently does nothing.)
     pub fn edit(mut self, f: impl FnOnce(&mut ConnectionDraft)) {
-        if matches!(*self.status.peek(), Status::Connecting(_)) {
+        if matches!(*self.status.peek(), Status::Storing | Status::Connecting(_)) {
             return;
         }
         {
@@ -279,11 +314,15 @@ impl App for ConnectionApp {
                         }),
                 };
                 ConnectionCtx {
+                    password_expected: State::create(draft.pg.password),
                     draft: State::create(draft),
                     target: State::create(target),
                     status: State::create(Status::Idle),
                     profiles: State::create(None),
                     selected_option: State::create(None),
+                    password: State::create(String::new()),
+                    password_removed: State::create(false),
+                    password_probe: State::create(PasswordProbe::Asking),
                 }
             }
         });
@@ -297,6 +336,32 @@ impl App for ConnectionApp {
                     profiles.set(Some(found));
                 });
             }
+        });
+
+        use_hook(move || {
+            let expects = {
+                let draft = ctx.draft.peek();
+                (draft.provider == ProviderId::Postgres
+                    && draft.pg.password == PgPassword::Keystore)
+                    .then(|| draft.def().url())
+            };
+            let Some(url) = expects else { return };
+            let mut probe = ctx.password_probe;
+            spawn(async move {
+                let read = offload(move || SecretRef::derived(PG_PASSWORD, &url).get()).await;
+                probe.set(match read {
+                    Some(Ok(Some(_))) => PasswordProbe::Stored,
+                    Some(Ok(None)) => PasswordProbe::Absent,
+                    Some(Err(why)) => PasswordProbe::Refused(format!(
+                        "This machine's keystore could not be read, so whether a password is \
+                         stored here is unknown. {why}"
+                    )),
+                    None => PasswordProbe::Refused(
+                        "This machine's keystore could not be read: a worker did not answer."
+                            .into(),
+                    ),
+                });
+            });
         });
 
         use_watch_connection(ctx);
