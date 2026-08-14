@@ -33,7 +33,6 @@
 //! clears the intent through [`abandon_install`], leaving the staged bundle and a `Ready` status.
 //! The swap happens in `main`, after `launch` returns and no window is left.
 
-#[cfg(debug_assertions)]
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -250,7 +249,10 @@ pub fn install(status: UpdateStatus) {
         _ => return,
     };
     if update::is_local() {
-        tracing::warn!("not installing {}: it came from a local origin", staged.display());
+        tracing::warn!(
+            "not installing {}: it came from a local origin",
+            staged.display()
+        );
         return;
     }
     let Site::Writable(target) = install_site() else {
