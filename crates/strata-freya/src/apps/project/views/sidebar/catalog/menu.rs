@@ -326,14 +326,17 @@ pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
 
 /// A **saved query** row's menu: open it · rename it · delete it.
 ///
-/// `renaming` is the row's own inline-rename flag; the item just flips it on and the row reacts
-/// in its own scope (seeds the draft, focuses the input, commits), so it survives this menu
-/// closing — the tab strip's rename works the same way.
+/// `renaming` names **which** saved query is being renamed and `draft` holds what has been typed;
+/// the item points one at this row and seeds the other, so the rename survives both this menu
+/// closing and the row scrolling out of the virtualized window. Seeding here rather than in the row
+/// is what makes that true: a row that seeded its own draft re-seeded it from the stored name every
+/// time it was rebuilt.
 pub fn query_menu(
     actions: &CatalogActions,
     id: Uuid,
     name: String,
-    mut renaming: State<bool>,
+    mut renaming: State<Option<Uuid>>,
+    mut draft: State<String>,
 ) -> Menu {
     Menu::new()
         .min_width(Size::px(CONTEXT_MENU_WIDTH))
@@ -350,9 +353,13 @@ pub fn query_menu(
         ))
         .child(
             MenuButton::new()
-                .on_press(move |_| {
-                    renaming.set(true);
-                    ContextMenu::close();
+                .on_press({
+                    let name = name.clone();
+                    move |_| {
+                        draft.set(name.clone());
+                        renaming.set(Some(id));
+                        ContextMenu::close();
+                    }
                 })
                 .child(menu_row(IconName::Pencil, "Rename")),
         )

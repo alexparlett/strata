@@ -3,71 +3,87 @@
 //!
 //! ## What the top level is
 //!
-//! Data sources. First the **project workspace** — labelled with the project's own name, because
-//! it is not a "files provider" but the catalog Strata's federating engine defines: file tables,
-//! internal tables, views and saved queries all live under it, and so does a **cross-source**
-//! view joining workspace files to `pg.…`, since a node for a database groups by what it
-//! *defines* rather than where the bytes live (the DataGrip/FDW precedent — a Postgres view over
-//! a foreign table lives under Postgres). Then one node per connection: a **database** opens onto
-//! its enabled schemas, and an **object store** onto the workspace defs that read through it, as
-//! links rather than a second editable copy of those rows.
+//! Data sources. First the **project workspace** — labelled with the project's own name, because it
+//! is not a "files provider" but the catalog Strata's federating engine defines: file tables,
+//! internal tables, views and saved queries all live under it, and so does a **cross-source** view
+//! joining workspace files to `pg.…`, since a node for a database groups by what it *defines*
+//! rather than where the bytes live (the DataGrip/FDW precedent — a Postgres view over a foreign
+//! table lives under Postgres). Then one node per connection: a **database** opens onto its enabled
+//! schemas, and an **object store** onto the workspace defs that read through it, as links rather
+//! than a second editable copy of those rows.
+//!
+//! ## How it is built
+//!
+//! **The pane walks the tree into a flat list of visible rows and hands that to the fork's
+//! virtualized [`Tree`]** (`node::walk`), so only the rows on screen are mounted. That matters for
+//! one node kind above all: everything else is bounded by the project file, but a schema's relation
+//! list is the *server's*, and `RELATIONS_QUERY` carries no `LIMIT` — so opening one is the only
+//! place a row count nobody here decides reaches the layout.
 //!
 //! ## Where the data comes from
 //!
 //! Two places, and the difference is the point. Everything under the workspace is the
 //! [`ProjectState`] store — the project file's defs plus what engine registration *learned* about
 //! each ([`Reg`](crate::apps::project::state::Reg)). **Not** an introspection query against
-//! DataFusion, which would be wrong where it matters most: a def whose registration *failed* has
-//! no engine presence at all yet is exactly the row the tree must keep showing. Everything under
-//! a database connection is the opposite — there are no defs, because a database answers for
-//! itself, so it is [`Engine::db_listing`](strata_core::engine::Engine::db_listing), which reads
-//! the connect-time enumeration held beside the pool rather than the network. A ↻ re-connects,
-//! and *that* is the refresh.
+//! DataFusion, which would be wrong where it matters most: a def whose registration *failed* has no
+//! engine presence at all yet is exactly the row the tree must keep showing. Everything under a
+//! database connection is the opposite — there are no defs, because a database answers for itself,
+//! so it is [`Engine::db_listing`](strata_core::engine::Engine::db_listing), which reads the
+//! connect-time enumeration held beside the pool rather than the network. A ↻ re-connects, and
+//! *that* is the refresh.
 //!
 //! ## Subscriptions
 //!
-//! Each node subscribes to its own [`ProjChan`], so a table registration landing wakes the TABLES
-//! group alone — not the views, the saved queries or the connections. That is what the store's
-//! per-section channels were built for, and it is why the tree is nested components rather than
-//! one flat list built at the root.
+//! **The pane root subscribes to every section the walk reads** — `Meta` for the project's name,
+//! then `Tables`, `Views`, `Queries` and `Connections`. That is what virtualizing costs: one
+//! registration landing re-walks the tree, where the nested pane woke the one group it belonged to.
+//! The list is exhaustive on purpose, because a walk input nothing subscribes to is a row that goes
+//! stale until something unrelated happens to wake the pane.
 //!
 //! ## Local UI state
 //!
-//! Filter text, which nodes are open, and which nested columns are expanded are all
-//! **pane-local** — none of it is project data, none of it persists. Expansion is one set keyed
-//! by [node path](TreeCtx::open), which is what lets a jump from an object-store link open the
-//! ancestors of a row three levels away.
+//! Filter text, which nodes are open, which nested columns are expanded and which saved query is
+//! being renamed are all **pane-local** — none of it is project data, none of it persists. It is
+//! also all on [`TreeCtx`] rather than in a row, and that is not a preference: a virtualized row's
+//! scope is a **slot**, so scrolling hands it a different row, and anything the slot remembered
+//! would then be remembered about the wrong one.
 
 mod columns;
-mod database;
+mod connection;
 mod entry;
 #[cfg(test)]
 mod interaction;
 mod menu;
+mod node;
 mod row;
-mod store;
+mod view;
 mod workspace;
 
-/// The catalog's own **actions**, for the command palette: its TABLES / VIEWS / SAVED QUERIES
-/// rows are the same gestures as these menu items, so they call them rather than reimplementing
-/// the SQL they generate and the `Origin` they bind a tab to.
+/// The catalog's own **actions**, for the command palette: its TABLES / VIEWS / SAVED QUERIES rows
+/// are the same gestures as these menu items, so they call them rather than reimplementing the SQL
+/// they generate and the `Origin` they bind a tab to.
 pub use self::menu::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
-use freya::components::TreeConfig;
-use freya::components::{define_theme, get_theme, ScrollConfig, ScrollController, ScrollView};
+use freya::components::{define_theme, get_theme, ScrollConfig, Tree, TreeThemePartial};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_core::util::contains_lowercased;
-use strata_model::{ConnectionDef, ProviderId};
+use uuid::Uuid;
 
-use self::database::DatabaseNode;
+use self::menu::rename_saved_query;
+use self::node::{walk, Node, NodeKind};
 use self::row::{INDENT, ROW_HEIGHT};
-use self::store::{AddConnectionRow, StoreNode};
-use self::workspace::{seeded_paths, WorkspaceNode};
+use self::view::TreeRow;
+use self::workspace::seeded_paths;
+use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{ProjChan, ProjectState};
-use crate::components::metrics::{PANE_BODY_MIN_W, SP_3, SP_4};
+use crate::components::metrics::{SP_3, SP_4};
+use crate::keymap::on_command;
+use crate::state::use_config_station;
+use strata_core::config::Command;
 
 define_theme!(
     %[component]
@@ -99,6 +115,11 @@ define_theme!(
 );
 
 /// The tree's scroll inset.
+///
+/// There is no `PANE_BODY_MIN_W` floor beside it, and that is the difference between a tree and the
+/// prose bodies that carry one: a floor exists to stop *wrapping* degrading into one character per
+/// line, and a tree row ellipsizes rather than wraps. On the pane's own frame it would stop the
+/// panel shrinking instead, which is the opposite of the rule it comes from.
 const BODY_PAD: Gaps = Gaps::new(SP_3, SP_3, SP_4, SP_3);
 
 /// Does `name` survive the filter? Case-insensitive substring, through the shared
@@ -107,54 +128,48 @@ const BODY_PAD: Gaps = Gaps::new(SP_3, SP_3, SP_4, SP_3);
 /// `needle` is **already lowercased**, which is that function's own contract and what every other
 /// filter surface in the app honours: lowering inside the test allocates a `String` per *name*
 /// rather than per keystroke, and this tree tests every def plus every relation of every open
-/// database on three passes.
+/// database on every walk.
 ///
-/// The filter spans **names at any depth the tree can enumerate for free** — defs, saved
-/// queries, connections, schemas and relations — and deliberately not columns: a column name
-/// surfacing its table was never this filter's job, and a remote relation's columns are an
-/// introspection the pane will not run to answer a keystroke.
+/// The filter spans **names at any depth the tree can enumerate for free** — defs, saved queries,
+/// connections, schemas and relations — and deliberately not columns: a column name surfacing its
+/// table was never this filter's job, and a remote relation's columns are an introspection the pane
+/// will not run to answer a keystroke.
 pub fn matches(name: &str, needle: &str) -> bool {
     needle.is_empty() || contains_lowercased(name, needle)
 }
 
-/// The tree's pane-local handles, in context because the tree is exactly the deep, open-ended
-/// shape context is reserved for (state-arch §8): a schema node three levels down toggles the
-/// same set the workspace node does, and a jump from an object-store link has to open ancestors
-/// it cannot see.
+/// The tree's pane-local handles, in context because the tree is exactly the deep, open-ended shape
+/// context is reserved for (state-arch §8): a row four levels down toggles the same set the
+/// workspace node does, and a jump from an object-store link has to open ancestors it cannot see.
 #[derive(Clone, Copy, PartialEq)]
 pub struct TreeCtx {
-    /// Which node paths are open. One set for the whole tree, columns included, because a path
-    /// is a path.
+    /// Which node paths are open. One set for the whole tree, columns included, because a path is a
+    /// path.
     pub open: State<HashSet<String>>,
-    /// The node path a jump has asked to be shown — cleared by the row that answers it.
+    /// The node path a jump has asked to be shown — cleared by the pane once it has answered.
+    ///
+    /// Answered by the target's **index** in the flat list, because the row a jump names is usually
+    /// not built, which for a virtualized list is the ordinary case rather than the exception. The
+    /// scroller is deliberately not here beside this slot: only the pane holds that index, so a row
+    /// that could reach the scroller could reach it with nothing to say.
     pub reveal: State<Option<String>>,
-    /// The body's scroller, so that row can bring itself into view.
-    pub scroll: ScrollController,
+    /// Which saved query is being renamed, if any, and the text typed so far.
+    ///
+    /// Both are the pane's rather than the row's, and the draft has to travel with the flag: a
+    /// virtualized row's scope is a slot, so scrolling the row out of the window destroys anything
+    /// it was holding. Kept in the row, the draft was silently re-seeded from the stored name on the
+    /// way back in, and a commit then wrote the name the user had just replaced.
+    pub renaming: State<Option<Uuid>>,
+    pub draft: State<String>,
 }
 
 impl TreeCtx {
-    /// Is `path` **stored** open? Rarely what a container wants — see [`shows`](Self::shows).
-    pub fn is_open(&self, path: &str) -> bool {
-        self.open.read().contains(path)
-    }
-
-    /// Does `path` draw its children? The stored answer, **or** open regardless because a filter
-    /// is narrowing the tree and this node kept something: keeping a node because a descendant
-    /// matched and then hiding the match is worse than not keeping it at all.
-    ///
-    /// One method rather than the rule restated at each container, because the site that forgot to
-    /// restate it was the workspace — the node holding the tables, views and saved queries a
-    /// filter is mostly for.
-    pub fn shows(&self, path: &str, kept: bool) -> bool {
-        self.is_open(path) || kept
-    }
-
     /// Open `path` if it is closed, close it if it is open — a chevron press.
     ///
-    /// Takes the row's **effective** open state rather than flipping set membership, because a
-    /// node a filter has forced open is stored *closed*: flipping membership there writes the
-    /// wrong way, the row redraws open because the filter still forces it, and clearing the
-    /// filter reveals the opposite of what the press appeared to do.
+    /// Takes the row's **effective** open state rather than flipping set membership, because a node
+    /// a filter has forced open is stored *closed*: flipping membership there writes the wrong way,
+    /// the row redraws open because the filter still forces it, and clearing the filter reveals the
+    /// opposite of what the press appeared to do.
     pub fn toggle(&self, path: &str, open: bool) {
         let mut set = self.open;
         let mut set = set.write();
@@ -168,8 +183,8 @@ impl TreeCtx {
         }
     }
 
-    /// Open every path in `ancestors` and ask for `path` to be brought into view — the
-    /// object-store link's jump.
+    /// Open every path in `ancestors` and ask for `path` to be brought into view — the object-store
+    /// link's jump.
     pub fn reveal(&self, ancestors: &[String], path: String) {
         let (mut open, mut reveal) = (self.open, self.reveal);
         let mut set = open.write();
@@ -181,15 +196,39 @@ impl TreeCtx {
     }
 }
 
-/// The node paths open on a fresh pane: the workspace and its three groups, so a project opens
-/// on its own catalog exactly as the flat pane did. Connections open on a press, because a
-/// database's schemas are a listing and the user came here for their tables.
+/// The rename that has lost the row it was being typed into, if any.
+///
+/// A rename ends when its row leaves the tree, and it ends the way a blur does. The row owns the
+/// commit-on-outside-press and a virtualized row is unmounted by a scroll or a filter keystroke, so
+/// a rename whose row has gone has nothing on screen left to commit it.
+fn stranded_rename(nodes: &[Node], renaming: Option<Uuid>) -> Option<Uuid> {
+    let id = renaming?;
+    let drawn = nodes
+        .iter()
+        .any(|node| matches!(&node.kind, NodeKind::SavedQuery { id: row, .. } if *row == id));
+    (!drawn).then_some(id)
+}
+
+/// The node paths open on a fresh pane: the workspace and its three groups, so a project opens on
+/// its own catalog exactly as the flat pane did. Connections open on a press, because a database's
+/// schemas are a listing and the user came here for their tables.
 fn seeded() -> HashSet<String> {
     seeded_paths().into_iter().collect()
 }
 
-/// The data-sources tree — the sidebar body under the filter row. `filter` is owned by the
-/// sidebar shell (it lives in the header row beside the ↻ and the `+`) and read here.
+/// What the row builder is handed.
+///
+/// Both halves ride in the builder **data** rather than being captured, because a
+/// `VirtualScrollView` memoizes its builder closure: anything captured there goes stale on the next
+/// walk or the next theme (AGENTS.md §3).
+#[derive(Clone, PartialEq)]
+struct TreeData {
+    nodes: Rc<Vec<Node>>,
+    theme: CatalogTheme,
+}
+
+/// The data-sources tree — the sidebar body under the filter row. `filter` is owned by the sidebar
+/// shell (it lives in the header row beside the ↻ and the `+`) and read here.
 #[derive(PartialEq)]
 pub struct Catalog {
     pub filter: State<String>,
@@ -208,54 +247,101 @@ impl Catalog {
 impl Component for Catalog {
     fn render(&self) -> impl IntoElement {
         let theme = get_theme!(&self.theme, CatalogThemePreference, "catalog");
-        let filter = self.filter.read().to_lowercase();
+        let needle = self.filter.read().to_lowercase();
+        let engine = use_consume::<EngineCtx>();
+        let config = use_config_station();
+        let actions = use_catalog_actions();
 
         let open = use_state(seeded);
         let reveal = use_state(|| None::<String>);
-        let scroll = use_scroll_controller(ScrollConfig::default);
+        let renaming = use_state(|| None::<Uuid>);
+        let draft = use_state(String::new);
+        let mut scroll = use_scroll_controller(ScrollConfig::default);
         use_provide_context(|| TreeCtx {
             open,
             reveal,
-            scroll,
-        });
-        use_provide_context(|| TreeConfig {
-            indent: INDENT,
-            item_height: ROW_HEIGHT,
+            renaming,
+            draft,
         });
 
-        let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
-        let connections: Vec<ConnectionDef> = radio
-            .read()
-            .connections
-            .iter()
-            .map(|c| c.def.clone())
-            .collect();
-        let none_yet = connections.is_empty();
+        let meta = use_radio::<ProjectState, ProjChan>(ProjChan::Meta);
+        let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
+        let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
+        let queries = use_radio::<ProjectState, ProjChan>(ProjChan::Queries);
+        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+        drop(meta.read());
+        drop(views.read());
+        drop(queries.read());
+        drop(connections.read());
 
-        let body = rect()
-            .width(Size::fill())
-            .min_width(Size::px(PANE_BODY_MIN_W))
-            .vertical()
-            .padding(BODY_PAD)
-            .child(WorkspaceNode::new(filter.clone(), theme.clone()))
-            .children(connections.into_iter().map(|def| {
-                let url = def.url();
-                match def.provider.id() {
-                    ProviderId::Postgres => DatabaseNode::new(def, filter.clone(), theme.clone())
-                        .key(url)
-                        .into_element(),
-                    _ => StoreNode::new(def, filter.clone(), theme.clone())
-                        .key(url)
-                        .into_element(),
-                }
-            }))
-            .maybe_child(
-                (none_yet && filter.is_empty())
-                    .then(|| AddConnectionRow::new(theme).into_element()),
-            );
+        let nodes = {
+            let project = tables.read();
+            let expanded = open.read();
+            walk(&project, &engine, &needle, &expanded)
+        };
+
+        let wanted = reveal.read().clone();
+        let target = wanted
+            .as_deref()
+            .and_then(|path| nodes.iter().position(|node| node.path() == Some(path)));
+        let renamed = stranded_rename(&nodes, *renaming.read());
+        use_side_effect_with_deps(&renamed, move |renamed| {
+            let Some(id) = *renamed else {
+                return;
+            };
+            let (mut renaming, mut draft) = (renaming, draft);
+            rename_saved_query(&actions, id, &draft.peek().clone());
+            draft.set(String::new());
+            renaming.set(None);
+        });
+
+        use_side_effect_with_deps(&(wanted, target), move |(wanted, target)| {
+            if wanted.is_none() {
+                return;
+            }
+            if let Some(index) = target {
+                scroll.scroll_to_offset(
+                    *index as f32 * ROW_HEIGHT,
+                    ROW_HEIGHT,
+                    Direction::Vertical,
+                );
+            }
+            let mut reveal = reveal;
+            reveal.set(None);
+        });
+
+        let length = nodes.len();
+        let data = TreeData {
+            nodes: Rc::new(nodes),
+            theme,
+        };
 
         rect()
             .expanded()
-            .child(ScrollView::new_controlled(scroll).child(body))
+            .padding(BODY_PAD)
+            .on_global_key_down(on_command(config, Command::Cancel, move || {
+                let mut renaming = renaming;
+                renaming.peek().is_some() && renaming.take().is_some()
+            }))
+            .child(
+                Tree::new_with_data(data, |item: VirtualItem, data: &TreeData| {
+                    match data.nodes.get(item.index) {
+                        Some(node) => TreeRow {
+                            node: node.clone(),
+                            theme: data.theme.clone(),
+                        }
+                        .into_element(),
+                        None => rect().into_element(),
+                    }
+                })
+                .length(length)
+                .scroll_controller(scroll)
+                .theme(
+                    TreeThemePartial::default()
+                        .background(Color::TRANSPARENT)
+                        .indent(INDENT)
+                        .item_height(ROW_HEIGHT),
+                ),
+            )
     }
 }

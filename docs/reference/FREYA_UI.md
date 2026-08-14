@@ -35,13 +35,13 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   `TreeItem` / `Disclosure` / `TreeConfig`, themed by the `catalog` component theme and given the
   app's own chevron through `TreeItem::arrow`, with the one gap it had — a pressable row's `Link`
   role, tab stop and focus ring, which `SideBarItem` already carried — fixed in the fork rather
-  than around it. What it does **not** use is the `Tree` wrapper, and that is a scope call rather
-  than a preference: `Tree` is `VirtualScrollView` over a flat list of visible rows, so it needs
-  the row count up front, and this tree's rows fetch as they open (a status glyph subscribes, a
-  scan dispatches, a remote relation introspects). Answering the count would mean mirroring those
-  query results into a pane-local map, which is the one thing the state rules forbid — so the rows
-  compose as nested components under the pane's own `ScrollView`, and `Tree` stays where its
-  contract fits (the results record view).
+  than around it. It uses the `Tree` **wrapper** too: the pane walks its own tree into a flat list
+  of visible rows and hands that over, so only the rows on screen are ever mounted. The wrapper was
+  declined once, on the grounds that the tree's rows fetch as they open and so could not answer a
+  row count; that was not true of what was built (a relation is a leaf, `Engine::db_listing` reads
+  the connect-time enumeration, a def's columns come off its `Reg` row), and the one place a row
+  count is server-controlled rather than bounded by the project file — a Postgres schema, whose
+  relation query carries no `LIMIT` — is exactly the case that made mounting every row untenable.
 
   A **dashed** edge was the one thing neither table could get from anywhere: torin fills the region
   between an outer and an inner rounded rect, and a filled region cannot carry a pattern, so
@@ -258,6 +258,21 @@ design is [FREYA_STATE_ARCHITECTURE.md](../FREYA_STATE_ARCHITECTURE.md).
   the follow-up `on_press`/`on_global_pointer_press`. If a handler calls `prevent_default`, do
   double-click/press detection *inside* that same handler
   (`EventsCombos::pressed(loc).is_double()`), not via `on_press`.
+- **A virtualized list is one component type per row, and a row's scope is a *slot*, not a row.**
+  A `VirtualScrollView` rebuilds its children as a moving window and Freya pairs a parent's old and
+  new children by key **in order**, so a list of one type pairs slot 0 with slot 0 and the **list**
+  stops reordering. That is the whole of the claim: a row's own children still change shape as its
+  fold plan gives marks up, so the differ's `moved` path is reached from inside a row either way.
+  Mixed types pair by type instead, which hands one row's scope to a different row a level up the
+  list, and a scope reused across two components allocates the wrong number of hooks and hard
+  fails. So the data-sources tree's twelve row kinds are one `TreeRow` that runs every
+  hook and dispatches on the node (`sidebar/catalog/view.rs`) — which also means **every helper a
+  row reaches is checked for being a hook**: `name_width` read the type scale and `type_palette`
+  reads the theme, and both were called from two arms out of twelve. What a slot may then remember
+  is what is true of the *slot* (its measured width); anything true of a row is either tagged with
+  whose it is (`use_status` takes the row's node path) or lives on the pane (`TreeCtx::renaming`).
+  Keying the rows is not the escape: the window shifts by one on every scroll step, so identity
+  keys turn each step into a list of moves.
 - **`VirtualScrollView` memoizes its builder closure**, so snapshots captured in the closure go
   stale. Each child reads shared state reactively (`state.read()`) and computes its own view.
 - **Two siblings on the same layer have no paint order — set a layer, don't rely on document

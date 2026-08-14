@@ -319,9 +319,18 @@ database's are the views whose plans scan through its catalog (`ViewInfo::remote
 def can name a database. Confirming removes the def, deregisters the store or catalog, and — for
 a database — deletes the derived keystore entry the def expected.
 
-One filter spans the tree. A node survives it if its own name matches or any descendant's does;
-the workspace's three groups are the stated exception, staying put with their counts following
-the filter, because a count of `0` is what says the filter found nothing there.
+One filter spans the tree. A node survives it if its own name matches or any descendant's does,
+and a node kept by a descendant's match opens itself, since keeping the container and then hiding
+what saved it is worse than not keeping it; the workspace's three groups are the stated
+exception, staying put with their counts following the filter, because a count of `0` is what
+says the filter found nothing there.
+
+The pane **walks the tree into a flat list of visible rows and virtualizes it** (the fork's
+`Tree`), so only the rows on screen are built. That is not an optimisation of the workspace half,
+whose row count is bounded by the project file: it is what makes a database node safe to open,
+since `RELATIONS_QUERY` carries no `LIMIT` and one schema's relation list is the server's to
+decide. A jump from an object-store link is therefore answered by the target's **index** in that
+list rather than by its measured rectangle, because the row it names has usually not been built.
 
 ## Registration order
 

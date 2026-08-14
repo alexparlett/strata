@@ -74,11 +74,11 @@ pub use persist::ProjectFile;
 pub use persist::{
     persisted_defs, use_init_faults, use_report, FaultsCtx, PersistFaults, ReportCtx,
 };
-pub use project::{FaultKind, ProjChan, ProjectState, Reg};
-/// The catalog's rows themselves. Nothing outside this module names them at runtime — every
-/// consumer reads them through [`ProjectState`]'s own fields — but a test that builds a store
-/// **inline** has to, which is what AGENTS.md §1 asks for instead of bending a signature to be
-/// testable (the command palette's index is tested exactly this way).
+pub use project::{ConnRow, FaultKind, ProjChan, ProjectState, Reg};
+/// The remaining catalog rows. A test that builds a store **inline** names these, which is what
+/// AGENTS.md §1 asks for instead of bending a signature to be testable (the command palette's index
+/// is tested exactly this way); [`ConnRow`] is above because the data-sources tree's walk reads a
+/// connection's registration off the row it is already iterating rather than looking it up again.
 #[cfg(test)]
 pub use project::{TableRow, ViewInfo, ViewRow};
 pub use session::{ProblemGroup, QueryTab, SessionState, Stamp};

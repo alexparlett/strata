@@ -1,22 +1,22 @@
-//! The **workspace** node and its three groups — the project's own database.
+//! The **workspace** branch of the walk — the project's own database — and the three rows that are
+//! structure rather than content: the workspace node, one of its groups, and the note an empty
+//! QUERIES group leaves.
 //!
 //! Labelled with the project's name rather than "workspace", because that is what it is: the
 //! catalog Strata's federating engine defines, addressed as `strata`, holding everything the
-//! project declares. Its children are the flat pane's TABLES · VIEWS · QUERIES sections
-//! verbatim — same rows, same `Reg` status slots, same menus, same columns expansion — one level
-//! further in.
+//! project declares. Its children are the flat pane's TABLES · VIEWS · QUERIES sections verbatim —
+//! same rows, same `Reg` status slots, same menus, same columns expansion — one level further in.
 
 use freya::prelude::*;
-use freya::radio::{use_radio, use_radio_station};
-use strata_model::{CatalogKind, WORKSPACE_CATALOG};
-use uuid::Uuid;
+use strata_model::{CatalogKind, ColumnInfo, WORKSPACE_CATALOG};
 
-use super::entry::{EntryRow, SavedQueryRow};
-use super::menu::use_catalog_actions;
-use super::row::{Row, INDENT};
-use super::{matches, CatalogTheme, TreeCtx};
+use super::columns::flatten_cols;
+use super::matches;
+use super::node::{Column, Entry, Node, NodeKind, Open, Place};
+use super::row::Row;
+use super::view::{body, RowBody, RowCtx};
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::project::state::{ProjChan, ProjectState};
+use crate::apps::project::state::{ProjectState, Reg};
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::ROW_ACTION;
 use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
@@ -24,9 +24,8 @@ use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
 /// The workspace node's own path — the root of every path under it.
 pub const WORKSPACE: &str = "ws";
 
-/// Where the QUERIES group's empty note starts: level-in from the group, so it lines up with the
-/// rows it stands in for rather than with the header above them.
-const NOTE_INSET: f32 = 3. * INDENT;
+/// How deep a workspace entry sits: the workspace node, then its group.
+pub const ENTRY_DEPTH: usize = 2;
 
 /// One of the workspace's three groups.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,8 +36,6 @@ pub enum Group {
 }
 
 impl Group {
-    const ALL: [Group; 3] = [Group::Tables, Group::Views, Group::Queries];
-
     /// Which group a catalog kind belongs to — the one place the mapping is written, so a fourth
     /// kind is a compile error here and nowhere else.
     pub fn of(kind: CatalogKind) -> Self {
@@ -65,235 +62,21 @@ impl Group {
             Group::Queries => "QUERIES",
         }
     }
-
-    /// The store channel this group's contents live on — the whole reason the tree is nested
-    /// components: a table registration landing must not wake the views or the saved queries.
-    fn channel(self) -> ProjChan {
-        match self {
-            Group::Tables => ProjChan::Tables,
-            Group::Views => ProjChan::Views,
-            Group::Queries => ProjChan::Queries,
-        }
-    }
 }
 
 /// The node paths a fresh pane opens on — the workspace and its three groups, so a project opens
 /// on its own catalog exactly as the flat pane did.
 pub fn seeded_paths() -> Vec<String> {
-    let mut paths = vec![WORKSPACE.to_string()];
-    paths.extend(Group::ALL.iter().map(|g| g.path().to_string()));
-    paths
+    vec![
+        WORKSPACE.to_string(),
+        Group::Tables.path().to_string(),
+        Group::Views.path().to_string(),
+        Group::Queries.path().to_string(),
+    ]
 }
 
-/// The project's own database.
-#[derive(PartialEq)]
-pub struct WorkspaceNode {
-    /// The filter, **already lowercased** — see `matches`.
-    needle: String,
-    theme: CatalogTheme,
-}
-
-impl WorkspaceNode {
-    pub fn new(needle: String, theme: CatalogTheme) -> Self {
-        Self { needle, theme }
-    }
-}
-
-impl Component for WorkspaceNode {
-    fn render(&self) -> impl IntoElement {
-        let tree = use_consume::<TreeCtx>();
-        let name = use_radio_station::<ProjectState, ProjChan>()
-            .peek()
-            .name
-            .clone();
-        // The workspace holds the rows a filter is mostly for, so it opens on a match like any
-        // other container; its groups then narrow themselves.
-        let open = tree.shows(WORKSPACE, !self.needle.is_empty());
-
-        let row = Row::new(0, self.theme.clone())
-            .expanded(open)
-            .on_press(move |_| tree.toggle(WORKSPACE, open))
-            .on_toggle(move |_| tree.toggle(WORKSPACE, open))
-            .child(
-                Icon::new(IconName::Database)
-                    .color(self.theme.provider_color)
-                    .size(14.),
-            )
-            .child(
-                Body::new(name)
-                    .color(self.theme.name_color)
-                    .width(Size::flex(1.))
-                    .text_overflow(TextOverflow::Ellipsis),
-            )
-            .child(MonoValue::new(WORKSPACE_CATALOG).color(self.theme.meta_color));
-
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .child(row)
-            .maybe(open, |el| {
-                el.children(Group::ALL.into_iter().map(|group| {
-                    GroupNode {
-                        group,
-                        needle: self.needle.clone(),
-                        theme: self.theme.clone(),
-                        key: DiffKey::None,
-                    }
-                    .key(group.path())
-                }))
-            })
-    }
-}
-
-/// One of the workspace's three groups — `▾ TABLES · 4` over its rows.
-///
-/// **A group is structural, so it stays while a filter is typed** and its count follows the
-/// filter. That is the one exception to the tree's "keep a node only if it or a descendant
-/// matches" rule, and it is deliberate: the count going to `0` is what tells the user the filter
-/// found nothing here, which an absent row cannot say.
-#[derive(PartialEq)]
-struct GroupNode {
-    group: Group,
-    /// The filter, **already lowercased** — see `matches`.
-    needle: String,
-    theme: CatalogTheme,
-    key: DiffKey,
-}
-
-impl KeyExt for GroupNode {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
-
-impl Component for GroupNode {
-    fn render(&self) -> impl IntoElement {
-        let tree = use_consume::<TreeCtx>();
-        let radio = use_radio::<ProjectState, ProjChan>(self.group.channel());
-        let actions = use_catalog_actions();
-        let path = self.group.path();
-
-        let rows = {
-            let p = radio.read();
-            match self.group {
-                Group::Tables => Rows::Entries(
-                    CatalogKind::Table,
-                    p.tables
-                        .iter()
-                        .map(|t| t.def.name.clone())
-                        .filter(|n| matches(n, &self.needle))
-                        .collect(),
-                ),
-                Group::Views => Rows::Entries(
-                    CatalogKind::View,
-                    p.views
-                        .iter()
-                        .map(|v| v.def.name.clone())
-                        .filter(|n| matches(n, &self.needle))
-                        .collect(),
-                ),
-                Group::Queries => Rows::Queries(
-                    p.saved_queries
-                        .iter()
-                        .map(|q| (q.id, q.name.clone()))
-                        .filter(|(_, n)| matches(n, &self.needle))
-                        .collect(),
-                ),
-            }
-        };
-        let total = rows.len();
-        let open = tree.shows(path, !self.needle.is_empty() && total > 0);
-
-        let plus = (self.group == Group::Tables).then(|| {
-            TooltipContainer::new(Tooltip::new_text("New table"))
-                .position(AttachedPosition::Bottom)
-                .child(
-                    Button::new()
-                        .flat()
-                        .theme_layout(
-                            ButtonLayoutThemePartial::default()
-                                .width(Size::px(ROW_ACTION))
-                                .height(Size::px(ROW_ACTION))
-                                .padding(Gaps::new_all(0.)),
-                        )
-                        .on_press(move |e: Event<PressEventData>| {
-                            e.stop_propagation();
-                            actions.configure(ConfigureTarget::New);
-                        })
-                        .child(
-                            Icon::new(IconName::Plus)
-                                .size(13.)
-                                .color(self.theme.label_color),
-                        ),
-                )
-                .into_element()
-        });
-
-        let row = Row::new(1, self.theme.clone())
-            .expanded(open)
-            .on_press(move |_| tree.toggle(path, open))
-            .on_toggle(move |_| tree.toggle(path, open))
-            .child(
-                Eyebrow::new(format!("{} · {total}", self.group.label()))
-                    .color(self.theme.label_color)
-                    .width(Size::flex(1.))
-                    .text_overflow(TextOverflow::Ellipsis),
-            )
-            .maybe(plus.is_some(), |el| el.trailing(plus.clone().unwrap()));
-
-        let empty_note = (self.group == Group::Queries && total == 0 && self.needle.is_empty())
-            .then(|| {
-                rect()
-                    .padding(Gaps::new(0., 0., 0., NOTE_INSET))
-                    .child(Caption::new("No saved queries yet").color(self.theme.meta_color))
-            });
-
-        rect()
-            .width(Size::fill())
-            .vertical()
-            .child(row)
-            .maybe(open, |el| {
-                el.children(rows.into_elements(self.group, &self.theme))
-                    .maybe_child(empty_note)
-            })
-    }
-}
-
-/// What a group holds — entries addressed by name, or saved queries addressed by `Uuid`.
-enum Rows {
-    Entries(CatalogKind, Vec<String>),
-    Queries(Vec<(Uuid, String)>),
-}
-
-impl Rows {
-    fn len(&self) -> usize {
-        match self {
-            Rows::Entries(_, names) => names.len(),
-            Rows::Queries(queries) => queries.len(),
-        }
-    }
-
-    fn into_elements(self, group: Group, theme: &CatalogTheme) -> Vec<Element> {
-        match self {
-            Rows::Entries(kind, names) => names
-                .into_iter()
-                .map(|name| {
-                    let key = name.clone();
-                    EntryRow::new(kind, name, group.path(), theme.clone())
-                        .key(key)
-                        .into_element()
-                })
-                .collect(),
-            Rows::Queries(queries) => queries
-                .into_iter()
-                .map(|(id, name)| SavedQueryRow::new(id, name, theme.clone()).into_element())
-                .collect(),
-        }
-    }
-}
-
-/// The node path of a workspace def's row — so the object-store link rows can address one
-/// without restating how a path is spelled.
+/// The node path of a workspace def's row — so the object-store link rows can address one without
+/// restating how a path is spelled.
 pub fn entry_path(kind: CatalogKind, name: &str) -> String {
     format!("{}/{name}", Group::of(kind).path())
 }
@@ -301,4 +84,248 @@ pub fn entry_path(kind: CatalogKind, name: &str) -> String {
 /// The nodes a jump has to open before [`entry_path`] can be seen.
 pub fn entry_ancestors(kind: CatalogKind) -> Vec<String> {
     vec![WORKSPACE.to_string(), Group::of(kind).path().to_string()]
+}
+
+/// The workspace node, its three groups, and everything they hold.
+///
+/// The workspace holds the rows a filter is mostly for, so it opens on a match like any other
+/// container; its groups then narrow themselves.
+pub fn walk_workspace(project: &ProjectState, needle: &str, open: &Open, out: &mut Vec<Node>) {
+    let filtering = !needle.is_empty();
+    let shown = open.shows(WORKSPACE, filtering);
+    out.push(Node::branch(
+        0,
+        WORKSPACE.to_string(),
+        shown,
+        true,
+        NodeKind::Workspace {
+            name: project.name.clone(),
+        },
+    ));
+    if !shown {
+        return;
+    }
+
+    let tables: Vec<&_> = project
+        .tables
+        .iter()
+        .filter(|t| matches(&t.def.name, needle))
+        .collect();
+    if group(Group::Tables, tables.len(), needle, open, out) {
+        for row in tables {
+            entry(
+                Entry {
+                    kind: CatalogKind::Table,
+                    name: row.def.name.clone(),
+                    internal: row.def.origin.is_internal(),
+                    waiting: matches!(row.reg, Reg::Loading),
+                    problem: ProjectState::table_problem(row),
+                    scan: row.profile,
+                },
+                row.reg.ready().map(|meta| meta.columns.as_slice()),
+                &row.def.partition_cols,
+                open,
+                out,
+            );
+        }
+    }
+
+    let views: Vec<&_> = project
+        .views
+        .iter()
+        .filter(|v| matches(&v.def.name, needle))
+        .collect();
+    if group(Group::Views, views.len(), needle, open, out) {
+        for row in views {
+            entry(
+                Entry {
+                    kind: CatalogKind::View,
+                    name: row.def.name.clone(),
+                    internal: false,
+                    waiting: matches!(row.reg, Reg::Loading),
+                    problem: project.view_problem(row),
+                    scan: row.profile,
+                },
+                row.reg.ready().map(|info| info.columns.as_slice()),
+                &[],
+                open,
+                out,
+            );
+        }
+    }
+
+    let queries: Vec<&_> = project
+        .saved_queries
+        .iter()
+        .filter(|q| matches(&q.name, needle))
+        .collect();
+    if group(Group::Queries, queries.len(), needle, open, out) {
+        for query in &queries {
+            out.push(Node::leaf(
+                ENTRY_DEPTH,
+                NodeKind::SavedQuery {
+                    id: query.id,
+                    name: query.name.clone(),
+                },
+            ));
+        }
+        if queries.is_empty() && !filtering {
+            out.push(Node::leaf(ENTRY_DEPTH, NodeKind::NoQueries));
+        }
+    }
+}
+
+/// Push a group's header row and answer whether its contents follow.
+///
+/// **A group is structural, so it stays while a filter is typed** and its count follows the filter.
+/// That is the one exception to the tree's "keep a node only if it or a descendant matches" rule,
+/// and it is deliberate: the count going to `0` is what tells the user the filter found nothing
+/// here, which an absent row cannot say.
+fn group(group: Group, count: usize, needle: &str, open: &Open, out: &mut Vec<Node>) -> bool {
+    let path = group.path();
+    let shown = open.shows(path, !needle.is_empty() && count > 0);
+    out.push(Node::branch(
+        1,
+        path.to_string(),
+        shown,
+        true,
+        NodeKind::Group { group, count },
+    ));
+    shown
+}
+
+/// Push one entry and, when it is open, the column rows under it.
+///
+/// `columns` is `Some` only on a **registered** row, which is also the only way a row can be
+/// expandable: a def whose registration failed has nothing to open.
+fn entry(
+    resolved: Entry,
+    columns: Option<&[ColumnInfo]>,
+    partitions: &[(String, String)],
+    open: &Open,
+    out: &mut Vec<Node>,
+) {
+    let path = entry_path(resolved.kind, &resolved.name);
+    let is_open = open.is_open(&path);
+    let columns = columns.filter(|c| !c.is_empty());
+    let (owner_kind, owner) = (resolved.kind, resolved.name.clone());
+    out.push(Node::branch(
+        ENTRY_DEPTH,
+        path.clone(),
+        is_open,
+        columns.is_some(),
+        NodeKind::Entry(resolved),
+    ));
+
+    let Some(columns) = columns.filter(|_| is_open) else {
+        return;
+    };
+    let mut rows = Vec::new();
+    flatten_cols(&path, &[], 0, columns, partitions, open.0, &mut rows);
+    out.extend(rows.into_iter().map(|row| {
+        Node::branch(
+            ENTRY_DEPTH + 1 + row.depth,
+            row.key.clone(),
+            row.is_expanded,
+            row.has_children,
+            NodeKind::Column(Column {
+                owner_kind,
+                owner: owner.clone(),
+                row,
+            }),
+        )
+    }));
+}
+
+/// The project's own database.
+pub fn workspace_row(at: &Place, name: &str, cx: &RowCtx) -> RowBody {
+    let tree = cx.tree;
+    let (open, path) = (at.open, at.path.clone());
+
+    body(
+        Row::new(at.depth, cx.theme.clone())
+            .disclosure(at.disclosure())
+            .on_press({
+                let path = path.clone();
+                move |_: Event<PressEventData>| tree.toggle(&path, open)
+            })
+            .on_toggle(move |_: Event<PressEventData>| tree.toggle(&path, open))
+            .child(
+                Icon::new(IconName::Database)
+                    .color(cx.theme.provider_color)
+                    .size(14.),
+            )
+            .child(
+                Body::new(name.to_string())
+                    .color(cx.theme.name_color)
+                    .width(Size::flex(1.))
+                    .text_overflow(TextOverflow::Ellipsis),
+            )
+            .child(MonoValue::new(WORKSPACE_CATALOG).color(cx.theme.meta_color)),
+    )
+}
+
+/// One of the workspace's three groups — `▾ TABLES · 4`, and the TABLES group's `+`.
+pub fn group_row(at: &Place, group: Group, count: usize, cx: &RowCtx) -> RowBody {
+    let tree = cx.tree;
+    let (open, path) = (at.open, at.path.clone());
+
+    let plus = (group == Group::Tables).then(|| {
+        let actions = cx.catalog.clone();
+        TooltipContainer::new(Tooltip::new_text("New table"))
+            .position(AttachedPosition::Bottom)
+            .child(
+                Button::new()
+                    .flat()
+                    .theme_layout(
+                        ButtonLayoutThemePartial::default()
+                            .width(Size::px(ROW_ACTION))
+                            .height(Size::px(ROW_ACTION))
+                            .padding(Gaps::new_all(0.)),
+                    )
+                    .on_press(move |e: Event<PressEventData>| {
+                        e.stop_propagation();
+                        actions.configure(ConfigureTarget::New);
+                    })
+                    .child(
+                        Icon::new(IconName::Plus)
+                            .size(13.)
+                            .color(cx.theme.label_color),
+                    ),
+            )
+            .into_element()
+    });
+
+    body(
+        Row::new(at.depth, cx.theme.clone())
+            .disclosure(at.disclosure())
+            .on_press({
+                let path = path.clone();
+                move |_: Event<PressEventData>| tree.toggle(&path, open)
+            })
+            .on_toggle(move |_: Event<PressEventData>| tree.toggle(&path, open))
+            .child(
+                Eyebrow::new(format!("{} · {count}", group.label()))
+                    .color(cx.theme.label_color)
+                    .width(Size::flex(1.))
+                    .text_overflow(TextOverflow::Ellipsis),
+            )
+            .map(plus, Row::trailing),
+    )
+}
+
+/// What an empty QUERIES group says.
+///
+/// An ordinary [`Row`], because the tree's rows are one height — which is what lets the list be
+/// virtualized at all — and a row's own indent already puts the note where the rows it stands in
+/// for would be.
+pub fn no_queries_row(at: &Place, cx: &RowCtx) -> RowBody {
+    body(
+        Row::new(at.depth, cx.theme.clone()).child(
+            Caption::new("No saved queries yet")
+                .color(cx.theme.meta_color)
+                .width(Size::flex(1.))
+                .text_overflow(TextOverflow::Ellipsis),
+        ),
+    )
 }

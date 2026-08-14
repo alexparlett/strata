@@ -23,7 +23,6 @@ use strata_model::{
 use uuid::Uuid;
 
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
 use super::entry::watched_scan;
@@ -31,6 +30,7 @@ use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
 use super::*;
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::ScanId;
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
 use crate::apps::project::views::{DropTarget, ProfileTarget, SchemasRequest};
 use crate::components::metrics::PROGRESS_HOLD;
@@ -253,9 +253,19 @@ fn runner_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
 
 /// [`runner_over`] at a chosen pane width — what the badge's fold is measured against.
 fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Handles) {
+    runner_shaped(project, width, 1400.)
+}
+
+/// [`runner_sized`] at a chosen pane **height** too — what the virtualization is measured against,
+/// since the whole claim is that a row off the bottom of the viewport is never built.
+fn runner_shaped(
+    project: fn() -> ProjectState,
+    width: f32,
+    height: f32,
+) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
-        (width, 1400.).into(),
+        (width, height).into(),
         |r| {
             let filter = r.provide_root_context(|| State::create(String::new()));
             let selection = r.provide_root_context(|| State::create(None::<ColRef>));
@@ -1119,17 +1129,21 @@ fn the_name_goes_on_collapsing_once_the_row_has_folded() {
     );
 }
 
-/// **Folding the status column must not cancel the scan.** The spinner's component is what
-/// *dispatches* a profile, so gating it on the fold meant a Profile asked for while the sidebar
-/// was narrow mounted nothing, started nothing and said nothing — the user accepts the cost
-/// confirm and no work happens.
+/// **Folding the status column must not cancel the scan.**
 ///
-/// Pinned as the **predicate**, not as a rendered assertion. The first version of this test
-/// checked that the request was still in the store and that no spinner was drawn, and neither of
-/// those distinguishes a live subscription from a dropped one: `request_profile` writes the store
-/// field whatever is mounted, and there is deliberately no glyph at this width either way. It
-/// would have passed against the very regression it was named for. What actually broke was what
-/// the mount was gated on, so that is what is checked.
+/// The spinner's component is what *dispatches* a profile, so gating it on the fold meant a Profile
+/// asked for while the sidebar was narrow mounted nothing, started nothing and said nothing — the
+/// user accepts the cost confirm and no work happens.
+///
+/// Scrolling the row out of the virtualized window is deliberately **not** the same case: that
+/// unmounts the subscriber, but `use_query` does not cancel a running execution on unmount, so the
+/// scan finishes and the row re-attaches to it on the way back in.
+///
+/// Pinned as the **predicate**, not as a rendered assertion. The first version of this test checked
+/// that the request was still in the store and that no spinner was drawn, and neither of those
+/// distinguishes a live subscription from a dropped one: `request_profile` writes the store field
+/// whatever is mounted, and there is deliberately no glyph at this width either way. It would have
+/// passed against the very regression it was named for.
 #[test]
 fn a_folded_status_column_still_subscribes_to_the_scan() {
     let shown = Folds {
@@ -1714,7 +1728,7 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
 mod connections {
     use super::*;
 
-    fn s3(bucket: &str) -> ConnectionDef {
+    pub fn s3(bucket: &str) -> ConnectionDef {
         ConnectionDef {
             address: bucket.into(),
             provider: Provider::S3(S3Store {
@@ -2187,4 +2201,139 @@ mod connections {
         click_text(&mut runner, "Add a connection");
         assert_eq!(*h.editor.peek(), Some(ConnectionTarget::New));
     }
+}
+
+/// **The tree is virtualized, which is the whole of this change.**
+///
+/// The one place a row count is not bounded by the project file is a database schema, whose
+/// relation list is the server's and whose query carries no `LIMIT` — but a container-backed
+/// listing is `strata-core/tests/postgres_federation.rs`'s, and what this needs to pin is the
+/// *pane*, not the listing. A workspace with a great many tables exercises the same list: the walk
+/// produces a node per row either way, and the assertion is that mounting stops at the viewport.
+///
+/// Measured on the **rows that exist**, not on the ones that are visible: a `ScrollView` keeps its
+/// off-screen children in the tree, so the flat pane and the nested tree would both have laid out
+/// all six hundred. Asserted as a bound with room to spare rather than an exact count, because how
+/// many rows fit is layout's business, not this test's.
+mod virtualization {
+    use super::*;
+
+    /// The number of rows to build: enough that "only the viewport" and "all of them" cannot be
+    /// confused for one another at any plausible row height.
+    const MANY: usize = 600;
+
+    fn wide_project() -> ProjectState {
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: (0..MANY)
+                .map(|i| table(&format!("t{i:04}"), vec![]))
+                .collect(),
+            ..Default::default()
+        };
+        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-virtualized"))
+    }
+
+    /// How many table rows the tree actually built.
+    fn built(runner: &TestingRunner) -> usize {
+        texts(runner)
+            .iter()
+            .filter(|t| t.starts_with('t') && t.len() == 5)
+            .count()
+    }
+
+    #[test]
+    fn only_the_rows_in_the_viewport_are_ever_built() {
+        let (mut runner, _) = runner_shaped(wide_project, 300., 400.);
+        settle(&mut runner);
+
+        assert!(
+            shows(&runner, &format!("TABLES · {MANY}")),
+            "the group counts every row the filter left: {:?}",
+            texts(&runner)
+        );
+        let built = built(&runner);
+        assert!(
+            built > 0 && built < MANY / 4,
+            "a 400px viewport built {built} of {MANY} rows"
+        );
+        assert!(
+            shows(&runner, "t0000"),
+            "and the rows it did build are the ones at the top"
+        );
+    }
+
+    /// **A jump reaches a row the tree has not built.** The reveal is answered by the row's index in
+    /// the flat list rather than by its measured rectangle, which is what makes an off-screen target
+    /// the ordinary case rather than the one that silently does nothing.
+    ///
+    /// The group is collapsed first so the bucket is within reach without scrolling by hand: its
+    /// link is the gesture under test, and the row that link names is nowhere near the viewport.
+    #[test]
+    fn a_jump_scrolls_to_a_row_that_was_never_built() {
+        fn linked() -> ProjectState {
+            let mut tables: Vec<TableDef> = (0..MANY)
+                .map(|i| table(&format!("t{i:04}"), vec![]))
+                .collect();
+            let mut last = table("zz_last", vec![]);
+            last.connection = Some("s3://lake".into());
+            tables.push(last);
+            let defs = ProjectDefs {
+                name: "test".into(),
+                tables,
+                connections: vec![connections::s3("lake")],
+                ..Default::default()
+            };
+            let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-jump"));
+            p.connection_registered("s3://lake");
+            p
+        }
+
+        let (mut runner, _) = runner_shaped(linked, 300., 400.);
+        settle(&mut runner);
+        assert!(
+            !shows(&runner, "zz_last"),
+            "the def's own row sorts last, six hundred rows below the fold"
+        );
+
+        click_text(&mut runner, &format!("TABLES · {}", MANY + 1));
+        click_text(&mut runner, "lake");
+        assert_eq!(
+            texts(&runner).iter().filter(|t| *t == "zz_last").count(),
+            1,
+            "the bucket's link only — the def's row is inside the collapsed group: {:?}",
+            texts(&runner)
+        );
+
+        click_text(&mut runner, "zz_last");
+
+        assert!(
+            shows(&runner, "zz_last"),
+            "the jump opened the group and scrolled the def's own row into view: {:?}",
+            texts(&runner)
+        );
+    }
+}
+
+/// **The pane lays out inside its panel, however narrow the panel gets.**
+///
+/// A panel has no usability minimum (P5-06), so the body's floor is there to stop wrapping
+/// degrading into one character per line — not to stop the panel shrinking. Below the floor the
+/// rows still have to stay inside the width they were given, or the tree paints over the workbench
+/// beside it. `PANE_BODY_MIN_W` is 132, so this is measured well under it.
+#[test]
+fn the_tree_lays_out_within_its_panel_at_stub_width() {
+    let (mut runner, _) = runner_shaped(mixed_origins, 100., 400.);
+    settle(&mut runner);
+
+    let overflowing: Vec<(String, f32)> = runner
+        .find_many(|node, element| {
+            Label::try_downcast(element).map(|l| (l.text.to_string(), node.layout().area.max_x()))
+        })
+        .into_iter()
+        .filter(|(_, max_x)| *max_x > 100.)
+        .collect();
+    assert!(
+        overflowing.is_empty(),
+        "nothing may paint past the panel: {overflowing:?}"
+    );
 }
