@@ -1,6 +1,6 @@
 # QE-03 · `describe_table` shape collapse for keyed siblings
 
-**Workstream:** Query ergonomics · **Status:** ⬜ · **Depends on:** nothing
+**Workstream:** Query ergonomics · **Status:** ✅ (built 2026-08-14) · **Depends on:** nothing
 
 ## Goal
 
@@ -22,7 +22,8 @@ map-like objects as Arrow `Map` so every surface shrinks — is recorded against
 considered-and-not-built list (record-vs-map is an inference-time heuristic; DF's Map function
 coverage is its sparsest).
 
-## Current state (verified 2026-08-13)
+## Current state (verified 2026-08-13 — the state this was planned against, kept as the starting
+point; `bounded_forest` is `walk` now and `SCHEMA_DEPTH` is 5, see **As built** below)
 
 - The whole algorithm is `crates/strata-agent/src/describe.rs` (872 lines incl. tests):
   `SCHEMA_PAGE` 50, `MATCH_PAGE` 25, `SCHEMA_BUDGET` 16,384 bytes, sampling ladder
@@ -85,3 +86,52 @@ coverage is its sparsest).
 `crates/strata-agent/src/describe.rs` · `crates/strata-agent/src/wire.rs` (`ColumnWire` /
 `MatchWire` fields) · `crates/strata-agent/src/tools.rs` (tool description) ·
 `crates/strata-agent/src/assistant/system.md` · `docs/AGENT_ACCESS_SPEC.md`.
+
+## As built (2026-08-14)
+
+The plan held; six things it did not say are settled here, four of them corrections.
+
+- **The collapse is a *cutting* strategy, not a projection.** It runs only after the complete
+  rung fails, never before it — because "same shape" catches ordinary schemas too. Sixty
+  `Utf8` columns are sixty same-shaped siblings, and collapsing a schema that fits would trade
+  the names, which are the whole answer there, for a count. So: an answer that fits complete is
+  never collapsed, and the "no counting fields means complete" contract is untouched by
+  construction rather than by care.
+- **And that rule reads over the *forest*, not over the page** — the correction a review caught
+  before merge. The complete rung is measured on one page, so gating on it alone let a wide
+  keyed set escape whenever its page happened to fit: 19,311 UUID keys holding a two-field
+  record are ~150 nodes and ~8 KB on page 1, comfortably inside both bounds, so
+  `describe_table(t, path=['contentBlocks'])` answered 50 UUID names, 387 pages deep, while
+  `describe_table(t)` collapsed the same struct correctly — one struct, two answers, decided by
+  which way the caller reached it. A forest that is both **paged and collapsible** now skips
+  the complete rung outright: being paged already means the answer is cut, and a collapse
+  available in it says more than any page of it does. A collapsible forest that fits in one
+  page is still never collapsed, which is the cutting rule intact.
+- **A leaf never joins a set**, for the same reason at the other scale: a leaf carries nothing
+  but its name, so a shape standing for two hundred of them says less than the
+  `children_total` that already elides them. A set is containers only.
+- **The walk root collapses too, before it pages.** `describe_table(t, path=['contentBlocks'])`
+  — the drill-down the feedback actually took — is the same pathology one level down, and
+  collapsing the *page* of 50 would have made `keys_total` a fact about the page. So `slots`
+  runs over the whole forest and paging is over slots from there, which is what makes one
+  collapsed answer the whole answer rather than the first of 387.
+- **Shape equality is checked, not hashed.** `ColumnInfo` already derives `PartialEq`, so
+  `same_shape` is an exhaustive destructure comparing everything but the name; the hash
+  (`shallow`, one level deep) only buckets the candidates. A digest that *decided* membership
+  would be a collapse claiming keys are identical on the strength of 64 bits, and hashing a
+  quarter-million fields per rung is exactly the cost this module exists to avoid.
+- **The search splits a set in two halves, because only one of them is shared.** The keys vary,
+  so each is still tested by name and answers **as itself** — a caller searching for a key
+  wants that key back, spelled as the file spells it. Everything below is identical by
+  construction, so it is searched once through the placeholder with a multiplier carried down
+  (nested sets multiply). That makes a row and a hit different things: rows are what pages,
+  `matched_total` is still every field matched. Both are on the wire and both are documented.
+- **`SCHEMA_DEPTH` moved 3 → 5, guarded by a per-rung node cap** — the one place this went
+  past the plan's "renders at the ladder's full depth". At 3 the answer stops at the List's
+  synthetic `element` level, one short of `eligibilityRule`, so the Goal's own quoted view was
+  not reachable. The cap makes the deeper rungs free rather than risky: a rung is built against
+  `NODE_CAP` (= `SCHEMA_BUDGET / NODE_FLOOR`) and abandoned the moment it passes it, and past
+  that many nodes a rendering cannot fit whatever its names are — so no rung is ever refused
+  that would have fitted, only the *building* is bounded. That guard is a fix in its own right:
+  the depth-3 rung could already build ~16k nodes on a 50-column window to measure it, which is
+  this module's founding defect at a smaller size.

@@ -36,6 +36,13 @@ by name anywhere in the tree, 'path' to descend to a nested column an answer
 named, and 'page' to read more columns. Every answer states the totals it was
 cut from.
 
+Where an object is keyed by data, thousands of same-shaped fields under UUID
+keys, they come back as one entry named '<key>' with 'keys_total' and
+'key_examples'. That is a placeholder, not a field name: never write SQL
+against it, and put a real key from 'key_examples' in 'path' to descend into
+one. A 'matching' row through such a set is one row too, with 'matched_keys'
+saying how many fields it stands for.
+
 Open a session with 'open_query_session' before running. Sessions are yours to
 manage: iterate scratch work in one session, and park a result you will refer
 back to in its own, because a new run in a session replaces the previous

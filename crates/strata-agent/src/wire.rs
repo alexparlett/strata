@@ -388,8 +388,9 @@ fn split_reg(reg: RegState) -> (StateWire, Option<String>) {
 ///
 /// The schema portion is **bounded** (`crate::describe`), and the convention over every
 /// bound is: an answer with no totals in it is a complete answer. `columns_total`,
-/// `children_total` on a column, `matched_total` and `page` appear exactly where something
-/// was elided or searched, and each names what the shown part was cut from.
+/// `children_total` and `keys_total` on a column, `matched_total`, `matched_keys` on a match
+/// and `page` appear exactly where something was elided, collapsed or searched, and each
+/// names what the shown part was cut from.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DescribeResult {
     pub name: String,
@@ -431,7 +432,9 @@ pub struct DescribeResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub matches: Vec<MatchWire>,
     /// How many fields 'matching' matched — stated even at zero, so an empty answer cannot
-    /// read as an unsearched one. Absent only when no 'matching' was given.
+    /// read as an unsearched one. Absent only when no 'matching' was given. Counts every
+    /// matching field, including the ones a collapsed row stands for (`matched_keys`), so it
+    /// can exceed the number of rows; 'page' is what says whether more rows exist.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_total: Option<usize>,
     /// Present only when the answer is one window of more.
@@ -448,6 +451,10 @@ pub struct MatchWire {
     pub path: Vec<String>,
     pub dtype: String,
     pub kind: KindWire,
+    /// How many real fields this one row stands for, when its path runs through a collapsed
+    /// key set (the `<key>` segment). Absent when the row is one field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_keys: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
@@ -477,6 +484,16 @@ pub struct ColumnWire {
     /// Reach the rest with `describe_table`'s 'path' and 'page', or 'matching'.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children_total: Option<usize>,
+    /// On a **collapsed key set**: how many same-shaped siblings this one entry stands for.
+    /// Its name is the placeholder `<key>` rather than any of theirs, because the keys are
+    /// data and the shape below them is the answer. Present only on such an entry — which is
+    /// what tells it apart from a field a file really named `<key>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keys_total: Option<usize>,
+    /// A few of that set's real keys, exactly as the file spells them — what `describe_table`'s
+    /// 'path' takes to descend into one of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub key_examples: Vec<String>,
     /// Facts the source reports **for free** — read at registration, never computed. Empty
     /// for every format without metadata to read, which is every format but Parquet and
     /// Arrow. Profiling is deliberately not exposed (the spec's "The policy gate").
@@ -496,6 +513,8 @@ impl From<&ColumnInfo> for ColumnWire {
             nullable: c.nullable,
             children: c.children.iter().map(ColumnWire::from).collect(),
             children_total: None,
+            keys_total: None,
+            key_examples: Vec::new(),
             stats: c.stats.iter().map(StatWire::from).collect(),
         }
     }

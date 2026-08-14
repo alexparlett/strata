@@ -10,8 +10,9 @@ The app is built on **Freya 0.4 (Skia/native)**. It began as a Dioxus (wry/webvi
 rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The open work
 (`.claude/tasks/`) is the **database-connections workstream** (DB — federated Postgres over
 `datafusion-table-providers` + `datafusion-federation`), the **query-ergonomics workstream**
-(QE — the deep-JSON field-feedback batch: the struct-enumeration UDFs, `regexp_extract_all`,
-and the agent surface's describe/session/export gaps), the rest of the
+(QE — the deep-JSON field-feedback batch; the struct-enumeration UDFs, `regexp_extract_all`
+and `describe_table`'s keyed-sibling collapse are in, leaving the agent surface's
+session/export gaps and the guidance pass), the rest of the
 **internal-tables-in-the-UI workstream** (IT — IT-01's empty-table panel is built; IT-02, Save
 results as table, is not) and design polish (phase 5). The assistant
 workstream is complete — the loop, the pane, the model listings, and conversations that survive

@@ -31,10 +31,20 @@ not (dynamic access to a *heterogeneous* struct), and the revisit condition are 
 |---|---|---|---|
 | QE-01 | [Struct UDFs: `struct_keys`, `struct_entries`, `struct_get`, `to_json`](QE-01-struct-udfs.md) | 1, 2 (mitigates 4) | ✅ |
 | QE-02 | [`regexp_extract_all` UDF](QE-02-regexp-extract-all.md) | 6 | ✅ |
-| QE-03 | [`describe_table` shape collapse for keyed siblings](QE-03-describe-shape-collapse.md) | 10 | ⬜ |
+| QE-03 | [`describe_table` shape collapse for keyed siblings](QE-03-describe-shape-collapse.md) | 10 | ✅ |
 | QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ⬜ |
 | QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ⬜ |
 | QE-06 | [Deep-JSON guidance + the upstream ledger](QE-06-guidance-and-ledger.md) | 3, 4, 5, 7, 8, 9 | ⬜ |
+
+QE-03 landed the collapse the "real win" line named: past the byte budget, eight or more
+structurally identical sibling *containers* become one `<key>` entry with `keys_total` and
+`key_examples`, and `matching` answers one row with `matched_keys` instead of thousands of
+paths differing in one segment. Four corrections are in its file — the collapse is a
+**cutting** strategy (an answer that fits complete is never collapsed, or sixty `Utf8`
+columns lose their names), a leaf never joins a set, the walk root collapses **before** it
+pages (or `keys_total` would be a fact about the page), and shape equality is *checked*
+(`ColumnInfo` derives `PartialEq`) with the hash only bucketing. It also moved `SCHEMA_DEPTH`
+3 → 5 behind a per-rung node cap, which is what puts `eligibilityRule` in the first answer.
 
 Dependencies: QE-01..05 are independent of each other. QE-06 references QE-01's function by
 name, so it lands last (or its guidance ships without that line and gains it with QE-01).
