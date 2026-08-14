@@ -126,7 +126,10 @@ src/state/updates.rs             UP-02 — the app-global **update status**: wha
                                  is parked in a process-global the next mount adopts, and the
                                  install intent is another one — the swap happens in `main` after
                                  `launch` returns. The mechanism itself is `strata_core::update`;
-                                 the surfaces are `src/updater.rs`
+                                 the surfaces are `src/updater.rs`. A dev build is pointed at a
+                                 local releases server with `STRATA_UPDATE_ORIGIN`
+                                 (`strata-core/examples/fake_releases.rs`) — the only way to see
+                                 any of this without cutting a release
 src/updater.rs                   UP-03 — the updater's **surfaces**, the half that belongs to no
                                  single window (so not an `apps/` folder, which is one per OS
                                  window). `Affordance::of(status, site)` is the one answer to "what

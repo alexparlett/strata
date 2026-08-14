@@ -42,6 +42,24 @@ After **any theme change**, regenerate + verify the schema:
 `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
 `themes/theme.schema.json` must match the `Role` vocabulary + the editor's syntax scopes).
 
+The updater is **inert in a dev build** (a `cargo run` is not an installation) and there is never
+a newer release to hand, so its surfaces draw nothing. To drive them, run the releases server and
+point a **debug** build at it:
+
+```bash
+cargo run -p strata-core --example fake_releases
+```
+
+```bash
+STRATA_UPDATE_ORIGIN=http://127.0.0.1:8787 cargo run
+```
+
+Type a scenario at the server's prompt (`none` · `offer` · `page` · `slow` · `fail`) and press
+App ▸ *Check for Updates…* in the app. Nothing about the app is faked — same request, same JSON,
+a real archive downloaded and unpacked by the same `ditto` — only the *server* is local; the
+signature check gives way (it could never pass on a locally-made bundle) and the install is
+refused. Full table: `crates/strata-core/examples/fake_releases.rs`.
+
 **`cargo test` needs a container runtime.** Two integration tests drive real servers through
 testcontainers — `strata-core/tests/object_store_minio.rs` (W7, MinIO) and
 `strata-core/tests/postgres_federation.rs` (DB-02, PostgreSQL) — and both are

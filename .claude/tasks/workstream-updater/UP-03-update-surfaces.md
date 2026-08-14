@@ -190,6 +190,18 @@ What landed:
   needed **`MarkdownViewer::theme` in the fork** — it was the one themed component with no
   per-instance setter (AGENTS.md §6: fix the fork, don't grow an app-side token). Fork commit must
   be pushed with this change.
+- **A local releases server** (`strata-core/examples/fake_releases.rs`, `STRATA_UPDATE_ORIGIN`),
+  because none of the above can be *driven* otherwise: the mechanism is inert outside a bundle, so
+  a `cargo run` has no site, no offer and a disabled menu item — and even bundled there is no
+  newer release unless you cut one. A first version **faked the statuses** app-side and was
+  replaced: it was a second state machine beside the real one, and everything it proved was about
+  itself. Pointing the *check* at `127.0.0.1` instead keeps the whole ladder real — same request,
+  same JSON, a real archive downloaded with real progress and unpacked by the same `ditto` — and
+  costs three debug-only seams: the origin, the signature check (a locally-made bundle carries no
+  Apple signature and never could, so it is skipped **keyed on the origin**, never on a flag of
+  its own), and the site + install refusal app-side. All `cfg`'d out of a release build, which is
+  what makes an environment variable an acceptable way to ask. Scenarios are typed at the
+  server's prompt and picked up by App ▸ Check for Updates…, which re-checks over a known offer.
 
 ## References
 - `apps/launcher/views/rail.rs:68` — the version line.

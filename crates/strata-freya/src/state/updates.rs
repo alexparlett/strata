@@ -20,12 +20,21 @@
 //! workspace window and its mount is the second wake. That matters most for a download, which ends
 //! in a verified bundle on disk that losing the answer would orphan.
 //!
+//! **A dev build can be pointed at a local server.** The mechanism is inert outside a bundle and
+//! there is never a newer release to hand, so the surfaces draw nothing in a `cargo run` — set
+//! `STRATA_UPDATE_ORIGIN` (debug builds only, `strata_core::update::local_origin`) and the whole
+//! ladder runs for real against `crates/strata-core/examples/fake_releases.rs`. Two things here
+//! have to answer differently while it is: [`install_site`], because a dev build has no bundle to
+//! light the surfaces up with, and [`install`], because there is nowhere to swap one in.
+//!
 //! **The install is a quit.** A running app's bundle is never mutated: the press records the swap
 //! in [`PENDING`] — a process-global, because it outlives every window and scope — and calls the
 //! ordinary [`quit`](crate::platform::quit), so every close confirm keeps its say. A cancelled quit
 //! clears the intent through [`abandon_install`], leaving the staged bundle and a `Ready` status.
 //! The swap happens in `main`, after `launch` returns and no window is left.
 
+#[cfg(debug_assertions)]
+use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -111,7 +120,10 @@ pub fn create_global_updates() -> UpdateStatus {
 /// is the only honest way to ask, and not something to do on every repaint.
 pub fn install_site() -> &'static Site {
     static SITE: OnceLock<Site> = OnceLock::new();
-    SITE.get_or_init(update::site)
+    SITE.get_or_init(|| match update::is_local() {
+        true => Site::Writable(env::temp_dir().join("strata-update-local/Strata.app")),
+        false => update::site(),
+    })
 }
 
 /// **Ask GitHub whether there is a newer release.**
@@ -237,6 +249,10 @@ pub fn install(status: UpdateStatus) {
         Update::Ready { staged, .. } => staged.clone(),
         _ => return,
     };
+    if update::is_local() {
+        tracing::warn!("not installing {}: it came from a local origin", staged.display());
+        return;
+    }
     let Site::Writable(target) = install_site() else {
         status.set(failed(
             "Strata cannot be replaced where it is installed. Open the release page to install \

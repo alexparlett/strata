@@ -33,6 +33,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(debug_assertions)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use semver::Version;
@@ -210,6 +212,16 @@ pub fn download_blocking(
     }
 }
 
+/// **Is the updater pointed at a local server?** — `STRATA_UPDATE_ORIGIN`, debug builds only,
+/// served by `examples/fake_releases.rs`.
+///
+/// The app asks because two things it owns have to answer differently while it is: a dev build
+/// has no install site, so the surfaces would draw nothing at all; and the swap has no bundle to
+/// put anywhere, so the install is refused rather than taken.
+pub fn is_local() -> bool {
+    local_origin().is_some()
+}
+
 /// **Where the running app is installed**, and whether it can be replaced there.
 ///
 /// The bundle is the first `.app` above the executable, which is what makes this true for the
@@ -325,7 +337,39 @@ pub fn discard(app: &Path) {
 
 /// The endpoint the check reads. Built here so the slug is written once.
 fn releases_url() -> String {
-    format!("https://api.github.com/repos/{REPO}/releases?per_page={PER_PAGE}")
+    let origin = local_origin().unwrap_or("https://api.github.com");
+    format!("{origin}/repos/{REPO}/releases?per_page={PER_PAGE}")
+}
+
+/// **Where the releases come from, when it is not GitHub** — `STRATA_UPDATE_ORIGIN`, and only
+/// in a **debug** build.
+///
+/// The updater is inert outside a bundle and there is never a newer release to hand, so nothing
+/// downstream of the check can be looked at in a dev build. Pointing it at
+/// `http://127.0.0.1:8787` fixes that without a fake anywhere: the request, the JSON, the offer,
+/// the download and its progress are the shipping code, and only the *server* is local. The dev
+/// server is `examples/fake_releases.rs`.
+///
+/// The whole body is `cfg`'d out of a release build, so a shipped app reads no such variable and
+/// cannot be pointed anywhere — which is what makes an environment variable acceptable here, and
+/// what keeps [`verify`]'s relaxation below honest.
+fn local_origin() -> Option<&'static str> {
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+    #[cfg(debug_assertions)]
+    {
+        static ORIGIN: OnceLock<Option<String>> = OnceLock::new();
+        ORIGIN
+            .get_or_init(|| {
+                let origin = env::var("STRATA_UPDATE_ORIGIN").ok()?;
+                let origin = origin.trim().trim_end_matches('/').to_string();
+                tracing::warn!("reading releases from {origin}, not GitHub");
+                Some(origin)
+            })
+            .as_deref()
+    }
 }
 
 /// A current-thread runtime for the length of one call — `list_models_blocking`'s trade,
@@ -536,7 +580,19 @@ fn bundle_in(stage: &Path) -> Result<PathBuf, String> {
 /// Order matters. The strict verify comes first because it is what seals everything else: the
 /// `Info.plist` read below is only worth trusting once the signature covering it has been
 /// checked.
+///
+/// **A local origin is the one thing that relaxes this**, and only in a debug build: a bundle
+/// the dev server made carries no Apple signature and never could, so a check pointed at
+/// `127.0.0.1` would stop at the first step and `Ready` would be unreachable on a developer's
+/// machine. The relaxation is keyed on [`local_origin`] rather than on a flag of its own, so it
+/// cannot be switched on for a bundle that came from GitHub, and it is `cfg`'d out of a release
+/// build with the origin itself. It says so in the log, loudly, because a skipped signature
+/// check is the one thing here worth never doing by accident.
 fn verify(app: &Path) -> Result<(), String> {
+    if let Some(origin) = local_origin() {
+        tracing::warn!("not verifying {}: it came from {origin}", app.display());
+        return Ok(());
+    }
     let checked = Command::new(CODESIGN)
         .arg("--verify")
         .arg("--deep")
