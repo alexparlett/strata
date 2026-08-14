@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::engine::store::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
 use strata_model::{
-    ConnectionDef, GcsAuth, GcsStore, PgStore, Provider, ProviderId, S3Auth, S3Store,
+    ConnectionDef, GcsAuth, GcsStore, PgPassword, PgStore, Provider, ProviderId, S3Auth, S3Store,
 };
 
 /// What this window is editing: a new connection, or an existing one by
@@ -101,6 +101,103 @@ impl GcsAuthId {
     }
 }
 
+/// What this machine's keystore said about the entry the def expects. Read once at mount, and
+/// only where the def expects one.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub enum PasswordProbe {
+    #[default]
+    Asking,
+    Stored,
+    Absent,
+    /// The keystore refused to answer, in its own words — never folded into
+    /// [`Absent`](Self::Absent), which would claim a fact nobody established.
+    Refused(String),
+}
+
+/// What the PASSWORD row is showing: its sentence and both of its presses, off one value.
+///
+/// A password is optional (`trust`, `peer`, certificate), so absence is a state rather than a
+/// mode and there is no pill; every arm is reachable by typing into the box or by one of the two
+/// presses.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PasswordRow {
+    /// Something is typed: it lands in this machine's keystore at Save.
+    Typed,
+    /// No password expected. `forgetting` when this machine's entry goes in the same Save.
+    Unused {
+        forgetting: bool,
+    },
+    /// Expected, and this machine holds it.
+    Stored,
+    /// Expected, and this machine does not — a colleague opening a shared project.
+    Missing,
+    /// Expected, and this machine's entry is being removed at Save. Other machines keep theirs,
+    /// which is the whole difference from [`Unused`](Self::Unused).
+    Removing,
+    Asking,
+    Refused(String),
+}
+
+impl PasswordRow {
+    /// What the def expects with the box empty, whether anything is typed, whether a removal is
+    /// pending, and what the keystore said.
+    pub fn of(expected: PgPassword, typed: bool, removed: bool, probe: &PasswordProbe) -> Self {
+        if typed {
+            return Self::Typed;
+        }
+        match expected {
+            PgPassword::None => Self::Unused {
+                forgetting: removed,
+            },
+            PgPassword::Keystore if removed => Self::Removing,
+            PgPassword::Keystore => match probe {
+                PasswordProbe::Asking => Self::Asking,
+                PasswordProbe::Stored => Self::Stored,
+                PasswordProbe::Absent => Self::Missing,
+                PasswordProbe::Refused(why) => Self::Refused(why.clone()),
+            },
+        }
+    }
+
+    /// The line under the box, each arm about **this machine** — the half a committed def cannot
+    /// state. A marker echoing `PgPassword::Keystore` would read "a password is stored" on a
+    /// machine that has never held one.
+    pub fn note(&self) -> String {
+        match self {
+            Self::Typed => "This password goes into this machine's keystore when you save.".into(),
+            Self::Unused { forgetting: false } => {
+                "This connection signs in without a password.".into()
+            }
+            Self::Unused { forgetting: true } => "This connection signs in without a password. \
+                 The one stored on this machine is removed when you save."
+                .into(),
+            Self::Stored => {
+                "A password is stored on this machine. Type a new one to replace it.".into()
+            }
+            Self::Missing => "This connection expects a password and none is stored on this \
+                 machine. Enter it here."
+                .into(),
+            Self::Removing => "The password stored on this machine is removed when you save. \
+                 This connection still expects one, so other machines keep theirs."
+                .into(),
+            Self::Asking => "Checking this machine's keystore…".into(),
+            Self::Refused(why) => why.clone(),
+        }
+    }
+
+    /// Whether **Remove from this machine** is offered: there has to be an entry here to remove.
+    pub fn offers_removal(&self) -> bool {
+        matches!(self, Self::Stored)
+    }
+
+    /// Whether **This connection uses no password** is offered — wherever one is still expected,
+    /// including while the keystore is asked or refusing, since the press edits the def rather
+    /// than this machine.
+    pub fn offers_disuse(&self) -> bool {
+        !matches!(self, Self::Typed | Self::Unused { .. })
+    }
+}
+
 /// Everything the user has chosen.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ConnectionDraft {
@@ -115,14 +212,14 @@ pub struct ConnectionDraft {
     pub allow_http: bool,
     pub gcs_auth: GcsAuthId,
     pub sa_path: String,
-    /// A database connection's settings, carried **whole and unedited** until DB-04 builds the
-    /// rows for them.
+    /// A database connection's settings, edited in place by the Postgres rows. Held whole where
+    /// the S3 and GCS fields are held flat, because it carries no mode-plus-reference pair for a
+    /// trip through the picker to lose. [`password`](PgStore::password) is the one field no
+    /// control writes directly — [`ConnectionCtx`](super::ConnectionCtx)'s slots derive it.
     ///
-    /// The provider picker does not offer `PG` yet (`views::form::ProviderPicker`), so the only
-    /// way one reaches this window is a def written by hand — and the window must round-trip it
-    /// rather than quietly replacing it with defaults on Save. Held as the def's own type for
-    /// the same reason the S3 fields are held flat: this is what the draft *has*, and when the
-    /// fields arrive they edit it in place.
+    /// Not cloned into the def: [`def`](Self::def) rebuilds it field by field with no `..`, so
+    /// its text is trimmed like every other field here and a field added to `PgStore` has to be
+    /// answered rather than silently carried untrimmed.
     pub pg: PgStore,
     /// The connection's client options, **as rows** — see [`ConfigRows`].
     pub client_config: ConfigRows,
@@ -335,10 +432,7 @@ impl ConnectionDraft {
     /// The providers it *isn't* keep their defaults: the def has nothing to say about them.
     pub fn of(def: &ConnectionDef) -> Self {
         let mut draft = Self {
-            provider: match def.provider.id() {
-                id if id.is_object_store() => id,
-                _ => ProviderId::S3,
-            },
+            provider: def.provider.id(),
             address: def.address.clone(),
             client_config: ConfigRows::of(&def.client_config),
             ..Default::default()
@@ -393,18 +487,67 @@ impl ConnectionDraft {
 
     /// What the address box is called, and what it is called *in prose* — a bucket for the two
     /// object stores, a URL for HTTP. One pair, so the label and every sentence about it agree.
+    /// The `host:port` half of a database address, and the database half — the two boxes the
+    /// Postgres form splits [`address`](Self::address) into.
+    ///
+    /// A split of the one stored string rather than two draft fields, so `ConnectionDef::address`
+    /// stays `host:port/database` and `parse_pg_address` remains the only parse of that grammar.
+    /// Total where that parse is fallible: this is what the *boxes* show while the address is
+    /// being typed and is still wrong, and `check_address` is what refuses it.
+    pub fn pg_server(&self) -> &str {
+        match self.address.split_once('/') {
+            Some((server, _)) => server,
+            None => &self.address,
+        }
+    }
+
+    pub fn pg_database(&self) -> &str {
+        self.address.split_once('/').map_or("", |(_, db)| db)
+    }
+
+    /// Type into the URL box. Loses a pasted scheme for [`set_address`]'s reason, and **stops at
+    /// the first `/`**.
+    ///
+    /// Neither half may carry the separator, or the two boxes stop being a view of the address:
+    /// each box's effect subscribes to its own buffer alone, so a `host:port/appdb` pasted here
+    /// would write the database half while the DATABASE box — which never re-runs — went on
+    /// showing nothing, and the next keystroke in it would drop what was pasted. Truncating is
+    /// what makes that unrepresentable; the database is then simply not set, which the blocker
+    /// says in its own words.
+    pub fn set_pg_server(&mut self, typed: String) {
+        let database = self.pg_database().to_string();
+        let typed = strip_scheme(&typed);
+        let server = typed.split_once('/').map_or(typed, |(server, _)| server);
+        self.compose_pg(server, &database);
+    }
+
+    /// Type into the DATABASE box. A `/` is dropped for [`set_pg_server`]'s reason, and because
+    /// one kept here would compose an address naming two databases.
+    pub fn set_pg_database(&mut self, typed: String) {
+        let server = self.pg_server().to_string();
+        self.compose_pg(&server, &typed.replace('/', ""));
+    }
+
+    /// `host:port` + `database` back into the one address. The separator is written only when
+    /// there is a database, so an untouched DATABASE box leaves the address as the server alone
+    /// and the blocker asks for a database rather than complaining about a trailing `/`.
+    fn compose_pg(&mut self, server: &str, database: &str) {
+        self.address = match database.is_empty() {
+            true => server.to_string(),
+            false => format!("{server}/{database}"),
+        };
+    }
+
     pub fn address_label(&self) -> &'static str {
         match self.provider {
-            ProviderId::Http => "URL",
-            ProviderId::Postgres => "SERVER",
+            ProviderId::Http | ProviderId::Postgres => "URL",
             _ => "BUCKET",
         }
     }
 
     pub fn address_noun(&self) -> &'static str {
         match self.provider {
-            ProviderId::Http => "URL",
-            ProviderId::Postgres => "server",
+            ProviderId::Http | ProviderId::Postgres => "URL",
             _ => "bucket",
         }
     }
@@ -437,7 +580,14 @@ impl ConnectionDraft {
                     },
                 }),
                 ProviderId::Http => Provider::Http,
-                ProviderId::Postgres => Provider::Postgres(self.pg.clone()),
+                ProviderId::Postgres => Provider::Postgres(PgStore {
+                    catalog: self.pg.catalog.trim().to_string(),
+                    user: self.pg.user.trim().to_string(),
+                    sslmode: self.pg.sslmode,
+                    sslrootcert: self.pg.sslrootcert.trim().to_string(),
+                    password: self.pg.password,
+                    schemas: self.pg.schemas.clone(),
+                }),
             },
         }
     }
@@ -597,9 +747,316 @@ mod tests {
                 provider: Provider::Http,
                 client_config: Default::default(),
             },
+            ConnectionDef {
+                address: "db.internal:5432/analytics".into(),
+                provider: Provider::Postgres(PgStore {
+                    catalog: "warehouse".into(),
+                    user: "reader".into(),
+                    sslmode: strata_model::PgSslMode::VerifyFull,
+                    sslrootcert: "/certs/rds.pem".into(),
+                    password: PgPassword::Keystore,
+                    schemas: vec!["public".into(), "analytics".into()],
+                }),
+                client_config: Default::default(),
+            },
         ] {
             assert_eq!(ConnectionDraft::of(&def).def(), def, "{}", def.url());
         }
+    }
+
+    /// **A stored database connection opens as one.** `of` used to clamp a non-object-store def
+    /// to S3, so a Postgres def opened as an S3 connection and a Save with nothing touched
+    /// replaced it with one. The round trip above cannot catch that: it never looks at a provider.
+    #[test]
+    fn a_database_def_opens_on_the_database_arm() {
+        let def = ConnectionDef {
+            address: "db.internal:5432/analytics".into(),
+            provider: Provider::Postgres(PgStore {
+                catalog: "warehouse".into(),
+                user: "reader".into(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        };
+        let draft = ConnectionDraft::of(&def);
+        assert_eq!(draft.provider, ProviderId::Postgres);
+        assert_eq!(draft.address_label(), "URL");
+        assert_eq!(draft.blocker(), None);
+    }
+
+    /// **A database's blockers are the model's own**, so a name this form accepts is one
+    /// `engine::db::connect` accepts, in the same words. The project-wide catalog clash is the
+    /// footer's, since it needs the other connections.
+    #[test]
+    fn a_database_draft_is_refused_on_the_engines_terms() {
+        let good = ConnectionDraft {
+            provider: ProviderId::Postgres,
+            address: "db.internal:5432/analytics".into(),
+            pg: PgStore {
+                catalog: "warehouse".into(),
+                user: "reader".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(good.blocker(), None);
+
+        let mut portless = good.clone();
+        portless.address = "db.internal/analytics".into();
+        assert!(portless.blocker().unwrap().contains("needs a port"));
+
+        let mut nameless = good.clone();
+        nameless.pg.catalog = String::new();
+        assert!(nameless.blocker().unwrap().contains("no catalog name"));
+
+        let mut reserved = good.clone();
+        reserved.pg.catalog = "STRATA".into();
+        assert!(reserved
+            .blocker()
+            .unwrap()
+            .contains("this project's own catalog"));
+
+        let mut userless = good.clone();
+        userless.pg.user = "  ".into();
+        assert!(userless.blocker().unwrap().contains("no user"));
+
+        let mut spaced = good.clone();
+        spaced.pg.user = "read only".into();
+        assert!(spaced.blocker().unwrap().contains("spaces"));
+
+        let mut certless = good;
+        certless.pg.sslmode = strata_model::PgSslMode::VerifyFull;
+        assert_eq!(
+            certless.blocker(),
+            None,
+            "a blank root certificate is the driver's own trust store, not a missing answer"
+        );
+    }
+
+    /// **The database fields are trimmed into the def like every other field here.** `engine::db`
+    /// trims at use, so an untrimmed name still registers as `pg` — while the committed,
+    /// *shared* `project.json` would record `"pg "`, and the def is what every surface displays.
+    #[test]
+    fn a_database_defs_text_is_trimmed() {
+        let draft = ConnectionDraft {
+            provider: ProviderId::Postgres,
+            address: "  db.internal:5432/analytics  ".into(),
+            pg: PgStore {
+                catalog: " warehouse ".into(),
+                user: " reader ".into(),
+                sslmode: strata_model::PgSslMode::VerifyFull,
+                sslrootcert: " /certs/rds.pem ".into(),
+                password: PgPassword::Keystore,
+                schemas: vec!["public".into()],
+            },
+            ..Default::default()
+        };
+        let def = draft.def();
+        assert_eq!(def.address, "db.internal:5432/analytics");
+        let Provider::Postgres(pg) = &def.provider else {
+            panic!("a database def");
+        };
+        assert_eq!(pg.catalog, "warehouse");
+        assert_eq!(pg.user, "reader");
+        assert_eq!(pg.sslrootcert, "/certs/rds.pem");
+        assert_eq!(pg.password, PgPassword::Keystore, "carried, never trimmed");
+        assert_eq!(def.url(), "postgres://reader@db.internal:5432/analytics");
+    }
+
+    /// **URL and DATABASE are two boxes over one stored address**, so the def keeps
+    /// `host:port/database` and `parse_pg_address` stays the only parse of that grammar. Total in
+    /// both directions while the address is half-typed, which is most of the time.
+    #[test]
+    fn the_two_database_boxes_split_and_recompose_one_address() {
+        let mut draft = ConnectionDraft {
+            provider: ProviderId::Postgres,
+            pg: PgStore {
+                catalog: "pg".into(),
+                user: "reader".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        draft.set_pg_server("db.internal:5432".into());
+        assert_eq!(
+            draft.address, "db.internal:5432",
+            "no database, no separator"
+        );
+        assert!(draft.blocker().unwrap().contains("needs a database"));
+
+        draft.set_pg_database("analytics".into());
+        assert_eq!(draft.address, "db.internal:5432/analytics");
+        assert_eq!(draft.blocker(), None);
+
+        assert_eq!(draft.pg_server(), "db.internal:5432");
+        assert_eq!(draft.pg_database(), "analytics");
+
+        draft.set_pg_server("postgres://other:5433".into());
+        assert_eq!(
+            draft.address, "other:5433/analytics",
+            "a pasted scheme goes, and the database is untouched"
+        );
+
+        draft.set_pg_database("a/b".into());
+        assert_eq!(
+            draft.address, "other:5433/ab",
+            "one database per connection, so a '/' typed here cannot compose a second"
+        );
+
+        draft.set_pg_database(String::new());
+        assert_eq!(
+            draft.address, "other:5433",
+            "clearing it drops the separator"
+        );
+
+        draft.set_pg_database("analytics".into());
+        draft.set_pg_server("host:5432/pasted".into());
+        assert_eq!(
+            draft.address, "host:5432/analytics",
+            "a whole address pasted into the URL box stops at the '/': neither box may carry the \
+             separator, or one of them shows something the address does not say"
+        );
+        assert_eq!(draft.pg_server(), "host:5432");
+        assert_eq!(draft.pg_database(), "analytics");
+
+        let stored = ConnectionDraft::of(&ConnectionDef {
+            address: "db:5432/analytics".into(),
+            provider: Provider::Postgres(PgStore::default()),
+            client_config: Default::default(),
+        });
+        assert_eq!(
+            stored.pg_server(),
+            "db:5432",
+            "and a stored def splits back"
+        );
+        assert_eq!(stored.pg_database(), "analytics");
+    }
+
+    /// **A pasted `postgres://` URL loses its scheme like every other non-HTTP address**: the
+    /// picker states the scheme and `url()` puts it back.
+    #[test]
+    fn a_database_address_loses_a_pasted_scheme() {
+        let mut draft = ConnectionDraft {
+            provider: ProviderId::Postgres,
+            pg: PgStore {
+                catalog: "pg".into(),
+                user: "reader".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        draft.set_address("postgres://db.internal:5432/analytics".into());
+        assert_eq!(draft.address, "db.internal:5432/analytics");
+        assert_eq!(
+            draft.def().url(),
+            "postgres://reader@db.internal:5432/analytics"
+        );
+    }
+
+    /// **The PASSWORD row is about *this machine*, not about the def.** A committed def can only
+    /// say a password is expected; conflating that with "one is stored" tells a colleague opening
+    /// a shared project that theirs is already here. "Not asked yet" and "refused to say" are not
+    /// "there is none" either.
+    #[test]
+    fn the_password_row_reports_this_machine_rather_than_the_def() {
+        use PasswordProbe as P;
+
+        let row =
+            |expected, typed, removed, probe: &P| PasswordRow::of(expected, typed, removed, probe);
+
+        assert_eq!(
+            row(PgPassword::None, false, false, &P::Absent),
+            PasswordRow::Unused { forgetting: false }
+        );
+        assert_eq!(
+            row(PgPassword::Keystore, false, false, &P::Stored),
+            PasswordRow::Stored
+        );
+        assert_eq!(
+            row(PgPassword::Keystore, false, false, &P::Absent),
+            PasswordRow::Missing,
+            "expected, and this machine has none"
+        );
+        assert_eq!(
+            row(PgPassword::Keystore, false, false, &P::Asking),
+            PasswordRow::Asking
+        );
+        assert_eq!(
+            row(
+                PgPassword::Keystore,
+                false,
+                false,
+                &P::Refused("locked".into())
+            ),
+            PasswordRow::Refused("locked".into())
+        );
+
+        assert_eq!(
+            row(PgPassword::Keystore, true, false, &P::Stored),
+            PasswordRow::Typed,
+            "what is being typed outranks what is stored, in every state"
+        );
+        assert_eq!(
+            row(PgPassword::None, true, true, &P::Absent),
+            PasswordRow::Typed
+        );
+    }
+
+    /// **The two clearing gestures are not the same gesture.** *Remove from this machine* leaves
+    /// the expectation standing so a colleague keeps their own password; *this connection uses no
+    /// password* edits the shared def.
+    #[test]
+    fn removing_a_password_locally_is_not_declaring_the_connection_has_none() {
+        let removing = PasswordRow::of(PgPassword::Keystore, false, true, &PasswordProbe::Stored);
+        assert_eq!(removing, PasswordRow::Removing);
+        assert!(
+            removing.note().contains("other machines keep theirs"),
+            "{}",
+            removing.note()
+        );
+
+        let unused = PasswordRow::of(PgPassword::None, false, true, &PasswordProbe::Stored);
+        assert_eq!(unused, PasswordRow::Unused { forgetting: true });
+        assert!(
+            unused.note().contains("without a password"),
+            "{}",
+            unused.note()
+        );
+    }
+
+    /// **Neither press is offered where it would mean nothing**, and neither is a dead end —
+    /// typing a password gets back to expecting one from every arm.
+    #[test]
+    fn the_password_presses_are_offered_where_they_do_something() {
+        assert!(PasswordRow::Stored.offers_removal());
+        for row in [
+            PasswordRow::Typed,
+            PasswordRow::Missing,
+            PasswordRow::Removing,
+            PasswordRow::Asking,
+            PasswordRow::Unused { forgetting: false },
+        ] {
+            assert!(!row.offers_removal(), "{row:?}: nothing here to remove");
+        }
+
+        for row in [
+            PasswordRow::Stored,
+            PasswordRow::Missing,
+            PasswordRow::Removing,
+            PasswordRow::Asking,
+            PasswordRow::Refused("locked".into()),
+        ] {
+            assert!(row.offers_disuse(), "{row:?}: a password is still expected");
+        }
+        assert!(
+            !PasswordRow::Unused { forgetting: false }.offers_disuse(),
+            "already the answer"
+        );
+        assert!(
+            !PasswordRow::Typed.offers_disuse(),
+            "a box with a password in it is not the place to say there is none"
+        );
     }
 
     /// **The HTTP box is one input holding a whole URL**, scheme and all: there is no scheme

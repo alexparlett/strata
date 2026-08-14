@@ -192,7 +192,14 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   workspace table of the same bare name), and a relation that vanishes server-side is a
   **reconciliation** whose staleness bound is stated where the message is built. The agent's
   two name-answering tools grew the honesty to match: `list_tables` names the database catalogs,
-  `describe_table` answers for a three-part name.
+  `describe_table` answers for a three-part name. **DB-04 is in** — the picker offers
+  `ProviderId::ALL`, the arm's rows are its own, and the PASSWORD row reports **this machine**
+  rather than the def: a committed expectation cannot say whether an entry is here, so the row
+  probes the keystore once at mount and keeps its two clearing gestures apart (a local removal is
+  not a declaration that the connection has no password). Save's keystore work — migrate, then
+  put or delete — runs on a worker **in front of** the store write under a new `Status::Storing`,
+  which its file records as the correction to "call it at `def()`-assembly time": `blocker`
+  assembles a def per keystroke.
   Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
@@ -283,9 +290,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 ## Rough order
 
 1. **Database connections (DB)** — the new capability workstream, eight tasks: DB-01 ✅,
-   DB-02 ✅ and DB-03 ✅, so **DB-04 and DB-08 are next** and sit on DB-02 independently (DB-08
-   needs nothing after it — schedule it early); DB-05 (the tree redesign, the heaviest task)
-   after DB-04; DB-06 and DB-07 close on the tree.
+   DB-02 ✅, DB-03 ✅ and DB-04 ✅, so **DB-05 (the tree redesign, the heaviest task) and DB-08
+   are next**; DB-08 sits on DB-02 alone and needs nothing after it, so schedule it early. DB-06
+   and DB-07 close on the tree.
 2. **Query ergonomics (QE)** — six independent tasks; QE-01 first (it is the headline fix and
    QE-06's guidance names it).
 3. **Internal tables in the UI (IT)** — the one remaining task, IT-02 (Save results as

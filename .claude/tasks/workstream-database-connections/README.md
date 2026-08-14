@@ -239,11 +239,12 @@ profiling) sit on the tree.
 | DB-01 | Federation groundwork in `build_context` | ✅ | — |
 | DB-02 | The Postgres arm: model, secrets, pool, catalog provider, registration | ✅ | DB-01 |
 | DB-03 | Statement policy over remote catalogs | ✅ | DB-02 |
-| DB-04 | The connection editor's Postgres form | ⬜ | DB-02 |
+| DB-04 | The connection editor's Postgres form | ✅ | DB-02 |
 | DB-05 | The data-sources tree: the catalog pane redesigned | ⬜ | DB-02, DB-04 |
 | DB-06 | Gestures + completion over the tree | ⬜ | DB-05 |
 | DB-07 | Column inspector + profiling for remote tables | ⬜ | DB-05 |
 | DB-08 | JSON accessors over remote columns: the pushdown rewrite | ⬜ | DB-02 |
+| DB-09 | A current database, so unqualified names resolve | ⬜ | DB-02 |
 
 Sources for the research this plan rests on: both repos read at 2026-08-13 HEAD
 (`datafusion-table-providers` 0.13.0, `datafusion-federation` 0.5.5), and the codebase map in
