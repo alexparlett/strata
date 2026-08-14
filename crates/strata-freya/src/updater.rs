@@ -303,7 +303,7 @@ pub struct UpdateConfirm {
 
 impl Component for UpdateConfirm {
     fn render(&self) -> impl IntoElement {
-        let mut ask = self.ask;
+        let ask = self.ask;
         let status = self.status;
         let asked = ask.read().clone();
         let roles = use_roles();
@@ -364,7 +364,7 @@ fn restart_card(
                     .color(roles.get(Role::TextMuted))
                     .wrap(),
                 )
-                .maybe_child((!notes.is_empty()).then(|| Changelog { notes }))
+                .maybe_child((!notes.is_empty()).then_some(Changelog { notes }))
                 .child(release_notes(roles, page_url)),
         )
         .action(
