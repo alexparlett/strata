@@ -818,6 +818,9 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
 - **Every worktree builds into its own `target/`; the machine-wide cache is sccache, never a
   shared `CARGO_TARGET_DIR`** — the shared dir serialized sessions on cargo's build lock and
   accumulated 335 GB; the dev profile's `debug = "line-tables-only"` is part of the same decision.
+  The cache delivers only with its 40 GB cap (the 10 GB default is smaller than one build and
+  thrashes: 32 min vs 4 min, measured) and a bounded idle timeout — a build frozen on trivial
+  crates is a wedged server; `sccache --stop-server` unwedges it now.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`.
 - **Clippy is part of that check, and a lint wrong for this codebase is allowed once at the
