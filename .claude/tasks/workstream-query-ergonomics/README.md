@@ -29,8 +29,8 @@ not (dynamic access to a *heterogeneous* struct), and the revisit condition are 
 
 | ID | Task | Feedback items | Status |
 |---|---|---|---|
-| QE-01 | [Struct UDFs: `struct_keys`, `struct_entries`, `struct_get`, `to_json`](QE-01-struct-udfs.md) | 1, 2 (mitigates 4) | ⬜ |
-| QE-02 | [`regexp_extract_all` UDF](QE-02-regexp-extract-all.md) | 6 | ⬜ |
+| QE-01 | [Struct UDFs: `struct_keys`, `struct_entries`, `struct_get`, `to_json`](QE-01-struct-udfs.md) | 1, 2 (mitigates 4) | ✅ |
+| QE-02 | [`regexp_extract_all` UDF](QE-02-regexp-extract-all.md) | 6 | ✅ |
 | QE-03 | [`describe_table` shape collapse for keyed siblings](QE-03-describe-shape-collapse.md) | 10 | ⬜ |
 | QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ⬜ |
 | QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ⬜ |
@@ -94,7 +94,7 @@ re-diagnoses these from scratch; revisit the list at the next DF bump.
    returns plain Utf8 with no extension metadata.
 5. **Dot access fails on an unnested struct alias** (`r.p` → "Invalid qualifier r";
    `r['p']` works) — upstream planner inconsistency. Workaround is the bracket spelling.
-6. *(ours — QE-02)*
+6. *(ours — QE-02, built: `regexp_extract_all`)*
 7. **`string_agg(DISTINCT x, d ORDER BY y)` unsupported** — DISTINCT and ORDER BY each work
    alone, not together. Upstream aggregate limitation; no clean workaround (a pre-deduped
    subquery with its own ordering is the usual dodge).

@@ -161,8 +161,12 @@ Strata has **its own built-ins** too, and they are exactly that one call: `engin
 (QE-01) holds `struct_keys` / `struct_entries` / `struct_get` / `to_json`, the struct
 vocabulary DataFusion has no spelling for — which keys does *this row* have, walk a keyed
 object with the values still typed, index one by a key computed per row — over the `Struct`
-that `json_poly` infers every JSON object as. A new built-in belongs there, and it inherits
-the `DROP FUNCTION` fence for free (`Functions::created` stays false for it).
+that `json_poly` infers every JSON object as. Beside them, `regexp_extract_all` (QE-02) —
+every non-overlapping match of a pattern, where DataFusion 54's `regexp_match` returns only the
+first, so multi-match extraction per row is `unnest(regexp_extract_all(col, pattern))` instead of
+a recursive CTE; its compile caching is DataFusion's own two functions rather than a second one.
+A new built-in belongs there, and it inherits the `DROP FUNCTION` fence for free
+(`Functions::created` stays false for it).
 
 > The Dioxus-era `Command`/`Event` channel protocol + worker loop was deleted along with the
 > Dioxus app itself. The engine's only interface is the direct-call facade above.

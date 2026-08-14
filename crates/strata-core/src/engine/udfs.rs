@@ -1,5 +1,6 @@
-//! Strata's own SQL built-ins (QE-01): the four functions that make an object-keyed `Struct`
-//! enumerable and walkable.
+//! Strata's own SQL built-ins: the four functions that make an object-keyed `Struct` enumerable
+//! and walkable (QE-01), and [`RegexpExtractAll`], which returns every match of a pattern rather
+//! than the first (QE-02).
 //!
 //! [`json_poly`](super::json_poly) infers every JSON object as a `Struct` with keys unioned across
 //! the file, and DataFusion's struct vocabulary is entirely literal — `get_field` and dot access
@@ -30,13 +31,20 @@
 //! `Struct{metadata: BinaryView, value: BinaryView}`, which the grid, inspector and export each
 //! render as hex, and a keys-only read of a 5,000-key struct measured 58.7ms against 19.75µs for
 //! the bitmap walk. These four return types every reader already has an arm for.
+//!
+//! **And [`RegexpExtractAll`], which is about none of that.** It shares this module because it is
+//! the same one-call integration, not because it is the same subject. DataFusion 54's regexp
+//! family stops at the first match — `regexp_match` returns *that* match's capture groups and
+//! there is no global variant — which is what forces a recursive walk over a string holding
+//! several. With it, multi-match extraction per row is
+//! `unnest(regexp_extract_all(col, pattern))`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayBuilder, ArrayRef, AsArray, ListArray, NullBufferBuilder,
-    StringArray, StringBuilder, StructArray,
+    new_null_array, Array, ArrayBuilder, ArrayRef, AsArray, Int64Array, ListArray,
+    NullBufferBuilder, StringArray, StringArrayType, StringBuilder, StructArray,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::interleave;
@@ -49,12 +57,14 @@ use datafusion::arrow::json::writer::{
 use datafusion::common::{exec_err, internal_datafusion_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
+use datafusion::functions::regex::{compile_and_cache_regex, compile_regex};
+use datafusion::logical_expr::scalar_doc_sections::{DOC_SECTION_REGEX, DOC_SECTION_STRUCT};
 use datafusion::logical_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    Signature, TypeSignature, Volatility,
 };
 use datafusion::prelude::SessionContext;
+use regex::Regex;
 
 use crate::engine::json_poly::infer::JSON_TEXT_KEY;
 
@@ -79,6 +89,7 @@ pub fn register(ctx: &SessionContext) {
         ScalarUDF::from(StructEntries::new()),
         ScalarUDF::from(StructGet::new()),
         ScalarUDF::from(ToJson::new()),
+        ScalarUDF::from(RegexpExtractAll::new()),
     ];
     for udf in udfs {
         let name = udf.name().to_string();
@@ -662,6 +673,204 @@ impl Encoder for Verbatim<'_> {
     }
 }
 
+/// `regexp_extract_all(string, pattern[, group]) -> List<Utf8>` — every non-overlapping match,
+/// where DataFusion's own `regexp_match` returns only the first.
+///
+/// DuckDB's spelling and semantics, including the optional group index. There is deliberately no
+/// flags argument: the `regex` crate takes them inline (`(?i)foo`), so a fourth argument would be
+/// a second way to say one thing, and DataFusion's own family only has one because Postgres does.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct RegexpExtractAll {
+    signature: Signature,
+    documentation: Documentation,
+}
+
+/// The item field of the extracted list. **Nullable**, unlike [`keys_field`]: a capture group is
+/// allowed to take no part in a match it is written into (`(a)|(b)` against `"ab"` has one such
+/// per match), and an empty string is a match a pattern can genuinely make — so the two cannot
+/// share an answer. Group 0 never produces one, but the group may be a column, so the return type
+/// cannot promise that.
+fn match_field() -> FieldRef {
+    Arc::new(Field::new("item", DataType::Utf8, true))
+}
+
+impl RegexpExtractAll {
+    pub fn new() -> RegexpExtractAll {
+        RegexpExtractAll {
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Uniform(
+                        2,
+                        vec![DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8],
+                    ),
+                    TypeSignature::Exact(vec![
+                        DataType::Utf8View,
+                        DataType::Utf8View,
+                        DataType::Int64,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::LargeUtf8,
+                        DataType::LargeUtf8,
+                        DataType::Int64,
+                    ]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64]),
+                ],
+                Volatility::Immutable,
+            ),
+            documentation: Documentation::builder(
+                DOC_SECTION_REGEX,
+                "Returns every non-overlapping match of the pattern in the string, as a list of \
+                 strings -- where regexp_match returns only the first. 'group' is the capture \
+                 group to return, 0 (the default) being the whole match; a group that took no \
+                 part in a match is null in its place. No match gives an empty list, and null in \
+                 gives null out. Flags are written into the pattern itself, as in '(?i)foo'.",
+                "regexp_extract_all(string, pattern[, group])",
+            )
+            .build(),
+        }
+    }
+}
+
+impl ScalarUDFImpl for RegexpExtractAll {
+    fn name(&self) -> &str {
+        "regexp_extract_all"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(match_field()))
+    }
+
+    /// The string argument keeps its own Arrow type — the signature admits all three — and only
+    /// it needs a generic body: the pattern and the group are narrowed to one type each first,
+    /// since they are one value per call in every real one.
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let values = args.args[0].to_array(args.number_rows)?;
+        let pattern_array = cast(&literal_or_column(&args.args[1])?, &DataType::Utf8)?;
+        let patterns = pattern_array.as_string::<i32>();
+        let group_array = match args.args.get(2) {
+            Some(arg) => Some(cast(&literal_or_column(arg)?, &DataType::Int64)?),
+            None => None,
+        };
+        let groups: Option<&Int64Array> = group_array.as_deref().map(AsArray::as_primitive);
+
+        let extracted = match values.data_type() {
+            DataType::Utf8 => extract_all(values.as_string::<i32>(), patterns, groups),
+            DataType::LargeUtf8 => extract_all(values.as_string::<i64>(), patterns, groups),
+            DataType::Utf8View => extract_all(values.as_string_view(), patterns, groups),
+            other => exec_err!("'{}' takes a string, not {other}", self.name()),
+        }?;
+        Ok(ColumnarValue::Array(extracted))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(&self.documentation)
+    }
+}
+
+/// An argument as an array, a literal staying **one element** rather than being widened to the
+/// batch.
+///
+/// The pattern and the group are one value for the whole call in every real one, and
+/// `to_array(number_rows)` would copy the pattern string once per row to say so. [`cell`] is the
+/// other half of the arrangement, and [`extract_all`] compiles a one-element pattern once.
+fn literal_or_column(arg: &ColumnarValue) -> Result<ArrayRef> {
+    match arg {
+        ColumnarValue::Scalar(value) => value.to_array(),
+        ColumnarValue::Array(array) => Ok(Arc::clone(array)),
+    }
+}
+
+/// The index into an argument [`literal_or_column`] built: a literal's single element for every
+/// row, a column's own.
+fn cell(len: usize, row: usize) -> usize {
+    match len {
+        1 => 0,
+        _ => row,
+    }
+}
+
+/// The matches of `patterns` in `values`, one list per row.
+///
+/// **Compilation is paid for once per distinct pattern**, which is DataFusion's own arrangement
+/// in `regexp_count` and reuses its two functions: a literal is compiled before the loop, and a
+/// pattern column goes through `compile_and_cache_regex`, keyed by the pattern text (with no
+/// flags, which this function has no argument for). Its refusal names the pattern, so a mistyped
+/// one reads the same here as it does from the built-ins beside it.
+fn extract_all<'a, S: StringArrayType<'a>>(
+    values: S,
+    patterns: &'a StringArray,
+    groups: Option<&Int64Array>,
+) -> Result<ArrayRef> {
+    let rows = values.len();
+    let fixed = match patterns.len() == 1 && !patterns.is_null(0) {
+        true => Some(compile_regex(patterns.value(0), None)?),
+        false => None,
+    };
+    let mut cache: HashMap<(&str, Option<&str>), Regex> = HashMap::new();
+
+    let mut extracted = StringBuilder::new();
+    let mut offsets: Vec<i32> = Vec::with_capacity(rows + 1);
+    offsets.push(0);
+    let mut nulls = NullBufferBuilder::new(rows);
+    for row in 0..rows {
+        let value = (!values.is_null(row)).then(|| values.value(row));
+        let at = cell(patterns.len(), row);
+        let pattern = (!patterns.is_null(at)).then(|| patterns.value(at));
+        let group = match groups {
+            None => Some(0),
+            Some(groups) => {
+                let at = cell(groups.len(), row);
+                (!groups.is_null(at)).then(|| groups.value(at))
+            }
+        };
+        let (Some(value), Some(pattern), Some(group)) = (value, pattern, group) else {
+            nulls.append_null();
+            offsets.push(extracted.len() as i32);
+            continue;
+        };
+
+        let regex = match &fixed {
+            Some(regex) => regex,
+            None => compile_and_cache_regex(pattern, None, &mut cache)?,
+        };
+        let capture_groups = regex.captures_len() - 1;
+        let Some(index) = usize::try_from(group)
+            .ok()
+            .filter(|index| *index <= capture_groups)
+        else {
+            return exec_err!(
+                "'regexp_extract_all' has no group {group}: the pattern '{pattern}' has \
+                 {capture_groups} capture groups, and group 0 is the whole match"
+            );
+        };
+        match index {
+            0 => {
+                for found in regex.find_iter(value) {
+                    extracted.append_value(found.as_str());
+                }
+            }
+            index => {
+                for captures in regex.captures_iter(value) {
+                    extracted.append_option(captures.get(index).map(|found| found.as_str()));
+                }
+            }
+        }
+        nulls.append_non_null();
+        offsets.push(extracted.len() as i32);
+    }
+    let list = ListArray::try_new(
+        match_field(),
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(extracted.finish()),
+        nulls.finish(),
+    )?;
+    Ok(Arc::new(list))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -967,13 +1176,132 @@ mod tests {
         );
     }
 
-    /// All four reach the catalog the language service and the agent read, with their
+    /// A string column holding several matches per row, which is what the report ran into: the
+    /// second row has none and the third has no string at all, so one query settles all three
+    /// answers. `pat` is the same pattern as a **column**, for the non-literal path.
+    const RULES: &str = concat!(
+        r#"{"id":1,"rule":"var:alpha and var:beta","pat":"var:([a-z]+)"}"#,
+        "\n",
+        r#"{"id":2,"rule":"always true","pat":"[aeiou]"}"#,
+        "\n",
+        r#"{"id":3}"#,
+        "\n",
+    );
+
+    /// **Every match, not the first** — and the two answers that are not a match: no match is an
+    /// empty list, and a null string is a null list. `to_json` renders the list exactly, which is
+    /// what tells `[]` and `NULL` apart at a glance.
+    #[tokio::test]
+    async fn every_match_comes_back_and_no_match_is_an_empty_list() {
+        let engine = fixture("extract", RULES).await;
+        let out = run(
+            &engine,
+            "SELECT to_json(regexp_extract_all(rule, 'var:[a-z]+')) FROM t ORDER BY id",
+        )
+        .await;
+        assert_eq!(
+            column(&out, 0),
+            vec![r#"["var:alpha","var:beta"]"#, "[]", "NULL"]
+        );
+    }
+
+    /// The group index picks a capture group out of each match, and a group that took no part in
+    /// one is null **in its place** rather than dropped — the list stays one element per match.
+    #[tokio::test]
+    async fn a_group_index_picks_a_capture_and_an_absent_one_is_null() {
+        let engine = fixture("group", RULES).await;
+        let out = run(
+            &engine,
+            "SELECT to_json(regexp_extract_all(rule, 'var:([a-z]+)', 1)), \
+                    to_json(regexp_extract_all('ab', '(a)|(b)', 2)) FROM t ORDER BY id",
+        )
+        .await;
+        assert_eq!(column(&out, 0)[0], r#"["alpha","beta"]"#);
+        assert_eq!(column(&out, 1)[0], r#"[null,"b"]"#);
+    }
+
+    /// A group the pattern does not have is refused by name, with the pattern and the count it
+    /// does have — never a silent null, which would read as "no match".
+    #[tokio::test]
+    async fn a_group_the_pattern_does_not_have_is_refused() {
+        let engine = fixture("nogroup", RULES).await;
+        let err = fails(
+            &engine,
+            "SELECT regexp_extract_all(rule, 'var:([a-z]+)', 2) FROM t",
+        )
+        .await;
+        assert!(err.contains("no group 2"), "{err}");
+        assert!(err.contains("var:([a-z]+)"), "{err}");
+    }
+
+    /// An invalid pattern is an error naming the pattern, not a panic — DataFusion's own wording
+    /// for the same mistake, because the compile is DataFusion's own function.
+    #[tokio::test]
+    async fn an_invalid_pattern_names_itself() {
+        let engine = fixture("badpattern", RULES).await;
+        let err = fails(
+            &engine,
+            "SELECT regexp_extract_all(rule, 'var:([a-z]+') FROM t",
+        )
+        .await;
+        assert!(err.contains("var:([a-z]+"), "{err}");
+    }
+
+    /// The pattern may be a **column**, which is the path the compile cache exists for: row 2's
+    /// pattern is a different one, and neither compiles more than once for the batch.
+    #[tokio::test]
+    async fn the_pattern_may_be_a_column() {
+        let engine = fixture("patcolumn", RULES).await;
+        let out = run(
+            &engine,
+            "SELECT to_json(regexp_extract_all(rule, pat)) FROM t ORDER BY id",
+        )
+        .await;
+        assert_eq!(
+            column(&out, 0),
+            vec![
+                r#"["var:alpha","var:beta"]"#,
+                r#"["a","a","u","e"]"#,
+                "NULL",
+            ]
+        );
+    }
+
+    /// **The reported job, end to end**: one expression plus `unnest` is a row per match, which
+    /// is what the recursive-CTE walk was standing in for.
+    ///
+    /// Neither the row with **no match** nor the row with **no string** contributes anything —
+    /// the empty list and the null list read alike here, DataFusion's `unnest` in a projection
+    /// dropping both rather than preserving a null. So the two answers this function keeps apart
+    /// are only distinguishable before the `unnest`, which is what
+    /// [`every_match_comes_back_and_no_match_is_an_empty_list`] asserts.
+    #[tokio::test]
+    async fn unnest_turns_the_matches_into_rows() {
+        let engine = fixture("unnest", RULES).await;
+        let out = run(
+            &engine,
+            "SELECT id, v FROM \
+             (SELECT id, unnest(regexp_extract_all(rule, 'var:([a-z]+)', 1)) AS v FROM t) \
+             ORDER BY id, v",
+        )
+        .await;
+        assert_eq!(column(&out, 0), vec!["1", "1"]);
+        assert_eq!(column(&out, 1), vec!["alpha", "beta"]);
+    }
+
+    /// All five reach the catalog the language service and the agent read, with their
     /// descriptions — the registry walk unedited.
     #[test]
-    fn the_four_are_in_the_function_catalog() {
+    fn the_built_ins_are_in_the_function_catalog() {
         let engine = Engine::new(Default::default());
         let catalog = engine.functions();
-        for name in ["struct_keys", "struct_entries", "struct_get", "to_json"] {
+        for name in [
+            "struct_keys",
+            "struct_entries",
+            "struct_get",
+            "to_json",
+            "regexp_extract_all",
+        ] {
             let sym = catalog
                 .scalar
                 .iter()

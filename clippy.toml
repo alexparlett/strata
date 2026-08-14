@@ -27,10 +27,11 @@ too-many-lines-threshold = 200
 
 # `doc_markdown` wants a backtick around anything that looks like an identifier, and these are
 # **prose**: the query engine and the object store this app is written *about* (230 mentions
-# between them), other IDEs cited as design precedent, a protocol and its method, a naming
-# convention, a key, a framework, a fake-GCS server. Backticking them would claim they are code,
-# and `DataFusion` the product is not `datafusion` the crate. `".."` keeps clippy's own default
-# list (GitHub, OAuth, …) rather than replacing it.
+# between them), other IDEs cited as design precedent, another engine cited for the semantics a
+# built-in copies, a protocol and its method, a naming convention, a key, a framework, a
+# fake-GCS server. Backticking them would claim they are code, and `DataFusion` the product is
+# not `datafusion` the crate. `".."` keeps clippy's own default list (GitHub, OAuth, …) rather
+# than replacing it.
 #
 # Note when editing this: cargo does not always re-lint on a `clippy.toml` change alone. Touch a
 # source file (or `cargo clean -p <crate>`) before concluding an entry here is unnecessary.
@@ -39,6 +40,7 @@ doc-valid-idents = [
     "AppKit",
     "DataFusion",
     "DataGrip",
+    "DuckDB",
     "IntelliJ",
     "JetBrains",
     "MinIO",

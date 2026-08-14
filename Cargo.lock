@@ -9251,6 +9251,7 @@ dependencies = [
  "keyring-core",
  "object_store",
  "preferences",
+ "regex",
  "reqwest 0.12.28",
  "secrecy",
  "semver",
