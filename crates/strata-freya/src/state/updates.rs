@@ -58,8 +58,8 @@ pub type UpdateStatus = State<Update>;
 /// What the updater last learned. One value for the whole app.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub enum Update {
-    /// Nothing has been asked yet. The surfaces show nothing at all for this — a version line,
-    /// and no talk of updates.
+    /// Nothing has been asked yet. The rail shows nothing at all for this — a version line, and
+    /// no talk of updates.
     #[default]
     Idle,
     Checking,
@@ -69,11 +69,16 @@ pub enum Update {
     Available {
         version: String,
         page_url: String,
+        /// What changed, in the release's own Markdown — see [`Asset`]'s neighbour
+        /// `update::Offer::notes`. It travels through all three offer states because the check
+        /// is the only thing that reads it and the dialog can be raised over any of them.
+        notes: String,
         asset: Option<Asset>,
     },
     Downloading {
         version: String,
         page_url: String,
+        notes: String,
         got: u64,
         /// What the server declared, which is not always something it knows.
         total: Option<u64>,
@@ -83,10 +88,12 @@ pub enum Update {
     Ready {
         version: String,
         page_url: String,
+        notes: String,
         staged: PathBuf,
     },
     /// Whatever went wrong, in its own words. Never nagged about — a failed check is a log line
-    /// and a quiet status, not chrome.
+    /// and a quiet status on the rail — but it is reported in the dialog of whoever asked for
+    /// the check by name.
     Failed {
         why: String,
     },
@@ -136,6 +143,7 @@ pub fn check(status: UpdateStatus) {
             Ok(Check::Newer(offer)) => Update::Available {
                 version: offer.version,
                 page_url: offer.page_url,
+                notes: offer.notes,
                 asset: offer.asset,
             },
             Err(why) => failed(why),
@@ -156,17 +164,24 @@ pub fn download(status: UpdateStatus) {
         Update::Available {
             version,
             page_url,
+            notes,
             asset: Some(asset),
-        } => (version.clone(), page_url.clone(), asset.clone()),
+        } => (
+            version.clone(),
+            page_url.clone(),
+            notes.clone(),
+            asset.clone(),
+        ),
         _ => return,
     };
-    let (version, page_url, asset) = offered;
+    let (version, page_url, notes, asset) = offered;
     let Some(working) = Working::start() else {
         return;
     };
     status.set(Update::Downloading {
         version: version.clone(),
         page_url: page_url.clone(),
+        notes: notes.clone(),
         got: 0,
         total: Some(asset.size),
     });
@@ -183,6 +198,7 @@ pub fn download(status: UpdateStatus) {
             Ok(staged) => Update::Ready {
                 version,
                 page_url,
+                notes,
                 staged,
             },
             Err(why) => failed(why),
@@ -294,10 +310,10 @@ pub fn use_updates(status: UpdateStatus, config: ConfigStation) {
 }
 
 /// **Whatever went wrong, recorded where it was learned.** The one way to build
-/// [`Update::Failed`], because the surfaces deliberately draw *nothing* for it (UP-03: the rail
-/// never nags and a failed check is not chrome) — so if this did not log, a refused signature
-/// and a finished download would be indistinguishable and there would be nothing to diagnose
-/// from. One funnel rather than a `tracing` call remembered at five sites, on the log's own
+/// [`Update::Failed`], because the rail deliberately draws *nothing* for it (UP-03: the rail
+/// never nags and a failed check is not chrome) and the report card is only up if somebody
+/// asked — so if this did not log, a refused signature and a finished download would be
+/// indistinguishable and there would be nothing to diagnose from. One funnel rather than a `tracing` call remembered at five sites, on the log's own
 /// rule: the fact is recorded by whoever observed it.
 fn failed(why: impl Into<String>) -> Update {
     let why = why.into();

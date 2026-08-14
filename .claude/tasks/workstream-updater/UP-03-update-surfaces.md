@@ -158,6 +158,39 @@ before it closes, which is false with `confirm_close_running` off; it now says a
 
 Step 5 stands: no persistent in-project indicator.
 
+## The follow-up: the menubar item had no answer (2026-08-14)
+
+Shipped as above, App ▸ *Check for Updates…* over an up-to-date app **did nothing visible**. The
+quiet rule was right about the rail and over-applied to the item: `Idle`/`Checking`/`UpToDate`/
+`Failed` draw nothing anywhere, so a question the user asked by name went unanswered — the same
+"looks live, does nothing" failure `Gate` exists to prevent, reached from the other side.
+
+What landed:
+
+- **`updater::raise`**, the menubar's own thin match over the one `Affordance`: raise
+  `UpdateAsk::Report` on the pressing window's slot, *then* check, so the answer lands in the card
+  the press opened — and it checks over an offer it already has, because the item says *check* and
+  a startup `Available` can be a release stale. A staged update still diverts to the restart
+  question (`press`'s), a download in flight only reports, and a dev build still offers nothing.
+  The rail's `press` is untouched — there, pressing *is* the offer. **Review caught one bug in
+  it**: the affordance was resolved in the `match` scrutinee, so the `peek` guard outlived the arm
+  and `check`'s `status.set` panicked on the ordinary press — the generational-borrow trap the
+  confirm dialogs already record. Bound in a `let` first, exactly as `press` does.
+- **`UpdateAsk` is two questions.** `Restart` keeps carrying its version; `Report` carries
+  nothing, because it is a view of the app-global status rather than a question about one release.
+- **`Report::of`** — one pure match over the status for glyph, tone, title, subject and body, so
+  the card cannot pair a tick with a failure. The subject is `Affordance::note` (one vocabulary
+  with the rail) and the single accent action is `Affordance::action` through `press`, so the card
+  offers nothing the rail would not and a download started in it reports progress in place.
+- **The changelog**, asked for in the same pass: `update::Offer::notes` carries GitHub's release
+  body (already read by the check, normalized line endings, `null` parsed as `Option`) through all
+  three offer states — and on through `Affordance::Restart` to the **restart** card, which is the
+  first sight of it when the download was started from the rail — and `Changelog` renders it with
+  the chat pane's `MarkdownViewer` in a fixed scrolling well at the type scale's small sizes. That
+  needed **`MarkdownViewer::theme` in the fork** — it was the one themed component with no
+  per-instance setter (AGENTS.md §6: fix the fork, don't grow an app-side token). Fork commit must
+  be pushed with this change.
+
 ## References
 - `apps/launcher/views/rail.rs:68` — the version line.
 - `apps/settings/views/system.rs:97-107` — the toggle-row template; `search.rs:95` — the index.

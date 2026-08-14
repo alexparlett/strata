@@ -102,6 +102,14 @@ pub struct Offer {
     /// The release page, always — this is what an offer degrades to when there is nothing to
     /// install or nowhere to install it.
     pub page_url: String,
+    /// **What changed**, as GitHub holds it: the release body, which is Markdown. Carried
+    /// rather than fetched a second time, because the check has already read it, and carried
+    /// **unparsed** — the surface that shows it (UP-03's report card) renders it with the app's
+    /// own Markdown viewer, so this crate does no Markdown work and this stays one string.
+    ///
+    /// Empty for a release with no body, which is the same nothing as a release note nobody
+    /// wrote: the card simply draws no panel.
+    pub notes: String,
     /// The update archive, or `None` for a release that carries none. **Not an error**: a
     /// release cut before UP-01, or one whose build failed halfway, is still a real release
     /// worth pointing at.
@@ -390,6 +398,12 @@ fn newest(body: &str, current: &Version) -> Result<Check, String> {
     Ok(Check::Newer(Offer {
         version: version.to_string(),
         page_url: release.html_url,
+        notes: release
+            .body
+            .unwrap_or_default()
+            .replace("\r\n", "\n")
+            .trim()
+            .to_string(),
         asset: release
             .assets
             .into_iter()
@@ -410,6 +424,11 @@ struct Release {
     #[serde(default)]
     draft: bool,
     html_url: String,
+    /// The release notes. `Option` rather than a defaulted `String` because GitHub sends the
+    /// field as `null` for a release with no body, which a `String` field would refuse to read
+    /// — and one such release in the list would blind the updater entirely.
+    #[serde(default)]
+    body: Option<String>,
     #[serde(default)]
     assets: Vec<ReleaseAsset>,
 }
@@ -648,13 +667,17 @@ mod tests {
     use super::*;
 
     /// A release list in GitHub's own shape, so the parse under test is the parse that runs.
+    ///
+    /// `r###` because a release body opens with a Markdown heading: the `"##` that starts one
+    /// would close an `r#` or an `r##` string.
     fn releases() -> &'static str {
-        r#"[
+        r###"[
           {
             "tag_name": "v0.4.0",
             "draft": false,
             "prerelease": true,
             "html_url": "https://github.com/alexparlett/strata/releases/tag/v0.4.0",
+            "body": "## What's new\r\n\r\n- Charts got a Shape panel\r\n",
             "assets": [
               {
                 "name": "Strata-0.4.0-universal.dmg",
@@ -675,7 +698,7 @@ mod tests {
             "html_url": "https://github.com/alexparlett/strata/releases/tag/v0.3.1",
             "assets": []
           }
-        ]"#
+        ]"###
     }
 
     fn check(body: &str, current: &str) -> Check {
@@ -699,6 +722,27 @@ mod tests {
         let asset = offer.asset.expect("the archive");
         assert_eq!(asset.name, "Strata-0.4.0-universal.app.zip");
         assert_eq!(asset.size, 111_166_586);
+    }
+
+    /// **The offer carries what changed, as written.** GitHub's body is Markdown and reaches
+    /// the surface unparsed — rendering it is the app's, not this crate's — but its line
+    /// endings are normalized here, because a `\r` reaches the text shaper as a glyph even
+    /// after the Markdown parser has had it. A release with no body,
+    /// which GitHub sends as `null`, is simply nothing to show; reading that field as a
+    /// `String` would refuse the whole list.
+    #[test]
+    fn the_offer_carries_the_release_notes_and_survives_a_release_with_none() {
+        let offer = offer(releases(), "0.3.1");
+        assert_eq!(
+            offer.notes, "## What's new\n\n- Charts got a Shape panel",
+            "the notes were rewritten or left with a carriage return"
+        );
+
+        let body = r#"[
+          {"tag_name": "v0.5.0", "draft": false, "prerelease": false, "body": null,
+           "html_url": "https://example.invalid/v0.5.0", "assets": []}
+        ]"#;
+        assert_eq!(self::offer(body, "0.3.1").notes, "");
     }
 
     /// **Never a version that is not strictly newer.** Equal is up to date, and older is up to

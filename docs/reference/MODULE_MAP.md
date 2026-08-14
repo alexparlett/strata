@@ -135,9 +135,13 @@ src/updater.rs                   UP-03 — the updater's **surfaces**, the half 
                                  dialog cannot each restate the rules: a dev build offers
                                  nothing, a release with no archive (or a bundle that cannot be
                                  replaced) degrades to the release page, a staged update is a
-                                 restart. `press` is the one gesture behind all four, each arm a
-                                 call into `state::updates`. `UpdateConfirm` is the restart
-                                 question — one component, mounted at both workspace window roots,
+                                 restart. `press` is the rail's gesture, each arm a
+                                 call into `state::updates`; `raise` is the menubar's, which
+                                 raises the report card and then checks, so a check that found
+                                 nothing still has an answer. `UpdateConfirm` is both cards —
+                                 the restart question and the report (`Report::of` for the report's
+                                 words, `Changelog` on both for the release's own Markdown in a
+                                 fixed scrolling well) — one component, at both workspace roots,
                                  over a **per-window** `AskSlot` (two project windows must not both
                                  raise it). `UpdateRequest` is the app-global App ▸ Check for
                                  Updates… records its press in: that item has no chord to

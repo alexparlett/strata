@@ -2200,10 +2200,52 @@ Things that must not regress. Each was fought for once already.
   weaker copy of that dialog. The card says a window that *would* ask before quitting still
   asks, never that one with a running query does: `confirm_close_running` can be off, and a
   dialog that promised a prompt the user had switched off would be a false reassurance.
-  **A failure is not silent just because it is not chrome.** The surfaces deliberately draw
+  **A failure is not silent just because it is not chrome.** The rail deliberately draws
   nothing for `Update::Failed`, so `state::updates::failed` is the one constructor and it logs —
   otherwise a refused signature and a finished download would be indistinguishable, with nothing
   to diagnose from.
+- **The rail is quiet because nobody asked it; the menubar item asked, so it is owed an answer —
+  including "nothing to install".** The quiet rule is about *nagging*, and it was over-applied:
+  `Idle`, `Checking`, `UpToDate` and `Failed` draw nothing anywhere, so App ▸ *Check for
+  Updates…* over an up-to-date app was a menu item that did nothing at all — which is the
+  "looks live, does nothing" failure the item's own `Gate` exists to prevent, arrived at from the
+  other side. So the rail keeps its silence and the menubar gets `updater::raise`: a second thin
+  match over the same `Affordance`, which raises `UpdateAsk::Report` on the pressing window's
+  slot and *then* runs the check, so the answer lands in the card the press opened. It checks
+  **over an offer it already has**, because the item says *check*: an `Available` learned at
+  startup can be a release behind by the time somebody asks, and reporting it unasked would
+  answer with a fact nobody re-established (`check` stands itself down while a job runs, so a
+  second press costs nothing). Three arms divert — a staged update is still the restart question
+  (that one is `press`'s), a download in flight only reports, since the offer in hand is the one
+  being installed, and a dev build offers nothing — and the rail's own action is untouched,
+  because there pressing *is* the offer. The affordance is bound **before** the match: a `peek`
+  guard resolved in a match *scrutinee* lives for the whole match, and the `check` in an arm
+  writes that same state, which is the generational-borrow panic the confirm dialogs record —
+  this function shipped it once and it panicked on the ordinary press.
+  `UpdateAsk` is therefore an enum of two questions: the restart carries its version so the card
+  cannot name a different one, and the report carries nothing, because it is a view of the
+  app-global status rather than a question about one release.
+  **The card's words are one pure match and its action is the affordance's.** `Report::of(status,
+  offer, tones)` answers glyph, tone, title, subject and body together, so the card cannot end up
+  with a tick beside "the update failed"; the subject line *is* `Affordance::note`, so the card
+  and the rail describe one update in one vocabulary; and the one accent action is
+  `Affordance::action` pressed through `press` — this card can offer nothing the rail would not,
+  and a download started in it reports its own progress in place.
+  **What changed is the release's own Markdown, rendered by the viewer the app already has.**
+  `update::Offer::notes` is GitHub's release body, carried by the check that already read it
+  (never a second request) with its line endings normalized, since a `\r` reaches the text shaper
+  as a glyph; a `null` body is `Option<String>` at the parse, or one release without notes would
+  refuse the whole list. It rides all three offer states, so the panel does not vanish when the
+  download starts, and it rides `Affordance::Restart` and `UpdateAsk::Restart` on to the restart
+  card, which can be the **first** sight of it: a download started from the rail never raises the
+  report card, and asking somebody to restart into a release whose notes the app is holding and
+  never shows is the same silence this whole entry is about. **Both** cards draw it through the
+  chat pane's `MarkdownViewer` — one Markdown dress in the app — at the type scale's small sizes,
+  per instance, through
+  `MarkdownViewer::theme`: a fork addition, because that component was the only themed one
+  without the per-instance setter every other one has (§6's rule, not an app-side token). The
+  well is a **fixed height and scrolls**, so a long changelog cannot push the action strip off
+  the window.
 - **No command bus.** App-level shortcuts are distributed `on_global_key_down` listeners per
   feature (helper: `strata-freya::keymap::on_command`), resolving through the central
   `strata-core::keymap` table. Precedence = document order; a modal barrier = an early-mounted
