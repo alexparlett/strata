@@ -36,7 +36,50 @@ env:
 # the skip list is *run* by `test`, which has no container runtime, and a test that cannot
 # tell a busy provider from a missing one fails loud there.
 jobs:
+  # The gate: both Rust jobs run only when the diff could have moved the build. A
+  # docs-only change (.claude/, docs/, markdown) compiles nothing and never queues for
+  # the shared container worker.
+  #
+  # A gate *job*, deliberately not a workflow-level `paths` filter: a path-skipped
+  # workflow creates no check runs at all, so the day a required status check is added
+  # to main, docs-only PRs would wait forever on a check that never reports. A skipped
+  # job reports as skipped, which satisfies a required check. It also fails loud in the
+  # right direction: if this job itself errors, the Rust jobs are skipped but the run is
+  # red - a broken filter can never read as a green run over unreviewed Rust.
+  #
+  # The filter list is what the build actually READS, not "*.rs": `crates/**` covers the
+  # workspace and the Freya fork gitlink; `themes/**` and `assets/**` are pulled in from
+  # the repo root by `include_str!`/`include_bytes!` (the theme JSONs, the schema that
+  # `schema_in_sync` compares, the fonts); and this file itself, because a CI change must
+  # prove CI still works.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      # Full history, no submodule: push events diff against the previous head (a PR
+      # event reads the file list from the API and needs no history at all), and the
+      # filter never builds anything, so the fork checkout would be pure cost.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'clippy.toml'
+              - 'themes/**'
+              - 'assets/**'
+              - '.github/workflows/ci.yml'
+
   test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # macOS, not ubuntu: the app is macOS-first (the muda menubar, the traffic-light
     # gutter, `set_window_parent`), so a green Linux build would not be evidence the
     # thing we ship compiles. It also skips the gtk/webkit apt dance the fork's own
@@ -131,8 +174,12 @@ jobs:
 
   # The two container tests - the connections one (W7, MinIO) and the database one
   # (DB-02, PostgreSQL) - drive real servers, so this job, and only this job, carries the
-  # cloud agent and the repo-wide queue.
+  # cloud agent and the repo-wide queue. Behind the same gate as `test`: a skipped job
+  # never enters the concurrency queue, so a docs-only PR no longer takes a turn on the
+  # account's one container worker.
   containers:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # Serialized across the whole repository, not per branch: Testcontainers Cloud gives
     # this account **one** worker at a time. Two runs overlapping means the second is
     # refused - `Failed to get a worker: ErrValidator: too many concurrent requests`, or

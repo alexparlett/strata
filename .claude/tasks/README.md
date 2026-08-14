@@ -244,6 +244,27 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   **free text validated per row against the planner** (`Engine::column_type`), after deriving a
   picker from Arrow was investigated and rejected on three findings (no Arrow → SQL inverse, a
   config-dependent mapping, and Arrow spellings refused by the planner outright).
+- **Assistant memory**
+  ([`workstream-assistant-memory/`](workstream-assistant-memory/README.md), AM) — ⬜ **all
+  seven tasks open, planned 2026-08-13** — per-project persistent memory for the assistant,
+  so a new conversation no longer starts cold: **facts** and **SQL recipes** auto-distilled
+  after each settled turn (mem0's consolidation shape — the extraction call is shown the
+  related existing memories and answers with ADD/UPDATE/DELETE/NOOP ops), stored in a
+  **LanceDB** table at `.strata/memory.lance/` (gitignored; pins verified identical to the
+  workspace's — arrow 58 / DataFusion 54 / object_store 0.13 — so no second DataFusion),
+  embedded by a **bundled local model** (fastembed/ort, ~25 MB, 384 dims, an app constant —
+  chosen over `genai`'s embed API because Anthropic/Groq have none), and recalled two ways:
+  a budgeted `Project memory` context block on every send and a `search_memory` tool
+  appended like `offer_sql` (assistant-only, never on the MCP router). Retrieval is
+  four-signal fusion (vector + BM25 FTS, both Lance's, + table-tag entity boost + recency);
+  the non-vector signals are the always-works floor, so nothing in the memory path can ever
+  fail a turn. Seven tasks: the store facade (AM-01), the embedder + bundle assets (AM-02,
+  carries the release-pipeline risk), extraction + the `Ai::memory_enabled` toggle (AM-03,
+  the earliest end-to-end demo), recall (AM-04), the prune panel off the chat header
+  (AM-05), lifecycle hardening (AM-06), spec + end-to-end (AM-07). The README records the
+  crate evaluations that settled the design — five hobby RAG crates,
+  `datafusion-index-provider` (a prototype, wrong problem), redb/rusqlite (storage only) —
+  do not re-litigate them.
 
 ## Known bugs (carried from the Dioxus-era backlog; re-verify under Freya)
 
@@ -266,13 +287,17 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    QE-06's guidance names it).
 3. **Internal tables in the UI (IT)** — the one remaining task, IT-02 (Save results as
    table); small, sits on nothing open.
-4. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
+4. **Assistant memory (AM)** — seven tasks; AM-01 → AM-02 → AM-03 is the critical path to
+   the first demo (AM-03 works FTS-only if AM-02 lags), then AM-04/AM-05 in either order,
+   AM-06, AM-07 closes. AM-02 carries the release-pipeline work (bundled model + ONNX
+   runtime) — start it early enough that a release isn't waiting on notarization surprises.
+5. **Phase 5 polish** — the consistency + finish pass, largely theme/token work.
 
 (Every other workstream is closed: **Connections/W7**, **Polymorphic JSON**, **Agent
 access**, **Editor statements**, the **Assistant** — AS-07 landed 2026-08-11 with AS-03
 behind it — the **Chart** workstream, 09/10/11 built and 05/07 cut on 2026-08-12, and the
 **Updater**, UP-03 landing its surfaces on 2026-08-13. The open workstreams above are DB,
-QE and IT.)
+QE, IT and AM.)
 
 ## Sourcing
 
