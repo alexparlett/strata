@@ -163,15 +163,23 @@ fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) 
 /// `engine::db::connect` refuses, in the same words. It folds, unlike [`url_clash`] beside it,
 /// because a catalog name is a SQL identifier. The set is the project's *stored* defs where the
 /// engine's is what is live — a connection that failed to connect reserves nothing.
+///
+/// **The row this window opened on is dropped first**, exactly as [`url_clash`] drops it.
+/// `check_catalog_name` skips the candidate by comparing URLs, and a database connection's URL
+/// carries its user — so editing the USER, the URL or the DATABASE moves the identity, the stale
+/// row stops matching, and the draft clashes with the connection it is replacing. The footer then
+/// quotes that connection's own old URL back and Save never re-enables.
 fn catalog_clash(
     ctx: ConnectionCtx,
     project: RadioStation<ProjectState, ProjChan>,
 ) -> Option<String> {
     let def = ctx.draft.read().def();
+    let editing = ctx.target.read().editing().map(str::to_string);
     let existing: Vec<ConnectionDef> = project
         .peek()
         .connections
         .iter()
+        .filter(|c| editing.as_deref() != Some(c.def.url().as_str()))
         .map(|c| c.def.clone())
         .collect();
     check_catalog_name(&existing, &def).err()

@@ -515,6 +515,65 @@ fn a_database_draft_is_blocked_and_explained_beside_the_button() {
     assert_eq!(rescan.peek().seq, 1, "and it saves once the name is free");
 }
 
+/// **Editing a database connection's identity does not make it clash with itself.**
+///
+/// `check_catalog_name` skips the candidate by comparing URLs, and a database connection's URL
+/// carries its user — so changing only the USER moves the identity, the stored row stops matching,
+/// and the draft reads as clashing with the very connection it is replacing. The footer quoted
+/// that connection's own old URL back and Save stayed disabled short of also renaming the catalog,
+/// which is not what the user was doing.
+#[test]
+fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
+    let draft = ConnectionDraft {
+        provider: ProviderId::Postgres,
+        address: "db.internal:5432/analytics".into(),
+        pg: PgStore {
+            catalog: "pg".into(),
+            user: "reader".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let stored = "postgres://reader@db.internal:5432/analytics";
+    let (mut runner, (ctx, mut project, _)) = runner(
+        "pg-self-clash",
+        ConnectionTarget::Edit(stored.into()),
+        draft,
+    );
+    {
+        let mut p = project.write_channel(ProjChan::Connections);
+        p.upsert_connection(ConnectionDef {
+            address: "db.internal:5432/analytics".into(),
+            provider: Provider::Postgres(PgStore {
+                catalog: "pg".into(),
+                user: "reader".into(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        });
+    }
+    settle(&mut runner);
+
+    // The footer holds the station rather than subscribing to it, so this edit is what re-renders
+    // it — and it has to land with the row already stored, or the clash never gets asked about.
+    ctx.edit(|draft| draft.pg.user = "writer".into());
+    settle(&mut runner);
+
+    assert_eq!(
+        ctx.draft.peek().def().url(),
+        "postgres://writer@db.internal:5432/analytics",
+        "the identity moved, so the stored row no longer matches it"
+    );
+    let said = texts(&runner);
+    assert!(
+        !said
+            .iter()
+            .any(|t| t.contains("is already the catalog name")),
+        "the row this window opened on is not a peer to clash against: {said:?}"
+    );
+    assert_eq!(ctx.draft.peek().blocker(), None);
+}
+
 /// **A password typed into a new connection reaches the def as an expectation and nothing more.**
 /// The value is bound for this machine's keystore, which no test opens; what is asserted is the
 /// half that is the def's.
