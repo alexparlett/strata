@@ -33,7 +33,7 @@ not (dynamic access to a *heterogeneous* struct), and the revisit condition are 
 | QE-02 | [`regexp_extract_all` UDF](QE-02-regexp-extract-all.md) | 6 | ✅ |
 | QE-03 | [`describe_table` shape collapse for keyed siblings](QE-03-describe-shape-collapse.md) | 10 | ✅ |
 | QE-04 | [Agent query-session lifetime](QE-04-session-lifetime.md) | 11 | ✅ |
-| QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ⬜ |
+| QE-05 | [Agent result export — the first curated write](QE-05-result-export.md) | 12 | ✅ |
 | QE-06 | [Deep-JSON guidance + the upstream ledger](QE-06-guidance-and-ledger.md) | 3, 4, 5, 7, 8, 9 | ⬜ |
 | QE-07 | [Bound every schema surface: shared collapse + derived depth](QE-07-schema-bound.md) | follow-on from 10 | ⬜ |
 | QE-08 | [The catalog pane survives a keyed struct](QE-08-catalog-pane-bound.md) | follow-on from 10 | ⬜ |
@@ -63,9 +63,10 @@ task file was deliberately not edited (active session).
 Dependencies: QE-01..05 are independent of each other. QE-06 references QE-01's function by
 name, so it lands last (or its guidance ships without that line and gains it with QE-01).
 QE-07 sits on QE-03's merge; QE-08 sits on DB-05 and (for its collapse half) QE-07.
-QE-05's permission model is **decided** (Alex, 2026-08-13): always available, agent-supplied
-path — read access already hands over the data, so the fence is the write rules (owned
-storage refused, no overwrite), not a consent gate.
+QE-05's permission model was **decided** (Alex, 2026-08-13) and built that way: always
+available, agent-supplied path — read access already hands over the data, so the fence is the
+write rules (owned storage refused, no overwrite, no folder creation, plus the three shape
+rules that make those answerable), not a consent gate.
 
 ## Settled facts the tasks stand on (source-verified 2026-08-13)
 
@@ -88,13 +89,14 @@ storage refused, no overwrite), not a consent gate.
   QE-04 moved that TTL 5 min → 30 min and stated it in the tool description, `system.md` and
   the spec; the 5 was parity with rmcp's `SessionConfig::keep_alive`, which governs the
   *session* lifecycle this sweep does not serve.
-- Export from the agent is deliberately absent, and the spec reserves its shape:
-  "**Curated writes** … arrive as new, separately permissioned tools; `run` never loosens"
-  (docs/AGENT_ACCESS_SPEC.md:437-439). QE-05 is that reserved task — with the permission
-  half deliberately relaxed by decision (see the task): the data is already fully readable
-  through the tool, so the fence is the write rules, and `run` still never loosens. The
-  assistant also keeps its today-answer: `offer_sql` validates under the **editor's**
-  capability, so it can hand the user a `COPY … TO` card the assistant itself is refused.
+- Export from the agent was deliberately absent, and the spec reserved its shape:
+  "**Curated writes** … arrive as new, separately permissioned tools; `run` never loosens".
+  QE-05 built it and relaxed the permission half: the data is already fully readable through
+  `read_page`, so the fence is the **write** rules and `run` still never loosens. The spec's
+  reserved paragraph is now a *Curated writes* section recording that. `export_result` is the
+  eleventh tool; the assistant keeps its other answer too, because `offer_sql` validates under
+  the **editor's** capability and can hand the user a `COPY … TO` card the assistant itself is
+  refused — `system.md` says which is for which.
 - `datafusion.sql_parser.enable_ident_normalization` already exists in `ENGINE_KEYS`
   (`engine/config.rs:321`, default `true`), is offered in Settings ▸ Engine ▸ Properties, is
   **settable by typed `SET`** (absent from `refuse_reserved_key`'s list), and the language

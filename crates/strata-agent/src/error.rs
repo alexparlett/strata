@@ -64,6 +64,16 @@ impl AgentError {
     pub fn no_such_query_session(session: QuerySessionId) -> AgentError {
         AgentError::NotFound(format!("No open query session '{}'.", session.0))
     }
+
+    /// The one wording for a query session that is open but has nothing settled in it — what
+    /// `read_page` and `export_result` both answer, because a session with no result is one
+    /// condition however the caller meant to use it. Takes the handle as the caller spelled it,
+    /// since that is what they have to pass again after re-running.
+    pub fn no_result(session: &str) -> AgentError {
+        AgentError::NotFound(format!(
+            "No result in query session '{session}'. Run a query in it first."
+        ))
+    }
 }
 
 impl fmt::Display for AgentError {

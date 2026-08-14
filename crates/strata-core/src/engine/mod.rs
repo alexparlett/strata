@@ -102,7 +102,7 @@ pub fn stopped_on_purpose(error: &str) -> bool {
 }
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1323,6 +1323,41 @@ impl Engine {
             Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
             Err(join) => Err(format!("export task failed: {join}")),
         }
+    }
+
+    /// Write `snapshot` to a **caller-named** file (QE-05) — [`export`](Engine::export)'s funnel
+    /// for a caller with no file dialog in front of it, and the agent vocabulary's one write.
+    ///
+    /// A third gesture into the export the window and the typed `COPY` already make, never a third
+    /// implementation: this composes the spec that has no options to get wrong (the whole result,
+    /// snapshot order, one file) and hands it to [`export`](Engine::export), which keeps the pin,
+    /// the background count and the ordinal's exclusion exactly as it does for the window.
+    ///
+    /// What is new is the destination, because the caller named it with nothing in front of it to
+    /// say no — so [`export::check_destination`] is the fence, and it is the whole fence: the data
+    /// itself is already readable page by page by whoever can call this.
+    pub async fn export_result(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        path: String,
+        format: export::Format,
+    ) -> Result<export::ExportReport, String> {
+        let root = self.data_root.lock().unwrap().clone();
+        export::check_destination(&path, root.as_deref())?;
+        let (path, rows) = self
+            .export(
+                snapshot,
+                export::ExportSpec {
+                    path,
+                    scope: export::Scope::All,
+                    sort: None,
+                    format,
+                    partition: export::Partition::default(),
+                },
+            )
+            .await?;
+        let bytes = fs::metadata(&path).ok().map(|m| m.len());
+        Ok(export::ExportReport { path, rows, bytes })
     }
 
     /// Register what one [`ConnectionDef`] describes: an **object store**, so tables can be
@@ -2985,14 +3020,14 @@ mod read_options_tests {
     /// fixtures another run may be asserting over.
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("strata_read_options_{}_{name}", process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).expect("temp dir");
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).expect("temp dir");
         d
     }
 
     fn write(dir: &Path, name: &str, body: &str) -> String {
         let path = dir.join(name);
-        std::fs::write(&path, body).expect("fixture");
+        fs::write(&path, body).expect("fixture");
         path.to_string_lossy().into_owned()
     }
 
@@ -3041,7 +3076,7 @@ mod read_options_tests {
         use datafusion::prelude::SessionContext;
 
         let d = dir("csv_null_options");
-        std::fs::write(d.join("t.csv"), "a,b\n1,NAN\n2,3\n").expect("fixture");
+        fs::write(d.join("t.csv"), "a,b\n1,NAN\n2,3\n").expect("fixture");
         let loc = d.to_string_lossy().to_string();
 
         let read = |opts: &'static str| {

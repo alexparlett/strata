@@ -226,8 +226,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 - **Query ergonomics**
   ([`workstream-query-ergonomics/`](workstream-query-ergonomics/README.md), QE) — planned
   2026-08-13 from field feedback on deep object-keyed JSON (the `sample/config.json` shape)
-  queried through the agent surface; **the two engine UDF tasks, QE-03 and QE-04 are ✅,
-  QE-05 and QE-06 are ⬜**.
+  queried through the agent surface; **the two engine UDF tasks, QE-03, QE-04 and QE-05 are ✅,
+  QE-06 is ⬜**.
   The UDFs are `engine::udfs`, one `register` call:
   the struct family `struct_keys`/`struct_entries`/`struct_get`/`to_json` (QE-01, the whole
   fix for the dynamic-key story: enumeration off the null bitmaps and access by computed
@@ -242,11 +242,13 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   stateless idle sweep's TTL is 30 minutes, stated to the model in the tool description, the
   system prompt and the spec as a ceiling, since a connected client's sessions outlive any
   clock; the 5 it replaces was parity with rmcp's session keep-alive, which governs the branch
-  this sweep does not serve. Then result export as the
-  spec's reserved first **curated write**, its permission model decided (Alex, 2026-08-13:
-  always on, agent-supplied path — read access already hands over the data, so the fence is
-  the write rules) (QE-05); QE-06 lands the guidance + workaround spellings where the model reads
-  them. Two follow-ons were planned 2026-08-14 out of QE-03's review plus a probe of the
+  this sweep does not serve. **QE-05 ✅** — `export_result`, the spec's reserved first
+  **curated write**, built on the decided model (always on, agent-supplied path: `read_page`
+  already hands over the data, so the whole fence is the write rules — never into `.strata/` or
+  the spool, never over an existing file, never creating folders). It reaches the engine
+  directly like `read_page` rather than through `Host`, and composes a spec for
+  `Engine::export` rather than being a second export; `run`'s policy is untouched. QE-06 lands
+  the guidance + workaround spellings where the model reads them. Two follow-ons were planned 2026-08-14 out of QE-03's review plus a probe of the
   real 62 MB fixture: **QE-07** (the schema bound as a shared `strata-core` mechanism, the
   describe ladder's depth derived rather than pinned, elided-shape counts, and the permanent
   hand-run probe — with the record-vs-map question measured closed) and **QE-08** (the
@@ -306,9 +308,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
    DB-02 ✅, DB-03 ✅ and DB-04 ✅, so **DB-05 (the tree redesign, the heaviest task) and DB-08
    are next**; DB-08 sits on DB-02 alone and needs nothing after it, so schedule it early. DB-06
    and DB-07 close on the tree.
-2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-04 are in, so QE-05 is next,
-   QE-06 lands after it (its guidance names QE-01's functions), QE-07 follows QE-03's merge,
-   and QE-08 waits for DB-05's tree.
+2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-05 are in, so QE-06 is next
+   (its guidance names QE-01's functions), QE-07 follows QE-03's merge, and QE-08 waits for
+   DB-05's tree.
 3. **Internal tables in the UI (IT)** — the one remaining task, IT-02 (Save results as
    table); small, sits on nothing open.
 4. **Assistant memory (AM)** — seven tasks; AM-01 → AM-02 → AM-03 is the critical path to

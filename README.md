@@ -183,6 +183,11 @@ Strata can serve its own catalog and query engine to an AI agent over the
 are real runs against the same engine, materializing the same immutable snapshots your own do, so anything it finds
 you can page, sort, export or take over.
 
+The one thing an agent can write is a **file**: `export_result` saves a result it has already run to a path it names,
+in CSV, NDJSON, Parquet or Arrow. It never overwrites an existing file, never creates folders, and cannot write inside
+the project's own `.strata` directory. Nothing else about your project is writable — an agent cannot register a table,
+save a view or change a setting.
+
 The agent works in **query sessions** of its own, not in your tabs: the sidebar's **Agents** pane shows each connected
 agent, what it is working on and every query it has run, with the figures each one came back with. Press a query and it
 opens in a **new** tab, yours to read, edit and run. Nothing an agent does opens, focuses or closes a tab of yours, and
@@ -361,7 +366,7 @@ native rendering, and the Dioxus frontend has since been deleted.
 ```mermaid
 flowchart LR
     freya["<b>strata-freya</b><br/>the app — one module per OS window:<br/>launcher · project · settings · export · configure · connection"]
-    agent["<b>strata-agent</b><br/>MCP server + headless host<br/>(read-only tool vocabulary)"]
+    agent["<b>strata-agent</b><br/>MCP server + headless host<br/>(MCP tool vocabulary)"]
     core["<b>strata-core</b><br/>engine logic — the DataFusion boundary,<br/>config, theme, SQL language service"]
     model["<b>strata-model</b><br/>serde data vocabulary<br/>(schema · results · catalog · session)"]
     editor["<b>strata-code-editor</b><br/>Skia code editor<br/>(Rope + tree-sitter)"]

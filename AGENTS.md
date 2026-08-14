@@ -410,6 +410,15 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `AgentServer::drop`. A close racing a dispatch is a **tombstone** — but it still aborts the
   engine immediately; only the *row* waits for the last settle. `is_running` is *any* run in
   flight, and the pane reads it rather than restating it.
+- **The vocabulary's one write is always available, and its whole fence is the path.**
+  `export_result` writes a session's settled result to a caller-named file and loosens `run` by
+  nothing. A consent surface was declined because `read_page` already hands over every byte, so
+  the rules are about the write: never into `.strata/` or the snapshot spool (`ddl::copy`'s own
+  gate), never over an existing file, never creating folders — plus the shape rules that make
+  those answerable (absolute, local, and the three DataFusion would otherwise read as a glob or
+  a collection: no `?`/`*`/`[`, no trailing separator, and an extension on the last segment). It reaches the **engine
+  directly** like `read_page`, and is a **third gesture into `Engine::export`**, never a second
+  implementation.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.**
   `try_read` never a wait; the timer exists only while the feature is on; staleness bounded and stated.
 - **A second deployment of the vocabulary answers the same questions from what it already has,

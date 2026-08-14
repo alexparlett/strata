@@ -44,11 +44,19 @@ pub struct MockProject {
 
 impl MockProject {
     /// A project with its own engine and an empty catalog.
+    ///
+    /// The engine is told where the project is, because **every** host that opens one does
+    /// ([`Engine::set_data_dir`]) — a mock that skipped it would leave the engine's
+    /// owned-storage fence with no `.strata/` to fence, and `export_result` would then read a
+    /// path inside it as an ordinary folder that happens not to exist yet.
     pub fn new(name: &str, root: impl Into<PathBuf>) -> MockProject {
+        let root = root.into();
+        let engine = Engine::new(BTreeMap::new());
+        engine.set_data_dir(&root);
         MockProject {
             name: name.into(),
-            root: root.into(),
-            engine: Arc::new(Engine::new(BTreeMap::new())),
+            root,
+            engine: Arc::new(engine),
             catalog: Vec::new(),
             described: Vec::new(),
             sessions: Vec::new(),
@@ -107,6 +115,7 @@ impl MockHost {
             .iter_mut()
             .find(|p| p.root == root)
         {
+            engine.set_data_dir(root);
             project.engine = engine;
         }
     }

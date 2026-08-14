@@ -1,5 +1,10 @@
-//! The **vocabulary** — the ten read-only tools of `docs/AGENT_ACCESS_SPEC.md`, over a
-//! [`Host`].
+//! The **vocabulary** — the eleven tools of `docs/AGENT_ACCESS_SPEC.md`, over a [`Host`].
+//!
+//! Ten of them read; the eleventh, [`export_result`](StrataTools::export_result), writes one file
+//! at a path the caller names (QE-05). It is not a hole in the read-only rule — the gate `run`
+//! asks is untouched and refuses the agent's own `COPY` exactly as before — because there is no
+//! data behind it that `read_page` does not already hand over byte for byte. What it *does* need
+//! guarding is the destination, and that fence is `Engine::export_result`'s.
 //!
 //! [`StrataTools`] is the rmcp `ServerHandler`, and it is deliberately transport-free: the
 //! Streamable-HTTP server ([`crate::server`]) serves it, the headless host (AA-05) serves the
@@ -7,7 +12,7 @@
 //! frontends.
 //!
 //! **The vocabulary is methods; the tools are wrappers.** The public methods on [`StrataTools`]
-//! *are* the ten tools — plain arguments, plain answers, no rmcp type in any signature — and the
+//! *are* the eleven tools — plain arguments, plain answers, no rmcp type in any signature — and the
 //! `#[tool_router]` block below them is one wrapper each, doing only what a semantic call cannot:
 //! resolving which agent the *request* is ([`Caller`]) and holding it against the idle sweep. So an
 //! in-process caller reaches the identical body, gate and messages included.
@@ -56,10 +61,10 @@ use crate::host::{
 };
 use crate::wire::{
     cells, columns, functions_result, plan_result, rows_result, tables_result, Columns,
-    DescribeResult, DescribeTableParams, DiagnosticWire, FunctionsResult, ListFunctionsParams,
-    ListTablesParams, PageResult, ProjectParams, ProjectsResult, QuerySessionParams,
-    QuerySessionResult, QuerySessionsResult, ReadPageParams, RunParams, RunResult, TablesResult,
-    ValidateParams, ValidateResult,
+    DescribeResult, DescribeTableParams, DiagnosticWire, ExportResult, ExportResultParams,
+    FunctionsResult, ListFunctionsParams, ListTablesParams, PageResult, ProjectParams,
+    ProjectsResult, QuerySessionParams, QuerySessionResult, QuerySessionsResult, ReadPageParams,
+    RunParams, RunResult, TablesResult, ValidateParams, ValidateResult,
 };
 
 /// The most rows one call will hand back, however large a `page_size` is asked for. A cap
@@ -377,7 +382,7 @@ impl<H: Host> StrataTools<H> {
         Self::rooted(host, false)
     }
 
-    /// The vocabulary over `host` **as the app's own assistant** (AS-02) — the same ten tools,
+    /// The vocabulary over `host` **as the app's own assistant** (AS-02) — the same eleven tools,
     /// marked so every [`Host`] can tell it from a client that dialled in.
     ///
     /// The mark rides [`Agent::in_app`] to `open_query_session`, which is where a host first
@@ -623,7 +628,7 @@ fn session_handle(text: &str) -> Result<QuerySessionId, AgentError> {
         .map_err(|_| AgentError::NotFound(format!("No open query session '{text}'.")))
 }
 
-/// **The vocabulary itself** — the ten tools as plain methods, with no rmcp type in any
+/// **The vocabulary itself** — the eleven tools as plain methods, with no rmcp type in any
 /// signature.
 ///
 /// Everything a tool *does* is here; the `#[tool_router]` block below is wrappers. A wrapper
@@ -893,10 +898,7 @@ impl<H: Host> StrataTools<H> {
         let session = session_handle(&params.query_session)?;
         let (project, engine) = self.engine(params.project.as_deref()).await?;
         let Some(last) = self.recall(agent, &project.root, session) else {
-            return Err(AgentError::NotFound(format!(
-                "No result to read in query session '{}'. Run a query in it first.",
-                params.query_session
-            )));
+            return Err(AgentError::no_result(&params.query_session));
         };
         if last.engine != engine.id() {
             self.forget(agent, &project.root, session);
@@ -935,6 +937,66 @@ impl<H: Host> StrataTools<H> {
                     self.forget(agent, &project.root, session);
                     Err(AgentError::ResultMoved)
                 }
+            }
+        }
+    }
+
+    /// **The vocabulary's one write** (QE-05): a query session's settled result, on the user's
+    /// disk, at a path the caller names.
+    ///
+    /// Reaches the engine directly, exactly as [`read_page`](Self::read_page) does and for the
+    /// same reason — the source is the session's own snapshot, which this layer already holds,
+    /// and no host has anything to add to a write that touches no window state. So the app, the
+    /// headless server and the in-process assistant all answer it from the engine they already
+    /// hand over, with no [`Host`] method and no channel hop behind it.
+    ///
+    /// **It is not a loosening of [`run`](Self::run).** `Blocked::CopyTo` still refuses the
+    /// agent's own `COPY`, the classification is untouched, and this writes nowhere a statement
+    /// could reach anyway: `Engine::export_result`'s fence is the whole of what a caller-named
+    /// path is allowed to be. What made a consent gate pointless is that `read_page` already
+    /// hands over every byte — the decision and its reasoning are in `docs/AGENT_ACCESS_SPEC.md`.
+    ///
+    /// A run that returned **no rows** materialized nothing, so there is no snapshot table to copy
+    /// from and this refuses rather than writing an empty file. That is the one place it parts
+    /// company with [`read_page`](Self::read_page), whose empty page is the honest answer to the
+    /// same state: a file claims to be the result, and a header row over no rows is a claim about
+    /// data the run never produced.
+    pub async fn export_result(
+        &self,
+        params: ExportResultParams,
+    ) -> Result<ExportResult, AgentError> {
+        self.export_result_as(self.connection.agent, params).await
+    }
+
+    async fn export_result_as(
+        &self,
+        agent: AgentId,
+        params: ExportResultParams,
+    ) -> Result<ExportResult, AgentError> {
+        let session = session_handle(&params.query_session)?;
+        let (project, engine) = self.engine(params.project.as_deref()).await?;
+        let Some(last) = self.recall(agent, &project.root, session) else {
+            return Err(AgentError::no_result(&params.query_session));
+        };
+        if last.engine != engine.id() {
+            self.forget(agent, &project.root, session);
+            return Err(AgentError::ResultMoved);
+        }
+        let Some(snapshot) = last.snapshot else {
+            return Err(AgentError::Query(format!(
+                "The result in query session '{}' has no rows, so there is nothing to write.",
+                params.query_session
+            )));
+        };
+        match engine
+            .export_result(snapshot, params.path, params.format.into())
+            .await
+        {
+            Ok(report) => Ok(ExportResult::from((params.query_session, report))),
+            Err(e) if engine.snapshot_live(snapshot) => Err(AgentError::Query(e)),
+            Err(_) => {
+                self.forget(agent, &project.root, session);
+                Err(AgentError::ResultMoved)
             }
         }
     }
@@ -1117,6 +1179,26 @@ impl<H: Host> StrataTools<H> {
         Ok(Json(self.read_page_as(agent, params).await?))
     }
 
+    /// Write a query session's last settled result to a file on the user's machine, in csv,
+    /// ndjson, parquet or arrow. The whole result, in result order, from the snapshot the
+    /// session already holds: nothing is re-run and no row limit applies, so this is how a
+    /// result larger than you want to read gets to disk. Give an absolute path to a file that
+    /// does not exist, with an extension, in a folder that does exist: an export never
+    /// overwrites, never creates folders, and cannot write inside the project's own '.strata'
+    /// directory. A path with no extension, a trailing slash, or a '?', '*' or '[' in it is
+    /// refused, because none of those name one file. Format options are the
+    /// format's defaults; the app's Export window is where the user picks others. Reports the
+    /// path written, the row count and the file's size.
+    #[tool(name = "export_result", annotations(destructive_hint = false))]
+    async fn export_result_tool(
+        &self,
+        caller: Caller,
+        Parameters(params): Parameters<ExportResultParams>,
+    ) -> Result<Json<ExportResult>, AgentError> {
+        let (agent, _busy) = self.agent(&caller)?;
+        Ok(Json(self.export_result_as(agent, params).await?))
+    }
+
     /// Close one of your query sessions. A run still in flight in it is cancelled. Closing is
     /// tidy rather than required — every session you hold goes when you disconnect.
     #[tool(name = "close_query_session", annotations(destructive_hint = false))]
@@ -1133,12 +1215,13 @@ impl<H: Host> StrataTools<H> {
 #[tool_handler(
     name = "strata",
     instructions = "Strata is a local parquet/CSV/JSON query workspace over Apache DataFusion. \
-Read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
+SQL is read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
 Start with list_tables and describe_table to learn the catalog, validate to check SQL \
 cheaply, then open_query_session and run. Your work lives in query sessions of your own, \
 which the user can watch and promote into their editor wherever Strata's window is open — so \
 it never disturbs the tabs they are working in. Open a session per line of investigation; each run \
-in a session replaces the last one's result."
+in a session replaces the last one's result. export_result saves a session's whole result to a \
+file on the user's machine, which is how a result too large to read reaches disk."
 )]
 impl<H: Host> ServerHandler for StrataTools<H> {}
 
@@ -1154,7 +1237,7 @@ mod tests {
     use crate::assistant::SYSTEM;
     use crate::host::{CatalogEntry, Described, QuerySessionState, RegState};
     use crate::mock::{MockHost, MockProject};
-    use crate::wire::{EntryWire, Mode, QuerySessionStateWire, Sort, StateWire};
+    use crate::wire::{EntryWire, ExportFormat, Mode, QuerySessionStateWire, Sort, StateWire};
 
     use super::*;
 
@@ -2125,6 +2208,175 @@ mod tests {
             .unwrap();
         assert_eq!(page.total, 0);
         assert!(page.rows.is_empty());
+    }
+
+    /// **The one write in the vocabulary, end to end** (QE-05): the session's settled result on
+    /// disk, at a path the caller named, with the figures the write pass produced.
+    ///
+    /// The file is read back rather than trusted: the ordinal column must not be in it, the row
+    /// order must be the result's, and `bytes` must be the size of the file that is actually
+    /// there. Driven through a real engine, because the claim is that this is the export the
+    /// window makes, reached by a caller with no dialog in front of it.
+    #[tokio::test]
+    async fn export_result_writes_the_settled_result_to_the_path_it_was_given() {
+        let (root, tools) = one_project("export").await;
+        let session = open(&tools).await;
+        tools
+            .run(run_params(
+                &session,
+                "SELECT id, name FROM people ORDER BY id DESC",
+            ))
+            .await
+            .unwrap();
+
+        let out = root.join("people.parquet");
+        let written = tools
+            .export_result(export_params(&session, &out))
+            .await
+            .expect("exported");
+        assert_eq!(written.query_session, session);
+        assert_eq!(written.path, out.display().to_string());
+        assert_eq!(written.rows, 5);
+        assert_eq!(written.bytes, Some(fs::metadata(&out).unwrap().len()));
+
+        let csv = root.join("people.csv2");
+        tools
+            .export_result(ExportResultParams {
+                format: ExportFormat::Csv,
+                ..export_params(&session, &csv)
+            })
+            .await
+            .expect("exported");
+        assert_eq!(
+            fs::read_to_string(&csv).unwrap(),
+            "id,name\n5,eli\n4,dev\n3,cara\n2,ben\n1,ana\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **Every refusal names its own reason**, because each one has a different recovery: run
+    /// something, re-run it, or pick another path. The path rules are the engine's fence
+    /// (`Engine::export_result`); the two session ones are this layer's, and "no result" is the
+    /// same sentence `read_page` gives for the same condition.
+    #[tokio::test]
+    async fn export_result_names_the_reason_it_refused() {
+        let (root, tools) = one_project("export_refusals").await;
+        let session = open(&tools).await;
+        let out = root.join("out.parquet");
+
+        let stray = QuerySessionId::new().0.to_string();
+        assert!(matches!(
+            tools.export_result(export_params(&stray, &out)).await,
+            Err(AgentError::NotFound(_))
+        ));
+
+        let unrun = tools
+            .export_result(export_params(&session, &out))
+            .await
+            .expect_err("nothing has run in it");
+        assert_eq!(unrun, AgentError::no_result(&session));
+
+        tools
+            .run(run_params(&session, "SELECT id FROM people WHERE id > 99"))
+            .await
+            .unwrap();
+        let empty = tools
+            .export_result(export_params(&session, &out))
+            .await
+            .expect_err("no rows were materialized")
+            .to_string();
+        assert!(empty.contains("has no rows"), "{empty}");
+
+        tools
+            .run(run_params(&session, "SELECT id FROM people"))
+            .await
+            .unwrap();
+        tools
+            .export_result(export_params(&session, &out))
+            .await
+            .expect("exported");
+        let taken = tools
+            .export_result(export_params(&session, &out))
+            .await
+            .expect_err("already there")
+            .to_string();
+        assert!(taken.contains("never overwrites"), "{taken}");
+
+        let relative = tools
+            .export_result(ExportResultParams {
+                path: "out.parquet".into(),
+                ..export_params(&session, &out)
+            })
+            .await
+            .expect_err("relative")
+            .to_string();
+        assert!(relative.contains("absolute path"), "{relative}");
+
+        let extensionless = tools
+            .export_result(export_params(&session, &root.join("results")))
+            .await
+            .expect_err("would be written as a folder of part files")
+            .to_string();
+        assert!(
+            extensionless.contains("no file extension"),
+            "{extensionless}"
+        );
+        assert!(
+            !root.join("results").exists(),
+            "and the refusal comes before the write"
+        );
+
+        let owned = tools
+            .export_result(export_params(
+                &session,
+                &root.join(".strata/tables/sales/rows.parquet"),
+            ))
+            .await
+            .expect_err("inside .strata")
+            .to_string();
+        assert!(owned.contains("this project's own data"), "{owned}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A newer run in the session retires the snapshot the export would have read, and the
+    /// answer is the same "re-run to read it" a page gets — never a half-written file.
+    #[tokio::test]
+    async fn export_result_reports_a_result_a_newer_run_replaced() {
+        let (root, tools) = one_project("export_moved").await;
+        let session = open(&tools).await;
+        tools
+            .run(run_params(&session, "SELECT id FROM people"))
+            .await
+            .unwrap();
+
+        let engine = tools.host.engine(&root).await.unwrap();
+        engine
+            .query(
+                WsId(Uuid::parse_str(&session).unwrap().as_u128()),
+                RunTag(999),
+                "SELECT name FROM people".into(),
+                10,
+            )
+            .await
+            .unwrap();
+
+        let out = root.join("stale.parquet");
+        assert!(matches!(
+            tools.export_result(export_params(&session, &out)).await,
+            Err(AgentError::ResultMoved)
+        ));
+        assert!(!out.exists(), "a refusal writes nothing");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// An export of `session`'s result to `path`, as parquet.
+    fn export_params(session: &str, path: &Path) -> ExportResultParams {
+        ExportResultParams {
+            query_session: session.into(),
+            path: path.display().to_string(),
+            format: ExportFormat::Parquet,
+            project: None,
+        }
     }
 
     /// **The manifest is the router, not a copy of it.** Asserted here rather than only in

@@ -817,11 +817,12 @@ that loop be tested against a mock host and a stub endpoint with no window and n
 
 ```
 src/lib.rs                       the crate charter + the seam diagram: rmcp server / stdio host /
-                                 chat loop → `StrataTools` (the ten tools) → `Host`
-src/tools.rs                     the **vocabulary** — the ten read-only tools (the doc's "The ten tools" section) as the
+                                 chat loop → `StrataTools` (the eleven tools) → `Host`
+src/tools.rs                     the **vocabulary** — the eleven tools (the doc's "The eleven tools" section) as the
                                  rmcp `ServerHandler`, deliberately transport-free. The policy
                                  gate runs here, *before* dispatch; `run` never rewrites SQL and
-                                 reports a stop as a status, not a fault
+                                 reports a stop as a status, not a fault. Ten read; `export_result`
+                                 (QE-05) writes one file, straight at the engine like `read_page`
 src/host.rs                      the **`Host` seam** — the union of the vocabulary's questions
                                  and nothing else. Methods return `impl Future + Send` rather
                                  than `async fn` (rmcp polls on its own runtime and needs `Send`,
