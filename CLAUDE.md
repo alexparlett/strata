@@ -11,8 +11,9 @@ rewritten clean-slate on Freya; the Dioxus frontend has been **deleted**. The op
 (`.claude/tasks/`) is the **database-connections workstream** (DB — federated Postgres over
 `datafusion-table-providers` + `datafusion-federation`), the **query-ergonomics workstream**
 (QE — the deep-JSON field-feedback batch; the struct-enumeration UDFs, `regexp_extract_all`,
-`describe_table`'s keyed-sibling collapse and the agent session lifetime are in, leaving the
-agent surface's export gap and the guidance pass), the rest of the
+`describe_table`'s keyed-sibling collapse, the agent session lifetime, the agent's result
+export and the guidance pass are in, leaving the two schema-bounding follow-ons — the shared
+collapse and the catalog pane), the rest of the
 **internal-tables-in-the-UI workstream** (IT — IT-01's empty-table panel is built; IT-02, Save
 results as table, is not) and design polish (phase 5). The assistant
 workstream is complete — the loop, the pane, the model listings, and conversations that survive

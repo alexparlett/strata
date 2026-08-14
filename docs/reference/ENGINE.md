@@ -168,5 +168,19 @@ a recursive CTE; its compile caching is DataFusion's own two functions rather th
 A new built-in belongs there, and it inherits the `DROP FUNCTION` fence for free
 (`Functions::created` stays false for it).
 
+**What DataFusion 54 cannot do around them is a ledger, not folklore.** The limits a user
+driving deep JSON hits — a `UNION ALL` branch is an independent scan of its source, a
+`json_get_json` result carries `arrow.json` metadata that will not unify against plain text
+across a recursive CTE's branches, a FROM-clause `UNNEST` alias has no addressable fields,
+`string_agg` orders only by what it aggregates once `DISTINCT` is in play, and `UNNEST` in
+FROM cannot reference a nested outer column — are written down once, each with a workaround
+re-run against this build, what could only be taken on the field report's word, and the note to
+file upstream from, in
+`.claude/tasks/workstream-query-ergonomics/README.md`. The pin is structural
+(`datafusion-table-providers` + `datafusion-federation` hold the four crates together at 54),
+so the list is revisited at the next bump rather than per report. When that workstream closes,
+whatever is still true moves into its `SETTLED_TASKS.md` entry — the folder goes, the ledger
+must not go with it.
+
 > The Dioxus-era `Command`/`Event` channel protocol + worker loop was deleted along with the
 > Dioxus app itself. The engine's only interface is the direct-call facade above.

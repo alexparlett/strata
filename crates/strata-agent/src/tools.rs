@@ -1079,7 +1079,9 @@ impl<H: Host> StrataTools<H> {
     /// share that shape) and 'key_examples' (a few of them, spelled as the file spells them).
     /// `<key>` is a placeholder, not a field name: to descend into one of those keys, put a
     /// real key from 'key_examples' in the path. A 'matching' row through a collapsed set is
-    /// likewise one row, with 'matched_keys' saying how many fields it stands for. A
+    /// likewise one row, with 'matched_keys' saying how many fields it stands for. Every field
+    /// name here is spelled the way the file spells it, and SQL lowercases an unquoted
+    /// identifier by default, so a mixed-case name has to be quoted to resolve. A
     /// three-part name describes a relation in a database connection's catalog instead: its
     /// columns and types, and the connection it is in, with no def facts because it has none.
     #[tool(name = "describe_table", annotations(read_only_hint = true))]

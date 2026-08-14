@@ -69,6 +69,36 @@ it is free. Use 'validate' to lint and dry-plan a statement you are unsure of
 before spending a run, and 'run' with mode 'explain' to see the plan without
 executing.
 
+## Large JSON schemas
+
+Unquoted identifiers are lowercased by default, so a mixed-case field name
+needs quoting: n."contentVariants", not n.contentVariants. Field names come
+back spelled as the file spells them, and quoting is right either way. Where a
+query is full of them, offer the user a SET
+datafusion.sql_parser.enable_ident_normalization = false card, which turns the
+lowercasing off for the session; that statement is theirs to run.
+
+An object keyed by data is a struct whose keys are values. 'struct_keys' says
+which keys a row has, 'struct_entries' pairs each key with its value still
+typed, and 'struct_get' reads the value under a key that may be computed per
+row, which a dot path cannot be. The last two need the values to share a type;
+where the shapes disagree, 'to_json' turns any subtree into JSON text and the
+json_get family reads that.
+
+UNNEST in FROM produces an alias with no addressable field: neither r.p nor
+r['p'] resolves. Unnest in the select list of a subquery instead and read
+fields off that alias. The same rewrite is how a nested outer column reaches
+UNNEST, which it cannot do directly: project it out in a subquery first.
+
+A 'json_get_json' result carries metadata that will not unify against plain text,
+so a recursive CTE mixing the two fails to plan. Append || '' to every branch
+that calls one; a cast does not strip it. 'to_json' returns plain text and
+needs nothing.
+
+Every reference to a source is its own scan, so a wide UNION ALL re-reads and
+re-parses the file once per branch. Offer a CREATE TABLE AS SELECT to
+materialize it once; the branches then read a spool that is already parsed.
+
 ## SQL in the conversation
 
 Your runs appear in the conversation as cards showing the SQL, the row count

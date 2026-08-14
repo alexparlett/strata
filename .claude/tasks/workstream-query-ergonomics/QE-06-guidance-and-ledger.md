@@ -1,7 +1,26 @@
 # QE-06 · Deep-JSON guidance + the upstream ledger
 
-**Workstream:** Query ergonomics · **Status:** ⬜ · **Depends on:** best after QE-01 (its
+**Workstream:** Query ergonomics · **Status:** ✅ · **Depends on:** best after QE-01 (its
 guidance names `to_json`); can land before it minus that line
+
+## What landed (2026-08-14)
+
+Step 4 came first, and it is why the other three read differently from the plan: the
+reproductions were run against this build before a line of guidance was written, and **three
+of the five inherited workarounds were wrong**. The ledger entries carry the corrections
+(items 3, 4, 5, 7); the two that matter most are that `r['p']` does **not** rescue a
+FROM-clause `UNNEST` alias — nothing addresses that alias, and the fix is to unnest in a
+subquery's select list — and that `x || ''` is not "the only spelling that works" but the only
+one that *strips the metadata*, which has to go on every branch that calls a json function
+because the mismatch is between branches. `string_agg`'s own error names a working ordering.
+Guidance therefore ships the select-list rewrite, not the bracket spelling.
+
+`system.md` gained one *Large JSON schemas* section (casing, the struct family, the two
+`UNNEST` rewrites, the recursive-CTE spelling, materialise-instead-of-fan-out). The `SET` line
+is phrased as a card to **offer**: `Capability::Agent` refuses `SET`, so the assistant telling
+the user to run one is the honest form. `describe_table`'s description gained the casing
+sentence. `ENGINE.md` points at the ledger from the built-ins paragraph and states where the
+survivors go when this folder is deleted.
 
 ## Goal
 
