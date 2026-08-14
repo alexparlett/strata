@@ -16,7 +16,8 @@ client at it — is the README's *Agent access* section; this is the engineering
 
 ## One vocabulary, three deployments
 
-The whole feature is one read-only tool vocabulary, `StrataTools`
+The whole feature is one tool vocabulary — read-only but for the file export
+([Curated writes](#curated-writes)) — `StrataTools`
 (`crates/strata-agent/src/tools.rs`), over one seam, the `Host` trait
 (`crates/strata-agent/src/host.rs`). `Host` answers the project-scoped questions — which
 projects are open, what the catalog holds, who owns which query session — and hands back
@@ -30,7 +31,7 @@ engine handles for the data reads. The vocabulary is deployed:
   `crates/strata-freya/src/main.rs`). The `Host` here is a plain `Engine` with the project's
   registration pass replayed over it.
 - **In-process** — `StrataTools`' own public methods, with no MCP hop and no rmcp type in any
-  signature. The ten tools *are* those methods; the `#[tool]` items are wrappers that add the
+  signature. The eleven tools *are* those methods; the `#[tool]` items are wrappers that add the
   two things a semantic call cannot have (which agent the request is, and holding it against
   the idle sweep) and then delegate. `StrataTools::manifest()` is the vocabulary as plain data
   — name, description, argument schema per tool — **derived from the same router that answers
@@ -57,7 +58,11 @@ a socket server would force a proxy into every connection. Hence the embedded-lo
 shape, compensated with the loopback bind and the bearer token. The headless host uses stdio
 because there the client really does own the process.
 
-## The ten tools
+## The eleven tools
+
+Ten of them read. The eleventh, `export_result`, writes one file at a path the caller names —
+see [Curated writes](#curated-writes) for why it is available to every agent and what the fence
+around it actually is.
 
 All tools are project-scoped unless noted. `project` is optional everywhere it appears and
 only required when more than one project window is open — the error lists the candidates. A
@@ -77,6 +82,7 @@ ambiguity rather than guessing.
 | `run(query_session, sql, mode?, page_size?)` | The policy gate, then a dispatch straight at the engine on that session's workspace. Returns columns, page-1 rows, the exact total, and elapsed time. `mode: "explain"` returns the logical and physical plan as text and materializes nothing. |
 | `read_page(query_session, page, sort?)` | Pages the session's last settled result — an immutable snapshot, so paging (and re-sorting) never re-runs the query. A snapshot retired by a newer run in the session reports "the result was replaced; re-run". |
 | `close_query_session(query_session)` | Drops the session and tears its engine workspace down, cancelling any run still in flight. Tidy rather than required — every session goes when its connection does. |
+| `export_result(query_session, path, format)` | Writes the session's last settled result to a file, in `csv` / `ndjson` / `parquet` / `arrow`. The **whole** result in result order, read from the snapshot the session already holds — nothing is re-run and no page size applies, so this is how a result larger than an agent wants to read reaches disk. `path` is an absolute local path, with an extension, whose folder exists and whose file does not. Reports the path written, the row count `COPY` returned and the file's size. |
 
 Rules that hold across the vocabulary:
 
@@ -142,6 +148,65 @@ Rules that hold across the vocabulary:
 - **Every session-scoped tool is scoped to the calling agent** — a property of the types, not
   a check anyone has to remember (see [Identity and teardown](#identity-and-teardown)).
 
+## Curated writes
+
+`export_result` (QE-05) is the vocabulary's one write, and the only thing it can produce is a
+new file on the user's own disk. It is **always available, with no consent surface**, and it
+is not a loosening of `run`: the policy gate, the classification and `Blocked::CopyTo` are
+untouched, so an agent's own `COPY … TO` is refused exactly as before.
+
+This relaxes what this document used to reserve ("curated writes arrive as new, *separately
+permissioned* tools"). The permission turned out to be a fiction. `read_page` already hands
+the agent every byte of the result, so a toggle in front of writing those same bytes to the
+user's own disk protects no data the read surface has not already exposed — it only decides
+whether the agent has to talk the user through a Python detour to produce the identical file.
+Per-call confirmation was never a candidate either: a tool call must not block on a dialog,
+which is the same reason profiling is not exposed at all (see [The policy gate](#the-policy-gate)).
+
+**What does need protecting is the write, so the whole fence is the path rules**
+(`Engine::export_result` → `engine::export::check_destination`, refusing by name in every
+case):
+
+- **Never into storage Strata owns** — the project's `.strata/` or the snapshot spool. A stray
+  file under an internal table's directory is read back as phantom rows by that table's next
+  scan. This is the settled gate a typed `COPY` runs, resolved rather than compared as text,
+  and it is literally the same function.
+- **Never over an existing file.** There is no overwrite flag in v1. This is the one genuinely
+  new risk of a caller-supplied path — a driven client clobbering the user's files — and
+  minting a fresh name is the agent's job.
+- **Never creates folders.** The parent directory has to exist.
+- **An absolute local path, naming one file.** A relative path resolves against a process cwd the
+  agent cannot see and a remote target has no local file at all, so under either the two rules
+  above would be answered about something the caller never meant. The other three are read off
+  DataFusion's own `FileOutputMode::single_file_output` and `ListingTableUrl::parse`, which
+  between them decide what the target *is*: a `?`, `*` or `[` anywhere makes the path a glob
+  pattern and the write lands in the directory before it under a generated name; a trailing
+  separator is a collection; and **a last segment with no extension is a collection too**. Both
+  of the last two were measured writing a *directory* of part files where the answer claimed one
+  file, with `bytes` reporting the directory inode's size. These exist to make the other three
+  true, not as extra caution.
+
+The typed `COPY` keeps only the first of these: a statement the user typed in their own editor
+may overwrite their own file, which is the statement doing what it says.
+
+Two shapes are worth naming because they are the precedent for any later curated write:
+
+- **It reaches the engine directly, like `read_page`, not through a `Host` method.** The source
+  is the query session's own snapshot, which the tool layer already holds, and the write touches
+  no window state — so the app, the headless server and the in-process assistant all answer it
+  from the `Arc<Engine>` they already hand over, with no channel hop and no second
+  implementation per deployment.
+- **It is a third gesture into the export funnel, never a third implementation.** It composes
+  the `ExportSpec` that has no options to get wrong (the whole result, snapshot order, one file)
+  and hands it to `Engine::export` — so the pin, the background-work count the close confirm
+  reads, and the exclusion of `__strata_ord` are all the window's own, unchanged. Write options
+  are each format's defaults; the Export window is where a user picks others.
+
+The assistant keeps both answers and `system.md` says which is which: `export_result` when the
+user asked it to save results, an `offer_sql` `COPY` card when they should choose the
+destination or the options themselves, or when what they want written is not a result it has
+already run.
+
 ## Agent runs are real runs
 
 A query session is an agent-managed handle: the agent opens sessions, runs in them, and
@@ -186,8 +251,8 @@ Consequences, all deliberate:
 
 ## The policy gate
 
-Agent access is read-only: queries, `EXPLAIN`, `SHOW` and `DESCRIBE` run; every write-shaped
-statement is refused. The refusal is the app's own: the engine's statement classification —
+An agent's SQL is read-only: queries, `EXPLAIN`, `SHOW` and `DESCRIBE` run; every write-shaped
+statement is refused, `COPY … TO` included, and `export_result` existing changes nothing here. The refusal is the app's own: the engine's statement classification —
 the same one the editor's validation uses — is read at the agent capability, and `run` asks
 `Engine::policy_verdicts` **before dispatch**, refusing any flagged statement with the same
 message text the editor shows ("CREATE TABLE is not supported in the editor. Register tables
@@ -453,7 +518,7 @@ store existing:
   name the agent goes under.
 - **The loop offers one tool this document does not list**: `offer_sql`, how the assistant
   hands the user a statement to execute. It is never registered on the router, so `tools/list`
-  is exactly the ten below and no MCP client is offered it.
+  is exactly the eleven below and no MCP client is offered it.
 
   A conversation now outlives its window (AS-07, `.strata/chats/`), and nothing in this document
   changes for it: a restored transcript is a **read of a file**, so reopening one opens no query
@@ -469,7 +534,8 @@ store existing:
 
   The design and decision record are in `.claude/tasks/workstream-assistant/`.
 - **MCP resources** — the vocabulary is tools only.
-- **Curated writes** (register a table, save a view, export). If they ever arrive, they
-  arrive as new, separately permissioned tools; `run` never loosens.
+- **Curated writes that change the project** — registering a table, saving a view. Export is
+  built and is the precedent for the shape ([Curated writes](#curated-writes)); the two that
+  edit the catalog are not, and `run` never loosens for either.
 - **A stdio↔HTTP proxy mode** for stdio-only clients pairing with the in-app server; today
   such clients use a generic proxy like `mcp-remote`.

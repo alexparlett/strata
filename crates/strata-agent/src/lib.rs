@@ -1,5 +1,5 @@
-//! **Agent access** — the read-only tool vocabulary an AI agent drives a Strata project
-//! with, everything about it that is frontend-agnostic.
+//! **Agent access** — the tool vocabulary an AI agent drives a Strata project with, everything
+//! about it that is frontend-agnostic.
 //!
 //! `docs/AGENT_ACCESS_SPEC.md` is the contract; this crate is the tool vocabulary, the policy gate,
 //! the transport's guard rails and the error taxonomy, over one deliberate abstraction: the [`Host`]
@@ -9,7 +9,7 @@
 //!
 //! ```text
 //!   rmcp server  ─┐
-//!   stdio server ─┼─→ StrataTools (the ten tools) ─→ Host ─┬─→ AA-03: the app's bridge
+//!   stdio server ─┼─→ StrataTools (the eleven tools) ─→ Host ─┬─→ AA-03: the app's bridge
 //!   chat loop    ─┘        │                               └─→ AA-05: a plain Engine
 //!                          └─ data plane: Arc<Engine> direct (fetch_page / validate /
 //!                             functions), so bulk reads never queue behind UI work
@@ -24,9 +24,10 @@
 //! in). A query session maps onto the engine's `WsId`, so the runs stay real while the attention
 //! stays the user's.
 //!
-//! Read-only in v1, the editor's managed-DDL policy exactly, gated **before dispatch** through
-//! AA-01's export of the editor's own predicate. Curated writes, if they arrive, arrive as new
-//! tools; `run` never loosens.
+//! SQL is read-only, the editor's managed-DDL policy exactly, gated **before dispatch** through
+//! AA-01's export of the editor's own predicate. `run` never loosens: the one curated write
+//! (`export_result`, QE-05) is a tool of its own, and the only thing it can produce is a new file
+//! outside the storage Strata owns.
 
 pub mod assistant;
 mod describe;

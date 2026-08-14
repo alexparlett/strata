@@ -14,6 +14,11 @@
 //!   the output reads back claiming a value it never had. Export answers this from the snapshot
 //!   write pass's free counts; a typed COPY has no snapshot, so it pays for one extra scan
 //!   ([`no_null_partition_values`]).
+//! - **A target inside storage Strata owns is refused.** A stray file under an internal table's
+//!   directory is phantom rows on its next scan. The gate is
+//!   [`refuse_owned_target`](crate::engine::export::refuse_owned_target), which lives beside the
+//!   other two in `engine::export` because three surfaces write a result to a path and the user
+//!   reads one rule.
 //!
 //! The reserved-name half is the router's: a `__snap_` relation anywhere in the source refuses with
 //! `Blocked::ReservedName`, which keeps `COPY (SELECT * FROM __snap_3) TO …` from writing
@@ -22,9 +27,6 @@
 //! The Export window is **unchanged** and remains the snapshot-backed, race-free path. A typed COPY
 //! reads live tables, twice when it is partitioned — the gate is a pre-flight, not a lock.
 
-use std::borrow::Cow;
-use std::env;
-use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
@@ -36,11 +38,9 @@ use datafusion::prelude::{ident, SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::engine::export::{
-    copy_row_count, partition_columns_are_bare_words, partition_null_refusal,
+    copy_row_count, partition_columns_are_bare_words, partition_null_refusal, refuse_owned_target,
 };
-use crate::engine::query::snapshots_root;
 use crate::engine::sql::StmtKind;
-use crate::project::strata_dir;
 use crate::util::plural;
 
 use super::{DataRoot, StatementOutcome};
@@ -78,7 +78,7 @@ pub async fn copy_to(
     let partition_by = copying.partition_by.clone();
     let input = Arc::clone(&copying.input);
 
-    refuse_owned_target(&target, root)?;
+    refuse_owned_target(&target, root.as_deref(), StmtKind::Copy.label())?;
 
     SQLOptions::new()
         .with_allow_dml(true)
@@ -100,89 +100,6 @@ pub async fn copy_to(
         count: Some(rows as u64),
         effect: None,
     })
-}
-
-/// Refuse a `COPY` whose target lands in storage Strata owns — the project's `.strata/` directory
-/// (internal table data, the session, the conversations) or the snapshot spool.
-///
-/// **The two fenced roots are the two places a stray file changes what Strata later reads.** A
-/// file under `.strata/tables/<slug>/` is listed by that table's next scan; one under the snapshot
-/// spool is read back as a result. Everywhere else on the disk is the user's own, and a `COPY` that
-/// overwrites their file is the statement doing what it says.
-///
-/// **Resolved, never compared as text.** A relative `output_url` is the process's cwd away from an
-/// absolute one, and `'.strata/../.strata/tables'` names the fenced directory without sharing its
-/// prefix. The target need not exist yet, so `canonicalize` cannot be asked about it directly: the
-/// path is made absolute, its `.` and `..` segments are folded away, and both sides are then
-/// anchored on the deepest ancestor that *does* exist — which is what makes a symlinked project
-/// folder compare equal to the path the fence was built from.
-fn refuse_owned_target(target: &str, root: &DataRoot) -> Result<(), String> {
-    let local = match target.split_once("://") {
-        Some((scheme, rest)) if is_url_scheme(scheme) => {
-            match scheme.eq_ignore_ascii_case("file") {
-                true => Cow::Owned(format!("/{}", rest.trim_start_matches('/'))),
-                false => return Ok(()),
-            }
-        }
-        _ => Cow::Borrowed(target),
-    };
-    let path = resolve(Path::new(local.as_ref()));
-
-    let mut fenced = vec![(PathBuf::from(snapshots_root()), "holds query results")];
-    if let Some(root) = root {
-        fenced.push((strata_dir(root), "holds this project's own data"));
-    }
-    for (dir, what) in fenced {
-        if path.starts_with(resolve(&dir)) {
-            return Err(format!(
-                "{} can't write into '{}', which {what}",
-                StmtKind::Copy.label(),
-                dir.display(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Whether `s` is shaped like a URL scheme — RFC 3986's `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
-///
-/// A path separator can never appear in one, which is the whole point: it is what tells
-/// `s3://bucket` from a local file whose name happens to contain `://`.
-fn is_url_scheme(s: &str) -> bool {
-    let mut chars = s.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-}
-
-/// `path` as an absolute path with `.` and `..` folded away, anchored on the deepest ancestor that
-/// exists. See [`refuse_owned_target`] for why each of the three steps is there.
-fn resolve(path: &Path) -> PathBuf {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        env::current_dir().unwrap_or_default().join(path)
-    };
-    let mut folded = PathBuf::new();
-    for part in absolute.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                folded.pop();
-            }
-            other => folded.push(other),
-        }
-    }
-    let mut existing: &Path = &folded;
-    loop {
-        if let Ok(real) = existing.canonicalize() {
-            let rest = folded.strip_prefix(existing).unwrap_or(Path::new(""));
-            return real.join(rest);
-        }
-        match existing.parent() {
-            Some(parent) => existing = parent,
-            None => return folded,
-        }
-    }
 }
 
 /// Refuse a partitioned `COPY` whose partition columns contain NULLs, in the Export window's
@@ -255,51 +172,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::{env, process};
 
-    use super::is_url_scheme;
     use crate::engine::sql::Blocked;
     use crate::engine::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use crate::project::{save_defs, ProjectDefs};
-
-    /// **A scheme is a scheme, and a path with `://` in it is a path.** Reading everything before
-    /// the first `://` as a scheme waved `…/x://y` through the ownership fence as though it named
-    /// an object store, which is how a local target inside `.strata/` could skip the check.
-    #[test]
-    fn only_a_real_scheme_reads_as_a_url() {
-        for yes in ["s3", "gs", "http", "https", "file", "s3a", "x+y", "a-b.c"] {
-            assert!(is_url_scheme(yes), "{yes}");
-        }
-        for no in [
-            "",
-            "3s",
-            "/tmp/a",
-            "sales/eu",
-            "/proj/.strata/tables/sales/x",
-            "a b",
-            "a_b",
-        ] {
-            assert!(!is_url_scheme(no), "{no}");
-        }
-    }
-
-    /// The fence itself, over the two shapes that matter: a remote target is not ours to judge,
-    /// and a local one carrying `://` is still a local one.
-    #[test]
-    fn a_local_target_with_a_colon_slash_slash_is_still_fenced() {
-        let root = env::temp_dir().join(format!("strata-copy-fence-{}", process::id()));
-        let strata = crate::project::strata_dir(&root);
-        let owned = strata.join("tables/sales/x://y");
-        let data_root: super::DataRoot = Some(root.clone());
-
-        super::refuse_owned_target(&owned.to_string_lossy(), &data_root)
-            .expect_err("a local path inside .strata is refused whatever is in its name");
-        super::refuse_owned_target("s3://acme-lake/out.parquet", &data_root)
-            .expect("a remote target is not local storage");
-        super::refuse_owned_target(
-            &root.join("out.parquet").to_string_lossy(),
-            &Some(root.join("elsewhere")),
-        )
-        .expect("the user's own file");
-    }
 
     /// Run one statement and take its report — anything else is a test that asked the wrong
     /// question.

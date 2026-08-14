@@ -11,6 +11,17 @@
 //! **The snapshot is the source, never a re-run** (`docs/SNAPSHOT_SPEC.md`): an export reads
 //! the same immutable table the grid pages, with the same [`ExportSpec::sort`] the grid is
 //! showing, so what lands on disk is what was on screen.
+//!
+//! **The gates an export answers to live here, and the statements reach them.** Three surfaces
+//! write a result to a path — the Export window, a typed `COPY … TO` (`ddl::copy`), and the
+//! agent's `export_result` (QE-05) — and none of them may land in storage Strata owns. So
+//! [`refuse_owned_target`], [`partition_columns_are_bare_words`] and [`partition_null_refusal`]
+//! are all this module's, called by whichever surface reaches them, rather than each having its
+//! own copy of a rule the user reads as one.
+
+use std::borrow::Cow;
+use std::env;
+use std::path::{is_separator, Component, Path, PathBuf};
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::Schema;
@@ -18,8 +29,9 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::dialect::Dialect;
 
-use super::query::snapshot_name;
+use super::query::{snapshot_name, snapshots_root};
 use crate::engine::sql;
+use crate::project::strata_dir;
 use strata_model::SnapshotId;
 
 /// Everything one export needs: where it goes, how much of the snapshot, in what order, in
@@ -34,6 +46,20 @@ pub struct ExportSpec {
     pub sort: Option<(String, bool)>,
     pub format: Format,
     pub partition: Partition,
+}
+
+/// What one finished export wrote, for a caller with no window to show it in
+/// ([`Engine::export_result`](crate::engine::Engine::export_result)).
+///
+/// Every figure is read rather than derived: `rows` is the count `COPY` itself returns and
+/// `bytes` is the written file's own size. `bytes` is optional because the size is read back
+/// *after* a write that has already succeeded — a stat that fails is a fact this call could not
+/// learn, never a failed export.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportReport {
+    pub path: String,
+    pub rows: usize,
+    pub bytes: Option<u64>,
 }
 
 /// How much of the snapshot to write.
@@ -65,6 +91,48 @@ impl Format {
             Self::Json(_) => "JSON",
             Self::Parquet(_) => "PARQUET",
             Self::Arrow => "ARROW",
+        }
+    }
+}
+
+/// The write options a caller that was offered none gets.
+///
+/// [`Default`] rather than a constant per surface because it is a property of the format: a
+/// reader has to be able to open what was written with nothing said, so the defaults are the
+/// self-describing spellings (a header row, a comma, `"` quotes doubled, no compression). The
+/// Export window's draft starts on the same values and is free to move: it exists to be edited,
+/// while [`crate::engine::Engine::export_result`] offers no options at all and these are what it
+/// writes.
+impl Default for Csv {
+    fn default() -> Csv {
+        Csv {
+            header: true,
+            delimiter: ',',
+            null_value: String::new(),
+            quote: '"',
+            escape: None,
+            double_quote: true,
+            compression: Compression::None,
+        }
+    }
+}
+
+impl Default for Json {
+    fn default() -> Json {
+        Json {
+            compression: Compression::None,
+        }
+    }
+}
+
+impl Default for Parquet {
+    fn default() -> Parquet {
+        Parquet {
+            compression: Codec::Zstd(3),
+            statistics: Statistics::Page,
+            max_row_group_size: 1_048_576,
+            writer_version: WriterVersion::V1,
+            dictionary: true,
         }
     }
 }
@@ -492,6 +560,204 @@ fn is_bare_word(dialect: &dyn Dialect, name: &str) -> bool {
         && rest.all(|c| dialect.is_identifier_part(c))
 }
 
+/// Refuse a write whose target lands in storage Strata owns — the project's `.strata/` directory
+/// (internal table data, the session, the conversations) or the snapshot spool.
+///
+/// **The two fenced roots are the two places a stray file changes what Strata later reads.** A
+/// file under `.strata/tables/<slug>/` is listed by that table's next scan; one under the snapshot
+/// spool is read back as a result. Everywhere else on the disk is the user's own, and a write that
+/// overwrites their file is the statement doing what it says.
+///
+/// **Resolved, never compared as text.** A relative target is the process's cwd away from an
+/// absolute one, and `'.strata/../.strata/tables'` names the fenced directory without sharing its
+/// prefix. The target need not exist yet, so `canonicalize` cannot be asked about it directly: the
+/// path is made absolute, its `.` and `..` segments are folded away, and both sides are then
+/// anchored on the deepest ancestor that *does* exist — which is what makes a symlinked project
+/// folder compare equal to the path the fence was built from.
+///
+/// `subject` is what the sentence is about, because two surfaces reach this and the user reads a
+/// refusal as being about the thing they did: `COPY` for the typed statement (`ddl::copy`),
+/// `Export` for [`check_destination`]'s caller. Only the subject differs — the rule, the roots and
+/// the reason are one copy.
+pub(super) fn refuse_owned_target(
+    target: &str,
+    root: Option<&Path>,
+    subject: &str,
+) -> Result<(), String> {
+    let local = match target.split_once("://") {
+        Some((scheme, rest)) if is_url_scheme(scheme) => {
+            match scheme.eq_ignore_ascii_case("file") {
+                true => Cow::Owned(format!("/{}", rest.trim_start_matches('/'))),
+                false => return Ok(()),
+            }
+        }
+        _ => Cow::Borrowed(target),
+    };
+    let path = resolve(Path::new(local.as_ref()));
+
+    let mut fenced = vec![(PathBuf::from(snapshots_root()), "holds query results")];
+    if let Some(root) = root {
+        fenced.push((strata_dir(root), "holds this project's own data"));
+    }
+    for (dir, what) in fenced {
+        if path.starts_with(resolve(&dir)) {
+            return Err(format!(
+                "{subject} can't write into '{}', which {what}",
+                dir.display(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `s` is shaped like a URL scheme — RFC 3986's `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
+///
+/// A path separator can never appear in one, which is the whole point: it is what tells
+/// `s3://bucket` from a local file whose name happens to contain `://`.
+fn is_url_scheme(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// `path` as an absolute path with `.` and `..` folded away, anchored on the deepest ancestor that
+/// exists. See [`refuse_owned_target`] for why each of the three steps is there.
+///
+/// **The whole path existing is its own case, because `join("")` is not a no-op.** Pushing an
+/// empty relative path leaves a trailing separator, and `stat` on `some-file/` is `ENOTDIR` — so a
+/// resolved path that names an existing *file* answered `exists() == false`, which
+/// [`check_destination`]'s no-overwrite rule reads as a free name. `starts_with` is
+/// component-wise and never noticed.
+fn resolve(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir().unwrap_or_default().join(path)
+    };
+    let mut folded = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                folded.pop();
+            }
+            other => folded.push(other),
+        }
+    }
+    let mut existing: &Path = &folded;
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let rest = folded.strip_prefix(existing).unwrap_or(Path::new(""));
+            return match rest.as_os_str().is_empty() {
+                true => real,
+                false => real.join(rest),
+            };
+        }
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return folded,
+        }
+    }
+}
+
+/// The characters that make `ListingTableUrl::parse` read a path as a **glob pattern** rather
+/// than a path — `datafusion-datasource`'s own `GLOB_START_CHARS`, restated here because it is
+/// private and it decides where a write actually lands.
+const GLOB_CHARS: [char; 3] = ['?', '*', '['];
+
+/// Whether `path`'s last segment carries an extension, which is what makes DataFusion write it as
+/// **one file** rather than a directory of part files (`FileOutputMode::Automatic`).
+///
+/// DataFusion's own predicate, restated: its `ListingTableUrl::file_extension` asks whether the
+/// last URL segment contains a `.` and does not end with one. Rust's `Path::extension` is *not*
+/// the same question — it answers `None` for a dotfile like `.gitignore`, which DataFusion counts
+/// as having one — and disagreeing here would refuse a path that would have worked.
+fn names_one_file(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains('.') && !name.ends_with('.'))
+}
+
+/// Where an export a **caller named** may land (QE-05): an absolute local path naming a file that
+/// does not exist yet, in a folder that does, outside the storage Strata owns.
+///
+/// **The path is the whole fence, because the data is not one.** An agent's `export_result` reads
+/// a result it can already page byte for byte, so nothing here protects the *contents*; what is
+/// new is that a caller with no file dialog in front of it names the destination. So the rules are
+/// about the write: it never lands where Strata reads back what it finds, it never overwrites, and
+/// it never makes a folder.
+///
+/// **The shape refusals are not extra caution — they are what make the other three *true*, and
+/// each of them is a thing DataFusion would otherwise do quietly to a path nobody vetted.** A
+/// relative path resolves against a process cwd the caller cannot see, so "the parent exists" and
+/// "the file does not" would be answered about a folder it never meant; a remote target has no
+/// local file to ask either question of, so the no-overwrite promise could not be kept there. The
+/// last three are the same rule read off `FileOutputMode::single_file_output` and
+/// `ListingTableUrl::parse`, which together decide what the target even *is*:
+///
+/// - **A glob character (`?`, `*`, `[`) makes the path a pattern**, and `parse` then splits it —
+///   the write lands in the directory *before* the glob under a generated name. Measured: an
+///   export to `…/report[1].csv` reported success at that path while the rows went to
+///   `…/<random>_0.csv` beside it, so the answer named a file that does not exist.
+/// - **A trailing separator is a collection**, so DataFusion fans part files into it.
+/// - **No extension is a collection too** — `Automatic` mode is single-file only when the last
+///   segment carries one. Measured: an export to `…/results` created a *directory* holding
+///   `<random>_0.csv`, and `bytes` reported the directory inode's 96 as the file's size.
+///
+/// The typed `COPY` is unaffected and keeps exactly one of these ([`refuse_owned_target`]): a
+/// statement the user typed in their own editor may overwrite their own file and may ask for a
+/// directory of part files, which is the statement doing what it says.
+pub(super) fn check_destination(path: &str, root: Option<&Path>) -> Result<(), String> {
+    if path
+        .split_once("://")
+        .is_some_and(|(scheme, _)| is_url_scheme(scheme))
+    {
+        return Err(format!(
+            "Export writes a local file, and '{path}' names a remote location. Give an absolute \
+             path on this machine"
+        ));
+    }
+    if let Some(glob) = path.chars().find(|c| GLOB_CHARS.contains(c)) {
+        return Err(format!(
+            "'{path}' contains '{glob}', which reads as a filename pattern rather than a path. \
+             Give a path with no '?', '*' or '[' in it"
+        ));
+    }
+    if !Path::new(path).is_absolute() {
+        return Err(format!(
+            "Export takes an absolute path, and '{path}' is relative"
+        ));
+    }
+    if path.ends_with(is_separator) {
+        return Err(format!(
+            "'{path}' names a folder, and an export writes one file. Give the path of the file to \
+             write"
+        ));
+    }
+    if !names_one_file(path) {
+        return Err(format!(
+            "'{path}' has no file extension, so it would be written as a folder of part files \
+             rather than one file. Give the file an extension, such as '.csv'"
+        ));
+    }
+    refuse_owned_target(path, root, "Export")?;
+
+    let resolved = resolve(Path::new(path));
+    if resolved.exists() {
+        return Err(format!(
+            "'{path}' already exists, and an export never overwrites. Give a path that is not taken"
+        ));
+    }
+    match resolved.parent() {
+        Some(parent) if parent.is_dir() => Ok(()),
+        _ => Err(format!(
+            "'{}' does not exist, and an export writes a file rather than the folders above it",
+            Path::new(path).parent().unwrap_or(Path::new("")).display()
+        )),
+    }
+}
+
 /// `COPY … TO` returns a single `UInt64` "count" column with the rows written.
 ///
 /// Shared with `ddl::tables`, whose CTAS spool is a `COPY` too: the row count in its report and
@@ -515,7 +781,13 @@ pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::{fs, process};
+
     use datafusion::arrow::datatypes::{DataType, Field};
+
+    use crate::engine::{Engine, RunTag, WsId};
 
     use super::*;
 
@@ -701,5 +973,177 @@ mod tests {
             sql::lex::dialect("postgresql").as_ref(),
             "region#eu"
         ));
+    }
+
+    /// **A scheme is a scheme, and a path with `://` in it is a path.** Reading everything before
+    /// the first `://` as a scheme waved `…/x://y` through the ownership fence as though it named
+    /// an object store, which is how a local target inside `.strata/` could skip the check.
+    #[test]
+    fn only_a_real_scheme_reads_as_a_url() {
+        for yes in ["s3", "gs", "http", "https", "file", "s3a", "x+y", "a-b.c"] {
+            assert!(is_url_scheme(yes), "{yes}");
+        }
+        for no in [
+            "",
+            "3s",
+            "/tmp/a",
+            "sales/eu",
+            "/proj/.strata/tables/sales/x",
+            "a b",
+            "a_b",
+        ] {
+            assert!(!is_url_scheme(no), "{no}");
+        }
+    }
+
+    /// The ownership fence, over the two shapes that matter: a remote target is not ours to judge,
+    /// and a local one carrying `://` is still a local one.
+    #[test]
+    fn a_local_target_with_a_colon_slash_slash_is_still_fenced() {
+        let root = env::temp_dir().join(format!("strata-copy-fence-{}", process::id()));
+        let owned = strata_dir(&root).join("tables/sales/x://y");
+
+        refuse_owned_target(&owned.to_string_lossy(), Some(&root), "COPY")
+            .expect_err("a local path inside .strata is refused whatever is in its name");
+        refuse_owned_target("s3://acme-lake/out.parquet", Some(&root), "COPY")
+            .expect("a remote target is not local storage");
+        refuse_owned_target(
+            &root.join("out.parquet").to_string_lossy(),
+            Some(&root.join("elsewhere")),
+            "COPY",
+        )
+        .expect("the user's own file");
+    }
+
+    /// **A caller-named destination has to be a new local file, and each refusal says which rule
+    /// it broke.** The shape rules are what make the other two answerable: a relative path and a
+    /// remote one have no local file to ask "does this already exist" of, and the last three are
+    /// the paths DataFusion would not write as one file at all.
+    #[test]
+    fn a_callers_destination_has_to_name_a_new_local_file() {
+        let root = scratch("destination");
+        let taken = root.join("taken.csv");
+        fs::write(&taken, "n\n1\n").unwrap();
+
+        let refused = |path: &str| check_destination(path, Some(&root)).expect_err(path);
+        assert!(refused("s3://acme-lake/out.parquet").contains("names a remote location"));
+        assert!(refused("file:///tmp/out.csv").contains("names a remote location"));
+        assert!(refused("out.csv").contains("is relative"));
+        assert!(refused(&format!("{}/", root.display())).contains("names a folder"));
+        assert!(refused(&taken.display().to_string()).contains("never overwrites"));
+        assert!(
+            refused(&root.join("nope/out.csv").display().to_string()).contains("does not exist")
+        );
+
+        check_destination(&root.join("fresh.csv").display().to_string(), Some(&root))
+            .expect("a new file beside the project is the caller's own");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **The three paths DataFusion writes as something other than the one named file.** Each was
+    /// measured against the engine before this rule existed: `…/results` became a *directory* of
+    /// part files whose inode size was reported as `bytes`, and `…/report[1].csv` reported success
+    /// at a path where no file existed while the rows landed beside it under a generated name.
+    ///
+    /// A dotfile is deliberately **allowed**: DataFusion counts `.gitignore` as carrying an
+    /// extension (its own predicate is "contains a dot and does not end with one"), so refusing it
+    /// would decline a path that works.
+    #[test]
+    fn a_destination_that_would_not_be_one_file_is_refused() {
+        let root = scratch("one-file");
+        let refused = |path: &str| check_destination(path, Some(&root)).expect_err(path);
+
+        assert!(refused(&root.join("results").display().to_string()).contains("no file extension"));
+        assert!(refused(&root.join("out.").display().to_string()).contains("no file extension"));
+        for globbed in ["report[1].csv", "report?.csv", "report*.csv"] {
+            let err = refused(&root.join(globbed).display().to_string());
+            assert!(err.contains("filename pattern"), "{globbed}: {err}");
+        }
+        assert!(refused(&root.join("a*b/out.csv").display().to_string()).contains("pattern"));
+
+        assert!(names_one_file("/tmp/.gitignore"), "a dotfile has one");
+        check_destination(&root.join(".gitignore").display().to_string(), Some(&root))
+            .expect("DataFusion reads a dotfile as carrying an extension");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **What lands on disk is the result, in result order, with no bookkeeping in it.** The
+    /// ordinal column orders the read and is projected away, so a caller's file carries the user's
+    /// own columns and the rows in the order the run produced them — not sorted, not re-run.
+    #[tokio::test]
+    async fn a_callers_export_writes_the_result_in_order_and_never_the_ordinal() {
+        let root = scratch("agent-export");
+        let eng = Arc::new(Engine::new(BTreeMap::new()));
+        eng.set_data_dir(&root);
+        let snapshot = settled(
+            &eng,
+            "SELECT * FROM (VALUES (3,'c'),(1,'a'),(2,'b')) AS t(n, s)",
+        )
+        .await;
+
+        let out = root.join("out.csv");
+        let report = eng
+            .export_result(
+                snapshot,
+                out.display().to_string(),
+                Format::Csv(Csv::default()),
+            )
+            .await
+            .expect("exported");
+
+        assert_eq!(report.path, out.display().to_string());
+        assert_eq!(report.rows, 3);
+        assert_eq!(report.bytes, Some(fs::metadata(&out).unwrap().len()));
+        assert_eq!(fs::read_to_string(&out).unwrap(), "n,s\n3,c\n1,a\n2,b\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **The two fences a caller-named path needs, driven through the engine.** The owned-storage
+    /// one is reached by a path that does *not* share `.strata`'s prefix as text, because the gate
+    /// resolves rather than compares; the overwrite one is the genuinely new risk of a path nobody
+    /// picked in a dialog, and a refusal leaves the file that is already there exactly as it was.
+    #[tokio::test]
+    async fn a_callers_export_is_fenced_out_of_owned_storage_and_never_overwrites() {
+        let root = scratch("agent-fence");
+        let eng = Arc::new(Engine::new(BTreeMap::new()));
+        eng.set_data_dir(&root);
+        let snapshot = settled(&eng, "SELECT 1 AS n").await;
+        let export = |path: PathBuf| {
+            eng.export_result(
+                snapshot,
+                path.display().to_string(),
+                Format::Csv(Csv::default()),
+            )
+        };
+
+        let sneaky = root.join(".strata/tables/../tables/sales/rows.csv");
+        let owned = export(sneaky).await.expect_err("inside .strata");
+        assert!(owned.contains("holds this project's own data"), "{owned}");
+
+        let out = root.join("once.csv");
+        export(out.clone()).await.expect("the user's own folder");
+        let written = fs::read_to_string(&out).unwrap();
+        let again = export(out.clone()).await.expect_err("already there");
+        assert!(again.contains("never overwrites"), "{again}");
+        assert_eq!(fs::read_to_string(&out).unwrap(), written);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The snapshot one run settled, which is what an export reads.
+    async fn settled(eng: &Arc<Engine>, sql: &str) -> SnapshotId {
+        let (output, _) = eng
+            .query(WsId(1), RunTag(1), sql.into(), 10)
+            .await
+            .expect("query");
+        output.snapshot.expect("a materialized result")
+    }
+
+    /// A scratch project folder of our own, per test — the tag is load-bearing because these run
+    /// concurrently in one process.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("strata_export_{}_{tag}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

@@ -1,6 +1,6 @@
 //! **Name to method** — the binding between what a model answers with and the vocabulary.
 //!
-//! A model replies with a tool *name* and a JSON object; [`StrataTools`] offers ten typed
+//! A model replies with a tool *name* and a JSON object; [`StrataTools`] offers eleven typed
 //! methods. Turning one into the other needs a message for bad arguments that reads well *to a
 //! model*, which is why this lives here rather than in AS-01: a crate with no provider in it
 //! has no register to write that message in.
@@ -34,8 +34,8 @@ use crate::tools::StrataTools;
 
 use super::offer;
 use crate::wire::{
-    DescribeTableParams, ListFunctionsParams, ListTablesParams, ProjectParams, ProjectsResult,
-    QuerySessionParams, ReadPageParams, RunParams, RunResult, ValidateParams,
+    DescribeTableParams, ExportResultParams, ListFunctionsParams, ListTablesParams, ProjectParams,
+    ProjectsResult, QuerySessionParams, ReadPageParams, RunParams, RunResult, ValidateParams,
 };
 
 /// The most rows the assistant asks 'run' for, however many the model requests.
@@ -262,6 +262,22 @@ async fn dispatch<H: Host>(
                 )
             }
         },
+        "export_result" => match params::<ExportResultParams>(name, arguments) {
+            Err(e) => (Err(e), plain),
+            Ok(p) => {
+                let session = p.query_session.clone();
+                let written = tools.export_result(p).await;
+                let rows = written.as_ref().ok().map(|r| r.rows);
+                (
+                    answer(name, written.as_ref()),
+                    Facts {
+                        query_session: Some(session),
+                        rows,
+                        ..plain
+                    },
+                )
+            }
+        },
         "close_query_session" => match params::<QuerySessionParams>(name, arguments) {
             Err(e) => (Err(e), plain),
             Ok(p) => {
@@ -326,8 +342,8 @@ fn params<T: DeserializeOwned>(name: &str, arguments: Value) -> Result<T, AgentE
 }
 
 /// The one wording for arguments that did not fit a tool's schema — shared with
-/// [`offer_sql`](super::offer), which is the eleventh tool and must teach the model the same
-/// recovery as the ten. Here rather than at each site for `AgentError::no_such_query_session`'s
+/// [`offer_sql`](super::offer), the assistant's own tool, which must teach the model the same
+/// recovery as the router's. Here rather than at each site for `AgentError::no_such_query_session`'s
 /// reason: a message written twice is a message that drifts the moment either is tuned.
 pub(super) fn bad_arguments(name: &str, why: &JsonError) -> String {
     format!(

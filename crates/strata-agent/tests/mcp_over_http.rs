@@ -85,6 +85,7 @@ async fn a_client_lists_the_tools_and_calls_them() {
         vec![
             "close_query_session",
             "describe_table",
+            "export_result",
             "list_functions",
             "list_projects",
             "list_query_sessions",
@@ -96,13 +97,11 @@ async fn a_client_lists_the_tools_and_calls_them() {
         ]
     );
     let info = client.peer_info().expect("server info");
+    let instructions = info.instructions.as_deref().unwrap_or_default();
+    assert!(instructions.contains("SQL is read-only"), "{instructions}");
     assert!(
-        info.instructions
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Read-only"),
-        "{:?}",
-        info.instructions
+        instructions.contains("export_result"),
+        "the one write is named where the read-only rule is stated: {instructions}"
     );
 
     let tables = client

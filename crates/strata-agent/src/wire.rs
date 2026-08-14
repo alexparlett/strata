@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use strata_core::engine::export::{Csv, ExportReport, Format, Json, Parquet};
 use strata_core::engine::plan::QueryPlan;
 use strata_core::engine::sql::{FunctionCatalog, FunctionSym};
 use strata_core::util::{clip, collapse_sql};
@@ -171,6 +172,72 @@ pub struct Sort {
 
 fn yes() -> bool {
     true
+}
+
+/// `export_result` on the wire. Its own struct rather than [`ReadPageParams`] because the
+/// destination belongs to the write alone.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExportResultParams {
+    /// A query-session handle whose last run settled with rows.
+    pub query_session: String,
+    /// Absolute path of the file to write, with a file extension. It must not exist, and the
+    /// folder above it must.
+    pub path: String,
+    /// What to write. Each format is written with its own defaults: a CSV carries a header row
+    /// and comma-separated fields, none of them are compressed.
+    pub format: ExportFormat,
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// What an export writes — the four the engine's writer supports, named as a reader would ask
+/// for them (`ndjson` rather than DataFusion's `JSON`, which is what its JSON writer actually
+/// emits here).
+///
+/// No write options ride with the choice: the tool writes each format's self-describing
+/// defaults ([`Format`]'s own), because a caller with no dialog in front of it has nothing to
+/// preview an unusual delimiter against. The Export window is where those are chosen.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    Csv,
+    Ndjson,
+    Parquet,
+    Arrow,
+}
+
+impl From<ExportFormat> for Format {
+    fn from(format: ExportFormat) -> Format {
+        match format {
+            ExportFormat::Csv => Format::Csv(Csv::default()),
+            ExportFormat::Ndjson => Format::Json(Json::default()),
+            ExportFormat::Parquet => Format::Parquet(Parquet::default()),
+            ExportFormat::Arrow => Format::Arrow,
+        }
+    }
+}
+
+/// What `export_result` wrote. Every figure is the engine's own: `rows` is what `COPY` counted
+/// and `bytes` is the file's own size, absent only when it could not be read back after a write
+/// that had already succeeded.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExportResult {
+    pub query_session: String,
+    pub path: String,
+    pub rows: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+}
+
+impl From<(String, ExportReport)> for ExportResult {
+    fn from((query_session, report): (String, ExportReport)) -> ExportResult {
+        ExportResult {
+            query_session,
+            path: report.path,
+            rows: report.rows,
+            bytes: report.bytes,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -1070,5 +1137,6 @@ mod tests {
         object_schema::<QuerySessionsResult>("QuerySessionsResult");
         object_schema::<RunResult>("RunResult");
         object_schema::<PageResult>("PageResult");
+        object_schema::<ExportResult>("ExportResult");
     }
 }

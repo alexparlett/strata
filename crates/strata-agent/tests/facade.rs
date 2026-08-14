@@ -1,4 +1,4 @@
-//! **The vocabulary with no transport under it** (AS-01) — the ten tools driven as plain
+//! **The vocabulary with no transport under it** (AS-01) — the eleven tools driven as plain
 //! methods, from outside the crate, with no rmcp type anywhere in this file.
 //!
 //! `mcp_over_http.rs` and `mcp_over_stdio.rs` prove the two MCP deployments; this proves the
@@ -220,7 +220,7 @@ async fn a_blocked_statement_is_refused_in_the_editors_own_words() {
 }
 
 /// The manifest is what an in-process loop hands its model, and it has to be the same offer
-/// an MCP client gets: the ten names `mcp_over_http.rs` pins off `tools/list`, each with the
+/// an MCP client gets: the eleven names `mcp_over_http.rs` pins off `tools/list`, each with the
 /// description and argument schema that listing carries.
 ///
 /// **The order is asserted rather than sorted away, and the difference from
@@ -239,6 +239,7 @@ fn the_manifest_offers_exactly_what_the_wire_advertises() {
         vec![
             "close_query_session",
             "describe_table",
+            "export_result",
             "list_functions",
             "list_projects",
             "list_query_sessions",
@@ -300,5 +301,9 @@ fn the_manifest_offers_exactly_what_the_wire_advertises() {
     assert_eq!(
         properties("close_query_session"),
         vec!["project", "query_session"]
+    );
+    assert_eq!(
+        properties("export_result"),
+        vec!["format", "path", "project", "query_session"]
     );
 }

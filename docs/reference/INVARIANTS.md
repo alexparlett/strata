@@ -476,7 +476,7 @@ Things that must not regress. Each was fought for once already.
   for an export window, which owes the user the rows it was opened on, and wrong for a
   long-lived server, where the honest answer is that the query session has moved on.
 - **The vocabulary is public methods and `#[tool]` is a wrapper over them; the model-facing
-  manifest is derived from the router that serves MCP.** (AS-01) The ten tools *are*
+  manifest is derived from the router that serves MCP.** (AS-01) The eleven tools *are*
   `StrataTools`' own public methods — plain arguments in, wire result types out, no rmcp type
   in any signature — and each `#[tool]` item does only what a semantic call cannot: resolve
   which agent the *request* is (`Caller`) and hold it against the idle sweep (`Busy`), then
@@ -609,6 +609,33 @@ Things that must not regress. Each was fought for once already.
   *app* performed), while an explicit close of a running session is the agent's own decision
   about its own work and is allowed. `is_running` is **any** run in flight, not the newest —
   every consumer of it destroys work when it is wrong.
+- **The vocabulary's one write is always available, and its whole fence is the path.**
+  `export_result` (QE-05) writes a query session's settled result to a file the caller names, and
+  it is *not* a loosening of `run` — the classification, the policy gate and `Blocked::CopyTo`
+  are untouched. A consent surface was considered and **declined on the observation that killed
+  it**: `read_page` already hands over every byte of that result, so a gate on writing the same
+  bytes to the user's own disk protects no data the read surface has not already exposed, and
+  per-call confirmation was never a candidate (a tool call must not block on a dialog — the same
+  reason profiling is not exposed at all). What needs protecting is the write, so
+  `export::check_destination` refuses **by name**: never into `.strata/` or the snapshot spool
+  (the settled resolved-target gate, literally `ddl::copy`'s own function), never over an
+  existing file with no overwrite flag, never creating folders — and the shape rules that make
+  those answerable at all. Two of them are about the caller (absolute, local: a relative path
+  resolves against a cwd the caller cannot see and a remote one has no local file to ask about);
+  the other three are read off DataFusion's `FileOutputMode::single_file_output` and
+  `ListingTableUrl::parse`, which decide what the target *is* — a `?`/`*`/`[` makes it a glob and
+  the write lands in the directory before it under a generated name, and a trailing separator
+  **or a last segment with no extension** makes it a collection. Both of the last two were
+  measured writing a directory of part files while the answer claimed one file, `bytes` reporting
+  the directory inode's size. Two shapes
+  are the precedent for any later curated write: it reaches the **engine directly** like
+  `read_page`, because the source is the session's own snapshot and no window state is touched
+  (so all three deployments answer it with no `Host` method and no channel hop), and it is a
+  **third gesture into `Engine::export`**, composing the spec with no options to get wrong so the
+  pin, the background-work count and the ordinal's exclusion are the window's own, unchanged.
+  Related: `resolve` returns the canonical path itself when nothing is left to join — `join("")`
+  leaves a trailing separator and `stat("file/")` is `ENOTDIR`, which read an existing file as a
+  free name. `starts_with` is component-wise and never noticed.
 - **Poll only what nothing on our side can observe, and name the reason where the poll is.** The
   header's agent dot is the app's one sampled fact: how many MCP clients are paired lives in
   rmcp's `LocalSessionManager`, and a session is created inside `service.handle(req)` — below our
@@ -726,7 +753,7 @@ Things that must not regress. Each was fought for once already.
   settles. A cancelled turn settles as `Cancelled`, never `Failed`.
 - **A statement the user can run is a tool call, not a formatting convention — and the check in
   front of it is the *editor's* policy.** `offer_sql` is the assistant's own tool, dispatched by
-  the loop and **never registered on the router**, so `tools/list` stays the ten and no MCP
+  the loop and **never registered on the router**, so `tools/list` stays the router's own and no MCP
   client is offered a tool it has no transcript to use. A tagged markdown fence was built first
   and withdrawn: a fence is taught only by prose in the system prompt, which small local models
   follow unevenly, and it cannot check anything before the text is on screen. The tool validates
