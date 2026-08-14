@@ -52,9 +52,12 @@ const ADDR: &str = "127.0.0.1:8787";
 /// `CARGO_PKG_VERSION` is today, and it should be obvious in a screenshot that it is not real.
 const VERSION: &str = "9.9.9";
 
-/// How big the pretend archive is before compression. Big enough that a download takes long
-/// enough to watch (the app moves its progress every megabyte), small enough to build in a
-/// blink and cost nothing on disk.
+/// How big the pretend archive is. Big enough that a download is a thing you can watch (the app
+/// moves its progress every megabyte), small enough to build in a blink and cost nothing.
+///
+/// The padding is **noise, not zeros**: `ditto` deflates the archive, and 48 MB of zeros came out
+/// as a 52 KB download that was over before any progress could be drawn. Incompressible bytes
+/// keep the archive the size it says it is.
 const PADDING: usize = 48 << 20;
 
 /// How much of the archive `slow` writes per tick, and how long it waits between ticks — a
@@ -365,6 +368,22 @@ fn releases(scenario: Scenario, size: u64) -> String {
     list.to_string()
 }
 
+/// `len` bytes a deflater cannot shrink — an xorshift rather than a dependency, because the only
+/// property wanted here is "does not compress", and the archive has to keep the size it declares
+/// or there is no download to watch.
+fn noise(len: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut bytes = Vec::with_capacity(len);
+    while bytes.len() < len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        bytes.extend_from_slice(&state.to_le_bytes());
+    }
+    bytes.truncate(len);
+    bytes
+}
+
 /// **Build the archive the app will really download and really unpack.**
 ///
 /// A `Strata.app` with the two things the staging path looks for — an `.app` at the top level of
@@ -390,7 +409,7 @@ fn build_archive() -> Result<PathBuf, String> {
         "#!/bin/sh\necho 'this is not Strata'\n",
     )
     .map_err(|e| format!("could not write the executable: {e}"))?;
-    fs::write(app.join("Contents/Resources.bin"), vec![0u8; PADDING])
+    fs::write(app.join("Contents/Resources.bin"), noise(PADDING))
         .map_err(|e| format!("could not write the padding: {e}"))?;
 
     let zipped = Command::new("/usr/bin/ditto")
