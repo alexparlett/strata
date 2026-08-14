@@ -531,6 +531,10 @@ fn drop_row(
                 return;
             }
             engine.disconnect(url);
+            // A forget takes a catalog off the session — the discrete catalog mutation
+            // `catalog_settled` is for. Without it, a query naming the forgotten database keeps
+            // whatever verdict it last had, and completion keeps offering names nothing resolves.
+            catalog_settled(catalog);
         }
         DropTarget::Query { id, .. } => {
             let landed = {

@@ -21,9 +21,11 @@
 use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
+use strata_core::engine::quote_ident;
 use strata_model::{CatalogKind, Origin, ProviderId, SavedQuery};
 use uuid::Uuid;
 
+use super::node::Remote;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{
@@ -373,27 +375,115 @@ pub fn query_menu(
         }))
 }
 
-/// **View table / View view** — put `SELECT * FROM <row>` in a tab, ready to run but not run:
-/// the row was clicked to look at the data, and pressing Run is the user's call (a full-width
-/// scan of a big table shouldn't start itself).
+/// The statement every "look at this" gesture puts in a tab: a full read of `target`, where
+/// `target` is a name **already rendered** for interpolation.
 ///
 /// The `LIMIT` is the row-limit setting, as in the Dioxus app; `0` means no limit, so the clause
 /// is dropped rather than written as `LIMIT 0`.
+pub fn select_sql(target: &str, limit: usize) -> String {
+    match limit > 0 {
+        true => format!("SELECT *\nFROM {target}\nLIMIT {limit};"),
+        false => format!("SELECT *\nFROM {target};"),
+    }
+}
+
+/// The statement **Pin as view…** composes (DB-06) — `name` and `target` both already rendered,
+/// and by *different* renderers: the view is a workspace def, so its name is the one the store
+/// will key it under, while the target's spelling is a server's. See
+/// [`quote_ident`](strata_core::engine::quote_ident).
+pub fn pin_view_sql(name: &str, target: &str) -> String {
+    format!("CREATE VIEW {name} AS\nSELECT *\nFROM {target};")
+}
+
+/// Put `sql` in a scratch tab titled `name`, ready to run but not run.
+///
+/// Nothing here runs anything, and that is the shared rule rather than a per-gesture choice: the
+/// row was pressed to look at something, and a full-width scan of a big table shouldn't start
+/// itself. The composing gestures (Pin as view…) are the Shape panel's precedent — a statement
+/// handed over for the user to finish.
+///
+/// **Two gestures on one row need two names**, because [`open_or_focus`] finds a scratch tab by
+/// name *and* text: with one name between them the second gesture never owns it, so its own
+/// repeat press matches nothing and stacks `… 2`, `… 3`, `… 4` — the very thing that funnel
+/// exists to prevent. The name is also a **label**, never a statement, so it is built from plain
+/// segments: an address rendered for SQL carries quotes a tab strip should not show.
+///
+/// [`open_or_focus`]: crate::apps::project::state::SessionState::open_or_focus
+fn open_composed(actions: &CatalogActions, name: &str, sql: String) {
+    let mut session = actions.session;
+    session
+        .write_channel(Chan::Tabs)
+        .open_or_focus(name, sql, Origin::Scratch);
+}
+
+/// **View table / View view** — a full read of a workspace row.
 ///
 /// `pub` because the command palette's TABLES and VIEWS rows are the same gesture as this menu
 /// item — that is what makes the two agree on the generated SQL and its `LIMIT` rather than
 /// happening to.
 pub fn view_row(actions: &CatalogActions, name: &str) {
     let limit = actions.config.peek().settings.row_limit;
-    let sql = if limit > 0 {
-        format!("SELECT *\nFROM {name}\nLIMIT {limit};")
-    } else {
-        format!("SELECT *\nFROM {name};")
+    open_composed(actions, name, select_sql(&quote_ident(name), limit));
+}
+
+/// A **remote relation** row's menu (DB-06): query it · pin it as a workspace view.
+///
+/// Two items and no more. Everything the workspace rows offer beyond these is about a **def** —
+/// Configure edits one, Drop removes one, Refresh re-infers one — and a remote relation has none:
+/// the database answers for itself, and the connection's own row is where its lifecycle lives.
+/// Profile is DB-07's, with a remote expression set and a confirm that says the scan runs on the
+/// server.
+pub fn relation_menu(actions: &CatalogActions, relation: &Remote) -> Menu {
+    let verb = match relation.view {
+        true => "Query view",
+        false => "Query table",
     };
-    let mut session = actions.session;
-    session
-        .write_channel(Chan::Tabs)
-        .open_or_focus(name, sql, Origin::Scratch);
+    Menu::new()
+        .min_width(Size::px(CONTEXT_MENU_WIDTH))
+        .child({
+            let relation = relation.clone();
+            actions.item(IconName::Play, verb, move |a| {
+                query_relation(a, &relation);
+            })
+        })
+        .child({
+            let relation = relation.clone();
+            actions.item(IconName::Eye, "Pin as view…", move |a| {
+                pin_relation(a, &relation);
+            })
+        })
+}
+
+/// **Query table / Query view** — [`view_row`] over a three-part name. Both forms were built by
+/// the walk, so this composes rather than quotes: the label titles the tab, the address goes in
+/// the statement.
+pub fn query_relation(actions: &CatalogActions, relation: &Remote) {
+    let limit = actions.config.peek().settings.row_limit;
+    open_composed(
+        actions,
+        &relation.label,
+        select_sql(&relation.address, limit),
+    );
+}
+
+/// **Pin as view…** — the workstream's "make it a bare-named def" gesture: a `CREATE VIEW` over
+/// the remote relation, in an **unrun** tab for the user to rename and run.
+///
+/// Composing rather than executing is the point. The name is a guess — the relation's own, which
+/// is the only one available and frequently the wrong one in a workspace that already has a table
+/// called `orders` — so the user finishes the statement, and running it lands the def through the
+/// view funnel that already exists (⌘S and typed view DDL are the other two ways into it). A
+/// gesture that created the view itself would have had to invent a name, or refuse.
+///
+/// The tab is titled with the **view being made** rather than the relation being read, which is
+/// what the workspace rows already do and what keeps this gesture's tab apart from Query's on the
+/// same row (see [`open_composed`]).
+pub fn pin_relation(actions: &CatalogActions, relation: &Remote) {
+    open_composed(
+        actions,
+        &relation.name,
+        pin_view_sql(&quote_ident(&relation.name), &relation.address),
+    );
 }
 
 /// **Edit query** — open the view's own SQL in a tab bound to it (`Origin::View`), so ⌘S

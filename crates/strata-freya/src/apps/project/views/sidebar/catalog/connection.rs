@@ -18,12 +18,13 @@
 
 use freya::prelude::*;
 use strata_core::engine::db::{SchemaListingView, SchemaVisibility};
+use strata_core::engine::sql::qualified;
 use strata_core::engine::Engine;
 use strata_model::{CatalogKind, Provider, ProviderId};
 
 use super::matches;
-use super::menu::connection_menu;
-use super::node::{Connection, Node, NodeKind, Open, Place};
+use super::menu::{connection_menu, query_relation, relation_menu};
+use super::node::{Connection, Node, NodeKind, Open, Place, Remote};
 use super::row::{actions_button, fold_plan, name_width, tip, Row, StatusMark};
 use super::view::{body, RowBody, RowCtx};
 use super::workspace::{entry_ancestors, entry_path};
@@ -95,13 +96,19 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
     let listing = (connected && (open.is_open(&path) || filtering))
         .then(|| engine.db_listing(def))
         .flatten();
-    let schemas: Vec<SchemaListingView> = listing
-        .map(|(_, schemas)| schemas)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|s| s.visibility != SchemaVisibility::NotEnabled)
-        .filter(|s| !filtering || survives(s, needle))
-        .collect();
+    // The name relations are addressed by rides with them, because it is the *registered* one and
+    // an unlisted connection has neither: no listing, no schemas, no relation to address.
+    let (registered, schemas): (String, Vec<SchemaListingView>) = match listing {
+        Some((registered, schemas)) => (
+            registered,
+            schemas
+                .into_iter()
+                .filter(|s| s.visibility != SchemaVisibility::NotEnabled)
+                .filter(|s| !filtering || survives(s, needle))
+                .collect(),
+        ),
+        None => (String::new(), Vec::new()),
+    };
 
     let named =
         matches(&def.address, needle) || catalog.as_deref().is_some_and(|c| matches(c, needle));
@@ -170,10 +177,16 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
             out.extend(relations.into_iter().map(|relation| {
                 Node::leaf(
                     3,
-                    NodeKind::Relation {
+                    NodeKind::Relation(Remote {
+                        label: format!("{registered}.{}.{}", schema.name, relation.name),
+                        address: qualified([
+                            registered.as_str(),
+                            schema.name.as_str(),
+                            relation.name.as_str(),
+                        ]),
                         name: relation.name.clone(),
                         view: views,
-                    },
+                    }),
                 )
             }));
         }
@@ -350,20 +363,56 @@ pub fn rel_group_row(at: &Place, views: bool, count: usize, cx: &RowCtx) -> RowB
     )
 }
 
-/// One relation inside a schema.
+/// One relation inside a schema, and the two gestures on it (DB-06).
 ///
-/// A leaf, and the disclosure it does not draw is the honest mark of where DB-05 stops.
-pub fn relation_row(at: &Place, name: &str, view: bool, cx: &RowCtx) -> RowBody {
-    let (icon, color) = match view {
+/// A leaf, and the disclosure it does not draw is the honest mark of where the tree stops: its
+/// columns are an introspection, and the surface that reads them is the inspector DB-07 builds.
+///
+/// **Double-press queries it**, in the one `on_press` handler — a second registration under the
+/// same event name would replace the first, so that is where a double is detected (AGENTS.md §3).
+/// A single *mouse* press deliberately does nothing: the row is a leaf, so there is no disclosure
+/// for it to mean, and a full read of a remote table is not something to start by pointing at it.
+/// The ⋮ carries both gestures, and the right-click opens the same card.
+///
+/// **A press that is not a mouse press is an activation, not a failed double.** Wiring `on_press`
+/// at all is what makes the fork's `TreeItem` a tab stop with the `Link` role and a focus ring —
+/// its own comment is that those "promise an activation no key can perform" — so a keyboard Enter
+/// has to *do* the gesture. There is no double-press to wait for on a keyboard, and every other
+/// pressable row in this tree answers Enter.
+pub fn relation_row(at: &Place, relation: &Remote, cx: &RowCtx) -> RowBody {
+    let actions = cx.catalog.clone();
+    let (icon, color) = match relation.view {
         true => (IconName::Eye, cx.theme.view_color),
         false => (IconName::Database, cx.theme.table_color),
     };
 
+    let build_menu = {
+        let (actions, relation) = (actions.clone(), relation.clone());
+        move || relation_menu(&actions, &relation)
+    };
+    let menu_for_row = build_menu.clone();
+    let queried = relation.clone();
+
     body(
         Row::new(at.depth, cx.theme.clone())
+            .on_press(move |e: Event<PressEventData>| {
+                let activates = match e.data() {
+                    PressEventData::Mouse(m) => {
+                        EventsCombos::pressed(m.global_location).is_double()
+                    }
+                    _ => true,
+                };
+                if activates {
+                    query_relation(&actions, &queried);
+                }
+            })
+            .on_context_menu(move |_: Event<PressEventData>| {
+                ContextMenu::open(menu_for_row());
+            })
+            .trailing(actions_button(build_menu))
             .child(Icon::new(icon).color(color).size(14.))
             .child(
-                MonoValue::new(name.to_string())
+                MonoValue::new(relation.name.clone())
                     .color(cx.theme.name_color)
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),

@@ -128,7 +128,7 @@ use query::{
     claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
     ReadPolicy,
 };
-use sql::{FunctionCatalog, PreparedSym};
+use sql::{DatabaseSym, FunctionCatalog, PreparedSym, RelationSym, SchemaSym};
 use strata_model::{
     Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, PgPassword, Provider, QueryOutput,
     SnapshotId, TabId, Trend,
@@ -1443,6 +1443,59 @@ impl Engine {
         db::listing(&self.databases, conn, pg)
     }
 
+    /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
+    /// connection (DB-06), its schemas and relations from [`db_listing`](Self::db_listing).
+    ///
+    /// Built here rather than in the editor because both halves are read the way the rest of the
+    /// engine reads them: the catalog name off the def, so a connection that has never answered
+    /// still offers the name a query has to say, and the schemas off the connect-time
+    /// enumeration, already scoped. Only a `Live` schema is offered — one the def enables and the
+    /// server does not have is a name that cannot resolve, and the tree already says so on its
+    /// own row; a schema the connection does not show arrives here empty
+    /// ([`SchemaListingView::relations`](db::SchemaListingView::relations)), so this walk clones
+    /// what it offers rather than the whole database.
+    ///
+    /// Free and synchronous, like the listing it reads: it is what lets the completion snapshot
+    /// carry remote names without the popup ever reaching the network.
+    pub fn database_syms<'a>(
+        &self,
+        defs: impl IntoIterator<Item = &'a ConnectionDef>,
+    ) -> Vec<DatabaseSym> {
+        defs.into_iter()
+            .filter_map(|def| {
+                let Provider::Postgres(pg) = &def.provider else {
+                    return None;
+                };
+                let name = pg.catalog.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                let schemas = self
+                    .db_listing(def)
+                    .map(|(_, schemas)| schemas)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|s| s.visibility == db::SchemaVisibility::Live)
+                    .map(|s| SchemaSym {
+                        name: s.name,
+                        relations: s
+                            .relations
+                            .into_iter()
+                            .map(|r| RelationSym {
+                                view: r.is_view(),
+                                name: r.name,
+                            })
+                            .collect(),
+                    })
+                    .collect();
+                Some(DatabaseSym {
+                    name: name.to_string(),
+                    schemas,
+                })
+            })
+            .collect()
+    }
+
     /// The catalogs database connections have registered, in the spelling they were registered
     /// under — the workspace's own excluded, since it is not one.
     ///
@@ -1829,8 +1882,11 @@ pub fn fold_ident(name: &str) -> String {
 /// same identity the unquoted spelling had.
 ///
 /// The reserved-word authority is [`sql::lex::is_reserved_in_name_position`], the same one
-/// completion's quoting uses.
-pub(crate) fn quote_ident(name: &str) -> String {
+/// completion's quoting uses — but the two renderers are **not** interchangeable, and
+/// [`sql::quote_verbatim`] states the difference: that one preserves the spelling, for a name
+/// whose identity belongs to a server. `pub` because a surface composing a statement about a
+/// *workspace* def has to say the name that def will be keyed under (DB-06's Pin as view).
+pub fn quote_ident(name: &str) -> String {
     let id = fold_ident(name);
     let mut rest = id.chars();
     let bare = matches!(rest.next(), Some(c) if c.is_ascii_lowercase() || c == '_')

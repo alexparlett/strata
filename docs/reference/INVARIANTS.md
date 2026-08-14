@@ -1359,6 +1359,23 @@ Things that must not regress. Each was fought for once already.
   `create_view` / `drop_view`, which never produce an effect. Replay needs no code of its own — a
   typed view is a `ViewDef`, and `register_pass`'s fixed point orders a chain from cold exactly as
   it does a saved one. Spec: [STATEMENTS_SPEC.md](../STATEMENTS_SPEC.md) §6.3.
+- **A name is rendered into a statement by one of two renderers, and which one is decided by
+  whose identity the name is.** `engine::quote_ident` is **fold-preserving**: it renders a name
+  so DataFusion resolves it to `fold_ident(name)`, which is the identity a workspace def has
+  actually been registered under — so it lower-cases `DailySales` on purpose, and a name that
+  already worked keeps its exact old identity. `sql::quote_verbatim` is **case-preserving**: the
+  name survives the parser exactly as spelled, which is what a relation whose spelling belongs to
+  a *server* needs, and `sql::qualified` renders a dotted name **segment by segment** through it
+  (quoting `pg.public.orders` whole would make it a bare relation with dots in it). The two are
+  not interchangeable and the wrong one is silently wrong in opposite directions: the folding one
+  over a remote `"Orders"` asks the server for a relation it may not have, and the preserving one
+  over a workspace def re-keys a def every sibling addresses by its folded name.
+  `export::quote_col`, which quotes unconditionally, is a third rule for a third reason (a
+  projection list, where nothing has to resolve back to a stored identity). The pair lives in
+  `sql::ident` — it is the completion insert's own rule, lifted out of it at DB-06 so the
+  data-sources tree's gestures compose their `FROM` through the same function rather than a
+  fourth spelling of it; DB-06's own Pin as view uses **both**, one per name in its
+  `CREATE VIEW`, which is the clearest statement of the rule there is.
 - **A typed `COPY` is DataFusion's own write behind the two checks the Export window used to
   stand in for, and the Export window is unchanged.** The write is not ours and never becomes
   ours: `ddl::copy::copy_to` plans the statement once, gates that plan, and drives it — no text is

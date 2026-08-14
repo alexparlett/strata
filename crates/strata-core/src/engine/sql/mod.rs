@@ -4,6 +4,7 @@
 //! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds), under the engine's
 //!   configured `datafusion.sql_parser.dialect`.
 //! - [`context`] — split statements + classify the caret's clause context.
+//! - [`ident`] — writing a name back **into** a statement, case-preserving.
 //! - [`symbols`] — the [`Catalog`] and in-statement alias resolution.
 //! - [`validate`] — the full diagnostics pass: lexical lints, the statement router, the native
 //!   name [`resolve`]r, and the engine **dry-plan**. Byte-spanned for squiggles.
@@ -17,13 +18,15 @@
 pub mod complete;
 pub mod context;
 mod fuzzy;
+pub mod ident;
 pub mod lex;
 mod resolve;
 pub mod symbols;
 pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
-pub use symbols::{Catalog, PreparedSym};
+pub use ident::{needs_quoting, qualified, quote_verbatim};
+pub use symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym};
 pub use validate::{
     classify, classify_one, policy_verdicts, read_policy, validate, Blocked, Capability,
     PolicyRefusal, StmtKind, Verdict,

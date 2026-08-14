@@ -104,7 +104,8 @@ impl Component for EditorTab {
                     engine.functions(),
                     engine.prepared(),
                     dialect,
-                );
+                )
+                .with_databases(engine.database_syms(p.connections.iter().map(|c| &c.def)));
             });
         }
         let on_completions = move |req: CompletionRequest| {

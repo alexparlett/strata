@@ -12,7 +12,7 @@ former's own README.
 Eight tasks. DB-01 is the low-risk groundwork; DB-02 is the mechanism and carries the
 integration test; DB-03, DB-04 and DB-08 sit on DB-02 independently; DB-05 — the catalog
 redesign — sits on DB-02 + DB-04; DB-06 (gestures + completion) and DB-07 (inspector +
-profiling) sit on the tree.
+profiling) sit on the tree. **01–06 are in**; DB-07, DB-08 and DB-09 are open.
 
 ## Decisions already made (do not re-litigate; the reasoning is recorded here)
 
@@ -125,6 +125,24 @@ profiling) sit on the tree.
   and their failure states stay `ProjectState` rows, remote listings stay discovery reads off
   the engine's caches — the redesign changes what the pane paints, not what holds the data,
   so "never a `FetchCatalog`" survives intact.
+- **A remote relation is a place work starts, and both gestures compose into an unrun tab**
+  (built, DB-06 ✅). *Query table / Query view* is `view_row`'s own funnel over a three-part
+  name, and *Pin as view…* is the workstream's "make it a bare-named def" gesture — composed,
+  never executed, because the view's name is a guess and running the statement lands the def
+  through the view funnel that already exists. The menu carries those two and nothing else:
+  everything else a workspace row offers is about a **def**, and a remote relation has none.
+  Two renderers, picked by whose identity a name is: `sql::qualified`/`quote_verbatim`
+  (case-preserving, for the server's spelling) and `engine::quote_ident` (fold-preserving, for
+  the workspace def the view will become).
+- **Completion offers a database's names segment by segment, and the listing needs no warming**
+  (built, DB-06 ✅ — this **overturns** the interior-swappable handle DB-06's plan called for).
+  The catalog name comes from the def (so a connection that has never answered still offers the
+  name a query has to say), the schemas and relations from `db_listing`. There is no warming
+  step because DB-02 enumerates a whole database in one round trip at connect: a listing moves
+  only at connect and disconnect, both catalog-epoch events, so the ordinary snapshot rebuild
+  already sees it. A third segment offers nothing — a remote relation's column list is an
+  introspection, and the completion path does no I/O. The *workspace* catalog is deliberately
+  not offered as a qualifier: bare names are how every surface addresses it.
 - **Schema visibility is a per-connection choice on the def, and it scopes display, never
   resolution.** `PgStore.schemas` (enabled schemas, default `public`) is committed
   configuration — DataGrip's "N of M schemas" model. The tree and completion show enabled
@@ -241,7 +259,7 @@ profiling) sit on the tree.
 | DB-03 | Statement policy over remote catalogs | ✅ | DB-02 |
 | DB-04 | The connection editor's Postgres form | ✅ | DB-02 |
 | DB-05 | The data-sources tree: the catalog pane redesigned | ✅ | DB-02, DB-04 |
-| DB-06 | Gestures + completion over the tree | ⬜ | DB-05 |
+| DB-06 | Gestures + completion over the tree | ✅ | DB-05 |
 | DB-07 | Column inspector + profiling for remote tables | ⬜ | DB-05 |
 | DB-08 | JSON accessors over remote columns: the pushdown rewrite | ⬜ | DB-02 |
 | DB-09 | A current database, so unqualified names resolve | ⬜ | DB-02 |
@@ -253,5 +271,5 @@ DB-02 — `docs/CONNECTIONS_SPEC.md` (database section), `docs/reference/ENGINE.
 `docs/reference/INVARIANTS.md` + AGENTS.md §2 (no-secrets and the one-catalog scoping),
 `docs/ARCHITECTURE.md`, `docs/README.md`'s CONNECTIONS_SPEC index row; DB-03 —
 `docs/STATEMENTS_SPEC.md`; DB-05 — CONNECTIONS_SPEC's pane section,
-`docs/reference/{MODULE_MAP, FREYA_UI, INVARIANTS}.md`; DB-06 — `docs/COMPLETION_SPEC.md`;
-DB-07 — INVARIANTS' profiling entry.
+`docs/reference/{MODULE_MAP, FREYA_UI, INVARIANTS}.md`; DB-06 — `docs/COMPLETION_SPEC.md`
+plus CONNECTIONS_SPEC's gestures and completion sections; DB-07 — INVARIANTS' profiling entry.
