@@ -42,6 +42,18 @@ pub const MCP_PATH: &str = "/mcp";
 /// The auth scheme, lowercased for the case-insensitive compare RFC 7235 asks for.
 const BEARER: &str = "bearer ";
 
+/// How often [`sweep`] looks, **derived from the window it enforces**.
+///
+/// A sweep can only retract on a tick, so the interval is what turns [`STATELESS_IDLE`] into
+/// the bound the tool description and the system prompt state: half the window puts retraction
+/// between one and one and a half idle windows after the last call. Named rather than written
+/// into the `interval` call so it cannot be pinned to a number while the window moves.
+///
+/// `checked_div` rather than `/`, which is not `const` — and rather than halving `as_secs`,
+/// which would truncate a sub-second window to a zero interval, the one period
+/// [`tokio::time::interval`] panics on.
+pub const SWEEP_INTERVAL: Duration = STATELESS_IDLE.checked_div(2).expect("2 is not zero");
+
 /// Mint a bearer token for [`AgentServer::start`].
 ///
 /// Here rather than beside the setting it is stored in, because the rule it has to satisfy is
@@ -161,10 +173,10 @@ impl Drop for AgentServer {
 /// half of that rule: the timer is not a standing cost of the app, it is a cost of having the
 /// feature on.
 ///
-/// Swept at half the idle window, so an agent is retracted between one and one and a half
+/// Swept at [`SWEEP_INTERVAL`], so an agent is retracted between one and one and a half
 /// [`STATELESS_IDLE`]s after its last call rather than up to two.
 async fn sweep<H: Host>(tools: StrataTools<H>, cancel: CancellationToken) {
-    let mut ticks = tokio::time::interval(STATELESS_IDLE / 2);
+    let mut ticks = tokio::time::interval(SWEEP_INTERVAL);
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
@@ -283,6 +295,23 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, HeaderValue::from_str(value).unwrap());
         headers
+    }
+
+    /// **The sweep looks often enough for the stated bound to be true.** `retire_idle` can only
+    /// act on a tick, so a client is retracted up to one interval *after* its window closes —
+    /// which is the difference between the 30 minutes the tool description and the system
+    /// prompt state and a client kept for an hour because somebody left the interval at a
+    /// literal while the window moved.
+    #[test]
+    fn the_sweep_ticks_inside_the_idle_window() {
+        assert!(
+            !SWEEP_INTERVAL.is_zero(),
+            "a zero interval is a busy loop, not a sweep"
+        );
+        assert!(
+            SWEEP_INTERVAL <= STATELESS_IDLE / 2,
+            "retraction lands within one and a half idle windows"
+        );
     }
 
     #[test]

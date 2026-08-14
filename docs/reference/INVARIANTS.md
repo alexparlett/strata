@@ -577,10 +577,18 @@ Things that must not regress. Each was fought for once already.
   display. The **project-scoped** tools keep working; the line is whether a tool must know whose
   agent is asking, not `read_only_hint` (which `list_query_sessions` and `read_page` both carry,
   and both are refused). Retraction follows the same split: RAII where there
-  is a connection, and an idle sweep (`retire_idle`, matched to rmcp's own `keep_alive`) where
+  is a connection, and an idle sweep (`retire_idle`, `STATELESS_IDLE` = 30 minutes) where
   there is not — skipping any agent with a call in flight, because retiring one mid-run aborts
   its own query and reports that back as "you stopped this", and running a final sweep from
-  `AgentServer::drop`, because `shutdown_background` never polls the sweep task again.
+  `AgentServer::drop`, because `shutdown_background` never polls the sweep task again. That
+  window is **not** parity with rmcp's `keep_alive`, though it was for its first five minutes:
+  `keep_alive` times out a *session worker*, which is the branch retracted by a `Drop` anyway,
+  while a stateless request holds no rmcp state between calls at all — so this sweep is the
+  only bound there and has nothing to agree with. Five minutes measured thinking time between
+  calls and retired sessions out from under clients reasoning over a large result;
+  `open_query_session`'s description, the assistant's system prompt and
+  `docs/AGENT_ACCESS_SPEC.md` state the 30 as a ceiling ("may be retired"), because one text
+  reaches connected callers too.
 
   *Teardown.* MCP permits concurrent requests on one connection and the dispatch is the
   caller's, so a `close_query_session` can land between a run's `RunStarting` and its

@@ -329,9 +329,18 @@ Teardown follows the same honesty:
 - A connection's drop retracts its agent everywhere: every window's driver drops the agent's
   rows and retires each of its sessions' engine workspaces.
 - Stateless agents, having no connection to key on, are retired by an **idle sweep**
-  (5 minutes, matching rmcp's own session keep-alive). The sweep skips a busy agent — a run
-  can sit on the engine for minutes, and a timer must not cancel an agent's own query — and
-  runs once more when the server itself is dropped, so nothing leaks on shutdown.
+  (30 minutes, swept at half that so retraction lands within one and a half windows). The
+  sweep skips a busy agent — a run can sit on the engine for minutes, and a timer must not
+  cancel an agent's own query — and runs once more when the server itself is dropped, so
+  nothing leaks on shutdown. The window measures the gap *between* calls, because the busy
+  guard re-stamps an agent when its call finishes; five minutes was rmcp's
+  `SessionConfig::keep_alive`, which governs the session lifecycle this sweep does not serve,
+  and it retired sessions out from under clients that were merely reasoning about a large
+  result. Nothing on rmcp's side holds state for a stateless caller between requests, so this
+  is the only bound there, and what it bounds is capped anyway by the remembered-run and
+  per-agent session caps. `open_query_session`'s description and the assistant's system prompt
+  state the same figure, as a ceiling ("may be retired") — a connected client's sessions live
+  until its connection drops, and one text reaches both.
 - A close racing a dispatch is a **tombstone**: the handle stops answering immediately and
   the engine is aborted immediately (a runaway scan must not burn to completion with no
   handle left to stop it), but the internal row waits for the last settle to sweep it, so a

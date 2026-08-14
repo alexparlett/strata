@@ -1,6 +1,6 @@
 # QE-04 · Agent query-session lifetime
 
-**Workstream:** Query ergonomics · **Status:** ⬜ · **Depends on:** nothing
+**Workstream:** Query ergonomics · **Status:** ✅ (built 2026-08-14) · **Depends on:** nothing
 
 ## Goal
 
@@ -71,3 +71,37 @@ about it — revisit only if the symptom recurs after the TTL change).
 `crates/strata-agent/src/server.rs` (comment only, the interval derives) ·
 `crates/strata-agent/src/assistant/system.md` · `docs/AGENT_ACCESS_SPEC.md` · tests in
 `tools.rs`.
+
+## As built (2026-08-14)
+
+The plan held. Three things it did not say are settled here, one of them a correction to its
+own step 2.
+
+- **rmcp's `keep_alive` never governed this branch, so the parity the old value claimed was
+  with the wrong thing** — the finding step 1 asked for. `SessionConfig::keep_alive`
+  (`transport/streamable_http_server/session/local.rs:1107`, default 300s) times out a
+  `LocalSessionWorker` whose event channel has gone quiet, on the **session** lifecycle —
+  exactly the clients Strata already retracts by `Drop`. The stateless branch has no session
+  manager and no `SessionConfig` at all: `get_service()` per request, the value dropped when
+  the response is written, nothing held between calls. So rmcp expires nothing at five minutes
+  for a stateless caller, `STATELESS_IDLE` is the only bound there, and raising it puts the two
+  mechanisms no further out of step than they already were — they are disjoint.
+- **The bound is stated as a ceiling, "may be retired", because one text reaches every
+  caller.** Step 2 asked for "sessions idle out after 30 minutes" in the tool description and
+  `system.md`, and neither audience is only the stateless one: the description reaches every
+  MCP client through `tools/list` *and* the in-app assistant through `manifest()`, and the
+  in-app assistant is `Caller::Owned` — its agent is `connection.agent`, never in the
+  `Roster` the sweep walks, so it idles out never. A flat "sessions idle out after 30 minutes"
+  would be false for it and for stdio. "May be retired" is true on both branches, is the same
+  figure, and is the same planning advice; the recovery line is `list_query_sessions` as
+  planned.
+- **The agreement between the constant and the prose is checked rather than generated.** A
+  `#[tool]` description is a doc comment, so it cannot interpolate a `Duration` — the honest
+  form of "derive the prose from the constant where the harness allows" is a test
+  (`the_stated_idle_bound_is_the_constant`) asserting that the router's own
+  `open_query_session` description and `assistant::SYSTEM` both name `STATELESS_IDLE` in
+  minutes. The spec is the third surface and stays prose the same edit carries. The interval is
+  now a named `server::SWEEP_INTERVAL` derived from the window, with
+  `the_sweep_ticks_inside_the_idle_window` holding the relationship the "one and a half idle
+  windows" claim rests on — the assertion step 3 asked for, and one that only bites if somebody
+  later pins the interval to a literal.
