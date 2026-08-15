@@ -446,7 +446,7 @@ mod tests {
     use super::*;
 
     /// A scratch project folder of our own, per test — `tag` is load-bearing for the reason
-    /// `strata-core`'s own helper says: these run concurrently in one process and DataFusion
+    /// `strata-engine`'s own helper says: these run concurrently in one process and DataFusion
     /// re-LISTs a table's sources at scan time.
     fn scratch(tag: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!("strata_headless_{}_{tag}", process::id()));

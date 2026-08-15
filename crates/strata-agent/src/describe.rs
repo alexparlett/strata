@@ -18,8 +18,8 @@
 //! The constants are this module's own rather than the value encoder's: same discipline, different
 //! budgets, and a shared constant would couple two surfaces that tune independently.
 //!
-//! In `strata-agent` rather than `strata-core` because its output is [`ColumnWire`], a wire shape
-//! core must not know; beside `wire.rs` rather than in it because the walk plus the search plus the
+//! In `strata-agent` rather than `strata-engine` because its output is [`ColumnWire`], a wire
+//! shape the engine must not know; beside `wire.rs` rather than in it because the walk plus the search plus the
 //! budget loop is an algorithm with its own tests.
 
 use std::cmp::Reverse;

@@ -1,7 +1,7 @@
 //! **End-to-end: what the window is showing → what lands on disk.**
 //!
 //! The other two suites each cover half of this. `model`'s tests stop at the [`ExportSpec`],
-//! and `strata-core`'s `engine_export.rs` starts from one. Neither would catch the half that
+//! and `strata-engine`'s `engine_export.rs` starts from one. Neither would catch the half that
 //! actually breaks in use: a draft that *looks* right producing a spec that writes the wrong
 //! file — a delimiter that never reaches the writer, a scope that ignores the sort, a
 //! partition toggle that doesn't gate.

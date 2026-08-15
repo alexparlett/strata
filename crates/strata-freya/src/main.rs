@@ -1,4 +1,5 @@
-//! Strata — the Freya (Skia / native) frontend, over the shared `strata-core`.
+//! Strata — the Freya (Skia / native) frontend, over the shared core crates (`strata-core`
+//! for app services, `strata-engine` for the DataFusion boundary).
 //!
 //! `apps/<window>/` holds one self-contained OS window each, `platform/` the window model that
 //! spawns and focuses between them. Top-level `state/` (global singletons), `components/` (design

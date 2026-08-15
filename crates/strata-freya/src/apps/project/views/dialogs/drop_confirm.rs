@@ -1436,7 +1436,7 @@ mod tests {
 
     /// **Confirming an internal table's drop deletes its data** — the half of ED-05's parity
     /// only this surface can show, the other half (that the typed statement and
-    /// `Engine::drop_table` leave the same state) being pinned in `strata-core`.
+    /// `Engine::drop_table` leave the same state) being pinned in `strata-engine`.
     ///
     /// Before ED-05 this arm called `Engine::deregister`, which forgets the provider and nothing
     /// else. On an internal table that orphans `.strata/tables/<slug>/` forever: no def points at

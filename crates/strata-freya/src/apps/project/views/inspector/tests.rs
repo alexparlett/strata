@@ -83,7 +83,7 @@ fn table(name: &str, format: &str) -> TableDef {
 const SCAN_TABLE: &str = "regions";
 const SCAN_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../strata-core/tests/fixtures/loadfix/regions.csv"
+    "/../strata-engine/tests/fixtures/loadfix/regions.csv"
 );
 
 /// `events` is Parquet with footer facts and a nested struct; `uploads` is CSV, which reports

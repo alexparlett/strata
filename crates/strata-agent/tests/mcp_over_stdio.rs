@@ -26,7 +26,7 @@ use strata_core::project::{save_defs, ProjectDefs};
 use strata_model::{SourceFormat, TableDef, TableOrigin, ViewDef};
 
 /// A project folder holding one good table, one whose source is missing, and a view over the
-/// good one. `tag` is per test for the reason `strata-core`'s own `scratch` helper takes one:
+/// good one. `tag` is per test for the reason `strata-engine`'s own `scratch` helper takes one:
 /// these run concurrently in one process and DataFusion re-LISTs a table's sources at scan
 /// time, so a shared folder would let one test delete another's data mid-query.
 fn project(tag: &str) -> PathBuf {

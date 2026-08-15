@@ -201,7 +201,7 @@ mod tests {
         block_on(engine.register(TableSpec {
             name: "regions".into(),
             paths: vec![format!(
-                "{}/../strata-core/tests/fixtures/loadfix/regions.csv",
+                "{}/../strata-engine/tests/fixtures/loadfix/regions.csv",
                 env!("CARGO_MANIFEST_DIR")
             )],
             format: SourceFormat::from_name("csv"),

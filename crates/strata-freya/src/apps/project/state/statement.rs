@@ -187,7 +187,7 @@ fn mutated(to: Settle, chan: ProjChan, write: impl FnOnce(&mut ProjectState)) ->
 ///
 /// Driven over a **real** engine and a real project folder, because that round trip is the whole
 /// deliverable: every link either side of it is unit-tested (`Engine::table_meta` in
-/// `strata-core`, `ProjectState::table_reread` next door), and what nothing else covers is that
+/// `strata-engine`, `ProjectState::table_reread` next door), and what nothing else covers is that
 /// the arm dispatches at all and its spawned task lands.
 #[cfg(test)]
 mod tests {

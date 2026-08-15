@@ -419,7 +419,7 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 /// row's Refresh ([`refresh_table`]) — a re-scan *is* a re-registration, so there is one
 /// implementation of "make the engine match the defs", not several that can drift. The
 /// three differ only in the work list they hand in. The engine-facing half — connections
-/// first, then tables, then views by fixed-point rounds — is `strata-core`'s
+/// first, then tables, then views by fixed-point rounds — is `strata-engine`'s
 /// [`register_pass`] (AA-01, so a headless host runs the same sequence); this keeps what is
 /// genuinely the store's: `Reg<T>` rows and log entries, folded per outcome as each settles.
 ///

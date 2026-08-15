@@ -1,4 +1,4 @@
-//! The engine bridge: spawn the shared `strata-core` [`Engine`] and expose it to the
+//! The engine bridge: spawn the shared `strata-engine` [`Engine`] and expose it to the
 //! Freya UI as a cloneable [`EngineCtx`] — the window's one engine handle, held in
 //! context. The engine is a **direct-call async facade** (it owns its own Tokio runtime
 //! internally), so freya-query capabilities simply await its methods — no protocol, no
