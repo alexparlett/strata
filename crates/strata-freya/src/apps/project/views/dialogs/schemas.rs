@@ -1,10 +1,18 @@
 //! The database connection's **Schemas…** picker (DB-05) — which of a connection's schemas the
 //! tree, the inspector and completion show.
 //!
-//! **Display only**, and that is what makes this dialog legitimate at all. Registration exposes
+//! **No reconnect**, and that is what makes this dialog legitimate at all. Registration exposes
 //! every schema the connection can reach; [`PgStore::schemas`] scopes what Strata *shows*, so a
-//! change here needs no reconnect, invalidates no plan and cannot break a query that already
-//! names a schema this list leaves out.
+//! change here rebuilds no pool, invalidates no plan and cannot break a query that already names
+//! a schema this list leaves out.
+//!
+//! It is **not** display only, and has not been since DB-09: an unqualified name searches the
+//! schemas a connection shows, so this press moves what `orders` means. Two things follow, and
+//! both are Apply's ([`apply`]) — the session is told
+//! ([`Engine::show_schemas`](strata_engine::Engine::show_schemas)), and the **catalog epoch** is
+//! bumped, because diagnostics are a reconciliation against that epoch and completion's snapshot
+//! is keyed on it. Without the bump the tree redraws while every open tab keeps the verdict it
+//! had, and the popup goes on offering names that have stopped resolving.
 //!
 //! Which is also why the write is **not** `upsert_connection`: that replaces the row with a fresh
 //! `Reg::Loading`, and nothing would answer it short of a whole-catalog re-scan — a permanent
@@ -25,7 +33,10 @@ use strata_engine::db::SchemaVisibility;
 use strata_model::{ConnectionDef, PgStore, Provider};
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{persisted_defs, use_report, ProjChan, ProjectState, ReportCtx};
+use crate::apps::project::state::{
+    catalog_settled, persisted_defs, use_catalog, use_report, Catalog, ProjChan, ProjectState,
+    ReportCtx,
+};
 use crate::components::dialog::{CheckboxRow, Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{SP_2, SP_4};
@@ -77,21 +88,36 @@ fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &PgStore) -> (Vec<Offer>,
     (offers, true)
 }
 
-/// Write `schemas` onto the connection's def and persist — the whole of what Apply does.
+/// Write `schemas` onto the connection's def, tell the session, persist, and bump the catalog
+/// epoch — the whole of what Apply does.
+///
+/// Both of the last two are because this press moves what an unqualified name resolves to: the
+/// session learns the new set without a reconnect (`Engine::show_schemas`), and the surfaces that
+/// answer about names re-derive on the epoch and nothing else — every tab's diagnostics through
+/// `stale_tabs`, and the completion snapshot through its key. The discrete catalog mutation
+/// [`catalog_settled`] exists for, exactly as a Forget is.
 fn apply(
     project: RadioStation<ProjectState, ProjChan>,
+    engine: &EngineCtx,
+    catalog: Catalog,
     report: ReportCtx,
     url: &str,
     schemas: Vec<String>,
 ) {
     let mut project = project;
-    let mut p = project.write_channel(ProjChan::Connections);
-    p.update_connection_def(url, |def| {
-        if let Provider::Postgres(pg) = &mut def.provider {
-            pg.schemas = schemas;
+    {
+        let mut p = project.write_channel(ProjChan::Connections);
+        p.update_connection_def(url, |def| {
+            if let Provider::Postgres(pg) = &mut def.provider {
+                pg.schemas = schemas;
+            }
+        });
+        if let Some(row) = p.connections.iter().find(|c| c.def.url() == url) {
+            engine.show_schemas(&row.def);
         }
-    });
-    persisted_defs(&p, report);
+        persisted_defs(&p, report);
+    }
+    catalog_settled(catalog);
 }
 
 /// Mounted at the window root beside the other dialogs, on the same terms: while open, its key
@@ -113,6 +139,7 @@ impl Component for SchemasPicker {
         let mut slot = self.target;
         let url = slot.read().clone();
         let engine = use_consume::<EngineCtx>();
+        let catalog = use_catalog();
         let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let report = use_report();
@@ -200,6 +227,8 @@ impl Component for SchemasPicker {
             let mut slot = slot;
             apply(
                 project,
+                &engine,
+                catalog,
                 report,
                 &url,
                 draft.peek().iter().cloned().collect(),
@@ -238,5 +267,136 @@ impl Component for SchemasPicker {
                     .child(Control::new("Apply")),
             )
             .into_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use freya::radio::RadioStation;
+    use freya_testing::TestingRunner;
+    use strata_core::project::ProjectDefs;
+    use strata_core::theme::load;
+    use strata_model::{PgPassword, PgSslMode};
+
+    use super::*;
+    use crate::apps::project::state::{CatalogState, Log, PersistFaults};
+    use crate::theme::strata_theme;
+
+    fn temp_root() -> PathBuf {
+        std::env::temp_dir().join(format!("strata-schemas-{}", std::process::id()))
+    }
+
+    /// One database connection showing both of its schemas.
+    fn connection() -> ConnectionDef {
+        ConnectionDef {
+            address: "db.internal:5432/analytics".into(),
+            provider: Provider::Postgres(PgStore {
+                catalog: "pg".into(),
+                user: "reader".into(),
+                sslmode: PgSslMode::Disable,
+                sslrootcert: String::new(),
+                password: PgPassword::None,
+                schemas: vec!["public".into(), "analytics".into()],
+            }),
+            client_config: Default::default(),
+        }
+    }
+
+    fn app() -> impl IntoElement {
+        use_init_theme(|| strata_theme(&load("midnight")));
+        let target = use_consume::<SchemasRequest>();
+        rect().expanded().child(SchemasPicker { target })
+    }
+
+    type Handles = (
+        SchemasRequest,
+        RadioStation<ProjectState, ProjChan>,
+        Catalog,
+    );
+
+    fn runner() -> (TestingRunner, Handles) {
+        let root = temp_root();
+        let conn = connection();
+        TestingRunner::new(
+            app,
+            (900., 700.).into(),
+            move |r| {
+                r.provide_root_context(EngineCtx::default);
+                let catalog = r.provide_root_context(|| State::create(CatalogState::Settled(7)));
+                let target = r.provide_root_context(|| State::create(None::<String>));
+                let project = r.provide_root_context(|| {
+                    let defs = ProjectDefs {
+                        name: "test".into(),
+                        connections: vec![conn.clone()],
+                        ..ProjectDefs::default()
+                    };
+                    RadioStation::<ProjectState, ProjChan>::create(ProjectState::from_defs(
+                        defs,
+                        root.clone(),
+                    ))
+                });
+                r.provide_root_context(|| State::create(Log::default()));
+                r.provide_root_context(|| State::create(PersistFaults::default()));
+                (target, project, catalog)
+            },
+            1.,
+        )
+    }
+
+    fn texts(runner: &TestingRunner) -> Vec<String> {
+        runner.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
+    }
+
+    fn click_text(runner: &mut TestingRunner, text: &str) {
+        let area = runner
+            .find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|l| l.text == text)
+                    .map(|_| node.layout().area)
+            })
+            .into_iter()
+            .max_by(|a, b| a.min_y().total_cmp(&b.min_y()))
+            .unwrap_or_else(|| panic!("no text run {text:?} in the tree: {:?}", texts(runner)));
+        let point = (
+            (area.min_x() + area.width() / 2.) as f64,
+            (area.min_y() + area.height() / 2.) as f64,
+        );
+        runner.move_cursor(point);
+        runner.click_cursor(point);
+        runner.sync_and_update();
+        runner.sync_and_update();
+    }
+
+    /// **Applying bumps the catalog epoch** (DB-09) — without it the tree redraws while every
+    /// open tab keeps squiggling against the schemas that were shown a moment ago.
+    #[test]
+    fn applying_a_schema_change_bumps_the_catalog_epoch() {
+        let (mut runner, (mut target, project, catalog)) = runner();
+        runner.sync_and_update();
+        target.set(Some(connection().url()));
+        runner.sync_and_update();
+        runner.sync_and_update();
+
+        click_text(&mut runner, "analytics");
+        click_text(&mut runner, "Apply");
+
+        assert_eq!(
+            project.peek().connections[0].def.provider.clone(),
+            Provider::Postgres(PgStore {
+                schemas: vec!["public".into()],
+                ..match connection().provider {
+                    Provider::Postgres(pg) => pg,
+                    _ => unreachable!(),
+                }
+            }),
+            "the def keeps only the schemas still ticked"
+        );
+        assert_eq!(
+            catalog.peek().epoch(),
+            Some(8),
+            "and the epoch moved, so the surfaces that answer about names re-derive"
+        );
     }
 }

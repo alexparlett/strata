@@ -6,29 +6,28 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::*;
+use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::plan::{
     fmt_ms, self_time_ms, split_name_detail, Metric, MetricKind, PlanKind, PlanNode, QueryPlan,
 };
+use crate::query::{plan_statement, ReadPolicy};
 
 /// Build a structured [`QueryPlan`] for an `EXPLAIN [ANALYZE]` statement by
 /// walking DataFusion's own typed plans — **no plan-text parsing**.
+///
+/// Given the statement rather than the text, under the read path's own [`ReadPolicy`]: an
+/// EXPLAIN's bare names are resolved by the same pass a Run's are
+/// ([`parse_one`](crate::sql::parse_one)), or the plan pane would answer about a query the editor
+/// cannot run.
 ///
 /// We plan the EXPLAIN, unwrap the `Explain`/`Analyze` wrapper to the real inner
 /// `LogicalPlan`, re-plan it to a physical `ExecutionPlan`, and (for ANALYZE)
 /// execute it so each operator's live `MetricsSet` is populated. Then we walk the
 /// logical and physical trees into `PlanNode`s, reading each node's name,
 /// one-line detail, and metrics directly from the DataFusion types.
-pub async fn run_explain(ctx: &SessionContext, sql: &str) -> Result<QueryPlan, String> {
-    let opts = SQLOptions::new()
-        .with_allow_dml(false)
-        .with_allow_ddl(false)
-        .with_allow_statements(false);
-
-    let df = ctx
-        .sql_with_options(sql, opts)
-        .await
-        .map_err(|e| e.to_string())?;
+pub async fn run_explain(ctx: &SessionContext, stmt: DFStatement) -> Result<QueryPlan, String> {
+    let df = plan_statement(ctx, stmt, ReadPolicy::ReadOnly).await?;
 
     let (inner, analyze) = match df.logical_plan() {
         LogicalPlan::Explain(e) => (e.plan.as_ref(), false),

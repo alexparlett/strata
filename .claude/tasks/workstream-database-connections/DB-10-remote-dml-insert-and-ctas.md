@@ -47,6 +47,29 @@ DataFusion can *plan* go here; statements only the server can run go there.
   `PostgresTableFactory` per connection, providers cached per relation. The listing is the
   **connect-time enumeration**, shared as `Arc<Listing>` with the catalog provider — today nothing
   ever replaces it short of a re-connect.
+- **DB-09 left a placeholder refusal for this task to turn into a rewrite** (decided by Alex,
+  2026-08-15). A *bare* `INSERT` target that only a database connection has is refused today by
+  `sql::qualify` (`sql/qualify.rs`, `Pass::write_target`) with `ddl::in_database`'s own sentence,
+  before the statement plans — because with no remote write path at all, "table
+  'strata.public.orders' not found" reads as a contradiction after `SELECT * FROM orders` works.
+  **That refusal is not the rule; it is what the rule looks like while writing is impossible.**
+  The rule is that **a write target resolves exactly as a read does**: when this task makes a
+  connection writable, `Pass::write_target` stops refusing and simply rewrites, so
+  `INSERT INTO orders` dispatches to `pg.public.orders` the same way `SELECT * FROM orders` reads
+  it. Asked for directly: *"I want the write to dispatch just like read does."*
+  Three things make that safe without a second gate of ours, and they are the argument to keep in
+  view rather than re-derive: a connection is **read-only by default** and the user opted this one
+  in; **ambiguity still refuses by name**, so a write never picks between two servers; and the arm
+  is reached with a qualified name, so `ddl::bare_name` and this task's read-only refusal answer
+  identically whether or not the qualifier was typed — one funnel, no "did the user mean it"
+  branch. The pass is then simpler, not more complex: `write_target` and `Refusal::remote_target`
+  both disappear into `resolve`, and the position list becomes "everything but a create target".
+- **Creation is the one asymmetry, and it stays.** `CREATE TABLE orders` names a relation that
+  does not exist yet, so there is nothing to resolve *to* — and if the connection happens to have
+  an `orders`, resolving would turn a plainly local intent into "create it on the server", which
+  then fails as already existing. A create target is the workspace's unless qualified; a remote
+  `CREATE TABLE pg.public.x` is this task's own branch, reached by typing the qualifier. Same for
+  DB-11's `CREATE VIEW`.
 
 ## Build
 

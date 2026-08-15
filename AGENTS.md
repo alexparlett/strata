@@ -274,6 +274,20 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `CREATE`/`DROP FUNCTION` need no fence of ours, DataFusion refusing a qualified function name
   while planning. Reading is never refused: a query, a `COPY`'s source and a `PREPARE`d body all
   resolve a remote relation normally.
+- **A bare name the workspace does not hold is resolved across the connected databases on the
+  *statement*, in front of both the router and the planner — and a write target is never resolved
+  for the user.** `sql::qualify` inside `sql::parse_one`: workspace first, exactly one remote match
+  rewritten whole in the spellings that reach it, several refused **by name** with every candidate
+  printed, none left bare. Views resolve like tables, and the search runs in the schemas each
+  connection **shows** — a schema switched off neither captures a bare name nor collides with one
+  in a schema left on, while a name written in full still resolves into any of them. Never a moved
+  default catalog — that
+  breaks the `__snap_` fence, the write gate and both halves of a view's recorded dependencies at
+  once. Resolvable positions named per kind: a **create** target is never resolved (nothing to
+  resolve to — permanent), a **write** target is read only to refuse it in `ddl::in_database`'s own
+  words (temporary — a write addresses an existing relation, so it resolves like a read once
+  DB-10/DB-11 land). The read path therefore takes the **statement** (`query::plan_statement`),
+  never a resolved statement re-rendered to text.
 - **A view's dependencies are two lists, because only one of them is checkable against the
   project's rows.** `PlanDeps`/`ViewMeta`/`ViewInfo` keep workspace scans **bare** and
   non-workspace scans **qualified whole** (`tables` / `remote`, `deps` / `remote_deps`), split by
@@ -543,7 +557,9 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   listing, uses the default dialect and skips federation); `pg_class` not `pg_tables`, so remote
   views show; providers cached per relation and `table_type` answered from the cached `relkind`, so
   `SHOW TABLES` costs nothing remote; `jsonb` maps to text, never a refusal. `PgStore.schemas`
-  scopes **display, never resolution**, and `Engine::db_listing` is the one tagged read every
+  scopes **display and the implicit bare-name search, never the resolution of a name the user
+  wrote** (one live cell, `db::Shown`, written by `connect` and by `Engine::show_schemas` since
+  the picker does not reconnect), and `Engine::db_listing` is the one tagged read every
   surface shares. Read-only in v1; a reconnect replaces, rename included.
 - **A JSON accessor over a remote column is rewritten into the server's own operator, and a family
   member with no faithful spelling is refused by name rather than approximated.** `->` / `->>` /

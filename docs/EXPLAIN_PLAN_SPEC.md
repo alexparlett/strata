@@ -140,7 +140,9 @@ unit, so their label is DataFusion's own display string; everything else is form
 
 ### The walk (`engine/explain.rs`)
 
-`run_explain` plans the statement under `SQLOptions` with DML/DDL/statements disallowed, unwraps
+`run_explain` is handed the **parsed, resolved** statement (`Engine::explain` → `sql::parse_one`,
+so an EXPLAIN's bare names reach the same relations a Run's do — DB-09) and plans it under
+`SQLOptions` with DML/DDL/statements disallowed (`query::plan_statement`), unwraps
 the `LogicalPlan::Explain` / `Analyze` wrapper to the inner plan, walks it into `logical`, then
 re-plans it physical. Under ANALYZE it executes the physical plan (`collect`) so live metrics land
 on the operators, then walks `physical` — reading each node's name, one-line display

@@ -10,22 +10,23 @@
 //! `ALL_KEYWORDS` stays reachable but demoted: it only surfaces on a ≥2-char prefix
 //! match, so `SERDE`-class noise never buries a catalog symbol.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
 
 use crate::config::{key_def, Kind as KeyKind, ENGINE_KEYS};
 use crate::ddl::{option_keys_for, refuse_reserved_key, OptionKind, STORED_AS_FORMATS};
+use crate::fold_ident;
 use crate::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
     Clause, ColumnList, Context, ListSource, Role,
 };
-use crate::sql::ident::quote_verbatim;
+use crate::sql::ident::{qualified, quote_verbatim};
 use crate::sql::lex::{
     caret_extends_numeric_literal, caret_in_string_or_comment, lex, literal_at, TokKind,
 };
-use crate::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, TableSym};
+use crate::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym, TableSym};
 use crate::sql::FunctionSym;
 use strata_model::Kind;
 
@@ -272,8 +273,97 @@ fn push_relation_targets(
         let ord = coverage(have) * 2 + written_rel(&t.name);
         pool.ordered(&t.name, T_PRIMARY, ord, || table_item(t, replace));
     }
+    let shared = shared_names(catalog);
+    for db in &catalog.databases {
+        for schema in &db.schemas {
+            for relation in &schema.relations {
+                match shared.contains(&fold_ident(&relation.name)) {
+                    false => pool.push(&relation.name, T_SECONDARY, || {
+                        remote_relation_item(
+                            relation.name.clone(),
+                            quote_verbatim(&relation.name),
+                            db,
+                            schema,
+                            relation,
+                            replace,
+                        )
+                    }),
+                    true => {
+                        let name = qualified([
+                            db.name.as_str(),
+                            schema.name.as_str(),
+                            relation.name.as_str(),
+                        ]);
+                        pool.push(&name.clone(), T_SECONDARY, || {
+                            remote_relation_item(name.clone(), name, db, schema, relation, replace)
+                        });
+                    }
+                }
+            }
+        }
+    }
     for db in &catalog.databases {
         pool.push(&db.name, T_SECONDARY, || database_item(db, replace));
+    }
+}
+
+/// **The names more than one source answers to**, folded — every name whose bare spelling
+/// therefore reaches nothing in particular, counting the project's own tables and views in so one
+/// map answers both halves of the resolver's rule.
+///
+/// Built once per offer rather than asked per relation, which would be quadratic in the size of a
+/// database on every keystroke the popup is open.
+fn shared_names(catalog: &Catalog) -> HashSet<String> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let names = catalog
+        .tables
+        .iter()
+        .map(|t| &t.name)
+        .chain(catalog.databases.iter().flat_map(|db| {
+            db.schemas
+                .iter()
+                .flat_map(|schema| schema.relations.iter().map(|r| &r.name))
+        }));
+    for name in names {
+        *seen.entry(fold_ident(name)).or_default() += 1;
+    }
+    seen.into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// A connected database's relation offered **where a relation goes**, not behind a qualifier
+/// (DB-09). `label` and `insert` are one name spelled for a reader and for the parser — bare when
+/// it resolves to this relation, three-part when [`shared_names`] says it does not.
+///
+/// `T_SECONDARY`, below the project's own: that a bare name means theirs is the same precedence,
+/// written into the ranking.
+fn remote_relation_item(
+    label: String,
+    insert: String,
+    db: &DatabaseSym,
+    schema: &SchemaSym,
+    relation: &RelationSym,
+    replace: &Range<usize>,
+) -> Completion {
+    Completion {
+        label,
+        insert,
+        kind: match relation.view {
+            true => CompletionKind::View,
+            false => CompletionKind::Table,
+        },
+        detail: Some(format!(
+            "{}.{} · {}",
+            db.name,
+            schema.name,
+            match relation.view {
+                true => "view",
+                false => "table",
+            }
+        )),
+        replace: replace.clone(),
     }
 }
 

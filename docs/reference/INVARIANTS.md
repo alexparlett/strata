@@ -1077,12 +1077,21 @@ Things that must not regress. Each was fought for once already.
   with one such column entirely unreadable, and this is representation honesty rather than silent
   corruption: the value is intact, only the type is wider.
 
-  **Schema visibility scopes display, never resolution.** `PgStore.schemas` is committed
-  configuration (DataGrip's "N of M schemas"); registration exposes every schema regardless, so a
-  query naming a non-enabled one still runs. `Engine::db_listing` is the one read every surface
-  shares and it answers **scoped and tagged** (`Live | EnabledButMissing | NotEnabled`), so no
-  consumer re-derives visibility. It reads the connect-time enumeration, which is why a ↻ — a
-  re-run of the registration pass — *is* the refresh.
+  **Schema visibility scopes display and the *implicit* search, never the resolution of a name
+  the user wrote.** `PgStore.schemas` is committed configuration (DataGrip's "N of M schemas");
+  registration exposes every schema regardless, so a query naming a non-enabled one still runs.
+  `Engine::db_listing` is the one read every surface shares and it answers **scoped and tagged**
+  (`Live | EnabledButMissing | NotEnabled`), so no consumer re-derives visibility. It reads the
+  connect-time enumeration, which is why a ↻ — a re-run of the registration pass — *is* the
+  refresh. Since DB-09 the setting has a second reader, and it is the reason the sentence above
+  gained a clause: an **unqualified** name searches only the schemas a connection shows. The tree
+  is the statement of what the user works with, so a schema switched off must not capture a bare
+  name — and, the case that settled it, must not make one *ambiguous* against a relation in a
+  schema they left on, refusing a query by naming something they cannot see. The shown set is one
+  live cell shared between the connection and its catalog provider (`db::Shown`), written by
+  `connect` and by the Schemas… picker through `Engine::show_schemas`: the picker writes the def
+  without reconnecting (a display choice must not rebuild a pool), so a copy taken at connect
+  would be stale the first time it was read.
 
   **Read-only against the database in v1**, and a reconnect **replaces**: `db::connect` deregisters
   whatever that URL last registered, under the name it went in under, so the editor's rename (same
@@ -1936,6 +1945,29 @@ Things that must not regress. Each was fought for once already.
   fault. Reading is never refused — a plain query, a cross-source join, a `COPY`'s source and a
   `PREPARE`d body all resolve a remote relation normally, which is the whole point of the
   connection and the thing an over-broad gate would break.
+- **A bare name the workspace does not hold is resolved across the connected databases on the
+  *statement*, in front of both the router and the planner — and a write target is never resolved
+  for the user.** `sql::qualify`, inside `sql::parse_one`: the workspace wins (asked of
+  `table_exist`, which sees tables, views and the snapshot spool), exactly one relation of that
+  name across the connected catalogs is rewritten whole in the spellings that reach it, several
+  are refused **by name** with every candidate printed, and none is left bare for DataFusion's own
+  error. Views and materialized views resolve like tables, because the search asks the providers;
+  every registered schema is searched, because `PgStore::schemas` scopes display and never
+  resolution. **The statement and not the session** is the whole of this rule: DataFusion has one
+  default catalog and no search path, and `in_workspace` answers `true` for every bare name — so
+  moving the default breaks the `__snap_` fence, the write gate and *both* halves of the entry
+  below at once, most sharply the last, where a view whose body says `orders` would be recorded as
+  reading a workspace table it never read. Resolving on the statement leaves all four untouched,
+  because the plan then carries the name the read reached. Resolvable positions are named per
+  statement kind and the catch-all is narrow, so a kind nobody named keeps today's meaning. A
+  **create** target is never resolved and that is permanent — it names something that does not
+  exist yet, so there is nothing to resolve to. A **write** target is read only to refuse it in
+  `ddl::in_database`'s own sentence, since "not found" is the wrong answer about a relation the
+  same session will happily read — and that refusal is temporary: a write addresses an existing
+  relation, so it resolves like a read once DB-10/DB-11 give it somewhere to go. Two consequences: the read path takes
+  the **statement** (`query::plan_statement` is `sql_with_options` with the parse taken out, never
+  a resolved statement re-rendered to text), and `Engine::parse_one` runs before the first await or
+  `query` stops publishing its in-flight entry on the first poll.
 - **A view's dependencies are two lists, because only one of them is checkable against the
   project's own rows.** `PlanDeps` keeps workspace scans **bare** (`tables`) and non-workspace
   scans **qualified whole** (`remote`), split by the same `in_workspace`, and `ViewMeta` and the

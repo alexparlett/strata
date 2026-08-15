@@ -230,8 +230,9 @@ provider (a control that cannot mean anything for the chosen provider is not shi
    `PgStore::catalog`, the prefix Strata queries the connection by (`pg` makes
    `pg.public.orders`) — Strata's name for the connection, not anything the server has, and its
    hint says so. It is the user's choice rather than derived from DATABASE, because two servers'
-   `analytics` would derive one prefix. Making it unnecessary for everyday queries is
-   **DB-09** (a current database, so unqualified names resolve). The
+   `analytics` would derive one prefix. It is not needed for an everyday query: a bare name
+   resolves across the connections (DB-09, below), and the prefix is what reaches *across* sources
+   or tells two same-named relations apart. The
    certificate path under SSL MODE appears for the two verifying modes and is optional there
    (blank is the machine's own trust store). There is no SCHEMAS row: schema enablement is a
    tree-node gesture (DB-05), where the live enumeration already sits and where one picker serves
@@ -505,9 +506,12 @@ reconnect **replaces**: whatever that URL last registered comes out, under the n
 under, so the editor's rename (same URL, new catalog name) is handled by the registration rather
 than by a surface remembering.
 
-**Schema visibility scopes display, never resolution.** `schemas` is DataGrip's "N of M schemas"
-choice. The engine registers every schema regardless — the providers are lazy, so that costs
-nothing — which means a query naming a schema that is not enabled still resolves and runs.
+**Schema visibility scopes display and the *implicit* search, never the resolution of a name the
+user wrote.** `schemas` is DataGrip's "N of M schemas" choice. The engine registers every schema
+regardless — the providers are lazy, so that costs nothing — which means a query naming a schema
+that is not enabled still resolves and runs. What it *does* bound, since DB-09, is where an
+**unqualified** name is looked for (see *Unqualified names* above): a schema you switched off
+neither captures a bare name nor collides with one in a schema you left on.
 `Engine::db_listing` is the one read every surface shares, and it answers **scoped and tagged**
 (`Live | EnabledButMissing | NotEnabled`), so nothing re-derives visibility. It reads the
 connect-time enumeration, which is why a ↻ *is* the refresh.
@@ -563,8 +567,76 @@ behind a remote relation's provider, and nothing else.
 **Read-only in v1.** Nothing writes to a database: `INSERT` gates on whether the target is a table
 Strata owns, and the schema provider refuses a registration in its own words underneath that.
 
+### Unqualified names (DB-09)
+
+`SELECT * FROM orders` reaches a connected database's `orders`. The three-part name is what you
+type to reach *across* sources, not what you type to work in one.
+
+There is no current database and no `USE`: **a bare name is resolved against everything
+connected, once, before the statement is planned** (`sql::qualify`, run from `sql::parse_one` —
+the one parse in front of both the router and the planner).
+
+1. The workspace wins. Its schema holds its tables, its views and the result spool, so nothing
+   that resolves today changes meaning, and `__snap_` names stay inside the fence that reserves
+   them.
+2. Exactly one relation of that name across the connected catalogs: the statement is rewritten to
+   the three-part name, every part quoted, in the spellings that reach it — the catalog as the
+   connection registered it, the schema and the relation as the server spells them. Views and
+   materialized views included; the search asks the providers, and the listing is
+   `relkind IN ('r','p','v','m','f')`. **The search runs in the schemas each connection shows**
+   (`PgStore::schemas`) — see below.
+3. More than one: refused, naming every candidate — `'orders' is ambiguous: 'pg.public.orders',
+   'pg.analytics.orders'. Qualify it`. Never a coin flip between two servers.
+4. None: left bare, which is the error DataFusion already gives.
+
+**Resolvable positions.** A CTAS body, an `INSERT`'s source query, a view's body and a `COPY`'s
+source are reads and resolve. A CTE name and a registered table function are held back. Two
+carve-outs, and they are not the same kind of thing:
+
+- **A create target is never resolved.** `CREATE TABLE orders` makes a workspace table while a
+  connection has an `orders` — the name does not exist yet, so there is nothing to resolve *to*,
+  and resolving would read a plainly local intent as "make it on the server". Permanent.
+- **A write target is read but not rewritten**, and only to refuse it in the connection's own
+  words rather than as a name that does not exist: after `SELECT * FROM orders` works, "table
+  'strata.public.orders' not found" reads as a contradiction rather than as the read-only rule it
+  is. **Temporary** — a write target addresses a relation that already exists, so it resolves
+  exactly as a read does, and that is what it will do once a connection can be written to
+  (DB-10/DB-11). Today writing to a database is refused outright, so the refusal is the whole of
+  that rule's visible behaviour.
+
+**Why the statement and not the session.** DataFusion has one default catalog and one default
+schema and no search path, so the other design is to *move* the default. `providers::in_workspace`
+answers `true` for every bare name, and four rules turn on that answer: the `__snap_` fence, what
+a write may target, and the two halves of a view's recorded dependencies. A moved default makes
+all four wrong at once — most sharply the last, where a view whose body says `orders` would be
+recorded as reading a *workspace* table it never read, so dropping an unrelated table names it,
+its missing-dependency check cries wolf over a relation no def exists for, and forgetting the
+connection matches nothing. Resolving on the statement leaves all four untouched: the plan carries
+the name the read reached, so `PlanDeps` records `pg.public.orders` in its remote half for free.
+There is no mode, nothing to display and nothing a restart has to clear.
+
+**The implicit search is scoped to the schemas a connection shows, and only the implicit one.**
+`PgStore::schemas` bounds what an *unqualified* name searches; a name written in full still
+resolves into any schema the role can see, which is what "display, never resolution" was always
+about. Both halves are one rule: the tree is the statement of what you are working with, so a
+schema switched off cannot capture a bare name, and — the case that made this obvious — cannot
+collide with a relation in a schema you left on. Without the scoping, `sessions` in a hidden
+`analytics` refuses a query about the `sessions` the tree is showing, naming a schema the user
+cannot see. The set is one live cell shared between the connection and its catalog provider
+(`db::Shown`), written by `connect` and by the Schemas… picker through `Engine::show_schemas` —
+the picker does not reconnect, so a copy taken at connect would be stale by the time it was read.
+
+What a bare name means can still change — creating a workspace `orders` takes the name back, and
+the same query then reads the project's own table. Completion is the answer to that: at a relation
+position it offers each connection's relations too, and **inserts the spelling that resolves** —
+bare where the name is unambiguous, three-part where the project's own catalog or a second shown
+schema holds it (`complete::bare_relation_item`). The offer is ranked below the project's own
+tables and views, which is the precedence rule written into the ranking.
+
 Verified end to end against a real PostgreSQL in
-`crates/strata-engine/tests/postgres_federation.rs`.
+`crates/strata-engine/tests/postgres_federation.rs` — including a bare read of a remote view, a
+bare read into a schema the connection does not display, the ambiguity refusal, the refused write,
+and the dependency assertion that is the whole risk.
 
 ## Tables over a connection
 

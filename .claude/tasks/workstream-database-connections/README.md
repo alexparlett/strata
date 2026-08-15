@@ -14,8 +14,8 @@ integration test; DB-03, DB-04 and DB-08 sit on DB-02 independently; DB-05 — t
 redesign — sits on DB-02 + DB-04; DB-06 (gestures + completion) and DB-07 (inspector +
 profiling) sit on the tree; DB-10 and DB-11 are write-back — DB-10 (INSERT/CTAS through the
 crate's write provider) relaxes DB-03's read-only policy behind a per-connection opt-in, and
-DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–08 are
-in**; DB-09, DB-10 and DB-11 are open.
+DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–09 are
+in**; DB-10 and DB-11 are open.
 
 ## Decisions already made (do not re-litigate; the reasoning is recorded here)
 
@@ -193,9 +193,37 @@ in**; DB-09, DB-10 and DB-11 are open.
   persistence story); neither fences the mechanism's programmatic catalog registration. The
   door to workspace schemas stays **additively** open: an optional `schema` field defaulting
   to `public`, workspace-catalog schema registration, a tree that already paints the level.
-  Known friction accepted for v1: Postgres-heavy sessions qualify every name; the fix if it
-  bites is a `USE`-shaped session default-catalog gesture (a session feature over config keys
-  we currently fence as owned — its own small follow-up, not a def-model change).
+  The friction this left — Postgres-heavy sessions qualifying every name — is closed by DB-09,
+  and **not** by the `USE`-shaped session default this bullet expected (see below).
+- **A bare name is resolved across the connections on the statement; there is no current
+  database** (built, DB-09 ✅ — Alex, 2026-08-15, and this **overturns** the `USE`/session-default
+  design DB-09 was written around). Asked as "instead of a default for a session, could the
+  planner auto-inject the qualifier when only one database has that name?" — and it is the better
+  answer, for a reason the task file had already identified as its whole risk.
+  `providers::in_workspace` answers `true` for every bare name, and four rules turn on that: the
+  `__snap_` fence, what a write may target, and the two halves of a view's recorded dependencies.
+  **Moving the default breaks all four at once**, most sharply the last — a view whose body says
+  `orders` would be recorded as reading a workspace table it never read. Resolving on the
+  *statement* instead (`sql::qualify`, inside `sql::parse_one`, in front of both the router and
+  the planner) leaves all four untouched, because the plan then carries the name the read reached
+  and `PlanDeps` records it remote for free. Workspace first, exactly one remote match rewritten
+  whole, several refused **by name** with every candidate printed, none left bare. Two carve-outs,
+  and only one is permanent: a **create** target is never resolved (it names something that does
+  not exist yet, so there is nothing to resolve to, and resolving would read a plainly local
+  intent as "make it on the server"), while a **write** target is merely *refused* in
+  `ddl::in_database`'s existing sentence for as long as writing to a database is impossible at
+  all — a write addresses a relation that already exists, so **it resolves like a read once
+  DB-10/DB-11 land** (Alex, 2026-08-15: "I want the write to dispatch just like read does"), and
+  those two files carry the seam. The implicit search runs in the schemas a connection **shows**
+  (a correction made while using it: a hidden schema was refusing a query about a visible one, by
+  naming a relation the tree does not list — `PgStore::schemas` bounds where an *unqualified* name
+  is looked for, and never what a name written in full resolves to), and the two surfaces that
+  answer about names were taught the same question: the keyword-typo lint stopped squiggling a
+  resolvable `orders`, and completion offers a connection's relations where a relation goes, each
+  row named by the spelling that reaches it. No mode, no status bar, no `RESET`, nothing for a
+  restart to clear. The cost is
+  that a bare name can change meaning when a workspace table takes it; completion's **qualified**
+  offer (DB-06) is the answer, so what is in the buffer stays explicit.
 - **Read-only against the database in v1.** ✅ **built (DB-03, 2026-08-13).** Every DDL arm that
   resolves a target refuses a name inside a database connection's catalog **by name** — one
   sentence, minted once in `ddl::bare_name`, which every such arm already went through;
@@ -295,7 +323,7 @@ in**; DB-09, DB-10 and DB-11 are open.
 | DB-06 | Gestures + completion over the tree | ✅ | DB-05 |
 | DB-07 | Column inspector + profiling for remote tables | ✅ | DB-05 |
 | DB-08 | JSON accessors over remote columns: the pushdown rewrite | ✅ | DB-02 |
-| DB-09 | A current database, so unqualified names resolve | ⬜ | DB-02 |
+| DB-09 | Unqualified names resolve across the connections | ✅ | DB-02 |
 | DB-10 | Remote DML: INSERT and CTAS into a database connection | ⬜ | DB-02 |
 | DB-11 | Remote statements the server runs: DDL + UPDATE/DELETE | ⬜ | DB-10 |
 
@@ -308,6 +336,8 @@ DB-02 — `docs/CONNECTIONS_SPEC.md` (database section), `docs/reference/ENGINE.
 `docs/STATEMENTS_SPEC.md`; DB-05 — CONNECTIONS_SPEC's pane section,
 `docs/reference/{MODULE_MAP, FREYA_UI, INVARIANTS}.md`; DB-06 — `docs/COMPLETION_SPEC.md`
 plus CONNECTIONS_SPEC's gestures and completion sections; DB-07 — INVARIANTS' profiling entry;
+DB-09 — CONNECTIONS_SPEC's *Unqualified names* section, `docs/STATEMENTS_SPEC.md` §1 + §4, and
+INVARIANTS + AGENTS.md §2;
 DB-08 — CONNECTIONS_SPEC's database section (what pushes down) plus INVARIANTS + AGENTS.md §2;
 DB-10 — STATEMENTS_SPEC §4, CONNECTIONS_SPEC's read-only toggle, and the "read-only in v1"
 sentences in INVARIANTS.md + AGENTS.md §2 (rewritten to lead with what now works); DB-11 —

@@ -172,7 +172,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   holistic redesign of the catalog pane that absorbs and retires the Connections pane
   (DB-05) — then gestures + completion (DB-06) and inspector + profiling over remote tables
   (DB-07) on the tree, plus the JSON-accessor pushdown rewrite (DB-08), which sits directly
-  on DB-02 and can land any time after it, a current database so unqualified names resolve
+  on DB-02 and can land any time after it, unqualified names resolving across the connections
   (DB-09), and **write-back** (added 2026-08-15) behind a per-connection read-only opt-in:
   INSERT/CTAS through the crate's write provider (DB-10) and the statements only the server
   can run — CREATE VIEW, CREATE MATERIALIZED VIEW, DROPs, UPDATE, DELETE — span-spliced onto
@@ -224,7 +224,14 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   Four corrections in its file, two of them found only by running against the server: Strata's
   own `json_union_to_text` wrapper must not be refusable by name, and `->>` needs parentheses
   against a comparison because sqlparser gives it looser precedence than `=` — true for local
-  JSON too, and a dialect follow-up if it bites.
+  JSON too, and a dialect follow-up if it bites. **DB-09 is in, and not as planned** — Alex
+  reframed it (2026-08-15) from a current-database setting into a **statement** pass, which is
+  the better answer for the reason that task file had already named as its whole risk: a bare
+  name the workspace does not hold resolves across the connected catalogs before anything plans
+  it (workspace first, one match rewritten whole, several refused by name, none left bare), so
+  `in_workspace` did not change and a view's recorded dependencies stay honest. No `USE`, no
+  session state, no status bar. Its file records what moved with it — the read path takes the
+  statement rather than the buffer, and a write target is never resolved for the user.
   Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
@@ -329,9 +336,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — DB-01 through DB-08 are ✅, so **DB-09 (a current database,
-   so unqualified names resolve) is next**; it sits on DB-02 alone. DB-10 (remote INSERT/CTAS)
-   and DB-11 (remote server statements, on DB-10) close the workstream.
+1. **Database connections (DB)** — DB-01 through DB-09 are ✅, so **DB-10 (remote INSERT/CTAS) is
+   next**; DB-11 (remote server statements, on DB-10) closes the workstream.
 2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-05 are in, so QE-06 is next
    (its guidance names QE-01's functions), QE-07 follows QE-03's merge, and QE-08 waits for
    DB-05's tree.

@@ -141,6 +141,16 @@ is the one to use for real work. Either way the first build pulls DataFusion and
 To try it against real data, open the repo's **`sample/`** folder as a project: it registers parquet, CSV and JSON
 tables, a Hive-partitioned `events/` directory, internal tables, saved views and queries.
 
+For the federated half, start the sample database — a seeded PostgreSQL in a container, with no password to enter:
+
+```bash
+docker build -t strata-sample-pg sample/postgres && docker run -d --name strata-sample-pg -p 127.0.0.1:55432:5432 -e POSTGRES_USER=strata -e POSTGRES_DB=strata_sample -e POSTGRES_HOST_AUTH_METHOD=trust strata-sample-pg
+```
+
+The project already carries the connection, so `SELECT * FROM orders` joins the parquet users straight onto live
+PostgreSQL. **[`sample/postgres/README.md`](sample/postgres/README.md)** is what is in it and what to try —
+including the deliberate name clashes that show which source a bare name means.
+
 ### Tests
 
 ```bash

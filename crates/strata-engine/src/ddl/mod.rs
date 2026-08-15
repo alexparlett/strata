@@ -304,8 +304,10 @@ fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<Strin
 /// something this app can point at.
 ///
 /// Not parameterised by `what`: the answer is the same for a table and for a view, because it is
-/// about the *catalog* and not about the kind of thing being made in it.
-pub(super) fn in_database(name: &TableReference, catalog: &str) -> String {
+/// about the *catalog* and not about the kind of thing being made in it — which is also why
+/// [`sql::qualify`](crate::sql) reaches it for the write target it refuses before planning
+/// rather than wording that refusal a second way.
+pub(crate) fn in_database(name: &TableReference, catalog: &str) -> String {
     format!(
         "'{name}' is in the database connection '{catalog}'. Strata reads remote tables; it does \
          not create, drop or write them"
