@@ -19,13 +19,24 @@
 //! Confirming is [`ProfileActions::start`], the same call the ↻ makes: there is one path from
 //! "profile this" to a request on the row, and this dialog is a gate in front of it rather than
 //! a second copy of it.
+//!
+//! ## The target says where the request is kept
+//!
+//! [`ProfileTarget`] has two arms and every action here takes one, because a relation inside a
+//! database connection's catalog has no `ProjectState` row to record a request on — a database
+//! answers for itself, so there are no defs under it (DB-02). The rule that the store holds the
+//! request generalizes rather than being excepted: *whoever owns the surface holds it*, which for
+//! a remote relation is the window (`state::catalog`'s `RemoteScans`). Nothing is minted into the
+//! store, and the numbers still live only in the freya-query entry the `ScanId` keys.
 
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_model::{CatalogKind, ColRef, RightPane};
+use strata_model::{CatalogKind, ColOwner, ColRef, RightPane};
 
+use crate::apps::project::query::{ProfileTarget, ScanId};
 use crate::apps::project::state::{
-    use_catalog_selection, CatalogSelection, Chan, ProjChan, ProjectState, SessionState,
+    use_catalog_selection, use_remote_scans, CatalogSelection, Chan, ProjChan, ProjectState,
+    RemoteScans, SessionState,
 };
 use crate::components::dialog::{Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
@@ -34,37 +45,55 @@ use crate::components::tones::tones;
 use crate::components::typography::{Control, MonoValue, Prose, Title};
 use crate::theme::{use_roles, Role};
 
-/// What a profile confirm is about — a table or a view, by **name**, which is their shared
-/// engine/SQL identity. (A saved query is a stored string: there is nothing to scan.)
-#[derive(Clone, PartialEq, Debug)]
-pub struct ProfileTarget {
-    pub kind: CatalogKind,
-    pub name: String,
+/// The confirm's own reading of a [`ProfileTarget`]: what the action is called, and what the work
+/// actually is. (A saved query is a stored string: there is nothing to scan.)
+///
+/// The identity lives with the cache key it *is* (`query::profile`); the words live here, beside
+/// the dialog that says them.
+trait ProfileWording {
+    fn verb(&self) -> &'static str;
+    fn body(&self) -> &'static str;
 }
 
-impl ProfileTarget {
-    /// The action, used for the title and the row menus' item alike.
-    pub fn verb(kind: CatalogKind) -> &'static str {
-        match kind {
-            CatalogKind::View => "Profile view",
-            _ => "Profile table",
-        }
+/// The action, from a workspace entry's kind alone — what a row menu's item is labelled before
+/// there is any target to speak of.
+pub fn profile_verb(kind: CatalogKind) -> &'static str {
+    match kind {
+        CatalogKind::View => "Profile view",
+        _ => "Profile table",
+    }
+}
+
+impl ProfileWording for ProfileTarget {
+    fn verb(&self) -> &'static str {
+        profile_verb(self.kind())
     }
 
-    /// What a scan does, in the terms that hold at any size. The two differ in what "reads
-    /// everything" means: a table's files, or a view's whole query — joins, aggregates and all.
+    /// What a scan does, in the terms that hold at any size — and **where it happens**, which is
+    /// the third arm's whole point: a remote scan spends the server's time rather than this
+    /// machine's, and it computes a smaller set for it (`profile::Profiled`), so a confirm that
+    /// promised medians would be promising what the numbers then do not show.
     fn body(&self) -> &'static str {
-        match self.kind {
-            CatalogKind::View => {
+        match self {
+            ProfileTarget::Workspace {
+                kind: CatalogKind::View,
+                ..
+            } => {
                 "Runs the view's query in full to compute distinct counts, minimums, maximums, \
                  means and medians. Distinct counts cannot be merged, so there is no cheaper \
                  form. The result is cached until the view is redefined or a table it reads \
                  changes."
             }
-            _ => {
+            ProfileTarget::Workspace { .. } => {
                 "Reads every file to compute distinct counts, minimums, maximums, means and \
                  medians. Distinct counts cannot be merged across files, so there is no cheaper \
                  form. The result is cached until the table changes."
+            }
+            ProfileTarget::Remote { .. } => {
+                "Runs one statement on the database that reads every row, to compute distinct \
+                 counts, minimums, maximums and means. Distinct counts cannot be merged, so \
+                 there is no cheaper form, and the server does the work. The result is cached \
+                 until the connection is refreshed."
             }
         }
     }
@@ -80,6 +109,8 @@ pub struct ProfileActions {
     project: RadioStation<ProjectState, ProjChan>,
     session: RadioStation<SessionState, Chan>,
     selection: CatalogSelection,
+    /// Where a **remote** relation's request is kept — see [`RemoteScans`].
+    remote: RemoteScans,
     /// The confirm slot this dialog watches. Setting it *is* asking the question.
     target: State<Option<ProfileTarget>>,
 }
@@ -90,6 +121,7 @@ pub fn use_profile_actions() -> ProfileActions {
         project: use_radio_station::<ProjectState, ProjChan>(),
         session: use_radio_station::<SessionState, Chan>(),
         selection: use_catalog_selection(),
+        remote: use_remote_scans(),
         target: use_consume::<State<Option<ProfileTarget>>>(),
     }
 }
@@ -98,57 +130,85 @@ pub fn use_profile_actions() -> ProfileActions {
 ///
 /// **Only a first scan asks** (P3-10). An entry that already carries a request is being
 /// re-scanned — the user has seen this question, agreed to it, and is now asking for the same
-/// work again — so a second dialog would be noise. Pure over the store, so the rule is testable
-/// without a window and there is one copy of it.
-pub fn needs_confirm(project: &ProjectState, kind: CatalogKind, name: &str) -> bool {
-    project.profile_scan(kind, name).is_none()
+/// work again — so a second dialog would be noise. Pure over the request, so the rule is one
+/// sentence whichever storage the request came out of.
+pub fn needs_confirm(scan: Option<ScanId>) -> bool {
+    scan.is_none()
 }
 
 impl ProfileActions {
-    /// **Profile this entry** — the one entry point every trigger uses. A first scan raises the
-    /// confirm; a re-scan goes straight through ([`needs_confirm`]).
-    pub fn ask(&self, kind: CatalogKind, name: &str) {
-        if !needs_confirm(&self.project.peek(), kind, name) {
-            self.start(kind, name);
-            return;
+    /// The scan asked for on `target`, **from whichever storage backs it** — the workspace entry's
+    /// own catalog row, or the window's satellite for a relation that has no row.
+    ///
+    /// One reader, so every caller of [`ask`](Self::ask), [`start`](Self::start) and the zone that
+    /// renders the result are looking at the same slot.
+    pub fn scan(&self, target: &ProfileTarget) -> Option<ScanId> {
+        match target {
+            ProfileTarget::Workspace { kind, name } => {
+                self.project.peek().profile_scan(*kind, name)
+            }
+            ProfileTarget::Remote { relation, .. } => self.remote.peek().get(relation).copied(),
         }
-        let mut target = self.target;
-        target.set(Some(ProfileTarget {
-            kind,
-            name: name.to_string(),
-        }));
     }
 
-    /// Ask for the scan: a fresh request on the row, which is what the zone subscribes to (and
-    /// what supersedes any scan already running, engine-side).
-    ///
-    /// The channel is the entry's own section, so a table's scan never wakes the views.
-    pub fn start(&self, kind: CatalogKind, name: &str) {
-        let mut project = self.project;
-        let channel = match kind {
-            CatalogKind::View => ProjChan::Views,
-            _ => ProjChan::Tables,
-        };
-        if project
-            .write_channel(channel)
-            .request_profile(kind, name)
-            .is_none()
-        {
+    /// **Profile this entry** — the one entry point every trigger uses. A first scan raises the
+    /// confirm; a re-scan goes straight through ([`needs_confirm`]).
+    pub fn ask(&self, target: &ProfileTarget) {
+        if !needs_confirm(self.scan(target)) {
+            self.start(target);
             return;
         }
-        self.reveal(kind, name);
+        let mut slot = self.target;
+        slot.set(Some(target.clone()));
+    }
+
+    /// Ask for the scan: a fresh request in the target's own storage, which is what the zone
+    /// subscribes to (and what supersedes any scan already running, engine-side).
+    ///
+    /// **The one `None` this can answer is a workspace row that is no longer there** — an entry
+    /// the user cannot be looking at any more, which the inspector reports as gone on the same
+    /// pass. It is not the bail this generalization exists to remove: before it, a remote target
+    /// fell through the workspace lookup and left a confirmed, agreed-to scan starting *nothing*,
+    /// with the panel still offering it. A relation now has somewhere to record the request, so
+    /// that arm cannot be reached at all.
+    ///
+    /// A workspace request lands on the entry's own section channel, so a table's scan never wakes
+    /// the views.
+    pub fn start(&self, target: &ProfileTarget) -> Option<ScanId> {
+        let scan = match target {
+            ProfileTarget::Workspace { kind, name } => {
+                let mut project = self.project;
+                project
+                    .write_channel(section(*kind))
+                    .request_profile(*kind, name)?
+            }
+            ProfileTarget::Remote { relation, .. } => {
+                let scan = ScanId::new();
+                let mut remote = self.remote;
+                remote.write().insert(relation.clone(), scan);
+                scan
+            }
+        };
+        self.reveal(target);
+        Some(scan)
     }
 
     /// Drop the request: a cancel, and the honest state afterwards is the zone offering the scan
     /// again. The engine-side abort is the caller's (it holds the engine) — see the inspector's
     /// running state.
-    pub fn clear(&self, kind: CatalogKind, name: &str) {
-        let mut project = self.project;
-        let channel = match kind {
-            CatalogKind::View => ProjChan::Views,
-            _ => ProjChan::Tables,
-        };
-        project.write_channel(channel).clear_profile(kind, name);
+    pub fn clear(&self, target: &ProfileTarget) {
+        match target {
+            ProfileTarget::Workspace { kind, name } => {
+                let mut project = self.project;
+                project
+                    .write_channel(section(*kind))
+                    .clear_profile(*kind, name);
+            }
+            ProfileTarget::Remote { relation, .. } => {
+                let mut remote = self.remote;
+                remote.write().remove(relation);
+            }
+        }
     }
 
     /// Put the scan where the user can see it happen.
@@ -159,22 +219,23 @@ impl ProfileActions {
     /// every column, so any of them shows that it ran. A scan started from the inspector's own
     /// card is already looking at this entry, so nothing moves.
     ///
-    /// An entry with no landed schema keeps the selection it had: there is no column to name
-    /// yet, and inventing one would point the panel at nothing.
-    fn reveal(&self, kind: CatalogKind, name: &str) {
+    /// **Where the first column is not known here, the selection is the owner itself** and the
+    /// panel stands it on the first column once it has one. A workspace entry whose registration
+    /// has landed can be named directly; a remote relation's columns are an introspection this
+    /// window may not have made yet, and a workspace entry with no landed schema has no column to
+    /// name either — so both take the empty path rather than inventing one or leaving the panel
+    /// pointed somewhere else.
+    fn reveal(&self, target: &ProfileTarget) {
         let mut selection = self.selection;
+        let owner = owner_of(target);
         let looking = selection
             .peek()
             .as_ref()
-            .is_some_and(|c| c.kind == kind && ProjectState::same_name(&c.owner, name));
+            .is_some_and(|c| same_owner(&c.owner, &owner));
         if !looking {
-            let Some(first) = self.first_column(kind, name) else {
-                return;
-            };
             selection.set(Some(ColRef {
-                kind,
-                owner: name.to_string(),
-                path: vec![first],
+                path: self.first_column(target).into_iter().collect(),
+                owner,
             }));
         }
         let mut session = self.session;
@@ -185,8 +246,11 @@ impl ProfileActions {
         }
     }
 
-    /// The entry's first top-level column, if its schema has landed.
-    fn first_column(&self, kind: CatalogKind, name: &str) -> Option<String> {
+    /// The entry's first top-level column, where this window already knows it.
+    fn first_column(&self, target: &ProfileTarget) -> Option<String> {
+        let ProfileTarget::Workspace { kind, name } = target else {
+            return None;
+        };
         let p = self.project.peek();
         let columns = match kind {
             CatalogKind::View => p
@@ -204,6 +268,42 @@ impl ProfileActions {
                 .map(|meta| &meta.columns),
         }?;
         columns.first().map(|c| c.name.clone())
+    }
+}
+
+/// Which catalog section a workspace request lands on.
+fn section(kind: CatalogKind) -> ProjChan {
+    match kind {
+        CatalogKind::View => ProjChan::Views,
+        _ => ProjChan::Tables,
+    }
+}
+
+/// The selection owner a profile target is about.
+fn owner_of(target: &ProfileTarget) -> ColOwner {
+    match target {
+        ProfileTarget::Workspace { kind, name } => ColOwner::Entry {
+            kind: *kind,
+            name: name.clone(),
+        },
+        ProfileTarget::Remote { relation, .. } => ColOwner::Remote(relation.clone()),
+    }
+}
+
+/// Are these the same owner? A workspace name is compared the way the engine resolves it
+/// ([`ProjectState::same_name`]) — a remote relation is already the server's own spelling, and is
+/// compared as it stands.
+fn same_owner(a: &ColOwner, b: &ColOwner) -> bool {
+    match (a, b) {
+        (
+            ColOwner::Entry { kind, name },
+            ColOwner::Entry {
+                kind: other_kind,
+                name: other,
+            },
+        ) => kind == other_kind && ProjectState::same_name(name, other),
+        (ColOwner::Remote(one), ColOwner::Remote(two)) => one == two,
+        _ => false,
     }
 }
 
@@ -225,7 +325,7 @@ impl Component for ProfileConfirm {
         let confirm = move |()| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
-                actions.start(target.kind, &target.name);
+                actions.start(&target);
             }
             slot.set(None);
         };
@@ -237,9 +337,9 @@ impl Component for ProfileConfirm {
         let title = rect()
             .width(Size::fill())
             .vertical()
-            .child(Title::new(ProfileTarget::verb(target.kind)).color(roles.get(Role::Text)))
+            .child(Title::new(target.verb()).color(roles.get(Role::Text)))
             .child(
-                MonoValue::new(target.name.clone())
+                MonoValue::new(target.label())
                     .color(roles.get(Role::Accent))
                     .text_overflow(TextOverflow::Ellipsis),
             );
@@ -278,6 +378,7 @@ impl Component for ProfileConfirm {
 /// on the row), while the scan behind that request is the engine's own tested contract.
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     use datafusion::arrow::datatypes::{DataType, Field};
@@ -286,7 +387,7 @@ mod tests {
     use strata_core::engine::{TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ColumnInfo, TableDef, TableOrigin, ViewDef};
+    use strata_model::{ColumnInfo, RemoteRef, TableDef, TableOrigin, ViewDef};
 
     use super::*;
     use crate::theme::strata_theme;
@@ -347,6 +448,7 @@ mod tests {
         RadioStation<ProjectState, ProjChan>,
         RadioStation<SessionState, Chan>,
         CatalogSelection,
+        RemoteScans,
     );
 
     fn runner() -> (TestingRunner, Handles) {
@@ -362,23 +464,39 @@ mod tests {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
                 });
                 let selection = r.provide_root_context(|| State::create(None::<ColRef>));
-                (target, project, session, selection)
+                let remote = r.provide_root_context(|| State::create(BTreeMap::new()));
+                (target, project, session, selection, remote)
             },
             1.,
         )
     }
 
+    fn workspace(kind: CatalogKind, name: &str) -> ProfileTarget {
+        ProfileTarget::Workspace {
+            kind,
+            name: name.to_string(),
+        }
+    }
+
+    /// `pg.public.orders`, as the tree composes one.
+    fn remote_target(kind: CatalogKind, relation: &str) -> ProfileTarget {
+        ProfileTarget::Remote {
+            kind,
+            relation: RemoteRef {
+                connection: "pg".into(),
+                schema: "public".into(),
+                relation: relation.into(),
+            },
+        }
+    }
+
     fn open(
         runner: &mut TestingRunner,
         slot: &mut State<Option<ProfileTarget>>,
-        kind: CatalogKind,
-        name: &str,
+        target: ProfileTarget,
     ) {
         runner.sync_and_update();
-        slot.set(Some(ProfileTarget {
-            kind,
-            name: name.to_string(),
-        }));
+        slot.set(Some(target));
         runner.sync_and_update();
         runner.sync_and_update();
     }
@@ -414,7 +532,11 @@ mod tests {
     #[test]
     fn the_confirm_describes_the_work_and_quotes_no_figures() {
         let (mut runner, (mut slot, ..)) = runner();
-        open(&mut runner, &mut slot, CatalogKind::Table, "events");
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::Table, "events"),
+        );
 
         let texts = texts(&runner);
         assert_eq!(texts[0], "Profile table");
@@ -438,10 +560,11 @@ mod tests {
     #[test]
     fn a_re_scan_needs_no_confirm() {
         let mut p = project();
-        assert!(needs_confirm(&p, CatalogKind::Table, "events"));
+        let scan = |p: &ProjectState| p.profile_scan(CatalogKind::Table, "events");
+        assert!(needs_confirm(scan(&p)));
 
         p.request_profile(CatalogKind::Table, "events");
-        assert!(!needs_confirm(&p, CatalogKind::Table, "events"));
+        assert!(!needs_confirm(scan(&p)));
 
         p.table_registered(
             "events",
@@ -450,7 +573,7 @@ mod tests {
                 rows: Some(11),
             },
         );
-        assert!(needs_confirm(&p, CatalogKind::Table, "events"));
+        assert!(needs_confirm(scan(&p)));
     }
 
     /// A **view** says what a scan of a view costs — its whole query, not a file read — and what
@@ -458,7 +581,11 @@ mod tests {
     #[test]
     fn a_view_confirm_names_the_query_rather_than_files() {
         let (mut runner, (mut slot, ..)) = runner();
-        open(&mut runner, &mut slot, CatalogKind::View, "daily");
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::View, "daily"),
+        );
 
         let texts = texts(&runner);
         assert_eq!(texts[0], "Profile view");
@@ -475,9 +602,13 @@ mod tests {
     /// would otherwise run out of sight.
     #[test]
     fn running_the_scan_records_the_request_and_reveals_the_entry() {
-        let (mut runner, (mut slot, project, mut session, selection)) = runner();
+        let (mut runner, (mut slot, project, mut session, selection, _)) = runner();
         session.write_channel(Chan::Layout).close_right_pane();
-        open(&mut runner, &mut slot, CatalogKind::Table, "events");
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::Table, "events"),
+        );
 
         click_action(&mut runner, "Run scan");
 
@@ -503,8 +634,12 @@ mod tests {
     /// Cancelling is a true no-op: no request, nothing scanned, nothing revealed.
     #[test]
     fn cancelling_asks_for_nothing() {
-        let (mut runner, (mut slot, project, _, selection)) = runner();
-        open(&mut runner, &mut slot, CatalogKind::Table, "events");
+        let (mut runner, (mut slot, project, _, selection, _)) = runner();
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::Table, "events"),
+        );
 
         click_action(&mut runner, "Cancel");
 
@@ -516,6 +651,72 @@ mod tests {
         assert!(slot.peek().is_none());
     }
 
+    /// **The regression this generalization exists to prevent.** A remote relation has no
+    /// `ProjectState` row, and before the target had two arms the confirmed scan of one fell
+    /// through the workspace lookup and started *nothing* — a cost the user had read, agreed to,
+    /// and been given no work for, with the panel still offering the scan. The request now lands
+    /// in the window's satellite, and the reveal points the panel at the relation.
+    #[test]
+    fn confirming_a_remote_scan_records_the_request_it_promised() {
+        let (mut runner, (mut slot, project, _, selection, remote)) = runner();
+        let target = remote_target(CatalogKind::Table, "orders");
+        open(&mut runner, &mut slot, target.clone());
+
+        let texts = texts(&runner);
+        assert_eq!(texts[0], "Profile table");
+        assert_eq!(texts[1], "pg.public.orders", "named as SQL addresses it");
+        let body = texts
+            .iter()
+            .find(|t| t.contains("distinct counts"))
+            .expect("the body copy");
+        assert!(
+            body.contains("on the database"),
+            "the copy says whose time this spends: {body}"
+        );
+        assert!(
+            !body.contains("medians"),
+            "…and does not promise a fact the remote set cannot compute: {body}"
+        );
+
+        click_action(&mut runner, "Run scan");
+
+        let ProfileTarget::Remote { relation, .. } = &target else {
+            unreachable!()
+        };
+        assert!(
+            remote.peek().get(relation).is_some(),
+            "the window holds the request the confirm agreed to"
+        );
+        assert!(slot.peek().is_none(), "the dialog closed itself");
+        assert_eq!(
+            selection.peek().as_ref().map(|c| c.owner.clone()),
+            Some(ColOwner::Remote(relation.clone())),
+            "…with the panel pointed at the relation"
+        );
+        assert!(
+            selection.peek().as_ref().is_some_and(|c| c.path.is_empty()),
+            "and standing on no column yet: only an introspection can name one"
+        );
+        assert_eq!(
+            project.peek().tables.len(),
+            1,
+            "nothing was minted into the store"
+        );
+    }
+
+    /// A **view** on a database says so, in the same words a workspace view does — one vocabulary
+    /// for the action, whichever catalog the relation is in.
+    #[test]
+    fn a_remote_view_is_labelled_a_view() {
+        let (mut runner, (mut slot, ..)) = runner();
+        open(
+            &mut runner,
+            &mut slot,
+            remote_target(CatalogKind::View, "big_orders"),
+        );
+        assert_eq!(texts(&runner)[0], "Profile view");
+    }
+
     /// Headless preview for eyeballing against the canvas's `profile` tile. Ignored by default
     /// (it writes a file, asserts nothing):
     /// `cargo test -p strata-freya profile_confirm_preview -- --ignored`.
@@ -523,7 +724,11 @@ mod tests {
     #[ignore = "writes target/profile-confirm-preview.png for eyeballing; run explicitly"]
     fn profile_confirm_preview() {
         let (mut runner, (mut slot, ..)) = runner();
-        open(&mut runner, &mut slot, CatalogKind::Table, "events");
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::Table, "events"),
+        );
         runner.render_to_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../target/profile-confirm-preview.png"
@@ -535,7 +740,11 @@ mod tests {
     #[test]
     fn escape_cancels_and_enter_runs_the_scan() {
         let (mut runner, (mut slot, project, ..)) = runner();
-        open(&mut runner, &mut slot, CatalogKind::Table, "events");
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::Table, "events"),
+        );
 
         runner.press_key(Key::Named(NamedKey::Escape));
         runner.sync_and_update();
@@ -545,7 +754,11 @@ mod tests {
         );
         assert!(slot.peek().is_none());
 
-        open(&mut runner, &mut slot, CatalogKind::Table, "events");
+        open(
+            &mut runner,
+            &mut slot,
+            workspace(CatalogKind::Table, "events"),
+        );
         runner.press_key(Key::Named(NamedKey::Enter));
         runner.sync_and_update();
         assert!(project

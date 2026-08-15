@@ -494,10 +494,17 @@ src/apps/project/                the project window (Valin-shaped)
                                  `&Arc<Engine>`, which Deref cannot reach
   query/                         the freya-query capabilities over the engine facade — run_query
                                  (RunQuery · FetchSnapshotPage), validate, profile (P3-09: the
-                                 scan, keyed by `ProfileSpec { owner, scan }`, with `use_profile`
-                                 the one place that Query is built), chart (Rz2: `FetchChart`
-                                 keyed by `ChartSpec { snapshot, query, display }` — the display
-                                 config is in the key because axis labels render through it)
+                                 scan, keyed by `ProfileSpec { target, scan }`, with `use_profile`
+                                 the one place that Query is built; `ProfileTarget` is also what
+                                 says where the request is kept and how the engine name renders —
+                                 DB-07), chart (Rz2: `FetchChart` keyed by
+                                 `ChartSpec { snapshot, query, display }` — the display config is
+                                 in the key because axis labels render through it), relation
+                                 (DB-07: a remote relation's columns, the one thing under a
+                                 database connection that costs a round trip; keyed by the
+                                 relations wanted **and the catalog epoch**, so a ↻ re-reads.
+                                 The tree's pane holds one subscription over what its walk drew
+                                 open, the inspector one over what it is looking at)
   state/                         per-window state (Radio): channel, hooks, session
                                  agent.rs = the **window driver** (AA-03, re-pointed by AA-03b):
                                  one serial loop over both channels. It never waits for a query —
@@ -538,7 +545,10 @@ src/apps/project/                the project window (Valin-shaped)
                                  can share) — a `ConnRow`'s `Reg<()>` carries no payload
                                  because connecting *registers* an object store rather than
                                  inferring anything, so the three states are the whole value
-                                 catalog.rs = CatalogSelection, the inspected column (context)
+                                 catalog.rs = CatalogSelection, the inspected column, plus
+                                 `RemoteScans` — the profile request for relations that have no
+                                 catalog row to keep one on, pruned against the connections that
+                                 are still `Ready` (both context)
                                  log.rs = P3-13's **event log** satellite (`LogCtx`, ephemeral,
                                  capped): the record behind the drawer's Events tab. No producer
                                  hook — whichever layer observed the fact appends it (the scan
@@ -675,10 +685,11 @@ src/apps/project/                the project window (Valin-shaped)
                                  rows: one `connection_row` for both kinds, a database's schemas →
                                  Tables and Views groups → relations off `Engine::db_listing`, an
                                  object store's **links** into the workspace rows that read
-                                 through it, and the pane's one empty state; a relation is a leaf
-                                 until DB-07 can address its columns, and carries its rendered
-                                 three-part `address` because the walk is where the catalog and
-                                 the schema are still in hand) · columns (flatten + tests)
+                                 through it, and the pane's one empty state; a relation **opens onto its
+                                 columns** (DB-07 — the one node whose children cost a round trip,
+                                 so it shows a loading note until they land), and carries its
+                                 rendered three-part `address` because the walk is where the
+                                 catalog and the schema are still in hand) · columns (flatten + tests)
                                  · menu (P3-06: one item list per row kind, shared by right-click
                                  and the ⋮ so the two triggers can't drift; Drop and Forget open
                                  the confirm, never drop; `select_sql`/`pin_view_sql` are DB-06's

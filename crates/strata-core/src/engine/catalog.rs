@@ -9,6 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::stats::Precision;
 use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
+use datafusion::sql::TableReference;
 
 use strata_model::{
     ChartRole, ColumnInfo, CsvRead, FileCompression, JsonShape, Kind, SourceFormat, Stat, StatKey,
@@ -18,9 +19,9 @@ use crate::engine::arrow_stats::StrataArrowFormat;
 use crate::engine::json_poly::PolyJsonFormat;
 use crate::engine::providers::in_workspace;
 use crate::engine::query::is_snapshot_name;
-use crate::engine::sql::Blocked;
-use crate::engine::{fold_ident, CATALOG, SCHEMA};
-use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
+use crate::engine::sql::{qualified, Blocked};
+use crate::engine::{fold_ident, quote_ident, CATALOG, SCHEMA};
+use crate::profile::{aggregates, decode, profile_sql, CatalogProfile, Profiled};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
 /// (`None` when the source doesn't report one).
@@ -920,7 +921,23 @@ async fn readers(
 /// Spawned onto the engine's own runtime by [`Engine::profile`](super::Engine::profile), which
 /// owns the abort handle: blocking is fine in here, since this is *meant* to be the expensive
 /// thing the user opted into, and the UI stays live either way.
+///
+/// **Whose name it is decides both the expressions and the renderer**, and that is one decision
+/// made once: a workspace name executes here, so it gets the whole expression set and the
+/// fold-preserving [`quote_ident`] its registered identity needs; a name in a database
+/// connection's catalog federates into one statement on the server, so it gets [`Profiled`]'s
+/// restricted set and the case-preserving [`qualified`], which prints the segments the server
+/// itself spells. Reaching for either one alone is silently wrong in opposite directions.
 pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProfile, String> {
+    let reference = TableReference::parse_str(name);
+    let parts = reference.to_vec();
+    let (at, from) = match in_workspace(&reference) {
+        true => (Profiled::Workspace, quote_ident(name)),
+        false => (
+            Profiled::Database,
+            qualified(parts.iter().map(String::as_str)),
+        ),
+    };
     let df = ctx.table(name).await.map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df
         .schema()
@@ -928,8 +945,8 @@ pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProf
         .iter()
         .map(|f| column_info(f))
         .collect();
-    let (exprs, slots) = aggregates(&columns);
-    let sql = profile_sql(name, &exprs);
+    let (exprs, slots) = aggregates(&columns, at);
+    let sql = profile_sql(&from, &exprs);
     let batches = df
         .aggregate(vec![], exprs)
         .map_err(|e| e.to_string())?

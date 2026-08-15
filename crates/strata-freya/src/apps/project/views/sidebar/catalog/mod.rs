@@ -40,6 +40,25 @@
 //! The list is exhaustive on purpose, because a walk input nothing subscribes to is a row that goes
 //! stale until something unrelated happens to wake the pane.
 //!
+//! ## The one subscription that is not free
+//!
+//! A remote relation's **columns** are a round trip (DB-07), and the pane holds that subscription
+//! rather than a row: the walk decides which relations are open and it cannot await, and a
+//! virtualized row's scope is a slot that scrolling hands to somebody else. The walk returns what
+//! it drew open, an effect moves that into the query's key, and the answer comes back as an input
+//! on the next pass — so opening a relation costs one extra pass, during which that row shows its
+//! loading note because the read has not happened either way.
+//!
+//! **What the walk is handed is *accumulated*, not the query's current value**, and that is the
+//! difference between a working tree and a flickering one. The key is the whole open set plus the
+//! catalog epoch, and freya-query starts a changed key at `Pending` with no carried value — so
+//! reading the entry directly would blank *every* already-drawn relation back to its loading note
+//! whenever any other relation was opened, or whenever any unrelated catalog pass moved the epoch.
+//! Merging each settled answer into a map the pane keeps is the same rule the inspector's
+//! STATISTICS zone holds (`views/inspector/column.rs`): **never show less than a moment ago.** The
+//! map only grows, bounded by the relations opened in this window's life, and a relation the
+//! server has since dropped is corrected by the `Err` its next answer merges over the old one.
+//!
 //! ## Local UI state
 //!
 //! Filter text, which nodes are open, which nested columns are expanded and which saved query is
@@ -74,12 +93,13 @@ use strata_core::util::contains_lowercased;
 use uuid::Uuid;
 
 use self::menu::rename_saved_query;
-use self::node::{walk, Node, NodeKind};
+use self::node::{walk, Node, NodeKind, Walked};
 use self::row::{INDENT, ROW_HEIGHT};
 use self::view::TreeRow;
 use self::workspace::seeded_paths;
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{ProjChan, ProjectState};
+use crate::apps::project::query::use_remote_schemas;
+use crate::apps::project::state::{use_catalog, ProjChan, ProjectState};
 use crate::components::metrics::{SP_3, SP_4};
 use crate::keymap::on_command;
 use crate::state::use_config_station;
@@ -274,11 +294,22 @@ impl Component for Catalog {
         drop(queries.read());
         drop(connections.read());
 
-        let nodes = {
+        let wanted = use_state(Vec::new);
+        let epoch = use_catalog().read().epoch();
+        let described = use_remote_schemas(&engine, wanted.read().clone(), epoch);
+
+        let Walked {
+            nodes,
+            open_relations,
+        } = {
             let project = tables.read();
             let expanded = open.read();
-            walk(&project, &engine, &needle, &expanded)
+            walk(&project, &engine, &needle, &expanded, &described)
         };
+        use_side_effect_with_deps(&open_relations, move |relations| {
+            let mut wanted = wanted;
+            wanted.set_if_modified(relations.clone());
+        });
 
         let wanted = reveal.read().clone();
         let target = wanted

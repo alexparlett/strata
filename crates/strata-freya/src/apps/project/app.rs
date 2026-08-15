@@ -32,17 +32,18 @@ use crate::apps::project::close::{
     close_bridge, close_project, CloseBridge, CloseGuard, CloseTarget, Veto,
 };
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::ProfileTarget;
 use crate::apps::project::state::{
     chats_cap, load_project, seed_pick, use_agent_bridge, use_autosave, use_diagnostics,
     use_engine_config, use_engine_restart, use_init_agents, use_init_catalog_selection,
     use_init_chats, use_init_faults, use_init_history, use_init_log, use_init_project,
-    use_init_session, use_report, AssistantCtx, Chan, EngineRestart, Loaded, SessionState,
+    use_init_remote_scans, use_init_session, use_report, AssistantCtx, Chan, EngineRestart, Loaded,
+    SessionState,
 };
 use crate::apps::project::views::{
     ChatConfirm, ChatDrop, CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher,
-    DropConfirm, DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProfileTarget,
-    ProjectLoadFailed, ProjectLoading, RequestKeepers, SchemasPicker, SchemasRequest, ShapeDialog,
-    ShapeTarget, Shell,
+    DropConfirm, DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProjectLoadFailed,
+    ProjectLoading, RequestKeepers, SchemasPicker, SchemasRequest, ShapeDialog, ShapeTarget, Shell,
 };
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -505,6 +506,7 @@ impl Component for ProjectLoaded {
         use_diagnostics();
         use_engine_config(&engine, self.confirm);
         use_init_catalog_selection();
+        use_init_remote_scans();
         let drop_target = use_provide_context(|| State::create(None::<DropTarget>));
         let chat_target = use_provide_context(|| State::create(None::<ChatDrop>));
         let profile_target = use_provide_context(|| State::create(None::<ProfileTarget>));

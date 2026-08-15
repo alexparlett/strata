@@ -125,7 +125,9 @@ impl Entry {
             Entry::Action(action) => action.label().to_string(),
             Entry::Table { name, .. } | Entry::View { name, .. } => name.clone(),
             Entry::Query { name, .. } => name.clone(),
-            Entry::Column { col, .. } => format!("{}.{}", col.owner, col.path.join(".")),
+            Entry::Column { col, .. } => {
+                format!("{}.{}", col.owner.label(), col.path.join("."))
+            }
         }
     }
 
@@ -152,7 +154,7 @@ impl Entry {
             Entry::View { name, .. } => format!("view:{name}"),
             Entry::Query { id, .. } => format!("query:{id}"),
             Entry::Column { col, .. } => {
-                format!("col:{:?}:{}:{}", col.kind, col.owner, col.path.join("."))
+                format!("col:{:?}:{}", col.owner, col.path.join("."))
             }
         }
     }
@@ -230,11 +232,11 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
         };
         for column in &meta.columns {
             entries.push(Entry::Column {
-                col: ColRef {
-                    kind: CatalogKind::Table,
-                    owner: table.def.name.clone(),
-                    path: vec![column.name.clone()],
-                },
+                col: ColRef::entry(
+                    CatalogKind::Table,
+                    table.def.name.clone(),
+                    vec![column.name.clone()],
+                ),
                 dtype: column.dtype.clone(),
                 kind: column.kind,
                 part: table
@@ -251,11 +253,11 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
         };
         for column in &info.columns {
             entries.push(Entry::Column {
-                col: ColRef {
-                    kind: CatalogKind::View,
-                    owner: view.def.name.clone(),
-                    path: vec![column.name.clone()],
-                },
+                col: ColRef::entry(
+                    CatalogKind::View,
+                    view.def.name.clone(),
+                    vec![column.name.clone()],
+                ),
                 dtype: column.dtype.clone(),
                 kind: column.kind,
                 part: false,

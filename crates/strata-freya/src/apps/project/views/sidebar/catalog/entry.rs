@@ -29,7 +29,7 @@ use super::row::{
 use super::view::{body, RowBody, RowCtx};
 use super::{CatalogTheme, TreeCtx};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{use_profile, ScanId};
+use crate::apps::project::query::{use_profile, ProfileTarget, ScanId};
 use crate::apps::project::state::Chan;
 use crate::components::badge::Badge;
 use crate::components::dot::Dot;
@@ -60,6 +60,10 @@ pub fn entry_row(at: &Place, entry: &Entry, cx: &RowCtx) -> RowBody {
     let actions = cx.catalog.clone();
 
     let (kind, name) = (entry.kind, entry.name.clone());
+    let target = ProfileTarget::Workspace {
+        kind,
+        name: name.clone(),
+    };
     let icon_color = match kind {
         CatalogKind::View => cx.theme.view_color,
         CatalogKind::Query => cx.theme.query_color,
@@ -102,7 +106,7 @@ pub fn entry_row(at: &Place, entry: &Entry, cx: &RowCtx) -> RowBody {
                 .into_element()
         }))
         .child(
-            MonoValue::new(name.clone())
+            MonoValue::new(name)
                 .color(cx.theme.name_color)
                 .width(Size::flex(1.))
                 .text_overflow(TextOverflow::Ellipsis),
@@ -123,7 +127,7 @@ pub fn entry_row(at: &Place, entry: &Entry, cx: &RowCtx) -> RowBody {
                 .maybe_child(match entry.scan {
                     Some(scan) => Some(
                         ProfileStatus {
-                            owner: name.clone(),
+                            target: target.clone(),
                             scan,
                             settled: cx.status.clone(),
                             theme: cx.theme.clone(),
@@ -137,8 +141,7 @@ pub fn entry_row(at: &Place, entry: &Entry, cx: &RowCtx) -> RowBody {
 
     let mut out = body(row);
     out.extend(
-        watched_scan(folds, entry.scan)
-            .map(|scan| ProfileWatch { owner: name, scan }.into_element()),
+        watched_scan(folds, entry.scan).map(|scan| ProfileWatch { target, scan }.into_element()),
     );
     out
 }
@@ -168,7 +171,7 @@ pub(super) fn watched_scan(folds: Folds, scan: Option<ScanId>) -> Option<ScanId>
 /// tables from subscribing (and, with an un-run entry, *dispatching*) a scan nobody asked for.
 #[derive(PartialEq)]
 struct ProfileStatus {
-    owner: String,
+    target: ProfileTarget,
     scan: ScanId,
     /// What the column says when **no scan is running** — so the one slot is never empty while the
     /// row has something to report, and never holds two glyphs at once.
@@ -178,7 +181,7 @@ struct ProfileStatus {
 
 impl Component for ProfileStatus {
     fn render(&self) -> impl IntoElement {
-        match scan_running(&self.owner, self.scan) {
+        match scan_running(&self.target, self.scan) {
             true => tip(PROFILING)
                 .child(CircularLoader::new().size(STATUS_DOT).a11y_alt(PROFILING))
                 .into_element(),
@@ -194,22 +197,22 @@ impl Component for ProfileStatus {
 /// the fold plan has taken the status column away. See [`watched_scan`].
 #[derive(PartialEq)]
 struct ProfileWatch {
-    owner: String,
+    target: ProfileTarget,
     scan: ScanId,
 }
 
 impl Component for ProfileWatch {
     fn render(&self) -> impl IntoElement {
-        let _running = scan_running(&self.owner, self.scan);
+        let _running = scan_running(&self.target, self.scan);
         rect()
     }
 }
 
-/// Subscribe to `owner`'s scan and answer whether it is executing right now — the one hook both
+/// Subscribe to `target`'s scan and answer whether it is executing right now — the one hook both
 /// [`ProfileStatus`] and [`ProfileWatch`] are built around, so the two cannot subscribe differently.
-fn scan_running(owner: &str, scan: ScanId) -> bool {
+fn scan_running(target: &ProfileTarget, scan: ScanId) -> bool {
     let engine = use_consume::<EngineCtx>();
-    let query = use_profile(&engine, owner, scan);
+    let query = use_profile(&engine, target, scan);
     let reader = query.read();
     let running = matches!(
         &*reader.state(),
@@ -228,14 +231,10 @@ pub fn column_row(at: &Place, column: &Column, cx: &RowCtx) -> RowBody {
     let mut layout = cx.layout;
 
     let col = ColRef {
-        kind: column.owner_kind,
         owner: column.owner.clone(),
         path: column.row.path.clone(),
     };
-    let selected = selection
-        .read()
-        .as_ref()
-        .is_some_and(|s| s.owner == col.owner && s.kind == col.kind && s.path == col.path);
+    let selected = selection.read().as_ref() == Some(&col);
 
     let swatch = kind_color(column.row.kind, &cx.palette);
     let (open, path) = (at.open, at.path.clone());

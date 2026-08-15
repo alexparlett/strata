@@ -249,13 +249,14 @@ mod tests {
     use strata_core::config::AppConfig;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ColRef, SourceFormat, TableDef, TableOrigin};
+    use strata_model::{ColRef, RemoteRef, SourceFormat, TableDef, TableOrigin};
 
     use super::*;
     use crate::apps::configure::ConfigureTarget;
     use crate::apps::project::contexts::EngineCtx;
+    use crate::apps::project::query::{ProfileTarget, ScanId};
     use crate::apps::project::state::{ProjChan, ProjectState, ScanRequest, ScanScope};
-    use crate::apps::project::views::{DropTarget, ProfileTarget, SchemasRequest};
+    use crate::apps::project::views::{DropTarget, SchemasRequest};
     use crate::state::ConfigStation;
     use crate::theme::strata_theme;
 
@@ -306,6 +307,9 @@ mod tests {
                 r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
                 r.provide_root_context(|| State::create(None::<DropTarget>));
                 r.provide_root_context(|| State::create(None::<ProfileTarget>));
+                r.provide_root_context(|| {
+                    State::create(std::collections::BTreeMap::<RemoteRef, ScanId>::new())
+                });
                 r.provide_root_context(|| State::create(None::<ConfigureTarget>));
                 r.provide_root_context(|| State::create(None::<ConnectionTarget>));
                 r.provide_root_context(|| State::create(None::<String>) as SchemasRequest);

@@ -1,6 +1,7 @@
 //! The catalog's **context signals**: the **inspected column** the right-hand inspector is
-//! describing, whether a catalog **scan** is in flight, and the **re-scan request** the sidebar's
-//! ↻ raises for the window root's scan driver to serve.
+//! describing, the **profile requests** on relations that have no catalog row to keep one on,
+//! whether a catalog **scan** is in flight, and the **re-scan request** the sidebar's ↻ raises for
+//! the window root's scan driver to serve.
 //!
 //! All are context signals, not Radio stores (state-arch §8, the `LayoutCtx` / `LogCtx` shape):
 //! one small value each, written in one place and read in another across the shell. Neither is on
@@ -8,11 +9,18 @@
 //! registration learned, and a transient "what am I looking at" pointer would wake every catalog
 //! subscriber on each click.
 //!
-//! The selection's value is a [`ColRef`] — `{ kind, owner, path }` — because a name alone can't say
-//! *which* `city`, the top-level one or the one inside `address`, and the sidebar renders both.
+//! The selection's value is a [`ColRef`] — `{ owner, path }`, where the owner is a workspace table
+//! or view **or** a relation inside a database connection's catalog — because a name alone can't
+//! say *which* `city`, the top-level one or the one inside `address`, and the sidebar renders both.
 
-use freya::prelude::{consume_context, use_provide_context, State, WritableUtils};
-use strata_model::ColRef;
+use std::collections::{BTreeMap, BTreeSet};
+
+use freya::prelude::{consume_context, use_provide_context, use_side_effect, State, WritableUtils};
+use freya::radio::use_radio;
+use strata_model::{ColRef, Provider, RemoteRef};
+
+use super::{ProjChan, ProjectState, Reg};
+use crate::apps::project::query::ScanId;
 
 /// The selected column, or `None` when nothing is inspected. `State` is `Copy`, so consumers hold
 /// it by value.
@@ -26,6 +34,66 @@ pub fn use_init_catalog_selection() -> CatalogSelection {
 /// This window's inspected-column slot, from context.
 pub fn use_catalog_selection() -> CatalogSelection {
     consume_context::<CatalogSelection>()
+}
+
+/// **The profile scan asked for on each remote relation** — the same request a workspace entry
+/// keeps on its own catalog row, for the relations that have no row to keep it on.
+///
+/// A database answers for itself, so there are no defs and no `Reg` rows under a database
+/// connection (DB-02) — which leaves the "an expensive, opt-in result is freya-query keyed by the
+/// request; the store holds the request" rule with nowhere to put the request. The rule generalizes
+/// rather than being excepted: **whoever owns the surface holds the request**. For a workspace
+/// entry that is `ProjectState`; for a remote relation it is the window, here. Nothing is minted
+/// into the store, and the numbers still live only in the freya-query entry the [`ScanId`] keys.
+///
+/// A map on a `State` rather than a store channel because it is not project data and does not
+/// persist: it is dropped with the window, exactly like the selection above it.
+pub type RemoteScans = State<BTreeMap<RemoteRef, ScanId>>;
+
+/// Provide this window's remote-scan requests, and keep them true. Call once in the window root.
+///
+/// **Invalidation is a reconciliation, not an event.** A scan describes a relation as the
+/// connection last answered for it, so it survives exactly as long as that connection is connected:
+/// a Forget takes its row away, and a whole-catalog ↻ drops every connection row to `Loading` before
+/// re-connecting ([`ProjectState::reload_connections`]), which rebuilds every provider — so both
+/// gestures are covered by the one rule, and a single table's Refresh (which touches no connection)
+/// leaves a remote scan alone. Nothing here has to notice *which* gesture happened.
+pub fn use_init_remote_scans() -> RemoteScans {
+    let scans: RemoteScans = use_provide_context(|| State::create(BTreeMap::new()));
+    let project = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+    use_side_effect(move || {
+        let connected = connected_catalogs(&project.read());
+        let mut scans = scans;
+        if scans
+            .peek()
+            .keys()
+            .any(|relation| !connected.contains(&relation.connection))
+        {
+            scans
+                .write()
+                .retain(|relation, _| connected.contains(&relation.connection));
+        }
+    });
+    scans
+}
+
+/// The catalog names of every database connection that is currently connected — what a remote
+/// relation's [`RemoteRef::connection`] is addressed by, from the defs that decide it.
+fn connected_catalogs(project: &ProjectState) -> BTreeSet<String> {
+    project
+        .connections
+        .iter()
+        .filter(|row| matches!(row.reg, Reg::Ready(())))
+        .filter_map(|row| match &row.def.provider {
+            Provider::Postgres(pg) => Some(pg.catalog.trim().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// This window's remote-scan requests, from context.
+pub fn use_remote_scans() -> RemoteScans {
+    consume_context::<RemoteScans>()
 }
 
 /// The state of the catalog **as a thing to resolve against** — one value answering both

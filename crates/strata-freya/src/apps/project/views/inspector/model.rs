@@ -17,10 +17,11 @@
 use std::time::SystemTime;
 
 use strata_core::engine::profile::CatalogProfile;
+use strata_core::engine::RemoteRelation;
 use strata_core::util::{ago, fmt_int};
-use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, Stat, StatKey};
+use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, RemoteRef, Stat, StatKey};
 
-use crate::apps::project::query::ScanId;
+use crate::apps::project::query::{ProfileTarget, ScanId};
 use crate::apps::project::state::{ProjectState, Reg};
 
 /// Display order for the facts box.
@@ -50,6 +51,11 @@ pub enum FormatBadge {
     Json,
     Arrow,
     View,
+    /// A relation inside a database connection's catalog — no reader of ours at all: the server
+    /// holds the bytes and answers about them, which is the same reason its free tier is the
+    /// schema and nothing else. Badged with the **connection** rather than with a format, because
+    /// which connection a relation came through is the fact worth carrying in the title.
+    Connection(String),
     /// A format the app has no reader for — shown as written, in the recessive tone.
     Other(String),
 }
@@ -75,6 +81,7 @@ impl FormatBadge {
             FormatBadge::Json => "JSON".into(),
             FormatBadge::Arrow => "ARROW".into(),
             FormatBadge::View => "VIEW".into(),
+            FormatBadge::Connection(name) => name.to_uppercase(),
             FormatBadge::Other(f) => f.to_uppercase(),
         }
     }
@@ -83,8 +90,10 @@ impl FormatBadge {
 /// Everything the inspector renders about one resolved column.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ColumnFacts {
-    /// The table or view it belongs to — the title's "from …".
-    pub owner: String,
+    /// **What owns it, and so what a scan of it would be of** — the title's "from …", the channel
+    /// a request lands on, and the name the engine profiles. One field rather than three, because
+    /// a column's owner answers all of it and three would be three chances to disagree.
+    pub target: ProfileTarget,
     /// The leaf's own name. The path is how it was found, not what it is called.
     pub name: String,
     pub dtype: String,
@@ -99,7 +108,9 @@ pub struct ColumnFacts {
     /// ([`with_scan`]). Empty for a nested field before a scan (footers describe leaves and we
     /// don't traverse into them), for a view's columns, and for any format without metadata.
     pub stats: Vec<Stat>,
-    /// Owned by a view: there are no files under it, so there is no footer tier at all.
+    /// Nothing of ours reads files for this column, so there is no footer tier at all — a view,
+    /// whose columns its query defines, and a remote relation, whose bytes are the server's.
+    /// What the two share is the *absence*; what a scan of each costs is the target's to say.
     pub derived: bool,
     /// A **nested field** — a struct's child, not a top-level column whose type is a struct.
     /// The scan is keyed by top-level column name, so this is what stops `address.city`
@@ -127,29 +138,47 @@ pub enum Inspected {
     Gone(String),
 }
 
-/// Resolve the selection against the catalog store.
+/// Resolve a **workspace** selection against the catalog store.
 ///
-/// One lookup, not two: [`ColRef::kind`] says which collection owns it. Tables and views share
+/// One lookup, not two: the owner says which collection owns it. Tables and views share
 /// a namespace, so searching both and hoping the name lands in one is how a view's column ends
 /// up wearing a table's facts.
-pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
-    let scan = project.profile_scan(col.kind, &col.owner);
-    match col.kind {
-        CatalogKind::View => match project.views.iter().find(|v| v.def.name == col.owner) {
-            None => Inspected::Gone(gone_owner(&col.owner)),
+pub fn inspect(
+    project: &ProjectState,
+    col: &ColRef,
+    kind: CatalogKind,
+    name: &str,
+    scan: Option<ScanId>,
+) -> Inspected {
+    let target = ProfileTarget::Workspace {
+        kind,
+        name: name.to_string(),
+    };
+    match kind {
+        CatalogKind::View => match project.views.iter().find(|v| v.def.name == name) {
+            None => Inspected::Gone(gone_owner(name)),
             Some(row) => match &row.reg {
                 Reg::Loading => Inspected::Loading,
                 Reg::Failed(e) => Inspected::Failed(e.clone()),
-                Reg::Ready(info) => facts(col, &info.columns, FormatBadge::View, None, true, scan),
+                Reg::Ready(info) => facts(
+                    col,
+                    target,
+                    &info.columns,
+                    FormatBadge::View,
+                    None,
+                    true,
+                    scan,
+                ),
             },
         },
-        _ => match project.tables.iter().find(|t| t.def.name == col.owner) {
-            None => Inspected::Gone(gone_owner(&col.owner)),
+        _ => match project.tables.iter().find(|t| t.def.name == name) {
+            None => Inspected::Gone(gone_owner(name)),
             Some(row) => match &row.reg {
                 Reg::Loading => Inspected::Loading,
                 Reg::Failed(e) => Inspected::Failed(e.clone()),
                 Reg::Ready(meta) => facts(
                     col,
+                    target,
                     &meta.columns,
                     FormatBadge::of_table(&row.def.format),
                     meta.rows,
@@ -161,28 +190,77 @@ pub fn inspect(project: &ProjectState, col: &ColRef) -> Inspected {
     }
 }
 
+/// Resolve a **remote** selection against what the connection answered about it.
+///
+/// The two tiers collapse to one here, and that is the honest shape rather than a gap: a database
+/// reports its schema and nothing else for free. There is no footer to read, no file listing to
+/// count, and — deliberately — no row estimate borrowed from `pg_class.reltuples` in the ROWS row,
+/// which the completeness bar *divides by*: an estimated denominator under an exact null count is
+/// the two-reads-as-one fault this panel refuses everywhere else. A scan answers both for real.
+pub fn inspect_remote(
+    col: &ColRef,
+    relation: &RemoteRef,
+    answer: Option<&Result<RemoteRelation, String>>,
+    scan: Option<ScanId>,
+) -> Inspected {
+    let found = match answer {
+        None => return Inspected::Loading,
+        Some(Err(why)) => return Inspected::Failed(why.clone()),
+        Some(Ok(found)) => found,
+    };
+    let kind = match found.view {
+        true => CatalogKind::View,
+        false => CatalogKind::Table,
+    };
+    facts(
+        col,
+        ProfileTarget::Remote {
+            kind,
+            relation: relation.clone(),
+        },
+        &found.columns,
+        FormatBadge::Connection(relation.connection.clone()),
+        None,
+        true,
+        scan,
+    )
+}
+
 fn gone_owner(owner: &str) -> String {
     format!("'{owner}' is no longer in the catalog.")
 }
 
 /// Walk the path into `columns` and build the facts, or report the column gone.
+///
+/// **An empty path is the owner itself**, which resolves to its first column — the state a remote
+/// relation is selected in before anything has read its columns, and the one a profile's reveal
+/// leaves behind when it cannot name a column yet. An owner with no columns at all is the one case
+/// that has nothing to stand on, and says so.
 fn facts(
     col: &ColRef,
+    target: ProfileTarget,
     columns: &[ColumnInfo],
     format: FormatBadge,
     rows: Option<u64>,
     derived: bool,
     scan: Option<ScanId>,
 ) -> Inspected {
-    let Some(info) = resolve(columns, &col.path) else {
-        return Inspected::Gone(format!(
-            "'{}' is no longer a column of '{}'.",
-            col.path.join("."),
-            col.owner
-        ));
+    let owner = target.label();
+    let info = match col.path.is_empty() {
+        true => columns.first(),
+        false => resolve(columns, &col.path),
+    };
+    let Some(info) = info else {
+        return Inspected::Gone(match col.path.is_empty() {
+            true => format!("'{owner}' has no columns."),
+            false => format!(
+                "'{}' is no longer a column of '{owner}'.",
+                col.path.join(".")
+            ),
+        });
     };
     Inspected::Column(Box::new(ColumnFacts {
-        owner: col.owner.clone(),
+        target,
         name: info.name.clone(),
         dtype: info.dtype.clone(),
         kind: info.kind,
@@ -265,16 +343,9 @@ fn resolve<'a>(columns: &'a [ColumnInfo], path: &[String]) -> Option<&'a ColumnI
 }
 
 impl ColumnFacts {
-    /// Which catalog section owns this column — what a scan request is addressed to.
-    ///
-    /// `derived` is exactly "owned by a view" ([`inspect`] sets it for `CatalogKind::View` and
-    /// nothing else), so there is no second field to keep in step. A saved query has no schema
-    /// and can't be inspected at all.
-    pub fn owner_kind(&self) -> CatalogKind {
-        match self.derived {
-            true => CatalogKind::View,
-            false => CatalogKind::Table,
-        }
+    /// What the title's "from …" says.
+    pub fn owner(&self) -> String {
+        self.target.label()
     }
 }
 
@@ -470,7 +541,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
-    use strata_model::{TableDef, TableOrigin, ViewDef};
+    use strata_model::{ColOwner, TableDef, TableOrigin, ViewDef};
 
     use super::*;
     use strata_model::SourceFormat;
@@ -577,15 +648,21 @@ mod tests {
     }
 
     fn sel(kind: CatalogKind, owner: &str, path: &[&str]) -> ColRef {
-        ColRef {
-            kind,
-            owner: owner.into(),
-            path: path.iter().map(|s| (*s).to_string()).collect(),
-        }
+        ColRef::entry(kind, owner, path.iter().map(|s| (*s).to_string()).collect())
+    }
+
+    /// The panel's own resolution of a workspace selection — the kind and name come out of the
+    /// owner exactly as the inspector takes them out of it.
+    fn look(project: &ProjectState, col: &ColRef) -> Inspected {
+        let ColOwner::Entry { kind, name } = &col.owner else {
+            panic!("a workspace selection");
+        };
+        let scan = project.profile_scan(*kind, name);
+        inspect(project, col, *kind, name, scan)
     }
 
     fn column(project: &ProjectState, col: &ColRef) -> ColumnFacts {
-        match inspect(project, col) {
+        match look(project, col) {
             Inspected::Column(facts) => *facts,
             other => panic!("expected a resolved column, got {other:?}"),
         }
@@ -731,12 +808,12 @@ mod tests {
     fn a_selection_reports_what_happened_to_its_row() {
         let mut p = project();
         assert!(matches!(
-            inspect(&p, &sel(CatalogKind::Table, "nope", &["x"])),
+            look(&p, &sel(CatalogKind::Table, "nope", &["x"])),
             Inspected::Gone(m) if m == "'nope' is no longer in the catalog."
         ));
         assert!(
             matches!(
-                inspect(&p, &sel(CatalogKind::Table, "events", &["gone"])),
+                look(&p, &sel(CatalogKind::Table, "events", &["gone"])),
                 Inspected::Gone(m) if m == "'gone' is no longer a column of 'events'."
             ),
             "the row is there; the column the schema used to have is not"
@@ -744,13 +821,13 @@ mod tests {
 
         p.reload_tables();
         assert!(matches!(
-            inspect(&p, &sel(CatalogKind::Table, "events", &["amount"])),
+            look(&p, &sel(CatalogKind::Table, "events", &["amount"])),
             Inspected::Loading
         ));
 
         p.table_failed("events", "No such file or directory (os error 2)".into());
         assert!(matches!(
-            inspect(&p, &sel(CatalogKind::Table, "events", &["amount"])),
+            look(&p, &sel(CatalogKind::Table, "events", &["amount"])),
             Inspected::Failed(e) if e == "No such file or directory (os error 2)"
         ));
     }
@@ -1099,5 +1176,170 @@ mod tests {
             "above it, whole percents read better"
         );
         assert_eq!(fill_label(0.5), "50%");
+    }
+
+    /// A relation as the connection answered for it — the shape `Engine::describe_remote` hands
+    /// back, built here so the remote arm is tested with no network and no server.
+    fn described(relation: &RemoteRef, view: bool, columns: Vec<ColumnInfo>) -> RemoteRelation {
+        RemoteRelation {
+            connection: relation.connection.clone(),
+            relation: format!("{}.{}", relation.schema, relation.relation),
+            view,
+            columns,
+        }
+    }
+
+    fn orders() -> RemoteRef {
+        RemoteRef {
+            connection: "pg".into(),
+            schema: "public".into(),
+            relation: "orders".into(),
+        }
+    }
+
+    fn remote_ref(relation: &RemoteRef, path: &[&str]) -> ColRef {
+        ColRef {
+            owner: ColOwner::Remote(relation.clone()),
+            path: path.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    /// **The remote arm end to end.** Until the one introspection lands there is nothing to
+    /// describe and the panel says so; afterwards the column is described on exactly the terms a
+    /// database can honestly offer — its type, badged with the connection it came through, and no
+    /// free row count or completeness bar, because a server reports neither for free.
+    #[test]
+    fn a_remote_column_is_loading_once_and_then_carries_only_what_the_server_said() {
+        let relation = orders();
+        let selected = remote_ref(&relation, &["total"]);
+
+        assert!(
+            matches!(
+                inspect_remote(&selected, &relation, None, None),
+                Inspected::Loading
+            ),
+            "the first sight of a relation this session is its one introspection"
+        );
+
+        let answer = Ok(described(
+            &relation,
+            false,
+            vec![col("total", DataType::Int64, Vec::new())],
+        ));
+        let Inspected::Column(facts) = inspect_remote(&selected, &relation, Some(&answer), None)
+        else {
+            panic!("the columns landed");
+        };
+
+        assert_eq!(facts.name, "total");
+        assert_eq!(
+            facts.owner(),
+            "pg.public.orders",
+            "named as SQL addresses it"
+        );
+        assert_eq!(facts.format, FormatBadge::Connection("pg".into()));
+        assert_eq!(facts.format.label(), "PG");
+        assert!(
+            facts.derived,
+            "nothing of ours reads files for it, so there is no footer tier"
+        );
+        assert_eq!(
+            fact_rows(&facts)
+                .into_iter()
+                .map(|r| r.label)
+                .collect::<Vec<_>>(),
+            vec!["TYPE"],
+            "no ROWS: `reltuples` is an estimate, and the completeness bar divides by this number"
+        );
+        assert_eq!(completeness(&facts), None);
+        assert_eq!(
+            facts.target,
+            ProfileTarget::Remote {
+                kind: CatalogKind::Table,
+                relation
+            },
+            "…and a scan of it is addressed to the relation, not to a row that does not exist"
+        );
+    }
+
+    /// **An empty path is the relation itself**, which the panel stands on its first column — the
+    /// state a profile's reveal leaves behind, because only this introspection could have named a
+    /// column and it had not happened yet.
+    #[test]
+    fn a_relation_with_no_column_chosen_stands_on_its_first() {
+        let relation = orders();
+        let answer = Ok(described(
+            &relation,
+            false,
+            vec![
+                col("id", DataType::Int64, Vec::new()),
+                col("total", DataType::Int64, Vec::new()),
+            ],
+        ));
+
+        let Inspected::Column(facts) =
+            inspect_remote(&remote_ref(&relation, &[]), &relation, Some(&answer), None)
+        else {
+            panic!("the relation resolves to a column");
+        };
+        assert_eq!(facts.name, "id");
+    }
+
+    /// The server calls it a view, so every surface labels the action that way — one vocabulary,
+    /// whichever catalog the relation is in.
+    #[test]
+    fn a_remote_view_carries_the_view_kind_into_its_profile_target() {
+        let relation = RemoteRef {
+            relation: "big_orders".into(),
+            ..orders()
+        };
+        let answer = Ok(described(
+            &relation,
+            true,
+            vec![col("total", DataType::Int64, Vec::new())],
+        ));
+        let Inspected::Column(facts) = inspect_remote(
+            &remote_ref(&relation, &["total"]),
+            &relation,
+            Some(&answer),
+            None,
+        ) else {
+            panic!("the columns landed");
+        };
+        assert_eq!(facts.target.kind(), CatalogKind::View);
+    }
+
+    /// A refused introspection is reported as the fault it is, rather than as an absent relation:
+    /// the connection lists it, and the server would not describe it.
+    #[test]
+    fn a_refused_introspection_says_why() {
+        let relation = orders();
+        let answer = Err("Cannot read 'pg.public.orders': permission denied".to_string());
+        assert!(matches!(
+            inspect_remote(&remote_ref(&relation, &["total"]), &relation, Some(&answer), None),
+            Inspected::Failed(why) if why.contains("permission denied")
+        ));
+    }
+
+    /// A scan asked for on a relation reaches its facts from the window's satellite, which is
+    /// where a relation with no catalog row keeps its request.
+    #[test]
+    fn a_remote_scan_request_reaches_the_facts() {
+        let relation = orders();
+        let answer = Ok(described(
+            &relation,
+            false,
+            vec![col("total", DataType::Int64, Vec::new())],
+        ));
+        let scan = ScanId::new();
+        let Inspected::Column(facts) = inspect_remote(
+            &remote_ref(&relation, &["total"]),
+            &relation,
+            Some(&answer),
+            Some(scan),
+        ) else {
+            panic!("the columns landed");
+        };
+        assert_eq!(facts.scan, Some(scan));
     }
 }
