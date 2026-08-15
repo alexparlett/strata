@@ -20,7 +20,7 @@ Two rules shape everything below:
   object store found"*. Registering that store is the whole of what an object-store connection
   *does* (`crates/strata-core/src/engine/store.rs`). A database connection is the same shape
   against a different registry: it builds a connection pool and registers a **catalog**
-  (`crates/strata-core/src/engine/db.rs`).
+  (`crates/strata-core/src/engine/db/`).
 
 ## Providers
 
@@ -459,6 +459,14 @@ crate's `DatabaseCatalogProvider`; the others are that it snapshots the listing 
 ↻ could not refresh it) and that it skips the federation wrapper, silently forfeiting the pushdown
 this exists for.
 
+A relation's provider is built **one level below** the crate's `PostgresTableFactory`
+(`engine/db/federate.rs`), which is that factory's three steps written out — the `SqlTable`, the
+PostgreSQL unparser dialect, the federation wrapper — plus an executor of ours around the crate's.
+`datafusion-table-providers` leaves every one of `datafusion-federation`'s rewrite hooks at its
+`None` default, and those hooks are the only place a statement can be touched between the unparser
+and the wire. The schema provider is still the one construction site, and the dialect, the wrapper
+and the per-relation cache are unchanged by the move.
+
 **The def:**
 
 | Field | What it is |
@@ -508,12 +516,47 @@ re-applies locally). A same-connection join, aggregate or TopK federates into **
 statement. A pg × parquet join is ambiguous at the join node: the largest single-provider subtree
 under the pg side still federates, and the join itself runs locally. A federated subplan that
 unparses to SQL the server rejects fails **loudly at execute time** — there is no silent local
-fallback, and the results pane's error path is the surface.
+fallback, and the results pane's error path is the surface. What that failure *says*, when the
+cause is a name only DataFusion has, is the JSON paragraph below.
 
 `jsonb` and other exotic types arrive as `Utf8` JSON text (`UnsupportedTypeAction::String`), which
 the app's own Postgres-style accessors already read. The crate's default would refuse the whole
 relation for one such column. This is representation honesty rather than silent corruption: the
 value is intact, only the type is wider.
+
+**JSON accessors are rewritten into PostgreSQL's own operators, and an accessor that has no
+faithful spelling refuses by name** (`engine/db/json.rs`). `payload ->> 'type'` is planned as a
+`datafusion-functions-json` UDF call, and a UDF call unparses *by name* — so without this a
+federated subplan would carry `json_as_text(payload, 'type')` to a server that has no such
+function, and federation has no per-expression fallback to catch it. What pushes down:
+
+| Typed | Planned as | Sent as |
+|---|---|---|
+| `x ->> 'k'`, `x -> 'a' ->> 'k'` | `json_as_text(x, …)` | `(x ->> 'k')`, `((x -> 'a') ->> 'k')` |
+| `x ? 'k'` | `json_contains(x, …)` | `((x -> 'k') IS NOT NULL)` |
+
+An accessor compared against something needs **parentheses**: `WHERE (payload ->> 'type') =
+'click'`, not `WHERE payload ->> 'type' = 'click'`. sqlparser gives every Postgres-style operator
+`PgOther` precedence, which is looser than `Eq`, so the bare form binds as
+`payload ->> ('type' = 'click')` and fails planning with "expected string or int, got Boolean".
+That is the parser's, not federation's — it reads the same way over a local JSON column.
+
+Everything else in the family — `json_get` (bare `->`), `json_get_str`, `json_get_json`,
+`json_length`, `json_object_keys` and the typed getters — is **unmapped on purpose**, because each
+would answer differently on the server than it does here: `->` returns Arrow's JSON union, which no
+PostgreSQL expression produces; `->>` stringifies an object where `json_get_str` is NULL; `->`
+hands back normalised `jsonb` where `json_get_json` hands back the source slice. A mapping that was
+close enough would make a query's answer depend on where it ran, so an unmapped member is a
+refusal naming the function, the connection and the way out (copy the rows in with `CREATE TABLE …
+AS SELECT …`); `->`'s refusal also names `->>`, and a mapped accessor called with no key to look
+up says *that* rather than that the accessor is unsupported. The same sentence wraps the failures
+only the server can raise — a created SQL macro that survived `simplify`, an accessor over a column
+that is `text` rather than `json` — recognised by the `SQLSTATE: 42883` the provider crate renders
+rather than by PostgreSQL's prose, which has at least three wordings for it. Those keep the
+server's own words and add ours on a line of their own. **`json_contains` is not `?`**: Postgres's `?` is also true for a string *array element* and
+takes no integer index, where the local function is false for both, so the faithful spelling is the
+arrow chain. None of this is reachable from a local JSON column: the rewrite rides the executor
+behind a remote relation's provider, and nothing else.
 
 **Read-only in v1.** Nothing writes to a database: `INSERT` gates on whether the target is a table
 Strata owns, and the schema provider refuses a registration in its own words underneath that.

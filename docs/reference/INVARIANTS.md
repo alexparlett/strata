@@ -1062,7 +1062,9 @@ Things that must not regress. Each was fought for once already.
   `DatabaseCatalogProvider` snapshots the schema and table list at construction (a ↻ could not
   refresh it), builds plain `SqlTable`s with the default unparser dialect, and skips the federation
   wrapper — so the generic path silently forfeits exactly the pushdown this workstream exists for.
-  Ours builds through `PostgresTableFactory` (dialect + federation) and **caches a provider per
+  Ours builds one level below `PostgresTableFactory` — that factory's own three steps written out
+  (`engine::db::federate`, DB-08), so a rewrite hook can ride the executor — and **caches a
+  provider per
   relation**, so diagnostics' validation costs one remote introspection per relation per connect
   rather than one per keystroke; `SchemaProvider::table_type` is **overridden** to answer from the
   cached `relkind`, because its default is `self.table(name).await` and `information_schema.tables`
@@ -1085,6 +1087,37 @@ Things that must not regress. Each was fought for once already.
   **Read-only against the database in v1**, and a reconnect **replaces**: `db::connect` deregisters
   whatever that URL last registered, under the name it went in under, so the editor's rename (same
   URL, new catalog name) is handled by construction rather than by a surface remembering.
+- **A JSON accessor over a remote column is rewritten into the server's own operator, and a family
+  member with no faithful spelling is refused by name rather than approximated.** (DB-08,
+  `engine::db::json`.) `->` / `->>` / `?` are planned as `datafusion-functions-json` UDF calls, and
+  a UDF call unparses **by name** — so without a rewrite a federated subplan carries
+  `json_as_text(payload, 'type')` to a server that has no such function, and federation has no
+  per-expression fallback to catch it. The rewrite is an AST pass on the executor's `ast_analyzer`
+  seam, which is why the provider is constructed one level below the crate's factory; it is
+  reachable only from the remote SQL path, so local JSON is untouched.
+
+  **One table is the whole of it**, and it is the only source of "mapped": `json_as_text` → `->>`
+  (an arrow chain for a path), `json_contains` → `IS NOT NULL` over that chain, everything else
+  unmapped. Unmapped is a **judgement per member, stated**, never an omission — `json_get` returns
+  Arrow's JSON union, which no Postgres expression produces; `json_get_str` is NULL where `->>`
+  stringifies an object; `json_get_json` hands back the source slice where `->` hands back
+  normalised `jsonb`; `json_length` counts object keys as well as array elements. A mapping that is
+  close enough makes a query's answer depend on where it ran, which is worse than a refusal —
+  which is also why `json_contains` is **not** `?` (Postgres's `?` is true for a string array
+  element and takes no integer index; the local function is false for both).
+
+  The refusal names the function, the connection and the way out (copy the rows in with a CTAS,
+  and for `->` the spelling that does push down), minted beside the table because the table is
+  what knows — and a *mapped* accessor called with no key to look up says **that**, rather than
+  that the accessor is unsupported, which the same call with a key would disprove. The failures
+  only the server can catch — a created SQL macro that survived `simplify`, an accessor over a
+  `text` column — keep Postgres's own words with that same way out after them, wrapped where the
+  error is born (the executor knows it is remote and which connection it is), never by
+  string-matching in the generic run path. Recognised by the **code**, `SQLSTATE: 42883`, which
+  the provider crate renders into every server error it hands back: the prose has at least three
+  wordings (`function … does not exist`, `operator does not exist: …`, `could not identify an
+  equality operator for type …`) and matching those would miss the third while firing on any
+  message where the words merely co-occur.
 - **A connection's password lives in the OS keystore under a ref *derived* from the connection's
   identity, and the def stores only the expectation.** (DB-02, and the deliberate rewrite of W7's
   no-secrets rule — see the entry below on `strata_core::secret`.) `PgPassword::{None, Keystore}`

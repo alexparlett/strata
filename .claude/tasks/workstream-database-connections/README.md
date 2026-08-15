@@ -14,8 +14,8 @@ integration test; DB-03, DB-04 and DB-08 sit on DB-02 independently; DB-05 — t
 redesign — sits on DB-02 + DB-04; DB-06 (gestures + completion) and DB-07 (inspector +
 profiling) sit on the tree; DB-10 and DB-11 are write-back — DB-10 (INSERT/CTAS through the
 crate's write provider) relaxes DB-03's read-only policy behind a per-connection opt-in, and
-DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–07 are
-in**; DB-08, DB-09, DB-10 and DB-11 are open.
+DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–08 are
+in**; DB-09, DB-10 and DB-11 are open.
 
 ## Decisions already made (do not re-litigate; the reasoning is recorded here)
 
@@ -73,9 +73,15 @@ in**; DB-08, DB-09, DB-10 and DB-11 are open.
   snapshots the schema/table list at construction (a ↻ could not refresh it), it builds plain
   `SqlTable`s with the default dialect, and it skips the federation wrapper — so the generic
   path would silently forfeit exactly the pushdown this workstream exists for. Ours enumerates
-  at connect, lists tables lazily, and builds providers through `PostgresTableFactory` (dialect
-  + federation included), cached per table so diagnostics' validation costs one remote
-  introspection per table per connect, not one per keystroke.
+  at connect, lists tables lazily, and builds providers cached per table so diagnostics'
+  validation costs one remote introspection per table per connect, not one per keystroke.
+  **The construction sits one level below `PostgresTableFactory`** (DB-08,
+  `engine/db/federate.rs`): that factory's own three steps written out — `SqlTable`, the Postgres
+  unparser dialect, the federation wrapper — plus an executor of ours wrapping the crate's,
+  because `datafusion-table-providers` leaves every `datafusion-federation` rewrite hook at its
+  `None` default and those hooks are the only seam between the unparser and the wire.
+  `DbSchemaProvider` is still the one construction site; the dialect, the wrapper and the
+  per-table cache did not change with the move.
 - **Federation is installed unconditionally, in `build_context`.** ✅ **built (DB-01,
   2026-08-13).** `datafusion_federation::default_optimizer_rules()` (inserts
   `FederationOptimizerRule` after `scalar_subquery_to_join` — the ordering is load-bearing,
@@ -214,6 +220,19 @@ in**; DB-08, DB-09, DB-10 and DB-11 are open.
   own Postgres-style accessors (`json_get`/`->`/`->>` over Utf8) already handle — the default
   (`Error`) would instead make any table with one exotic column entirely unreadable. This is
   representation honesty, not silent corruption: the value is intact, only the type is wider.
+- **A JSON accessor is mapped only where the operator means the same thing, and the rest refuse
+  by name.** ✅ **built (DB-08, 2026-08-15).** The mapped pair is `json_as_text` → `->>` (the
+  arrow chain for a path) and `json_contains` → `(… IS NOT NULL)` over the chain. Everything else
+  in the family is unmapped **on purpose**, each for a stated semantic difference — `json_get`
+  returns Arrow's JSON union, `json_get_str` is NULL where `->>` stringifies, `json_get_json`
+  hands back the source slice where `->` hands back normalised `jsonb`, `json_length` counts
+  objects as well as arrays. Two corrections to this plan's first draft, both from reading the
+  crates: **`json_contains` is not `?`** (Postgres's `?` is true for a string array element and
+  takes no integer index, where the local function is false for both — the arrow chain is the
+  faithful spelling, at the cost of a GIN index this query never had), and **`json_length` has no
+  faithful spelling at all** (`jsonb_array_length` raises on a non-array and the object half is
+  set-returning), so it is unmapped rather than approximated. Do not "complete" the table: a
+  mapping that is close enough makes a query's answer depend on where it ran.
 - **Pushdown expectations, so nobody re-measures them.** Single-table filter/projection/LIMIT
   push down even without federation (the `SqlTable` scan unparses them; unsupported exprs fall
   back to `Unsupported` and re-apply locally). Same-connection joins/aggregates/TopK federate
@@ -246,10 +265,10 @@ in**; DB-08, DB-09, DB-10 and DB-11 are open.
 ## Known risks (watch during DB-02, verify in its test)
 
 - **Unparser gaps**: DF-specific functions (created macros should be `simplify`-expanded before
-  the federation rule runs — test, don't assume). The JSON-accessor case — `json_get` over a
-  *remote* column reaching Postgres as unknown SQL — is not accepted as a gap: **DB-08 closes
-  it** by rewriting the `functions-json` family into Postgres's own operator syntax at the
-  federation seam, with a named refusal for anything unmapped. `IN (subquery)` reaching the
+  the federation rule runs — test, don't assume). The JSON-accessor case is **closed** (DB-08,
+  2026-08-15): `->>` and `?` are rewritten into Postgres's own operators at the federation seam,
+  every other family member refuses by name with the workaround, and a DF-only name that only the
+  server can catch keeps Postgres's words with ours after them. `IN (subquery)` reaching the
   federation scanner is `not_impl_err`, and `datafusion.optimizer.skip_failed_rules` defaults
   to `false`, so such a query errors rather than degrading — DF's decorrelation usually
   removes these first; the integration test pins one. **Measured at DB-01**: the refusal is
@@ -275,7 +294,7 @@ in**; DB-08, DB-09, DB-10 and DB-11 are open.
 | DB-05 | The data-sources tree: the catalog pane redesigned | ✅ | DB-02, DB-04 |
 | DB-06 | Gestures + completion over the tree | ✅ | DB-05 |
 | DB-07 | Column inspector + profiling for remote tables | ✅ | DB-05 |
-| DB-08 | JSON accessors over remote columns: the pushdown rewrite | ⬜ | DB-02 |
+| DB-08 | JSON accessors over remote columns: the pushdown rewrite | ✅ | DB-02 |
 | DB-09 | A current database, so unqualified names resolve | ⬜ | DB-02 |
 | DB-10 | Remote DML: INSERT and CTAS into a database connection | ⬜ | DB-02 |
 | DB-11 | Remote statements the server runs: DDL + UPDATE/DELETE | ⬜ | DB-10 |
@@ -289,6 +308,7 @@ DB-02 — `docs/CONNECTIONS_SPEC.md` (database section), `docs/reference/ENGINE.
 `docs/STATEMENTS_SPEC.md`; DB-05 — CONNECTIONS_SPEC's pane section,
 `docs/reference/{MODULE_MAP, FREYA_UI, INVARIANTS}.md`; DB-06 — `docs/COMPLETION_SPEC.md`
 plus CONNECTIONS_SPEC's gestures and completion sections; DB-07 — INVARIANTS' profiling entry;
+DB-08 — CONNECTIONS_SPEC's database section (what pushes down) plus INVARIANTS + AGENTS.md §2;
 DB-10 — STATEMENTS_SPEC §4, CONNECTIONS_SPEC's read-only toggle, and the "read-only in v1"
 sentences in INVARIANTS.md + AGENTS.md §2 (rewritten to lead with what now works); DB-11 —
 STATEMENTS_SPEC §4's remote answers.

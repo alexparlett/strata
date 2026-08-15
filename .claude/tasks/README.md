@@ -158,8 +158,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
   ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
-  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 + DB-07 ✅ (2026-08-14), the
-  rest open** —
+  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 + DB-07 ✅ (2026-08-14),
+  DB-08 ✅ (2026-08-15), the rest open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
@@ -183,8 +183,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   DataFusion already raised). **DB-02 is in too** — `Provider::Postgres(PgStore)` on the def,
   `SecretRef::derived` beside `mint` (so the committed def carries only the *expectation* of a
   password), `engine::db`: the pool that is its own probe, the one-round-trip `pg_class`
-  enumeration, and a lazily-listing, per-relation-cached catalog provider built through
-  `PostgresTableFactory` — dispatched from `Engine::connect`/`disconnect` with `register_pass`
+  enumeration, and a lazily-listing, per-relation-cached catalog provider (built through
+  `PostgresTableFactory` until DB-08 moved the construction one level below it)
+  — dispatched from `Engine::connect`/`disconnect` with `register_pass`
   untouched, plus `Engine::db_listing` (scoped and tagged) for DB-05/06 and a real-PostgreSQL
   integration test in the container CI job. One structural correction is recorded in its file:
   DataFusion's `CatalogProviderList` can register a catalog and never remove one, so the engine
@@ -213,7 +214,16 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   connect, so a listing only ever moves on a catalog epoch — a Forget did not bump that epoch and
   now does, and `Context::Dot` carries the **whole** chain because the head is what picks the
   namespace. It also settled the identifier-rendering rule now in AGENTS §2: two renderers,
-  chosen by whose identity a name is.
+  chosen by whose identity a name is. **DB-08 is in** — a JSON accessor over a remote column is
+  rewritten into Postgres's own operator on `datafusion-federation`'s `ast_analyzer` seam, which
+  is why the provider is now built one level below the crate's factory; one table is the only
+  source of "mapped" (`->>` and `?`, with every other family member refused **by name** for a
+  stated semantic difference rather than approximated), and the failures only the server can
+  catch keep its words with our way out after them, recognised by SQLSTATE rather than prose.
+  Four corrections in its file, two of them found only by running against the server: Strata's
+  own `json_union_to_text` wrapper must not be refusable by name, and `->>` needs parentheses
+  against a comparison because sqlparser gives it looser precedence than `=` — true for local
+  JSON too, and a dialect follow-up if it bites.
   Read the workstream README first — it records the settled decisions, including
   the big ones: the whole database registers automatically as a catalog (no per-table defs;
   discovery gets catalogs, declaration gets defs; pinning is a view), the pane is redesigned
@@ -318,10 +328,9 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — DB-01 through DB-07 are ✅, so **DB-08 (the JSON-accessor
-   pushdown rewrite) is next**; it sits on DB-02 alone and needs nothing after it. DB-09 (a
-   current database), DB-10 (remote INSERT/CTAS) and DB-11 (remote server statements, on
-   DB-10) close the workstream.
+1. **Database connections (DB)** — DB-01 through DB-08 are ✅, so **DB-09 (a current database,
+   so unqualified names resolve) is next**; it sits on DB-02 alone. DB-10 (remote INSERT/CTAS)
+   and DB-11 (remote server statements, on DB-10) close the workstream.
 2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-05 are in, so QE-06 is next
    (its guidance names QE-01's functions), QE-07 follows QE-03's merge, and QE-08 waits for
    DB-05's tree.

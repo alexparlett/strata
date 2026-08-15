@@ -545,6 +545,16 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
   `SHOW TABLES` costs nothing remote; `jsonb` maps to text, never a refusal. `PgStore.schemas`
   scopes **display, never resolution**, and `Engine::db_listing` is the one tagged read every
   surface shares. Read-only in v1; a reconnect replaces, rename included.
+- **A JSON accessor over a remote column is rewritten into the server's own operator, and a family
+  member with no faithful spelling is refused by name rather than approximated.** `->` / `->>` /
+  `?` plan to `functions-json` UDF calls and a UDF call unparses **by name**, so the rewrite is an
+  AST pass on the federation executor's `ast_analyzer` seam — which is why the provider is built one
+  level below the crate's factory, and why local JSON is untouched. `engine::db::json`'s one table
+  is the only source of "mapped": `json_as_text` → `->>`, `json_contains` → `IS NOT NULL` over the
+  arrow chain, everything else unmapped with the difference stated (`json_contains` is **not** `?`).
+  The refusal names the function, the connection and the CTAS way out; the failures only the server
+  can catch keep its words with that same way out after them, wrapped where the error is born and
+  recognised by the SQLSTATE the provider crate renders, never by its prose.
 - **A table reads through a connection by naming it, and the composition happens once, in
   `resolve_source`.** `TableDef::connection` is the connection's `url()` and the only thing that
   says a table is remote; its sources are bucket-relative exactly then, never relativized, and
