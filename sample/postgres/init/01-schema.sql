@@ -60,7 +60,7 @@ CREATE TABLE public.sessions (
 );
 
 -- ---------------------------------------------------------------------------------------------
--- analytics — a schema the connection does NOT display, and still resolves
+-- analytics — a second shown schema, so a bare name has two places to be found in
 -- ---------------------------------------------------------------------------------------------
 
 CREATE TABLE analytics.daily_revenue (
