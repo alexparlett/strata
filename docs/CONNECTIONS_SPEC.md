@@ -648,6 +648,27 @@ The whole arm is proven against a real MinIO in
 the only thing that would catch a regression in the S3 credential bridge (see CLAUDE.md for the
 container-runtime requirement).
 
+### How the two container tests are built
+
+Both integration tests — `object_store_minio.rs` (W7) and `postgres_federation.rs` (DB-02) — drive
+a **real server** rather than a mock, because the thing under test is a whole round trip against
+one, and a mock is written by the same understanding of the protocol it is meant to check: it can
+be shaped to pass without anyone noticing.
+
+For the same reason, **each fixture is seeded by a deliberately different client than the code
+under test**. `postgres_federation.rs` seeds with `tokio-postgres`, a layer *below* the pool and
+factory it exercises, so the fixture is written with the raw driver and the test and the code
+cannot agree on a shared misunderstanding. `object_store_minio.rs` seeds with `aws-sdk-s3`, an
+independent implementation — `object_store` cannot create a bucket at all, and having the write
+side be someone else's code is what stops fixture and subject agreeing on a wrong reading of the
+protocol. Both seeding crates are already in the graph (the Postgres provider's `bb8-postgres`
+pins one; the AWS chain carries the other), so neither costs a build.
+
+`testcontainers` is pinned to the major `testcontainers-modules` itself depends on: the two share
+a `bollard`, and a newer `testcontainers` resolves a second one that conflicts outright. Its
+`properties-config` feature is not optional for us — CLAUDE.md explains why a runtime is otherwise
+up, configured and invisible.
+
 ## How a query reaches a bucket
 
 ```mermaid

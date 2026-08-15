@@ -26,6 +26,15 @@ The dependency direction is strict: `strata-freya` sits on top; `strata-engine` 
 never depend on UI; `strata-model` depends on nothing of ours. When a Freya limitation shows up,
 the fix goes **into the fork**, not around it in app code.
 
+**Two reqwest majors, on purpose.** `strata-core` pins reqwest **0.12** because that is what
+`strata-engine`'s `object_store` resolves, so the updater's HTTP client is the crate already
+compiled into the graph rather than a second stack; it takes `default-features = false` with
+exactly object_store's features, since reqwest's defaults would pull `native-tls` in beside the
+rustls this graph resolves and a second TLS backend is a second root store to keep straight.
+`strata-agent` pins **0.13** because `genai` does. The two coexist — nothing passes a reqwest
+type across that seam, so there is no unification to force and no version to reconcile. Neither
+pin is free to move on its own: each follows the dependency that chose it.
+
 ## The engine: a direct-call async facade
 
 `strata_engine::Engine` owns a private multi-thread Tokio runtime (DataFusion's operators

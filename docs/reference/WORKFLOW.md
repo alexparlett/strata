@@ -23,6 +23,15 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   so app code never touches objc2 or a raw winit handle.
 - Follow the fork's own `AGENTS.md` conventions when editing it; keep changes upstream-shaped
   (themed tokens, doc comments, examples).
+- **The vendored editor's own dependencies track the fork's, not the newest release.**
+  `strata-code-editor` is a vendored copy of the fork's `freya-code-editor`, and it pins `ropey`,
+  `smallvec`, `tree-sitter` and `rustc-hash` at the versions the fork's copy resolves to. Cargo
+  unifies within a major, so matching majors means the vendored editor and upstream share one
+  `ropey` and one `tree-sitter` in the graph; letting one drift a major duplicates the crate and
+  `CodeEditorData: TextEditor` stops lining up across the seam. The freya sibling crates
+  (`freya-core`, `freya-edit`, `freya-engine`, `freya-components`, `torin`) come from the root
+  `[workspace.dependencies]` for the same reason — one `freya-edit` in the graph, not two. When
+  the fork bumps one of these, bump it here in the same change.
 - **After changing the fork, push it** — the committed gitlink must exist on the fork remote or
   fresh clones/CI can't init the submodule. This is not a formality: P4-03's `set_window_parent`
   commit was never pushed, so P4-04's worktree could not build the app at all (`no method named
@@ -99,16 +108,30 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   having no upstream counterpart at all. What is still tracked is upstream's *changes*, read as fork
   commits. `crates/freya` stays out, unchanged.
 - **A crate manifest declares; it does not explain.** No rationale comments in any
-  `crates/*/Cargo.toml`. The manifests had grown long why-essays per dependency — the DataFusion
-  lockstep set, `properties-config`'s invisible-runtime failure, the reqwest 0.12-vs-0.13 split,
-  why each integration-test fixture uses a deliberately different client. Every one of those facts
-  is a *design* fact, and every one of them was also written down in `docs/` where the surrounding
-  reasoning lives; keeping both meant two copies to keep true, and the manifest copy is the one
-  nobody greps and nobody updates. Docs are now the single home: state the reason there and let the
-  manifest be a list of versions and features. If a fact has no home in `docs/`, that is the signal
-  to write the doc entry, not to comment the manifest. The root `Cargo.toml` is the one exception —
-  its `[workspace.lints]` annotations say why a given lint is on or demoted, which is the reasoning
-  AGENTS.md §7 requires when the set changes and which has no other home.
+  `crates/*/Cargo.toml`. The manifests had grown long why-essays per dependency, and every one of
+  those was a *design* fact that belongs where the surrounding reasoning lives — keeping both
+  meant two copies to keep true, and the manifest copy is the one nobody greps and nobody
+  updates. Docs are the single home; the manifest is a list of versions and features. Where each
+  fact went:
+  - the DataFusion / federation / table-providers **lockstep set** →
+    [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md), under database connections;
+  - **how the two container tests are built** — real servers, and each fixture seeded by a
+    deliberately different client than the code under test, plus the
+    `testcontainers`/`testcontainers-modules` pin sharing one `bollard` →
+    [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md);
+  - `properties-config`'s **invisible-runtime** failure → [CLAUDE.md](../../CLAUDE.md);
+  - the **reqwest 0.12-vs-0.13** split → [ARCHITECTURE.md](../ARCHITECTURE.md), with the workspace
+    graph;
+  - the vendored editor's **pins tracking the fork's** → the fork section above;
+  - the command macro knowing **only idents, doc comments and expressions** →
+    [CLAUDE.md](../../CLAUDE.md) and [ARCHITECTURE.md](../ARCHITECTURE.md), which already said it.
+
+  If a fact has no home in `docs/`, that is the signal to write the doc entry, not to comment the
+  manifest — the list above is what that obligation looks like discharged, and it was a review
+  finding on the change that made the rule, not something the change got right first time. The
+  root `Cargo.toml` is the one exception: its `[workspace.lints]` annotations say why a given lint
+  is on or demoted, which is the reasoning AGENTS.md §7 requires when the set changes and which
+  has no other home.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
