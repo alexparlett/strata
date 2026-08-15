@@ -2,23 +2,10 @@
 name = "strata-freya"
 version = "0.3.2"
 edition = "2021"
-description = "Strata's Freya (Skia/native) frontend — the Freya-port target. Rides the shared strata-core alongside the transitional strata-dioxus app."
+description = "Strata's Freya (Skia/native) frontend — the app. Rides the shared core crates: `strata-core` for app services and `strata-engine` for the DataFusion boundary."
 license = "MIT"
 
 [dependencies]
-# Native GUI (Skia), from our fork (see the root `[workspace.dependencies]`). `radio` = per-window
-# Session store. The editor is our vendored `strata-code-editor` (owned fork of freya-code-editor),
-# NOT freya's `code-editor` feature — so we control cursor / gutter / line highlight / syntax palette
-# / squiggles / autocomplete.
-# `engine` is a re-export gate, not a dependency: it is what puts `freya::engine::prelude`
-# (Skia's `Canvas`, `FontCollection`, `Surface`) in reach, which the chart's offscreen capture
-# needs to render outside a `CanvasContext`.
-# `markdown` (and **not** `markdown-code-editor`): the assistant's transcript renders the model's
-# prose through the fork's own `MarkdownViewer` (AGENTS.md §3 — standard components first), and the
-# code-editor variant would pull in freya's `code-editor` feature, which is the very thing this
-# crate does not use. Without it a fenced block renders as a themed mono panel, which is what a
-# transcript wants: SQL the assistant is *explaining* is prose, and SQL it is *offering* arrives as
-# its own card through `offer_sql` rather than as markdown at all.
 freya = { workspace = true, features = [
   "radio",
   "query",
@@ -29,85 +16,40 @@ freya = { workspace = true, features = [
   "markdown",
 ] }
 
-# The shared core: engine (Command/Event protocol + worker handle) + the data vocabulary.
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
+strata-engine = { path = "../strata-engine" }
 
-# Agent access (AA-03): the read-only tool vocabulary + the `Host` seam this app implements,
-# and the MCP server that serves it. Frontend-agnostic on purpose — the dependency runs one
-# way only, so the same vocabulary can be served headless and, later, called by the chat pane.
 strata-agent = { path = "../strata-agent" }
 
-# `tokio::sync` and `tokio::select!`, and only for the agent bridge's two channels: mpsc +
-# oneshot are runtime-agnostic (they wake a waker, whoever polls it), which is the whole
-# reason the server's Tokio runtime can talk to Freya's UI executor at all, and `select!` is
-# how the bridge's one serial loop drains asks ahead of notices. `macros` is declared rather
-# than inherited: `strata-core` depends on tokio with `full` and Cargo unifies features across
-# the graph, so it would compile either way — and a build that only works because of what
-# another crate happens to ask for is one manifest edit away from not. Naming a feature states
-# what this crate *uses*. There is still no Tokio runtime **started** here — the engine owns
-# one and the agent server owns another, and this crate awaits their handles on Freya's own
-# executor.
 tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 
-# Our owned code-editor surface (vendored from freya-code-editor; see the crate's lib.rs).
 strata-code-editor = { path = "../strata-code-editor" }
 
-# The command palette's registration mechanism: one declaration site per command, carrying its
-# metadata and its body together (`apps::project::commands`).
 strata-command-macro = { path = "../strata-command-macro" }
 
-# The SQL grammar fed to the editor (derekstride/tree-sitter-sql). Its handle comes via
-# tree-sitter-language, so `LANGUAGE` drops into `EditorLanguage::new` with no direct tree-sitter dep.
 tree-sitter-sequel = "0.3"
 
-# The native theme format (themes/*.json) → deserialized into the Freya ColorsSheet.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Editor toolbar Format: pretty-print the SQL buffer in place.
 sqlformat = "0.3"
 
-# Structured logging (same facade strata-core emits on) + the subscriber that actually
-# prints it. Without an installed subscriber every `tracing::*` call is a silent no-op.
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# …and somewhere for it to go in an installed build. A `.app` launched from Finder has no
-# terminal: its stdout lands in the unified log, which is neither a file the user can send us
-# nor one `RUST_LOG` can be aimed at. The rolling appender is what makes a tester's run
-# readable after the fact (`init_logging`).
 tracing-appender = "0.2"
 
-# Stable per-tab identity (TabId) + serde for the future session snapshot.
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Executor-agnostic timer — the same primitive freya-sdk's `use_timeout` rides (Freya's UI
-# executor has no timer of its own): the running state's elapsed ticker, the session autosave's
-# debounce, the deadline on a window's geometry read and the delay before a slow project load
-# admits to being slow.
 async-io = "2.5"
 
-# Three jobs, all of them the boundary between a thread and the UI executor: the T2 close
-# bridge's veto channel (winit `on_close` hook → UI executor wake-up), the `oneshot` that carries
-# a `task::offload`ed answer home, and `select`/`block_on` for the callers that must bound or
-# block on one.
 futures = "0.3"
 
-# Native folder / file pickers (the launcher's OPEN, later Export + Configure). The *async*
-# dialog: the blocking one spins its own run loop and would freeze every other window.
 rfd = "0.15"
 
 [dev-dependencies]
-# Headless Skia renderer for the `#[ignore]`d preview harnesses (e.g. `plan_preview`):
-# mounts a real surface under the real theme and snapshots it to a PNG for eyeballing.
 freya-testing = { workspace = true }
-# Arrow, for **tests only** — the value tree's model is a projection of a `RecordBatch`, so its
-# tests have to build one. A dev-dependency rather than a real one on purpose: DataFusion is
-# touched only in `strata-core` (AGENTS.md §2), and this keeps that true of everything shipped
-# while letting a test build its own fixture inline rather than bending a signature to be testable.
 datafusion = "54"
 
-# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
-# `clippy.toml`). Every member inherits the same set — CI denies it.
 [lints]
 workspace = true

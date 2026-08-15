@@ -18,8 +18,8 @@ use strata_agent::wire::{
     QuerySessionParams, ReadPageParams, RunParams, RunResult, StateWire, ValidateParams,
 };
 use strata_agent::{AgentError, AgentIdentity, CatalogEntry, Described, RegState, StrataTools};
-use strata_core::engine::sql::Blocked;
-use strata_core::engine::TableSpec;
+use strata_engine::sql::Blocked;
+use strata_engine::TableSpec;
 use strata_model::SourceFormat;
 
 /// A project whose engine really holds a `people` table of five rows, plus the catalog rows

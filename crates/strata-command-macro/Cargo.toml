@@ -8,15 +8,10 @@ license = "MIT"
 [lib]
 proc-macro = true
 
-# Nothing but the three every attribute macro needs. This crate knows about idents, doc
-# comments and expressions — never about Strata's types, which is what keeps it a registration
-# mechanism rather than a second copy of the command vocabulary.
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
 
-# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
-# `clippy.toml`). Every member inherits the same set — CI denies it.
 [lints]
 workspace = true

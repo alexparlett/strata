@@ -10,7 +10,7 @@ use std::rc::Rc;
 use freya::prelude::*;
 use freya::query::{use_query, QueryStateData};
 use freya::radio::use_radio;
-use strata_core::engine::plan::PlanTab;
+use strata_engine::plan::PlanTab;
 use strata_model::{ResultsView, SnapshotId, TabId};
 
 mod cell_view;

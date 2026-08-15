@@ -16,9 +16,9 @@
 
 use std::time::SystemTime;
 
-use strata_core::engine::profile::CatalogProfile;
-use strata_core::engine::RemoteRelation;
 use strata_core::util::{ago, fmt_int};
+use strata_engine::profile::CatalogProfile;
+use strata_engine::RemoteRelation;
 use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, RemoteRef, Stat, StatKey};
 
 use crate::apps::project::query::{ProfileTarget, ScanId};
@@ -539,8 +539,8 @@ mod tests {
     use std::time::Duration;
 
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
+    use strata_engine::{column_info, TableMeta, ViewMeta};
     use strata_model::{ColOwner, TableDef, TableOrigin, ViewDef};
 
     use super::*;

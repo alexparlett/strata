@@ -34,11 +34,10 @@ searched and reopened from a test with nothing else built.
 
 ## Build
 
-1. **The dependency**: `lancedb = "0.37"` in `crates/strata-core/Cargo.toml`, with the
-   manifest-culture justification comment: why this crate (evaluated field is in the
-   workstream README), the pin lockstep (`lance =10.0.0` exact → joins the DataFusion
-   lockstep set as its largest member), and which features are off. Extend the root
-   `Cargo.toml` lockstep comment.
+1. **The dependency**: `lancedb = "0.37"` in `crates/strata-engine/Cargo.toml`. Manifests
+   carry no rationale comments — record why this crate (evaluated field is in the workstream
+   README), the pin lockstep (`lance =10.0.0` exact → joins the DataFusion lockstep set as its
+   largest member) and which features are off in `docs/`, beside the existing lockstep note.
 2. **The vocabulary** in `crates/strata-core/src/memory.rs`:
    `MemoryKind { Fact, Recipe }` (stable serde spellings, asserted like `ai.rs:265`);
    `Memory { id: Uuid, kind, text: String, sql: Option<String>, tables: Vec<String>

@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use strata_agent::assistant::{Conversation, Facts, Settle, TurnEvent};
 use strata_core::ai::{Effort, ProviderKind, CHATS_MIN};
-use strata_core::engine::CANCELLED;
 use strata_core::util::{now_hms, now_ms};
+use strata_engine::CANCELLED;
 use strata_model::{CatalogKind, TabId};
 use uuid::Uuid;
 

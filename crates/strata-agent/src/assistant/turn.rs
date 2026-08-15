@@ -35,7 +35,7 @@ use serde_json::{from_value, json, to_string, to_value, Error as JsonError, Valu
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use strata_core::engine::CANCELLED;
+use strata_engine::CANCELLED;
 
 use crate::host::Host;
 use crate::tools::StrataTools;

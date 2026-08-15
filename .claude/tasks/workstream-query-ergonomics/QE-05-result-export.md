@@ -158,9 +158,9 @@ The assistant's step card shows the row count through the existing `Facts`; no n
 
 ## Files (as built)
 
-`crates/strata-core/src/engine/export.rs` (the gates, the format defaults, `ExportReport`) ·
-`crates/strata-core/src/engine/mod.rs` (`Engine::export_result`) ·
-`crates/strata-core/src/engine/ddl/copy.rs` (reaches the moved fence) ·
+`crates/strata-engine/src/export.rs` (the gates, the format defaults, `ExportReport`) ·
+`crates/strata-engine/src/mod.rs` (`Engine::export_result`) ·
+`crates/strata-engine/src/ddl/copy.rs` (reaches the moved fence) ·
 `crates/strata-agent/src/{tools.rs, wire.rs, error.rs, mock.rs, lib.rs}` ·
 `crates/strata-agent/src/assistant/{dispatch.rs, system.md}` ·
 `crates/strata-agent/tests/{facade.rs, mcp_over_http.rs}` ·

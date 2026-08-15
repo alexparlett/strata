@@ -23,6 +23,15 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   so app code never touches objc2 or a raw winit handle.
 - Follow the fork's own `AGENTS.md` conventions when editing it; keep changes upstream-shaped
   (themed tokens, doc comments, examples).
+- **The vendored editor's own dependencies track the fork's, not the newest release.**
+  `strata-code-editor` is a vendored copy of the fork's `freya-code-editor`, and it pins `ropey`,
+  `smallvec`, `tree-sitter` and `rustc-hash` at the versions the fork's copy resolves to. Cargo
+  unifies within a major, so matching majors means the vendored editor and upstream share one
+  `ropey` and one `tree-sitter` in the graph; letting one drift a major duplicates the crate and
+  `CodeEditorData: TextEditor` stops lining up across the seam. The freya sibling crates
+  (`freya-core`, `freya-edit`, `freya-engine`, `freya-components`, `torin`) come from the root
+  `[workspace.dependencies]` for the same reason — one `freya-edit` in the graph, not two. When
+  the fork bumps one of these, bump it here in the same change.
 - **After changing the fork, push it** — the committed gitlink must exist on the fork remote or
   fresh clones/CI can't init the submodule. This is not a formality: P4-03's `set_window_parent`
   commit was never pushed, so P4-04's worktree could not build the app at all (`no method named
@@ -77,8 +86,13 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
     `sccache --stop-server` unwedges it immediately.
 
   With both in place the fresh-worktree floor is ~4 min, two-thirds of it the serial tail
-  `strata-core` → `strata-freya` + link — a fact about crate structure, not caching, and not
-  worth restructuring over at this size.
+  `strata-core` → `strata-engine` → `strata-freya` + link — a fact about crate structure, not
+  caching. That tail grew a link when the engine was split out of `strata-core`, and the entry
+  here used to say the structure was not worth changing *at that size*; the split was taken on
+  the **boundary** rather than on build time (the DataFusion-free half is now a crate that
+  cannot reach for DataFusion, instead of a rule saying it must not). The build-time effect is
+  real but secondary: an edit to config, keymap, theme, secrets or project persistence now
+  recompiles a ~13 s crate with no DataFusion in its graph, and only then the engine.
 
 ## Git, worktrees, and verification
 
@@ -93,6 +107,31 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   stopped being how anyone reads the crate once it grew to ~2x upstream's size with `completion.rs`
   having no upstream counterpart at all. What is still tracked is upstream's *changes*, read as fork
   commits. `crates/freya` stays out, unchanged.
+- **A crate manifest declares; it does not explain.** No rationale comments in any
+  `crates/*/Cargo.toml`. The manifests had grown long why-essays per dependency, and every one of
+  those was a *design* fact that belongs where the surrounding reasoning lives — keeping both
+  meant two copies to keep true, and the manifest copy is the one nobody greps and nobody
+  updates. Docs are the single home; the manifest is a list of versions and features. Where each
+  fact went:
+  - the DataFusion / federation / table-providers **lockstep set** →
+    [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md), under database connections;
+  - **how the two container tests are built** — real servers, and each fixture seeded by a
+    deliberately different client than the code under test, plus the
+    `testcontainers`/`testcontainers-modules` pin sharing one `bollard` →
+    [CONNECTIONS_SPEC.md](../CONNECTIONS_SPEC.md);
+  - `properties-config`'s **invisible-runtime** failure → [CLAUDE.md](../../CLAUDE.md);
+  - the **reqwest 0.12-vs-0.13** split → [ARCHITECTURE.md](../ARCHITECTURE.md), with the workspace
+    graph;
+  - the vendored editor's **pins tracking the fork's** → the fork section above;
+  - the command macro knowing **only idents, doc comments and expressions** →
+    [CLAUDE.md](../../CLAUDE.md) and [ARCHITECTURE.md](../ARCHITECTURE.md), which already said it.
+
+  If a fact has no home in `docs/`, that is the signal to write the doc entry, not to comment the
+  manifest — the list above is what that obligation looks like discharged, and it was a review
+  finding on the change that made the rule, not something the change got right first time. The
+  root `Cargo.toml` is the one exception: its `[workspace.lints]` annotations say why a given lint
+  is on or demoted, which is the reasoning AGENTS.md §7 requires when the set changes and which
+  has no other home.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
@@ -311,7 +350,7 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   Everything the shared container worker forces on a job — the repo-wide queue below, the cloud
   agent, the release step, the capacity retry — was being paid for by the whole suite, when two
   test files need it. So the workflow is two jobs. `containers` keeps the apparatus and runs
-  `cargo test -p strata-core --locked --test object_store_minio --test postgres_federation`: the
+  `cargo test -p strata-engine --locked --test object_store_minio --test postgres_federation`: the
   **binaries entire**, because those two files are the only ones in the workspace that mention
   testcontainers, so drawing the line at the test target means a test added to either is covered
   without a workflow edit. One invocation, so the two share a build and a cloud session rather

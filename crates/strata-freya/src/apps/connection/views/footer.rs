@@ -28,8 +28,8 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::engine::db::password_ref;
 use strata_core::secret::{migrate_derived, Secret, SecretError, SecretRef};
+use strata_engine::db::password_ref;
 use strata_model::{check_catalog_name, ConnectionDef, Provider};
 
 use crate::apps::connection::{ConnectionCtx, ConnectionTarget, Status};

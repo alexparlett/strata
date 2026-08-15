@@ -103,7 +103,7 @@ impl Kind {
 /// What a column may be **encoded** as on a chart (`docs/CHART_SPEC.md` §3).
 ///
 /// A second taxonomy rather than a reading of [`Kind`], which is coarser on purpose. Resolved from
-/// the Arrow `DataType` itself (`strata_core::engine::catalog::chart_role`) — never from a name and
+/// the Arrow `DataType` itself (`strata_engine::catalog::chart_role`) — never from a name and
 /// never from a type's *spelling*.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ChartRole {

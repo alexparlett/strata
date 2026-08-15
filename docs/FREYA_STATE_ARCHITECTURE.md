@@ -492,7 +492,7 @@ use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place 
 
 ## 7. The engine handle (`EngineCtx`) — a direct-call facade
 
-The engine (`strata_core::engine::Engine`) is a **direct-call async facade**, not a protocol:
+The engine (`strata_engine::Engine`) is a **direct-call async facade**, not a protocol:
 it owns a private multi-thread Tokio runtime (DataFusion's operators require a Tokio context,
 and query CPU must never run on the render thread), spawns each call onto it, and the caller
 awaits the `JoinHandle` — executor-agnostic, so Freya's non-Tokio executor awaits engine calls

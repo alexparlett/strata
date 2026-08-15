@@ -20,7 +20,7 @@ multi-match extraction is `unnest(regexp_extract_all(col, pattern))`.
 
 ## Build
 
-1. `RegexpExtractAll` in `crates/strata-core/src/engine/udfs.rs`, `ScalarUDFImpl`.
+1. `RegexpExtractAll` in `crates/strata-engine/src/udfs.rs`, `ScalarUDFImpl`.
    Semantics (DuckDB's): two or three args — string, pattern, optional group index
    (default 0 = the whole match); returns the list of that group's text for every
    non-overlapping match, empty list for no match, null in → null out. Invalid pattern is a
@@ -43,7 +43,7 @@ multi-match extraction is `unnest(regexp_extract_all(col, pattern))`.
 
 ## Files
 
-`crates/strata-core/src/engine/udfs.rs` · `crates/strata-core/src/engine/mod.rs` (register) ·
+`crates/strata-engine/src/udfs.rs` · `crates/strata-engine/src/mod.rs` (register) ·
 `crates/strata-core/Cargo.toml` (only if `regex` needs declaring) · tests beside the module.
 
 ## Built (2026-08-13)

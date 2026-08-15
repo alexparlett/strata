@@ -14,10 +14,10 @@ use freya::prelude::{
     Platform, State, TaskHandle, WritableUtils,
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
-use strata_core::engine::TableSpec;
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
-use strata_core::register::{register_pass, table_spec, RegOutcome};
 use strata_core::util::{fmt_int, plural};
+use strata_engine::register::{register_pass, table_spec, RegOutcome};
+use strata_engine::TableSpec;
 use strata_model::{ConnectionDef, SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -419,7 +419,7 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 /// row's Refresh ([`refresh_table`]) — a re-scan *is* a re-registration, so there is one
 /// implementation of "make the engine match the defs", not several that can drift. The
 /// three differ only in the work list they hand in. The engine-facing half — connections
-/// first, then tables, then views by fixed-point rounds — is `strata-core`'s
+/// first, then tables, then views by fixed-point rounds — is `strata-engine`'s
 /// [`register_pass`] (AA-01, so a headless host runs the same sequence); this keeps what is
 /// genuinely the store's: `Reg<T>` rows and log entries, folded per outcome as each settles.
 ///
@@ -685,7 +685,7 @@ mod tests {
     use std::env;
     use std::process;
 
-    use strata_core::engine::TableMeta;
+    use strata_engine::TableMeta;
     use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     use super::*;

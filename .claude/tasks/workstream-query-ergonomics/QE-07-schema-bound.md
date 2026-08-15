@@ -130,6 +130,6 @@ columns, 241,425 nested fields.
 
 ## Files
 
-`crates/strata-core/src/engine/schema_shape.rs` (new) + `engine/mod.rs` export ·
+`crates/strata-engine/src/schema_shape.rs` (new) + `engine/mod.rs` export ·
 `crates/strata-agent/src/describe.rs` · `crates/strata-agent/src/wire.rs` (the shapes-count
 field) · `AGENTS.md` / `docs/reference/INVARIANTS.md` · `docs/AGENT_ACCESS_SPEC.md`.

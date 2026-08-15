@@ -61,8 +61,8 @@ signature check gives way (it could never pass on a locally-made bundle) and the
 refused. Full table: `crates/strata-core/examples/fake_releases.rs`.
 
 **`cargo test` needs a container runtime.** Two integration tests drive real servers through
-testcontainers — `strata-core/tests/object_store_minio.rs` (W7, MinIO) and
-`strata-core/tests/postgres_federation.rs` (DB-02, PostgreSQL) — and both are
+testcontainers — `strata-engine/tests/object_store_minio.rs` (W7, MinIO) and
+`strata-engine/tests/postgres_federation.rs` (DB-02, PostgreSQL) — and both are
 deliberately **not** `#[ignore]`d — an ignored test is one nobody runs, and this is the only thing
 that would catch a regression in the S3 credential bridge. Testcontainers Cloud, Docker or colima
 all serve — the runtime is found from `~/.testcontainers.properties` (which a Testcontainers Cloud
@@ -130,11 +130,16 @@ A virtual workspace (no root package). `cargo run` at the root targets the **Fre
 Members:
 
 - **`strata-freya`** — the Freya (Skia/native) frontend. **The app** and the default build.
-- **`strata-core`** — engine logic: the DataFusion boundary (query/plan/profile/serialize/value_tree),
-  config, theme, the OS-keystore secret store, the assistant's model-listings satellite, the
-  updater's window-free mechanism (`update`), SQL
-  language service. The only place DataFusion is touched — bar a **dev**-dependency
-  in `strata-freya`, so a test can build an Arrow fixture without bending a signature to be testable.
+- **`strata-core`** — app services, **DataFusion-free**: config, keymap, theme, `.strata/` project
+  persistence, the OS-keystore secret store, the assistant's model-listings satellite, the
+  updater's window-free mechanism (`update`) and shared `util`. Sits below `strata-engine` and
+  knows nothing of it.
+- **`strata-engine`** — the DataFusion boundary: the direct-call async `Engine` facade, the
+  statement router (`ddl/`), snapshots, export, profiling, `serialize`/`value_tree`, the
+  DataFusion-free EXPLAIN model (`plan/`), the SQL language service (`sql/`) and the project
+  registration pass (`register`). **The only place DataFusion is touched** — bar a
+  **dev**-dependency in `strata-freya`, so a test can build an Arrow fixture without bending a
+  signature to be testable. Depends on `strata-core`; the arrow never points back.
 - **`strata-model`** — leaf data vocabulary, serde-only (schema, results, catalog, form, history,
   session, query_error). No logic. (The event log is *not* here: it is ephemeral app state —
   `strata-freya::apps::project::state::log`.)
@@ -197,7 +202,7 @@ When writing Freya code, lean on these in roughly this order:
 
 ## Engine model (short)
 
-`strata_core::engine::Engine` is a **direct-call async facade**: it owns a private multi-thread
+`strata_engine::Engine` is a **direct-call async facade**: it owns a private multi-thread
 Tokio runtime, spawns each call onto it, and the caller awaits the `JoinHandle` — executor-agnostic,
 so Freya's non-Tokio UI executor awaits engine methods like any async fn. No UI-side runtime, no
 channels, no request ids. In Freya the handle is `EngineCtx` (`Arc<Engine>` + Deref) held in

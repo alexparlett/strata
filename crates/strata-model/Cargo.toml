@@ -5,19 +5,12 @@ edition = "2021"
 description = "Strata core data vocabulary (schema, results, catalog, forms, logs, errors) — a framework-agnostic leaf crate shared by every frontend. Phase 0 of the Freya port."
 license = "MIT"
 
-# The leaf every other crate depends *down* onto. Only serde (the catalog/project
-# definitions persist to `.strata/`) + uuid (stable saved-query identity);
-# deliberately no datafusion, no UI.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
-# The catalog defs are what `.strata/project.json` holds, so their tests are about the JSON
-# they load from and write back — including the legacy shapes that still have to parse.
 serde_json = "1"
 
-# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
-# `clippy.toml`). Every member inherits the same set — CI denies it.
 [lints]
 workspace = true

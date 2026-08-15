@@ -4,7 +4,7 @@ How the DataFusion boundary is shaped, and the policies it enforces. The invaria
 [AGENTS.md](../../AGENTS.md) §2; snapshot lifecycle is [SNAPSHOT_SPEC.md](../SNAPSHOT_SPEC.md).
 
 
-The engine (`strata_core::engine::Engine`) is a **direct-call async facade**: it owns a private
+The engine (`strata_engine::Engine`) is a **direct-call async facade**: it owns a private
 multi-thread Tokio runtime (DataFusion's operators need a Tokio context; query CPU never touches
 the render thread), spawns each call onto it, and the caller awaits the `JoinHandle` — which is
 executor-agnostic, so Freya's non-Tokio UI executor awaits engine methods like any async fn. No

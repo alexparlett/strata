@@ -23,8 +23,8 @@
 //! mounted — so a derivation from the UI went false the moment the user switched tabs on a
 //! running query, and both the window close and a background tab's ⌘W skipped the confirm
 //! with the engine still executing. The engine owns both answers now
-//! ([`Engine::watch_inflight`](strata_core::engine::Engine::watch_inflight) for the window,
-//! [`Engine::is_running`](strata_core::engine::Engine::is_running) per tab). `confirm` and
+//! ([`Engine::watch_inflight`](strata_engine::Engine::watch_inflight) for the window,
+//! [`Engine::is_running`](strata_engine::Engine::is_running) per tab). `confirm` and
 //! `last` are still mirrored from reactive state by the root's `use_side_effect`s.
 
 use std::cell::RefCell;

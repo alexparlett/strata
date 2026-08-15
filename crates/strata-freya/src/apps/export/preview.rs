@@ -144,8 +144,8 @@ fn parquet(draft: &ExportDraft, target: &ExportTarget) -> String {
     let codec = format!("{:?}", draft.pq_codec).to_lowercase();
     let statistics = format!("{:?}", draft.pq_statistics).to_lowercase();
     let writer = match draft.pq_writer_version {
-        strata_core::engine::export::WriterVersion::V1 => "1.0",
-        strata_core::engine::export::WriterVersion::V2 => "2.0",
+        strata_engine::export::WriterVersion::V1 => "1.0",
+        strata_engine::export::WriterVersion::V2 => "2.0",
     };
     let dictionary = if draft.pq_dictionary { "on" } else { "off" };
     format!(
@@ -274,7 +274,7 @@ fn resolve(raw: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_core::engine::column_info;
+    use strata_engine::column_info;
 
     use super::*;
     use crate::apps::export::model::{CodecChoice, ScopeChoice};

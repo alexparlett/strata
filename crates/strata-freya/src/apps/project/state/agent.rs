@@ -37,7 +37,7 @@ use strata_agent::{
     AgentError, AgentId, CatalogEntry, Described, QuerySessionId, QuerySessionInfo,
     QuerySessionState, RegState,
 };
-use strata_core::engine::Engine;
+use strata_engine::Engine;
 use tokio::sync::mpsc;
 
 use crate::agent::ask::{AgentAsk, AgentNotice};
@@ -325,8 +325,8 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_agent::{Agent, AgentIdentity};
-    use strata_core::engine::{column_info, TableMeta, ViewMeta};
     use strata_core::project::ProjectDefs;
+    use strata_engine::{column_info, TableMeta, ViewMeta};
     use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef};
     use uuid::Uuid;
 

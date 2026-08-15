@@ -25,7 +25,7 @@
 //!   policy — the editor simply never dispatches what validation flagged, and an agent cannot be
 //!   trusted with that discipline. `run` asks `Engine::policy_verdicts` and refuses on any
 //!   non-clean answer, an unjudgeable one included: the gate fails closed.
-//! - **A stop is not a fault.** `strata_core::engine::stopped_on_purpose` is asked once, here.
+//! - **A stop is not a fault.** `strata_engine::stopped_on_purpose` is asked once, here.
 //! - **`run` never rewrites SQL.** No injected `LIMIT`; the *response* is bounded by `page_size`
 //!   plus `read_page`.
 //!
@@ -50,7 +50,7 @@ use rmcp::model::{JsonObject, ProtocolVersion};
 use rmcp::service::Peer;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
-use strata_core::engine::{stopped_on_purpose, Engine};
+use strata_engine::{stopped_on_purpose, Engine};
 use strata_model::SnapshotId;
 use uuid::Uuid;
 
@@ -280,7 +280,7 @@ struct Live {
 
 /// One stateless call in flight, holding its agent against the sweeper.
 ///
-/// RAII for [`SnapshotPin`](strata_core::engine::SnapshotPin)'s reason: the thing being
+/// RAII for [`SnapshotPin`](strata_engine::SnapshotPin)'s reason: the thing being
 /// protected outlives the statement that starts it, and every early return, `?` and dropped
 /// request future has to release it. Dropping re-stamps `seen`, so a long call leaves the
 /// agent's idle window starting from when it *finished*.
@@ -1232,8 +1232,8 @@ mod tests {
     use std::fs;
     use std::{env, process};
 
-    use strata_core::engine::sql::Blocked;
-    use strata_core::engine::{RunTag, TableSpec, WsId, CANCELLED};
+    use strata_engine::sql::Blocked;
+    use strata_engine::{RunTag, TableSpec, WsId, CANCELLED};
     use strata_model::SourceFormat;
 
     use crate::assistant::SYSTEM;

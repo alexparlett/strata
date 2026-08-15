@@ -55,7 +55,7 @@ force-kill. The probe's verdict, recorded in QE-07 so it is not re-derived: the 
 object fragments into **50 shapes, power-law distributed** — the 15 an answer shows cover
 93.6% — which vindicates `json_poly`'s Struct inference (a `Map` needs one value type; do
 not reopen record-vs-map) and makes the *presentation* bound the invariant: a surface that
-renders a schema bounds it. QE-07 promotes QE-03's collapse to a shared `strata-core`
+renders a schema bounds it. QE-07 promotes QE-03's collapse to a shared `strata-engine`
 mechanism, derives the describe ladder's depth instead of pinning it at 5, and counts
 elided shapes; QE-08 lands the pane's cap + collapse rows **after DB-05's tree**, whose
 task file was deliberately not edited (active session).
@@ -107,7 +107,7 @@ rules that make those answerable), not a consent gate.
 ## Upstream ledger — DataFusion 54 behaviour, not ours to build
 
 The pin is structural: DataFusion is held at **54** by `datafusion-table-providers` 0.13 +
-`datafusion-federation` 0.5.5 (the four move together — `strata-core/Cargo.toml:26-33`), so
+`datafusion-federation` 0.5.5 (the four move together — see `docs/CONNECTIONS_SPEC.md`), so
 even an upstream fix arrives only when that whole set bumps. Recorded here so nobody
 re-diagnoses these from scratch; revisit the list at the next DF bump.
 

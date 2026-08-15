@@ -1,7 +1,7 @@
 //! The **selection inspector** — what the catalogue knows about the selected property.
 //!
 //! Only real facts, the same rule the column inspector holds (P3-08): the description and the
-//! default come from [`ENGINE_KEYS`](strata_core::engine::config::ENGINE_KEYS), so a custom key
+//! default come from [`ENGINE_KEYS`](strata_engine::config::ENGINE_KEYS), so a custom key
 //! gets the one sentence that is true of it — that nothing here recognises it — rather than a
 //! `Default: —` row pretending the catalogue had an answer.
 //!
@@ -50,7 +50,7 @@ impl Component for Inspector {
         if status == KeyStatus::Blank {
             return rect();
         }
-        let restart = strata_core::engine::config::is_restart_key(row.key());
+        let restart = strata_engine::config::is_restart_key(row.key());
         let (badge, blurb) = match status {
             KeyStatus::Known(def) => (None, def.desc),
             KeyStatus::Reserved => (Some(("RESERVED", tones.error)), RESERVED),

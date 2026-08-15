@@ -92,7 +92,7 @@ pub fn flatten_cols(
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_core::engine::column_info;
+    use strata_engine::column_info;
 
     use super::*;
 

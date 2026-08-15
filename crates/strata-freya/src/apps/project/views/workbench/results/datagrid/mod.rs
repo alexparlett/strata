@@ -26,7 +26,7 @@ use freya::prelude::*;
 
 use crate::state::{use_config, use_config_station, ConfigChan};
 use strata_core::config::Command;
-use strata_core::engine::serialize::TextFormat;
+use strata_engine::serialize::TextFormat;
 
 use super::cell_view::{CellValue, CellView};
 use super::copy;

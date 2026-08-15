@@ -6,7 +6,7 @@ description: Format the Strata crates without reformatting the Freya fork. Use w
 # Format Strata
 
 ```bash
-cargo fmt -p strata-freya -p strata-core -p strata-model -p strata-code-editor -p strata-command-macro -p strata-agent
+cargo fmt -p strata-freya -p strata-core -p strata-engine -p strata-model -p strata-code-editor -p strata-command-macro -p strata-agent
 ```
 
 That is the whole thing. Run it from the repo root (or any worktree root).

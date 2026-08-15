@@ -45,7 +45,7 @@
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
-use strata_core::engine::drop_intent;
+use strata_engine::drop_intent;
 use strata_model::{CatalogKind, ProviderId, TableOrigin};
 use uuid::Uuid;
 
@@ -580,9 +580,9 @@ mod tests {
 
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
-    use strata_core::engine::{RunTag, TableMeta, ViewMeta, WsId};
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
+    use strata_engine::{RunTag, TableMeta, ViewMeta, WsId};
     use strata_model::{
         ConnectionDef, GcsStore, Origin, PgStore, Provider, S3Store, SavedQuery, SourceFormat,
         TableDef, TableOrigin, ViewDef,
@@ -1436,7 +1436,7 @@ mod tests {
 
     /// **Confirming an internal table's drop deletes its data** — the half of ED-05's parity
     /// only this surface can show, the other half (that the typed statement and
-    /// `Engine::drop_table` leave the same state) being pinned in `strata-core`.
+    /// `Engine::drop_table` leave the same state) being pinned in `strata-engine`.
     ///
     /// Before ED-05 this arm called `Engine::deregister`, which forgets the provider and nothing
     /// else. On an internal table that orphans `.strata/tables/<slug>/` forever: no def points at

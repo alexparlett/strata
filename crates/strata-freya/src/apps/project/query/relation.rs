@@ -35,8 +35,8 @@ use freya::prelude::{use_side_effect, use_state};
 use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, UseQuery};
 use std::collections::BTreeMap;
 use std::time::Duration;
-use strata_core::engine::sql::qualified;
-use strata_core::engine::RemoteRelation;
+use strata_engine::sql::qualified;
+use strata_engine::RemoteRelation;
 use strata_model::RemoteRef;
 
 use crate::apps::project::contexts::EngineCtx;

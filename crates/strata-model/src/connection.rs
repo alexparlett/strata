@@ -50,7 +50,7 @@ pub struct ConnectionDef {
     /// all three stores are built on the same HTTP client, so a per-provider copy would be the same
     /// table three times. A map rather than a list, because a key set twice has no meaning.
     ///
-    /// Which names are legal is `strata_core::engine::store`'s answer (`check_client_config`) —
+    /// Which names are legal is `strata_engine::store`'s answer (`check_client_config`) —
     /// the keys are `object_store`'s vocabulary and this crate does not depend on it. **Empty on a
     /// database connection**, which speaks no HTTP.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -106,7 +106,7 @@ impl ConnectionDef {
 ///
 /// **[`Postgres`](Self::Postgres) is a fourth arm rather than a second kind of thing.** It
 /// registers a DataFusion *catalog* where the others register an object store, and that difference
-/// lives entirely in `strata_core::engine`: everything here is the same def, `Reg` row, editor
+/// lives entirely in `strata_engine`: everything here is the same def, `Reg` row, editor
 /// window, registration pass and Forget confirm. A further database would be a further arm, not a
 /// generic RDBMS abstraction — the per-arm `match` *is* the mechanism.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -154,7 +154,7 @@ impl Provider {
 ///
 /// `existing` is the connections to fold `candidate` against, `candidate` excluded: the project's
 /// stored defs for the editor, and the databases already registered on the session for
-/// `strata_core::engine::db::connect`. Different sets on purpose — a connection that failed to
+/// `strata_engine::db::connect`. Different sets on purpose — a connection that failed to
 /// connect reserves nothing, which is why the engine's set is the live one.
 ///
 /// A no-op for every provider that registers an object store.
@@ -395,7 +395,7 @@ fn check_pg_address(address: &str) -> Result<(), String> {
 
 /// A database connection's address, taken apart — the **one** parse of `host:port/database`.
 ///
-/// `strata_core::engine::db` dials with exactly these parts rather than splitting the string a
+/// `strata_engine::db` dials with exactly these parts rather than splitting the string a
 /// second time: two parses of one grammar drift the first time the shape moves, and a second copy's
 /// refusals are unreachable prose that reads like live validation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -505,7 +505,7 @@ fn is_dotted_decimal_ip(bucket: &str) -> bool {
 #[serde(default)]
 pub struct S3Store {
     /// **Required**: `object_store` does not derive a bucket's region reliably (arrow-rs#2795) and
-    /// silently defaults to `us-east-1`, so `strata_core::engine::store` refuses a blank one.
+    /// silently defaults to `us-east-1`, so `strata_engine::store` refuses a blank one.
     pub region: String,
     pub auth: S3Auth,
     /// An S3-**compatible** endpoint (R2 / MinIO / OSS / COS). Empty means AWS itself.
@@ -651,7 +651,7 @@ impl PgStore {
 
 /// The catalog the project's own tables, views and results live in — what a database connection's
 /// catalog name may not be ([`PgStore::check_catalog`]). Here rather than in the engine that
-/// registers it, because both crates need it: `strata_core::engine::CATALOG` reads it.
+/// registers it, because both crates need it: `strata_engine::CATALOG` reads it.
 pub const WORKSPACE_CATALOG: &str = "strata";
 
 /// How the connection to the server is encrypted — libpq's own vocabulary in libpq's own spellings,

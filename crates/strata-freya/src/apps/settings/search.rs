@@ -26,7 +26,7 @@
 //! there is something to single out — a row of a pane, or a property's row in the grid *if it is
 //! overridden*. It never writes: a row in that grid is an override.
 
-use strata_core::engine::config::{EngineKey, ENGINE_KEYS};
+use strata_engine::config::{EngineKey, ENGINE_KEYS};
 
 use crate::apps::settings::{category, Route};
 use crate::components::form::Row;

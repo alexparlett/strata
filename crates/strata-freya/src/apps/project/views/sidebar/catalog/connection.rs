@@ -19,9 +19,9 @@
 //! function of its inputs and a row still holds no state that identifies it.
 
 use freya::prelude::*;
-use strata_core::engine::db::{SchemaListingView, SchemaVisibility};
-use strata_core::engine::sql::qualified;
-use strata_core::engine::{Engine, RemoteRelation};
+use strata_engine::db::{SchemaListingView, SchemaVisibility};
+use strata_engine::sql::qualified;
+use strata_engine::{Engine, RemoteRelation};
 use strata_model::{CatalogKind, ColOwner, Provider, ProviderId, RemoteRef};
 
 use super::columns::flatten_cols;

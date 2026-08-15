@@ -10,7 +10,7 @@ the enabled schemas.
 
 ## What was built
 
-1. **The quoting pair has one home.** `strata_core::engine::sql::ident` — `needs_quoting`,
+1. **The quoting pair has one home.** `strata_engine::sql::ident` — `needs_quoting`,
    `quote_verbatim` and `qualified` (a dotted name rendered **segment by segment**, since
    quoting `pg.public.orders` whole makes it a bare relation with dots in it). It is the
    completion insert's own rule, lifted out of `complete/mod.rs`, which now calls it. The

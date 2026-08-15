@@ -17,9 +17,9 @@ use strata_code_editor::prelude::{
     EditorLanguage, Rope,
 };
 use strata_core::config::Command;
-use strata_core::engine::config::{effective, DIALECT_KEY};
-use strata_core::engine::sql;
 use strata_core::keymap::resolve;
+use strata_engine::config::{effective, DIALECT_KEY};
+use strata_engine::sql;
 use strata_model::TabId;
 
 /// One tab's editor pane: the toolbar above the `CodeEditor`, then a bottom divider. Slices a

@@ -59,12 +59,12 @@ and the wiring.
 
 **The engine already does all of it.** `ddl::tables::create` serves both create kinds from one
 body, and the bare column-list form is first-class, in its own words
-([`tables.rs:70`](../../../crates/strata-core/src/engine/ddl/tables.rs)):
+([`tables.rs:70`](../../../crates/strata-engine/src/ddl/tables.rs)):
 
 > a declared column list with no query becomes an `EmptyRelation` carrying that schema, and the
 > spool below then writes it as a schema-carrying, zero-row Arrow file
 
-The router names it apart as `StmtKind::CreateTable` ([`validate.rs:571`](../../../crates/strata-core/src/engine/sql/validate.rs))
+The router names it apart as `StmtKind::CreateTable` ([`validate.rs:571`](../../../crates/strata-engine/src/sql/validate.rs))
 "because the *report* says different things, and because a kind that classifies is a kind some
 later task may implement differently". This is that task.
 

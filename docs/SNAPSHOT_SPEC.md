@@ -136,7 +136,7 @@ Disk, not memory: RAM holds one page regardless of result size.
 
 ## 5. The engine facade
 
-The engine (`strata_core::engine::Engine`) is a **direct-call async facade**: it owns a private
+The engine (`strata_engine::Engine`) is a **direct-call async facade**: it owns a private
 multi-thread Tokio runtime (DataFusion's operators require a Tokio context, and query CPU must
 never run on the render thread), spawns each call onto it, and awaits the `JoinHandle` — which is
 executor-agnostic, so Freya's non-Tokio UI executor awaits engine calls like any async fn. No

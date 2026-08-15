@@ -19,7 +19,7 @@ use serde_json::json;
 use strata_agent::host::{CatalogEntry, RegState};
 use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::{AgentServer, MCP_PATH};
-use strata_core::engine::TableSpec;
+use strata_engine::TableSpec;
 use strata_model::SourceFormat;
 use tokio::net::TcpStream;
 use tokio::time::sleep;
@@ -32,7 +32,7 @@ const TOKEN: &str = "test-token-a1b2c3";
 /// begins by removing its scratch directory, and DataFusion re-LISTs a table's sources at
 /// **scan** time rather than caching the file set at registration — so a shared directory
 /// would let one test delete `people.csv` out from under another test's in-flight query.
-/// (The same reason `strata-core`'s own `scratch(tag)` helper takes one.)
+/// (The same reason `strata-engine`'s own `scratch(tag)` helper takes one.)
 async fn serve(tag: &str) -> (AgentServer, String) {
     let root = env::temp_dir().join(format!("strata_agent_http_{}_{tag}", process::id()));
     let _ = fs::remove_dir_all(&root);

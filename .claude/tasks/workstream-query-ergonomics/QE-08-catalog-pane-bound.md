@@ -46,7 +46,7 @@ shows a wall of UUIDs — the freeze and the uselessness are two different defec
    control — reaching an unshown column is search/inspector territory (if DB-05's tree grew
    a filter box, say so here; do not build one in this task).
 2. **The collapse rows.** Where a container's children group into keyed sets
-   (`strata_core::engine::schema_shape`, QE-07), render one row per set — placeholder name,
+   (`strata_engine::schema_shape`, QE-07), render one row per set — placeholder name,
    `×N` count, the representative's subtree expandable beneath it — then the singular
    children. Collapse only past the cap (the same *cutting not projection* rule QE-03
    settled: a container that fits its cap shows real names). Expansion state for a set row
@@ -72,4 +72,4 @@ shows a wall of UUIDs — the freeze and the uselessness are two different defec
 
 DB-05's tree module (path known once it lands; today's sites are
 `crates/strata-freya/src/apps/project/views/sidebar/catalog/{entry,columns,mod}.rs`) ·
-`crates/strata-core/src/engine/schema_shape.rs` (consume only — owned by QE-07).
+`crates/strata-engine/src/schema_shape.rs` (consume only — owned by QE-07).

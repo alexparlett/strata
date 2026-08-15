@@ -18,7 +18,7 @@ and every gesture added here is **a second entry into a funnel that already exis
 | IT-01 | [Creating an internal table](IT-01-internal-table.md) — Configure's LOCATION ▸ **Internal**, name + columns | `StmtKind::CreateTable` | ✅ |
 | IT-02 | Save results as table — from the results toolbar, beside Export | `StmtKind::Ctas` | ⬜ *(file not written)* |
 
-The classifier already splits these two ([`validate.rs:568`](../../../crates/strata-core/src/engine/sql/validate.rs), on
+The classifier already splits these two ([`validate.rs:568`](../../../crates/strata-engine/src/sql/validate.rs), on
 `create.query.is_some()`), and `ddl::tables::create` already serves both from one body. Two
 kinds in the engine, zero in the UI — that split is what makes these two tasks rather than one.
 

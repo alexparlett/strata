@@ -112,7 +112,7 @@ demonstrated field need — registration is one line, so there is no economy in 
 ## Current state (verified 2026-08-13)
 
 - `datafusion_functions_json::register_all` runs in `build_context`
-  (`crates/strata-core/src/engine/mod.rs:1985`); the crate's `json_from_scalar` **rejects
+  (`crates/strata-engine/src/mod.rs:1985`); the crate's `json_from_scalar` **rejects
   Struct and List input** (`plan_err!("Unsupported type for json_from_scalar…")`), which is
   the refusal the feedback hit. Its `json_object_keys`/`json_get` work on JSON text only.
 - `engine::json_poly` infers every JSON object as a `Struct`
@@ -137,7 +137,7 @@ demonstrated field need — registration is one line, so there is no economy in 
 
 0. ~~**The `datafusion-variant` spike**~~ — **done, rejected**; verdict and evidence above.
    The dev-dependency and the spike test are removed; nothing in the tree references the crate.
-1. New module `crates/strata-core/src/engine/udfs.rs` (Strata's own built-ins — QE-02 joins
+1. New module `crates/strata-engine/src/udfs.rs` (Strata's own built-ins — QE-02 joins
    it) holding all four `ScalarUDFImpl`s.
    - `struct_keys`: per row, the field names whose child is valid at that index — null
      bitmap walk, no values touched. Null struct row → null (not empty list: "no object"
@@ -184,6 +184,6 @@ demonstrated field need — registration is one line, so there is no economy in 
 
 ## Files
 
-`crates/strata-core/src/engine/udfs.rs` (new) · `crates/strata-core/src/engine/mod.rs`
+`crates/strata-engine/src/udfs.rs` (new) · `crates/strata-engine/src/mod.rs`
 (register + module decl) · `docs/reference/ENGINE.md` (one line: Strata now has own built-ins,
 where they live) · tests beside the module + one fixture test in `strata-core`.

@@ -30,9 +30,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use freya::radio::RadioChannel;
-use strata_core::engine::{fold_ident, TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
-use strata_core::register::view_order;
+use strata_engine::register::view_order;
+use strata_engine::{fold_ident, TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColumnInfo, ConnectionDef, Provider, SavedQuery, TableDef, ViewDef,
 };
@@ -905,7 +905,7 @@ impl ProjectState {
     }
 
     /// Order `views` so that a view is re-created **after** every view it reads — the
-    /// store's projection over [`view_order`] (`strata-core`, beside the pass it
+    /// store's projection over [`view_order`] (`strata-engine`, beside the pass it
     /// orders): each view's known dependencies are its landed
     /// [`ViewInfo::view_deps`], and a view with no landed answer carries none, so it
     /// sorts wherever it falls — at project open that is every view, which is why the

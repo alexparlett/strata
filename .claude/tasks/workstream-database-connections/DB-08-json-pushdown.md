@@ -4,7 +4,7 @@
 
 ## What was built, and the four corrections that came out of building it
 
-`crates/strata-core/src/engine/db/` is a directory now: `mod.rs` (DB-02's, unchanged bar the
+`crates/strata-engine/src/db/` is a directory now: `mod.rs` (DB-02's, unchanged bar the
 provider construction), `json.rs` (the table, the rewrite, both refusals, unit tests) and
 `federate.rs` (the provider one level below `PostgresTableFactory`, plus `PgExecutor`).
 
@@ -158,6 +158,6 @@ remote "function does not exist".
 
 ## Files
 
-`crates/strata-core/src/engine/db.rs` (the table + hook install; provider construction if
-it moves down a level) · `crates/strata-core/tests/postgres_federation.rs` ·
+`crates/strata-engine/src/db.rs` (the table + hook install; provider construction if
+it moves down a level) · `crates/strata-engine/tests/postgres_federation.rs` ·
 `docs/CONNECTIONS_SPEC.md`.

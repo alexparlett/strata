@@ -12,16 +12,16 @@
 //! [`ExportDraft::apply`] is exhaustive over `Edit`.
 //!
 //! **The draft keeps every format's options side by side**, while
-//! [`strata_core::engine::export::Format`] keeps only the active format's — deliberately
+//! [`strata_engine::export::Format`] keeps only the active format's — deliberately
 //! different shapes. Switching to Parquet and back must not forget the delimiter you set, so
 //! the draft remembers; the engine spec must not be able to name a delimiter on a Parquet
 //! export, so [`ExportDraft::spec`] projects only the format in play.
 
-use strata_core::engine::export::{
+use strata_core::util::one_char;
+use strata_engine::export::{
     Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
     WriterVersion,
 };
-use strata_core::util::one_char;
 use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
 
 use crate::components::form::{self, Make};
@@ -76,7 +76,7 @@ impl ExportTarget {
 }
 
 /// Which format's card is selected. Separate from
-/// [`Format`](strata_core::engine::export::Format) because this one is a *choice* — it has no
+/// [`Format`](strata_engine::export::Format) because this one is a *choice* — it has no
 /// options attached, and it round-trips through the format cards.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FormatId {
@@ -668,7 +668,7 @@ pub fn thousands(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-    use strata_core::engine::column_info;
+    use strata_engine::column_info;
 
     use super::*;
 

@@ -59,7 +59,7 @@ this; nothing here paints.
 - `StrataCatalogProvider` stays untouched: a database connection registers a *sibling* catalog
   via `ctx.register_catalog` (`CatalogProviderList`), exactly as `build_context` registers
   `strata` (mod.rs:1828). `fold_ident` is mod.rs:1723.
-- The MinIO test (`strata-core/tests/object_store_minio.rs`) is the integration-test template:
+- The MinIO test (`strata-engine/tests/object_store_minio.rs`) is the integration-test template:
   one un-`#[ignore]`d `#[tokio::test]`, sequential phases, container held for the duration,
   capacity-refusal retry only, seeded by a different layer than the one under test. CI's split
   (AGENTS §7): the `minio` job runs the container test *binaries* entire
@@ -134,7 +134,7 @@ this; nothing here paints.
    provider (derived ref, read per new pool connection on `spawn_blocking`); the integration
    test hands a `StaticPasswordProvider` through the **same** `db::connect` entry point — no
    keystore in a `strata-core` test process (`open_keystore` is called only by the app's
-   `main` and by `tests/secret_keystore.rs`, which owns the real-keystore round trip).
+   `main` and by `strata-core/tests/secret_keystore.rs`, which owns the real-keystore round trip).
    **All-or-nothing shares `settle`'s one body rather than restating it** — the register-or-
    take-back is one function over a registration enum (object store | catalog), because the
    restated version of this contract is the documented burn scar at store.rs:82-89. And
@@ -190,13 +190,13 @@ this; nothing here paints.
    - `docs/reference/ENGINE.md`'s remote-scheme paragraph; `docs/ARCHITECTURE.md`'s
      engine/catalog paragraphs; and `docs/README.md`'s index row for CONNECTIONS_SPEC, which
      still advertises "the no-secrets credential model".
-6. **Integration test** — `strata-core/tests/postgres_federation.rs`, MinIO-shaped: one test,
+6. **Integration test** — `strata-engine/tests/postgres_federation.rs`, MinIO-shaped: one test,
    sequential phases, `testcontainers-modules` feature `postgres`, seeded over raw
    `tokio-postgres` (a lower layer than the pool/factory under test). Phases at minimum:
    - connect refusals: wrong port (named), wrong password (named), then a good connect
      registers catalog `pg` — **all through `db::connect` with a `StaticPasswordProvider`**
      (the password seam in Build 3; no keystore exists in this process, and the
-     real-keystore round trip stays `tests/secret_keystore.rs`'s);
+     real-keystore round trip stays `strata-core/tests/secret_keystore.rs`'s);
    - `SELECT` through `pg.public.t` returns seeded rows; a filtered scan's EXPLAIN carries the
      filter into `base_sql=` (single-table pushdown);
    - a two-table same-connection join's EXPLAIN shows **one** federated node whose `base_sql`
@@ -240,7 +240,7 @@ this; nothing here paints.
 (the object-store predicate on the TYPE pill) · `crates/strata-core/Cargo.toml`
 (`datafusion-table-providers-postgres = "0.13"`; `uuid` gains the `v5` feature; dev-deps
 `tokio-postgres`, `testcontainers-modules` + `postgres` feature) ·
-`crates/strata-core/tests/postgres_federation.rs` (new) · `.github/workflows/ci.yml` (targets,
+`crates/strata-engine/tests/postgres_federation.rs` (new) · `.github/workflows/ci.yml` (targets,
 skip names, and the split's prose) · docs per Build 5.
 
 ---
@@ -300,7 +300,7 @@ The plan had it call `db::connect` with `StaticPasswordProvider`, which would ha
 derived ref, `KeystorePassword`, the `spawn_blocking` read. Instead the test installs
 `keyring_core::mock` as this binary's store (exactly as `secret`'s own unit tests do) and drives
 `Engine::connect` / `Engine::disconnect` end to end. `secret::open_keystore` is still never called
-in a test process, so no real Keychain is touched, and `tests/secret_keystore.rs` still owns that
+in a test process, so no real Keychain is touched, and `strata-core/tests/secret_keystore.rs` still owns that
 round trip. The password seam is unchanged and still an argument to `db::connect`.
 
 ### 6. The snapshot ordinal had to leave the plan (the one change outside this task's files)
@@ -402,7 +402,7 @@ new test's function name; the split's prose is about both).
   (`"keystore"`), and there is **no UUID anywhere in the string**. `SecretRef::derived` is pinned
   to a literal id, not merely to self-consistency.
 - `rg 'datafusion_table_providers|PostgresConnectionPool' crates/` matches only
-  `crates/strata-core/src/engine/db.rs`, `crates/strata-core/Cargo.toml` and the integration
+  `crates/strata-engine/src/db.rs`, `crates/strata-core/Cargo.toml` and the integration
   test's `keyring`-free imports — nothing outside `engine::db` constructs a pool or names a
   provider-crate type.
 

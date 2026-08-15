@@ -60,8 +60,8 @@ use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
-use strata_core::engine::db::PG_PASSWORD;
 use strata_core::secret::SecretRef;
+use strata_engine::db::PG_PASSWORD;
 use strata_model::{PgPassword, ProviderId};
 
 use crate::apps::connection::views::{use_watch_connection, ConnectionBody, Footer, TitleBar};

@@ -1,6 +1,6 @@
 //! The shared **results-copy** capability (P2-11 / Dioxus Rz4): resolve the grid's
 //! selection against the current page, serialize it with the core writers
-//! (`strata_core::engine::serialize` — TSV / CSV / JSON / Markdown, headers on, nested
+//! (`strata_engine::serialize` — TSV / CSV / JSON / Markdown, headers on, nested
 //! cells as real JSON), and land the text on the system clipboard via
 //! `freya::clipboard` — the same handle the text inputs and the chart's Copy Image use, so
 //! there is exactly one clipboard stack in the app.
@@ -16,7 +16,7 @@ use freya::clipboard::Clipboard;
 use freya::prelude::*;
 
 use strata_core::config::Command;
-use strata_core::engine::serialize::{row_pretty_json, write_selection, TextFormat};
+use strata_engine::serialize::{row_pretty_json, write_selection, TextFormat};
 
 use super::cell_view::page_batch_row;
 use super::datagrid::GridData;

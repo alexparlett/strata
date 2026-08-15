@@ -110,9 +110,9 @@ DataFusion can *plan* go here; statements only the server can run go there.
 
 ## Files
 
-`crates/strata-core/src/engine/ddl/{mod,tables}.rs` · `crates/strata-core/src/engine/db.rs` ·
+`crates/strata-engine/src/ddl/{mod,tables}.rs` · `crates/strata-engine/src/db.rs` ·
 `crates/strata-model/src/connection.rs` · the connection editor's Postgres form (DB-04's window) ·
-`crates/strata-core/tests/postgres_federation.rs` · `docs/STATEMENTS_SPEC.md`,
+`crates/strata-engine/tests/postgres_federation.rs` · `docs/STATEMENTS_SPEC.md`,
 `docs/CONNECTIONS_SPEC.md`, `docs/reference/INVARIANTS.md` + AGENTS.md §2 (the "read-only in v1"
 sentences — rewrite to lead with what now works, the toggle and the still-refused kinds as the
 subordinate clause).

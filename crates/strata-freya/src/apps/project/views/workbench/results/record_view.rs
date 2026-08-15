@@ -27,7 +27,7 @@ use std::rc::Rc;
 use freya::components::{define_theme, get_theme, Button, ScrollView};
 use freya::prelude::*;
 
-use strata_core::engine::serialize::cell_preview_json;
+use strata_engine::serialize::cell_preview_json;
 use strata_model::Kind;
 
 use super::cell_view::page_batch_row;
@@ -384,8 +384,8 @@ mod interaction {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use freya_testing::TestingRunner;
-    use strata_core::engine::{column_info, RecordBatch, Schema};
     use strata_core::theme::load;
+    use strata_engine::{column_info, RecordBatch, Schema};
     use strata_model::Cell;
 
     use super::*;

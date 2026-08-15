@@ -274,7 +274,7 @@ to the fork's `Tree`. Only the rows on screen are mounted.
 what shipped: relations are leaves (columns are DB-07's), `Engine::db_listing` reads the
 connect-time enumeration rather than the network, and a def's columns come off `Reg::Ready`.
 Everything the row count needs was already synchronous. Meanwhile `RELATIONS_QUERY`
-(`strata-core/src/engine/db.rs`) carries no `LIMIT`, so one Postgres schema is the only row count
+(`strata-engine/src/db.rs`) carries no `LIMIT`, so one Postgres schema is the only row count
 in the app the *server* decides — which is the case that made mounting every row untenable rather
 than merely wasteful.
 

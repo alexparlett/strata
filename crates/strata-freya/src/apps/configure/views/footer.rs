@@ -17,7 +17,7 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, Radio, RadioStation};
-use strata_core::engine::{RunOutcome, RunTag, WsId};
+use strata_engine::{RunOutcome, RunTag, WsId};
 use uuid::Uuid;
 
 use crate::apps::configure::{ConfigureCtx, ConfigureTarget, Status};

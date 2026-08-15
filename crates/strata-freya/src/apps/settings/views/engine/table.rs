@@ -19,7 +19,7 @@
 //! nothing.
 
 use freya::prelude::*;
-use strata_core::engine::config::is_restart_key;
+use strata_engine::config::is_restart_key;
 
 use crate::apps::settings::settings_theme;
 use crate::apps::settings::views::engine::model::{KeyStatus, PropRows};

@@ -16,9 +16,9 @@ use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use futures::executor::block_on;
-use strata_core::engine::{column_info, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
+use strata_engine::{column_info, TableMeta, TableSpec, ViewMeta};
 use strata_model::{
     ColRef, ColumnInfo, RemoteRef, SourceFormat, Stat, StatKey, TableDef, TableOrigin, ViewDef,
 };
@@ -83,7 +83,7 @@ fn table(name: &str, format: &str) -> TableDef {
 const SCAN_TABLE: &str = "regions";
 const SCAN_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../strata-core/tests/fixtures/loadfix/regions.csv"
+    "/../strata-engine/tests/fixtures/loadfix/regions.csv"
 );
 
 /// `events` is Parquet with footer facts and a nested struct; `uploads` is CSV, which reports

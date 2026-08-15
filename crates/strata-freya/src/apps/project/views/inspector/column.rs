@@ -23,9 +23,9 @@ use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::engine::profile::{stats_footnote, CatalogProfile};
-use strata_core::engine::stopped_on_purpose;
 use strata_core::util::iso8601;
+use strata_engine::profile::{stats_footnote, CatalogProfile};
+use strata_engine::stopped_on_purpose;
 use strata_model::Origin;
 
 use super::model::{

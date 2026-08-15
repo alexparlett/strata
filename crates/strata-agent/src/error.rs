@@ -18,7 +18,7 @@ use std::fmt;
 use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock};
 use rmcp::ErrorData;
-use strata_core::engine::sql::PolicyRefusal;
+use strata_engine::sql::PolicyRefusal;
 
 use crate::host::{Project, QuerySessionId};
 
@@ -129,7 +129,7 @@ impl IntoCallToolResult for AgentError {
 mod tests {
     use std::path::PathBuf;
 
-    use strata_core::engine::sql::Blocked;
+    use strata_engine::sql::Blocked;
 
     use super::*;
 

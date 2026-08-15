@@ -88,7 +88,7 @@ AM-02 + AM-03; AM-07 closes with the spec and the end-to-end test.
   runtime, direct-call async methods, callers await — `engine/mod.rs:442`'s pattern), because
   LanceDB is async and Freya's render executor is not Tokio. Embedding happens **inside** the
   facade at write and at query; no caller ever sees a vector. `lancedb` and `fastembed` are
-  `strata-core` dependencies (the DataFusion-only-in-core invariant holds — lance's internal
+  `strata-engine` dependencies (the DataFusion-only-in-`strata-engine` invariant holds — lance's internal
   DataFusion stays inside that boundary).
 - **Two prompt deliverables, both static files** so the byte-identical-system-prompt rule
   survives: `system.md` grows a constant "Project memory" section (what the injected block is,

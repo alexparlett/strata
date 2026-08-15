@@ -18,10 +18,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use strata_core::engine::export::quote_col;
-use strata_core::engine::{duplicate_column, fold_ident};
 use strata_core::project::{relativize, resolve_source};
 use strata_core::util::one_char;
+use strata_engine::export::quote_col;
+use strata_engine::{duplicate_column, fold_ident};
 use strata_model::{
     ConnectionDef, CsvRead, FileCompression, JsonRead, JsonShape, ProviderId, SourceFormat,
     TableDef, TableOrigin,
@@ -233,7 +233,7 @@ pub type Probes = BTreeMap<String, Verdict>;
 ///
 /// The type is **text**, not a pick from a list: there is no Arrow → SQL inverse to author an
 /// offer from, so what it means is asked of the planner per row
-/// ([`Engine::column_type`](strata_core::engine::Engine::column_type)) rather than declared here.
+/// ([`Engine::column_type`](strata_engine::Engine::column_type)) rather than declared here.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ColumnDraft {
     pub name: String,
