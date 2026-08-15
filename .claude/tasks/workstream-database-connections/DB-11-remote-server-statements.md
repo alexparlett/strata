@@ -44,9 +44,10 @@ named.
   (`connect_direct` → `tokio_postgres` client) — verified in
   `datafusion-table-providers-postgres` 0.13.0. A new `db.rs` method wraps it: execute one
   statement on connection X, errors surfaced through `catalog::readable`'s existing peeling.
-- **DB-03's two-list split pays again here.** `ViewMeta.remote_deps` records which workspace
-  views read `pg.public.orders` qualified whole — so a remote `DROP` can name the workspace
-  views it strands, in `left_invalid`'s own words, without cascading anything.
+- **DB-03's two-list split pays again here.** `ViewMeta::remote` (mirrored freya-side as
+  `ViewInfo::remote_deps`) records which workspace views read `pg.public.orders` qualified
+  whole — so a remote `DROP` can name the workspace views it strands, in `left_invalid`'s own
+  words, without cascading anything.
 
 ## Build
 
@@ -65,7 +66,7 @@ named.
    check writable, body-check, splice, dispatch, report in the server's terms ("View 'public.v'
    created on 'pg'"). CTAS with a remote target stays **DB-10's** arm (data movement, not DDL) —
    the `CreateTable` arm branches on "has a query" exactly as it already does locally. A remote
-   `DROP TABLE`'s report names the workspace views left invalid, off `remote_deps`.
+   `DROP TABLE`'s report names the workspace views left invalid, off `ViewMeta::remote`.
 4. **`UPDATE` and `DELETE`, remote-only, as two new intercepted kinds** (asked for 2026-08-15 —
    and once `DROP TABLE` dispatches, refusing `DELETE` is not a safety line but a hole: dropping
    a whole table while its rows are untouchable is no policy at all). Each gains a `StmtKind`
