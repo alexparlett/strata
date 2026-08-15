@@ -8,7 +8,7 @@
 //! same rows, same `Reg` status slots, same menus, same columns expansion — one level further in.
 
 use freya::prelude::*;
-use strata_model::{CatalogKind, ColumnInfo, WORKSPACE_CATALOG};
+use strata_model::{CatalogKind, ColOwner, ColumnInfo, WORKSPACE_CATALOG};
 
 use super::columns::flatten_cols;
 use super::matches;
@@ -208,7 +208,10 @@ fn entry(
     let path = entry_path(resolved.kind, &resolved.name);
     let is_open = open.is_open(&path);
     let columns = columns.filter(|c| !c.is_empty());
-    let (owner_kind, owner) = (resolved.kind, resolved.name.clone());
+    let owner = ColOwner::Entry {
+        kind: resolved.kind,
+        name: resolved.name.clone(),
+    };
     out.push(Node::branch(
         ENTRY_DEPTH,
         path.clone(),
@@ -229,7 +232,6 @@ fn entry(
             row.is_expanded,
             row.has_children,
             NodeKind::Column(Column {
-                owner_kind,
                 owner: owner.clone(),
                 row,
             }),

@@ -633,6 +633,7 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
             format_json_color: role(Role::FormatJson),
             format_arrow_color: role(Role::FormatArrow),
             format_view_color: role(Role::FormatView),
+            format_database_color: role(Role::Accent),
         },
     );
     th.set(

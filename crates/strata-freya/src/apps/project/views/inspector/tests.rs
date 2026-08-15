@@ -8,6 +8,7 @@
 //! the panel started inventing a row: no facts a CSV never reported, no completeness bar without
 //! a real null count, and the null count never shown twice.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -19,12 +20,13 @@ use strata_core::engine::{column_info, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{
-    ColRef, ColumnInfo, SourceFormat, Stat, StatKey, TableDef, TableOrigin, ViewDef,
+    ColRef, ColumnInfo, RemoteRef, SourceFormat, Stat, StatKey, TableDef, TableOrigin, ViewDef,
 };
 
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::views::ProfileTarget;
+use crate::apps::project::query::{ProfileTarget, ScanId};
+use crate::apps::project::state::CatalogState;
 use crate::components::metrics::{ACTION_HEIGHT, PANE_BODY_MIN_W};
 use crate::theme::strata_theme;
 
@@ -198,6 +200,8 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
                 engine
             });
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
+            r.provide_root_context(|| State::create(CatalogState::Settled(1)));
+            r.provide_root_context(|| State::create(BTreeMap::<RemoteRef, ScanId>::new()));
             (selection, project, session, profile_target)
         },
         1.,
@@ -219,11 +223,7 @@ fn select(runner: &mut TestingRunner, sel: &mut State<Option<ColRef>>, col: ColR
 }
 
 fn column(kind: CatalogKind, owner: &str, path: &[&str]) -> ColRef {
-    ColRef {
-        kind,
-        owner: owner.into(),
-        path: path.iter().map(|s| (*s).to_string()).collect(),
-    }
+    ColRef::entry(kind, owner, path.iter().map(|s| (*s).to_string()).collect())
 }
 
 /// Every text run currently in the tree.
@@ -501,7 +501,7 @@ fn the_scan_card_asks_the_cost_confirm_rather_than_scanning() {
     click_text(&mut runner, "Profile table");
 
     assert_eq!(
-        target.peek().as_ref().map(|t| t.name.clone()),
+        target.peek().as_ref().map(ProfileTarget::label),
         Some("events".to_string()),
         "the press asks the question; confirming it is what records the request"
     );
@@ -585,7 +585,7 @@ fn a_view_column_offers_to_scan_the_view() {
 
     click_text(&mut runner, "Profile view");
     assert_eq!(
-        target.peek().as_ref().map(|t| (t.kind, t.name.clone())),
+        target.peek().as_ref().map(|t| (t.kind(), t.label())),
         Some((CatalogKind::View, "daily".to_string())),
         "asked about the view, on the views channel"
     );

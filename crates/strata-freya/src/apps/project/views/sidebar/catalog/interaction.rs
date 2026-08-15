@@ -17,8 +17,9 @@ use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_model::{
-    CatalogKind, ColRef, ColumnInfo, ConnectionDef, Origin, PgStore, Provider, ProviderId,
-    RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+    CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, PgStore, Provider,
+    ProviderId, RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef,
+    TableOrigin, ViewDef,
 };
 use uuid::Uuid;
 
@@ -30,9 +31,9 @@ use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
 use super::*;
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::ScanId;
+use crate::apps::project::query::{ProfileTarget, ScanId};
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
-use crate::apps::project::views::{DropTarget, ProfileTarget, SchemasRequest};
+use crate::apps::project::views::{DropTarget, SchemasRequest};
 use crate::components::metrics::PROGRESS_HOLD;
 use crate::components::metrics::ROW_ACTION;
 use crate::state::ConfigStation;
@@ -286,6 +287,9 @@ fn runner_shaped(
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));
             r.provide_root_context(|| State::create(None::<ConfigureTarget>));
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
+            r.provide_root_context(|| {
+                State::create(std::collections::BTreeMap::<RemoteRef, ScanId>::new())
+            });
             let editor = r.provide_root_context(|| State::create(None::<ConnectionTarget>));
             let schemas =
                 r.provide_root_context(|| State::create(None::<String>)) as SchemasRequest;
@@ -638,9 +642,14 @@ fn selecting_a_column_publishes_its_ref_and_opens_the_inspector() {
     click_text(&mut runner, "id");
 
     let selected = selection.peek().clone().expect("a column is selected");
-    assert_eq!(selected.owner, "orders");
+    assert_eq!(
+        selected.owner,
+        ColOwner::Entry {
+            kind: CatalogKind::Table,
+            name: "orders".into()
+        }
+    );
     assert_eq!(selected.path, vec!["id".to_string()]);
-    assert_eq!(selected.kind, CatalogKind::Table);
     assert!(
         session.peek().layout.right == Some(RightPane::Inspector),
         "selecting a column reveals the inspector"
@@ -1453,7 +1462,7 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
     click_text(&mut runner, "Profile table");
 
     assert_eq!(
-        profile_target.peek().as_ref().map(|t| t.name.clone()),
+        profile_target.peek().as_ref().map(ProfileTarget::label),
         Some("orders".to_string()),
         "the confirm was asked about `orders`: {:?}",
         profile_target.peek()
@@ -1472,7 +1481,7 @@ fn profile_asks_the_cost_confirm_rather_than_scanning() {
         profile_target
             .peek()
             .as_ref()
-            .map(|t| (t.kind, t.name.clone())),
+            .map(|t| (t.kind(), t.label())),
         Some((CatalogKind::View, "orders_daily".to_string()))
     );
 }
