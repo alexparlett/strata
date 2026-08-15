@@ -6,7 +6,7 @@
 //! referenced columns, `ORDER BY` the snapshot ordinal, `LIMIT cap + 1`, then a long→wide pivot in
 //! Rust when a series column splits the rows. No aggregation, no bucketing, no imposed order. The
 //! engine-side aggregation pipeline that used to live here was built, adversarially reviewed twice
-//! and withdrawn — `docs/reference/INVARIANTS.md` records the evidence; do not resurrect it.
+//! and withdrawn; do not resurrect it.
 //!
 //! Two exceptions, both bounded:
 //!

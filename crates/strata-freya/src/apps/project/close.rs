@@ -214,8 +214,8 @@ pub fn use_engineless_close(
 /// drains it into the same slot.)
 ///
 /// The predicate is the hook's, exactly — the engine's own in-flight flag plus
-/// `confirm_close_running` — because AGENTS.md §2 requires every path that destroys a window's
-/// work to ask on the same terms. It lives here, beside the tab gate it mirrors, rather than
+/// `confirm_close_running` — because every path that destroys a window's
+/// work must ask on the same terms. It lives here, beside the tab gate it mirrors, rather than
 /// inline at a call site: it was inline in `ProjectApp`'s shortcut handler, which is a scope the
 /// palette cannot reach, and a second copy of a confirm predicate is how one path ends up
 /// silently skipping the question.

@@ -1119,7 +1119,7 @@ fn the_row_folds_least_informative_first() {
 
 /// And the name goes on collapsing **after** everything foldable has gone — a leading run
 /// ellipsizes all the way down rather than setting a floor and making the row spill
-/// (AGENTS.md §3), so the order the user sees is: badge, icon, status glyph, then the name
+///, so the order the user sees is: badge, icon, status glyph, then the name
 /// shortening.
 #[test]
 fn the_name_goes_on_collapsing_once_the_row_has_folded() {

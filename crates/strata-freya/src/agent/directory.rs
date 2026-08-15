@@ -1,7 +1,7 @@
 //! The **service directory**: which project windows exist right now, from the server's
 //! thread — and the app's [`Host`] impl over them.
 //!
-//! This is the one registry AGENTS.md §4's no-registry rule does *not* govern, and the distinction
+//! This is the one registry the no-shared-registry rule does *not* govern, and the distinction
 //! is worth stating: that rule is about **reactive UI state**, where context or a prop already
 //! expresses the relationship. This is a **DI seam between threads** — the server has no scope, no
 //! context and no render pass, so a directory is the only shape a lookup can take. The [`Windows`]

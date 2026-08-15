@@ -1,7 +1,7 @@
 //! The **properties grid** — Freya's built-in `Table`, dressed for a JetBrains-style Name/Value
 //! editor.
 //!
-//! It is the built-in and not a hand-rolled lookalike (AGENTS.md §3), which cost four additions
+//! It is the built-in and not a hand-rolled lookalike, which cost four additions
 //! in the fork rather than four workarounds here: `TableRow::theme` (a `pub` field that had no
 //! builder, so a row could not carry its own selection or zebra fill, nor opt out of the hover
 //! response a selectable table does not want), `TableRow::on_press` (the canvas selects a row by
@@ -162,7 +162,7 @@ impl Component for HeadRow {
 /// remount the boxes on their new values instead of leaving them showing the old ones.
 ///
 /// The row's press selects it; pressing *into* a box selects it too, because a built-in control's
-/// press reaches its ancestors (AGENTS.md §3) — the one time that propagation is what you want
+/// press reaches its ancestors — the one time that propagation is what you want
 /// rather than the bug it usually is.
 #[derive(PartialEq)]
 struct PropTableRow {

@@ -7,7 +7,7 @@
 //! theme-independent. Layout tokens come off the spacing and radius scale
 //! ([`crate::components::metrics`]) — deliberately constants rather than theme fields, because a
 //! step does not vary by theme; the editor's and tooltip's type comes off the resolved
-//! [`Typography`] so the scale stays the single source (AGENTS.md §3).
+//! [`Typography`] so the scale stays the single source.
 //!
 //! **Built-ins** are a partial retune over the fork's registered default ([`builtin`]): a
 //! field the app agrees with is stated nowhere, and resolves through

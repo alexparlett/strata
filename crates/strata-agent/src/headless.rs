@@ -10,7 +10,7 @@
 //!
 //! - **Registration outcomes are the catalog.** The pass's own answers, folded once at startup into
 //!   the shape `ProjectState` holds in the app. Neither asks DataFusion, which would hide the
-//!   failed defs (AGENTS.md §2).
+//!   failed defs.
 //! - **A query session is an engine workspace and nothing else.** [`WsId`] nonces, with supersede,
 //!   retire and cancel the engine's own.
 //! - **One project by construction.** The process is opened *on* a project, so there is nothing to

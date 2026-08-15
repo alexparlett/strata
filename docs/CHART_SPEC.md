@@ -20,8 +20,7 @@ the grid pages — behind the toolbar's Table/Chart toggle. The designer's hando
    never a re-query.
 
    This is a settled decision, not a preference: an engine-side aggregation pipeline was built,
-   reviewed and withdrawn, and the principle must not be re-litigated —
-   `docs/reference/INVARIANTS.md` (the chart entry) holds the evidence trail. The short form:
+   reviewed and withdrawn, and the principle must not be re-litigated. The short form:
    a `GROUP BY` has no output order, so re-aggregating an already-shaped result structurally
    destroys the order the user asked for; a renderer cannot lose what it never recomputes.
 
@@ -411,7 +410,7 @@ percentage. Scatter and histogram, one colour by construction, show none.
 A series row is also the control that **hides** that series (§6): a press toggles, ⌥-press
 isolates, and a hidden row keeps its swatch and its slot and goes dim — the swatch is what says
 which colour comes back. The modifier is mirrored from the strip's own global key handlers,
-because a pointer event carries none (AGENTS.md §3), and it is re-read from every key event so a
+because a pointer event carries none, and it is re-read from every key event so a
 key-up lost while the window is unfocused cannot leave it stuck. A pie's rows stay inert.
 
 ## 10. Analytical charts are SQL, mapped

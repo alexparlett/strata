@@ -531,8 +531,6 @@ store existing:
   rather than leaving a `Running` row behind (`agent::directory`'s `SettleOnDrop`). That is how
   the assistant cancels a turn, and it is also what an MCP client hanging up mid-run does —
   AA-03c's connection-end reap covered the second case only.
-
-  The design and decision record are in `.claude/tasks/workstream-assistant/`.
 - **MCP resources** — the vocabulary is tools only.
 - **Curated writes that change the project** — registering a table, saving a view. Export is
   built and is the precedent for the shape ([Curated writes](#curated-writes)); the two that

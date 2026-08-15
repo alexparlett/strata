@@ -1,6 +1,6 @@
 //! The **semantic tones** — `success` / `info` / `warning` / `error`, read off the role
 //! vocabulary as one shared hook. A severity's colour follows the app-wide ramp wherever it
-//! appears (AGENTS.md §3): Problems' glyphs, Events' dots, the status bar's state dot all paint
+//! appears: Problems' glyphs, Events' dots, the status bar's state dot all paint
 //! from these four, never from a surface's own theme. This is the one place that reads them —
 //! three surfaces had grown three copies of the same four-slot read, with the fields in
 //! different orders.

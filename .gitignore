@@ -5,6 +5,14 @@
 sample/sample.strata
 # Stray test-project scaffold (rescaffolds from the reopen-on-startup set).
 themes/themes.strata/
-.claude/design-handoff/
 target/
 
+# Machine-local agent workflow: session context, backlog, skills, hooks, and the
+# engineering-reference corpus behind them. Deliberately not part of the repo.
+.claude/
+CLAUDE.local.md
+docs/reference/
+
+# A local clone of the Freya fork (the build uses the git dependency; the review
+# workflow and local fork development clone here).
+/crates/freya/

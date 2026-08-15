@@ -8,7 +8,7 @@
 //! handed to its content tasks land here:
 //!
 //! - **The count** is resolved by whichever body is mounted, into the [`DrawerCount`] slot this
-//!   shell owns — the `running` mirror's pattern (state-arch §6 / AGENTS.md §4): one resolver, one
+//!   shell owns — the `running` mirror's pattern (state-arch §6): one resolver, one
 //!   slot, read by props. The header cannot answer it itself without re-deriving the body's whole
 //!   list, and a second derivation of the same facts is how two numbers start disagreeing.
 //! - **The Clear rule**: shown on Events / History, **never** on Problems, whose rows self-clear

@@ -260,7 +260,7 @@ pub fn plural_noun(n: usize, noun: &str) -> Cow<'_, str> {
 /// days old, and a figure any more precise would have to tick to stay true. Here rather than in
 /// either caller because the inspector's scan age and the History drawer's timestamps are the
 /// same sentence about different things, and two spellings of it is exactly the near-duplicate
-/// wording AGENTS.md §3 says to merge.
+/// wording this codebase merges.
 pub fn ago(secs: u64) -> String {
     match secs {
         s if s < 60 => "just now".to_string(),

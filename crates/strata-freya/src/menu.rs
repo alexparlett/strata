@@ -999,7 +999,7 @@ mod test {
 
     /// `MenuScope::Project` needs an `OpenCtx` and so a live window, which a unit test has no
     /// way to build — and reshaping `gate` to take a bool so one could would be shaping a
-    /// production signature to be testable (AGENTS.md §1). What the arm actually turns on is
+    /// production signature to be testable. What the arm actually turns on is
     /// two facts that are reachable here, so they are asserted directly: a project window is
     /// always a workspace window with a project, and the two that move are read live.
     #[test]

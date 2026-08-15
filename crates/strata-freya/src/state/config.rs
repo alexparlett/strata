@@ -190,7 +190,7 @@ const ALL_AUDIENCES: [ConfigChan; 3] =
 /// Callers that represent a **deliberate commit** report it where the user is looking
 /// (`SettingsCtx::apply`); the bookkeeping writes deliberately do not, because the user did not ask
 /// for them and nine call sites announcing the same failure of the same file is the stacked
-/// near-duplicate AGENTS.md §3 rules out. Making a bookkeeping failure visible wants **one standing
+/// near-duplicate this codebase rules out. Making a bookkeeping failure visible wants **one standing
 /// condition**, which is not built.
 pub fn write_config(
     mut station: ConfigStation,

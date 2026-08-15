@@ -34,7 +34,7 @@ define_theme!(
         active_color: Color,
         accent: Color,
         /// The resting close glyph. A field rather than a role read beside the destructure: once a
-        /// component has a theme, every colour it paints is one of that theme's own (AGENTS.md §3),
+        /// component has a theme, every colour it paints is one of that theme's own,
         /// and the × had been the one exception.
         close: Color,
     }

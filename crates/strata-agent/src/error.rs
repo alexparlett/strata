@@ -56,7 +56,7 @@ impl AgentError {
     /// Here rather than at each site because it was written four times across two crates — the
     /// tool layer, the mock and the app's own driver — and `list_query_sessions` being *the*
     /// recovery from this condition only works if every host states it the same way
-    /// (AGENTS.md §3: merge near-duplicate messages rather than stack them).
+    /// (merge near-duplicate messages rather than stack them).
     ///
     /// It is also the answer to a handle belonging to a *different* agent, deliberately: a
     /// distinct "that is not yours" would confirm the session exists, which is a fact an

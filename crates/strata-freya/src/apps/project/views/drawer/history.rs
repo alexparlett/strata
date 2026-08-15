@@ -126,7 +126,7 @@ fn line_count(sql: &str) -> Option<usize> {
 ///
 /// Press loads, double-press loads and runs — both in the **one** `on_press` handler, because
 /// `EventsCombos` is how a double-press is detected once the node already handles the press
-/// (AGENTS.md §3: a second registration under the same event name replaces the first). The
+/// (a second registration under the same event name replaces the first). The
 /// double-press deliberately loads again before running: the first press of the pair already
 /// loaded it, so this is a no-op write that keeps the two paths one sentence rather than two.
 #[derive(PartialEq)]

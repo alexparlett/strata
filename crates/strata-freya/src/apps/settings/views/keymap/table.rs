@@ -13,7 +13,7 @@
 //! pointing at this", and it would be far too easy to knock a shortcut off a command by pointing
 //! at it. The handler is the **row's** — one command, one chord, so the whole row is the target
 //! rather than the column the chord happens to be drawn in. `EventsCombos` is how a double-press
-//! is detected once the row already handles the press (AGENTS.md §3), so both live in the one
+//! is detected once the row already handles the press, so both live in the one
 //! handler.
 //!
 //! The buttons *inside* the row stop their press, which is the exception to the rule the Engine

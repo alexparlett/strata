@@ -165,7 +165,7 @@ impl Entry {
     /// Computed **once**, into [`Index`], never per keystroke: it allocates four strings an entry
     /// and there is one entry per column in the project, so re-deriving it on every character
     /// would be tens of thousands of allocations a keystroke on the thread that draws every
-    /// window (AGENTS.md §2).
+    /// window.
     fn haystack(&self) -> String {
         let extra = match self {
             Entry::Action(action) => action.keywords(),
@@ -363,7 +363,7 @@ mod tests {
         }
     }
 
-    /// A store built inline — never a production signature bent to be testable (AGENTS.md §1).
+    /// A store built inline — never a production signature bent to be testable.
     /// One registered table with a partition key, one view over it, one saved query, and one
     /// table the engine refused.
     fn store() -> ProjectState {

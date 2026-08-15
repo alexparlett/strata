@@ -71,7 +71,7 @@ impl ChartCapture {
     /// Render the chart and put it on the clipboard, recording the outcome.
     ///
     /// The log entry is written here because this is the layer that watched the write happen
-    /// (AGENTS.md §2) — the press knows it was pressed, and nothing else learns whether the
+    /// — the press knows it was pressed, and nothing else learns whether the
     /// pasteboard took the image.
     pub fn copy(&self) {
         match render(&self.frame).map(Clipboard::set_image) {
@@ -91,7 +91,7 @@ impl ChartCapture {
 }
 
 /// A clipboard failure in the app's own words. The variant name is the fork's vocabulary, and a
-/// log entry is prose (AGENTS.md §3).
+/// log entry is prose.
 fn why(err: ClipboardError) -> &'static str {
     match err {
         ClipboardError::NotAvailable => "the system clipboard is not available",

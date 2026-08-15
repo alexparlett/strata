@@ -92,7 +92,7 @@ impl RunOutcome {
 /// the directory). The rest can fail on their own terms — no such table, no such query
 /// session — so they carry a `Result`.
 pub enum AgentAsk {
-    /// The catalog as the store shows it, never DataFusion introspection (AGENTS.md §2).
+    /// The catalog as the store shows it, never DataFusion introspection.
     Catalog(oneshot::Sender<Vec<CatalogEntry>>),
     Describe {
         name: String,

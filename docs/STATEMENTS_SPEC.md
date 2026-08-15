@@ -6,9 +6,8 @@ refuses it with the same words the squiggle showed. The agent surface asks the s
 stays read-only. This file documents that surface as built — the router, the dispatch, the
 provider layer, and the whole statement family: internal tables and the two writes over them,
 typed view DDL, typed `COPY`, the session statements, SQL functions, and typed
-`CREATE EXTERNAL TABLE`. Every intercepted kind now has a real arm; what remains of the workstream
-is the completion offer that catches up with them
-(`.claude/tasks/workstream-editor-statements/`).
+`CREATE EXTERNAL TABLE`. Every intercepted kind now has a real arm, and the completion offer
+covers every statement the router intercepts.
 
 ```mermaid
 flowchart TD
@@ -740,7 +739,7 @@ whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapsh
 
 | Surface | Reads | Shows |
 |---|---|---|
-| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help (AGENTS.md §8) |
+| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
 | diagnostics | `Engine::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
 | `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
 

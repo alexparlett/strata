@@ -562,7 +562,7 @@ mod tests {
     /// A write that lands records **nothing**. The funnel is a failure reporter, not an audit
     /// trail: every caller already logs its success in the mutation's own words ("Saved view
     /// 'x'"), and a row here saying a file was written would be the stacked near-duplicate
-    /// AGENTS.md §3 rules out.
+    /// this codebase rules out.
     #[test]
     fn a_write_that_lands_is_not_an_event() {
         let root = temp_root("ok");

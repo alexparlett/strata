@@ -498,7 +498,7 @@ impl<H: Host> StrataTools<H> {
     /// Retract every stateless agent unheard from for longer than `ttl` and with nothing in
     /// flight, releasing its query sessions exactly as a disconnection would.
     ///
-    /// **A poll, because nothing on our side can observe the fact** (AGENTS.md §2): a client
+    /// **A poll, because nothing on our side can observe the fact**: a client
     /// on the discover lifecycle has no connection, so its departure is not an event anywhere
     /// — there is no socket close, no `DELETE`, and no value whose drop means anything. The
     /// staleness is therefore bounded and stated rather than hidden — and the bound is `ttl`
