@@ -9,10 +9,13 @@ same-source subplans pushed down to the server. Built on
 [`datafusion-federation`](https://github.com/datafusion-contrib/datafusion-federation), per the
 former's own README.
 
-Eight tasks. DB-01 is the low-risk groundwork; DB-02 is the mechanism and carries the
+Eleven tasks. DB-01 is the low-risk groundwork; DB-02 is the mechanism and carries the
 integration test; DB-03, DB-04 and DB-08 sit on DB-02 independently; DB-05 — the catalog
 redesign — sits on DB-02 + DB-04; DB-06 (gestures + completion) and DB-07 (inspector +
-profiling) sit on the tree. **01–06 are in**; DB-07, DB-08 and DB-09 are open.
+profiling) sit on the tree; DB-10 and DB-11 are write-back — DB-10 (INSERT/CTAS through the
+crate's write provider) relaxes DB-03's read-only policy behind a per-connection opt-in, and
+DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–06 are
+in**; DB-07, DB-08, DB-09, DB-10 and DB-11 are open.
 
 ## Decisions already made (do not re-litigate; the reasoning is recorded here)
 
@@ -187,8 +190,14 @@ profiling) sit on the tree. **01–06 are in**; DB-07, DB-08 and DB-09 are open.
   sentence, minted once in `ddl::bare_name`, which every such arm already went through;
   `INSERT` reaches it before `Engine::is_internal`, since ownership is not a question to ask
   about a remote relation. The agent's capability is unchanged (verified: the new refusals are
-  all at dispatch, which the agent never reaches). Write-back (`read_write_table_provider` exists
-  in the crate) is a possible follow-up workstream, not a seam to pre-build.
+  all at dispatch, which the agent never reaches). Write-back is now **DB-10 + DB-11** (asked
+  for 2026-08-15), split by mechanism: what DataFusion can plan (INSERT, CTAS — the crate's
+  `PostgresTableWriter`, which DB-03 named) versus what only the server can run (CREATE VIEW,
+  CREATE MATERIALIZED VIEW, DROPs, UPDATE, DELETE — span-spliced dispatch over the pool; the
+  DML pair joined v1 because once DROP TABLE dispatches, refusing DELETE is a hole, not a
+  line). Both sit behind a per-connection `read_only` opt-in defaulting to read-only, so
+  DB-03's answer stays the shipped behavior for every existing connection, and the agent stays
+  read-only throughout.
   Three corrections came out of building it, each recorded in DB-03's own file: the `__snap_`
   namespace is the **workspace catalog's** and the predicate says so (`is_snapshot_ref`); a
   view's dependencies are **two lists**, workspace scans bare and remote scans qualified, or a
@@ -263,6 +272,8 @@ profiling) sit on the tree. **01–06 are in**; DB-07, DB-08 and DB-09 are open.
 | DB-07 | Column inspector + profiling for remote tables | ⬜ | DB-05 |
 | DB-08 | JSON accessors over remote columns: the pushdown rewrite | ⬜ | DB-02 |
 | DB-09 | A current database, so unqualified names resolve | ⬜ | DB-02 |
+| DB-10 | Remote DML: INSERT and CTAS into a database connection | ⬜ | DB-02 |
+| DB-11 | Remote statements the server runs: DDL + UPDATE/DELETE | ⬜ | DB-10 |
 
 Sources for the research this plan rests on: both repos read at 2026-08-13 HEAD
 (`datafusion-table-providers` 0.13.0, `datafusion-federation` 0.5.5), and the codebase map in
@@ -272,4 +283,7 @@ DB-02 — `docs/CONNECTIONS_SPEC.md` (database section), `docs/reference/ENGINE.
 `docs/ARCHITECTURE.md`, `docs/README.md`'s CONNECTIONS_SPEC index row; DB-03 —
 `docs/STATEMENTS_SPEC.md`; DB-05 — CONNECTIONS_SPEC's pane section,
 `docs/reference/{MODULE_MAP, FREYA_UI, INVARIANTS}.md`; DB-06 — `docs/COMPLETION_SPEC.md`
-plus CONNECTIONS_SPEC's gestures and completion sections; DB-07 — INVARIANTS' profiling entry.
+plus CONNECTIONS_SPEC's gestures and completion sections; DB-07 — INVARIANTS' profiling entry;
+DB-10 — STATEMENTS_SPEC §4, CONNECTIONS_SPEC's read-only toggle, and the "read-only in v1"
+sentences in INVARIANTS.md + AGENTS.md §2 (rewritten to lead with what now works); DB-11 —
+STATEMENTS_SPEC §4's remote answers.
