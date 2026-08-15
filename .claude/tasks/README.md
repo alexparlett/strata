@@ -158,20 +158,24 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
   ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
-  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 ✅ (2026-08-14), the rest
-  open** —
+  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 + DB-07 ✅ (2026-08-14), the
+  rest open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
   54), so the editor cross-joins parquet onto live Postgres with same-source subplans pushed
-  down to the server. Eight tasks: federation groundwork in `build_context` (DB-01), the
+  down to the server. Eleven tasks: federation groundwork in `build_context` (DB-01), the
   model + secrets + pool + catalog-provider mechanism with its testcontainers-Postgres
   integration test (DB-02), the statement-policy audit over remote catalogs (DB-03), the
   connection editor's Postgres form (DB-04), the **data-sources tree** — a DataGrip-shaped
   holistic redesign of the catalog pane that absorbs and retires the Connections pane
   (DB-05) — then gestures + completion (DB-06) and inspector + profiling over remote tables
   (DB-07) on the tree, plus the JSON-accessor pushdown rewrite (DB-08), which sits directly
-  on DB-02 and can land any time after it. **DB-01 is in** — `build_context` is on
+  on DB-02 and can land any time after it, a current database so unqualified names resolve
+  (DB-09), and **write-back** (added 2026-08-15) behind a per-connection read-only opt-in:
+  INSERT/CTAS through the crate's write provider (DB-10) and the statements only the server
+  can run — CREATE VIEW, CREATE MATERIALIZED VIEW, DROPs, UPDATE, DELETE — span-spliced onto
+  it (DB-11, on DB-10). **DB-01 is in** — `build_context` is on
   `SessionStateBuilder` with the federation rule and planner installed, the whole suite green
   with no test edited, and one correction recorded in its file: the rule is a no-op for every
   plan DataFusion can execute, but not structurally (its expression walk refuses
@@ -314,9 +318,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — DB-01 through DB-06 are ✅, so **DB-07 (inspector +
-   profiling over remote tables) and DB-08 (the JSON-accessor pushdown rewrite) are next**;
-   DB-08 sits on DB-02 alone and needs nothing after it. DB-09 (a current database) closes.
+1. **Database connections (DB)** — DB-01 through DB-07 are ✅, so **DB-08 (the JSON-accessor
+   pushdown rewrite) is next**; it sits on DB-02 alone and needs nothing after it. DB-09 (a
+   current database), DB-10 (remote INSERT/CTAS) and DB-11 (remote server statements, on
+   DB-10) close the workstream.
 2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-05 are in, so QE-06 is next
    (its guidance names QE-01's functions), QE-07 follows QE-03's merge, and QE-08 waits for
    DB-05's tree.
