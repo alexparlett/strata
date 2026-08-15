@@ -96,7 +96,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # The review pulls the diff through gh, but reads the working tree for
-      # context (CLAUDE.md, AGENTS.md, surrounding code). `crates/freya` - our
+      # context (AGENTS.md, surrounding code).
       - uses: actions/checkout@v6
         if: steps.scope.outputs.skip != 'true'
         with:
@@ -130,8 +130,8 @@ jobs:
             ${{ steps.scope.outputs.scope }}
 
             Then read the surrounding files for context - a hunk on its own rarely says
-            whether it is correct. This repository's conventions live in CLAUDE.md and
-            AGENTS.md; a change that contradicts them is a finding.
+            whether it is correct. This repository's conventions live in AGENTS.md; a change
+            that contradicts them is a finding.
 
             Look for correctness above all: wrong or inverted conditions, off-by-one,
             unwrap/panic on reachable input, dropped errors, removed guards, broken
@@ -140,8 +140,8 @@ jobs:
             Prefer a handful of real problems to a long list of style notes.
 
             One further class of finding this repository cares about: app code that
-            works around a Freya limitation instead of fixing it in the fork. AGENTS.md
-            §6 is the rule, and the shapes it names are the tell - a registry or bus
+            works around a Freya limitation instead of fixing it in the fork - a rule
+            AGENTS.md states in its Architecture section. The shapes are the tell - a registry or bus
             standing in for something the framework should order, a scale-factor
             correction in component code, a theme token duplicated onto a consuming
             surface because a component's own theme lacks the state, a hand-rolled

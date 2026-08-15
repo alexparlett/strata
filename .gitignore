@@ -14,13 +14,10 @@ target/
 .claude/worktrees/
 .claude/design-handoff/
 .claude/hooks/
-.claude/agents/
-.claude/workflows/
 .claude/settings.json
 .claude/settings.local.json
 .claude/skills/fmt/
 .claude/skills/freya-submodule/
-.claude/skills/adversarial-review/
 .claude/.DS_Store
 CLAUDE.local.md
 docs/reference/
