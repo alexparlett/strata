@@ -119,6 +119,10 @@ The curated lint set lives in `[workspace.lints]` in the root `Cargo.toml`, with
 one-line reason — not suppressed per site; an inline `#[allow]` is reserved for a fact about one
 specific site and carries the reason it is true there.
 
+If you work with Claude Code, the repo ships two skills in `.claude/skills/`: `run-app` launches
+the app the right way, and `adversarial-review` runs a change you just wrote past isolated
+hostile critics with a refutation gate — in front of the build check, not in place of it.
+
 ## Pull requests
 
 - Target `main`.

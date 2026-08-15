@@ -7,9 +7,19 @@ sample/sample.strata
 themes/themes.strata/
 target/
 
-# Machine-local agent workflow: session context, backlog, skills, hooks, and the
-# engineering-reference corpus behind them. Deliberately not part of the repo.
-.claude/
+# Machine-local agent workflow: session context, the backlog, hooks, worktrees, design
+# bundles and the engineering-reference corpus. Deliberately not part of the repo —
+# .claude/skills (minus the retired ones), agents and workflows ARE committed, for any
+# contributor's agent to use.
+.claude/tasks/
+.claude/worktrees/
+.claude/design-handoff/
+.claude/hooks/
+.claude/settings.json
+.claude/settings.local.json
+.claude/skills/fmt/
+.claude/skills/freya-submodule/
+.claude/.DS_Store
 CLAUDE.local.md
 docs/reference/
 
