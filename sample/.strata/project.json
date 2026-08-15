@@ -1,6 +1,22 @@
 {
   "name": "sample",
-  "connections": [],
+  "connections": [
+    {
+      "address": "127.0.0.1:55432/strata_sample",
+      "provider": {
+        "provider": "postgres",
+        "catalog": "pg",
+        "user": "strata",
+        "sslmode": "disable",
+        "sslrootcert": "",
+        "password": "none",
+        "schemas": [
+          "public",
+          "analytics"
+        ]
+      }
+    }
+  ],
   "tables": [
     {
       "name": "config",
@@ -190,9 +206,27 @@
       "meta": "—"
     },
     {
+      "id": "9c7a3d52-8e10-4f7b-b0c2-1d6e5a834f90",
+      "name": "files x database",
+      "sql": "-- One join across a parquet file, a CSV and a live PostgreSQL, all unqualified.\nSELECT r.region, u.name, count(*) AS orders, sum(o.total) AS spend\nFROM orders o\nJOIN users u ON u.user_id = o.user_id\nJOIN regions r ON r.country = u.country\nGROUP BY r.region, u.name\nORDER BY spend DESC;",
+      "meta": "—"
+    },
+    {
       "id": "fb8da082-0dd5-419c-aaac-4fb5c6bac713",
       "name": "nbas",
       "sql": "WITH items AS (SELECT unnest(nba['nbas']) AS i FROM config)\nSELECT UNNEST(i)\nFROM items",
+      "meta": "—"
+    },
+    {
+      "id": "5b1c0f1e-2a44-4c6e-9d3f-7e0a1c9b4d21",
+      "name": "orders (unqualified)",
+      "sql": "-- 'orders' is only in the database, so it resolves there with no qualifier.\nSELECT order_id, user_id, sku, quantity, total, placed_at\nFROM orders\nORDER BY placed_at;",
+      "meta": "—"
+    },
+    {
+      "id": "2f4e6b08-5c93-4a71-8e5d-3b9f0c7a1e64",
+      "name": "same name, two sources",
+      "sql": "-- A bare name is the project's own: 'products' is products.parquet. The database has a\n-- products table too, and it is reached by naming the connection.\nSELECT p.name, v.sku, v.price, s.supplier, s.unit_cost, s.lead_time_days\nFROM products p\nCROSS JOIN UNNEST(p.variants) AS v\nJOIN pg.public.products s ON s.sku = v.sku\nORDER BY p.name;",
       "meta": "—"
     },
     {

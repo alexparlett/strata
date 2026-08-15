@@ -29,10 +29,11 @@
 //! [`connect`] takes the provider as an argument, so passwordless authentication is `None` rather
 //! than a mode this module has to know about.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use datafusion::catalog::{CatalogProvider, SchemaProvider, TableProvider};
@@ -47,7 +48,9 @@ use datafusion_table_providers_postgres::pool::{self, PostgresConnectionPool};
 use secrecy::SecretString;
 use tokio::task::spawn_blocking;
 
-use strata_model::{check_catalog_name, parse_pg_address, ColumnInfo, ConnectionDef, PgStore};
+use strata_model::{
+    check_catalog_name, parse_pg_address, ColumnInfo, ConnectionDef, PgStore, Provider,
+};
 
 use super::connect::{self, Registration};
 use super::fold_ident;
@@ -71,7 +74,7 @@ pub const PG_PASSWORD: &str = "pg-password";
 /// able to clean up from the def it is about to remove.
 pub fn password_ref(conn: &ConnectionDef) -> Option<SecretRef> {
     match conn.provider {
-        strata_model::Provider::Postgres(_) => Some(SecretRef::derived(PG_PASSWORD, &conn.url())),
+        Provider::Postgres(_) => Some(SecretRef::derived(PG_PASSWORD, &conn.url())),
         _ => None,
     }
 }
@@ -127,6 +130,31 @@ struct Live {
     /// [`Engine::db_listing`](super::Engine::db_listing) reads what was registered rather than
     /// asking the server again.
     listing: Arc<Listing>,
+    /// The schemas this connection **shows**, shared with the catalog provider — see [`Shown`].
+    shown: Shown,
+}
+
+/// Which of a connection's schemas it shows, folded — **one live cell**, shared between the
+/// connection and the catalog it registered.
+///
+/// Shared rather than copied onto each because the Schemas… picker edits the def without
+/// reconnecting, so a copy taken at connect is stale the first time it is read. Its reader is
+/// [`sql::qualify`](crate::sql), which scopes an **unqualified** name's search to what a
+/// connection shows; a name written in full still resolves into any schema the role can see
+/// ([`DbCatalogProvider::schema`] asks the listing, never this).
+type Shown = Arc<RwLock<BTreeSet<String>>>;
+
+/// The folded schema set a def asks for.
+fn shown_of(pg: &PgStore) -> BTreeSet<String> {
+    pg.schemas.iter().map(|schema| fold_ident(schema)).collect()
+}
+
+/// The schemas `catalog` shows, or `None` — the workspace's own catalog, or a test's stand-in —
+/// which a caller reads as "no scoping to apply". The downcast is DataFusion's own pattern for a
+/// custom provider, kept here so the resolver need not know this type.
+pub(crate) fn shown_schemas(catalog: &dyn CatalogProvider) -> Option<BTreeSet<String>> {
+    let db: &DbCatalogProvider = (catalog as &dyn Any).downcast_ref()?;
+    Some(db.shown.read().unwrap().clone())
 }
 
 /// The live database connections this engine holds — the [`Connections`](super::Connections)
@@ -163,6 +191,22 @@ impl Databases {
     /// Forget `url`, handing back the catalog name it had registered.
     fn take(&self, url: &str) -> Option<String> {
         self.0.lock().unwrap().remove(url).map(|live| live.catalog)
+    }
+
+    /// Point this connection's [`Shown`] and its held def at what the stored def now says — the
+    /// Schemas… picker's engine half, and the only writer besides [`connect`].
+    ///
+    /// Both, so the map holds one answer rather than two that can disagree. A no-op for a
+    /// connection that is not live: the next connect reads the def anyway.
+    pub(crate) fn show(&self, url: &str, pg: &PgStore) {
+        let mut held = self.0.lock().unwrap();
+        let Some(live) = held.get_mut(url) else {
+            return;
+        };
+        *live.shown.write().unwrap() = shown_of(pg);
+        if let Provider::Postgres(held) = &mut live.def.provider {
+            held.schemas = pg.schemas.clone();
+        }
     }
 
     /// Deregister every live database and drop its pool — the engine's `Drop`, and the only
@@ -327,10 +371,12 @@ async fn prepare(
     let pool = build_pool(conn, pg, passwords).await?;
     let listing = Arc::new(enumerate(&pool).await?);
     let catalog = pg.catalog.trim().to_string();
+    let shown: Shown = Arc::new(RwLock::new(shown_of(pg)));
     let provider = Arc::new(DbCatalogProvider::new(
         catalog.clone(),
         Arc::clone(&pool),
         Arc::clone(&listing),
+        Arc::clone(&shown),
     ));
     Ok((
         Prepared {
@@ -342,6 +388,7 @@ async fn prepare(
             _pool: pool,
             def: conn.clone(),
             listing,
+            shown,
         },
     ))
 }
@@ -590,10 +637,19 @@ async fn enumerate(pool: &Arc<PostgresConnectionPool>) -> Result<Listing, String
 struct DbCatalogProvider {
     catalog: String,
     schemas: BTreeMap<String, Arc<DbSchemaProvider>>,
+    /// What an unqualified name's search is scoped to — see [`Shown`]. Never consulted by
+    /// [`schema`](CatalogProvider::schema) or by enumeration: a schema switched off is still
+    /// resolvable, still listed by `information_schema`, and still queryable in full.
+    shown: Shown,
 }
 
 impl DbCatalogProvider {
-    fn new(catalog: String, pool: Arc<PostgresConnectionPool>, listing: Arc<Listing>) -> Self {
+    fn new(
+        catalog: String,
+        pool: Arc<PostgresConnectionPool>,
+        listing: Arc<Listing>,
+        shown: Shown,
+    ) -> Self {
         let schemas = listing
             .schemas
             .iter()
@@ -610,7 +666,11 @@ impl DbCatalogProvider {
                 )
             })
             .collect();
-        Self { catalog, schemas }
+        Self {
+            catalog,
+            schemas,
+            shown,
+        }
     }
 }
 

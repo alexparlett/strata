@@ -37,7 +37,7 @@ use datafusion::sql::sqlparser::ast::{
 use datafusion::sql::sqlparser::tokenizer::Span;
 
 use crate::sql::fuzzy;
-use crate::sql::lex::rel_offset;
+use crate::sql::lex::byte_span;
 use crate::sql::validate::diag;
 use strata_model::{Diagnostic, Severity};
 
@@ -792,16 +792,10 @@ impl Resolver<'_> {
         }
     }
 
-    /// A sqlparser AST span (1-based line/col, relative to the statement slice)
-    /// as a byte range into the full buffer. `None` for the empty-span sentinel
-    /// synthesized nodes carry.
+    /// This walk's spans as byte ranges into the full buffer — [`lex::byte_span`] against the
+    /// statement slice it is walking.
     fn byte_span(&self, span: Span) -> Option<Range<usize>> {
-        if span.start.line == 0 || span.end.line == 0 {
-            return None;
-        }
-        let start = self.stmt_start + rel_offset(self.slice, span.start.line, span.start.column);
-        let end = self.stmt_start + rel_offset(self.slice, span.end.line, span.end.column);
-        (start < end).then_some(start..end)
+        byte_span(self.slice, self.stmt_start, span)
     }
 
     /// Emit one diagnostic. A spanless fault (empty-span sentinel) points at the

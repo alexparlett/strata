@@ -1397,4 +1397,67 @@ mod qualified {
         let items = offer("SELECT * FROM |", &catalog());
         absent(&items, "pg");
     }
+
+    /// **A connection's relations are offered where a relation goes** (DB-09), not only behind a
+    /// qualifier — the offer catching up with the fact that a bare name resolves. The detail names
+    /// the schema it came from, because the label alone cannot say which source it is.
+    #[test]
+    fn a_remote_relation_is_offered_bare_at_a_relation_target() {
+        let items = offer("SELECT * FROM |", &with_pg());
+        let p = pos(&items, "orders");
+        assert_eq!(items[p].insert, "orders", "a resolvable name inserts bare");
+        assert_eq!(items[p].detail.as_deref(), Some("pg.public · table"));
+        let v = pos(&items, "big_orders");
+        assert_eq!(items[v].kind, CompletionKind::View);
+        assert_eq!(items[v].detail.as_deref(), Some("pg.public · view"));
+    }
+
+    /// **A name the project's own catalog holds is offered under its qualified name.** The
+    /// workspace fixture has a `users` table, so a bare `users` is *its* — the connection's
+    /// relation is a different thing and says so, rather than losing its row to the pool's
+    /// one-row-per-name rule or offering a spelling that reaches the other source.
+    #[test]
+    fn a_remote_relation_the_workspace_shadows_is_offered_qualified() {
+        let items = offer("SELECT * FROM |", &with_pg());
+        let remote = pos(&items, "pg.public.users");
+        assert_eq!(items[remote].insert, "pg.public.users");
+        assert_eq!(items[remote].detail.as_deref(), Some("pg.public · table"));
+        let workspace = pos(&items, "users");
+        assert_eq!(
+            items[workspace].insert, "users",
+            "and the project's own keeps the bare name it answers to"
+        );
+    }
+
+    /// Two **shown** schemas holding one name is the tie the resolver refuses, so neither is
+    /// offered under the bare spelling that would be refused — both are offered qualified.
+    #[test]
+    fn a_name_two_shown_schemas_hold_is_offered_qualified() {
+        let both = catalog().with_databases(vec![DatabaseSym {
+            name: "pg".into(),
+            schemas: vec![
+                SchemaSym {
+                    name: "public".into(),
+                    relations: vec![relation("sessions", false)],
+                },
+                SchemaSym {
+                    name: "analytics".into(),
+                    relations: vec![relation("sessions", false)],
+                },
+            ],
+        }]);
+        let items = offer("SELECT * FROM |", &both);
+        pos(&items, "pg.public.sessions");
+        pos(&items, "pg.analytics.sessions");
+        absent(&items, "sessions");
+    }
+
+    /// The server's own spelling, quoted the way a statement has to say it — `quote_verbatim`'s
+    /// rule reaching the bare offer as well as the qualified one.
+    #[test]
+    fn a_remote_relation_that_needs_quoting_gets_it() {
+        let items = offer("SELECT * FROM |", &with_pg());
+        let p = pos(&items, "Mixed Case");
+        assert_eq!(items[p].insert, "\"Mixed Case\"");
+    }
 }

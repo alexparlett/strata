@@ -38,6 +38,7 @@ use datafusion::execution::options::{ArrowReadOptions, ReadOptions};
 use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
+use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::TableReference;
 use datafusion_functions_json::udfs::json_union_to_text_udf;
 use datafusion_functions_json::JSON_UNION_DATA_TYPE;
@@ -391,12 +392,12 @@ pub async fn run_and_snapshot(
     ctx: &SessionContext,
     engine_id: u64,
     snapshot: SnapshotId,
-    sql: &str,
+    stmt: DFStatement,
     page_size: usize,
     fmt: &CellFormat,
     policy: ReadPolicy,
 ) -> Result<(QueryOutput, RecordBatch, SnapshotStats), String> {
-    let result = materialize(ctx, engine_id, snapshot, sql, page_size, fmt, policy).await;
+    let result = materialize(ctx, engine_id, snapshot, stmt, page_size, fmt, policy).await;
     if result.is_err() {
         let _ = fs::remove_file(snapshot_file(engine_id, snapshot));
     }
@@ -488,6 +489,32 @@ pub enum ReadPolicy {
     Statements,
 }
 
+/// Plan one **already-resolved** statement under `policy` — `SessionContext::sql_with_options`
+/// with the parse taken out, since [`parse_one`](crate::sql::parse_one) did it.
+///
+/// The same three steps in the same order: plan, verify, `execute_logical_plan` (the half of that
+/// method which performs a DDL plan — none the read policy admits). Rendering the resolved
+/// statement back to text to keep the old signature is what this exists to avoid: the statement
+/// judged has to be the statement that runs.
+pub(crate) async fn plan_statement(
+    ctx: &SessionContext,
+    stmt: DFStatement,
+    policy: ReadPolicy,
+) -> Result<DataFrame, String> {
+    let plan = ctx
+        .state()
+        .statement_to_plan(stmt)
+        .await
+        .map_err(|e| e.to_string())?;
+    policy
+        .options()
+        .verify_plan(&plan)
+        .map_err(|e| e.to_string())?;
+    ctx.execute_logical_plan(plan)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 impl ReadPolicy {
     fn options(self) -> SQLOptions {
         SQLOptions::new()
@@ -501,7 +528,7 @@ async fn materialize(
     ctx: &SessionContext,
     engine_id: u64,
     snapshot: SnapshotId,
-    sql: &str,
+    stmt: DFStatement,
     page_size: usize,
     fmt: &CellFormat,
     policy: ReadPolicy,
@@ -514,10 +541,7 @@ async fn materialize(
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let df = ctx
-        .sql_with_options(sql, policy.options())
-        .await
-        .map_err(|e| e.to_string())?;
+    let df = plan_statement(ctx, stmt, policy).await?;
     let df = json_unions_as_text(df)?;
     let columns: Vec<ColumnInfo> = df
         .schema()

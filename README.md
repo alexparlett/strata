@@ -158,6 +158,18 @@ Use `cargo run --release` for real work. To try it on real data, open the repo's
 folder as a project: it registers parquet, CSV and JSON tables, a Hive-partitioned directory,
 views and saved queries.
 
+For the federated half, start the sample database — a seeded PostgreSQL in a container, with
+no password to enter:
+
+```bash
+docker build -t strata-sample-pg sample/postgres && docker run -d --name strata-sample-pg -p 127.0.0.1:55432:5432 -e POSTGRES_USER=strata -e POSTGRES_DB=strata_sample -e POSTGRES_HOST_AUTH_METHOD=trust strata-sample-pg
+```
+
+The sample project already carries the connection, so `SELECT * FROM orders` joins the parquet
+users straight onto live PostgreSQL. [sample/postgres/README.md](sample/postgres/README.md)
+tours what's in it and what to try, including the deliberate name clashes that show which
+source a bare name means.
+
 Tests, linting and the rest of the development workflow are in
 [CONTRIBUTING.md](CONTRIBUTING.md). Cutting a distributable `.app` and DMG is
 [docs/RELEASING.md](docs/RELEASING.md). The architecture, end to end, is

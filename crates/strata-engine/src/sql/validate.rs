@@ -4,10 +4,12 @@
 //!
 //! 1. **Lexical** — the tokenizer's own faults (unterminated string / quoted ident),
 //!    unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`).
-//! 2. **Policy** — each statement is parsed with DataFusion's own `DFParser` and put through
-//!    [`classify`] as [`Capability::Editor`]. Queries, introspection and the statements the editor
-//!    implements itself draw no squiggle and go on to the tiers below; the short list still
-//!    refused gets a policy diagnostic pointing at the right surface.
+//! 2. **Policy** — each statement is parsed with DataFusion's own `DFParser`, has its bare reads
+//!    resolved against the connected databases ([`qualify`](crate::sql::qualify), DB-09 — before
+//!    the classification, exactly as [`parse`] does it for a Run, and its refusals squiggle the
+//!    name), then goes through [`classify`] as [`Capability::Editor`]. Queries, introspection and
+//!    the statements the editor implements itself draw no squiggle and go on to the tiers below;
+//!    the short list still refused gets a policy diagnostic pointing at the right surface.
 //! 3. **Names** — the native [`resolve`](crate::sql::resolve)r walks the parsed AST and
 //!    reports **every** unknown table/column with a span (the planner below is fail-fast: one name
 //!    per statement), staying quiet where a mid-edit scope is unknowable. Name faults skip the
@@ -38,8 +40,9 @@ use datafusion::sql::sqlparser::parser::ParserError;
 
 use crate::query::{is_snapshot_name, is_snapshot_ref, ReadPolicy};
 use crate::sql::lex::{
-    is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
+    byte_span, is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
+use crate::sql::qualify::{qualify, Names};
 use crate::sql::resolve::{resolve, unwrap_statement};
 use crate::sql::FunctionCatalog;
 use strata_model::{Diagnostic, Severity};
@@ -114,7 +117,7 @@ pub async fn validate(
     let last = ranges.len().saturating_sub(1);
     for (idx, stmt_range) in ranges.into_iter().enumerate() {
         let slice = &sql[stmt_range.clone()];
-        let stmt = match state.sql_to_statement(slice, &dialect) {
+        let mut stmt = match state.sql_to_statement(slice, &dialect) {
             Ok(stmt) => stmt,
             Err(err) => {
                 if idx == last && is_incomplete(&err, slice, &stmt_range, &toks) {
@@ -133,6 +136,15 @@ pub async fn validate(
                 continue;
             }
         };
+        let refusals = qualify(ctx, &mut stmt);
+        if !refusals.is_empty() {
+            for refusal in refusals {
+                let span = byte_span(slice, stmt_range.start, refusal.span)
+                    .unwrap_or_else(|| leading_keywords_span(&toks, &stmt_range));
+                out.push(diag(Severity::Error, refusal.message, span, sql));
+            }
+            continue;
+        }
         match classify(&stmt, Capability::Editor) {
             Verdict::Refuse(blocked) => {
                 out.push(diag(
@@ -666,33 +678,52 @@ pub fn policy_verdicts(ctx: &SessionContext, sql: &str) -> Result<Vec<PolicyRefu
 /// `Err` is the same fail-closed contract [`policy_verdicts`] has: input that could not be
 /// judged is never dispatched.
 pub fn classify_one(ctx: &SessionContext, sql: &str) -> Result<(DFStatement, Verdict), String> {
-    let mut statements = parse(ctx, sql)?;
-    if statements.len() > 1 {
-        return Err("Run executes one statement at a time".into());
-    }
-    let stmt = statements.pop_front().ok_or("Nothing to run")?;
+    let stmt = parse_one(ctx, sql)?;
     let verdict = classify(&stmt, Capability::Editor);
     Ok((stmt, verdict))
 }
 
+/// `sql` as exactly one parsed, **resolved** statement — [`classify_one`] without the verdict,
+/// for the read paths that are given text and have to hand a statement to the planner. A resolved
+/// statement cannot be rendered back to text without losing the buffer the user wrote, so
+/// everything one passes through before planning is in one place.
+pub fn parse_one(ctx: &SessionContext, sql: &str) -> Result<DFStatement, String> {
+    let mut statements = parse(ctx, sql)?;
+    if statements.len() > 1 {
+        return Err("Run executes one statement at a time".into());
+    }
+    statements
+        .pop_front()
+        .ok_or_else(|| "Nothing to run".to_string())
+}
+
 /// Parse `sql` with **this session's own** dialect and recursion limit — the same resolution
-/// `SessionState::sql_to_statement` performs, and the one parse in front of the router.
+/// `SessionState::sql_to_statement` performs, and the one parse in front of the router — then
+/// resolve every bare read in it against the connected databases ([`qualify`], DB-09).
 ///
 /// One funnel, because the two gates that call it ([`policy_verdicts`] for the agent,
-/// [`classify_one`] for a Run) must not be able to read the same buffer differently: a dialect
-/// the agent gate resolved and the Run gate did not would be a statement judged as one form and
-/// executed as another.
+/// [`classify_one`] for a Run) must not read the same buffer differently. The resolution belongs
+/// here for that reason and one more: it can *change* a classification — a bare `__snap_3` the
+/// workspace does not hold stops being a reserved name once it resolves into a connection, where
+/// the prefix reserves nothing. A refusal from the pass is an `Err`, the fail-closed contract
+/// both callers already have.
 fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<DFStatement>, String> {
     let state = ctx.state();
     let options = state.config_options();
     let dialect = dialect_from_str(options.sql_parser.dialect)
         .ok_or_else(|| format!("Unsupported SQL dialect: {}", options.sql_parser.dialect))?;
-    DFParserBuilder::new(sql)
+    let mut statements = DFParserBuilder::new(sql)
         .with_dialect(dialect.as_ref())
         .with_recursion_limit(options.sql_parser.recursion_limit)
         .build()
         .and_then(|mut parser| parser.parse_statements())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    for stmt in &mut statements {
+        if let Some(refusal) = qualify(ctx, stmt).into_iter().next() {
+            return Err(refusal.message);
+        }
+    }
+    Ok(statements)
 }
 
 /// The span of a statement's leading keyword run (`CREATE EXTERNAL TABLE`,
@@ -924,6 +955,10 @@ fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
 /// that resolves as a table or registered function is never second-guessed. The
 /// caller decides how each hint surfaces: merged into an overlapping parse error's
 /// message, dropped under a better engine error, or a standalone warning.
+///
+/// **"Resolves" is `qualify::resolves`, not the workspace's own catalog** (DB-09): asking the
+/// narrower question squiggled `SELECT * FROM orders` — a query that runs — as an unknown word one
+/// edit from `ORDER`, which only the *table not found* error over the same span had been hiding.
 fn keyword_typo_hints(
     toks: &[Tok],
     ctx: &SessionContext,
@@ -938,12 +973,13 @@ fn keyword_typo_hints(
             _ => false,
         })
     }
+    let names = Names::of(ctx);
     let mut hints = Vec::new();
     for (i, t) in toks.iter().enumerate() {
         if t.kind != TokKind::Ident || t.text.len() < 2 {
             continue;
         }
-        if ctx.table_exist(t.text.as_str()).unwrap_or(false) || functions.contains(&t.text) {
+        if names.resolves(&t.text) || functions.contains(&t.text) {
             continue;
         }
         if name_like(i.checked_sub(1).and_then(|p| toks.get(p))) && !name_like(toks.get(i + 1)) {

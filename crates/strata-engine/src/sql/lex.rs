@@ -20,7 +20,7 @@ use std::str::FromStr;
 use datafusion::config::Dialect as EngineDialect;
 use datafusion::sql::sqlparser::dialect::{dialect_from_str, Dialect, GenericDialect};
 use datafusion::sql::sqlparser::keywords::Keyword;
-use datafusion::sql::sqlparser::tokenizer::{Location, Token, Tokenizer};
+use datafusion::sql::sqlparser::tokenizer::{Location, Span, Token, Tokenizer};
 
 /// Resolve the dialect `name` — the engine's own `datafusion.sql_parser.dialect`.
 ///
@@ -269,6 +269,20 @@ pub(crate) fn statement_at(toks: &[Tok], sql_len: usize, caret: usize) -> Range<
         .into_iter()
         .find(|r| caret <= r.end)
         .unwrap_or(0..sql_len)
+}
+
+/// A sqlparser AST span (1-based line/col, relative to the statement `slice` that starts
+/// `stmt_start` bytes into the buffer) as a byte range into that buffer.
+///
+/// `None` for the empty-span sentinel synthesized nodes carry, and for an inverted range — a
+/// caller with no span to point at squiggles the statement head instead.
+pub(crate) fn byte_span(slice: &str, stmt_start: usize, span: Span) -> Option<Range<usize>> {
+    if span.start.line == 0 || span.end.line == 0 {
+        return None;
+    }
+    let start = stmt_start + rel_offset(slice, span.start.line, span.start.column);
+    let end = stmt_start + rel_offset(slice, span.end.line, span.end.column);
+    (start < end).then_some(start..end)
 }
 
 /// Byte offset of 1-based (`line`, `column`) within `slice` (clamped to its end).

@@ -1,0 +1,25 @@
+name: strata-sample
+
+services:
+  postgres:
+    build: .
+    container_name: strata-sample-pg
+    # Trust auth, and it is the reason the sample project needs no keystore step: a committed
+    # `project.json` stores only the *expectation* of a password, so a fixture that wanted one
+    # would make every checkout type it in before the connection went green. The server is
+    # published on loopback only.
+    environment:
+      POSTGRES_USER: strata
+      POSTGRES_DB: strata_sample
+      POSTGRES_HOST_AUTH_METHOD: trust
+    # 55432, not 5432: a developer machine often already has a PostgreSQL on the default port,
+    # and a fixture that fights it is a fixture that looks broken.
+    ports:
+      - "127.0.0.1:55432:5432"
+    # No volume, on purpose. The seed runs only on an empty data directory, so keeping one would
+    # mean an edited `init/` silently did nothing; without one, `down` then `up` re-seeds.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U strata -d strata_sample"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

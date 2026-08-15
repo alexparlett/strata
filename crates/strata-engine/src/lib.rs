@@ -125,6 +125,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
 use datafusion::logical_expr::{ScalarUDF, TableType};
 use datafusion::prelude::*;
+use datafusion::sql::parser::Statement as DFStatement;
 use datafusion_federation::{default_optimizer_rules, FederatedQueryPlanner};
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
@@ -752,17 +753,18 @@ impl Engine {
     ) -> Result<RunOutcome, String> {
         let (stmt, verdict) = {
             let ctx = self.ctx.clone();
-            let text = sql.clone();
             self.rt()
-                .spawn(async move { sql::classify_one(&ctx, &text) })
+                .spawn(async move { sql::classify_one(&ctx, &sql) })
                 .await
                 .map_err(|e| format!("policy task failed: {e}"))??
         };
         match verdict {
-            Verdict::Query => self
-                .read(ws, tag, sql, page_size, sql::read_policy(&stmt))
-                .await
-                .map(|(output, batch)| RunOutcome::Rows(output, batch)),
+            Verdict::Query => {
+                let policy = sql::read_policy(&stmt);
+                self.read(ws, tag, stmt, page_size, policy)
+                    .await
+                    .map(|(output, batch)| RunOutcome::Rows(output, batch))
+            }
             Verdict::Intercept(kind) => {
                 let ctx = self.ctx.clone();
                 let root = self.data_root.lock().unwrap().clone();
@@ -923,8 +925,20 @@ impl Engine {
         sql: String,
         page_size: usize,
     ) -> Result<(QueryOutput, RecordBatch), String> {
-        self.read(ws, tag, sql, page_size, ReadPolicy::default())
+        let stmt = self.parse_one(&sql)?;
+        self.read(ws, tag, stmt, page_size, ReadPolicy::default())
             .await
+    }
+
+    /// `sql` as one parsed statement with its bare reads resolved ([`sql::parse_one`], DB-09) —
+    /// the entry every read arriving as *text* goes through. [`run`](Engine::run) does not: its
+    /// classification already produced the statement.
+    ///
+    /// **Not spawned onto the runtime**, unlike every call that touches the context to *do*
+    /// something: it has to land before the first await, or `query` stops publishing its in-flight
+    /// entry on the first poll and `DispatchGuard` has nothing to retract.
+    fn parse_one(&self, sql: &str) -> Result<DFStatement, String> {
+        sql::parse_one(&self.ctx, sql)
     }
 
     /// [`query`](Engine::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
@@ -937,7 +951,7 @@ impl Engine {
         &self,
         ws: WsId,
         tag: RunTag,
-        sql: String,
+        stmt: DFStatement,
         page_size: usize,
         policy: ReadPolicy,
     ) -> Result<(QueryOutput, RecordBatch), String> {
@@ -955,7 +969,7 @@ impl Engine {
             let ctx = self.ctx.clone();
             let engine_id = self.engine_id;
             let task = self.rt().spawn(async move {
-                run_and_snapshot(&ctx, engine_id, snapshot, &sql, page_size, &fmt, policy).await
+                run_and_snapshot(&ctx, engine_id, snapshot, stmt, page_size, &fmt, policy).await
             });
             lc.inflight.insert(
                 ws,
@@ -1120,9 +1134,10 @@ impl Engine {
     /// Supersedes the workspace's in-flight run (mutually exclusive, like a re-run) but
     /// leaves its settled snapshot alone (spec §4: explains materialize nothing).
     pub async fn explain(&self, ws: WsId, tag: RunTag, sql: String) -> Result<QueryPlan, String> {
+        let stmt = self.parse_one(&sql)?;
         let ctx = self.ctx.clone();
         self.bookkeep(ws, tag, "explain", async move {
-            explain::run_explain(&ctx, &sql).await
+            explain::run_explain(&ctx, stmt).await
         })
         .await
     }
@@ -1452,6 +1467,18 @@ impl Engine {
             return None;
         };
         db::listing(&self.databases, conn, pg)
+    }
+
+    /// Tell the session which schemas `conn` now **shows** — the Schemas… picker's engine half,
+    /// which writes the def without reconnecting.
+    ///
+    /// Since DB-09 an unqualified name searches what a connection shows, so the session has to
+    /// learn the new set as the picker commits it. A no-op for a connection that is not live.
+    pub fn show_schemas(&self, conn: &ConnectionDef) {
+        let Provider::Postgres(pg) = &conn.provider else {
+            return;
+        };
+        self.databases.show(&conn.url(), pg);
     }
 
     /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
