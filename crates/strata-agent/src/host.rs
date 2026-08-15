@@ -26,8 +26,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use strata_core::engine::plan::QueryPlan;
-use strata_core::engine::{Engine, WsId};
+use strata_engine::plan::QueryPlan;
+use strata_engine::{Engine, WsId};
 use strata_model::{ColumnInfo, QueryOutput};
 use uuid::Uuid;
 
@@ -307,7 +307,7 @@ pub enum Settled {
 
 /// The engine's own answer to a press that **did** dispatch: `Ok` is a result, `Err` is the
 /// engine's settled error string — which may be a fault or may be a stop
-/// (`strata_core::engine::stopped_on_purpose`). Judging it is the tool layer's, once.
+/// (`strata_engine::stopped_on_purpose`). Judging it is the tool layer's, once.
 pub type RunSettle = Result<Settled, String>;
 
 /// Whatever answers the vocabulary for a given deployment.

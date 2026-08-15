@@ -1,6 +1,6 @@
 # SQL Completion
 
-The completion system, across `strata-core::engine::sql` (the language side),
+The completion system, across `strata-engine::sql` (the language side),
 `strata-code-editor` (the popup), and `strata-freya` (the wiring). Functions complete with
 their real signatures in the row's detail, from the engine's `FunctionSym` catalog; a docs
 panel and a signature-help popup were prototyped and dropped — the signature in the

@@ -26,9 +26,9 @@ notarized with the rest.
   runs), and **the app bundle is self-contained** is a standing claim each new asset must keep
   (AGENTS §7 — the font precedent: naming a new asset means embedding it in the same change).
   `docs/RELEASING.md` documents the pipeline and must stay true.
-- The dependency-justification culture applies doubly here (a native-runtime dep): the
-  manifest comment records why local-over-provider (the workstream README's decision) and the
-  exact features taken.
+- A native-runtime dependency needs its reasoning written down — why local-over-provider (the
+  workstream README's decision) and the exact features taken. It goes in `docs/`, not the
+  manifest: manifests carry declarations only.
 - Blocking work off the render thread goes through `strata_freya::task::offload` — but this
   task's embedding all happens inside `Memories`' own runtime, so no Freya changes.
 
@@ -76,7 +76,7 @@ notarized with the rest.
 ## Files
 
 `crates/strata-core/src/memory/embed.rs` (new) · `crates/strata-core/src/memory.rs` (wiring)
-· `crates/strata-core/Cargo.toml` (fastembed + comment) · `scripts/fetch-embed-model.sh`
+· `crates/strata-engine/Cargo.toml` (fastembed) · `scripts/fetch-embed-model.sh`
 (new) · `scripts/bundle-macos.sh` · `.github/workflows/*` (fetch step) · `docs/RELEASING.md`
 · tests beside the module.
 

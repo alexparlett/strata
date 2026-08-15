@@ -2,192 +2,35 @@
 name = "strata-core"
 version = "0.2.0"
 edition = "2021"
-description = "Strata's framework-agnostic logic core: the SQL language service (and, being filled in during the port, the engine worker + protocol, serialization, profiling, and persistence). Shared by every frontend."
+description = "Strata's framework-agnostic app core: config, keymap, theme, project persistence, the OS-keystore secret store, the model-listings satellite and the updater mechanism. DataFusion-free — the engine is `strata-engine`, which depends on this crate."
 license = "MIT"
 
 [dependencies]
 strata-model = { path = "../strata-model" }
-# The query engine family. `sql` uses datafusion's re-exported `sqlparser`; `engine`/
-# `profile`/`serialize` use datafusion + arrow proper.
-datafusion = "54"
-# Postgres-style JSON accessors (`json_get`, `->`, `->>`) over a Utf8 column holding JSON
-# text. Registered into every engine's context by `build_context`, which is all the wiring there
-# is: `functions::snapshot` reads the *live* registry, so these reach completion, signature help
-# and the docs panel with no per-function work. Its version tracks DataFusion's major (0.54.x =
-# DataFusion 54), so it moves in lockstep with the `datafusion` pin above.
-# (`?` is registered as well but does not parse under our default `GenericDialect` — use
-# `json_contains`; see the note in `engine::build_context`.)
-datafusion-functions-json = "0.54"
-# `engine::build_context`: the federation optimizer rule + query planner (DB-01), which push a
-# same-source subplan back to the database that owns it rather than scanning it row by row. With
-# no `FederatedTableProviderAdaptor` in a plan the rule is a structural no-op, so a local-only
-# project pays nothing for it.
-#
-# **Lockstep with the `datafusion` pin.** Federation, the `datafusion-table-providers` crates
-# (DB-02), arrow and datafusion cross one type boundary — `TableProvider`, the unparser and the
-# federation plan node are all datafusion types — so app and providers must resolve *one*
-# DataFusion. 0.5.5 pins datafusion ^54 and arrow ^58.3; a future DataFusion bump moves all four
-# versions together, in one change.
-#
-# The `sql` feature is what DB-02's providers need (the SQL-federation half: the unparsing
-# executor and `SQLFederationProvider`). Declared here so the manifest edit lands once.
-datafusion-federation = { version = "0.5.5", features = ["sql"] }
-# `engine::db`: the Postgres arm (DB-02). The **leaf** crate rather than the umbrella
-# `datafusion-table-providers`, which would compile MySQL, SQLite, DuckDB, ClickHouse, ODBC and
-# FlightSQL beside it; adding a second database later is adding its own leaf.
-#
-# `-common` is named too because the seams live there rather than being re-exported: the
-# `PasswordProvider` trait the keystore bridge implements, `UnsupportedTypeAction` and
-# `to_secret_map`.
-#
-# Both are in the **lockstep** set described above the federation dependency — they pin
-# datafusion ^54 and arrow ^58, and `TableProvider`, the unparser and the federation plan node
-# all cross the boundary, so a DataFusion bump moves all four together. Default features (which
-# is `federation`) are what put `SqlTable`s behind a `FederatedTableProviderAdaptor`, i.e. what
-# makes a whole same-source subplan reach the server as one statement.
-datafusion-table-providers-postgres = "0.13"
-datafusion-table-providers-common = "0.13"
-# The password type that crate's `PasswordProvider` answers in. Named directly because
-# `engine::db` implements the trait; it is already in the graph as the providers' own dependency.
-secrecy = "0.10"
-# `engine::store`: the object stores a connection registers (W7). DataFusion already carries
-# `object_store` with only its local-filesystem feature on; naming it here with `aws`/`gcp`/`http`
-# is what turns those three on — Cargo unifies features, so this is the *same* crate DataFusion
-# resolves a `s3://` URL through, not a second copy.
-object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
-# The AWS credential chain `object_store` does not have. `AmazonS3Builder::from_env` reads the
-# `AWS_*` environment plus IMDS/ECS/web-identity and stops there — it does not read `~/.aws`
-# profiles and does not do SSO, so `AWS_PROFILE` alone is ignored. `aws-config` is the crate that
-# resolves the whole normal chain; `engine::store` wraps what it resolves in an
-# `object_store::CredentialProvider` (the datafusion-cli bridge). Needed only for the profile /
-# SSO arms — anonymous and the env/IMDS half of Ambient would work without it.
-# `behavior-version-latest` is what makes `BehaviorVersion::latest()` callable.
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-credential-types = "1"
-# Only for `engine::store::aws_profiles`: `aws_config::profile::load` takes the filesystem and
-# environment shims from this crate, and there is no re-export of them on `aws-config` itself.
-# Already in the graph — `aws-config` depends on it — so naming it costs a line and no build.
-aws-types = "1"
-# `engine` worker: dedicated thread + tokio runtime + mpsc command/event channels.
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-# `engine::json_poly::format` implements DataFusion's `FileFormat`, which is an `#[async_trait]`
-# trait — the attribute has to be applied by the same crate version DataFusion used, and it is
-# already in the graph via DataFusion itself.
-async-trait = "0.1"
-# `engine::udfs`: the compiled pattern `regexp_extract_all` caches (QE-02). Named because the
-# UDF spells `Regex` itself — and it is the **same** `Regex` DataFusion's own
-# `functions::regex::compile_regex` returns, which is the whole reason that function can be
-# reused rather than reimplemented with a second cache and a second error wording. Already in
-# the graph (DataFusion's regexp family is built on it, via its default `regex_expressions`
-# feature) and version-unified with it, so this costs a line and no build.
-regex = "1"
-# `config`/`theme`/`plan` persist + (de)serialize.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
-# `config`: app config (recent projects + prefs) in the OS user-config dir. `preferences` owns
-# the `AppInfo` identity and the JSON shape; the *file* is read and written here instead, through
-# `util::write_atomic` — the crate's own `save` is `File::create` plus `to_writer`, which is a
-# truncate-then-write with no fsync and no rename, and a config half-written by a kill is one the
-# next launch cannot parse. `app_dirs2` is what resolves the same path it would have used; it is
-# already in the graph as `preferences`' own dependency, so naming it here adds an edge, not code.
 preferences = "2"
 app_dirs2 = "2.5"
-# `util::now_hms`: the local wall clock behind an event-log timestamp. Already in the graph
-# (datafusion → arrow → chrono, with `clock` on), so this only names what we depend on.
 chrono = "0.4"
 tracing = "0.1.44"
-# `secret`: the OS-keystore reference id. Also what the tests mint saved-query ids with (the
-# type itself reaches the API via strata-model), which is why it was a dev-dependency before.
-# `v5` is `SecretRef::derived` (DB-02): a reference computed from a shared def's own identity,
-# so the committed `project.json` carries no machine-local id.
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
-# `secret`: the OS keystore behind the assistant's provider keys (AS-05).
-#
-# `keyring-core` is the API — entries, the error taxonomy, and the process-wide default
-# store — and each platform's store is a crate of its own, named per target below. This is
-# the split the all-in-one `keyring` crate hides: its `v1` module is the same three lines of
-# platform selection as `secret::open_keystore`, but it installs its store from a `LazyLock` inside
-# `Entry::new`, so nothing can be substituted for it. `keyring_core::mock` is the only way
-# to make a keystore *refuse*, and that path is the one this module exists to get right.
 keyring-core = "1"
-# `update`: the GitHub Releases check and the update download (UP-02). **Version 0.12 on
-# purpose** — `object_store` pins it, so this is the same crate already compiled into the graph
-# rather than a second HTTP stack (`strata-agent` carries 0.13 because `genai` does, and the two
-# coexist there). `default-features = false` with exactly the features object_store already turns
-# on: reqwest's defaults would pull `native-tls` in beside the rustls this graph resolves, and a
-# second TLS backend is a second root store to keep straight for no gain.
+tokio = { version = "1", features = ["rt", "net", "time"] }
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls-native-roots",
     "http2",
 ] }
-# `update`: comparing a release tag against the running version. Already in the lock (via
-# `rustc_version`), so this is a new direct declaration and no new download.
 semver = "1"
-# `secret`: zero a secret's buffer on drop, with a write the optimiser may not elide. Pure
-# Rust and no build script, which is the line this stops at - `secrets`-style mlock/mprotect
-# guarding wants libsodium linked in, and could only ever guard one copy of several anyway
-# (see the module docs).
 zeroize = "1"
 
-# The platform stores. Named per target rather than behind features, so an unsupported
-# platform is a build error in `secret::open_keystore` rather than a silent no-keystore at
-# runtime.
 [target.'cfg(target_os = "macos")'.dependencies]
-# `keychain` is the legacy (file-based) Keychain Services store, which is what an unsandboxed
-# app on macOS uses; `protected` is the sandboxed data-protection store and needs a
-# provisioning profile we do not ship.
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1"
 
-# iOS and Android are excluded rather than swept in with "unix": neither runs a Secret
-# Service, so a build for one would fail inside this dependency instead of at our own `cfg`,
-# which is the opposite of the loud failure this per-target split exists for. Upstream
-# `keyring` draws the line in the same place.
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
-# `crypto-rust` keeps the session encryption off a C library, matching what `keyring` itself
-# selects for this store.
 zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
-[dev-dependencies]
-# A real S3 server for the connections integration test (W7): `tests/object_store_minio.rs`
-# starts MinIO in a container rather than hand-rolling an S3 mock, because a mock is written
-# by the same understanding of the protocol it is meant to check — it can be shaped to pass
-# without anyone noticing. Needs a Docker runtime, which the macOS CI job does not have on its
-# own — CI supplies one via `atomicjar/testcontainers-cloud-setup-action` (see
-# .github/workflows/ci.yml). The test is deliberately *not* `#[ignore]`d: an ignored test is
-# one nobody runs, and this is the only thing covering SigV4 through the `aws-config` bridge.
-# Pinned to the major `testcontainers-modules` itself depends on: the two share a `bollard`,
-# and a newer `testcontainers` here resolves a second one that conflicts outright.
-#
-# `properties-config` is **not** optional for us: without it, reading
-# `~/.testcontainers.properties` is `#[cfg]`'d out and the only Docker endpoint the crate will
-# consider is `DOCKER_HOST`, falling back to `/var/run/docker.sock`. That file is exactly how a
-# Testcontainers Cloud agent advertises itself (`tc.host` / `docker.host`), locally and on CI —
-# so without the feature the runtime is up, configured, and invisible, and the failure reads as
-# `SocketNotFoundError("/var/run/docker.sock")` as if no runtime existed at all.
-testcontainers = { version = "0.27", features = ["properties-config"] }
-# `postgres` beside `minio`: `tests/postgres_federation.rs` (DB-02) drives a real PostgreSQL for
-# exactly the reason the MinIO test drives a real S3 — the thing under test is a whole
-# introspect-plan-unparse-execute round trip against a server, and a mock of it would be written
-# by the same understanding of Postgres that the code under test has.
-testcontainers-modules = { version = "0.15", features = ["minio", "postgres"] }
-# Seeds that database, and is deliberately a *lower layer* than the pool and factory under test:
-# the fixture is written with the raw driver, so the test and the code cannot agree on a shared
-# misunderstanding. Already in the graph via the Postgres provider, whose `bb8-postgres` pins it.
-tokio-postgres = "0.7"
-# Seeds the bucket the test then reads. Deliberately a *different* client from the one under
-# test: `object_store` cannot create a bucket at all, and having the write side be an
-# independent implementation is what stops the fixture and the code under test agreeing on a
-# shared misunderstanding of the protocol.
-aws-sdk-s3 = "1"
-# The read-options round-trips write their own fixtures, and a compression option can only be
-# proved by handing the reader a genuinely compressed file. Already in the tree via DataFusion.
-flate2 = "1"
-
-# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
-# `clippy.toml`). Every member inherits the same set — CI denies it.
 [lints]
 workspace = true

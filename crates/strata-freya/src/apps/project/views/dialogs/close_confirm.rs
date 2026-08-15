@@ -274,7 +274,7 @@ enum Whose {
 /// file being written. [`Engine::has_background_work`] is the only thing that can tell the two
 /// apart, which is what it is for.
 ///
-/// [`Engine::has_background_work`]: strata_core::engine::Engine::has_background_work
+/// [`Engine::has_background_work`]: strata_engine::Engine::has_background_work
 fn whose_work(engine: &EngineCtx, session: &SessionState, agents: &Agents) -> Whose {
     if session
         .tabs

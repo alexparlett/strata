@@ -19,7 +19,7 @@ use serde_json::json;
 use strata_agent::host::{CatalogEntry, RegState};
 use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::{AgentServer, MCP_PATH};
-use strata_core::engine::TableSpec;
+use strata_engine::TableSpec;
 use strata_model::SourceFormat;
 use tokio::net::TcpStream;
 use tokio::time::sleep;

@@ -13,9 +13,9 @@ use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
-use strata_core::engine::{column_info, TableMeta, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
+use strata_engine::{column_info, TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, PgStore, Provider,
     ProviderId, RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef,
@@ -1732,7 +1732,7 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
 /// A **database** connection can be listed no further than this without a server: `db_listing`
 /// reads the connect-time enumeration, so an unconnected database has no schemas and the node is
 /// a leaf. What its subtree looks like over a real server is
-/// `strata-core/tests/postgres_federation.rs`, which drives the same scoped-and-tagged answer this
+/// `strata-engine/tests/postgres_federation.rs`, which drives the same scoped-and-tagged answer this
 /// tree reads.
 mod connections {
     use super::*;
@@ -2216,7 +2216,7 @@ mod connections {
 ///
 /// The one place a row count is not bounded by the project file is a database schema, whose
 /// relation list is the server's and whose query carries no `LIMIT` — but a container-backed
-/// listing is `strata-core/tests/postgres_federation.rs`'s, and what this needs to pin is the
+/// listing is `strata-engine/tests/postgres_federation.rs`'s, and what this needs to pin is the
 /// *pane*, not the listing. A workspace with a great many tables exercises the same list: the walk
 /// produces a node per row either way, and the assertion is that mounting stops at the viewport.
 ///
@@ -2353,12 +2353,12 @@ fn the_tree_lays_out_within_its_panel_at_stub_width() {
 /// relation row exists only while `db_listing` answers, and that answer is the connect-time
 /// enumeration held beside a live pool, so the rendered pane cannot reach one without a server.
 /// What a real server does with these names is
-/// `strata-core/tests/postgres_federation.rs`, which runs the same
-/// [`qualified`](strata_core::engine::sql::qualified) rendering these templates wrap.
+/// `strata-engine/tests/postgres_federation.rs`, which runs the same
+/// [`qualified`](strata_engine::sql::qualified) rendering these templates wrap.
 mod gestures {
     use super::super::menu::{pin_view_sql, select_sql};
-    use strata_core::engine::quote_ident;
-    use strata_core::engine::sql::qualified;
+    use strata_engine::quote_ident;
+    use strata_engine::sql::qualified;
 
     #[test]
     fn a_query_reads_the_whole_relation_at_the_row_limit() {

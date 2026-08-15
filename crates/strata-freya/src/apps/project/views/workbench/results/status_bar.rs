@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use async_io::Timer;
 use freya::prelude::*;
 use strata_core::config::Command;
-use strata_core::engine::plan::PlanTab;
-use strata_core::engine::sql::StmtKind;
 use strata_core::util::fmt_int;
+use strata_engine::plan::PlanTab;
+use strata_engine::sql::StmtKind;
 use strata_model::Kind;
 
 use super::datagrid::{GridData, PageRead};
@@ -603,7 +603,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_core::engine::{column_info, RecordBatch, Schema};
+    use strata_engine::{column_info, RecordBatch, Schema};
     use strata_model::Cell;
 
     use super::*;

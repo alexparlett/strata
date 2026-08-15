@@ -117,9 +117,9 @@ named.
 
 ## Files
 
-`crates/strata-core/src/engine/ddl/{mod,tables,views}.rs` ·
-`crates/strata-core/src/engine/sql/validate.rs` (the two new kinds) · the completion statement
-templates (ED-11's pool) · `crates/strata-core/src/engine/db.rs` ·
-`crates/strata-core/tests/postgres_federation.rs` ·
+`crates/strata-engine/src/ddl/{mod,tables,views}.rs` ·
+`crates/strata-engine/src/sql/validate.rs` (the two new kinds) · the completion statement
+templates (ED-11's pool) · `crates/strata-engine/src/db.rs` ·
+`crates/strata-engine/tests/postgres_federation.rs` ·
 `docs/STATEMENTS_SPEC.md` (§4's table gets the new remote column answers),
 `docs/CONNECTIONS_SPEC.md`.

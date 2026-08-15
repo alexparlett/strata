@@ -21,7 +21,7 @@ use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
 use std::collections::BTreeSet;
 
-use strata_core::engine::db::SchemaVisibility;
+use strata_engine::db::SchemaVisibility;
 use strata_model::{ConnectionDef, PgStore, Provider};
 
 use crate::apps::project::contexts::EngineCtx;

@@ -6,7 +6,7 @@
 
 use freya::prelude::*;
 
-use strata_core::engine::plan::{InsightTone, MetricKind, PlanKind};
+use strata_engine::plan::{InsightTone, MetricKind, PlanKind};
 
 use super::ExplainPlanTheme;
 use crate::components::type_palette::TypePaletteTheme;

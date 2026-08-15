@@ -14,10 +14,10 @@ use freya::prelude::{
     Platform, State, TaskHandle, WritableUtils,
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
-use strata_core::engine::TableSpec;
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
-use strata_core::register::{register_pass, table_spec, RegOutcome};
 use strata_core::util::{fmt_int, plural};
+use strata_engine::register::{register_pass, table_spec, RegOutcome};
+use strata_engine::TableSpec;
 use strata_model::{ConnectionDef, SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -685,7 +685,7 @@ mod tests {
     use std::env;
     use std::process;
 
-    use strata_core::engine::TableMeta;
+    use strata_engine::TableMeta;
     use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     use super::*;

@@ -17,10 +17,10 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use strata_core::engine::export::{Csv, ExportReport, Format, Json, Parquet};
-use strata_core::engine::plan::QueryPlan;
-use strata_core::engine::sql::{FunctionCatalog, FunctionSym};
 use strata_core::util::{clip, collapse_sql};
+use strata_engine::export::{Csv, ExportReport, Format, Json, Parquet};
+use strata_engine::plan::QueryPlan;
+use strata_engine::sql::{FunctionCatalog, FunctionSym};
 use strata_model::{Cell, ColumnInfo, Diagnostic, Kind, QueryOutput, Severity, Stat, StatKey};
 
 use crate::host::{CatalogEntry, Project, QuerySessionInfo, QuerySessionState, RegState, RunMode};
@@ -828,7 +828,7 @@ pub struct QuerySessionResult {
 
 /// What a `run` settled as. **A stop is a status, not an error**: a cancel in the app or a
 /// supersede by a newer press is news the user already has, and the only thing that knows a
-/// stop from a fault is `strata_core::engine::stopped_on_purpose`.
+/// stop from a fault is `strata_engine::stopped_on_purpose`.
 ///
 /// **`extend` is load-bearing, not decoration.** This is the vocabulary's one `outputSchema`
 /// that is a sum rather than a struct, and schemars emits an internally-tagged enum as a bare

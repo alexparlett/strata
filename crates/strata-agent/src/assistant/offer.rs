@@ -164,7 +164,7 @@ mod tests {
     use std::{env, fs, process};
 
     use serde_json::json;
-    use strata_core::engine::TableSpec;
+    use strata_engine::TableSpec;
     use strata_model::SourceFormat;
 
     use crate::mock::{MockHost, MockProject};

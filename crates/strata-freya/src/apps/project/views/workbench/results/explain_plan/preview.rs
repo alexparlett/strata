@@ -4,8 +4,8 @@
 //! `cargo test -p strata-freya plan_preview -- --ignored`.
 
 use freya_testing::TestingRunner;
-use strata_core::engine::plan::{fmt_ms, self_time_ms, Metric, MetricKind, PlanKind, PlanNode};
 use strata_core::theme::load;
+use strata_engine::plan::{fmt_ms, self_time_ms, Metric, MetricKind, PlanKind, PlanNode};
 
 use super::*;
 use crate::theme::strata_theme;

@@ -8,7 +8,7 @@ screen.
 
 Two sources of truth sit under this, and they are the ones to change:
 
-- **`strata-core::engine::export`** — `ExportSpec` and the SQL it renders. Every option a spec can
+- **`strata-engine::export`** — `ExportSpec` and the SQL it renders. Every option a spec can
   name is a field DataFusion honours; there is no key/value bag.
 - **`strata-freya::apps::export::model`** — `ExportDraft::groups`, the list the window renders.
   Options are **data**: a group is a label, an optional hint and a control, and every control

@@ -45,7 +45,7 @@
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
-use strata_core::engine::drop_intent;
+use strata_engine::drop_intent;
 use strata_model::{CatalogKind, ProviderId, TableOrigin};
 use uuid::Uuid;
 
@@ -580,9 +580,9 @@ mod tests {
 
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
-    use strata_core::engine::{RunTag, TableMeta, ViewMeta, WsId};
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
+    use strata_engine::{RunTag, TableMeta, ViewMeta, WsId};
     use strata_model::{
         ConnectionDef, GcsStore, Origin, PgStore, Provider, S3Store, SavedQuery, SourceFormat,
         TableDef, TableOrigin, ViewDef,

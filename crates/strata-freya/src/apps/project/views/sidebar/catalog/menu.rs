@@ -21,7 +21,7 @@
 use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::engine::quote_ident;
+use strata_engine::quote_ident;
 use strata_model::{CatalogKind, Origin, ProviderId, SavedQuery};
 use uuid::Uuid;
 
@@ -397,7 +397,7 @@ pub fn select_sql(target: &str, limit: usize) -> String {
 /// The statement **Pin as view…** composes (DB-06) — `name` and `target` both already rendered,
 /// and by *different* renderers: the view is a workspace def, so its name is the one the store
 /// will key it under, while the target's spelling is a server's. See
-/// [`quote_ident`](strata_core::engine::quote_ident).
+/// [`quote_ident`](strata_engine::quote_ident).
 pub fn pin_view_sql(name: &str, target: &str) -> String {
     format!("CREATE VIEW {name} AS\nSELECT *\nFROM {target};")
 }

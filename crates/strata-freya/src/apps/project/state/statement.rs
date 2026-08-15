@@ -31,7 +31,7 @@
 use freya::prelude::{use_consume, use_side_effect, use_state, WritableUtils};
 use freya::query::{QueryStateData, UseQuery};
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::engine::{StatementReport, StoreEffect};
+use strata_engine::{StatementReport, StoreEffect};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryOutcome, RunQuery};
@@ -198,9 +198,9 @@ mod tests {
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
-    use strata_core::engine::{RunOutcome, RunTag, StoreEffect, TableMeta, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
     use strata_core::theme::load;
+    use strata_engine::{RunOutcome, RunTag, StoreEffect, TableMeta, WsId};
 
     use crate::apps::project::state::{CatalogState, Log, PersistFaults, ScanRequest};
     use crate::theme::strata_theme;

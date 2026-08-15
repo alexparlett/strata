@@ -28,13 +28,13 @@ use strata_agent::{
     Agent, AgentError, AgentId, CatalogEntry, Described, QuerySessionId, QuerySessionInfo,
     RunSettle, Settled,
 };
-use strata_core::engine::stopped_on_purpose;
+use strata_engine::stopped_on_purpose;
 use tokio::sync::oneshot;
 
 /// What one of an agent's runs came to.
 ///
 /// A stop is its own arm rather than an error string, because it is the one distinction the
-/// pane must not get wrong: `strata_core::engine::stopped_on_purpose` settles three strings
+/// pane must not get wrong: `strata_engine::stopped_on_purpose` settles three strings
 /// that are news the user already has, and painting one red would report a fault nobody had.
 /// The driver asks that predicate once, on the way in.
 #[derive(Clone, PartialEq, Debug)]

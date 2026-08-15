@@ -7,7 +7,7 @@
 //! size this surface exists for: `config.json`'s `contentBlocks` is 19,311 keys under one
 //! top-level key, and any bounded rendering of that names the shape and gives you no way into it.
 //! The tree opens what you ask for and nothing else — see `super::value_tree` for the model and
-//! `strata_core::engine::value_tree` for the Arrow reads.
+//! `strata_engine::value_tree` for the Arrow reads.
 //!
 //! The open state ([`State<Option<CellValue>>`]) lives on the `DataGrid` (it survives page flips
 //! like the column widths, and its `Command::Cancel` arm dismisses on Esc), and now carries the
@@ -281,8 +281,8 @@ mod interaction {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray, StructArray};
     use datafusion::arrow::datatypes::{DataType, Field, Fields};
     use freya_testing::TestingRunner;
-    use strata_core::engine::{RecordBatch, Schema};
     use strata_core::theme::load;
+    use strata_engine::{RecordBatch, Schema};
 
     use super::*;
     use crate::theme::strata_theme;

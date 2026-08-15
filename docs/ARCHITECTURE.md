@@ -9,25 +9,26 @@ links the document that owns its detail. If you are changing code rather than re
 
 ## The workspace
 
-A virtual Cargo workspace, six member crates plus a vendored fork:
+A virtual Cargo workspace, seven member crates plus a vendored fork:
 
 | Crate | Role |
 |---|---|
 | `strata-freya` | The app — Freya (Skia, native) frontend. One module per OS window under `apps/`: launcher, project, settings, export, configure, connection. The default build target. |
-| `strata-core` | Engine logic, and the only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, config, keymap, themes, the OS-keystore secret store. |
+| `strata-core` | App services, DataFusion-free: config, keymap, themes, `.strata/` project persistence, the OS-keystore secret store, the model-listings satellite, the updater mechanism, shared `util`. |
+| `strata-engine` | The only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, the EXPLAIN model, the registration pass. Sits on `strata-core`. |
 | `strata-model` | The leaf data vocabulary — schema, results, catalog, session, history, connections. Serde only, no logic, so every other crate can speak it without dragging dependencies. |
 | `strata-code-editor` | The vendored Skia code editor (Rope buffer, tree-sitter highlighting, completion popup, diagnostic squiggles) the SQL surface is built on. |
 | `strata-agent` | Agent access: the read-only MCP tool vocabulary, the HTTP server, and the headless stdio host. Deliberately Freya-free — one implementation serves the in-app server and `strata mcp` alike. |
 | `strata-command-macro` | One proc macro: `#[command_router]` / `#[command]`, the command palette's registration mechanism. Knows nothing of Strata's types. |
 | `crates/freya` | Our Freya fork, a git submodule resolved by **local path** — excluded from the workspace, but every build compiles against this checkout. |
 
-The dependency direction is strict: `strata-freya` sits on top; `strata-core` and `strata-agent`
+The dependency direction is strict: `strata-freya` sits on top; `strata-engine` sits on `strata-core`; `strata-core` and `strata-agent`
 never depend on UI; `strata-model` depends on nothing of ours. When a Freya limitation shows up,
 the fix goes **into the fork**, not around it in app code.
 
 ## The engine: a direct-call async facade
 
-`strata_core::engine::Engine` owns a private multi-thread Tokio runtime (DataFusion's operators
+`strata_engine::Engine` owns a private multi-thread Tokio runtime (DataFusion's operators
 need a Tokio context, and query CPU must never run on the render thread), spawns each call onto
 it, and the caller awaits the `JoinHandle`. That await is executor-agnostic, so Freya's non-Tokio
 UI executor awaits engine methods like any async fn. There are no channels, no request ids, no

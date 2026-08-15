@@ -7,10 +7,10 @@ this file; read the full entry before extending, arguing with, or overturning on
 
 Things that must not regress. Each was fought for once already.
 
-- **The engine is a direct-call async facade** (`strata_core::engine::Engine`): private multi-thread
+- **The engine is a direct-call async facade** (`strata_engine::Engine`): private multi-thread
   Tokio runtime, each call spawned onto it, caller awaits the `JoinHandle`. No UI-side runtime, no
   channels, no request ids, no router/demux — the Dioxus-era `Command`/`Event` protocol was deleted
-  with P2-01 and must not be rebuilt. DataFusion is touched **only** in `strata-core`.
+  with P2-01 and must not be rebuilt. DataFusion is touched **only** in `strata-engine`.
 - **Results are freya-query off the tab's SQL.** Each `QueryTab` owns its Run trigger
   (`QueryTab::request: Option<QuerySpec>` on `Chan::Request(id)`). The store holds **specs, never
   results** — rows live only in the freya-query cache keyed by `QuerySpec`. No runs-by-id store.

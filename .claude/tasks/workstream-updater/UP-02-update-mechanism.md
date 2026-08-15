@@ -38,10 +38,10 @@ quit-shaped restart. UP-03 puts surfaces on this; nothing here paints.
 **`strata_core::update`** — a satellite module beside `models.rs`, blocking API in
 `list_models_blocking`'s shape. Dependencies: `reqwest = "0.12"` (already compiled — `object_store`
 pins 0.12.28; match the features the lockfile already resolves rather than enabling a second TLS
-backend — `strata-agent`'s manifest comments at `Cargo.toml:65-69` explain the genai constraint)
+backend; `strata-agent` carries 0.13 because `genai` does, and the two coexist)
 and `semver = "1"` (in the lock via `rustc_version`; new direct declaration, no new download).
-Declare both in `strata-core`'s own manifest with the usual why-comment — the workspace root
-deliberately declares only the fork crates.
+Declare both in `strata-core`'s own manifest — the workspace root deliberately declares only
+the fork crates.
 
 1. **Check** — `check_blocking(current: &str) -> Result<Check, String>`.
    `GET https://api.github.com/repos/alexparlett/strata/releases?per_page=10` (the **list**, not

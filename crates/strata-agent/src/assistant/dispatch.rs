@@ -372,8 +372,8 @@ mod tests {
     use std::{env, fs, process};
 
     use serde_json::json;
-    use strata_core::engine::sql::Blocked;
-    use strata_core::engine::{TableSpec, CANCELLED};
+    use strata_engine::sql::Blocked;
+    use strata_engine::{TableSpec, CANCELLED};
     use strata_model::SourceFormat;
 
     use crate::host::{CatalogEntry, RegState};

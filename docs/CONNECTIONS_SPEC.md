@@ -18,9 +18,9 @@ Two rules shape everything below:
 - **DataFusion resolves nothing itself.** There is no built-in "read `s3://…`": the embedder
   builds an `object_store` and registers it per bucket, or every scan fails with *"No suitable
   object store found"*. Registering that store is the whole of what an object-store connection
-  *does* (`crates/strata-core/src/engine/store.rs`). A database connection is the same shape
+  *does* (`crates/strata-engine/src/store.rs`). A database connection is the same shape
   against a different registry: it builds a connection pool and registers a **catalog**
-  (`crates/strata-core/src/engine/db/`).
+  (`crates/strata-engine/src/db/`).
 
 ## Providers
 
@@ -428,7 +428,7 @@ remote relation's columns), are `docs/COMPLETION_SPEC.md` §2, §4 and §10.
 ## Registration order
 
 Connections are the **first phase** of the project registration pass
-(`strata_core::register::register_pass`): every connection registers before any table, because a
+(`strata_engine::register::register_pass`): every connection registers before any table, because a
 table's source path cannot resolve to an object store that is not registered yet — an ordering
 bug there would look exactly like a broken table — and because a view over `pg.public.orders`
 cannot plan before that catalog exists. A whole-catalog ↻ re-connects everything; a
@@ -440,7 +440,9 @@ A **PG** connection registers a DataFusion **catalog** rather than an object sto
 can `SELECT … FROM pg.public.orders JOIN events …` — cross-joining file-based tables onto live
 PostgreSQL, with filters, projections and whole same-source subplans pushed down to the server.
 Built on `datafusion-table-providers-postgres` and `datafusion-federation`, both pinned in
-lockstep with the `datafusion` version (`crates/strata-core/Cargo.toml` says why).
+lockstep with the `datafusion` version: `TableProvider`, the unparser and the federation plan
+node are all DataFusion types, so app and providers must resolve **one** DataFusion and a bump
+moves all four pins together.
 
 **The whole database comes through, and nothing is declared per table.** Connect enumerates every
 schema the role can see and every relation in them — one round trip against `pg_class`, filtered
@@ -562,7 +564,7 @@ behind a remote relation's provider, and nothing else.
 Strata owns, and the schema provider refuses a registration in its own words underneath that.
 
 Verified end to end against a real PostgreSQL in
-`crates/strata-core/tests/postgres_federation.rs`.
+`crates/strata-engine/tests/postgres_federation.rs`.
 
 ## Tables over a connection
 
@@ -642,7 +644,7 @@ carrying their folder's values, and a filter on a partition column takes DataFus
 path through the same store.
 
 The whole arm is proven against a real MinIO in
-`crates/strata-core/tests/object_store_minio.rs` — deliberately not `#[ignore]`d, because it is
+`crates/strata-engine/tests/object_store_minio.rs` — deliberately not `#[ignore]`d, because it is
 the only thing that would catch a regression in the S3 credential bridge (see CLAUDE.md for the
 container-runtime requirement).
 

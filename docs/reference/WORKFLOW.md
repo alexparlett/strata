@@ -77,8 +77,13 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
     `sccache --stop-server` unwedges it immediately.
 
   With both in place the fresh-worktree floor is ~4 min, two-thirds of it the serial tail
-  `strata-core` → `strata-freya` + link — a fact about crate structure, not caching, and not
-  worth restructuring over at this size.
+  `strata-core` → `strata-engine` → `strata-freya` + link — a fact about crate structure, not
+  caching. That tail grew a link when the engine was split out of `strata-core`, and the entry
+  here used to say the structure was not worth changing *at that size*; the split was taken on
+  the **boundary** rather than on build time (the DataFusion-free half is now a crate that
+  cannot reach for DataFusion, instead of a rule saying it must not). The build-time effect is
+  real but secondary: an edit to config, keymap, theme, secrets or project persistence now
+  recompiles a ~13 s crate with no DataFusion in its graph, and only then the engine.
 
 ## Git, worktrees, and verification
 
@@ -93,6 +98,17 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   stopped being how anyone reads the crate once it grew to ~2x upstream's size with `completion.rs`
   having no upstream counterpart at all. What is still tracked is upstream's *changes*, read as fork
   commits. `crates/freya` stays out, unchanged.
+- **A crate manifest declares; it does not explain.** No rationale comments in any
+  `crates/*/Cargo.toml`. The manifests had grown long why-essays per dependency — the DataFusion
+  lockstep set, `properties-config`'s invisible-runtime failure, the reqwest 0.12-vs-0.13 split,
+  why each integration-test fixture uses a deliberately different client. Every one of those facts
+  is a *design* fact, and every one of them was also written down in `docs/` where the surrounding
+  reasoning lives; keeping both meant two copies to keep true, and the manifest copy is the one
+  nobody greps and nobody updates. Docs are now the single home: state the reason there and let the
+  manifest be a list of versions and features. If a fact has no home in `docs/`, that is the signal
+  to write the doc entry, not to comment the manifest. The root `Cargo.toml` is the one exception —
+  its `[workspace.lints]` annotations say why a given lint is on or demoted, which is the reasoning
+  AGENTS.md §7 requires when the set changes and which has no other home.
 - **Build + `schema_in_sync` is the check.** After any theme change:
   `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync` (the committed
   `themes/theme.schema.json` must match `theme.rs`'s `REGISTRY`). Sandboxes that can't build verify
@@ -311,7 +327,7 @@ path** — edits are picked up on the next `cargo build`, no push needed locally
   Everything the shared container worker forces on a job — the repo-wide queue below, the cloud
   agent, the release step, the capacity retry — was being paid for by the whole suite, when two
   test files need it. So the workflow is two jobs. `containers` keeps the apparatus and runs
-  `cargo test -p strata-core --locked --test object_store_minio --test postgres_federation`: the
+  `cargo test -p strata-engine --locked --test object_store_minio --test postgres_federation`: the
   **binaries entire**, because those two files are the only ones in the workspace that mention
   testcontainers, so drawing the line at the test target means a test added to either is covered
   without a workflow edit. One invocation, so the two share a build and a cloud session rather

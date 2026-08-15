@@ -65,7 +65,7 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 **Engine, query, results**
 
 - **The engine is a direct-call async facade.** No UI-side runtime, channels, request ids, or
-  router. DataFusion is touched **only** in `strata-core`.
+  router. DataFusion is touched **only** in `strata-engine`.
 - **Results are freya-query off the tab's SQL.** The store holds specs, never results. A Run
   subscription is built **only** through `QuerySpec::query`; cache-entry lifetime is subscriber
   presence, held for background tabs by the request keepers. Never manage entry lifetime imperatively.
@@ -856,6 +856,11 @@ Full text: [docs/reference/WORKFLOW.md](docs/reference/WORKFLOW.md).
 - **Formatting is the `fmt` skill, never `cargo fmt --all`** — `--all` includes local path deps, so
   it reformats the fork (measured once: 344 files, 4006 deletions, none intended, and invisible in
   `git submodule status`).
+- **A crate manifest declares; it does not explain.** No rationale comments in any
+  `crates/*/Cargo.toml` — a dependency's *why* (a version lockstep, a feature that is load-bearing,
+  a deliberate second HTTP stack) goes in `docs/` where it is read, greppable and kept true beside
+  the rest of the reasoning. The root `Cargo.toml` is the exception: its `[workspace.lints]`
+  annotations stay, because a lint's justification has nowhere else to live.
 - **Every worktree builds into its own `target/`; the machine-wide cache is sccache, never a
   shared `CARGO_TARGET_DIR`** — the shared dir serialized sessions on cargo's build lock and
   accumulated 335 GB; the dev profile's `debug = "line-tables-only"` is part of the same decision.

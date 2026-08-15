@@ -30,9 +30,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use freya::radio::RadioChannel;
-use strata_core::engine::{fold_ident, TableMeta, ViewMeta};
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
-use strata_core::register::view_order;
+use strata_engine::register::view_order;
+use strata_engine::{fold_ident, TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColumnInfo, ConnectionDef, Provider, SavedQuery, TableDef, ViewDef,
 };

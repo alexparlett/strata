@@ -1,0 +1,38 @@
+[package]
+name = "strata-engine"
+version = "0.2.0"
+edition = "2021"
+description = "Strata's DataFusion boundary: the direct-call async `Engine` facade, the statement router, snapshots, export, profiling, the SQL language service and the project registration pass. The only crate that touches DataFusion."
+license = "MIT"
+
+[dependencies]
+strata-core = { path = "../strata-core" }
+strata-model = { path = "../strata-model" }
+datafusion = "54"
+datafusion-functions-json = "0.54"
+datafusion-federation = { version = "0.5.5", features = ["sql"] }
+datafusion-table-providers-postgres = "0.13"
+datafusion-table-providers-common = "0.13"
+secrecy = "0.10"
+object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = "1"
+aws-types = "1"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+chrono = "0.4"
+tracing = "0.1.44"
+
+[dev-dependencies]
+testcontainers = { version = "0.27", features = ["properties-config"] }
+testcontainers-modules = { version = "0.15", features = ["minio", "postgres"] }
+tokio-postgres = "0.7"
+aws-sdk-s3 = "1"
+flate2 = "1"
+keyring-core = "1"
+
+[lints]
+workspace = true

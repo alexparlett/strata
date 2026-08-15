@@ -12,8 +12,8 @@ Raw toggle. The view does no unit math; every number arrives with a ready-to-pri
 
 Code lives in two places:
 
-- **Engine:** `crates/strata-core/src/engine/plan/` (the model — `tree.rs`, `metrics.rs`,
-  `detail.rs`, `sql.rs`, `fmt.rs`) and `crates/strata-core/src/engine/explain.rs` (the walk).
+- **Engine:** `crates/strata-engine/src/plan/` (the model — `tree.rs`, `metrics.rs`,
+  `detail.rs`, `sql.rs`, `fmt.rs`) and `crates/strata-engine/src/explain.rs` (the walk).
 - **View:** `crates/strata-freya/src/apps/project/views/workbench/results/explain_plan/`
   (`mod.rs` shell + toolbar, `node.rs` the card, `palette.rs` colour resolution).
 
@@ -65,7 +65,7 @@ sequenceDiagram
 
 ## 2. The data model
 
-All types are in `strata_core::engine::plan` (re-exported from `plan/mod.rs`), with no DataFusion
+All types are in `strata_engine::plan` (re-exported from `plan/mod.rs`), with no DataFusion
 dependency — the view links against the model, never the planner.
 
 ### `QueryPlan` (`plan/tree.rs`)

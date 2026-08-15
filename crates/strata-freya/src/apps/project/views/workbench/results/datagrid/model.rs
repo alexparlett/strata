@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use freya::prelude::*;
-use strata_core::engine::RecordBatch;
+use strata_engine::RecordBatch;
 use strata_model::{Cell, ColumnInfo, Kind, QueryOutput};
 
 use super::DataGridTheme;

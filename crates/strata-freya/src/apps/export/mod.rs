@@ -31,7 +31,7 @@ use freya::prelude::*;
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
-use strata_core::engine::SnapshotPin;
+use strata_engine::SnapshotPin;
 
 use crate::apps::export::views::{ExportBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;

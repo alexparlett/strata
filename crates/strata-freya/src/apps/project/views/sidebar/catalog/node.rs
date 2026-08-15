@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 
 use freya::components::Disclosure;
-use strata_core::engine::Engine;
+use strata_engine::Engine;
 use strata_model::{CatalogKind, ColOwner, ConnectionDef, RemoteRef};
 use uuid::Uuid;
 
@@ -218,7 +218,7 @@ pub struct Remote {
     /// `catalog.schema.relation` in the plain segments — a tab title, never SQL.
     pub label: String,
     /// `catalog.schema.relation` rendered by
-    /// [`sql::qualified`](strata_core::engine::sql::qualified), ready to interpolate into a
+    /// [`sql::qualified`](strata_engine::sql::qualified), ready to interpolate into a
     /// statement.
     pub address: String,
     pub view: bool,

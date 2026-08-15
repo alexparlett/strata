@@ -9,7 +9,7 @@
 //!
 //! Pure functions over strings and picks — no Freya types, so the golden tests read as SQL.
 
-use strata_core::engine::export::quote_col;
+use strata_engine::export::quote_col;
 use strata_model::ChartRole;
 
 /// The aggregate a measure row offers — rendered to DataFusion's own function names.

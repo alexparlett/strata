@@ -9197,6 +9197,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-core",
+ "strata-engine",
  "strata-model",
  "tokio",
  "tokio-util",
@@ -9235,6 +9236,26 @@ version = "0.2.0"
 dependencies = [
  "app_dirs2",
  "apple-native-keyring-store",
+ "chrono",
+ "keyring-core",
+ "preferences",
+ "reqwest 0.12.28",
+ "semver",
+ "serde",
+ "serde_json",
+ "strata-model",
+ "tokio",
+ "tracing",
+ "uuid",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
+ "zeroize",
+]
+
+[[package]]
+name = "strata-engine"
+version = "0.2.0"
+dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
@@ -9250,23 +9271,16 @@ dependencies = [
  "futures",
  "keyring-core",
  "object_store",
- "preferences",
  "regex",
- "reqwest 0.12.28",
  "secrecy",
- "semver",
- "serde",
  "serde_json",
+ "strata-core",
  "strata-model",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
  "tokio-postgres",
  "tracing",
- "uuid",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
- "zeroize",
 ]
 
 [[package]]
@@ -9286,6 +9300,7 @@ dependencies = [
  "strata-code-editor",
  "strata-command-macro",
  "strata-core",
+ "strata-engine",
  "strata-model",
  "tokio",
  "tracing",

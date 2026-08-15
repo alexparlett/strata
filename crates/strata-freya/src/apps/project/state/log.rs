@@ -32,9 +32,9 @@ use freya::prelude::{
 use freya::query::{QueryStateData, UseQuery};
 
 use crate::apps::project::query::{QueryOutcome, RunQuery};
-use strata_core::engine::{stopped_on_purpose, CANCELLED};
 use strata_core::util::fmt_int;
 use strata_core::util::now_hms;
+use strata_engine::{stopped_on_purpose, CANCELLED};
 
 /// How many events are kept, newest-first. The log is a scrollback, not an audit trail — old
 /// enough to answer "what did the scan say", short enough that it can't grow without bound in a
@@ -208,7 +208,7 @@ fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strata_core::engine::{SUPERSEDED_RUN, SUPERSEDED_SCAN};
+    use strata_engine::{SUPERSEDED_RUN, SUPERSEDED_SCAN};
 
     /// Newest first, and bounded: the log is a scrollback, so the oldest event is what goes.
     #[test]

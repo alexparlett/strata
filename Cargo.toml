@@ -1,12 +1,14 @@
 [workspace]
 # Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core
-# crates, the vendored editor (`strata-code-editor`), agent access (`strata-agent`) and the
+# crates (`strata-core`, the DataFusion boundary `strata-engine`, the leaf `strata-model`), the
+# vendored editor (`strata-code-editor`), agent access (`strata-agent`) and the
 # command-palette proc macro (`strata-command-macro`). The Freya fork (`crates/freya`) is
 # excluded but resolved by local path — see docs/ARCHITECTURE.md.
 members = [
     "crates/strata-freya",
     "crates/strata-model",
     "crates/strata-core",
+    "crates/strata-engine",
     "crates/strata-code-editor",
     "crates/strata-command-macro",
     "crates/strata-agent",

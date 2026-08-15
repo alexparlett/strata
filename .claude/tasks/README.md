@@ -39,7 +39,7 @@ deciding something there is a bug.
   `docs/reference/SETTLED_TASKS.md`.
 - **The core logic survives.** The DataFusion engine (now a direct-call async facade), the SQL
   language service (`sql`), `serialize`, `plan`, `profile`, view-deps/validity, config, and
-  `.strata` persistence all live in **`strata-core`/`strata-model`** and are done. So most
+  `.strata` persistence all live in **`strata-engine`/`strata-core`/`strata-model`** and are done. So most
   remaining Freya work is **UI + wiring**, not rebuilding logic. A task tagged `[core ✓]` means
   "the hard logic exists; build the Freya surface and wire it."
 - **Freya has been a slow, learn-as-we-go build** (the datagrid alone — hover, selection, resize,
@@ -54,7 +54,8 @@ deciding something there is a bug.
 - 🟡 **partial** — some of it works; specifics in the task.
 - ⬜ **todo** — not started in Freya.
 - ➡ **graduated** — the task moved to its own workstream; its file is the pointer.
-- `[core ✓]` — the underlying logic already exists in `strata-core`; only Freya UI/wiring remains.
+- `[core ✓]` — the underlying logic already exists in the core crates (`strata-engine` for
+  engine work, `strata-core` for app services); only Freya UI/wiring remains.
 
 ## Where we are
 
@@ -95,7 +96,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   `docs/reference/SETTLED_TASKS.md`.
 - **Polymorphic JSON** (WJ) — ✅ **done, folder removed**: the Postgres-style JSON accessors
   (WJ-01) and the union-tolerant `FileFormat` (WJ-02, `engine::json_poly`). Entirely
-  `strata-core`; no UI surface of its own.
+  `strata-engine`; no UI surface of its own.
 - **Agent access** (`workstream-agent-access/`, folder removed — settled record in
   `docs/reference/SETTLED_TASKS.md`; AA) —
   agent-driven access to a project's data: one read-only tool vocabulary (`strata-agent`) over a
@@ -273,7 +274,7 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   directly like `read_page` rather than through `Host`, and composes a spec for
   `Engine::export` rather than being a second export; `run`'s policy is untouched. QE-06 lands
   the guidance + workaround spellings where the model reads them. Two follow-ons were planned 2026-08-14 out of QE-03's review plus a probe of the
-  real 62 MB fixture: **QE-07** (the schema bound as a shared `strata-core` mechanism, the
+  real 62 MB fixture: **QE-07** (the schema bound as a shared `strata-engine` mechanism, the
   describe ladder's depth derived rather than pinned, elided-shape counts, and the permanent
   hand-run probe — with the record-vs-map question measured closed) and **QE-08** (the
   catalog pane's cap + collapse rows, fixing the window-freezing `contentBlocks` expand —

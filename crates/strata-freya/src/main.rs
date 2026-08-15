@@ -17,9 +17,9 @@ use freya::prelude::*;
 use strata_agent::assistant::Assistant;
 use strata_agent::serve_stdio;
 use strata_core::config::AppConfig;
-use strata_core::engine::purge_snapshot_root;
 use strata_core::project as project_io;
 use strata_core::secret::open_keystore;
+use strata_engine::purge_snapshot_root;
 use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::agent::create_global_agent;

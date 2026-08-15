@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use strata_core::engine::plan::as_explain;
-use strata_core::engine::{Engine, RunTag, WsId};
+use strata_engine::plan::as_explain;
+use strata_engine::{Engine, RunTag, WsId};
 
 use crate::error::AgentError;
 use crate::host::{

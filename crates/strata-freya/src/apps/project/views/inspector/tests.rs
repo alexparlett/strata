@@ -16,9 +16,9 @@ use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use futures::executor::block_on;
-use strata_core::engine::{column_info, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
+use strata_engine::{column_info, TableMeta, TableSpec, ViewMeta};
 use strata_model::{
     ColRef, ColumnInfo, RemoteRef, SourceFormat, Stat, StatKey, TableDef, TableOrigin, ViewDef,
 };

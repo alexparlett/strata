@@ -12,7 +12,7 @@ changed" from "Postgres exists".
 
 ## Current state (verified 2026-08-13, corrected in review)
 
-- `build_context` (`crates/strata-core/src/engine/mod.rs:1784`) does **not** use
+- `build_context` (`crates/strata-engine/src/mod.rs:1784`) does **not** use
   `SessionStateBuilder`: it builds via `SessionContext::new_with_config_rt(config, rt)`
   (mod.rs:1813-1822), registers `StrataCatalogProvider` on the *context* (mod.rs:1828,
   displacing the `MemoryCatalogProvider` registered under the same name), runs
@@ -41,9 +41,9 @@ changed" from "Postgres exists".
 ## Build
 
 1. **Dependency** — `datafusion-federation = { version = "0.5.5", features = ["sql"] }` in
-   `strata-core/Cargo.toml`, with a why-comment stating the lockstep rule: *federation, the
-   table-providers crates, arrow and datafusion cross one type boundary and are bumped together
-   with the `datafusion` pin* (the `sql` feature is what DB-02's providers need; declaring it
+   `strata-engine/Cargo.toml`. The lockstep rule — *federation, the table-providers crates,
+   arrow and datafusion cross one type boundary and are bumped together with the `datafusion`
+   pin* — is recorded in `docs/CONNECTIONS_SPEC.md`, not in the manifest (the `sql` feature is what DB-02's providers need; declaring it
    here keeps the manifest edit in one task).
 2. **`build_context`** — restructure onto `SessionStateBuilder` (the Current state above is
    the checklist of what must survive the move byte-for-byte: config, runtime env, default
@@ -67,7 +67,7 @@ changed" from "Postgres exists".
 
 ## Files
 
-`crates/strata-core/Cargo.toml` · `crates/strata-core/src/engine/mod.rs` (`build_context`).
+`crates/strata-core/Cargo.toml` · `crates/strata-engine/src/mod.rs` (`build_context`).
 Reference: `datafusion-federation/src/lib.rs` (`default_optimizer_rules`,
 `FederatedQueryPlanner`), its `examples/df-csv-advanced.rs` for the non-sugar builder form.
 

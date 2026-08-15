@@ -41,8 +41,8 @@ use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 use freya::query::{use_query, QueryStateData};
 use freya::radio::use_radio;
-use strata_core::engine::config::display_subset;
 use strata_core::util::fmt_int;
+use strata_engine::config::display_subset;
 use strata_model::{
     CapUnit, ChartData, ChartMark, ChartQuery, ChartSeries, ColumnInfo, SnapshotId, TabId,
 };
@@ -1039,7 +1039,7 @@ mod tests {
         use datafusion::arrow::datatypes::{DataType, Field};
         use freya::radio::RadioStation;
         use freya_testing::TestingRunner;
-        use strata_core::engine::column_info;
+        use strata_engine::column_info;
         use strata_model::{ChartConfig, Origin};
 
         use super::strip::ControlStrip;

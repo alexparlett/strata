@@ -111,10 +111,10 @@ lands on the membership refusal, naming a connection the project does not have.
 
 ## Files
 
-`crates/strata-core/src/engine/ddl/{mod,tables,views,external}.rs` ·
-`crates/strata-core/src/engine/{providers,query,catalog,db,mod}.rs` ·
-`crates/strata-core/src/engine/sql/validate.rs` ·
-`crates/strata-core/tests/postgres_federation.rs` ·
+`crates/strata-engine/src/ddl/{mod,tables,views,external}.rs` ·
+`crates/strata-engine/src/{providers,query,catalog,db,mod}.rs` ·
+`crates/strata-engine/src/sql/validate.rs` ·
+`crates/strata-engine/tests/postgres_federation.rs` ·
 `crates/strata-agent/src/{host,tools,wire,describe}.rs` ·
 `crates/strata-freya/src/apps/project/state/{project,agent}.rs` ·
 `docs/STATEMENTS_SPEC.md`, `docs/AGENT_ACCESS_SPEC.md`.

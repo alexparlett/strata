@@ -6,24 +6,16 @@ description = "Strata's owned code-editor surface — vendored from freya-code-e
 license = "MIT"
 
 [dependencies]
-# The freya sibling crates, from the same fork git source as the `freya` umbrella (root
-# `[workspace.dependencies]`) — so there is exactly one `freya-edit` / `freya-core` in the graph and
-# `CodeEditorData: TextEditor` lines up.
 freya-core = { workspace = true }
 freya-engine = { workspace = true }
 freya-edit = { workspace = true }
 freya-components = { workspace = true }
 torin = { workspace = true }
 
-# Kept at the versions the fork's own `freya-code-editor` resolves to, so the vendored copy and
-# upstream share one `rustc-hash` / `ropey` / `tree-sitter` in the graph rather than duplicating a
-# major.
 ropey = "1.6"
 smallvec = "1.15"
 tree-sitter = "0.26"
 rustc-hash = "2.1"
 
-# The workspace lint policy (root `Cargo.toml` `[workspace.lints]`, thresholds in
-# `clippy.toml`). Every member inherits the same set — CI denies it.
 [lints]
 workspace = true

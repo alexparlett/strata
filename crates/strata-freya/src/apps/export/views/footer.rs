@@ -25,7 +25,7 @@ use crate::components::metrics::ACTION_HEIGHT;
 use crate::components::metrics::{SP_4, SP_5};
 use crate::components::tones::tones;
 use crate::components::typography::{Control, Path};
-use strata_core::engine::stopped_on_purpose;
+use strata_engine::stopped_on_purpose;
 
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
 const FOOTER_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);

@@ -20,8 +20,8 @@
 use std::time::Duration;
 
 use freya::query::{use_query, Captured, Query, QueryCapability, UseQuery};
-use strata_core::engine::profile::{CatalogProfile, Profiled};
-use strata_core::engine::sql::qualified;
+use strata_engine::profile::{CatalogProfile, Profiled};
+use strata_engine::sql::qualified;
 use strata_model::{CatalogKind, RemoteRef};
 use uuid::Uuid;
 
@@ -66,7 +66,7 @@ pub enum ProfileTarget {
 }
 
 impl ProfileTarget {
-    /// The name handed to [`Engine::profile`](strata_core::engine::Engine::profile) — a workspace
+    /// The name handed to [`Engine::profile`](strata_engine::Engine::profile) — a workspace
     /// entry's own name, or a remote relation's three segments rendered by the case-preserving
     /// renderer, which is the spelling the server resolves.
     ///
@@ -169,7 +169,7 @@ pub fn use_profile(
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use strata_core::engine::TableSpec;
+    use strata_engine::TableSpec;
     use strata_model::{SourceFormat, StatKey};
 
     use super::*;

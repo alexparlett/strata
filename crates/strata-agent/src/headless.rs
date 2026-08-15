@@ -33,10 +33,10 @@ use std::sync::{Arc, Mutex};
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 use strata_core::config::Settings;
-use strata_core::engine::plan::as_explain;
-use strata_core::engine::{Engine, RunTag, WsId};
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
-use strata_core::register::{register_project, RegOutcome};
+use strata_engine::plan::as_explain;
+use strata_engine::register::{register_project, RegOutcome};
+use strata_engine::{Engine, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::error::AgentError;
@@ -90,7 +90,7 @@ impl HeadlessHost {
     /// over it.
     ///
     /// The pass runs to completion **before** anything is served, which is what lets this host
-    /// ignore the registration window `strata_core::register` warns about: there is no second pass
+    /// ignore the registration window `strata_engine::register` warns about: there is no second pass
     /// to race here.
     ///
     /// `Err` only for a project that cannot be read. A *def* the engine refused is not an error: it

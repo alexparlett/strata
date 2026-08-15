@@ -35,7 +35,7 @@ use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
-use strata_core::engine::MAX_BINS;
+use strata_engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
@@ -1042,8 +1042,8 @@ mod tests {
     use freya::radio::RadioStation;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
     use freya_testing::TestingRunner;
-    use strata_core::engine::column_info;
     use strata_core::theme::load;
+    use strata_engine::column_info;
     use strata_model::{Axis, ChartData, ChartSeries, ColumnInfo, Origin};
 
     use super::super::config::resolve;

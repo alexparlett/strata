@@ -13,8 +13,8 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use freya::prelude::*;
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
-use strata_core::engine::column_info;
 use strata_core::theme::load;
+use strata_engine::column_info;
 use strata_model::{
     Axis, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartSeries, ColumnInfo, TabId,
 };

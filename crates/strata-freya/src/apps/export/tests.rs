@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use futures::executor::block_on;
-use strata_core::engine::export::Compression;
-use strata_core::engine::{column_info, Engine, RunTag, WsId};
+use strata_engine::export::Compression;
+use strata_engine::{column_info, Engine, RunTag, WsId};
 use strata_model::{Cell, ColumnInfo, SnapshotId};
 
 use super::model::{

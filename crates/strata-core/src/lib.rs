@@ -1,16 +1,12 @@
-//! Strata's framework-agnostic **logic core** — everything the app reasons *with*, below any UI
-//! framework. Depends *down* onto `strata-model`, the data vocabulary.
+//! Strata's framework-agnostic **app core** — the services the app reasons *with*, below any UI
+//! framework and clear of DataFusion. Depends *down* onto `strata-model`, the data vocabulary;
+//! the engine is `strata-engine`, which depends *up* onto this crate and never the reverse.
 //!
-//! - [`sql`] — the SQL language service (lex / context / symbols / validate / complete).
 //! - [`util`] — shared helpers, plus the crash-safe write every persisted file goes through.
-//! - [`plan`] — the query-plan (EXPLAIN) model + formatting.
 //! - [`config`] — disk app config + settings/keymap definitions.
+//! - [`keymap`] — the command table and chord resolution, settings-driven.
+//! - [`theme`] — the theme data model: the role vocabulary, the built-ins, schema generation.
 //! - [`project`] — `.strata/` project persistence (the durable catalog defs).
-//! - [`profile`] — the profiling scan logic (aggregate exprs + result decode).
-//! - [`engine`] — the DataFusion boundary: the direct-call async [`engine::Engine`] facade and its
-//!   snapshot lifecycle.
-//! - [`register`] — the project registration pass, shared by the app's catalog passes and by
-//!   headless hosts.
 //! - [`secret`] — the OS-keystore secret store: config holds a reference, never the secret.
 //! - [`ai`] — the assistant's configuration vocabulary: the persisted tokens only, since the
 //!   provider *table* is `strata-agent`'s, next to the `genai` pin it is verified against.
@@ -19,15 +15,11 @@
 //! - [`update`] — the in-app updater's mechanism. Window-free and blocking, like the listings
 //!   fetch.
 
-use engine::profile;
-
 pub mod ai;
 pub mod config;
-pub mod engine;
 pub mod keymap;
 pub mod models;
 pub mod project;
-pub mod register;
 pub mod secret;
 pub mod theme;
 pub mod update;

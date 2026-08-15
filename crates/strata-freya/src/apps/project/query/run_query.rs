@@ -21,8 +21,8 @@
 use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
-use strata_core::engine::plan::{as_explain, QueryPlan};
-use strata_core::engine::{RecordBatch, RunOutcome, RunTag, StatementReport};
+use strata_engine::plan::{as_explain, QueryPlan};
+use strata_engine::{RecordBatch, RunOutcome, RunTag, StatementReport};
 use strata_model::{Cell, QueryOutput, SnapshotId};
 use uuid::Uuid;
 
@@ -196,7 +196,7 @@ impl QueryCapability for FetchSnapshotPage {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use strata_core::engine::sql::Blocked;
+    use strata_engine::sql::Blocked;
 
     use super::*;
 

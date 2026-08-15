@@ -8,7 +8,7 @@
 //! format-agnostic. Gating it would hide a def's own stored columns the moment its format
 //! changed.
 //!
-//! The columns themselves are **found, not guessed** (`strata_core::engine::detect_partitions`):
+//! The columns themselves are **found, not guessed** (`strata_engine::detect_partitions`):
 //! the paths are read for `key=` segments they name, and a directory is walked for the
 //! `key=value` folders under it. The canvas says the section found them, so it has to have
 //! looked.

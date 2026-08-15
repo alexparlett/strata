@@ -75,6 +75,6 @@ own table" cannot both hold at once. Whatever this task builds is a *switch*, no
 
 ## Files
 
-`crates/strata-core/src/engine/{providers.rs, config.rs, ddl/session.rs, mod.rs}` ·
+`crates/strata-engine/src/{providers.rs, config.rs, ddl/session.rs, mod.rs}` ·
 `crates/strata-freya/src/apps/project/views/` (the tree gesture and the status bar) ·
 `docs/CONNECTIONS_SPEC.md`, `docs/STATEMENTS_SPEC.md`.

@@ -19,7 +19,7 @@
 //! a column that vanishes from one result and returns in the next must bring the user's
 //! choice back with it, and a config the surface silently rewrote could not do that.
 
-use strata_core::engine::MAX_BINS;
+use strata_engine::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartQuery, ChartRole, ChartSort, ChartX, ColumnInfo};
 
 /// How many result rows the renderer-first read will draw before it refuses (spec §7).
@@ -585,7 +585,7 @@ fn plural(n: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-    use strata_core::engine::column_info;
+    use strata_engine::column_info;
 
     use super::*;
 

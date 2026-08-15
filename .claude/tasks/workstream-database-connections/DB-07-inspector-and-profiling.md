@@ -228,6 +228,6 @@ beat later — or fails, where it is recorded and never asked for.
 `crates/strata-model/src/catalog.rs` (`ColRef`/selection widening) ·
 `crates/strata-freya/src/apps/project/` (inspector views, `dialogs/profile_confirm.rs`'s
 `ProfileTarget` generalization, the window-side request satellite) ·
-`crates/strata-core/src/engine/{profile.rs (remote expression set + qualified rendering),
-catalog.rs, db.rs (`reltuples`)}` · `crates/strata-core/tests/postgres_federation.rs` (the
+`crates/strata-engine/src/{profile.rs (remote expression set + qualified rendering),
+catalog.rs, db.rs (`reltuples`)}` · `crates/strata-engine/tests/postgres_federation.rs` (the
 profile EXPLAIN phase) · `docs/reference/INVARIANTS.md`.

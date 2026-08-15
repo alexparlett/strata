@@ -1,5 +1,5 @@
 use freya::prelude::*;
-use strata_core::engine::sql::StmtKind;
+use strata_engine::sql::StmtKind;
 
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{R_2, SP_4, SP_6};

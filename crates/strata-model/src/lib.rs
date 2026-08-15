@@ -3,7 +3,7 @@
 //!
 //! A leaf module depending on nothing app-specific, so `engine`, `profile`, `project` and the UI
 //! all depend *down* onto one vocabulary. The engine's *protocol* (`TableSpec`, `TableMeta`) stays
-//! in `strata_core::engine`: that is the engine's wire format, not shared vocabulary.
+//! in `strata_engine`: that is the engine's wire format, not shared vocabulary.
 
 mod catalog;
 mod chart;

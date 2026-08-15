@@ -81,7 +81,7 @@ what the first draft of this task put on the Connections pane.
   the URL clash, exactly as this task's Build says.
 - `address_label` / `address_noun` answer `SERVER` / `server`, and `set_address` strips a pasted
   scheme like every non-HTTP provider. `note()` has the keystore sentence.
-- The password funnel is `strata_core::secret`: `SecretRef::derived(strata_core::engine::db::PG_PASSWORD,
+- The password funnel is `strata_core::secret`: `SecretRef::derived(strata_engine::db::PG_PASSWORD,
   &def.url())` for put/get/delete, and **`secret::migrate_derived(&old, &new)`** for an identity
   move (address or user), which is built and is the one place that ordering lives. There is no
   `forget_derived` — a Forget is `SecretRef::derived(…).delete()`, which already tolerates absence.

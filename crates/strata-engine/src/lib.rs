@@ -1,0 +1,3788 @@
+//! The DataFusion engine — a **direct-call async facade** over a runtime it owns.
+//!
+//! This crate is the workspace's **one DataFusion boundary**: nothing else names DataFusion or
+//! Arrow (`strata-freya` carries a dev-dependency so a test can build a fixture, and that is
+//! all). It sits on `strata-core`, whose services it reads — `util`, `project` and `secret` —
+//! and never the other way round.
+//!
+//! Beside the facade live [`sql`] (the language service: validation, completion, symbols),
+//! [`plan`] (the DataFusion-free EXPLAIN model the UI renders), [`profile`] (a catalog entry's
+//! column statistics) and [`register`] (the project registration pass: connect, register tables,
+//! create views).
+//!
+//! [`Engine`] holds the `SessionContext` plus a private multi-thread Tokio runtime: every call
+//! spawns its work onto that runtime and awaits the `JoinHandle`, which is executor-agnostic — so
+//! Freya's non-Tokio UI executor awaits engine calls directly while DataFusion's own parallelism
+//! runs on the engine's threads and never on the render thread.
+//!
+//! **Pagination is bounded memory.** Each query executes **once** and its full result spools to an
+//! immutable on-disk **Arrow IPC snapshot** keyed by [`SnapshotId`] (`docs/SNAPSHOT_SPEC.md`); every
+//! page is a bounded `LIMIT/OFFSET` read of it, so RAM holds one page and no query is recomputed.
+//! The engine owns the snapshot **lifecycle** too: a re-run for the same workspace retires the
+//! previous snapshot at dispatch, cancel and cleanup retire partials, and dropping the engine
+//! clears its whole snapshot directory.
+//!
+//! Profiling ([`Engine::profile`]) is the third thing tracked beside runs and snapshots: one full
+//! scan per catalog entry, keyed by the entry rather than by a workspace, because a profile is a
+//! property of the *data* and not of any tab.
+//!
+//! The underlying logic lives in the sibling modules (`query`, `explain`, `catalog`, `export`,
+//! `profile`) as plain async functions over `&SessionContext`.
+
+mod arrow_stats;
+mod catalog;
+mod chart;
+pub mod config;
+/// The all-or-nothing contract a connection registers under, shared by [`store`] and [`db`].
+mod connect;
+/// `pub` for the surfaces that read a live database's shape — the data-sources tree, the schema
+/// picker and completion all go through [`Engine::db_listing`], whose vocabulary is here.
+pub mod db;
+mod ddl;
+mod explain;
+pub mod export;
+mod functions;
+pub mod json_poly;
+pub mod plan;
+pub mod profile;
+mod providers;
+mod query;
+pub mod register;
+pub mod serialize;
+pub mod sql;
+/// `pub` for the connection editor, which offers the client options this module knows how to
+/// apply ([`store::CLIENT_KEYS`]) and refuses the ones it does not ([`store::check_client_config`])
+/// — the same call `connect` makes, so a form and the store cannot disagree about an option.
+pub mod store;
+mod udfs;
+pub mod value_tree;
+
+/// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
+/// from an Arrow field in exactly one place, and anything building a column — a fixture
+/// included — should go through it rather than hand-writing a row whose `kind` and `role` are
+/// then a second opinion about the same type.
+pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
+/// The bin cap the histogram read clamps to — `pub` so the control offering a bin count is
+/// bounded by the same number rather than a second copy of it.
+pub use chart::MAX_BINS;
+/// What a surface can be told about one relation inside a database connection's catalog
+/// ([`Engine::describe_remote`]) — beside `TableMeta` because it answers the same question for
+/// the kind of source that has no def.
+pub use db::RemoteRelation;
+/// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
+/// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
+/// (ED-05) — the catalog's confirm says before the fact what the report says after it.
+pub use ddl::{
+    drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
+};
+pub use query::purge_snapshot_root;
+
+use sql::{PolicyRefusal, Verdict};
+
+/// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
+/// re-exported so frontends can name it without their own DataFusion dependency (this
+/// crate is the one DataFusion boundary).
+pub use datafusion::arrow::record_batch::RecordBatch;
+
+/// The Arrow schema type, re-exported for the same reason — code (and tests) holding a
+/// [`RecordBatch`] sometimes needs to name its schema.
+pub use datafusion::arrow::datatypes::Schema;
+
+/// A call the caller (or the app on their behalf) **stopped**: [`Engine::cancel`] aborted it, or
+/// [`Engine::cancel_profile`] did.
+pub const CANCELLED: &str = "cancelled";
+/// A run that finished but was no longer the latest dispatch for its workspace — a newer press
+/// replaced it, so its result is discarded and its snapshot retired ([`Engine::query`]).
+pub const SUPERSEDED_RUN: &str = "superseded by a newer run";
+/// The scan equivalent: a re-scan replaced this one ([`Engine::profile`]).
+pub const SUPERSEDED_SCAN: &str = "superseded by a newer scan";
+
+/// Did this `Err` mean the call was **stopped**, rather than that it *failed*?
+///
+/// The three strings above are one concept with three causes, and the distinction matters at every
+/// surface that shows a settled error: a stopped call is news the user already has (they cancelled,
+/// or they pressed Run again), so it must never be presented as a fault.
+///
+/// **A named predicate rather than a literal at each call site**, because the consumers used to
+/// match the engine's own prose: `state::log::run_event` compared against `"cancelled"` (and so
+/// mapped a *supersede* to a red `Error` row reading "superseded by a newer run"), while the
+/// inspector's scan zone did `== "cancelled" || starts_with("superseded")`. Two copies of one rule,
+/// each able to drift from the strings this module actually produces — and one of them already had.
+pub fn stopped_on_purpose(error: &str) -> bool {
+    matches!(error, CANCELLED | SUPERSEDED_RUN | SUPERSEDED_SCAN)
+}
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fs::{self, File};
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Instant;
+
+use datafusion::common::TableReference;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
+use datafusion::logical_expr::{ScalarUDF, TableType};
+use datafusion::prelude::*;
+use datafusion_federation::{default_optimizer_rules, FederatedQueryPlanner};
+use tokio::runtime::{Builder, Runtime};
+use tokio::task::AbortHandle;
+
+use crate::plan::QueryPlan;
+use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
+use db::Databases;
+use ddl::StrataFunctionFactory;
+use functions::Functions;
+use providers::{StrataCatalogList, StrataCatalogProvider};
+use query::{
+    claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
+    ReadPolicy,
+};
+use sql::{DatabaseSym, FunctionCatalog, PreparedSym, RelationSym, SchemaSym};
+use strata_model::{
+    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, PgPassword, Provider, QueryOutput,
+    SnapshotId, TabId, Trend,
+};
+
+/// A workspace's stable identity — the query tab that owns a run and its current
+/// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
+/// **native** tab id (the Freya `TabId` is a Uuid → `as_u128`) rather than
+/// maintaining a parallel one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct WsId(pub u128);
+
+impl From<TabId> for WsId {
+    /// A tab *is* an engine workspace — its `Uuid` widened to the `u128` key.
+    fn from(tab: TabId) -> Self {
+        WsId(tab.0.as_u128())
+    }
+}
+
+/// One dispatched run's identity **as the UI knows it** — the per-press nonce
+/// (`QuerySpec::run`), passed down so [`Engine::cancel`] can tell "still this run" from
+/// "a newer run replaced it" without a parallel request-id scheme.
+///
+/// It is the *caller's* nonce, so it is not unique here: the same tag can legitimately be
+/// dispatched twice (freya-query re-runs an entry when a subscriber remounts while it is
+/// still in flight). Engine-side lifecycle therefore keys on `InFlight::dispatch`, not on
+/// this — see [`Engine::query`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct RunTag(pub u128);
+
+/// What a **Run** settled to ([`Engine::run`], ED-02) — the two things a press can produce.
+///
+/// The split is the router's, not a mode the caller picks: a Run is one press, and whether it
+/// produces rows or performs a statement is a property of what was typed.
+pub enum RunOutcome {
+    /// Exactly [`Engine::query`]'s answer — the snapshot handle + page 1. Byte-for-byte the
+    /// path that shipped: same supersede, same retire-on-dispatch, same pins.
+    Rows(QueryOutput, RecordBatch),
+    /// An intercepted statement's report. **No snapshot**, and none retired: a tab that
+    /// creates a table can still page the result it already had
+    /// (`docs/SNAPSHOT_SPEC.md` §4 — DDL does not retire snapshots).
+    Statement(StatementReport),
+}
+
+/// Process-unique id per engine (one per project window), scoping snapshot files so
+/// windows never collide.
+static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// An in-flight **profile scan** (D4): which dispatch it is, and the handle that cancels it.
+///
+/// Keyed by catalog entry rather than by workspace, because a profile belongs to the *data*:
+/// it is asked for from the catalog, cached per entry, and two tables profile concurrently.
+/// There is no snapshot — a scan materializes one aggregate row and returns it.
+struct ProfileRun {
+    /// Engine-unique, monotonic — the same "am I still the latest?" check [`InFlight`] uses,
+    /// for the same reason: a re-scan supersedes, and the superseded call must not tear down
+    /// the entry the newer one now owns.
+    dispatch: u64,
+    abort: AbortHandle,
+}
+
+/// A workspace's in-flight run or explain: which dispatch it is, the snapshot it is
+/// materializing (`None` for an explain), and the abort handle that cancels it.
+struct InFlight {
+    /// Engine-unique, monotonic — the identity every "am I still the latest run?" check
+    /// compares. A [`RunTag`] can't do that job: it is the caller's nonce, and a repeat
+    /// dispatch of the same tag would make the superseded call mistake the *new* entry
+    /// for its own and tear down state it doesn't own.
+    dispatch: u64,
+    /// The caller's nonce, kept for exactly one thing: [`Engine::cancel`]'s guard.
+    tag: RunTag,
+    snapshot: Option<SnapshotId>,
+    abort: AbortHandle,
+    start: Instant,
+}
+
+/// Undoes a dispatch whose caller went away before it could settle.
+///
+/// A dispatch publishes its [`InFlight`] entry *before* awaiting the spawned work, so until
+/// the settle path runs the workspace looks busy. That was safe while every caller was
+/// freya-query, which by design never cancels an execution — but an agent's run (AA-03b) is
+/// awaited inside an MCP request future, and a client cancellation, a dropped connection or
+/// the agent server shutting down all drop it mid-await. Without this the entry is never
+/// removed: [`publish_inflight`](Engine::publish_inflight) latches the window's in-flight flag
+/// on for the engine's life, so every later close, re-root and restart asks the T2 confirm
+/// about a query that finished long ago, `is_running` reports a phantom, and the snapshot the
+/// detached task materialized is never retired.
+///
+/// Armed for the await and [`disarm`](Self::disarm)ed by the settle path, so the ordinary
+/// route pays nothing. The drop repeats the settle path's own `latest` check for the reason
+/// that check exists: a superseded call must not tear down the entry a newer dispatch owns.
+struct DispatchGuard<'a> {
+    engine: &'a Engine,
+    ws: WsId,
+    dispatch: u64,
+    armed: bool,
+}
+
+impl<'a> DispatchGuard<'a> {
+    fn arm(engine: &'a Engine, ws: WsId, dispatch: u64) -> Self {
+        Self {
+            engine,
+            ws,
+            dispatch,
+            armed: true,
+        }
+    }
+
+    /// The dispatch settled on its own terms; leave the entry to the settle path.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for DispatchGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(mut lc) = self.engine.lifecycle.lock() else {
+            return;
+        };
+        if lc.inflight.get(&self.ws).map(|f| f.dispatch) != Some(self.dispatch) {
+            return;
+        }
+        if let Some(f) = lc.inflight.remove(&self.ws) {
+            self.engine.abort_inflight(f);
+        }
+        self.engine.publish_inflight(&lc);
+    }
+}
+
+/// The engine's lifecycle bookkeeping, all under one lock (never held across an await):
+/// which run is in flight per workspace, which snapshot each workspace currently owns, and
+/// which catalog entries are being profiled.
+#[derive(Default)]
+struct Lifecycle {
+    inflight: HashMap<WsId, InFlight>,
+    current: HashMap<WsId, SnapshotId>,
+    /// In-flight profile scans by entry identity ([`fold_ident`] of the name — tables and
+    /// views share one namespace).
+    profiles: HashMap<String, ProfileRun>,
+    /// How many pieces of **background** work are in flight — an export writing a file, a
+    /// drop deleting a table's data (ED-05). A **count, not a map**: nothing addresses one of
+    /// these — no cancel, no supersede, no per-item state to look up. All it has to do is keep
+    /// [`publish_inflight`](Engine::publish_inflight) true while something is half-done, so the
+    /// close-while-running confirm asks before the window takes the runtime away.
+    ///
+    /// Not per-kind, because the question every reader asks is the same one: is anything the
+    /// user would rather finish still going? A second counter would be a second answer to it.
+    background: usize,
+    /// Snapshots a caller is **holding open**, and how many holds each has
+    /// ([`Engine::pin_snapshot`]). A pinned snapshot survives its workspace re-running.
+    pins: HashMap<SnapshotId, usize>,
+    /// Snapshots whose retire arrived while they were pinned. They are retired for real
+    /// when the last pin releases — deferred, never skipped, so nothing leaks.
+    deferred: HashSet<SnapshotId>,
+    /// What each live snapshot's write pass observed ([`query::SnapshotStats`]) — today the
+    /// exact per-column null counts a partitioned export has to check.
+    ///
+    /// Here rather than in the file because a snapshot never outlives its process, so this has
+    /// exactly its lifetime: inserted when it materializes, dropped when it retires. The Arrow
+    /// IPC snapshot carries no statistics of its own, and asking the file was never the point —
+    /// the write pass already streams every batch.
+    stats: HashMap<SnapshotId, query::SnapshotStats>,
+}
+
+/// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
+/// dropping it aborts in-flight work and removes its snapshot directory.
+pub struct Engine {
+    engine_id: u64,
+    /// DataFusion's home: the private multi-thread runtime every call spawns onto.
+    /// `Option` only so `Drop` can take it for a context-safe `shutdown_background`
+    /// (a plain field drop panics when the engine is dropped inside another runtime,
+    /// e.g. a `#[tokio::test]`); always `Some` while the engine lives.
+    rt: Option<Runtime>,
+    ctx: SessionContext,
+    /// The `datafusion.*` config overrides this engine runs with (W2). Mutex'd because
+    /// [`set_config`](Engine::set_config) re-points a live engine at a new set.
+    overrides: Mutex<BTreeMap<String, String>>,
+    /// The `datafusion.runtime.*` overrides this engine was **built** with. The `RuntimeEnv`
+    /// is fixed when the `SessionContext` is built, so this — not the live `overrides` — is
+    /// what [`restart_owed`](Engine::restart_owed) measures against: a user who declines the
+    /// restart keeps the new values in `overrides`, and comparing the two maps to each other
+    /// would then report "nothing changed" and never offer the restart again.
+    built_runtime: BTreeMap<String, String>,
+    /// Snapshot-id allocator — ids are per-engine unique for the process lifetime,
+    /// which is what makes a snapshot immutable-by-identity.
+    snap_seq: AtomicU64,
+    /// Dispatch-id allocator — see [`InFlight::dispatch`].
+    dispatch_seq: AtomicU64,
+    /// The exclusive lock on this engine's snapshot directory, held open for the engine's
+    /// whole life: it is what tells *another* process's startup purge that these
+    /// snapshots are live (`query::claim_snapshot_dir`). Never read — closing it is the
+    /// entire contract, so it drops with the engine, after `Drop` has cleaned up.
+    _snapshot_lock: Option<File>,
+    lifecycle: Mutex<Lifecycle>,
+    /// Optional mirror of "this engine has work in flight", published on every lifecycle
+    /// mutation for readers that can reach neither the lock nor async code — the window's
+    /// winit close hook (T2), which runs outside the UI and must be `Send`. Installed once
+    /// by [`Engine::watch_inflight`]; `None` until then, and for engines nobody watches.
+    inflight_flag: OnceLock<Arc<AtomicBool>>,
+    /// The registered SQL functions (built-ins + UDFs) for the language service (S26/S7/S25),
+    /// walked at build and re-walked by a statement that moves the registry (ED-09).
+    functions: Functions,
+    /// The project folder this engine may write internal tables into (ED-04), set at project
+    /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir). `None` until
+    /// then, and forever for an engine with no project behind it.
+    data_root: Mutex<Option<PathBuf>>,
+    /// Which registered tables are **internal** — see [`InternalTables`].
+    internal: InternalTables,
+    /// Which connections this engine has been told about — see [`Connections`].
+    connections: Connections,
+    /// The database connections that are **live**: their pools and the catalogs they registered
+    /// (DB-02) — see [`Databases`]. A field on the engine rather than something a task holds,
+    /// because a pool owns bb8's driver tasks and the engine's `Drop` has to be what ends them.
+    databases: Databases,
+    /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
+    /// Default on a fresh engine, which is what makes a restart clear the session.
+    session: SessionScope,
+}
+
+/// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
+///
+/// Derived state, rebuilt by the same registration pass that builds everything else, and
+/// deliberately **not a second catalog**: it holds names and nothing else, and answers exactly
+/// one engine-side question — may a write statement target this provider (ED-05). Everything
+/// the UI asks about the catalog is still the store's to answer.
+///
+/// **Shared by handle rather than borrowed**, because the two statements that ask it —
+/// `INSERT`, which gates on it, and `DROP TABLE`, which takes the origin from it — run inside
+/// the task [`bookkeep`](Engine::bookkeep) spawned, and that task must not hold the engine
+/// itself: the engine's `Drop` is what aborts it, so a task keeping the engine alive would
+/// keep the abort from ever arriving. This holds names only, so it outlives an engine
+/// harmlessly.
+#[derive(Clone, Debug, Default)]
+pub struct InternalTables(Arc<Mutex<HashSet<String>>>);
+
+impl InternalTables {
+    /// Whether `name` is a table whose data Strata owns. `false` for an external table, a view,
+    /// and a name that is not registered at all.
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.lock().unwrap().contains(&fold_ident(name))
+    }
+
+    /// Record what a registration (or a drop) settled about a table's origin.
+    fn note(&self, name: &str, internal: bool) {
+        let mut set = self.0.lock().unwrap();
+        match internal {
+            true => set.insert(fold_ident(name)),
+            false => set.remove(&fold_ident(name)),
+        };
+    }
+}
+
+/// The connection **URLs** this engine has been told about (ED-10) — the same shape as
+/// [`InternalTables`], for the same reasons and with the same limits.
+///
+/// It holds URLs and nothing else, and answers exactly one engine-side question: **may a typed
+/// `CREATE EXTERNAL TABLE` name this bucket**. Everything else about a connection — its provider,
+/// its region, where its credentials come from, whether its row is green — is the store's, and
+/// this is deliberately not a second copy of any of it.
+///
+/// **Membership, not connectivity.** [`Engine::connect`] notes the URL whether the store went in
+/// or not, because a connection that cannot resolve a credential today is still a connection this
+/// project has: the def a statement writes is durable and the fix (`aws sso login`, a region typed
+/// into the editor, ↻) happens afterwards. Asking DataFusion's object-store registry instead would
+/// have answered *no* for exactly those, in a sentence — "not a connection in this project" — that
+/// would then be false.
+///
+/// Rebuilt by the pass, like the origin set: `register_pass`'s first phase calls `connect` for
+/// every def, and [`Engine::disconnect`] — the Forget gesture and the edit that moves a
+/// connection's URL — is the one removal.
+#[derive(Clone, Debug, Default)]
+pub struct Connections(Arc<Mutex<HashSet<String>>>);
+
+impl Connections {
+    /// The connection `url` names, **in the connection's own spelling** — `None` when this project
+    /// has none.
+    ///
+    /// Answering with the stored string rather than a bool is what keeps a def's `connection`
+    /// field equal to the `ConnectionDef::url` everything else addresses it by: the store's
+    /// picker, `resolve_source` and the Forget confirm all match on that exact string.
+    ///
+    /// The fallback compares **case-insensitively**, because the object-store registry does. A URL
+    /// reaches DataFusion through `Url::parse`, which lower-cases the scheme and the host, so
+    /// `S3://acme-lake/events/` and `http://Aserver:8484/x.csv` resolve to stores that are
+    /// registered — and a byte-for-byte membership test would refuse them, naming a connection the
+    /// project visibly has. The exact hit is tried first so the ordinary case costs one lookup.
+    pub fn resolve(&self, url: &str) -> Option<String> {
+        let set = self.0.lock().unwrap();
+        if set.contains(url) {
+            return Some(url.to_string());
+        }
+        set.iter()
+            .find(|held| held.eq_ignore_ascii_case(url))
+            .cloned()
+    }
+
+    fn note(&self, url: &str) {
+        self.0.lock().unwrap().insert(url.to_string());
+    }
+
+    fn forget(&self, url: &str) {
+        self.0.lock().unwrap().remove(url);
+    }
+}
+
+impl Engine {
+    /// Build a window's engine, honouring the given `datafusion.*` `overrides` (W2).
+    pub fn new(overrides: BTreeMap<String, String>) -> Engine {
+        let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let rt = Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name(format!("df-engine-{engine_id}"))
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let ctx = build_context(&overrides);
+        let functions = Functions::new(&ctx);
+        let snapshot_lock = match claim_snapshot_dir(engine_id) {
+            Ok(lock) => Some(lock),
+            Err(why) => {
+                tracing::warn!(
+                    "engine {engine_id}: could not claim {} ({why}); its snapshots are \
+                     unprotected against another instance's startup purge",
+                    query::snapshot_dir(engine_id)
+                );
+                None
+            }
+        };
+        Engine {
+            engine_id,
+            rt: Some(rt),
+            ctx,
+            built_runtime: runtime_subset(&overrides),
+            overrides: Mutex::new(overrides),
+            snap_seq: AtomicU64::new(1),
+            dispatch_seq: AtomicU64::new(1),
+            _snapshot_lock: snapshot_lock,
+            lifecycle: Mutex::default(),
+            inflight_flag: OnceLock::new(),
+            functions,
+            data_root: Mutex::default(),
+            internal: InternalTables::default(),
+            connections: Connections::default(),
+            databases: Databases::default(),
+            session: SessionScope::default(),
+        }
+    }
+
+    /// Tell this engine which **project folder** it belongs to (ED-04).
+    ///
+    /// `root` is the project folder, not `.strata/tables`, because a statement that creates an
+    /// internal table needs both: the absolute directory to spool into, and the project-relative
+    /// path the def stores, which is what lets the def travel with `project.json`. The layout
+    /// between them is [`project::tables_dir`](strata_core::project::tables_dir)'s, in one place.
+    ///
+    /// Every host that opens a project calls this — the app window and the headless server both.
+    /// An engine that is never told refuses to *create* a table (politely, naming the reason) and
+    /// is otherwise unaffected: a project's existing internal defs replay through the ordinary
+    /// registration pass, whose source paths were already resolved against the root by the
+    /// caller.
+    pub fn set_data_dir(&self, root: &Path) {
+        *self.data_root.lock().unwrap() = Some(root.to_path_buf());
+    }
+
+    /// Whether `name` is a table whose data Strata owns — the one question the internal-name set
+    /// exists to answer (see [`InternalTables`]). `false` for an external table, a view, and a
+    /// name that is not registered at all.
+    pub fn is_internal(&self, name: &str) -> bool {
+        self.internal.contains(name)
+    }
+
+    /// Record what a registration settled about a table's origin. Called from every path that
+    /// registers one, so the set is rebuilt by the pass rather than maintained beside it.
+    fn note_origin(&self, name: &str, internal: bool) {
+        self.internal.note(name, internal);
+    }
+
+    /// Mirror "this engine has work in flight" into `flag` for the rest of its life — the
+    /// truth behind the close-while-running confirm (T2). Call once, when the window wires
+    /// its close guard.
+    ///
+    /// The engine is the **only** thing that knows: a run belongs to a workspace, not to a
+    /// mounted view, so a UI-side derivation only ever sees the tab whose results pane is
+    /// mounted and reads "idle" the moment the user switches tabs on a running query.
+    /// Publishing happens inside every lifecycle mutation, under the same lock, so the flag
+    /// cannot drift from `inflight`.
+    pub fn watch_inflight(&self, flag: Arc<AtomicBool>) {
+        let lc = self.lifecycle.lock().unwrap();
+        if self.inflight_flag.set(flag).is_err() {
+            tracing::error!(
+                "engine {}: in-flight flag already installed",
+                self.engine_id
+            );
+            return;
+        }
+        self.publish_inflight(&lc);
+    }
+
+    /// Publish "this engine has work in flight" to the installed flag. Called from **every**
+    /// mutation of `Lifecycle::inflight` / `Lifecycle::profiles`, with the lock held, so a
+    /// reader can never see a flag that disagrees with the maps.
+    ///
+    /// A **profile counts** (D4): a scan is the most expensive thing the app does, and closing
+    /// the window would throw it away — exactly what the confirm exists to ask about. The
+    /// per-tab probe below deliberately does not, because a profile is not a tab's work.
+    ///
+    /// An **export counts** for a stronger reason than either: closing mid-write doesn't lose
+    /// work, it leaves a truncated file (or a half-built Hive tree) on the user's disk under
+    /// the name they chose. Like a profile, it is nobody's tab, so the per-tab probe ignores it.
+    fn publish_inflight(&self, lc: &Lifecycle) {
+        if let Some(flag) = self.inflight_flag.get() {
+            flag.store(
+                !lc.inflight.is_empty() || !lc.profiles.is_empty() || lc.background > 0,
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    /// Whether workspace `ws` has a run or explain executing right now — the per-tab half
+    /// of the close-while-running confirm (a tab *is* a [`WsId`]). Same reason as
+    /// [`watch_inflight`](Engine::watch_inflight): a background tab's run is invisible to
+    /// the UI, which mounts only the active tab's results.
+    pub fn is_running(&self, ws: WsId) -> bool {
+        self.lifecycle.lock().unwrap().inflight.contains_key(&ws)
+    }
+
+    /// Whether anything **other than a workspace run** is in flight: a profile scan, an export,
+    /// or a drop deleting a table's data.
+    ///
+    /// The close confirm's gate is `watch_inflight`'s flag, which is runs ∪ profiles ∪
+    /// background — so a surface deciding *whose* work is at stake cannot answer from
+    /// [`is_running`](Engine::is_running) alone. Enumerating the workspaces it knows about and
+    /// assuming the rest is idle is exactly the wrong answer: a scan, an export or a drop in
+    /// flight is the user's own work, and a dialog that named an agent instead would ask them to
+    /// destroy it under the wrong sentence.
+    pub fn has_background_work(&self) -> bool {
+        let lc = self.lifecycle.lock().unwrap();
+        !lc.profiles.is_empty() || lc.background > 0
+    }
+
+    /// This engine's process-unique id — what makes a [`SnapshotId`] meaningful.
+    ///
+    /// Snapshot ids are a **per-engine** counter, so a restart mints `1` again: anything that
+    /// remembers a snapshot across a possible rebuild has to remember which engine minted it,
+    /// or it will read a *different* result that happens to share the number.
+    pub fn id(&self) -> u64 {
+        self.engine_id
+    }
+
+    /// The registered SQL functions (the editor's language catalog), as they stand.
+    ///
+    /// By handle rather than by reference, because the set is swappable: a `CREATE FUNCTION`
+    /// replaces it wholesale (`ddl::functions`), so a caller that held a borrow would be holding
+    /// the engine's lock for as long as it read.
+    pub fn functions(&self) -> Arc<FunctionCatalog> {
+        self.functions.catalog()
+    }
+
+    /// Re-point this live engine at `overrides` (Settings ▸ Engine ▸ Properties, W2), and
+    /// answer whether a restart is still owed.
+    ///
+    /// Every `ConfigOptions` key is written straight onto the live `SessionState`, so the
+    /// next query planned sees it. A key the user **removed** is not skipped — it is set back
+    /// to the built-in default from [`config::ENGINE_KEYS`], because leaving it at the value
+    /// that was just deleted is the one outcome nobody asked for. That completes the mapping:
+    /// the keys `ConfigOptions` accepts are exactly the ones the catalog names a default for,
+    /// so every key that ever applied can also be un-applied. (An unrecognised
+    /// `datafusion.*` key was already rejected by `set` at build time and stays rejected
+    /// here — it never took effect, so removing it is a no-op either way.)
+    ///
+    /// `datafusion.runtime.*` is the exception, and the reason this returns anything: those
+    /// configure the `RuntimeEnv`, which is fixed when the `SessionContext` is built. They
+    /// are recorded, not applied, and `true` means the caller owes the user a restart.
+    ///
+    /// A key the **session overlay** holds is recorded and not applied either (ED-08): a typed
+    /// `SET` wins for its key until `RESET` or restart, so the new value becomes the baseline a
+    /// `RESET` will land on rather than something that quietly overwrites what the user just
+    /// typed. That is the whole precedence rule, and it lives here because this is the only place
+    /// the two writers meet.
+    pub fn set_config(&self, overrides: BTreeMap<String, String>) -> bool {
+        let mut current = self.overrides.lock().unwrap();
+        if *current != overrides {
+            let state = self.ctx.state_ref();
+            let mut state = state.write();
+            let options = state.config_mut().options_mut();
+            let touched: BTreeSet<&String> = current.keys().chain(overrides.keys()).collect();
+            for key in touched {
+                if config::is_restart_key(key)
+                    || config::is_owned_key(key)
+                    || self.session.overlaid(key)
+                {
+                    continue;
+                }
+                let value = match overrides.get(key) {
+                    Some(value) => value.as_str(),
+                    None => match config::key_def(key) {
+                        Some(def) => def.default,
+                        None => continue,
+                    },
+                };
+                if let Err(e) = options.set(key, value) {
+                    tracing::warn!("engine config: skipping {key}={value}: {e}");
+                }
+            }
+            refresh_config_dependent_udfs(&mut state);
+            *current = overrides;
+        }
+        runtime_subset(&current) != self.built_runtime
+    }
+
+    /// Whether this engine's `datafusion.runtime.*` overrides have moved on from the ones its
+    /// `RuntimeEnv` was built with — i.e. whether a restart would change anything. Stays true
+    /// until the engine is actually rebuilt, so a declined restart can be offered again.
+    pub fn restart_owed(&self) -> bool {
+        runtime_subset(&self.overrides.lock().unwrap()) != self.built_runtime
+    }
+
+    /// The `datafusion.*` overrides this engine is running with.
+    pub fn overrides(&self) -> BTreeMap<String, String> {
+        self.overrides.lock().unwrap().clone()
+    }
+
+    /// The statements `PREPARE` has left in this session (ED-08), as language-service symbols —
+    /// what completion offers at an `EXECUTE` / `DEALLOCATE` operand.
+    ///
+    /// Off the engine's own mirror, because DataFusion's `SessionState::prepared_plans` is
+    /// `pub(crate)` and has no public enumeration.
+    pub fn prepared(&self) -> Vec<PreparedSym> {
+        self.session.prepared()
+    }
+
+    /// Validate `sql` against this engine's live session (P2-18): lexical lints,
+    /// managed-DDL policy, and a **dry-plan** of each statement — parse → resolve →
+    /// analyze, never execute — so the diagnostics are exactly the errors a Run would
+    /// hit. Total by design: faults come back as `Diagnostic`s, not an `Err`.
+    pub async fn validate(&self, sql: String) -> Vec<Diagnostic> {
+        let ctx = self.ctx.clone();
+        let functions = self.functions.catalog();
+        self.rt()
+            .spawn(async move { sql::validate(&ctx, &functions, &sql).await })
+            .await
+            .unwrap_or_default()
+    }
+
+    /// The managed-DDL policy over `sql` as a pre-dispatch gate (AA-01): the same
+    /// classification [`validate`](Engine::validate) squiggles, parsed with this
+    /// session's own dialect on the engine runtime. `Ok(vec![])` is a clean pass;
+    /// `Ok(refusals)` names each blocked statement; `Err` means the input could not be
+    /// judged (it does not parse) — the caller refuses dispatch on either non-clean
+    /// answer, so the gate fails closed.
+    pub async fn policy_verdicts(&self, sql: String) -> Result<Vec<PolicyRefusal>, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { sql::policy_verdicts(&ctx, &sql) })
+            .await
+            .map_err(|e| format!("policy task failed: {e}"))?
+    }
+
+    /// What this session's planner makes of one **SQL column type** — the empty-table panel's
+    /// per-row validation (IT-01). `Ok` is the Arrow type in the spelling every surface shows
+    /// it in; `Err` is the planner's own refusal, verbatim.
+    ///
+    /// A plan and nothing more, so it is as cheap as a diagnostics pass and has no more effect
+    /// than one — see [`ddl::column_type`] for why the offer cannot be authored instead.
+    pub async fn column_type(&self, sql_type: String) -> Result<String, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { ddl::column_type(&ctx, &sql_type).await })
+            .await
+            .map_err(|e| format!("column type task failed: {e}"))?
+    }
+
+    /// The engine's runtime (always present while the engine lives — see the field).
+    fn rt(&self) -> &Runtime {
+        self.rt.as_ref().expect("engine runtime")
+    }
+
+    /// **The editor's Run** (ED-02): classify `sql`, then route it.
+    ///
+    /// One classification in front of dispatch, and it is the same one the squiggles came from
+    /// ([`sql::classify_one`], `Capability::Editor`) — so a statement the editor did not
+    /// underline is a statement Run is prepared to perform, and a refusal fails the run with
+    /// the words the squiggle showed rather than a DataFusion error about a rule that is ours.
+    ///
+    /// - `Query` delegates to [`query`](Engine::query)'s body **byte-for-byte**, carrying only
+    ///   the one thing the router knows and the read path cannot: the [`ReadPolicy`] an `EXECUTE`
+    ///   needs ([`sql::read_policy`], ED-08). It is the only arm that touches the snapshot
+    ///   lifecycle, which is what keeps "DDL does not retire snapshots" true by construction
+    ///   rather than by care.
+    /// - `Intercept(kind)` goes to `ddl::execute`, bracketed by
+    ///   [`bookkeep`](Engine::bookkeep) so `cancel` / `is_running` / the close-while-running
+    ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
+    ///   one has to ask.
+    /// - `Refuse(b)` never reaches DataFusion at all: classification is in front of `ctx.sql`
+    ///   precisely because DDL executes *eagerly* inside it (spec §3), so anything that must
+    ///   not run cannot be allowed to plan.
+    ///
+    /// The `SQLOptions` triple the read path carries (`query::materialize`) stays defense in
+    /// depth behind this: it is no longer the gate, and it never had the vocabulary to be one —
+    /// it can refuse a class of plan, not name the surface that owns the capability.
+    pub async fn run(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        sql: String,
+        page_size: usize,
+    ) -> Result<RunOutcome, String> {
+        let (stmt, verdict) = {
+            let ctx = self.ctx.clone();
+            let text = sql.clone();
+            self.rt()
+                .spawn(async move { sql::classify_one(&ctx, &text) })
+                .await
+                .map_err(|e| format!("policy task failed: {e}"))??
+        };
+        match verdict {
+            Verdict::Query => self
+                .read(ws, tag, sql, page_size, sql::read_policy(&stmt))
+                .await
+                .map(|(output, batch)| RunOutcome::Rows(output, batch)),
+            Verdict::Intercept(kind) => {
+                let ctx = self.ctx.clone();
+                let root = self.data_root.lock().unwrap().clone();
+                let engine = ddl::Dispatch {
+                    root,
+                    internal: self.internal.clone(),
+                    connections: self.connections.clone(),
+                    scope: self.session.clone(),
+                    functions: self.functions.clone(),
+                    baseline: self.overrides(),
+                };
+                let report = self
+                    .bookkeep(ws, tag, "statement", async move {
+                        ddl::execute(&ctx, kind, stmt, engine).await
+                    })
+                    .await?;
+                self.settle_effect(report.effect.as_ref());
+                Ok(RunOutcome::Statement(report))
+            }
+            Verdict::Refuse(blocked) => Err(blocked.editor_message()),
+        }
+    }
+
+    /// What the **engine** has to learn from a statement's [`StoreEffect`], applied wherever one
+    /// is produced — [`run`](Engine::run)'s interception and [`drop_table`](Engine::drop_table)'s
+    /// direct call both.
+    ///
+    /// The engine learns from the returned value, exactly as the store does: an arm that
+    /// registered a table says so in its effect, and that is where the origin comes from — never
+    /// by asking DataFusion, which does not know. Held once rather than at each producer, so the
+    /// catalog-surface drop and the typed one cannot leave the engine in two different states.
+    /// Exhaustive on [`StoreEffect`] with no wildcard, for the reason [`ddl::execute`] is
+    /// exhaustive on `StmtKind`: an effect a later task adds must be a compile error here rather
+    /// than something the engine silently declines to learn from.
+    fn settle_effect(&self, effect: Option<&StoreEffect>) {
+        let Some(effect) = effect else { return };
+        match effect {
+            StoreEffect::TableUpserted { def, .. } => {
+                self.note_origin(&def.name, def.origin.is_internal());
+            }
+            StoreEffect::TableRemoved { name, .. } => {
+                self.cancel_profile(name);
+                self.note_origin(name, false);
+            }
+            StoreEffect::ViewUpserted { def, .. } => {
+                self.cancel_profile(&def.name);
+            }
+            StoreEffect::ViewRemoved { name } => {
+                self.cancel_profile(name);
+            }
+            StoreEffect::RescanTable { .. }
+            | StoreEffect::FunctionsChanged
+            | StoreEffect::PreparedChanged => {}
+        }
+    }
+
+    /// Drop the registered table `name` — **the one funnel both surfaces drop through** (ED-05).
+    ///
+    /// A typed `DROP TABLE` reaches the same body through [`run`](Engine::run)'s interception;
+    /// the catalog pane's confirm reaches it here, after it has taken the def out of the store
+    /// and written `project.json` (the store-first order `save_view` established — a drop the
+    /// project file never heard about comes back on the next open). Two gestures, one
+    /// implementation, because the difference between them is a *question asked of the user*,
+    /// not a difference in what the drop does: an internal table's data directory goes with it
+    /// on both paths, which is the whole reason this is not two calls.
+    ///
+    /// `if_exists` is the statement's clause. The pane passes `true`: the row it is dropping came
+    /// out of the store, and a def whose registration failed has no provider to deregister.
+    pub async fn drop_table(
+        &self,
+        name: String,
+        if_exists: bool,
+    ) -> Result<StatementOutcome, String> {
+        let _deleting = BackgroundGuard::new(self);
+        let ctx = self.ctx.clone();
+        let root = self.data_root.lock().unwrap().clone();
+        let internal = self.internal.clone();
+        let outcome = self
+            .rt()
+            .spawn(async move { ddl::drop_table(&ctx, &root, &internal, &name, if_exists).await })
+            .await
+            .map_err(|e| format!("drop table task failed: {e}"))??;
+        self.settle_effect(outcome.effect.as_ref());
+        Ok(outcome)
+    }
+
+    /// Bracket `work` as workspace `ws`'s in-flight call — the lifecycle every dispatch that
+    /// materializes **nothing** shares: [`explain`](Engine::explain), and every intercepted
+    /// statement.
+    ///
+    /// Supersedes whatever `ws` was running (a tab runs one thing at a time, exactly as a
+    /// re-press does), registers the abort handle so [`cancel`](Engine::cancel),
+    /// [`is_running`](Engine::is_running) and the close-while-running flag can all see it, and
+    /// removes the entry on the way out **iff** this is still the latest dispatch — by
+    /// `dispatch`, never by `tag`, for the reason [`InFlight::dispatch`] exists.
+    ///
+    /// `Lifecycle::current` is deliberately untouched: nothing routed through here spools a
+    /// snapshot, so there is none to settle and none to retire.
+    ///
+    /// `what` names the call in the one message a *runtime* failure can produce — a task that
+    /// panicked or was dropped by the runtime, which is a different fault from the call's own
+    /// `Err` and reads as one.
+    async fn bookkeep<F, T>(&self, ws: WsId, tag: RunTag, what: &str, work: F) -> Result<T, String>
+    where
+        F: Future<Output = Result<T, String>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
+        let task = {
+            let mut lc = self.lifecycle.lock().unwrap();
+            if let Some(prev) = lc.inflight.remove(&ws) {
+                self.abort_inflight(prev);
+            }
+            let task = self.rt().spawn(work);
+            lc.inflight.insert(
+                ws,
+                InFlight {
+                    dispatch,
+                    tag,
+                    snapshot: None,
+                    abort: task.abort_handle(),
+                    start: Instant::now(),
+                },
+            );
+            self.publish_inflight(&lc);
+            task
+        };
+
+        let mut guard = DispatchGuard::arm(self, ws, dispatch);
+        let joined = task.await;
+        guard.disarm();
+
+        let mut lc = self.lifecycle.lock().unwrap();
+        if lc.inflight.get(&ws).map(|f| f.dispatch) == Some(dispatch) {
+            lc.inflight.remove(&ws);
+        }
+        self.publish_inflight(&lc);
+        match joined {
+            Ok(res) => res,
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
+            Err(join) => Err(format!("{what} task failed: {join}")),
+        }
+    }
+
+    /// Run `sql` **once** for workspace `ws`: materialize a fresh immutable snapshot
+    /// and return its handle + page 1 (`docs/SNAPSHOT_SPEC.md` §3). Dispatch retires
+    /// the workspace's previous snapshot and aborts its in-flight run (§4); `tag` is
+    /// the caller's nonce for [`cancel`](Engine::cancel).
+    ///
+    /// Supersede checks key on the engine's own dispatch id, never on `tag`: the UI may
+    /// dispatch the same tag twice for one logical run, and comparing tags would let the
+    /// first call's settle path adopt the second call's `InFlight` entry — dismantling a
+    /// perfectly good run and failing *both* calls (see [`InFlight::dispatch`]).
+    pub async fn query(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        sql: String,
+        page_size: usize,
+    ) -> Result<(QueryOutput, RecordBatch), String> {
+        self.read(ws, tag, sql, page_size, ReadPolicy::default())
+            .await
+    }
+
+    /// [`query`](Engine::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
+    ///
+    /// Private, and `query` is the read-only entry every other caller keeps: the widening is only
+    /// ever sound for a statement [`sql::read_policy`] judged, so the ability to ask for it does
+    /// not belong on the facade (spec §1). One body either way — the lifecycle is identical, and a
+    /// second copy of it is what the whole snapshot discipline exists to avoid.
+    async fn read(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        sql: String,
+        page_size: usize,
+        policy: ReadPolicy,
+    ) -> Result<(QueryOutput, RecordBatch), String> {
+        let snapshot = SnapshotId(self.snap_seq.fetch_add(1, Ordering::Relaxed));
+        let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
+        let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        let task = {
+            let mut lc = self.lifecycle.lock().unwrap();
+            if let Some(prev) = lc.inflight.remove(&ws) {
+                self.abort_inflight(prev);
+            }
+            if let Some(old) = lc.current.remove(&ws) {
+                self.retire_or_defer(&mut lc, old);
+            }
+            let ctx = self.ctx.clone();
+            let engine_id = self.engine_id;
+            let task = self.rt().spawn(async move {
+                run_and_snapshot(&ctx, engine_id, snapshot, &sql, page_size, &fmt, policy).await
+            });
+            lc.inflight.insert(
+                ws,
+                InFlight {
+                    dispatch,
+                    tag,
+                    snapshot: Some(snapshot),
+                    abort: task.abort_handle(),
+                    start: Instant::now(),
+                },
+            );
+            self.publish_inflight(&lc);
+            task
+        };
+
+        let mut guard = DispatchGuard::arm(self, ws, dispatch);
+        let joined = task.await;
+        guard.disarm();
+
+        let mut lc = self.lifecycle.lock().unwrap();
+        let latest = lc.inflight.get(&ws).map(|f| f.dispatch) == Some(dispatch);
+        if latest {
+            lc.inflight.remove(&ws);
+        }
+        self.publish_inflight(&lc);
+        match joined {
+            Ok(Ok((output, batch, stats))) => {
+                if latest {
+                    if let Some(snap) = output.snapshot {
+                        lc.current.insert(ws, snap);
+                        lc.stats.insert(snap, stats);
+                    }
+                    Ok((output, batch))
+                } else {
+                    retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                    Err(SUPERSEDED_RUN.into())
+                }
+            }
+            Ok(Err(e)) => Err(e),
+            Err(join) if join.is_cancelled() => {
+                retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                Err(CANCELLED.into())
+            }
+            Err(join) => {
+                retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                Err(format!("query task failed: {join}"))
+            }
+        }
+    }
+
+    /// Read one page of one immutable snapshot — `sort` = `(column, ascending)` applied
+    /// as an `ORDER BY` over the whole snapshot before the page window (Rz6). Reads are
+    /// snapshot-scoped and side-effect free: safely cacheable by `(snapshot, page,
+    /// page_size, sort)`.
+    pub async fn fetch_page(
+        &self,
+        snapshot: SnapshotId,
+        page: usize,
+        page_size: usize,
+        sort: Option<(String, bool)>,
+    ) -> Result<(Vec<Vec<Cell>>, RecordBatch), String> {
+        let ctx = self.ctx.clone();
+        let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        let ord = self.ordinal(snapshot);
+        self.rt()
+            .spawn(async move {
+                query::fetch_page(&ctx, snapshot, page, page_size, sort, ord, &fmt).await
+            })
+            .await
+            .map_err(|e| format!("page task failed: {e}"))?
+    }
+
+    /// The name of `snapshot`'s ordinal column, if the write pass recorded one — `None` for
+    /// a retired snapshot (whose read fails anyway) and for a snapshot spooled without an
+    /// ordinal (an `EXPLAIN` result, or one with duplicate column names — see
+    /// `query::materialize`), which reads unordered exactly as it did before ordinals.
+    fn ordinal(&self, snapshot: SnapshotId) -> Option<String> {
+        self.lifecycle
+            .lock()
+            .unwrap()
+            .stats
+            .get(&snapshot)
+            .and_then(|s| s.ord.clone())
+    }
+
+    /// Read one immutable snapshot as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the
+    /// renderer-first read `q` asks for: a projected, ordinal-ordered, capped read plus a
+    /// long→wide pivot (`Rows`), raw points (`Raw`), or the one computed mark
+    /// (`Histogram`). No aggregation, no bucketing, no imposed order — the withdrawn
+    /// pipeline's grouped reads must not come back here (AGENTS.md §2).
+    ///
+    /// Snapshot-scoped and side-effect free like [`fetch_page`](Engine::fetch_page). Cache
+    /// identity is `(snapshot, q)` **plus the engine's display config**: axis labels render
+    /// through the live `datafusion.format.*` overrides, which `set_config` changes without
+    /// a restart — so a UI cache keyed on `(snapshot, q)` alone serves stale labels after a
+    /// Settings change, and the chart surface must re-render (not merely re-key) when those
+    /// overrides move, exactly as the grid's pages do. Deliberately no lifecycle
+    /// bookkeeping and no confirm in front of it — a projected, capped read of a local
+    /// snapshot is `fetch_page`-tier work, not [`profile`](Engine::profile)'s tier.
+    ///
+    /// The chart never re-reads the source files: it charts the result the grid is paging,
+    /// which is what makes the two agree when the data underneath has since moved.
+    pub async fn chart(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        q: ChartQuery,
+    ) -> Result<ChartData, String> {
+        let _reading = self.pin_snapshot(snapshot);
+        let ctx = self.ctx.clone();
+        let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        let ord = self.ordinal(snapshot);
+        self.rt()
+            .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt, ord.as_deref()).await })
+            .await
+            .map_err(|e| format!("chart task failed: {e}"))?
+    }
+
+    /// The least-squares fit over `snapshot`'s finite `(x, y)` pairs (Chart 11) — the
+    /// scatter's trendline, and the one computed *overlay* `docs/CHART_SPEC.md` §10
+    /// sanctions. Engine-side because the overlay is a function of the encoding, not of the
+    /// query: templating it into SQL would rewrite the user's query on every encoder gesture.
+    ///
+    /// [`chart`](Engine::chart)'s tier exactly — snapshot-scoped, side-effect free, pinned
+    /// for the length of the call — and deliberately **not** a [`ChartQuery`] arm, so a UI
+    /// cache can key the fit by the two columns alone and toggling the overlay never
+    /// re-reads the points. `Ok(None)` is a fit the data cannot support (fewer than two
+    /// pairs, or no x-variance): the overlay simply does not draw, never an error the user
+    /// must dismiss.
+    pub async fn trend(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        x: String,
+        y: String,
+    ) -> Result<Option<Trend>, String> {
+        let _reading = self.pin_snapshot(snapshot);
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { chart::run_trend(&ctx, snapshot, &x, &y).await })
+            .await
+            .map_err(|e| format!("trend task failed: {e}"))?
+    }
+
+    /// Does `snapshot` still exist to be read?
+    ///
+    /// The one honest way to tell "your result was replaced" from a real read failure. A
+    /// retired snapshot's table is deregistered, so [`fetch_page`](Engine::fetch_page)
+    /// answers with DataFusion's own "table not found" prose — and matching that prose at a
+    /// call site is exactly the copy-of-a-rule this crate keeps refusing to hand out
+    /// (`stopped_on_purpose` is the same lesson). A reader that outlived its snapshot asks
+    /// **after** its read fails, so the answer cannot race the dispatch that retired it.
+    ///
+    /// [`Lifecycle::stats`] is the register consulted because it has exactly a snapshot's
+    /// lifetime by construction — inserted when the write pass settles, removed by
+    /// [`retire_now`](Engine::retire_now), which every retire of a handed-out snapshot goes
+    /// through. A snapshot whose retire is **deferred** behind a pin is still there to read,
+    /// and still answers `true`, which is the same fact from the reader's side.
+    pub fn snapshot_live(&self, snapshot: SnapshotId) -> bool {
+        self.lifecycle.lock().unwrap().stats.contains_key(&snapshot)
+    }
+
+    /// Run an `EXPLAIN [ANALYZE]` statement for `ws` — a parsed plan tree, no snapshot.
+    /// Supersedes the workspace's in-flight run (mutually exclusive, like a re-run) but
+    /// leaves its settled snapshot alone (spec §4: explains materialize nothing).
+    pub async fn explain(&self, ws: WsId, tag: RunTag, sql: String) -> Result<QueryPlan, String> {
+        let ctx = self.ctx.clone();
+        self.bookkeep(ws, tag, "explain", async move {
+            explain::run_explain(&ctx, &sql).await
+        })
+        .await
+    }
+
+    /// Cancel `ws`'s in-flight run/explain **iff** it is still run `tag` (S14 — a stale
+    /// cancel can't abort a just-started newer run). Returns the elapsed time when
+    /// something was actually cancelled; the awaiting `query`/`explain` settles
+    /// `Err("cancelled")`.
+    ///
+    /// The `tag` — the UI's per-press nonce — is exactly right here, and the one place it
+    /// is: the caller is asking to stop *the run it can see*, so if a repeat dispatch
+    /// replaced the in-flight entry under the same tag, stopping that one is what the
+    /// press meant.
+    pub fn cancel(&self, ws: WsId, tag: RunTag) -> Option<u128> {
+        let mut lc = self.lifecycle.lock().unwrap();
+        if lc.inflight.get(&ws).map(|f| f.tag) == Some(tag) {
+            let f = lc.inflight.remove(&ws).unwrap();
+            let elapsed = f.start.elapsed().as_millis();
+            self.abort_inflight(f);
+            self.publish_inflight(&lc);
+            Some(elapsed)
+        } else {
+            None
+        }
+    }
+
+    /// Profile the catalog entry `name` — **one full scan, one aggregate, every column at
+    /// once** (D4, see [`profile`]). Works for a table or a view: a view has no footer at all,
+    /// so a scan is the only way it learns anything beyond a column's type.
+    ///
+    /// Deliberately expensive and deliberately opt-in: distinct counts can't be merged across
+    /// files, so there is no cheaper form. The UI confirms before a first scan (P3-10) and
+    /// caches the result until the entry changes.
+    ///
+    /// Superseded-by-dispatch like [`query`](Engine::query): a re-scan aborts the scan it
+    /// replaces, and the older call settles `Err("superseded by a newer scan")` rather than
+    /// tearing down the entry the newer one now owns. Dedup is the *caller's* (freya-query
+    /// keys the cache by the request), which is why two arrivals here mean two real requests.
+    pub async fn profile(&self, name: String) -> Result<profile::CatalogProfile, String> {
+        let key = fold_ident(&name);
+        let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
+        let task = {
+            let mut lc = self.lifecycle.lock().unwrap();
+            if let Some(prev) = lc.profiles.remove(&key) {
+                prev.abort.abort();
+            }
+            let ctx = self.ctx.clone();
+            let scanned = name.clone();
+            let task = self
+                .rt()
+                .spawn(async move { catalog::run_profile(&ctx, &scanned).await });
+            lc.profiles.insert(
+                key.clone(),
+                ProfileRun {
+                    dispatch,
+                    abort: task.abort_handle(),
+                },
+            );
+            self.publish_inflight(&lc);
+            task
+        };
+
+        let joined = task.await;
+
+        let mut lc = self.lifecycle.lock().unwrap();
+        let latest = lc.profiles.get(&key).map(|p| p.dispatch) == Some(dispatch);
+        if latest {
+            lc.profiles.remove(&key);
+        }
+        self.publish_inflight(&lc);
+        match joined {
+            Ok(res) if latest => res,
+            Ok(_) => Err(SUPERSEDED_SCAN.into()),
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
+            Err(join) => Err(format!("profile task failed: {join}")),
+        }
+    }
+
+    /// Abort the profile scan of `name`, if one is running — `true` when something was
+    /// actually cancelled. The awaiting [`profile`](Engine::profile) settles `Err("cancelled")`.
+    ///
+    /// Unguarded by any nonce, unlike [`cancel`](Engine::cancel): a scan is keyed by the entry,
+    /// and every caller — the inspector's Cancel, and every catalog mutation that is about to
+    /// make the result a lie — means "stop scanning *this entry*".
+    pub fn cancel_profile(&self, name: &str) -> bool {
+        let mut lc = self.lifecycle.lock().unwrap();
+        let cancelled = match lc.profiles.remove(&fold_ident(name)) {
+            Some(run) => {
+                run.abort.abort();
+                true
+            }
+            None => false,
+        };
+        self.publish_inflight(&lc);
+        cancelled
+    }
+
+    /// Hold `snapshot` open for as long as the returned [`SnapshotPin`] lives: while a pin is
+    /// out, retiring the snapshot is **deferred**, not skipped.
+    ///
+    /// A snapshot is owned by its workspace and retired the moment that workspace dispatches
+    /// another run (`docs/SNAPSHOT_SPEC.md` §4) — which is right for the grid, whose pages
+    /// follow the tab, and wrong for anything that outlives one press. The export window is
+    /// the first such reader: it is opened *on a result*, may sit there while the user goes
+    /// back and re-runs the query, and must still write the rows that were on screen when it
+    /// was opened. Without a pin a re-run deregisters the table mid-`COPY` and truncates the
+    /// file, or — the quieter failure — makes a later Export report no results at all when
+    /// there are plainly some on screen.
+    ///
+    /// **RAII rather than a pin/unpin pair**, deliberately: this is the same rule freya-query
+    /// cache entries live by (lifetime is a held handle, never imperative bookkeeping), so a
+    /// caller expresses "I still need this" by keeping the guard, and an early return, a
+    /// panic or a dropped window all release it.
+    pub fn pin_snapshot(self: &Arc<Self>, snapshot: SnapshotId) -> SnapshotPin {
+        let mut lc = self.lifecycle.lock().unwrap();
+        *lc.pins.entry(snapshot).or_insert(0) += 1;
+        drop(lc);
+        SnapshotPin {
+            engine: Arc::clone(self),
+            snapshot,
+        }
+    }
+
+    /// Drop one hold, retiring the snapshot for real if this was the last one and a retire
+    /// arrived while it was pinned.
+    fn release_pin(&self, snapshot: SnapshotId) {
+        let mut lc = self.lifecycle.lock().unwrap();
+        match lc.pins.get_mut(&snapshot) {
+            Some(holds) if *holds > 1 => *holds -= 1,
+            Some(_) => {
+                lc.pins.remove(&snapshot);
+                if lc.deferred.remove(&snapshot) {
+                    self.retire_now(&mut lc, snapshot);
+                }
+            }
+            None => tracing::error!(
+                "engine {}: released a pin on snapshot {snapshot} that was never held",
+                self.engine_id
+            ),
+        }
+    }
+
+    /// Retire `snapshot` unless someone is holding it open, in which case remember to retire
+    /// it when the last hold releases.
+    ///
+    /// Every retire of a snapshot a caller **has been handed** goes through here. The three
+    /// inside [`query`](Engine::query)'s settle path deliberately do not: they retire a run's
+    /// own partial or a superseded run's output, neither of which is ever returned, so nothing
+    /// can be holding one.
+    fn retire_or_defer(&self, lc: &mut Lifecycle, snapshot: SnapshotId) {
+        if lc.pins.contains_key(&snapshot) {
+            lc.deferred.insert(snapshot);
+        } else {
+            self.retire_now(lc, snapshot);
+        }
+    }
+
+    /// Retire a snapshot and forget what its write pass recorded. Every path that actually
+    /// deletes a live snapshot goes through here, so `Lifecycle::stats` cannot outlive the
+    /// snapshots it describes.
+    fn retire_now(&self, lc: &mut Lifecycle, snapshot: SnapshotId) {
+        lc.stats.remove(&snapshot);
+        retire_snapshot(&self.ctx, self.engine_id, snapshot);
+    }
+
+    /// Write `snapshot` to disk per `spec` (D6) — one file, or a Hive directory when the
+    /// spec carries partition columns. Returns `(path, rows_written)`.
+    ///
+    /// **The snapshot is the source, not the SQL.** An export never re-runs the query: it
+    /// streams the very table the grid is paging, in the sort the grid is showing, so the
+    /// file matches what was on screen even if the underlying data has since moved. That is
+    /// the whole reason snapshots exist (`docs/SNAPSHOT_SPEC.md`), and it is why this takes a
+    /// [`SnapshotId`] rather than a workspace: an export belongs to a *result*, not to a tab,
+    /// and the result outlives the tab's current text.
+    ///
+    /// Unlike [`query`](Engine::query) there is no dispatch nonce and no supersede: two
+    /// exports are two files, and neither invalidates the other. The bookkeeping is the
+    /// in-flight count, which keeps the close confirm honest while a file is half-written,
+    /// and a [`pin`](Engine::pin_snapshot) for the duration — so a re-run in the owning tab
+    /// can't deregister the table this `COPY` is streaming. The export window holds a pin of
+    /// its own for its whole life; this one makes the call correct on its own terms, for a
+    /// caller that has no window.
+    pub async fn export(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        spec: export::ExportSpec,
+    ) -> Result<(String, usize), String> {
+        let holding = ExportHold::new(self, snapshot);
+        let stats = self
+            .lifecycle
+            .lock()
+            .unwrap()
+            .stats
+            .get(&snapshot)
+            .cloned()
+            .unwrap_or_default();
+        let task = {
+            let ctx = self.ctx.clone();
+            self.rt().spawn(async move {
+                let _holding = holding;
+                export::run_export(&ctx, snapshot, spec, &stats).await
+            })
+        };
+
+        let joined = task.await;
+
+        match joined {
+            Ok(res) => res,
+            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
+            Err(join) => Err(format!("export task failed: {join}")),
+        }
+    }
+
+    /// Write `snapshot` to a **caller-named** file (QE-05) — [`export`](Engine::export)'s funnel
+    /// for a caller with no file dialog in front of it, and the agent vocabulary's one write.
+    ///
+    /// A third gesture into the export the window and the typed `COPY` already make, never a third
+    /// implementation: this composes the spec that has no options to get wrong (the whole result,
+    /// snapshot order, one file) and hands it to [`export`](Engine::export), which keeps the pin,
+    /// the background count and the ordinal's exclusion exactly as it does for the window.
+    ///
+    /// What is new is the destination, because the caller named it with nothing in front of it to
+    /// say no — so [`export::check_destination`] is the fence, and it is the whole fence: the data
+    /// itself is already readable page by page by whoever can call this.
+    pub async fn export_result(
+        self: &Arc<Self>,
+        snapshot: SnapshotId,
+        path: String,
+        format: export::Format,
+    ) -> Result<export::ExportReport, String> {
+        let root = self.data_root.lock().unwrap().clone();
+        export::check_destination(&path, root.as_deref())?;
+        let (path, rows) = self
+            .export(
+                snapshot,
+                export::ExportSpec {
+                    path,
+                    scope: export::Scope::All,
+                    sort: None,
+                    format,
+                    partition: export::Partition::default(),
+                },
+            )
+            .await?;
+        let bytes = fs::metadata(&path).ok().map(|m| m.len());
+        Ok(export::ExportReport { path, rows, bytes })
+    }
+
+    /// Register what one [`ConnectionDef`] describes: an **object store**, so tables can be
+    /// registered over its bucket (W7), or a **database catalog**, so its relations resolve as
+    /// `pg.public.orders` (DB-02).
+    ///
+    /// **Before any table that reads it.** DataFusion resolves no remote scheme on its own:
+    /// without this, a source path under `s3://acme-lake` fails its registration with "No
+    /// suitable object store found" no matter how well-formed the def is. That ordering is
+    /// [`register_pass`](crate::register::register_pass)'s, so every replay of a project gets
+    /// it — and a database connection needs exactly the same phase for a different reason, since
+    /// a view over `pg.public.orders` cannot be created before the catalog exists.
+    ///
+    /// **The provider decides the arm, and there is one spawn either way**, so the two cannot
+    /// drift apart on which runtime they ride: bb8 spawns a driver task per pooled connection,
+    /// and those have to land on the engine's own runtime or the engine's `Drop` does not end
+    /// them.
+    ///
+    /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
+    /// the credential chain does not answer for, a server that refused the user, a password this
+    /// machine does not have. See [`store::connect`] and [`db::connect`].
+    pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        let url = conn.url();
+        self.connections.note(&url);
+        let dbs = self.databases.clone();
+        let settled = self
+            .rt()
+            .spawn(async move {
+                match conn.provider.clone() {
+                    Provider::Postgres(pg) => {
+                        let passwords = match pg.password {
+                            PgPassword::None => None,
+                            PgPassword::Keystore => {
+                                Some(Arc::new(db::KeystorePassword::new(conn.url()))
+                                    as Arc<dyn PasswordProvider>)
+                            }
+                        };
+                        db::connect(&ctx, &dbs, &conn, &pg, passwords).await
+                    }
+                    _ => store::connect(&ctx, &conn).await,
+                }
+            })
+            .await
+            .map_err(|e| format!("connect task failed: {e}"))?;
+        if self.connections.resolve(&url).is_none() {
+            self.disconnect(&url);
+        }
+        settled
+    }
+
+    /// Forget what a connection registered — the Forget gesture's engine half (W7), addressed
+    /// by the same [`ConnectionDef::url`] [`connect`](Self::connect) put it in under.
+    ///
+    /// Synchronous, like [`deregister`](Self::deregister) and for the same reason: DataFusion
+    /// just drops the entry from its registry, so there is no work to spawn and no answer to
+    /// await. Dropping the pool is synchronous too — bb8's driver tasks end with it, on the
+    /// runtime they were spawned on.
+    ///
+    /// **Both arms are asked**, because a URL is all this is given — the def is gone by the time
+    /// a Forget reaches here. Neither is a fault when it does nothing: see [`store::disconnect`]
+    /// and [`db::disconnect`].
+    pub fn disconnect(&self, url: &str) {
+        self.connections.forget(url);
+        store::disconnect(&self.ctx, url);
+        db::disconnect(&self.ctx, &self.databases, url);
+    }
+
+    /// What a live database connection registered: the catalog it is addressed by, and its
+    /// schemas **scoped and tagged** against the def's own [`PgStore::schemas`] — `None` for a
+    /// connection that is not a live database.
+    ///
+    /// The one read the data-sources tree, the schema picker and completion share, so no
+    /// consumer re-derives visibility from the def. It reads the connect-time enumeration
+    /// rather than asking the server, which is what makes it free to call: a ↻ re-runs the
+    /// registration pass, and *that* is the refresh.
+    ///
+    /// Synchronous and not on the runtime, because there is no I/O in it.
+    pub fn db_listing(&self, conn: &ConnectionDef) -> Option<(String, Vec<db::SchemaListingView>)> {
+        let Provider::Postgres(pg) = &conn.provider else {
+            return None;
+        };
+        db::listing(&self.databases, conn, pg)
+    }
+
+    /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
+    /// connection (DB-06), its schemas and relations from [`db_listing`](Self::db_listing).
+    ///
+    /// Built here rather than in the editor because both halves are read the way the rest of the
+    /// engine reads them: the catalog name off the def, so a connection that has never answered
+    /// still offers the name a query has to say, and the schemas off the connect-time
+    /// enumeration, already scoped. Only a `Live` schema is offered — one the def enables and the
+    /// server does not have is a name that cannot resolve, and the tree already says so on its
+    /// own row; a schema the connection does not show arrives here empty
+    /// ([`SchemaListingView::relations`](db::SchemaListingView::relations)), so this walk clones
+    /// what it offers rather than the whole database.
+    ///
+    /// Free and synchronous, like the listing it reads: it is what lets the completion snapshot
+    /// carry remote names without the popup ever reaching the network.
+    pub fn database_syms<'a>(
+        &self,
+        defs: impl IntoIterator<Item = &'a ConnectionDef>,
+    ) -> Vec<DatabaseSym> {
+        defs.into_iter()
+            .filter_map(|def| {
+                let Provider::Postgres(pg) = &def.provider else {
+                    return None;
+                };
+                let name = pg.catalog.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                let schemas = self
+                    .db_listing(def)
+                    .map(|(_, schemas)| schemas)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|s| s.visibility == db::SchemaVisibility::Live)
+                    .map(|s| SchemaSym {
+                        name: s.name,
+                        relations: s
+                            .relations
+                            .into_iter()
+                            .map(|r| RelationSym {
+                                view: r.is_view(),
+                                name: r.name,
+                            })
+                            .collect(),
+                    })
+                    .collect();
+                Some(DatabaseSym {
+                    name: name.to_string(),
+                    schemas,
+                })
+            })
+            .collect()
+    }
+
+    /// The catalogs database connections have registered, in the spelling they were registered
+    /// under — the workspace's own excluded, since it is not one.
+    ///
+    /// Membership, not liveness, in the same sense `connections` is: a catalog is on the list
+    /// exactly while its connection is live, which is also exactly while a three-part name can
+    /// resolve through it. Synchronous and free — the list is a map this session holds.
+    pub fn database_catalogs(&self) -> Vec<String> {
+        self.ctx
+            .catalog_names()
+            .into_iter()
+            .filter(|name| fold_ident(name) != CATALOG)
+            .collect()
+    }
+
+    /// One relation inside a database connection's catalog, from what the session already
+    /// holds.
+    ///
+    /// The columns come from the provider the catalog caches per relation, so this costs one remote
+    /// introspection the first time and nothing afterwards. There is **no def and no `Reg` row**
+    /// behind it, by design: a database answers for itself.
+    ///
+    /// **The three answers are kept apart, which is why this is not an `Option`.** `Ok(None)` is an
+    /// *expected absence* and the caller's own not-found stands; `Err` is a relation the connection
+    /// **does** list whose introspection failed, which is a fault about the server rather than a
+    /// fact about the name — reporting it absent would tell an agent a relation does not exist when
+    /// it does.
+    ///
+    /// Existence is asked of `table_exist`, which reads the connect-time listing and costs nothing,
+    /// where `table` is the round trip. So the common miss never dials out.
+    pub async fn describe_remote(&self, name: String) -> Result<Option<RemoteRelation>, String> {
+        let reference = TableReference::parse_str(&name);
+        let TableReference::Full { catalog, .. } = &reference else {
+            return Ok(None);
+        };
+        let folded = fold_ident(catalog);
+        if folded == CATALOG {
+            return Ok(None);
+        }
+        let Some(connection) = self
+            .ctx
+            .catalog_names()
+            .into_iter()
+            .find(|registered| fold_ident(registered) == folded)
+        else {
+            return Ok(None);
+        };
+        let Some(schema_name) = reference.schema() else {
+            return Ok(None);
+        };
+        let Some(schema) = self
+            .ctx
+            .catalog(&connection)
+            .and_then(|catalog| catalog.schema(schema_name))
+        else {
+            return Ok(None);
+        };
+        if !schema.table_exist(reference.table()) {
+            return Ok(None);
+        }
+        let relation = format!("{schema_name}.{}", reference.table());
+        let table = reference.table().to_string();
+        // **The kind is the schema provider's, never the built provider's.** A relation's
+        // `TableProvider` here is the crate's federated `SqlTable`, whose `table_type` is
+        // hardcoded `Base` — so asking *it* reports every remote view as a table, and this answer
+        // and the tree's (which reads `relkind`) would disagree about the same relation.
+        // `DbSchemaProvider::table_type` is the relkind-aware one, and it costs nothing.
+        let kind = self
+            .rt()
+            .spawn({
+                let schema = Arc::clone(&schema);
+                let table = table.clone();
+                async move { schema.table_type(&table).await }
+            })
+            .await
+            .map_err(|e| format!("Reading '{name}' failed: {e}"))?
+            .map_err(|e| catalog::readable(&e.to_string()))?;
+        let provider = self
+            .rt()
+            .spawn(async move { schema.table(&table).await })
+            .await
+            .map_err(|e| format!("Reading '{name}' failed: {e}"))?
+            .map_err(|e| catalog::readable(&e.to_string()))?;
+        Ok(provider.map(|provider| RemoteRelation {
+            connection,
+            relation,
+            view: kind == Some(TableType::View),
+            columns: provider
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| column_info(field))
+                .collect(),
+        }))
+    }
+
+    /// The AWS profile names this machine's own configuration defines — what the connection
+    /// editor's **Named profile** picker offers (W7 · 03). See [`store::aws_profiles`]; no
+    /// profile's *contents* are read.
+    ///
+    /// On the engine rather than beside the surface that asks for it, for the two reasons every
+    /// other method here is: `aws-config` is [`store`]'s dependency and stays there, and this
+    /// reads files — so it belongs on the runtime that keeps a read off the thread drawing every
+    /// window, not in a component that would have to invent one.
+    pub async fn aws_profiles(&self) -> Vec<String> {
+        self.rt()
+            .spawn(store::aws_profiles())
+            .await
+            .unwrap_or_default()
+    }
+
+    /// (Re)register one external table from its spec, returning its inferred schema +
+    /// free row count.
+    ///
+    /// Aborts the table's profile scan first: re-registration re-infers the schema from
+    /// whatever is on disk *now*, so a scan in flight is computing numbers about files the
+    /// register is replacing. Done here rather than left to the caller because it is engine
+    /// truth — every path that re-registers gets it, including ones not yet written.
+    pub async fn register(&self, spec: TableSpec) -> Result<TableMeta, String> {
+        self.cancel_profile(&spec.name);
+        let ctx = self.ctx.clone();
+        let (name, internal) = (spec.name.clone(), spec.internal);
+        let meta = self
+            .rt()
+            .spawn(async move { catalog::register_external(&ctx, &spec).await })
+            .await
+            .map_err(|e| format!("register task failed: {e}"))?;
+        self.note_origin(&name, internal && meta.is_ok());
+        meta
+    }
+
+    /// What `name`'s row says **now** — its columns and free row count — read from the files
+    /// without re-registering the table (ED-05).
+    ///
+    /// The answer an `INSERT` needs, and the reason it is not [`register`](Engine::register):
+    /// re-registering deregisters the provider and builds a fresh one, and **that** is what
+    /// leaves every view above it holding a stale `Arc` (D10/D11). Views survive it only
+    /// because the caller then re-creates them. An append cannot make them stale — the sink
+    /// schema-checks before it writes, so the shape a view captured is the shape that is still
+    /// there — so re-registering after one would break the views and repair them again for
+    /// nothing, and re-infer a schema that could not have moved on the way.
+    ///
+    /// The count is still *read*, never added up from what a statement claimed: this re-LISTs
+    /// the sources and totals the footers, of which only the appended file's is uncached.
+    pub async fn table_meta(&self, name: String) -> Result<TableMeta, String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { catalog::table_meta(&ctx, &name).await })
+            .await
+            .map_err(|e| format!("table meta task failed: {e}"))?
+    }
+
+    /// The Hive partition keys under `paths`, outermost first — what the Configure window's
+    /// Hive section offers (P4-11). Listed through the session's object store, so it answers for
+    /// a bucket as readily as for a local folder.
+    pub async fn detect_partitions(&self, paths: Vec<String>) -> Vec<String> {
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { catalog::detect_partitions(&ctx, &paths).await })
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Drop a registered table.
+    pub fn deregister(&self, table: &str) {
+        self.cancel_profile(table);
+        let _ = self.ctx.deregister_table(table);
+        self.note_origin(table, false);
+    }
+
+    /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
+    /// what it reads (D10) — **the ⌘S gesture's entry into [`ddl::create_view`]**, which a
+    /// typed `CREATE VIEW` enters through [`run`](Engine::run) instead. `CREATE OR REPLACE`:
+    /// redefinition is the ⌘S-on-a-view path.
+    pub async fn create_view(&self, name: String, sql: String) -> Result<ViewMeta, String> {
+        self.cancel_profile(&name);
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { ddl::create_view(&ctx, &name, &sql).await })
+            .await
+            .map_err(|e| format!("create view task failed: {e}"))?
+    }
+
+    /// Drop the SQL view `name` (idempotent — `IF EXISTS`) — the catalog pane's entry into
+    /// [`ddl::drop_view`], as a typed `DROP VIEW` reaches it through [`run`](Engine::run).
+    pub async fn drop_view(&self, name: String) -> Result<(), String> {
+        self.cancel_profile(&name);
+        let ctx = self.ctx.clone();
+        self.rt()
+            .spawn(async move { ddl::drop_view(&ctx, &name).await })
+            .await
+            .map_err(|e| format!("drop view task failed: {e}"))?
+    }
+
+    /// Tear down one workspace (tab close): abort its in-flight run and retire its
+    /// current snapshot (spec §4).
+    ///
+    /// Sync, so it can't await the aborted task the way `query` does; if the tab's
+    /// `query` future is already gone, nothing does. What survives that is bounded — a
+    /// `__snap_N` registered over a file we deleted (an uncached read of it fails
+    /// cleanly, exactly like any retired snapshot), and at worst a stray parquet file in
+    /// this engine's own directory, which `Drop` removes wholesale.
+    pub fn cleanup_ws(&self, ws: WsId) {
+        let mut lc = self.lifecycle.lock().unwrap();
+        if let Some(f) = lc.inflight.remove(&ws) {
+            self.abort_inflight(f);
+        }
+        if let Some(snap) = lc.current.remove(&ws) {
+            self.retire_or_defer(&mut lc, snap);
+        }
+        self.publish_inflight(&lc);
+    }
+
+    /// Abort an in-flight run and retire whatever snapshot it was materializing.
+    ///
+    /// Best effort by construction: `abort()` lands at the task's next await (cooperative
+    /// cancel), so the task's own error-path cleanup never runs *and* the task can still
+    /// be mid-flight while we retire. The definitive sweep is the awaiter's — `query`
+    /// retires again once its `JoinHandle` reports cancelled, by which point the task is
+    /// finished for certain. This retire is what covers the paths with no awaiter left
+    /// (`cleanup_ws`, `Drop`).
+    fn abort_inflight(&self, f: InFlight) {
+        f.abort.abort();
+        if let Some(snap) = f.snapshot {
+            retire_snapshot(&self.ctx, self.engine_id, snap);
+        }
+    }
+}
+
+/// One piece of **background** engine work in flight — an export writing a file, a drop
+/// deleting a table's data. Holding one is what keeps the close-while-running flag true
+/// (`Lifecycle::background`), so the window asks before it takes the runtime away.
+///
+/// A guard rather than a matching pair of statements because every holder **awaits**, and a
+/// dropped future must not be able to leak the count: a leaked increment would make every later
+/// window close claim work was running for the rest of the engine's life. Borrows the engine, so
+/// it cannot outlive the call.
+struct BackgroundGuard<'a> {
+    engine: &'a Engine,
+}
+
+impl<'a> BackgroundGuard<'a> {
+    /// Constructing the guard *is* the acquire, so there is no way to hold one without having
+    /// taken what it releases.
+    fn new(engine: &'a Engine) -> Self {
+        let mut lc = engine.lifecycle.lock().unwrap();
+        lc.background += 1;
+        engine.publish_inflight(&lc);
+        Self { engine }
+    }
+}
+
+impl Drop for BackgroundGuard<'_> {
+    fn drop(&mut self) {
+        let mut lc = self.engine.lifecycle.lock().unwrap();
+        lc.background = lc.background.saturating_sub(1);
+        self.engine.publish_inflight(&lc);
+    }
+}
+
+/// One in-flight export's bookkeeping — [`BackgroundGuard`]'s count, plus a hold on the snapshot
+/// being written — released together by `Drop`.
+///
+/// The export half is the pin: a write must read the snapshot it was opened on even if the tab
+/// behind it re-runs. **Owned**, unlike [`BackgroundGuard`], because the thing it protects is the
+/// spawned write and not the call that started it — see [`Engine::export`] for what a
+/// caller-scoped guard let happen.
+struct ExportHold {
+    snapshot: SnapshotId,
+    /// **Weak, and that is load-bearing.** This hold rides on a task running on the runtime the
+    /// engine owns, so a strong `Arc` here would close a cycle — engine owns runtime owns task
+    /// owns hold owns engine — and the engine would never drop. The write does not need it
+    /// either: `run_export` holds its own clone of the `SessionContext`. An engine that has gone
+    /// has no bookkeeping left to correct, so a failed upgrade is the whole handling.
+    engine: Weak<Engine>,
+}
+
+impl ExportHold {
+    /// Claim both halves. Constructing the hold *is* the acquire, so there is no way to hold one
+    /// without having taken what it releases.
+    fn new(engine: &Arc<Engine>, snapshot: SnapshotId) -> Self {
+        let mut lc = engine.lifecycle.lock().unwrap();
+        *lc.pins.entry(snapshot).or_insert(0) += 1;
+        lc.background += 1;
+        engine.publish_inflight(&lc);
+        drop(lc);
+        Self {
+            snapshot,
+            engine: Arc::downgrade(engine),
+        }
+    }
+}
+
+impl Drop for ExportHold {
+    fn drop(&mut self) {
+        let Some(engine) = self.engine.upgrade() else {
+            return;
+        };
+        engine.release_pin(self.snapshot);
+        let mut lc = engine.lifecycle.lock().unwrap();
+        lc.background = lc.background.saturating_sub(1);
+        engine.publish_inflight(&lc);
+    }
+}
+
+/// A hold on one snapshot, keeping it readable past the re-run that would otherwise retire it
+/// (see [`Engine::pin_snapshot`]). Dropping it releases the hold, and retires the snapshot if
+/// a retire arrived while it was pinned and this was the last hold.
+///
+/// Holds an `Arc<Engine>` rather than a borrow so it can be parked in UI state for a window's
+/// lifetime — which is the whole point of it existing.
+pub struct SnapshotPin {
+    engine: Arc<Engine>,
+    snapshot: SnapshotId,
+}
+
+impl SnapshotPin {
+    /// The snapshot this pin is holding open.
+    pub fn snapshot(&self) -> SnapshotId {
+        self.snapshot
+    }
+}
+
+impl Drop for SnapshotPin {
+    fn drop(&mut self) {
+        self.engine.release_pin(self.snapshot);
+    }
+}
+
+impl Drop for Engine {
+    /// The window is closing: abort everything in flight and remove this engine's
+    /// snapshot directory. (`purge_snapshot_root` at the *next* process start covers an
+    /// abrupt exit that skips this.)
+    ///
+    /// Same asynchronous-abort caveat as `cleanup_ws`, with a smaller blast radius: an
+    /// aborted task that outlives us can only recreate files under a directory nobody
+    /// reads any more (its `SessionContext` dies with the engine), and the next startup
+    /// purge sweeps it — the claim goes with `_snapshot_lock`, which drops right after
+    /// this body, so that directory is no longer defended.
+    fn drop(&mut self) {
+        let mut lc = self.lifecycle.lock().unwrap();
+        for (_, f) in lc.inflight.drain() {
+            f.abort.abort();
+        }
+        for (_, p) in lc.profiles.drain() {
+            p.abort.abort();
+        }
+        lc.current.clear();
+        self.publish_inflight(&lc);
+        drop(lc);
+        self.databases.shutdown(&self.ctx);
+        if let Some(rt) = self.rt.take() {
+            rt.shutdown_background();
+        }
+        discard_snapshot_dir(self.engine_id);
+    }
+}
+
+/// The **engine identity** of a catalog name: the string DataFusion ends up keying the
+/// object under, once [`quote_ident`] has rendered `name` into a statement.
+///
+/// It is not a re-derivation of DataFusion's rules — it *asks* `TableReference::parse_str`,
+/// the very function `ctx.register_table(&str)` and `ctx.table(&str)` resolve a plain
+/// `&str` through. So a view created via [`quote_ident`] and a table registered from the
+/// same def name land on the same identity by construction: a single bare word folds to
+/// ASCII-lowercase (`MyView` → `myview`, `Order` → `order`), and anything the parser can't
+/// read as one identifier — a space, a hyphen, a leading digit, a stray quote — is the
+/// name verbatim.
+///
+/// A dotted name parses as *qualified*, which we deliberately don't honour: the engine owns
+/// one schema and a catalog name is an opaque label, so `a.b` is the literal name `a.b`.
+/// (Nothing regresses: `register_table("a.b")` resolves to schema `a`, which doesn't exist,
+/// so such a table never registered either.)
+/// `pub` because the empty-table panel asks the same question of its column rows (IT-01): two
+/// rows collide exactly when the create arm's own fold says they do, and a form approximating
+/// that with a case-insensitive compare would refuse pairs the engine accepts.
+pub fn fold_ident(name: &str) -> String {
+    match TableReference::parse_str(name) {
+        TableReference::Bare { table } => table.to_string(),
+        _ => name.to_string(),
+    }
+}
+
+/// Render `name` for interpolation into a statement, such that DataFusion resolves it to
+/// exactly [`fold_ident(name)`](fold_ident): bare when the folded name is a plain
+/// lowercase word that isn't reserved in a name position, double-quoted (any embedded `"`
+/// doubled) otherwise.
+///
+/// **Fold-preserving is the contract**, and it is what makes this safe to add to a shipped app.
+/// DataFusion lower-cases an unquoted identifier and takes a quoted one verbatim, so a view named
+/// `DailySales` has been registering as `dailysales` all along; emitting `"DailySales"` would
+/// re-key it and break every sibling def that says `FROM dailysales`. So a name that already worked
+/// keeps its exact old identity — nothing sayable bare is quoted, and the fold runs here rather
+/// than in the parser, which also makes the identity independent of
+/// `datafusion.sql_parser.enable_ident_normalization`.
+///
+/// Quoting is therefore never a re-keying, only a capability gain, and it fires in two cases:
+/// names that were genuinely broken (`Sales 2024`, `2024`, `sales-eu`) where nothing was ever
+/// registered to preserve, and reserved words defensively — `Order` folds to `"order"` first, the
+/// same identity the unquoted spelling had.
+///
+/// The reserved-word authority is [`sql::lex::is_reserved_in_name_position`], the same one
+/// completion's quoting uses — but the two renderers are **not** interchangeable, and
+/// [`sql::quote_verbatim`] states the difference: that one preserves the spelling, for a name
+/// whose identity belongs to a server. `pub` because a surface composing a statement about a
+/// *workspace* def has to say the name that def will be keyed under (DB-06's Pin as view).
+pub fn quote_ident(name: &str) -> String {
+    let id = fold_ident(name);
+    let mut rest = id.chars();
+    let bare = matches!(rest.next(), Some(c) if c.is_ascii_lowercase() || c == '_')
+        && rest.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !sql::lex::is_reserved_in_name_position(&id);
+    if bare {
+        id
+    } else {
+        format!("\"{}\"", id.replace('"', "\"\""))
+    }
+}
+
+/// Build a `SessionContext` honouring the engine config `overrides`: the
+/// `ConfigOptions` keys go on the `SessionConfig`; the `datafusion.runtime.*` keys
+/// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
+/// and skipped rather than failing the whole engine.
+fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
+    let mut config = SessionConfig::new().with_information_schema(true);
+    for (key, value) in overrides {
+        if key.starts_with("datafusion.runtime.") {
+            continue;
+        }
+        if config::is_owned_key(key) {
+            continue;
+        }
+        if let Err(e) = config.options_mut().set(key, value) {
+            tracing::warn!("engine config: skipping {key}={value}: {e}");
+        }
+    }
+    let mut config = config.with_default_catalog_and_schema(CATALOG, SCHEMA);
+    config.options_mut().sql_parser.collect_spans = true;
+    let rt = match build_runtime(overrides) {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::warn!("engine runtime config invalid ({e}); using defaults");
+            build_runtime(&BTreeMap::new()).expect("default runtime")
+        }
+    };
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(rt)
+        .with_default_features()
+        .with_catalog_list(Arc::new(StrataCatalogList::default()))
+        .with_optimizer_rules(default_optimizer_rules())
+        .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
+        .build();
+    let mut ctx = SessionContext::new_with_state(state);
+    ctx.register_catalog(CATALOG, Arc::new(StrataCatalogProvider::default()));
+    if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
+        tracing::warn!("engine: JSON functions unavailable: {e}");
+    }
+    udfs::register(&ctx);
+    ctx.with_function_factory(Arc::new(StrataFunctionFactory))
+}
+
+/// Whether the engine has a function called `name` (already folded), in any registry.
+///
+/// **All five, because `DROP FUNCTION` clears all five.** DataFusion's `drop_function` deregisters
+/// the scalar, aggregate, window, table and higher-order registries in one go, so "is this name
+/// taken" has to be the same question the drop would answer — otherwise a name this predicate does
+/// not see can be taken by a `CREATE FUNCTION` and then destroyed for the session by the matching
+/// `DROP`, which is exactly the loss the built-in fence exists to prevent. Asking three was wrong
+/// for the higher-order set in particular: `array_filter`, `array_transform` and `array_any_match`
+/// are registered **only** there, so they read as free names.
+///
+/// The table functions are asked through the state's own map rather than a registry method, since
+/// `FunctionRegistry` has none for them; `state_ref` rather than `state()`, which clones.
+fn registered_function(ctx: &SessionContext, name: &str) -> bool {
+    ctx.udf(name).is_ok()
+        || ctx.udaf(name).is_ok()
+        || ctx.udwf(name).is_ok()
+        || ctx.higher_order_function(name).is_ok()
+        || ctx.state_ref().read().table_functions().contains_key(name)
+}
+
+/// The catalog + schema **we own** — see [`build_context`].
+///
+/// The catalog's name is `strata-model`'s, because a database connection's own catalog name may
+/// not be it ([`strata_model::PgStore::check_catalog`]) and a name written down twice is a name
+/// that can disagree.
+const CATALOG: &str = strata_model::WORKSPACE_CATALOG;
+const SCHEMA: &str = "public";
+
+/// Re-initialise the UDFs that read `ConfigOptions` **when they were registered**, after a write
+/// to a live session's options. Call from every path that moves an option: a Settings Apply
+/// ([`Engine::set_config`]) and a typed `SET` / `RESET` (`ddl::session`).
+///
+/// Writing `ConfigOptions` is not the whole of applying a setting, and the gap is silent rather
+/// than loud. `NowFunc` captures `execution.time_zone` in `new_with_config` and bakes it into the
+/// literal its `simplify` returns, and the `to_timestamp` family does the same — so an option
+/// written without this reports success, moves `SHOW`, and leaves `now()` / `current_timestamp`
+/// answering in the zone the engine was *built* with until a restart. DataFusion's own
+/// `set_variable` and `reset_variable` do this immediately after the same `options.set` call
+/// (`context/mod.rs`); the `SessionStateBuilder` does it at construction, which is why a launch
+/// override always worked and only a live change did not.
+///
+/// `with_updated_config` returning `None` is the overwhelmingly common answer (the trait's own
+/// default), so this walks the registry and re-registers the handful that opt in.
+fn refresh_config_dependent_udfs(state: &mut SessionState) {
+    let options = state.config().options();
+    let updated: Vec<Arc<ScalarUDF>> = state
+        .scalar_functions()
+        .values()
+        .filter_map(|udf| udf.inner().with_updated_config(options).map(Arc::new))
+        .collect();
+    for udf in updated {
+        if let Err(e) = state.register_udf(udf) {
+            tracing::warn!("engine config: could not re-register a config-dependent function: {e}");
+        }
+    }
+}
+
+/// Just the `datafusion.runtime.*` entries of `overrides` — the half that
+/// [`build_runtime`] reads, and so the half a restart would change.
+fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    overrides
+        .iter()
+        .filter(|(k, _)| config::is_restart_key(k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// A `RuntimeEnv` from the `datafusion.runtime.*` overrides. Sizes ("2G", "100G") parse via
+/// `parse_capacity_limit`; the TTL via [`strata_core::util::parse_duration`], the same function
+/// [`config::value_error`] validates the field with.
+///
+/// **Always built, never DataFusion's own**, because one of these settings is ours: the
+/// list-files cache starts *off* (`ENGINE_KEYS`, where the reason is written down). DataFusion
+/// 54 turns it on by default with an infinite TTL, and a cached listing makes a re-scan return
+/// the previous answer — which is the one thing a re-scan exists not to do. That default has to
+/// be applied even when the user has set no `runtime.*` key at all, so there is no
+/// "nothing to configure" short circuit here.
+///
+/// **Every key [`config::ENGINE_KEYS`] catalogues as `runtime.*` is read here.** Four of them
+/// were catalogued — named, described, and treated as restart-required by
+/// [`is_restart_key`](config::is_restart_key) — but never consumed, which nothing noticed while
+/// there was no way to set them. P4-07's properties editor is that way: it offers the key,
+/// validates the value, badges it RESTART and rebuilds the engine, and the setting then did
+/// nothing, with no error to say so. A catalogue entry is a promise that the key applies, so
+/// adding one to `ENGINE_KEYS` means adding it here in the same change.
+fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Arc<RuntimeEnv>, String> {
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+    let val = |k: &str| {
+        overrides
+            .get(k)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let bytes = |key: &str, raw: &str| {
+        SessionContext::parse_capacity_limit(key, raw).map_err(|e| e.to_string())
+    };
+
+    let mem = val("datafusion.runtime.memory_limit");
+    let max_temp = val("datafusion.runtime.max_temp_directory_size");
+    let temp_dir = val("datafusion.runtime.temp_directory");
+    let metadata_cache = val("datafusion.runtime.metadata_cache_limit");
+    let list_cache = val("datafusion.runtime.list_files_cache_limit");
+    let list_ttl = val("datafusion.runtime.list_files_cache_ttl");
+
+    let mut b = RuntimeEnvBuilder::new().with_object_list_cache_limit(bytes(
+        "datafusion.runtime.list_files_cache_limit",
+        config::key_def("datafusion.runtime.list_files_cache_limit")
+            .expect("the catalogued key")
+            .default,
+    )?);
+    if let Some(v) = &mem {
+        b = b.with_memory_limit(bytes("datafusion.runtime.memory_limit", v)?, 1.0);
+    }
+    if let Some(v) = &max_temp {
+        b = b.with_max_temp_directory_size(
+            bytes("datafusion.runtime.max_temp_directory_size", v)? as u64
+        );
+    }
+    if let Some(v) = &temp_dir {
+        b = b.with_temp_file_path(v);
+    }
+    if let Some(v) = &metadata_cache {
+        b = b.with_metadata_cache_limit(bytes("datafusion.runtime.metadata_cache_limit", v)?);
+    }
+    if let Some(v) = &list_cache {
+        b = b.with_object_list_cache_limit(bytes("datafusion.runtime.list_files_cache_limit", v)?);
+    }
+    if let Some(v) = &list_ttl {
+        let ttl = strata_core::util::parse_duration(v).ok_or_else(|| {
+            format!("datafusion.runtime.list_files_cache_ttl: expected a duration like 30s or 2m, got {v}")
+        })?;
+        b = b.with_object_list_cache_ttl(Some(ttl));
+    }
+    b.build_arc().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::Pin;
+    use std::task::{Context, Waker};
+
+    use crate::sql::Blocked;
+    use strata_model::{SourceFormat, StatKey};
+
+    use super::*;
+
+    /// Big enough that the first dispatch is still streaming when the second lands, and
+    /// cheap to abort (the spool awaits per batch, so the abort takes effect at once).
+    const SLOW: &str = "SELECT count(*) FROM generate_series(1, 50000000)";
+    const FAST: &str = "SELECT 1 AS n";
+    /// A view body whose **profile** is still counting when a test acts on it: 50M distinct
+    /// values, aborted within a few dozen milliseconds, so the scan never accumulates far.
+    const SLOW_ROWS: &str = "SELECT * FROM generate_series(1, 50000000)";
+
+    /// Drive `fut` to its first await point and hand it back still owned, so a test can drop
+    /// it there. One poll is all it takes: a dispatch's bookkeeping is synchronous and runs
+    /// before the `await` on the spawned work, so after this the entry is published and the
+    /// future is parked exactly where a cancelled caller would abandon it.
+    fn dispatched<F: Future>(fut: F) -> Pin<Box<F>> {
+        let mut fut = Box::pin(fut);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            fut.as_mut().poll(&mut cx).is_pending(),
+            "the run settled before it could be interrupted"
+        );
+        fut
+    }
+
+    /// **A caller that goes away mid-run leaves the engine idle.**
+    ///
+    /// Every caller used to be freya-query, which never cancels an execution, so `query`
+    /// could publish its in-flight entry and rely on its own settle path to clear it. An
+    /// agent's run (AA-03b) is awaited inside an MCP request future instead, and a client
+    /// cancellation, a dropped connection or the agent server shutting down all drop it
+    /// mid-await. Without `DispatchGuard` the entry survives forever: the window's in-flight
+    /// flag latches on, so every later close, re-root and engine restart raises the
+    /// close-while-running confirm for a query that finished long ago.
+    #[test]
+    fn a_dropped_run_future_does_not_leave_the_workspace_running() {
+        let engine = Engine::new(BTreeMap::new());
+        let ws = WsId(1);
+        let flag = Arc::new(AtomicBool::new(false));
+        engine.watch_inflight(Arc::clone(&flag));
+
+        let running = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
+        assert!(engine.is_running(ws), "the dispatch published");
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "and the window sees work in flight"
+        );
+
+        drop(running);
+
+        assert!(
+            !engine.is_running(ws),
+            "dropping the caller must retract the dispatch, not strand it"
+        );
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "and the close-while-running flag must go back down"
+        );
+    }
+
+    /// The guard must not tear down an entry a **newer** dispatch owns — the same `latest`
+    /// rule the settle path follows, for the same reason.
+    #[test]
+    fn a_dropped_superseded_run_leaves_the_newer_dispatch_alone() {
+        let engine = Engine::new(BTreeMap::new());
+        let ws = WsId(1);
+
+        let first = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
+        let _second = dispatched(engine.query(ws, RunTag(2), SLOW.into(), 10));
+
+        drop(first);
+
+        assert!(
+            engine.is_running(ws),
+            "the superseded caller going away must not cancel the run that replaced it"
+        );
+    }
+
+    fn overrides(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// What the live session actually holds for `key` — the thing `set_config` claims to move.
+    fn live(engine: &Engine, key: &str) -> String {
+        engine
+            .ctx
+            .state()
+            .config()
+            .options()
+            .entries()
+            .into_iter()
+            .find(|entry| entry.key == key)
+            .and_then(|entry| entry.value)
+            .unwrap_or_default()
+    }
+
+    const BATCH: &str = "datafusion.execution.batch_size";
+    const MEMORY: &str = "datafusion.runtime.memory_limit";
+
+    #[test]
+    fn set_config_moves_a_live_option_and_puts_a_removed_one_back_to_its_default() {
+        let engine = Engine::new(overrides(&[(BATCH, "4096")]));
+        assert_eq!(live(&engine, BATCH), "4096", "built with the override");
+
+        assert!(!engine.set_config(overrides(&[(BATCH, "1024")])));
+        assert_eq!(live(&engine, BATCH), "1024", "applied without a restart");
+
+        assert!(!engine.set_config(BTreeMap::new()));
+        assert_eq!(
+            live(&engine, BATCH),
+            config::key_def(BATCH).expect("catalogued").default,
+            "a removed override goes back to the built-in default"
+        );
+    }
+
+    #[test]
+    fn a_runtime_key_owes_a_restart_until_the_engine_is_rebuilt() {
+        let engine = Engine::new(BTreeMap::new());
+        assert!(!engine.restart_owed());
+
+        assert!(
+            engine.set_config(overrides(&[(MEMORY, "2G")])),
+            "the RuntimeEnv is fixed at build, so this is owed"
+        );
+        assert!(engine.restart_owed());
+        assert!(
+            engine.set_config(overrides(&[(MEMORY, "2G"), (BATCH, "1024")])),
+            "a second write still owes the same restart"
+        );
+
+        let restarted = Engine::new(engine.overrides());
+        assert!(!restarted.restart_owed());
+    }
+
+    /// The JSON accessors reach the **function catalogue**, not merely the context — and those
+    /// are the same fact, which is the whole reason registering them is the entire integration.
+    /// `functions::snapshot` walks the live registry, so a UDF registered in `build_context`
+    /// arrives in autocomplete, signature help and the docs panel with no per-function table to
+    /// maintain and no way for the completion pool and the engine to disagree about what exists.
+    /// Asserted through `functions()` rather than through `ctx.udfs()` for exactly that reason:
+    /// the registry is the easy half, and it is the *snapshot* that the surfaces read.
+    #[test]
+    fn json_accessors_reach_the_function_catalogue() {
+        let engine = Engine::new(BTreeMap::new());
+        let functions = engine.functions();
+        let names: Vec<&str> = functions.scalar.iter().map(|f| f.name.as_str()).collect();
+        for want in [
+            "json_get",
+            "json_get_str",
+            "json_get_int",
+            "json_as_text",
+            "json_contains",
+            "json_length",
+        ] {
+            assert!(
+                names.contains(&want),
+                "'{want}' is registered on the context but absent from the function catalogue"
+            );
+        }
+    }
+
+    /// A bare `->` **used to panic the query task**, and must not.
+    ///
+    /// `json_get` returns a sparse `Union` (the crate's stand-in for Postgres `jsonb`, which Arrow
+    /// has no equivalent of). Parquet has no union logical type and `arrow_to_parquet_schema`
+    /// panics rather than erroring, so the snapshot every run materializes took the task down with
+    /// `not implemented: See ARROW-8817`. `query::flatten_json_unions` projects the column to its
+    /// canonical JSON text before the writer sees it.
+    ///
+    /// The four cases below are one per union arm that survives to a result, which is what makes
+    /// this a test of the *flattening* rather than of one expression.
+    #[tokio::test]
+    async fn a_bare_json_arrow_yields_text_instead_of_panicking() {
+        let eng = Engine::new(Default::default());
+        let doc = r#"'{"s": "x", "n": 7, "b": true, "o": {"k": 1}, "a": [1,2], "z": null}'"#;
+
+        let (out, _) = eng
+            .query(
+                WsId(1),
+                RunTag(1),
+                format!(
+                    "SELECT {doc} -> 's' AS s, {doc} -> 'n' AS n, {doc} -> 'b' AS b, \
+                     {doc} -> 'o' AS o, {doc} -> 'a' AS a, {doc} -> 'z' AS z"
+                ),
+                10,
+            )
+            .await
+            .expect("a union column no longer reaches the parquet writer");
+
+        let row: Vec<String> = out.rows[0].iter().map(|c| c.text.clone()).collect();
+        assert_eq!(
+            row,
+            vec![
+                r#""x""#.to_string(),
+                "7".to_string(),
+                "true".to_string(),
+                r#"{"k": 1}"#.to_string(),
+                "[1,2]".to_string(),
+                "NULL".to_string(),
+            ]
+        );
+        assert!(
+            out.rows[0][5].null,
+            "the JSON null arm is a real null, not the text"
+        );
+
+        assert!(
+            out.columns.iter().all(|c| !c.dtype.contains("Union")),
+            "{:?}",
+            out.columns.iter().map(|c| &c.dtype).collect::<Vec<_>>()
+        );
+    }
+
+    /// A union **nested** inside a struct now stores as itself.
+    ///
+    /// It used to be refused by name, because `json_union_to_text` takes the union directly so
+    /// there was nothing to wrap it with, and parquet would have panicked on it. The IPC snapshot
+    /// holds it, which is the fidelity the format change bought: the type that reaches the writer
+    /// is the type the query produced, and no coercion or refusal stands between them.
+    #[tokio::test]
+    async fn a_json_value_nested_in_a_struct_round_trips() {
+        let eng = Engine::new(Default::default());
+        let (out, _) = eng
+            .query(
+                WsId(1),
+                RunTag(1),
+                r#"SELECT struct('{"a":1}' -> 'a' AS v) AS wrapped"#.into(),
+                10,
+            )
+            .await
+            .expect("a nested union is storable under IPC");
+        assert_eq!(out.total, 1);
+        assert_eq!(out.columns.len(), 1);
+        assert_eq!(out.columns[0].name, "wrapped");
+    }
+
+    /// And they evaluate. A path accessor over a JSON *string* with nothing registered is the
+    /// case that says these belong to the engine rather than to a table — which is why they are
+    /// built in `build_context` beside the catalog naming and not in `catalog`.
+    #[tokio::test]
+    async fn a_json_accessor_needs_no_table() {
+        use datafusion::arrow::array::StringArray;
+
+        let ctx = build_context(&BTreeMap::new());
+        let batches = ctx
+            .sql(r#"SELECT json_get_str('{"a":{"b":"deep"}}', 'a', 'b') AS v"#)
+            .await
+            .expect("plan")
+            .collect()
+            .await
+            .expect("run");
+
+        let col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("json_get_str returns Utf8");
+        assert_eq!(col.value(0), "deep");
+    }
+
+    /// A catalogue entry is a promise that the key applies. Four `runtime.*` keys were
+    /// catalogued, described and badged RESTART while `build_runtime` never read them, so setting
+    /// one did nothing at all — invisible until P4-07 gave them an editor. This is the guard:
+    /// every `runtime.*` key the catalogue names must reach `RuntimeEnvBuilder`.
+    ///
+    /// It shows up as **the builder rejecting a value that key's kind cannot hold**, which is
+    /// something only a key that is actually read can do. (It used to be "the builder answered
+    /// with a runtime rather than `None`", which stopped meaning anything when `build_runtime`
+    /// started always building one — the list-files cache default is ours, so there is no longer
+    /// a "nothing to configure" answer to distinguish.) A free-text key has no invalid value and
+    /// is exempted by name rather than silently skipped.
+    #[test]
+    fn every_catalogued_runtime_key_reaches_the_runtime_builder() {
+        for entry in config::ENGINE_KEYS
+            .iter()
+            .filter(|e| config::is_restart_key(e.key))
+        {
+            let value = match entry.default {
+                "" => match entry.kind {
+                    config::Kind::Bytes => "64M",
+                    config::Kind::Duration => "30s",
+                    _ => "/tmp/strata-runtime-test",
+                },
+                default => default,
+            };
+            build_runtime(&overrides(&[(entry.key, value)]))
+                .unwrap_or_else(|e| panic!("{} = {value} was rejected: {e}", entry.key));
+
+            if entry.key == "datafusion.runtime.temp_directory" {
+                continue;
+            }
+            assert!(
+                build_runtime(&overrides(&[(entry.key, "nonsense")])).is_err(),
+                "{} accepted a value its kind cannot hold — the key is catalogued but never \
+                 read, so setting it does nothing and says nothing",
+                entry.key
+            );
+        }
+    }
+
+    /// The list-files cache is **off by Strata's default**, not DataFusion's — which turns it on
+    /// at 1M with an infinite TTL. Every re-scan promise depends on it: the catalog's Refresh,
+    /// the Configure window's re-inference and `CREATE OR REPLACE TABLE` all mean "list the
+    /// sources again", and a cached listing answers each of them with the previous file set.
+    #[test]
+    fn the_list_files_cache_is_off_unless_the_user_asks_for_one() {
+        let default = build_runtime(&BTreeMap::new()).expect("runtime");
+        assert!(
+            default.cache_manager.get_list_files_cache().is_none(),
+            "a fresh engine caches no listing"
+        );
+        let asked = build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_limit",
+            "4M",
+        )]))
+        .expect("runtime");
+        assert!(asked.cache_manager.get_list_files_cache().is_some());
+    }
+
+    #[test]
+    fn a_runtime_ttl_is_read_the_way_the_field_validates_it() {
+        assert!(build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_ttl",
+            "2m"
+        )]))
+        .is_ok());
+        assert_eq!(
+            strata_core::util::parse_duration("2m"),
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert!(build_runtime(&overrides(&[(
+            "datafusion.runtime.list_files_cache_ttl",
+            "nonsense"
+        )]))
+        .is_err());
+    }
+
+    #[test]
+    fn set_config_leaves_the_catalog_names_alone() {
+        let engine = Engine::new(BTreeMap::new());
+        engine.set_config(overrides(&[(
+            "datafusion.catalog.default_schema",
+            "elsewhere",
+        )]));
+        assert_eq!(live(&engine, "datafusion.catalog.default_schema"), SCHEMA);
+    }
+
+    #[test]
+    fn a_nameable_ident_is_emitted_bare_and_case_folded() {
+        for name in ["daily_sales", "_scratch", "t9", "orders2024"] {
+            assert_eq!(quote_ident(name), name, "already folded — untouched");
+        }
+        assert_eq!(quote_ident("DailySales"), "dailysales");
+        assert_eq!(quote_ident("Revenue"), "revenue");
+        assert_eq!(quote_ident("ORDERS"), "orders");
+    }
+
+    #[test]
+    fn only_an_unsayable_name_is_quoted_and_it_is_escaped() {
+        assert_eq!(quote_ident("Sales 2024"), "\"Sales 2024\"");
+        assert_eq!(quote_ident("2024"), "\"2024\"", "can't lead with a digit");
+        assert_eq!(quote_ident("sales-eu"), "\"sales-eu\"");
+        assert_eq!(
+            quote_ident("say \"hi\""),
+            "\"say \"\"hi\"\"\"",
+            "an embedded quote is doubled, not dropped"
+        );
+        assert_eq!(quote_ident("order"), "\"order\"");
+        assert_eq!(quote_ident("Order"), "\"order\"");
+    }
+
+    #[test]
+    fn the_folded_name_is_the_one_datafusion_resolves() {
+        for name in ["daily_sales", "MyView", "Order", "Sales 2024", "2024"] {
+            assert_eq!(
+                fold_ident(name),
+                TableReference::parse_str(name).table(),
+                "{name:?}"
+            );
+        }
+        assert_eq!(fold_ident("a.b"), "a.b");
+    }
+
+    #[tokio::test]
+    async fn a_view_round_trips_under_the_name_it_was_given() {
+        let eng = Engine::new(Default::default());
+        for (i, name) in ["daily_sales", "Sales 2024", "say \"hi\"", "Order"]
+            .iter()
+            .enumerate()
+        {
+            let meta = eng
+                .create_view((*name).into(), "SELECT 1 AS n".into())
+                .await
+                .unwrap_or_else(|e| panic!("create {name:?}: {e}"));
+            assert_eq!(meta.columns.len(), 1, "the view's own schema came back");
+
+            let ws = WsId(1);
+            let select = format!("SELECT * FROM {}", quote_ident(name));
+            let (out, _) = eng
+                .query(ws, RunTag(i as u128 * 2), select.clone(), 10)
+                .await
+                .unwrap_or_else(|e| panic!("select from {name:?}: {e}"));
+            assert_eq!(out.total, 1);
+
+            eng.drop_view((*name).into())
+                .await
+                .unwrap_or_else(|e| panic!("drop {name:?}: {e}"));
+            eng.query(ws, RunTag(i as u128 * 2 + 1), select, 10)
+                .await
+                .expect_err("the drop named the same view the create did");
+        }
+    }
+
+    /// The upgrade guarantee. A `.strata/project.json` written before quoting existed can
+    /// hold a view named `DailySales`, which DataFusion registered as `dailysales` — and
+    /// sibling defs / saved queries say `FROM dailysales`. Quoting must not re-key it.
+    #[tokio::test]
+    async fn a_mixed_case_view_still_registers_under_its_folded_name() {
+        let eng = Engine::new(Default::default());
+        eng.create_view("DailySales".into(), "SELECT 1 AS n".into())
+            .await
+            .expect("create");
+
+        let meta = eng
+            .create_view("Derived".into(), "SELECT * FROM dailysales".into())
+            .await
+            .expect("a def referencing the folded name");
+        assert_eq!(meta.columns.len(), 1, "…and planned against it");
+
+        for sql in ["SELECT * FROM dailysales", "SELECT * FROM DailySales"] {
+            let (out, _) = eng
+                .query(WsId(1), RunTag(1), sql.into(), 10)
+                .await
+                .unwrap_or_else(|e| panic!("{sql}: {e}"));
+            assert_eq!(out.total, 1);
+        }
+
+        eng.drop_view("DailySales".into()).await.expect("drop");
+        eng.query(WsId(1), RunTag(2), "SELECT * FROM dailysales".into(), 10)
+            .await
+            .expect_err("the drop named the same view the create did");
+    }
+
+    /// Which of `probes` resolve against `ctx` — "reachable as", asked of DataFusion rather
+    /// than re-derived here. [`TableReference::bare`] so each probe is taken verbatim and
+    /// never folded a second time on its way in.
+    async fn reachable(ctx: &SessionContext, probes: &[&str]) -> Vec<String> {
+        let mut hit = Vec::new();
+        for p in probes {
+            if ctx.table(TableReference::bare(*p)).await.is_ok() {
+                hit.push((*p).to_string());
+            }
+        }
+        hit
+    }
+
+    /// The **identities** `ctx`'s schema is keyed by, whatever spelling registered them —
+    /// `StrataSchemaProvider`'s own keys, minus the result snapshots it hides.
+    fn registered(ctx: &SessionContext) -> Vec<String> {
+        ctx.catalog(CATALOG)
+            .expect("our catalog")
+            .schema(SCHEMA)
+            .expect("our schema")
+            .table_names()
+    }
+
+    /// **The fold-preservation oracle.** The tests above pin `quote_ident` to hardcoded
+    /// expectations; this one pins it to *the code it replaced*, which is the property that
+    /// actually matters — an existing `.strata/project.json`, written and registered by the
+    /// shipped app, must keep working across this change.
+    ///
+    /// The shipped `create_view` interpolated the raw name unquoted and let the planner fold
+    /// it. So: register every name both ways — the old statement into one engine, today's
+    /// `create_view` into another — and require the two contexts to be reachable under
+    /// *exactly* the same spellings. That covers the headline case (`MyView` must still be
+    /// `myview`, never `"MyView"`) without either side asserting what the answer should be.
+    #[tokio::test]
+    async fn quoting_keeps_the_identity_the_unquoted_interpolation_gave_a_name() {
+        const NAMES: &[&str] = &["MyView", "DailySales", "daily_sales", "ORDERS", "Order"];
+        const PROBES: &[&str] = &[
+            "myview",
+            "MyView",
+            "MYVIEW",
+            "dailysales",
+            "DailySales",
+            "daily_sales",
+            "orders",
+            "ORDERS",
+            "order",
+            "Order",
+        ];
+
+        let legacy = Engine::new(Default::default());
+        let now = Engine::new(Default::default());
+        for name in NAMES {
+            let df = legacy
+                .ctx
+                .sql(&format!("CREATE OR REPLACE VIEW {name} AS SELECT 1 AS n"))
+                .await
+                .unwrap_or_else(|e| panic!("the shipped path handled {name:?}: {e}"));
+            let _ = df.collect().await;
+            now.create_view((*name).into(), "SELECT 1 AS n".into())
+                .await
+                .unwrap_or_else(|e| panic!("create_view {name:?}: {e}"));
+        }
+
+        assert_eq!(
+            registered(&legacy.ctx),
+            ["daily_sales", "dailysales", "myview", "order", "orders"],
+            "sanity: the shipped path folded each name to its lowercase spelling"
+        );
+        assert_eq!(
+            registered(&now.ctx),
+            registered(&legacy.ctx),
+            "every name must keep exactly the identity it always had — a sibling def saying \
+             `FROM myview` has no migration if this changes"
+        );
+        assert_eq!(
+            reachable(&now.ctx, PROBES).await,
+            reachable(&legacy.ctx, PROBES).await,
+            "and must stay reachable under exactly the spellings it always was"
+        );
+    }
+
+    /// The other half of the contract: the names quoting *added* really were broken before,
+    /// so there is no prior identity for them to preserve and quoting them is a pure
+    /// capability gain rather than a re-keying.
+    ///
+    /// Reserved words are pointedly **not** in this list. `CREATE VIEW Order …` parses fine
+    /// under DataFusion's `GenericDialect` (as does a bare `FROM order`), so `order` has a
+    /// real prior identity and is covered by the oracle above instead — quoting it is
+    /// defensive, not a repair, and the doc on [`quote_ident`] says so.
+    #[tokio::test]
+    async fn the_names_quoting_added_were_malformed_sql_before() {
+        let eng = Engine::new(Default::default());
+        for name in ["Sales 2024", "sales-eu", "2024", "say \"hi\""] {
+            let stmt = format!("CREATE OR REPLACE VIEW {name} AS SELECT 1 AS n");
+            assert!(
+                eng.ctx.sql(&stmt).await.is_err(),
+                "{name:?} was malformed unquoted — nothing was ever registered under it"
+            );
+        }
+    }
+
+    /// Register the `regions.csv` fixture (5 rows, `country` + `region`) under `name`.
+    async fn register_regions(eng: &Engine, name: &str) {
+        eng.register(TableSpec {
+            name: name.into(),
+            paths: vec![format!(
+                "{}/tests/fixtures/loadfix/regions.csv",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+            format: SourceFormat::from_name("csv"),
+            partitions: Vec::new(),
+            internal: false,
+        })
+        .await
+        .expect("register");
+    }
+
+    /// The "view as query" SQL has to *resolve*, not merely read well — the button drops
+    /// it into a scratch tab for the user to run. A table the user named `Regions`
+    /// registers as `regions` (`register_table` takes its `&str` through
+    /// `TableReference::parse_str`), so the generated `FROM` must say `regions`; the
+    /// always-quote helper this replaced printed `FROM "Regions"`, which plans against
+    /// nothing.
+    #[tokio::test]
+    async fn the_profile_sql_for_a_mixed_case_table_actually_runs() {
+        let eng = Engine::new(Default::default());
+        register_regions(&eng, "Regions").await;
+
+        let profile = eng.profile("Regions".into()).await.expect("profile");
+        assert!(
+            profile.sql.contains("FROM regions"),
+            "the folded name, bare: {}",
+            profile.sql
+        );
+        eng.query(WsId(1), RunTag(1), profile.sql.clone(), 10)
+            .await
+            .unwrap_or_else(|e| panic!("re-running the printed query: {e}\n{}", profile.sql));
+    }
+
+    /// A scan through the facade: the rows it read, and the per-type facts for the columns it
+    /// found. `regions.csv` is two `Utf8` columns, so each gets distinct / min / max and a
+    /// null count — and *not* mean / median, which are a type error on a string and would
+    /// fail the whole aggregate rather than one column (`profile::aggregates`).
+    #[tokio::test]
+    async fn a_scan_lands_the_per_type_facts_of_every_column() {
+        let eng = Engine::new(Default::default());
+        register_regions(&eng, "regions").await;
+
+        let profile = eng.profile("regions".into()).await.expect("profile");
+
+        assert_eq!(profile.rows, 5);
+        let keys = |col: &str| {
+            let mut keys: Vec<StatKey> = profile.cols[col].iter().map(|s| s.key).collect();
+            keys.sort_by_key(|k| format!("{k:?}"));
+            keys
+        };
+        for col in ["country", "region"] {
+            assert_eq!(
+                keys(col),
+                vec![
+                    StatKey::Distinct,
+                    StatKey::Max,
+                    StatKey::Min,
+                    StatKey::Nulls
+                ],
+                "{col}: a string column's facts, and no mean/median"
+            );
+        }
+        let stat = |col: &str, key: StatKey| {
+            profile.cols[col]
+                .iter()
+                .find(|s| s.key == key)
+                .map(|s| s.text.clone())
+                .unwrap_or_else(|| panic!("{col} has no {key:?}"))
+        };
+        assert_eq!(stat("region", StatKey::Distinct), "2", "EMEA and APAC");
+        assert_eq!(stat("region", StatKey::Min), "APAC");
+        assert_eq!(stat("region", StatKey::Nulls), "0");
+        assert!(
+            profile.cols["country"].iter().all(|s| s.exact),
+            "computed, not read from a truncatable footer"
+        );
+    }
+
+    /// Cancel, and what the flag says while a scan runs. Both halves are the point: a scan is
+    /// the most expensive thing the app does, so the window-close confirm counts it as work in
+    /// flight (D4) — and the Cancel in the inspector's running state has to actually stop it.
+    ///
+    /// The subject is a **view** over `generate_series`, which is also the case a scan matters
+    /// most for (a view has no footer at all): 50M rows of `count(distinct …)` is comfortably
+    /// slow enough to observe, and aborts at the next await.
+    #[tokio::test]
+    async fn a_scan_is_work_in_flight_and_cancel_stops_it() {
+        let eng = Engine::new(Default::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        eng.watch_inflight(flag.clone());
+        eng.create_view("slow".into(), SLOW_ROWS.into())
+            .await
+            .expect("create view");
+        assert!(!flag.load(Ordering::Relaxed), "idle to begin with");
+
+        let observe = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let flagged = flag.load(Ordering::Relaxed);
+            let cancelled = eng.cancel_profile("slow");
+            (flagged, cancelled)
+        };
+        let (settled, (flagged, cancelled)) = tokio::join!(eng.profile("slow".into()), observe);
+
+        assert!(flagged, "a running scan is work in flight");
+        assert!(cancelled, "…and the cancel found it");
+        assert_eq!(
+            settled.as_ref().err().map(String::as_str),
+            Some("cancelled")
+        );
+        assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
+        assert!(
+            !eng.cancel_profile("slow"),
+            "nothing left in flight to cancel"
+        );
+        assert!(!eng.is_running(WsId(1)));
+    }
+
+    /// Two things at once, because they are the same bookkeeping. A **re-scan supersedes**: the
+    /// older call reports no numbers, and the newer one owns the entry — which the late cancel
+    /// proves, since a settle path that keyed on the *name* would have removed the newer scan's
+    /// entry on its way out and left nothing to cancel (and the flag latched). And profiles are
+    /// **keyed per entry**, so a scan of another table runs alongside rather than being
+    /// superseded by it.
+    #[tokio::test]
+    async fn a_re_scan_supersedes_its_own_entry_and_nobody_elses() {
+        let eng = Engine::new(Default::default());
+        eng.create_view("slow".into(), SLOW_ROWS.into())
+            .await
+            .expect("create view");
+        register_regions(&eng, "regions").await;
+
+        let first = eng.profile("slow".into());
+        let re_scan = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            eng.profile("slow".into()).await
+        };
+        let other = eng.profile("regions".into());
+        let stop = async {
+            tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+            eng.cancel_profile("slow")
+        };
+        let (first, re_scan, other, stopped) = tokio::join!(first, re_scan, other, stop);
+
+        assert!(first.is_err(), "the superseded scan reports no numbers");
+        assert!(
+            stopped,
+            "the re-scan owns the entry, so there was one to cancel"
+        );
+        assert!(re_scan.is_err(), "…and that cancel landed on it");
+        assert_eq!(
+            other.map(|p| p.rows),
+            Ok(5),
+            "another entry's scan ran alongside, untouched"
+        );
+    }
+
+    /// Re-registering a table aborts its scan: the numbers would describe files the register
+    /// is replacing, so nothing should go on paying for them. Engine-side rather than left to
+    /// the caller, so every path that re-registers gets it.
+    #[tokio::test]
+    async fn re_registering_a_table_aborts_its_scan() {
+        let eng = Engine::new(Default::default());
+        eng.create_view("slow".into(), SLOW_ROWS.into())
+            .await
+            .expect("create view");
+
+        let scan = eng.profile("slow".into());
+        let replace = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            eng.create_view("slow".into(), "SELECT 1 AS n".into())
+                .await
+                .expect("re-create");
+        };
+        let (scan, ()) = tokio::join!(scan, replace);
+
+        assert_eq!(scan.as_ref().err().map(String::as_str), Some("cancelled"));
+    }
+
+    /// The close-while-running guard's two probes (T2). Both are answered from the
+    /// lifecycle map on purpose: the run under test has no UI at all here, which is
+    /// exactly the background-tab case a mounted-view derivation cannot see.
+    #[tokio::test]
+    async fn the_inflight_flag_and_the_per_workspace_probe_track_a_run() {
+        let eng = Engine::new(Default::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        eng.watch_inflight(flag.clone());
+        assert!(!flag.load(Ordering::Relaxed), "seeded from an idle engine");
+
+        let (ws, tag) = (WsId(1), RunTag(1));
+        let observe = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let seen = (flag.load(Ordering::Relaxed), eng.is_running(ws));
+            eng.cancel(ws, tag);
+            seen
+        };
+        let (settled, seen) = tokio::join!(eng.query(ws, tag, SLOW.into(), 10), observe);
+
+        assert_eq!(seen, (true, true), "flagged for as long as it executes");
+        assert!(settled.is_err(), "the cancel landed");
+        assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
+        assert!(!eng.is_running(ws));
+    }
+
+    /// **Background work raises the same flag a run does** — the close confirm's whole gate is
+    /// that one `AtomicBool` (`close::CloseHook::running`), so anything the user would rather
+    /// finish has to be counted in it, not merely runnable.
+    ///
+    /// Asserted on the guard rather than by racing a real drop or export: the guard *is* the
+    /// mechanism (`Engine::drop_table` and `Engine::export` each hold one for the length of
+    /// their await), the count is what a leaked increment would strand true for the engine's
+    /// whole life, and a test that had to make a delete slow enough to observe would be timing
+    /// against a filesystem.
+    #[test]
+    fn background_work_raises_the_close_confirms_flag_and_releases_it() {
+        let eng = Engine::new(Default::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        eng.watch_inflight(flag.clone());
+        assert!(!flag.load(Ordering::Relaxed), "seeded from an idle engine");
+        assert!(!eng.has_background_work());
+
+        {
+            let _first = BackgroundGuard::new(&eng);
+            assert!(flag.load(Ordering::Relaxed), "the window would now ask");
+            assert!(eng.has_background_work());
+            let second = BackgroundGuard::new(&eng);
+            drop(second);
+            assert!(
+                flag.load(Ordering::Relaxed),
+                "still flagged while the other is going"
+            );
+        }
+
+        assert!(!flag.load(Ordering::Relaxed), "cleared once both released");
+        assert!(!eng.has_background_work());
+    }
+
+    #[tokio::test]
+    async fn a_repeat_dispatch_of_one_tag_leaves_the_newer_run_intact() {
+        let eng = Engine::new(Default::default());
+        let (ws, tag) = (WsId(1), RunTag(7));
+        let first = eng.query(ws, tag, SLOW.into(), 10);
+        let second = async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            eng.query(ws, tag, FAST.into(), 10).await
+        };
+        let (first, second) = tokio::join!(first, second);
+
+        let (out, _) = second.expect("the newer dispatch settles Ok");
+        let snap = out.snapshot.expect("…owning a snapshot of its own");
+        eng.fetch_page(snap, 1, 10, None)
+            .await
+            .expect("…which the older dispatch did not retire");
+        if let Err(e) = &first {
+            assert_eq!(e, "cancelled", "the superseded dispatch settles cancelled");
+        }
+        assert!(
+            eng.cancel(ws, tag).is_none(),
+            "both settled — nothing left in flight"
+        );
+    }
+
+    /// **A query through `run` is a query through `query`.** The whole promise of routing is
+    /// that the read path did not move: same snapshot handle, same page 1, same totals — so a
+    /// regression here is the router having grown an opinion it has no business having.
+    #[tokio::test]
+    async fn a_query_routed_through_run_is_the_query_path_unchanged() {
+        let eng = Engine::new(Default::default());
+        let sql = "SELECT * FROM (VALUES (2), (1), (3)) AS t";
+
+        let RunOutcome::Rows(routed, _) = eng
+            .run(WsId(1), RunTag(1), sql.into(), 2)
+            .await
+            .expect("a SELECT runs")
+        else {
+            panic!("a SELECT settles rows");
+        };
+        let (direct, _) = eng
+            .query(WsId(2), RunTag(2), sql.into(), 2)
+            .await
+            .expect("…as it always did");
+
+        assert_eq!(routed.total, direct.total);
+        assert_eq!(routed.rows, direct.rows);
+        assert_eq!(routed.columns.len(), direct.columns.len());
+        let snap = routed.snapshot.expect("a snapshot handle");
+        let (page2, _) = eng.fetch_page(snap, 2, 2, None).await.expect("page 2");
+        assert_eq!(page2.len(), 1);
+    }
+
+    /// A refused statement fails with **the squiggle's own words** — `Blocked::editor_message`,
+    /// not DataFusion's account of a rule that is ours. `CREATE DATABASE` is the refusal that
+    /// stays refused: it is structurally impossible, not merely unimplemented.
+    #[tokio::test]
+    async fn a_refused_statement_fails_with_the_editors_message() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "CREATE DATABASE d".into(), 10)
+            .await
+            .err()
+            .expect("refused");
+        assert_eq!(err, Blocked::CreateDatabase.editor_message());
+    }
+
+    /// A statement that creates something still needs somewhere to put it, and an engine with no
+    /// project behind it says so rather than failing in DataFusion's words about a path nobody
+    /// chose (ED-04). Both creating statements, because what is missing differs: a `CREATE TABLE`
+    /// has nowhere to write the **data**, and a typed registration has nowhere to write the
+    /// **def**, which is the durable half of one (ED-10).
+    ///
+    /// (This is where the "not implemented yet" stub refusal used to be checked. There is no
+    /// unimplemented interception left — ED-10 filled the last arm — so the test that asserted
+    /// one is gone rather than pointed at a statement that now runs.)
+    #[tokio::test]
+    async fn creating_a_table_without_a_project_folder_says_why() {
+        let eng = Engine::new(Default::default());
+        for (sql, expected) in [
+            (
+                "CREATE TABLE t AS SELECT 1",
+                "CREATE TABLE AS needs a project folder to store the table's data",
+            ),
+            (
+                "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'x.csv'",
+                "CREATE EXTERNAL TABLE needs a project folder to store the table",
+            ),
+        ] {
+            let err = eng
+                .run(WsId(1), RunTag(1), sql.into(), 10)
+                .await
+                .err()
+                .expect("nowhere to store it");
+            assert_eq!(err, expected);
+        }
+    }
+
+    /// **Neither refusal touches the snapshot lifecycle.** DDL does not retire a snapshot
+    /// (`SNAPSHOT_SPEC` §4), so the workspace's settled result is still there to page after a
+    /// statement runs in the same tab — which is also what makes the results pane's "previous
+    /// snapshot survives" claim true rather than hopeful.
+    #[tokio::test]
+    async fn a_statement_leaves_the_workspaces_snapshot_alone() {
+        let eng = Engine::new(Default::default());
+        let (ws, sql) = (WsId(1), "SELECT * FROM (VALUES (1), (2)) AS t");
+
+        let (out, _) = eng
+            .query(ws, RunTag(1), sql.into(), 10)
+            .await
+            .expect("rows");
+        let snap = out.snapshot.expect("a snapshot handle");
+
+        for stmt in ["CREATE DATABASE d", "DROP TABLE t"] {
+            eng.run(ws, RunTag(2), stmt.into(), 10)
+                .await
+                .err()
+                .expect("refused or stubbed");
+            assert!(eng.snapshot_live(snap), "{stmt} retired the snapshot");
+        }
+        eng.fetch_page(snap, 1, 10, None)
+            .await
+            .expect("…and it still reads");
+        assert!(!eng.is_running(ws), "nothing left in flight either");
+    }
+
+    /// **One statement per Run**, refused with a policy sentence. Left to DataFusion this is
+    /// its parser complaining about its own limit, which tells the user nothing about what to
+    /// do next; the buffer is still validated per statement, so the squiggles are unaffected.
+    #[tokio::test]
+    async fn a_multi_statement_run_is_refused_as_a_batch() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "SELECT 1; SELECT 2".into(), 10)
+            .await
+            .err()
+            .expect("a batch");
+        assert_eq!(err, "Run executes one statement at a time");
+    }
+
+    /// **…and a terminated statement is one statement.** This is the gate's blast radius, not a
+    /// corner: people end statements with `;`, and if `parse_statements` ever counted the
+    /// trailing delimiter as a second (empty) statement, *every* such Run would refuse as a
+    /// batch — a total regression of Run, reported as a policy message so it would read like a
+    /// deliberate rule. Pinned here rather than trusted, because it is DataFusion's behaviour
+    /// and not ours. A `;` inside a string literal rides along for the same reason: the split
+    /// is the tokenizer's, so it must not be a text split.
+    #[tokio::test]
+    async fn a_terminated_statement_is_still_one_statement() {
+        let eng = Engine::new(Default::default());
+        for sql in [
+            "SELECT 1 AS n;",
+            "SELECT 1 AS n;\n",
+            "SELECT 1 AS n ;;",
+            "-- a note\nSELECT 1 AS n;",
+            "SELECT ';' AS n;",
+            "WITH t AS (SELECT 1 AS n) SELECT * FROM t;",
+        ] {
+            let outcome = eng.run(WsId(1), RunTag(1), sql.into(), 10).await;
+            assert!(
+                matches!(outcome, Ok(RunOutcome::Rows(_, _))),
+                "{sql:?} must run, not refuse as a batch"
+            );
+        }
+    }
+
+    /// A buffer with nothing to run in it says so. Not unreachable from the app: the blank-buffer
+    /// gate upstream (`press_query`) trims whitespace, and a comment is not whitespace.
+    #[tokio::test]
+    async fn a_buffer_of_only_comments_has_nothing_to_run() {
+        let eng = Engine::new(Default::default());
+        let err = eng
+            .run(WsId(1), RunTag(1), "-- just thinking out loud\n".into(), 10)
+            .await
+            .err()
+            .expect("nothing to run");
+        assert_eq!(err, "Nothing to run");
+    }
+}
+
+/// **Read options, end to end** — every option the Configure window offers, proved against a
+/// real file rather than against DataFusion's builder signature.
+///
+/// This is the point of P4-11's validation pass. The bar for offering an option is that it
+/// reaches the read, and the only way to hold that bar over a DataFusion upgrade is to register
+/// a table whose schema or rows are *different* because the option is set. Each test here
+/// therefore asserts the difference, not the call.
+#[cfg(test)]
+mod read_options_tests {
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::process;
+
+    use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat};
+
+    use super::*;
+
+    /// A fresh directory per test, so a stale fixture can never make one pass — and **per
+    /// process**, so a second test run cannot be the thing that makes it stale. The wipe on
+    /// entry is what makes a shared path dangerous rather than merely untidy: it deletes
+    /// fixtures another run may be asserting over.
+    fn dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("strata_read_options_{}_{name}", process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).expect("temp dir");
+        d
+    }
+
+    fn write(dir: &Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        fs::write(&path, body).expect("fixture");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// The same, gzipped — a compression option can only be proved by a genuinely compressed
+    /// file whose name carries the suffix.
+    fn write_gz(dir: &Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        let mut enc = flate2::write::GzEncoder::new(
+            File::create(&path).expect("fixture"),
+            flate2::Compression::default(),
+        );
+        enc.write_all(body.as_bytes()).expect("compress");
+        enc.finish().expect("finish");
+        path.to_string_lossy().into_owned()
+    }
+
+    fn spec(name: &str, paths: Vec<String>, format: SourceFormat) -> TableSpec {
+        TableSpec {
+            name: name.into(),
+            paths,
+            format,
+            partitions: Vec::new(),
+            internal: false,
+        }
+    }
+
+    fn names(meta: &TableMeta) -> Vec<String> {
+        meta.columns.iter().map(|c| c.name.clone()).collect()
+    }
+
+    /// **Why there is no "NULL value" option**, proved against DataFusion's own DDL rather than
+    /// against its source — because its `CREATE EXTERNAL TABLE` docs advertise `NULL_VALUE` in
+    /// exactly this position, which is what makes the absence look like an oversight.
+    ///
+    /// - `format.null_value` is the **writer's** null representation. The DDL accepts it, the
+    ///   reader never consults it, and the result is byte-identical to passing nothing.
+    /// - `format.null_regex` is the reader's, and it is wired into schema *inference* only
+    ///   (`CsvFormat::infer_schema`), not into `CsvSource`'s reader. So it re-types the column
+    ///   on what it saw and then fails the scan on the very token it was told was null.
+    ///
+    /// Offering either would be a control that does nothing or a control that breaks the table.
+    /// If a future DataFusion wires `null_regex` through to the scan, this test starts failing
+    /// on the third case and the option can be added.
+    #[tokio::test]
+    async fn a_csv_null_value_is_the_writers_and_a_null_regex_breaks_the_scan() {
+        use datafusion::prelude::SessionContext;
+
+        let d = dir("csv_null_options");
+        fs::write(d.join("t.csv"), "a,b\n1,NAN\n2,3\n").expect("fixture");
+        let loc = d.to_string_lossy().to_string();
+
+        let read = |opts: &'static str| {
+            let loc = loc.clone();
+            async move {
+                let ctx = SessionContext::new();
+                let ddl = format!("CREATE EXTERNAL TABLE t STORED AS csv LOCATION '{loc}/' {opts}");
+                ctx.sql(&ddl)
+                    .await
+                    .expect("ddl")
+                    .collect()
+                    .await
+                    .expect("ddl");
+                let df = ctx.sql("SELECT b IS NULL AS n FROM t ORDER BY a").await?;
+                df.collect().await
+            }
+        };
+
+        let with = read("OPTIONS('format.null_value' 'NAN')")
+            .await
+            .expect("scan");
+        let without = read("").await.expect("scan");
+        assert_eq!(
+            format!("{with:?}"),
+            format!("{without:?}"),
+            "NULL_VALUE changes nothing a reader can see"
+        );
+
+        let err = read("OPTIONS('format.null_regex' 'NAN')")
+            .await
+            .expect_err("the scan cannot parse what inference called null");
+        assert!(
+            err.to_string().contains("Error while parsing value 'NAN'"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delimiter_changes_how_the_columns_are_found() {
+        let d = dir("delimiter");
+        let path = write(&d, "s.csv", "a;b;c\n1;2;3\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "commas",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a;b;c"]);
+
+        let meta = eng
+            .register(spec(
+                "semis",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    delimiter: ';',
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn no_header_row_names_the_columns_positionally() {
+        let d = dir("header");
+        let path = write(&d, "s.csv", "1,2\n3,4\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    header: false,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["column_1", "column_2"]);
+    }
+
+    #[tokio::test]
+    async fn a_comment_character_keeps_the_commented_line_out_of_the_schema() {
+        let d = dir("comment");
+        let path = write(&d, "s.csv", "# generated\na,b\n1,2\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "raw",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect_err("the comment line is taken as the header");
+        assert!(err.contains("unequal lengths"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "commented",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    comment: Some('#'),
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a", "b"]);
+    }
+
+    /// The option that earns its place *because* a table is many files — and the one whose
+    /// absence is worst, because it does not fail the register.
+    ///
+    /// Schema inference merges the files happily: the table comes back with the union of the
+    /// columns and looks perfectly registered. It is the **scan** that then fails, on every
+    /// query, for the files that are short of a column. So this asserts the schema is the same
+    /// either way and the *read* is not.
+    #[tokio::test]
+    async fn truncated_rows_is_what_makes_differently_shaped_files_readable_not_merely_registrable()
+    {
+        let d = dir("truncated");
+        write(&d, "a.csv", "x,y\n1,2\n");
+        write(&d, "b.csv", "x,y,z\n3,4,5\n");
+        let path = d.to_string_lossy().into_owned();
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "strict",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect("registration succeeds — which is the trap");
+        assert_eq!(names(&meta), vec!["x", "y", "z"]);
+        let err = eng
+            .query(WsId(1), RunTag(1), "SELECT * FROM strict".into(), 100)
+            .await
+            .expect_err("the short file cannot be read against the merged schema");
+        assert!(err.contains("incorrect number of fields"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "union",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    truncated_rows: true,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["x", "y", "z"]);
+        eng.query(WsId(2), RunTag(2), "SELECT * FROM union".into(), 100)
+            .await
+            .expect("the missing column is padded with nulls");
+    }
+
+    /// The same option, within one file: a row short of a column fails the register outright.
+    #[tokio::test]
+    async fn truncated_rows_also_covers_a_ragged_row_inside_one_file() {
+        let d = dir("ragged");
+        let path = write(&d, "r.csv", "x,y\n1,2\n3\n");
+        let eng = Engine::new(Default::default());
+
+        assert!(eng
+            .register(spec(
+                "strict",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .is_err());
+
+        let meta = eng
+            .register(spec(
+                "ragged",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    truncated_rows: true,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["x", "y"]);
+        eng.query(WsId(3), RunTag(3), "SELECT * FROM ragged".into(), 100)
+            .await
+            .expect("the short row is padded");
+    }
+
+    /// Infer-rows at 0 is DataFusion's own "read everything as text" — the one claim the
+    /// canvas's hint makes about this field, so it is the one asserted.
+    #[tokio::test]
+    async fn zero_infer_rows_reads_every_csv_column_as_text() {
+        let d = dir("infer");
+        let path = write(&d, "s.csv", "n\n1\n2\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "typed",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(meta.columns[0].dtype, "Int64");
+
+        let meta = eng
+            .register(spec(
+                "text",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    infer_rows: Some(0),
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(meta.columns[0].dtype, "Utf8");
+    }
+
+    /// Compression is two things, and the second is the one that bit: the listing filters on
+    /// the file **extension**, so a gzipped CSV is only found when the filter says `.csv.gz`.
+    #[tokio::test]
+    async fn a_compressed_csv_is_both_found_and_decoded() {
+        let d = dir("gzip");
+        let path = write_gz(&d, "s.csv.gz", "a,b\n1,2\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "plain",
+                vec![path.clone()],
+                SourceFormat::Csv(CsvRead::default()),
+            ))
+            .await
+            .expect_err("the extension filter excludes it");
+        assert!(err.contains("not one"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "gz",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    compression: FileCompression::Gzip,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a", "b"]);
+    }
+
+    /// A **type-discriminated union** registers and queries, instead of failing schema inference.
+    ///
+    /// This is the acceptance for `engine::json_poly` at the level that actually matters — through
+    /// `Engine::register` and a real `SELECT`, not just the inference unit tests. Arrow's reader
+    /// fails this file outright with `Expected object json type, found: Array(…)`, naming neither
+    /// the key nor the source. The shape is `sample/config.json`'s, reduced: one key that is a
+    /// string, an object, an array and a bool across records.
+    #[tokio::test]
+    async fn a_polymorphic_json_field_registers_as_text_and_queries() {
+        let d = dir("json_poly");
+        let path = write(
+            &d,
+            "c.json",
+            concat!(
+                r#"{"id": 1, "content": "plain"}"#,
+                "\n",
+                r#"{"id": 2, "content": {"kind": "block"}}"#,
+                "\n",
+                r#"{"id": 3, "content": ["a", true]}"#,
+                "\n",
+                r#"{"id": 4, "content": false}"#,
+                "\n",
+            ),
+        );
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "poly",
+                vec![path],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("a conflicted field registers");
+        assert_eq!(names(&meta), vec!["content", "id"]);
+        let content = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "content")
+            .expect("content column");
+        assert_eq!(content.dtype, "Utf8", "the conflicted field is text");
+
+        let (out, _) = eng
+            .query(
+                WsId(1),
+                RunTag(1),
+                "SELECT content FROM poly ORDER BY id".into(),
+                10,
+            )
+            .await
+            .expect("query");
+        let cells: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
+        assert_eq!(
+            cells,
+            vec![
+                r#""plain""#.to_string(),
+                r#"{"kind":"block"}"#.to_string(),
+                r#"["a",true]"#.to_string(),
+                "false".to_string(),
+            ]
+        );
+    }
+
+    /// An empty JSON object stays an empty struct, end to end.
+    ///
+    /// It was briefly coerced to text, because parquet cannot write a zero-field struct
+    /// (`Parquet does not support writing empty structs`) and `sample/config.json` has 19,159 of
+    /// them — a storage workaround wearing an inference rule's clothes. The snapshot is Arrow IPC
+    /// now, which stores one, so the reader can say what the source actually contains.
+    #[tokio::test]
+    async fn an_empty_json_object_stays_an_empty_struct() {
+        let d = dir("json_poly_empty_obj");
+        let path = write(&d, "t.json", "{\"id\": 1, \"tags\": {}}\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("register");
+        let tags = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "tags")
+            .expect("tags column");
+        assert!(
+            tags.dtype.starts_with("Struct"),
+            "an empty object is an empty struct, not text: {}",
+            tags.dtype
+        );
+
+        let (out, _) = eng
+            .query(WsId(1), RunTag(1), "SELECT * FROM t".into(), 10)
+            .await
+            .expect("an empty struct reaches the grid");
+        assert_eq!(out.total, 1);
+    }
+
+    /// A conflict that spans **files** is the same conflict. It used to fail registration:
+    /// `infer` ran per file and the results were folded with arrow's `Schema::try_merge`, whose
+    /// `Field::try_merge` hard-errors on Struct-vs-Utf8 — so the feature worked inside one file
+    /// and not across two, and the single-file test above could not see it.
+    #[tokio::test]
+    async fn a_conflict_across_files_registers_too() {
+        let d = dir("json_poly_multifile");
+        write(&d, "a.json", "{\"id\": 1, \"content\": \"text\"}\n");
+        write(&d, "b.json", "{\"id\": 2, \"content\": {\"k\": 1}}\n");
+        let eng = Engine::new(Default::default());
+
+        let meta = eng
+            .register(spec(
+                "shards",
+                vec![format!("{}/", d.to_string_lossy())],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("a conflict across files registers");
+        let content = meta
+            .columns
+            .iter()
+            .find(|c| c.name == "content")
+            .expect("content column");
+        assert_eq!(content.dtype, "Utf8");
+    }
+
+    /// `infer_rows` of 0 is not a sample size, it is a schema with no columns. Left to run it
+    /// registered the table **successfully** with zero columns — a green catalog row whose every
+    /// query fails with "No field named". The Configure window floors it at 1; a hand-edited
+    /// `project.json` reaches the engine directly.
+    #[tokio::test]
+    async fn zero_infer_rows_is_refused_rather_than_registering_no_columns() {
+        let d = dir("json_poly_zero_infer");
+        let path = write(&d, "t.json", "{\"a\": 1}\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Json(JsonRead {
+                    infer_rows: Some(0),
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect_err("zero is not a sample size");
+        assert!(err.contains("at least 1"), "{err}");
+    }
+
+    /// A small `datafusion.execution.batch_size` must not lose rows.
+    ///
+    /// It did: the opener fed records into a decoder and discarded `Decoder::decode`'s returned
+    /// byte count, but arrow stops consuming once `batch_size` objects are buffered and expects
+    /// the tail to be re-fed. Measured before the fix — 50 rows in, **4 rows out**, no error.
+    /// `batch_size` is a catalogued, user-settable Engine key whose own description invites
+    /// lowering it.
+    #[tokio::test]
+    async fn a_small_batch_size_does_not_drop_rows() {
+        let d = dir("json_poly_batch");
+        let body: String = (0..50).map(|i| format!("{{\"i\": {i}}}\n")).collect();
+        let path = write(&d, "rows.json", &body);
+
+        for size in ["8192", "4"] {
+            let mut ov = BTreeMap::new();
+            ov.insert(
+                "datafusion.execution.batch_size".to_string(),
+                size.to_string(),
+            );
+            let eng = Engine::new(ov);
+            eng.register(spec(
+                "rows",
+                vec![path.clone()],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect("register");
+
+            let (out, _) = eng
+                .query(
+                    WsId(1),
+                    RunTag(1),
+                    "SELECT count(*) AS n FROM rows".into(),
+                    10,
+                )
+                .await
+                .expect("query");
+            assert_eq!(out.rows[0][0].text, "50", "batch_size={size} lost rows");
+        }
+    }
+
+    /// The option the canvas never had: a whole-document JSON array is readable, and the
+    /// failure message for reading it in the wrong shape now names the setting that fixes it.
+    #[tokio::test]
+    async fn a_json_array_document_reads_in_array_shape_and_explains_itself_in_the_other() {
+        let d = dir("json_shape");
+        let path = write(&d, "s.json", "[{\"a\": 1}, {\"a\": 2}]\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "ndjson",
+                vec![path.clone()],
+                SourceFormat::Json(JsonRead::default()),
+            ))
+            .await
+            .expect_err("an array is not newline-delimited");
+        assert!(err.contains("Set the JSON shape to array"), "{err}");
+
+        let meta = eng
+            .register(spec(
+                "array",
+                vec![path],
+                SourceFormat::Json(JsonRead {
+                    shape: JsonShape::Array,
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect("register");
+        assert_eq!(names(&meta), vec!["a"]);
+    }
+
+    /// A def naming a reader this build does not have fails **by name**. The arm this
+    /// replaces was a fallthrough onto parquet, so such a table registered as parquet and
+    /// said nothing — the register's one job is to be the check.
+    #[tokio::test]
+    async fn an_unreadable_format_fails_by_name_rather_than_being_read_as_parquet() {
+        let d = dir("unknown");
+        let path = write(&d, "s.avro", "not really avro");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "legacy",
+                vec![path],
+                SourceFormat::Unknown("avro".into()),
+            ))
+            .await
+            .expect_err("no reader");
+        assert_eq!(
+            err,
+            "Table 'legacy' is defined as 'avro', which Strata cannot read."
+        );
+    }
+
+    /// A multi-byte delimiter is reported, never truncated to its first byte — which would
+    /// split fields in the middle of the next character.
+    #[tokio::test]
+    async fn a_multi_byte_delimiter_is_refused_by_name() {
+        let d = dir("wide_delimiter");
+        let path = write(&d, "s.csv", "a,b\n1,2\n");
+        let eng = Engine::new(Default::default());
+
+        let err = eng
+            .register(spec(
+                "t",
+                vec![path],
+                SourceFormat::Csv(CsvRead {
+                    delimiter: '→',
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect_err("not a byte");
+        assert!(err.contains("single-byte character"), "{err}");
+
+        let err = eng
+            .register(spec(
+                "latin1",
+                vec![write(&d, "s2.csv", "a,b\n1,2\n")],
+                SourceFormat::Csv(CsvRead {
+                    delimiter: 'é',
+                    ..Default::default()
+                }),
+            ))
+            .await
+            .expect_err("not one byte in UTF-8");
+        assert!(err.contains("single-byte character"), "{err}");
+    }
+}
+
+/// **What the engine can say about a database connection's catalog** (DB-03) — the two reads
+/// the agent vocabulary needs so it stops answering "not found" about relations it can query.
+#[cfg(test)]
+mod remote_catalog_tests {
+    use super::*;
+    use crate::providers::fake_database;
+
+    #[tokio::test]
+    async fn the_workspace_catalog_is_not_a_database() {
+        let engine = Engine::new(BTreeMap::new());
+        assert!(
+            engine.database_catalogs().is_empty(),
+            "a project with no database connection has no database catalogs"
+        );
+        fake_database(&engine.ctx, "Sales", &["orders"]);
+        assert_eq!(
+            engine.database_catalogs(),
+            vec!["Sales".to_string()],
+            "in the spelling it was registered under, and without the workspace's own"
+        );
+    }
+
+    /// A qualified remote name describes; everything else is an **expected absence**
+    /// (`Ok(None)`) and leaves the store to say what it knows — a bare name is a def's, and a
+    /// def is not this method's business.
+    ///
+    /// The split that matters is absence against fault: every name below is an `Ok`, because
+    /// none of them is a failure. `Err` is reserved for a relation the connection lists whose
+    /// introspection then fails, which no fake catalog can produce — that arm is the real
+    /// server's (`tests/postgres_federation.rs`).
+    ///
+    /// Names are folded like every other in the session, and the answer carries the connection's
+    /// and the server's own spellings rather than the caller's. The absent set covers the four
+    /// ways a name is not this method's business: not in the connection, not a database catalog
+    /// (`strata`, and `STRATA`, which the catalog list resolves by folding), and not qualified
+    /// into one at all, which is a def's name for the store to answer.
+    #[tokio::test]
+    async fn describe_remote_answers_for_a_relation_and_nothing_else() {
+        let engine = Engine::new(BTreeMap::new());
+        fake_database(&engine.ctx, "pg", &["orders"]);
+
+        let described = engine
+            .describe_remote("pg.public.orders".into())
+            .await
+            .expect("no fault")
+            .expect("a relation the connection has");
+        assert_eq!(described.connection, "pg");
+        assert_eq!(described.relation, "public.orders");
+        assert!(!described.view);
+        assert_eq!(
+            described
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "total"]
+        );
+
+        let folded = engine
+            .describe_remote("PG.PUBLIC.ORDERS".into())
+            .await
+            .expect("no fault")
+            .expect("folded");
+        assert_eq!(folded.connection, "pg");
+        assert_eq!(folded.relation, "public.orders");
+
+        for name in [
+            "pg.public.gone",
+            "strata.public.orders",
+            "STRATA.public.orders",
+            "orders",
+            "public.orders",
+        ] {
+            assert_eq!(
+                engine.describe_remote(name.into()).await.expect("no fault"),
+                None,
+                "{name}"
+            );
+        }
+    }
+}

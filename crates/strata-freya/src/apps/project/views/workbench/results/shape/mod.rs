@@ -427,8 +427,8 @@ mod tests {
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
-    use strata_core::engine::{column_info, RunTag, WsId};
     use strata_core::theme::load;
+    use strata_engine::{column_info, RunTag, WsId};
 
     use super::compose::{GroupBy, GroupPick, MeasurePick, ShapeForm, ShapeOrder, SqlAgg, Stride};
     use super::*;
