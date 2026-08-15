@@ -17,8 +17,8 @@ mod schema;
 mod session;
 
 pub use catalog::{
-    CatalogKind, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoveKind, RemoveTarget,
-    SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+    CatalogKind, ColOwner, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoteRef,
+    RemoveKind, RemoveTarget, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
 };
 pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,

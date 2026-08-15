@@ -28,13 +28,14 @@ use uuid::Uuid;
 use super::node::Remote;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::connection::ConnectionTarget;
+use crate::apps::project::query::ProfileTarget;
 use crate::apps::project::state::{
     persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Anchor, Catalog,
     CatalogRescan, Chan, ChatsCtx, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{
-    ask_about, use_profile_actions, ConfigureRequest, ConnectionRequest, DropTarget,
-    ProfileActions, ProfileTarget, SchemasRequest,
+    ask_about, profile_verb, use_profile_actions, ConfigureRequest, ConnectionRequest, DropTarget,
+    ProfileActions, SchemasRequest,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -233,8 +234,13 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
             actions
                 .item(
                     IconName::Chart,
-                    ProfileTarget::verb(CatalogKind::Table),
-                    move |a| a.profile.ask(CatalogKind::Table, &name),
+                    profile_verb(CatalogKind::Table),
+                    move |a| {
+                        a.profile.ask(&ProfileTarget::Workspace {
+                            kind: CatalogKind::Table,
+                            name: name.clone(),
+                        });
+                    },
                 )
                 .enabled(registered)
         })
@@ -298,11 +304,12 @@ pub fn view_menu(actions: &CatalogActions, name: String) -> Menu {
         .child({
             let name = name.clone();
             actions
-                .item(
-                    IconName::Chart,
-                    ProfileTarget::verb(CatalogKind::View),
-                    move |a| a.profile.ask(CatalogKind::View, &name),
-                )
+                .item(IconName::Chart, profile_verb(CatalogKind::View), move |a| {
+                    a.profile.ask(&ProfileTarget::Workspace {
+                        kind: CatalogKind::View,
+                        name: name.clone(),
+                    });
+                })
                 .enabled(registered)
         })
         .child(actions.ask(
@@ -426,17 +433,21 @@ pub fn view_row(actions: &CatalogActions, name: &str) {
     open_composed(actions, name, select_sql(&quote_ident(name), limit));
 }
 
-/// A **remote relation** row's menu (DB-06): query it · pin it as a workspace view.
+/// A **remote relation** row's menu: query it · profile it · pin it as a workspace view.
 ///
-/// Two items and no more. Everything the workspace rows offer beyond these is about a **def** —
+/// Three items and no more. Everything the workspace rows offer beyond these is about a **def** —
 /// Configure edits one, Drop removes one, Refresh re-infers one — and a remote relation has none:
 /// the database answers for itself, and the connection's own row is where its lifecycle lives.
-/// Profile is DB-07's, with a remote expression set and a confirm that says the scan runs on the
-/// server.
+/// Profile (DB-07) is the one that arrived later, and it arrived as an arm of the entry point every
+/// other profile gesture already went through, not as a second one.
 pub fn relation_menu(actions: &CatalogActions, relation: &Remote) -> Menu {
     let verb = match relation.view {
         true => "Query view",
         false => "Query table",
+    };
+    let kind = match relation.view {
+        true => CatalogKind::View,
+        false => CatalogKind::Table,
     };
     Menu::new()
         .min_width(Size::px(CONTEXT_MENU_WIDTH))
@@ -444,6 +455,15 @@ pub fn relation_menu(actions: &CatalogActions, relation: &Remote) -> Menu {
             let relation = relation.clone();
             actions.item(IconName::Play, verb, move |a| {
                 query_relation(a, &relation);
+            })
+        })
+        .child({
+            let reference = relation.reference.clone();
+            actions.item(IconName::Chart, profile_verb(kind), move |a| {
+                a.profile.ask(&ProfileTarget::Remote {
+                    kind,
+                    relation: reference.clone(),
+                });
             })
         })
         .child({

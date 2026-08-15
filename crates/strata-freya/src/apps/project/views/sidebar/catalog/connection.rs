@@ -13,27 +13,36 @@
 //! read one answer and none of them re-derives visibility from the def. Collapsing and re-opening a
 //! schema costs nothing, and ↻ — which re-connects — is the refresh.
 //!
-//! A relation is a **leaf**: its columns are a round trip through the cached provider, and the
-//! surface that reads them, and that can address one, is the inspector DB-07 builds.
+//! A relation **opens onto its columns** (DB-07), and it is the one node here whose children are
+//! not free: they are a round trip through the provider the connection caches per relation. The
+//! pane subscribes to them and hands the answer back to the walk, so the walk stays a plain
+//! function of its inputs and a row still holds no state that identifies it.
 
 use freya::prelude::*;
 use strata_core::engine::db::{SchemaListingView, SchemaVisibility};
 use strata_core::engine::sql::qualified;
-use strata_core::engine::Engine;
-use strata_model::{CatalogKind, Provider, ProviderId};
+use strata_core::engine::{Engine, RemoteRelation};
+use strata_model::{CatalogKind, ColOwner, Provider, ProviderId, RemoteRef};
 
+use super::columns::flatten_cols;
 use super::matches;
 use super::menu::{connection_menu, query_relation, relation_menu};
-use super::node::{Connection, Node, NodeKind, Open, Place, Remote};
+use super::node::{Column, Connection, Node, NodeKind, Open, Place, Remote, Walked};
 use super::row::{actions_button, fold_plan, name_width, tip, Row, StatusMark};
 use super::view::{body, RowBody, RowCtx};
 use super::workspace::{entry_ancestors, entry_path};
 use crate::apps::connection::ConnectionTarget;
+use crate::apps::project::query::RemoteSchemas;
 use crate::apps::project::state::{ConnRow, ProjectState, Reg};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{SP_3, STATUS_DOT};
-use crate::components::typography::{Body, Eyebrow, MonoValue};
+use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
+
+/// Where a relation sits: connection ▸ schema ▸ Tables/Views ▸ **relation**. Named because its
+/// children are laid out from it, and a hand-counted depth on a row that gained children is how a
+/// tree quietly stops lining up.
+const RELATION_DEPTH: usize = 3;
 
 /// What a link row's trailing chevron says, on hover and to a screen reader — the trailing position
 /// is the standard "this navigates" mark, and the leading disclosure slot is empty on a leaf, so
@@ -60,16 +69,17 @@ pub fn walk_connections(
     engine: &Engine,
     needle: &str,
     open: &Open,
-    out: &mut Vec<Node>,
+    columns: &RemoteSchemas,
+    out: &mut Walked,
 ) {
     for row in &project.connections {
         match row.def.provider.id() {
-            ProviderId::Postgres => database(engine, row, needle, open, out),
-            _ => store(project, row, needle, open, out),
+            ProviderId::Postgres => database(engine, row, needle, open, columns, out),
+            _ => store(project, row, needle, open, &mut out.nodes),
         }
     }
     if project.connections.is_empty() && needle.is_empty() {
-        out.push(Node::leaf(0, NodeKind::AddConnection));
+        out.nodes.push(Node::leaf(0, NodeKind::AddConnection));
     }
 }
 
@@ -80,7 +90,14 @@ pub fn walk_connections(
 /// regardless, because a collapsed row still has to say what it is addressed by — and a blank one is
 /// *no* catalog rather than an empty one, since `Some("")` budgets a fold slot for a mark the row
 /// then draws as an empty label, buying room at the provider badge's expense.
-fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut Vec<Node>) {
+fn database(
+    engine: &Engine,
+    row: &ConnRow,
+    needle: &str,
+    open: &Open,
+    columns: &RemoteSchemas,
+    out: &mut Walked,
+) {
     let def = &row.def;
     let path = format!("conn/{}", def.url());
     let waiting = matches!(row.reg, Reg::Loading);
@@ -105,7 +122,7 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
     }
 
     let shown = open.shows(&path, filtering && !schemas.is_empty());
-    out.push(Node::branch(
+    out.nodes.push(Node::branch(
         0,
         path.clone(),
         shown,
@@ -126,7 +143,7 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
         let schema_path = format!("{path}/{}", schema.name);
         let matched = filtering && schema.relations.iter().any(|r| matches(&r.name, needle));
         let schema_open = open.is_open(&schema_path) || matched;
-        out.push(Node::branch(
+        out.nodes.push(Node::branch(
             1,
             schema_path.clone(),
             schema_open,
@@ -149,7 +166,7 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
                 .filter(|r| matches(&r.name, needle))
                 .collect();
             let group_open = open.shows(&group_path, filtering && !relations.is_empty());
-            out.push(Node::branch(
+            out.nodes.push(Node::branch(
                 2,
                 group_path.clone(),
                 group_open,
@@ -162,24 +179,106 @@ fn database(engine: &Engine, row: &ConnRow, needle: &str, open: &Open, out: &mut
             if !group_open {
                 continue;
             }
-            out.extend(relations.into_iter().map(|relation| {
-                Node::leaf(
-                    3,
+            for relation in relations {
+                let reference = RemoteRef {
+                    connection: registered.clone(),
+                    schema: schema.name.clone(),
+                    relation: relation.name.clone(),
+                };
+                let relation_path = format!("{group_path}/{}", relation.name);
+                let relation_open = open.is_open(&relation_path);
+                out.nodes.push(Node::branch(
+                    RELATION_DEPTH,
+                    relation_path.clone(),
+                    relation_open,
+                    true,
                     NodeKind::Relation(Remote {
-                        label: format!("{registered}.{}.{}", schema.name, relation.name),
+                        label: reference.label(),
                         address: qualified([
-                            registered.as_str(),
-                            schema.name.as_str(),
-                            relation.name.as_str(),
+                            reference.connection.as_str(),
+                            reference.schema.as_str(),
+                            reference.relation.as_str(),
                         ]),
                         name: relation.name.clone(),
+                        reference: reference.clone(),
                         view: views,
                     }),
-                )
-            }));
+                ));
+                if !relation_open {
+                    continue;
+                }
+                out.open_relations.push(reference.clone());
+                relation_columns(
+                    &relation_path,
+                    &reference,
+                    columns.get(&reference),
+                    open,
+                    &mut out.nodes,
+                );
+            }
         }
     }
 }
+
+/// The column rows under an open relation — or the one note that stands in for them.
+///
+/// **A relation is the one node in this tree whose children cost a round trip.** Everything else is
+/// the project file or the connect-time enumeration; a relation's columns are the introspection
+/// DB-02 made lazy on purpose, so that connecting to a database with a thousand tables is one
+/// query rather than a thousand. So the three states are all real states, and each says which it
+/// is: not read yet, read and refused, read.
+///
+/// A relation with no columns cannot happen server-side, so it takes the loading note rather than
+/// an empty-list arm nothing can produce.
+fn relation_columns(
+    path: &str,
+    reference: &RemoteRef,
+    answer: Option<&Result<RemoteRelation, String>>,
+    open: &Open,
+    out: &mut Vec<Node>,
+) {
+    let columns = match answer {
+        None => {
+            out.push(Node::leaf(
+                RELATION_DEPTH + 1,
+                NodeKind::RelationNote {
+                    text: LOADING_COLUMNS.to_string(),
+                    problem: false,
+                },
+            ));
+            return;
+        }
+        Some(Err(why)) => {
+            out.push(Node::leaf(
+                RELATION_DEPTH + 1,
+                NodeKind::RelationNote {
+                    text: why.clone(),
+                    problem: true,
+                },
+            ));
+            return;
+        }
+        Some(Ok(found)) => &found.columns,
+    };
+
+    let mut rows = Vec::new();
+    flatten_cols(path, &[], 0, columns, &[], open.0, &mut rows);
+    out.extend(rows.into_iter().map(|row| {
+        Node::branch(
+            RELATION_DEPTH + 1 + row.depth,
+            row.key.clone(),
+            row.is_expanded,
+            row.has_children,
+            NodeKind::Column(Column {
+                owner: ColOwner::Remote(reference.clone()),
+                row,
+            }),
+        )
+    }));
+}
+
+/// What an open relation says while its one introspection is in flight.
+const LOADING_COLUMNS: &str = "Reading columns…";
 
 /// What a connection's listing leaves the tree: the name its relations are addressed by, and the
 /// schemas it shows.
@@ -376,16 +475,16 @@ pub fn rel_group_row(at: &Place, views: bool, count: usize, cx: &RowCtx) -> RowB
     )
 }
 
-/// One relation inside a schema, and the two gestures on it (DB-06).
+/// One relation inside a schema: its columns underneath, and the gestures on it (DB-06, DB-07).
 ///
-/// A leaf, and the disclosure it does not draw is the honest mark of where the tree stops: its
-/// columns are an introspection, and the surface that reads them is the inspector DB-07 builds.
+/// **The chevron opens its columns and the press does not**, which is the *column* row's own shape
+/// one level up rather than a new one — there, too, a press selects and only the disclosure opens.
+/// It is what lets DB-06's gesture stand unchanged now that the row has children: a full read of a
+/// remote table is still not something to start by pointing at it.
 ///
 /// **Double-press queries it**, in the one `on_press` handler — a second registration under the
 /// same event name would replace the first, so that is where a double is detected (AGENTS.md §3).
-/// A single *mouse* press deliberately does nothing: the row is a leaf, so there is no disclosure
-/// for it to mean, and a full read of a remote table is not something to start by pointing at it.
-/// The ⋮ carries both gestures, and the right-click opens the same card.
+/// The ⋮ carries every gesture, and the right-click opens the same card.
 ///
 /// **A press that is not a mouse press is an activation, not a failed double.** Wiring `on_press`
 /// at all is what makes the fork's `TreeItem` a tab stop with the `Link` role and a focus ring —
@@ -394,6 +493,7 @@ pub fn rel_group_row(at: &Place, views: bool, count: usize, cx: &RowCtx) -> RowB
 /// pressable row in this tree answers Enter.
 pub fn relation_row(at: &Place, relation: &Remote, cx: &RowCtx) -> RowBody {
     let actions = cx.catalog.clone();
+    let tree = cx.tree;
     let (icon, color) = match relation.view {
         true => (IconName::Eye, cx.theme.view_color),
         false => (IconName::Database, cx.theme.table_color),
@@ -405,9 +505,12 @@ pub fn relation_row(at: &Place, relation: &Remote, cx: &RowCtx) -> RowBody {
     };
     let menu_for_row = build_menu.clone();
     let queried = relation.clone();
+    let (open, path) = (at.open, at.path.clone());
 
     body(
         Row::new(at.depth, cx.theme.clone())
+            .disclosure(at.disclosure())
+            .on_toggle(move |_: Event<PressEventData>| tree.toggle(&path, open))
             .on_press(move |e: Event<PressEventData>| {
                 let activates = match e.data() {
                     PressEventData::Mouse(m) => {
@@ -429,6 +532,34 @@ pub fn relation_row(at: &Place, relation: &Remote, cx: &RowCtx) -> RowBody {
                     .color(cx.theme.name_color)
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
+            ),
+    )
+}
+
+/// What an open relation shows in place of its columns — the one introspection in flight, or why
+/// it did not answer.
+///
+/// A row rather than a spinner beside the relation's name: the wait belongs where the columns will
+/// be, and a failure needs the room to say what to do about it.
+pub fn relation_note_row(at: &Place, text: &str, problem: bool, cx: &RowCtx) -> RowBody {
+    let color = match problem {
+        true => cx.theme.warn_color,
+        false => cx.theme.meta_color,
+    };
+    body(
+        Row::new(at.depth, cx.theme.clone())
+            .map(problem.then_some(color), |row, color| {
+                row.child(Icon::new(IconName::Alert).color(color).size(12.))
+            })
+            .child(
+                tip(text.to_string()).width(Size::flex(1.)).child(
+                    rect().a11y_alt(text.to_string()).child(
+                        Caption::new(text.to_string())
+                            .color(color)
+                            .width(Size::fill())
+                            .text_overflow(TextOverflow::Ellipsis),
+                    ),
+                ),
             ),
     )
 }

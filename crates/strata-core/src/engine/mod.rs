@@ -1557,6 +1557,21 @@ impl Engine {
         }
         let relation = format!("{schema_name}.{}", reference.table());
         let table = reference.table().to_string();
+        // **The kind is the schema provider's, never the built provider's.** A relation's
+        // `TableProvider` here is the crate's federated `SqlTable`, whose `table_type` is
+        // hardcoded `Base` — so asking *it* reports every remote view as a table, and this answer
+        // and the tree's (which reads `relkind`) would disagree about the same relation.
+        // `DbSchemaProvider::table_type` is the relkind-aware one, and it costs nothing.
+        let kind = self
+            .rt()
+            .spawn({
+                let schema = Arc::clone(&schema);
+                let table = table.clone();
+                async move { schema.table_type(&table).await }
+            })
+            .await
+            .map_err(|e| format!("Reading '{name}' failed: {e}"))?
+            .map_err(|e| catalog::readable(&e.to_string()))?;
         let provider = self
             .rt()
             .spawn(async move { schema.table(&table).await })
@@ -1566,7 +1581,7 @@ impl Engine {
         Ok(provider.map(|provider| RemoteRelation {
             connection,
             relation,
-            view: provider.table_type() == TableType::View,
+            view: kind == Some(TableType::View),
             columns: provider
                 .schema()
                 .fields()

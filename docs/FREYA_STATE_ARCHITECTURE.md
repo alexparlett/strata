@@ -91,7 +91,7 @@ editor buffer lives in the store, inside the tab.
 | **`History`** (`state/history.rs`) | context `State<History>` | yes (`.strata/history.jsonl`) | the query-history satellite (§8) |
 | **`Log`** (`state/log.rs`) | context `State<Log>` | no | the window's event record (§8) |
 | **`Agents`** (`state/agents.rs`) | context `State<Agents>` | no | what each connected agent is doing (§8) |
-| **Catalog signals** (`state/catalog.rs`) | context `State<T>` | no | the inspected column (`CatalogSelection`), the scan gate (`Catalog`), the ↻ re-scan request (`CatalogRescan`) |
+| **Catalog signals** (`state/catalog.rs`) | context `State<T>` | no | the inspected column (`CatalogSelection` — a `ColRef` whose owner is a workspace entry *or* a remote relation), the scan gate (`Catalog`), the ↻ re-scan request (`CatalogRescan`), and the profile requests for relations with no catalog row (`RemoteScans`, §6b) |
 | **Query layer** | freya-query | no | results / pages / plan / explain / chart / profiles — Runs keyed by a per-press nonce, snapshot reads by `(SnapshotId, …)` (see `SNAPSHOT_SPEC.md`) |
 | **Engine handle** (`EngineCtx`, `contexts/engine_ctx.rs`) | context | — | the direct-call engine facade (`Arc<Engine>`, Deref) + the tab-close cleanup hook (§7) |
 | **`MenuState`** (`menu.rs`) | `State::create_global` | — | the menubar's `MenuHandles` (handles, not state — §10) |
@@ -458,15 +458,23 @@ does. It follows the Run's division exactly:
 ```rust
 // apps/project/query/profile.rs
 ScanId       // a nonce, fresh per request (a first profile, or a ↻ re-scan)
-ProfileSpec  { owner: String, scan: ScanId }   // tables and views share one namespace, so no kind
+ProfileTarget  Workspace { kind, name } | Remote { kind, relation: RemoteRef }   // where it is
+ProfileSpec  { target: ProfileTarget, scan: ScanId }
 ProfileEntry : QueryCapability<Keys = ProfileSpec, Ok = CatalogProfile, Err = String>
-use_profile(engine, owner, scan) -> UseQuery<ProfileEntry>   // the ONE place the Query is built
+use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place the Query is built
 ```
 
 - **The store holds the request, never the numbers.** `TableRow::profile` / `ViewRow::profile`
   are `Option<ScanId>`; the facts live only in the cache entry that id keys. So invalidation is
   a `None` — `table_registered` / `table_failed` drop the table's and every reader view's,
   `view_registered` / `view_failed` drop the view's own.
+- **A relation inside a database connection's catalog has no row, so the *window* holds its
+  request** (DB-07): `state/catalog.rs`'s `RemoteScans`, a `BTreeMap<RemoteRef, ScanId>` on a
+  context `State`. The rule generalizes rather than being excepted — whoever owns the surface
+  holds the request — and nothing is minted into the store for it. Invalidation is a
+  reconciliation: entries whose connection is no longer `Reg::Ready` are dropped, which covers a
+  Forget and a whole-catalog ↻ without either being noticed specially. `ProfileTarget` is what
+  says which storage backs a given ask, and every `ProfileActions` method takes one.
 - **`stale_time(MAX)` + `clean_time(MAX)`.** A settled scan must never re-execute itself, and
   the five-minute default clean time would silently re-scan on the next mount. "Cached until the
   entry changes" is what the cost confirm promises, so the entry retires only when its request
@@ -710,7 +718,9 @@ crates/strata-freya/src/
       hooks.rs        use_init_session / use_init_project / use_init_history / use_autosave
     query/
       run_query.rs    RunQuery + QuerySpec · FetchSnapshotPage + PageSpec (§6)
-      profile.rs      ProfileEntry + ProfileSpec + use_profile (§6b)
+      profile.rs      ProfileEntry + ProfileSpec + ProfileTarget + use_profile (§6b)
+      relation.rs     RemoteColumns + ColumnsSpec + use_remote_columns — a remote relation's
+                      columns, the one read under a database connection that is not free
       chart.rs        FetchChart + ChartSpec (§6 step 4)
     contexts/
       engine_ctx.rs   EngineCtx — Arc<Engine> (Deref) + captured() + cleanup(tab); TabId→WsId

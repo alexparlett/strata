@@ -14,13 +14,13 @@ use std::collections::HashSet;
 
 use freya::components::Disclosure;
 use strata_core::engine::Engine;
-use strata_model::{CatalogKind, ConnectionDef};
+use strata_model::{CatalogKind, ColOwner, ConnectionDef, RemoteRef};
 use uuid::Uuid;
 
 use super::columns::ColRow;
 use super::connection::walk_connections;
 use super::workspace::{walk_workspace, Group};
-use crate::apps::project::query::ScanId;
+use crate::apps::project::query::{RemoteSchemas, ScanId};
 use crate::apps::project::state::ProjectState;
 
 /// One visible row of the tree.
@@ -162,8 +162,14 @@ pub enum NodeKind {
         views: bool,
         count: usize,
     },
-    /// One relation inside a schema. A leaf: its columns are DB-07's.
+    /// One relation inside a schema, opening onto its columns.
     Relation(Remote),
+    /// What an open relation says while its one introspection is in flight, or when it failed —
+    /// the only place in this tree where reading a node's children costs a round trip.
+    RelationNote {
+        text: String,
+        problem: bool,
+    },
     /// The pane's empty state, on a project with no connections at all.
     AddConnection,
 }
@@ -184,11 +190,12 @@ pub struct Entry {
     pub scan: Option<ScanId>,
 }
 
-/// One column row, and the entry it belongs to.
+/// One column row, and what it belongs to — a workspace table or view, or a relation inside a
+/// database connection's catalog. One row kind for both, because a column is a column: pressing it
+/// points the inspector at it, and what differs is only where its facts come from.
 #[derive(Clone, PartialEq)]
 pub struct Column {
-    pub owner_kind: CatalogKind,
-    pub owner: String,
+    pub owner: ColOwner,
     pub row: ColRow,
 }
 
@@ -204,6 +211,10 @@ pub struct Column {
 #[derive(Clone, PartialEq)]
 pub struct Remote {
     pub name: String,
+    /// The relation's address as the rest of the app holds one — what a profile request is keyed
+    /// by and what its columns are read for. The same three segments as [`label`](Self::label),
+    /// kept apart rather than parsed back out of it.
+    pub reference: RemoteRef,
     /// `catalog.schema.relation` in the plain segments — a tab title, never SQL.
     pub label: String,
     /// `catalog.schema.relation` rendered by
@@ -248,18 +259,38 @@ impl Open<'_> {
     }
 }
 
-/// Every row the tree is currently showing, top to bottom.
+/// What one walk produced: every row the tree is currently showing, and the remote relations it
+/// drew open.
 ///
-/// `needle` is **already lowercased** — see [`matches`](super::matches).
+/// **The open relations come back from the walk rather than being derived beside it**, because the
+/// walk is the only place the tree's shape is decided: which relations are shown at all depends on
+/// the filter, on which schemas the connection enables and on what the listing holds, and a second
+/// function answering "which relations are open" would be that whole decision written twice.
+#[derive(Default)]
+pub struct Walked {
+    pub nodes: Vec<Node>,
+    /// In walk order — deterministic, because the walk is. Canonicalizing it is
+    /// [`use_remote_columns`](crate::apps::project::query::use_remote_columns)'s, since that is
+    /// where it becomes a cache key.
+    pub open_relations: Vec<RemoteRef>,
+}
+
+/// Walk the tree.
+///
+/// `needle` is **already lowercased** — see [`matches`](super::matches). `columns` is an *input*
+/// like the listing and the expansion set: the pane subscribes to the columns of whatever the last
+/// walk reported open and hands the accumulated answer back here, so this stays a plain function
+/// and never awaits.
 pub fn walk(
     project: &ProjectState,
     engine: &Engine,
     needle: &str,
     open: &HashSet<String>,
-) -> Vec<Node> {
+    columns: &RemoteSchemas,
+) -> Walked {
     let open = Open(open);
-    let mut out = Vec::new();
-    walk_workspace(project, needle, &open, &mut out);
-    walk_connections(project, engine, needle, &open, &mut out);
+    let mut out = Walked::default();
+    walk_workspace(project, needle, &open, &mut out.nodes);
+    walk_connections(project, engine, needle, &open, columns, &mut out);
     out
 }

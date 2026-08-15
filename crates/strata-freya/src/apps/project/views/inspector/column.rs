@@ -23,10 +23,10 @@ use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::engine::profile::CatalogProfile;
+use strata_core::engine::profile::{stats_footnote, CatalogProfile};
 use strata_core::engine::stopped_on_purpose;
 use strata_core::util::iso8601;
-use strata_model::{CatalogKind, Origin};
+use strata_model::Origin;
 
 use super::model::{
     completeness, fact_rows, nested_fields, scan_age, scan_footnote, with_scan, ColumnFacts,
@@ -34,9 +34,9 @@ use super::model::{
 };
 use super::{InspectorTheme, PANEL_PAD};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{use_profile, ScanId};
+use crate::apps::project::query::{use_profile, ProfileTarget, ScanId};
 use crate::apps::project::state::{Chan, SessionState};
-use crate::apps::project::views::{use_profile_actions, ProfileActions, ProfileTarget};
+use crate::apps::project::views::{profile_verb, use_profile_actions, ProfileActions};
 use crate::components::badge::Badge;
 use crate::components::dot::Dot;
 use crate::components::icon::{Icon, IconName};
@@ -146,7 +146,7 @@ impl ColumnPanel {
                             .radius(BADGE_RADIUS)
                             .padding(Gaps::new(SP_1, SP_3, SP_1, SP_3)),
                     )
-                    .child(Path::new(format!("from {}", self.facts.owner)).color(t.meta_color)),
+                    .child(Path::new(format!("from {}", self.facts.owner())).color(t.meta_color)),
             )
             .into_element()
     }
@@ -161,12 +161,26 @@ impl ColumnPanel {
             FormatBadge::Json => t.format_json_color,
             FormatBadge::Arrow => t.format_arrow_color,
             FormatBadge::View => t.format_view_color,
+            FormatBadge::Connection(_) => t.format_database_color,
             FormatBadge::Other(_) => t.meta_color,
         }
     }
 
+    /// Why this column has no free facts under its type — which is a different sentence for each
+    /// of the two owners that report none, because the reason really is different: a view's
+    /// columns are defined by its query, and a remote relation's bytes are the server's.
     fn derived_note(&self) -> Element {
         let t = &self.theme;
+        let copy = match &self.facts.target {
+            ProfileTarget::Remote { .. } => {
+                "Read through a database connection. The server reports the column's type; \
+                 anything more is a scan."
+            }
+            ProfileTarget::Workspace { .. } => {
+                "Derived column, defined by the view's query. There are no files under it, \
+                 so the source reports no statistics."
+            }
+        };
         rect()
             .width(Size::fill())
             .margin(Gaps::new(0., PANEL_PAD, 0., PANEL_PAD))
@@ -174,14 +188,7 @@ impl ColumnPanel {
             .corner_radius(PANEL_RADIUS)
             .background(t.box_background)
             .border(Border::new().width(1.).fill(t.border_fill))
-            .child(
-                Path::new(
-                    "Derived column, defined by the view's query. There are no files under it, \
-                     so the source reports no statistics.",
-                )
-                .color(t.note_color)
-                .wrap(),
-            )
+            .child(Path::new(copy).color(t.note_color).wrap())
             .into_element()
     }
 
@@ -317,7 +324,7 @@ impl Component for Statistics {
                 scan,
                 key: DiffKey::None,
             }
-            .key(&self.facts.owner)
+            .key(self.facts.owner())
             .into_element(),
         }
     }
@@ -359,7 +366,8 @@ impl KeyExt for ScannedStatistics {
 impl Component for ScannedStatistics {
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
-        let query = use_profile(&engine, &self.facts.owner, self.scan);
+        let target = self.facts.target.clone();
+        let query = use_profile(&engine, &target, self.scan);
         let session = use_radio_station::<SessionState, Chan>();
         let actions = use_profile_actions();
         let danger = tones().error;
@@ -382,15 +390,13 @@ impl Component for ScannedStatistics {
         let running = matches!(state, Scan::Running);
         let announced = use_progress_hold(running);
 
-        let kind = self.facts.owner_kind();
-        let owner = self.facts.owner.clone();
         let t = &self.theme;
         let previous = held.read();
         let cancel = {
-            let owner = owner.clone();
+            let target = target.clone();
             move |_| {
-                engine.cancel_profile(&owner);
-                actions.clear(kind, &owner);
+                engine.cancel_profile(&target.sql_name());
+                actions.clear(&target);
             }
         };
 
@@ -407,18 +413,15 @@ impl Component for ScannedStatistics {
                         .into_element()
                 }))
                 .child(Path::new(scan_footnote(profile)).color(t.meta_color))
+                .maybe_child(
+                    stats_footnote(target.profiled())
+                        .map(|note| Path::new(note).color(t.meta_color).wrap().into_element()),
+                )
                 .maybe_child(tail);
             zone(
                 &facts,
                 t,
-                Some(scan_controls(
-                    t,
-                    profile,
-                    owner.clone(),
-                    kind,
-                    session,
-                    actions,
-                )),
+                Some(scan_controls(t, profile, &target, session, actions)),
                 Some(footnotes.into_element()),
             )
         };
@@ -606,14 +609,17 @@ fn zone(
 /// through the cost confirm (P3-10) exactly as the row menus' item does — one entry point, so
 /// the two can't drift.
 fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -> Element {
-    let kind = facts.owner_kind();
-    let owner = facts.owner.clone();
-    let copy = match facts.derived {
-        true => {
+    let target = facts.target.clone();
+    let copy = match (&target, facts.derived) {
+        (ProfileTarget::Remote { .. }, _) => {
+            "One statement on the database would compute distinct counts and means."
+        }
+        (_, true) => {
             "Running the view's query in full would compute distinct counts, means and medians."
         }
-        false => "Reading every file would compute distinct counts, means and medians.",
+        (_, false) => "Reading every file would compute distinct counts, means and medians.",
     };
+    let verb = profile_verb(target.kind());
 
     rect()
         .width(Size::fill())
@@ -644,14 +650,14 @@ fn scan_card(facts: &ColumnFacts, t: &InspectorTheme, actions: ProfileActions) -
             Button::new()
                 .filled()
                 .theme_layout(ButtonLayoutThemePartial::default().height(Size::px(ACTION_HEIGHT)))
-                .on_press(move |_| actions.ask(kind, &owner))
+                .on_press(move |_| actions.ask(&target))
                 .child(
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
                         .spacing(SP_3)
                         .child(Icon::new(IconName::Chart).size(14.))
-                        .child(Control::new(ProfileTarget::verb(kind))),
+                        .child(Control::new(verb)),
                 ),
         )
         .into_element()
@@ -710,13 +716,13 @@ const RESCANNING: &str = "Re-scanning…";
 fn scan_controls(
     t: &InspectorTheme,
     profile: &CatalogProfile,
-    owner: String,
-    kind: CatalogKind,
+    target: &ProfileTarget,
     session: RadioStation<SessionState, Chan>,
     actions: ProfileActions,
 ) -> Element {
     let sql = profile.sql.clone();
-    let name = owner.clone();
+    let name = target.label();
+    let rescan = target.clone();
     rect()
         .horizontal()
         .cross_align(Alignment::Center)
@@ -741,7 +747,7 @@ fn scan_controls(
             )
         }))
         .child(control_button(IconName::Reload, "Re-scan", move |_| {
-            actions.start(kind, &owner);
+            actions.start(&rescan);
         }))
         .into_element()
 }

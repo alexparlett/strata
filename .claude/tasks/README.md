@@ -158,8 +158,8 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
   pass. Docs: `docs/STATEMENTS_SPEC.md` + `docs/COMPLETION_SPEC.md` (the surface as built).
 - **Database connections**
   ([`workstream-database-connections/`](workstream-database-connections/README.md), DB) — 🟡
-  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 ✅ (2026-08-14), the rest
-  open** —
+  **DB-01 + DB-02 + DB-03 ✅ (2026-08-13), DB-04 + DB-05 + DB-06 + DB-07 ✅ (2026-08-14), the
+  rest open** —
   federated SQL over remote databases: a Postgres connection as a fourth `Provider` arm that
   registers a DataFusion **catalog** (not an object store), built on
   `datafusion-table-providers` 0.13 + `datafusion-federation` 0.5.5 (both pin our DataFusion
@@ -318,10 +318,10 @@ corrections that must not be re-litigated — is `docs/reference/SETTLED_TASKS.m
 
 ## Rough order
 
-1. **Database connections (DB)** — DB-01 through DB-06 are ✅, so **DB-07 (inspector +
-   profiling over remote tables) and DB-08 (the JSON-accessor pushdown rewrite) are next**;
-   DB-08 sits on DB-02 alone and needs nothing after it. DB-09 (a current database), DB-10
-   (remote INSERT/CTAS) and DB-11 (remote server statements, on DB-10) close the workstream.
+1. **Database connections (DB)** — DB-01 through DB-07 are ✅, so **DB-08 (the JSON-accessor
+   pushdown rewrite) is next**; it sits on DB-02 alone and needs nothing after it. DB-09 (a
+   current database), DB-10 (remote INSERT/CTAS) and DB-11 (remote server statements, on
+   DB-10) close the workstream.
 2. **Query ergonomics (QE)** — eight tasks; QE-01 through QE-05 are in, so QE-06 is next
    (its guidance names QE-01's functions), QE-07 follows QE-03's merge, and QE-08 waits for
    DB-05's tree.

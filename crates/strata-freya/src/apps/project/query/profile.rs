@@ -20,7 +20,9 @@
 use std::time::Duration;
 
 use freya::query::{use_query, Captured, Query, QueryCapability, UseQuery};
-use strata_core::engine::profile::CatalogProfile;
+use strata_core::engine::profile::{CatalogProfile, Profiled};
+use strata_core::engine::sql::qualified;
+use strata_model::{CatalogKind, RemoteRef};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -37,14 +39,80 @@ impl ScanId {
     }
 }
 
-/// What one scan is of: the catalog entry, and the request that asked for it.
+/// **What a profile is of**, and — because the two are the same question — where its request is
+/// kept and how its SQL is written.
 ///
-/// The entry is named, not kinded: tables and views share **one** namespace (the engine
-/// resolves either from the name alone, and `ProjectState::name_in_use` stops two rows folding
-/// together), so a second field would be a second source of truth for the same identity.
+/// A workspace entry is named and not kinded *for the engine*: tables and views share one
+/// namespace, so the name alone resolves it. The `kind` rides along because the **store** does need
+/// it — a request lands on the tables channel or the views channel, and `ProjectState` searches one
+/// list. A remote relation has no list to search and no row to land on, which is exactly why the
+/// two arms exist ([`ProfileActions`](crate::apps::project::views::ProfileActions) reads whichever
+/// storage backs the arm it is handed).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum ProfileTarget {
+    Workspace {
+        kind: CatalogKind,
+        name: String,
+    },
+    Remote {
+        /// Whether the server calls it a table or a view. The **same vocabulary** as the workspace
+        /// arm, so every surface labels the action by one rule rather than growing a second word
+        /// for remote things; the fact behind it is `Relation::is_view`, which DB-02 made the one
+        /// place the server's `relkind` letters are read, so the tree and `describe_remote` cannot
+        /// disagree about it.
+        kind: CatalogKind,
+        relation: RemoteRef,
+    },
+}
+
+impl ProfileTarget {
+    /// The name handed to [`Engine::profile`](strata_core::engine::Engine::profile) — a workspace
+    /// entry's own name, or a remote relation's three segments rendered by the case-preserving
+    /// renderer, which is the spelling the server resolves.
+    ///
+    /// **One place**, because it is both what the cache key dispatches with and what a cancel
+    /// addresses: two renderings of one relation would be two scans, of which only one could be
+    /// stopped.
+    pub fn sql_name(&self) -> String {
+        match self {
+            ProfileTarget::Workspace { name, .. } => name.clone(),
+            ProfileTarget::Remote { relation, .. } => qualified([
+                relation.connection.as_str(),
+                relation.schema.as_str(),
+                relation.relation.as_str(),
+            ]),
+        }
+    }
+
+    /// Where this scan's aggregate runs, which is what decides the facts it can compute
+    /// ([`Profiled`]).
+    pub fn profiled(&self) -> Profiled {
+        match self {
+            ProfileTarget::Workspace { .. } => Profiled::Workspace,
+            ProfileTarget::Remote { .. } => Profiled::Database,
+        }
+    }
+
+    /// Whether this is a table or a view — what every surface labels the action by.
+    pub fn kind(&self) -> CatalogKind {
+        match self {
+            ProfileTarget::Workspace { kind, .. } | ProfileTarget::Remote { kind, .. } => *kind,
+        }
+    }
+
+    /// What the entry is called, as a panel or a dialog prints it.
+    pub fn label(&self) -> String {
+        match self {
+            ProfileTarget::Workspace { name, .. } => name.clone(),
+            ProfileTarget::Remote { relation, .. } => relation.label(),
+        }
+    }
+}
+
+/// What one scan is of: the entry, and the request that asked for it.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ProfileSpec {
-    pub owner: String,
+    pub target: ProfileTarget,
     pub scan: ScanId,
 }
 
@@ -58,7 +126,7 @@ impl QueryCapability for ProfileEntry {
     type Keys = ProfileSpec;
 
     async fn run(&self, spec: &ProfileSpec) -> Result<CatalogProfile, String> {
-        self.0.profile(spec.owner.clone()).await
+        self.0.profile(spec.target.sql_name()).await
     }
 }
 
@@ -78,11 +146,15 @@ impl QueryCapability for ProfileEntry {
 ///   the window's life. Deliberate, and bounded by how many times one person presses ↻ — a
 ///   `CatalogProfile` is a `BTreeMap` of a few `Stat`s per column, and the alternative is
 ///   silently re-reading their whole dataset.
-pub fn use_profile(engine: &EngineCtx, owner: &str, scan: ScanId) -> UseQuery<ProfileEntry> {
+pub fn use_profile(
+    engine: &EngineCtx,
+    target: &ProfileTarget,
+    scan: ScanId,
+) -> UseQuery<ProfileEntry> {
     use_query(
         Query::new(
             ProfileSpec {
-                owner: owner.to_string(),
+                target: target.clone(),
                 scan,
             },
             ProfileEntry(engine.captured()),
@@ -101,6 +173,24 @@ mod tests {
     use strata_model::{SourceFormat, StatKey};
 
     use super::*;
+
+    fn workspace(name: &str) -> ProfileTarget {
+        ProfileTarget::Workspace {
+            kind: CatalogKind::Table,
+            name: name.to_string(),
+        }
+    }
+
+    fn remote(relation: &str) -> ProfileTarget {
+        ProfileTarget::Remote {
+            kind: CatalogKind::Table,
+            relation: RemoteRef {
+                connection: "pg".into(),
+                schema: "public".into(),
+                relation: relation.into(),
+            },
+        }
+    }
 
     /// A scan of a real table reaches the engine and comes back with the facts a footer can't
     /// carry. `regions.csv` is the CSV case, which is the one profiling exists for: the source
@@ -122,7 +212,7 @@ mod tests {
 
         let scan = ProfileEntry(engine.captured());
         let spec = ProfileSpec {
-            owner: "regions".into(),
+            target: workspace("regions"),
             scan: ScanId::new(),
         };
         let profile = block_on(scan.run(&spec)).expect("scan");
@@ -147,16 +237,15 @@ mod tests {
     /// one is never re-executed by a remount. The nonce is what buys both.
     #[test]
     fn each_request_is_its_own_cache_key() {
-        let owner = "regions".to_string();
         let scan = ScanId::new();
         let first = ProfileSpec {
-            owner: owner.clone(),
+            target: workspace("regions"),
             scan,
         };
         assert_eq!(
             first,
             ProfileSpec {
-                owner: owner.clone(),
+                target: workspace("regions"),
                 scan
             },
             "the same request is the same key — a remount reads the cache"
@@ -164,10 +253,30 @@ mod tests {
         assert_ne!(
             first,
             ProfileSpec {
-                owner,
+                target: workspace("regions"),
                 scan: ScanId::new()
             },
             "a re-scan is a new request, so it executes"
         );
+        assert_ne!(
+            first,
+            ProfileSpec {
+                target: remote("regions"),
+                scan
+            },
+            "a workspace table and a remote relation of the same name are two entries"
+        );
+    }
+
+    /// **The two renderers, seen from the one place that picks between them.** A workspace entry
+    /// hands the engine its own name, which `run_profile` then folds; a remote relation hands over
+    /// three segments quoted on their own account, which is the spelling the server resolves — and
+    /// what a cancel has to address, since it names the scan by this same string.
+    #[test]
+    fn a_targets_engine_name_is_its_own_identity_written_down() {
+        assert_eq!(workspace("MyTable").sql_name(), "MyTable");
+        assert_eq!(remote("orders").sql_name(), "pg.public.orders");
+        assert_eq!(remote("Orders").sql_name(), "pg.public.\"Orders\"");
+        assert_eq!(remote("orders").label(), "pg.public.orders");
     }
 }

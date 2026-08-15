@@ -14,8 +14,8 @@ integration test; DB-03, DB-04 and DB-08 sit on DB-02 independently; DB-05 — t
 redesign — sits on DB-02 + DB-04; DB-06 (gestures + completion) and DB-07 (inspector +
 profiling) sit on the tree; DB-10 and DB-11 are write-back — DB-10 (INSERT/CTAS through the
 crate's write provider) relaxes DB-03's read-only policy behind a per-connection opt-in, and
-DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–06 are
-in**; DB-07, DB-08, DB-09, DB-10 and DB-11 are open.
+DB-11 (statements dispatched to the server: the DDL plus UPDATE/DELETE) sits on it. **01–07 are
+in**; DB-08, DB-09, DB-10 and DB-11 are open.
 
 ## Decisions already made (do not re-litigate; the reasoning is recorded here)
 
@@ -157,15 +157,20 @@ in**; DB-07, DB-08, DB-09, DB-10 and DB-11 are open.
   crate's `pg_tables` — remote *views*, matviews, partitioned and foreign tables must show
   and resolve, or the tree lies about what is queryable.
 - **The inspector and profiling treat a remote table as first-class, on the existing terms —
-  and the store still grows nothing.** Columns are the cached provider's Arrow schema (free);
-  profiling keeps P3-09's whole shape — opt-in, one entry point (`ProfileActions::ask`,
-  generalized over a `ProfileTarget`), the confirm in front, nonce-keyed freya-query result —
-  with a **remote-specific expression set** federating to the server (the local set's median
-  is `approx_percentile_cont`, which no Postgres speaks and DF 54's dialect cannot override —
-  DB-07 has the proof), and the confirm's wording saying the scan runs on the database. The one generalization: a remote table has no `ProjectState`
-  row, so the profile request lives in a window-side slot instead of on a row — the
-  "store holds the request" rule generalized to "whoever owns the surface holds the request",
-  never a remote row minted into the store (DB-07).
+  and the store still grows nothing** (built, DB-07 ✅). Columns are the cached provider's Arrow
+  schema, read through the one capability the tree and the inspector share; profiling keeps
+  P3-09's whole shape — opt-in, one entry point (`ProfileActions::ask`, generalized over a
+  `ProfileTarget`), the confirm in front, nonce-keyed freya-query result — with a
+  **remote-specific expression set** federating to the server (the local set's median is
+  `approx_percentile_cont`, which no Postgres speaks and DF 54's dialect cannot override), and the
+  confirm's wording saying the scan runs on the database. The one generalization: a remote table
+  has no `ProjectState` row, so the profile request lives in a window-side satellite instead of on
+  a row — the "store holds the request" rule generalized to "whoever owns the surface holds the
+  request", never a remote row minted into the store. Two corrections came out of building it,
+  both in DB-07's own file: the **tree's relation opens onto its columns** and the *pane* holds
+  that one subscription, because the walk is synchronous and a virtualized row's scope is a slot;
+  and **`pg_class.reltuples` is refused rather than shown**, because a row estimate's only home is
+  the ROWS row and the completeness bar divides by it.
 - **The multi-database data model lands at the engine level; the def model stays flat — by
   argument, not inertia** (raised twice by Alex, settled 2026-08-13). After DB-02 the engine's
   model *is* DataFusion's native one: the `CatalogProviderList` holds N databases, schemas
@@ -269,7 +274,7 @@ in**; DB-07, DB-08, DB-09, DB-10 and DB-11 are open.
 | DB-04 | The connection editor's Postgres form | ✅ | DB-02 |
 | DB-05 | The data-sources tree: the catalog pane redesigned | ✅ | DB-02, DB-04 |
 | DB-06 | Gestures + completion over the tree | ✅ | DB-05 |
-| DB-07 | Column inspector + profiling for remote tables | ⬜ | DB-05 |
+| DB-07 | Column inspector + profiling for remote tables | ✅ | DB-05 |
 | DB-08 | JSON accessors over remote columns: the pushdown rewrite | ⬜ | DB-02 |
 | DB-09 | A current database, so unqualified names resolve | ⬜ | DB-02 |
 | DB-10 | Remote DML: INSERT and CTAS into a database connection | ⬜ | DB-02 |
