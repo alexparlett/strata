@@ -18,6 +18,11 @@
 //! plain `SqlTable`s with the default unparser dialect, and skips the federation wrapper — so the
 //! generic path would forfeit exactly the pushdown this workstream exists for.
 //!
+//! **A relation's provider is built one level below the crate's factory** ([`federate`]), so the
+//! JSON accessor family can be rewritten into Postgres's own operators on its way out ([`json`]).
+//! The dialect, the federation wrapper and the per-relation cache are unchanged by that move, and
+//! [`DbSchemaProvider`] is still the one place a provider is constructed.
+//!
 //! **This module holds a password for the length of one login, and never stores one.** The def says
 //! only that one is expected; the value is read from the OS keystore per pool connection, under a
 //! [reference derived](crate::secret::SecretRef::derived) from the connection's own identity.
@@ -39,7 +44,6 @@ use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider
 use datafusion_table_providers_common::util::secrets::to_secret_map;
 use datafusion_table_providers_common::UnsupportedTypeAction;
 use datafusion_table_providers_postgres::pool::{self, PostgresConnectionPool};
-use datafusion_table_providers_postgres::PostgresTableFactory;
 use secrecy::SecretString;
 use tokio::task::spawn_blocking;
 
@@ -49,6 +53,9 @@ use super::connect::{self, Registration};
 use super::fold_ident;
 use super::providers::deregister_catalog;
 use crate::secret::SecretRef;
+
+mod federate;
+mod json;
 
 /// The keystore family every database password is filed under — the `kind` half of
 /// [`SecretRef::derived`]. One string, here, because the editor's put and this module's read
@@ -319,11 +326,10 @@ async fn prepare(
 
     let pool = build_pool(conn, pg, passwords).await?;
     let listing = Arc::new(enumerate(&pool).await?);
-    let factory = Arc::new(PostgresTableFactory::new(Arc::clone(&pool)));
     let catalog = pg.catalog.trim().to_string();
     let provider = Arc::new(DbCatalogProvider::new(
         catalog.clone(),
-        factory,
+        Arc::clone(&pool),
         Arc::clone(&listing),
     ));
     Ok((
@@ -587,7 +593,7 @@ struct DbCatalogProvider {
 }
 
 impl DbCatalogProvider {
-    fn new(catalog: String, factory: Arc<PostgresTableFactory>, listing: Arc<Listing>) -> Self {
+    fn new(catalog: String, pool: Arc<PostgresConnectionPool>, listing: Arc<Listing>) -> Self {
         let schemas = listing
             .schemas
             .iter()
@@ -597,7 +603,7 @@ impl DbCatalogProvider {
                     Arc::new(DbSchemaProvider {
                         catalog: catalog.clone(),
                         schema: schema.name.clone(),
-                        factory: Arc::clone(&factory),
+                        pool: Arc::clone(&pool),
                         relations: schema.relations.clone(),
                         built: Mutex::new(BTreeMap::new()),
                     }),
@@ -665,7 +671,7 @@ impl CatalogProvider for DbCatalogProvider {
 struct DbSchemaProvider {
     catalog: String,
     schema: String,
-    factory: Arc<PostgresTableFactory>,
+    pool: Arc<PostgresConnectionPool>,
     relations: BTreeMap<String, Relation>,
     built: Mutex<BTreeMap<String, Arc<dyn TableProvider>>>,
 }
@@ -696,19 +702,18 @@ impl SchemaProvider for DbSchemaProvider {
         if let Some(built) = self.built.lock().unwrap().get(&fold_ident(name)) {
             return Ok(Some(Arc::clone(built)));
         }
-        let provider = self
-            .factory
-            .table_provider(TableReference::partial(
-                self.schema.clone(),
-                relation.name.clone(),
+        let provider = federate::table_provider(
+            &self.pool,
+            &self.catalog,
+            TableReference::partial(self.schema.clone(), relation.name.clone()),
+        )
+        .await
+        .map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Cannot read '{}.{}.{}': {e}",
+                self.catalog, self.schema, relation.name
             ))
-            .await
-            .map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Cannot read '{}.{}.{}': {e}",
-                    self.catalog, self.schema, relation.name
-                ))
-            })?;
+        })?;
         self.built
             .lock()
             .unwrap()

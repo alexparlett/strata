@@ -1,6 +1,74 @@
 # DB-08 · JSON accessors over remote columns: the pushdown rewrite
 
-**Workstream:** Database connections · **Status:** ⬜ · **Depends on:** DB-02
+**Workstream:** Database connections · **Status:** ✅ **built (2026-08-15)** · **Depends on:** DB-02
+
+## What was built, and the four corrections that came out of building it
+
+`crates/strata-core/src/engine/db/` is a directory now: `mod.rs` (DB-02's, unchanged bar the
+provider construction), `json.rs` (the table, the rewrite, both refusals, unit tests) and
+`federate.rs` (the provider one level below `PostgresTableFactory`, plus `PgExecutor`).
+
+1. **The seam is the executor's `ast_analyzer`, not the table's.** Both exist; the executor's runs
+   once per federated node where the table's runs once per table *scan*, and the executor is also
+   where a remote error is born — so the rewrite and the error wrapper are one type
+   (`PgExecutor`, delegating every other `SQLExecutor` method, `compute_context` included, since
+   that is what decides whether two relations federate into one statement). It holds
+   `Arc<dyn SQLExecutor>` rather than the concrete `SqlTable`, whose generic parameters would tie
+   this module to `tokio-postgres`.
+2. **`json_contains` is not `?`.** Postgres's `?` is also true for a string *array element* and
+   takes no integer index, where the local function is false for both. The faithful spelling is
+   `((x -> k) IS NOT NULL)` over the arrow chain — same answer as `jiter_json_find(...).is_some()`
+   on every input, JSON `null` included (`'{"a":null}'::jsonb -> 'a'` is `'null'::jsonb`, not SQL
+   NULL). It gives up a GIN index `?` could have used; correctness over an index this query never
+   had.
+3. **`json_length` is unmapped, not "`jsonb_array_length`-based".** It counts object keys as well
+   as array elements and is NULL for anything else; `jsonb_array_length` raises on a non-array and
+   the object half is set-returning. `json_get_str` is unmapped for the reason the plan already
+   suspected: `->>` stringifies objects, arrays, numbers and booleans where it is NULL. So the
+   mapped table is two rows, and every other family member states its own difference.
+4. **The rewrite shows up in EXPLAIN as `rewritten_executor_sql=`, not inside `base_sql=`.**
+   `VirtualExecutionPlan`'s `DisplayAs` prints `base_sql` *before* any analyzer runs and then
+   prints each stage's output only where it differs — which is a better assertion than the plan
+   asked for, since the test can pin that `base_sql` carries `json_as_text` and the statement that
+   leaves carries `->>` and no longer carries the function.
+
+Two more the **server run** found, neither visible to a unit test:
+
+5. **`json_union_to_text` must not be in the table.** It is never something a user typed — it is
+   `query::json_unions_as_text`'s own projection over a `json_get` result, added after planning —
+   and it sits *above* the `json_get` in the statement, where an outer projection is traversed
+   before the subquery under it. In the table, a federated `payload -> 'type'` refused with
+   "'json_union_to_text' cannot run on the database connection 'pg'", naming a function the user
+   can neither see nor remove. Out of it, the `json_get` beneath refuses in the user's own terms,
+   and a union that somehow reached a remote statement without one fails server-side as an
+   undefined function, which the wrapper answers.
+6. **`->>` has to be parenthesised against a comparison, and that is the parser's doing, not this
+   task's.** sqlparser gives every Postgres-style operator `PgOther` precedence (16), which is
+   *looser* than `Eq` (20), so `payload ->> 'type' = 'click'` binds as
+   `payload ->> ('type' = 'click')` and fails type coercion with "expected string or int, got
+   Boolean" — locally and federated alike, before and after this change. The plan's own headline
+   query is written that way and does not parse; `(payload ->> 'type') = 'click'` does. Worth its
+   own follow-up if it bites: DataFusion's parser dialect is a Settings key, and the PostgreSQL
+   dialect gets this right.
+
+A fifth, from the review pass: **the remote-error wrapper keys on `SQLSTATE: 42883`**, which
+`datafusion-table-providers-postgres` renders into every server error it hands back, not on
+Postgres's prose. `undefined_function` has at least three wordings — `function … does not exist`,
+`operator does not exist: …`, and `could not identify an equality operator for type …`, which a
+federated `SELECT DISTINCT` over a `json` column raises — so prose-matching would have missed the
+third while firing wherever the words merely co-occur. If the crate ever stops rendering the code
+this stops wrapping, which is the safe direction.
+
+Two smaller notes. `json_as_text` → `->>` is faithful **because** the column is `jsonb` on the
+server: the text the local function would have run over is Postgres's own rendering of that
+`jsonb`, so "the raw slice" and "what `->>` returns" are the same bytes. And `?` cannot be typed
+at all under DataFusion's default parser dialect (it tokenizes as a placeholder), so the
+integration test writes `json_contains` by name — the name the planner produces from `?` anyway.
+
+**Verified against a real server** (2026-08-15): `postgres_federation.rs`'s `json_pushdown` phase
+is green, and so is `cargo test --workspace` entire, both container tests included, plus clippy
+`-D warnings`. Corrections 5 and 6 above are what that run found — a unit test could not have,
+since both are about the statement DataFusion actually hands the executor.
 
 ## Goal
 

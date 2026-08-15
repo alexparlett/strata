@@ -55,6 +55,9 @@ const CATALOG: &str = "pg";
 /// **view** (which the crate's `pg_tables` listing would have missed — one of the three reasons
 /// the enumeration is ours), and a `jsonb` column (which the crate's default type action would
 /// have refused, taking the whole table with it).
+///
+/// `public.events` is DB-08's own: a `jsonb` column with a nested object under it, so a chained
+/// accessor has a path to walk and a key only one row has.
 const SEED: &str = "\
 CREATE TABLE public.orders (id INT PRIMARY KEY, customer INT, total INT, tags JSONB);
 INSERT INTO public.orders VALUES
@@ -64,6 +67,11 @@ INSERT INTO public.orders VALUES
 CREATE TABLE public.customers (id INT PRIMARY KEY, name TEXT);
 INSERT INTO public.customers VALUES (10, 'acme'), (20, 'globex');
 CREATE VIEW public.big_orders AS SELECT id, total FROM public.orders WHERE total > 50;
+CREATE TABLE public.events (id INT PRIMARY KEY, payload JSONB);
+INSERT INTO public.events VALUES
+  (1, '{\"type\":\"click\",\"source\":{\"campaign\":\"spring\"}}'),
+  (2, '{\"type\":\"view\",\"source\":{\"campaign\":\"winter\"}}'),
+  (3, '{\"type\":\"click\",\"source\":{\"campaign\":\"spring\"},\"bot\":true}');
 CREATE SCHEMA analytics;
 CREATE TABLE analytics.sessions (id INT PRIMARY KEY, minutes INT);
 INSERT INTO analytics.sessions VALUES (1, 5), (2, 9);
@@ -254,6 +262,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let fixtures = env::temp_dir().join(format!("strata-pg-{}", process::id()));
     mixed_plan(&engine, &fixtures).await;
     exotic_types_and_refusals(&engine).await;
+    json_pushdown(&engine, &fixtures).await;
     statement_policy(&engine, &fixtures).await;
     cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
@@ -280,6 +289,7 @@ async fn enumeration(engine: &Engine, port: u16) {
             vec!["analytics".to_string(), "sessions".to_string()],
             vec!["public".to_string(), "big_orders".to_string()],
             vec!["public".to_string(), "customers".to_string()],
+            vec!["public".to_string(), "events".to_string()],
             vec!["public".to_string(), "orders".to_string()],
         ],
         "every schema the role can see, and every relation in them"
@@ -312,6 +322,7 @@ async fn enumeration(engine: &Engine, port: u16) {
         Some(vec![
             ("big_orders", "v"),
             ("customers", "r"),
+            ("events", "r"),
             ("orders", "r")
         ]),
         "a remote view is listed as one, which pg_tables could not have said"
@@ -359,6 +370,7 @@ async fn qualified_offer(engine: &Engine, conn: &ConnectionDef) {
         vec![
             "big_orders".to_string(),
             "customers".to_string(),
+            "events".to_string(),
             "orders".to_string()
         ],
         "every relation the listing holds, remote view included"
@@ -554,23 +566,6 @@ async fn exotic_types_and_refusals(engine: &Engine) {
         "a jsonb column arrives as JSON text rather than making its table unreadable"
     );
 
-    assert!(
-        engine
-            .query(
-                WsId(1),
-                RunTag(10),
-                format!(
-                    "SELECT id FROM {CATALOG}.public.orders WHERE json_get_str(tags, 'channel') \
-                     = 'web'"
-                ),
-                200,
-            )
-            .await
-            .is_err(),
-        "DB-08 flips this assertion; until then a pushed-down accessor must fail loudly rather \
-         than quietly answering from a local fallback that does not exist"
-    );
-
     assert_eq!(
         rows(
             engine,
@@ -611,6 +606,156 @@ async fn exotic_types_and_refusals(engine: &Engine) {
         panic!("v1 is read-only against a database");
     };
     assert!(!why.is_empty(), "the refusal says something: {why}");
+}
+
+/// **JSON accessors over a remote column** (DB-08) — a phase of the test above.
+///
+/// The rewrite is judged by the *server*, which is the whole reason this lives here: a unit test
+/// can pin the operator syntax the mapping table produces (and does, next to the table), but only
+/// `PostgreSQL` can say that `->>` over a `jsonb` column means what `json_as_text` means over the
+/// text that column arrives as.
+///
+/// Two spellings here are the **parser's** business rather than this task's, and both are the same
+/// before and after it. `->>` has to be parenthesised against a comparison: sqlparser gives every
+/// Postgres-style operator `PgOther` precedence (16), which is *looser* than `Eq` (20), so a bare
+/// `payload ->> 'type' = 'click'` binds as `payload ->> ('type' = 'click')` and fails type coercion
+/// — locally and federated alike. And `json_contains` is written by name rather than as `?`, which
+/// is what the planner turns `?` into: under DataFusion's default parser dialect a `?` tokenizes as
+/// a placeholder.
+async fn json_pushdown(engine: &Engine, dir: &Path) {
+    let clicks = format!(
+        "SELECT id FROM {CATALOG}.public.events WHERE (payload ->> 'type') = 'click' ORDER BY id"
+    );
+    assert_eq!(
+        rows(engine, 50, &clicks).await,
+        vec![vec!["1".to_string()], vec!["3".to_string()]],
+        "the headline query answers"
+    );
+
+    let plan = explain(engine, 51, &clicks).await;
+    let federated: Vec<&str> = plan
+        .lines()
+        .filter(|line| line.contains("VirtualExecutionPlan"))
+        .collect();
+    assert_eq!(federated.len(), 1, "the whole read federates:\n{plan}");
+    assert!(
+        federated[0].contains("json_as_text"),
+        "the unparser writes the UDF call, which is what there is to rewrite:\n{}",
+        federated[0]
+    );
+    let Some((_, rewritten)) = federated[0].split_once("rewritten_executor_sql=") else {
+        panic!("the rewrite did not run:\n{}", federated[0]);
+    };
+    assert!(
+        rewritten.contains("->>") && !rewritten.contains("json_as_text"),
+        "the statement that leaves carries the operator, not the function: {rewritten}"
+    );
+
+    assert_eq!(
+        rows(
+            engine,
+            52,
+            &format!(
+                "SELECT payload -> 'source' ->> 'campaign' FROM {CATALOG}.public.events \
+                 WHERE id = 1"
+            )
+        )
+        .await,
+        vec![vec!["spring".to_string()]],
+        "a chained path walks the object on the server"
+    );
+
+    assert_eq!(
+        rows(
+            engine,
+            53,
+            &format!(
+                "SELECT id FROM {CATALOG}.public.events WHERE json_contains(payload, 'bot') \
+                 ORDER BY id"
+            )
+        )
+        .await,
+        vec![vec!["3".to_string()]],
+        "and a containment test asks it too"
+    );
+
+    let Err(why) = engine
+        .query(
+            WsId(1),
+            RunTag(54),
+            format!("SELECT payload -> 'type' FROM {CATALOG}.public.events"),
+            200,
+        )
+        .await
+    else {
+        panic!("'->' returns a union type no PostgreSQL expression produces");
+    };
+    assert!(
+        why.contains("'json_get'")
+            && why.contains("'->>'")
+            && why.contains(&format!("'{CATALOG}'")),
+        "the refusal names the function, the spelling that works and the connection: {why}"
+    );
+
+    let Err(why) = engine
+        .query(
+            WsId(1),
+            RunTag(55),
+            format!(
+                "SELECT id FROM {CATALOG}.public.events WHERE json_get_str(payload, 'type') \
+                 = 'click'"
+            ),
+            200,
+        )
+        .await
+    else {
+        panic!("'json_get_str' is NULL for a non-string, where '->>' stringifies one");
+    };
+    assert!(
+        why.contains("'json_get_str'") && why.contains("CREATE TABLE"),
+        "an unmapped member names itself and the way out: {why}"
+    );
+    assert!(
+        !why.contains("does not exist"),
+        "…and it is Strata's sentence rather than a raw SQLSTATE: {why}"
+    );
+
+    fs::create_dir_all(dir).expect("a fixture folder");
+    fs::write(
+        dir.join("local_events.csv"),
+        "id,payload\n1,\"{\"\"type\"\":\"\"click\"\"}\"\n",
+    )
+    .expect("the fixture");
+    engine
+        .register(table_spec(
+            dir,
+            &TableDef {
+                name: "local_events".into(),
+                format: SourceFormat::Csv(CsvRead::default()),
+                connection: None,
+                sources: vec!["local_events.csv".into()],
+                partition_cols: Vec::new(),
+                origin: TableOrigin::External,
+            },
+        ))
+        .await
+        .expect("a local table with a JSON text column");
+    assert_eq!(
+        rows(
+            engine,
+            56,
+            "SELECT payload ->> 'type', payload -> 'type', json_get_str(payload, 'type'), \
+             json_length(payload) FROM local_events"
+        )
+        .await,
+        vec![vec![
+            "click".to_string(),
+            "\"click\"".to_string(),
+            "click".to_string(),
+            "1".to_string()
+        ]],
+        "none of this reaches a local column: the rewrite rides the remote executor only"
+    );
 }
 
 /// **A reconnect replaces, and a disconnect stops resolving** — a phase of the test above.
