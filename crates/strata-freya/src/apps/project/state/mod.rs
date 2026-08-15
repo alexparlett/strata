@@ -27,7 +27,8 @@ pub use agent::use_agent_bridge;
 pub use agents::{use_init_agents, Agents, AgentsCtx};
 pub use catalog::{
     catalog_settled, use_catalog, use_catalog_rescan, use_catalog_selection,
-    use_init_catalog_selection, Catalog, CatalogRescan, CatalogSelection,
+    use_init_catalog_selection, use_init_remote_scans, use_remote_scans, Catalog, CatalogRescan,
+    CatalogSelection, RemoteScans,
 };
 /// Only tests name these: they stand the catalog's context signals up by hand, where the window
 /// goes through `use_init_catalog` / `use_init_catalog_rescan`. Production code reaches

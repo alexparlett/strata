@@ -29,15 +29,19 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
+use datafusion::arrow::datatypes::{DataType, Field};
 use keyring_core::mock;
 use strata_core::engine::db::{SchemaVisibility, PG_PASSWORD};
-use strata_core::engine::{sql, Engine, RunOutcome, RunTag, ViewMeta, WsId};
+use strata_core::engine::profile::{aggregates, profile_sql, Profiled};
+use strata_core::engine::{
+    column_info, sql, stopped_on_purpose, Engine, RunOutcome, RunTag, ViewMeta, WsId,
+};
 use strata_core::project::ProjectDefs;
 use strata_core::register::{register_project, table_spec, RegOutcome};
 use strata_core::secret::{Secret, SecretRef};
 use strata_model::{
-    Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, TableDef,
-    TableOrigin, ViewDef,
+    Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, StatKey,
+    TableDef, TableOrigin, ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -259,6 +263,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     enumeration(&engine, port).await;
     qualified_offer(&engine, &conn).await;
     pushdown(&engine).await;
+    profiling(&engine).await;
     let fixtures = env::temp_dir().join(format!("strata-pg-{}", process::id()));
     mixed_plan(&engine, &fixtures).await;
     exotic_types_and_refusals(&engine).await;
@@ -478,6 +483,166 @@ async fn pushdown(engine: &Engine) {
             vec!["globex".to_string(), "42".to_string()]
         ],
         "and it answers correctly"
+    );
+}
+
+/// **Profiling a remote relation** (DB-07) — a phase of the test above.
+///
+/// The claim this settles is the one only a server can: that the whole aggregate really does
+/// federate into **one** remote statement, and that `PostgreSQL` really does run it. What the
+/// expression set *is* stays pinned next door in `engine::profile`'s own tests, against
+/// DataFusion's `PostgreSQL` dialect, so a working tree with no container still fails if somebody
+/// adds an aggregate the wire cannot carry.
+///
+/// **Both statements here are built from the set rather than typed out**, and that is the whole
+/// discipline of this phase: a hand-written one explains itself, so an aggregate added to
+/// `Profiled::wanted`'s Database arm that renders and then fails on the server would leave every
+/// assertion below green.
+///
+/// `orders` is the right subject: `total` is numeric, which is the only column kind whose set
+/// differs, and `tags` is `jsonb` — arriving as `Utf8` — so the scan also has to survive the type
+/// mapping DB-02 chose.
+async fn profiling(engine: &Engine) {
+    let name = format!("{CATALOG}.public.orders");
+
+    // **Built from the set, never typed out.** A hand-written statement here would explain
+    // itself: an aggregate added to `Profiled::wanted`'s Database arm that the unparser renders
+    // and the server lacks would federate, fail, and leave this phase green — which is the one
+    // thing it exists to catch. Same discipline as
+    // `unsplit_expression_set_fails_on_the_server` below.
+    let columns = [
+        column_info(&Field::new("total", DataType::Int32, true)),
+        column_info(&Field::new("tags", DataType::Utf8, true)),
+    ];
+    let (exprs, _) = aggregates(&columns, Profiled::Database);
+    let statement = profile_sql(&name, &exprs);
+    assert!(
+        !statement.is_empty(),
+        "every expression in the remote set has to unparse before it can federate"
+    );
+
+    let plan = explain(engine, 50, statement.trim_end_matches(';')).await;
+    let federated: Vec<&str> = plan
+        .lines()
+        .filter(|line| line.contains("VirtualExecutionPlan"))
+        .collect();
+    assert_eq!(
+        federated.len(),
+        1,
+        "the profile's aggregate did not federate into one remote node:\n{plan}"
+    );
+    for expected in ["count(", "min(", "max(", "avg("] {
+        assert!(
+            federated[0].to_lowercase().contains(expected),
+            "the remote statement is missing {expected}…):\n{}",
+            federated[0]
+        );
+    }
+    assert!(
+        !federated[0].to_lowercase().contains("percentile"),
+        "…and the median never reached the wire:\n{}",
+        federated[0]
+    );
+
+    let profile = engine
+        .profile(name.clone())
+        .await
+        .expect("the remote profile runs on the server");
+
+    assert_eq!(profile.rows, 3);
+    let total = profile.cols.get("total").expect("the numeric column");
+    let fact = |key: StatKey| {
+        total
+            .iter()
+            .find(|s| s.key == key)
+            .map(|s| s.text.as_str())
+            .unwrap_or_else(|| panic!("no {key:?} in {total:?}"))
+    };
+    assert_eq!(fact(StatKey::Nulls), "0");
+    assert_eq!(fact(StatKey::Distinct), "3");
+    assert_eq!(fact(StatKey::Min), "10");
+    assert_eq!(fact(StatKey::Max), "99");
+    // Compared as a **number**, not as its rendering: `avg(integer)` is `numeric` on the server
+    // and the connector maps that to a decimal, so how many digits reach `ArrayFormatter` is a
+    // property of the type mapping rather than of the answer. The value is what this pins.
+    let mean: f64 = fact(StatKey::Mean).parse().expect("a numeric mean");
+    assert!(
+        (mean - (99.0 + 10.0 + 42.0) / 3.0).abs() < 1e-9,
+        "avg over an integer column comes back as a number: {mean}"
+    );
+    assert!(
+        !total.iter().any(|s| s.key == StatKey::Median),
+        "the median is absent **by design** — no PostgreSQL spelling, and no per-expression \
+         fallback to catch one: {total:?}"
+    );
+    // **The jsonb column is why the remote set stops at a distinct count for strings.** DB-02 maps
+    // it to `Utf8`, so it is indistinguishable from `text` here, and PostgreSQL has no
+    // `min(jsonb)` — an ordered aggregate on it would fail this whole scan rather than one column.
+    let tags = profile
+        .cols
+        .get("tags")
+        .expect("the jsonb column is profiled");
+    assert!(
+        tags.iter().any(|s| s.key == StatKey::Distinct),
+        "…counted: {tags:?}"
+    );
+    assert!(
+        !tags
+            .iter()
+            .any(|s| matches!(s.key, StatKey::Min | StatKey::Max)),
+        "…and never ordered: {tags:?}"
+    );
+
+    assert!(
+        profile.sql.contains(&format!("FROM {name};")),
+        "and 'view as query' hands over the server's own spelling: {}",
+        profile.sql
+    );
+    let rerun = rows(engine, 51, profile.sql.trim_end_matches(';')).await;
+    assert_eq!(rerun.len(), 1, "…which runs: {}", profile.sql);
+
+    unsplit_expression_set_fails_on_the_server(engine, &name).await;
+}
+
+/// **Why the expression set is split at all**, pinned rather than argued.
+///
+/// Without this, deleting [`Profiled`] and profiling every relation with the workspace set would
+/// leave the whole suite green: the phase above only asserts that the *remote* set works. This
+/// asserts the other half — that federation is not a fallback. It sweeps the aggregate into one
+/// remote statement or none, and the server has no `approx_percentile_cont`, so the scan fails
+/// **whole**: not a missing median, a missing profile.
+///
+/// The statement is built from the workspace set's own expressions rather than typed out, so it
+/// stays the thing profiling would actually have sent.
+async fn unsplit_expression_set_fails_on_the_server(engine: &Engine, name: &str) {
+    let columns = [column_info(&Field::new("total", DataType::Int32, true))];
+    let (exprs, _) = aggregates(&columns, Profiled::Workspace);
+    let sql = profile_sql(name, &exprs);
+
+    // Two ways the median is fatal, and only the unparser can say which this build is. If it
+    // refuses the expression outright, `profile_sql` answers empty and no federated statement
+    // could ever have carried it — the claim is already settled. Otherwise it renders a function
+    // name, and the server is what refuses.
+    if sql.is_empty() {
+        return;
+    }
+    assert!(
+        sql.contains("percentile"),
+        "the workspace set is what carries the median: {sql}"
+    );
+
+    let why = engine
+        .query(
+            WsId(1),
+            RunTag(52),
+            sql.trim_end_matches(';').to_string(),
+            200,
+        )
+        .await
+        .expect_err("the workspace set must not survive a trip to PostgreSQL");
+    assert!(
+        !stopped_on_purpose(&why),
+        "a real failure, not a cancel: {why}"
     );
 }
 

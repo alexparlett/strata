@@ -69,10 +69,17 @@ Things that must not regress. Full text: [docs/reference/INVARIANTS.md](docs/ref
 - **Results are freya-query off the tab's SQL.** The store holds specs, never results. A Run
   subscription is built **only** through `QuerySpec::query`; cache-entry lifetime is subscriber
   presence, held for background tabs by the request keepers. Never manage entry lifetime imperatively.
-- **An expensive, opt-in *result* is freya-query keyed by the request; the store holds the request.**
-  A re-scan is a new nonce; invalidating is dropping the request. Never a results field, dedup set,
-  or spinner flag. The `Query` is cache identity, so it is built in **one** place.
-- **One entry point per expensive action, with the confirm in front of it** (`ProfileActions::ask`).
+- **An expensive, opt-in *result* is freya-query keyed by the request; the request is held by
+  whoever owns the surface — usually the store, and for a relation with no row, the window.**
+  A re-scan is a new nonce; invalidating is dropping the request (for the window's satellite, a
+  reconciliation against the connections that are still `Ready`). Never a results field, dedup set,
+  or spinner flag, and never a remote row minted into the store. The `Query` is cache identity, so
+  it is built in **one** place.
+- **One entry point per expensive action, with the confirm in front of it** (`ProfileActions::ask`),
+  and every call takes the `ProfileTarget` that says where the request goes.
+- **A profile's expression set and its `FROM` renderer are one decision, made where the scanned
+  name's identity is known** (`Profiled`). A federated scan drops the median rather than failing
+  whole, and says so; never a spelling nobody verified.
 - **An internal table is an ordinary def whose data Strata owns, and `TableOrigin` is a flag on
   that def rather than a second kind of thing.** CTAS spools into `.strata/tables/<slug>/` and
   registers through `register_external`, so the store, the persist funnel and replay need no new

@@ -911,10 +911,35 @@ Things that must not regress. Each was fought for once already.
   spinner flag — the cache key is the dedup and `query.read().state()` is the spinner. And the
   `Query` (stale/clean times included) is the identity, so it is **built in one place**: two call
   sites spelling it differently are two entries, i.e. the same table scanned twice.
+
+  **The holder of the request is whoever owns the surface, which is usually but not always the
+  store** (DB-07). A relation inside a database connection's catalog has no `ProjectState` row to
+  keep a request on — a database answers for itself, so there are no defs under it — and the rule
+  generalizes rather than being excepted: the request goes in a window-side satellite
+  (`state::catalog`'s `RemoteScans`, keyed by `RemoteRef`), never a remote row minted into the
+  store. What does not move is everything else: the nonce, the cache identity, and the numbers
+  living only in the freya-query entry. Its invalidation is a **reconciliation**, not an event —
+  the entries whose connection is no longer `Ready` are dropped, which covers a Forget and a ↻
+  (whose `reload_connections` passes every row through `Loading`) without either being noticed
+  specially, and leaves a single table's Refresh alone because it touches no connection.
 - **One entry point per expensive action, with the confirm in front of it.** Every trigger for a
   scan calls `ProfileActions::ask`, which raises P3-10's confirm on a first scan and goes straight
   through on a re-scan; confirming calls the same `start` the ↻ calls. Adding a surface means
   calling `ask`, never reaching for the store directly — the same rule the drop confirm holds.
+  Every one of those calls takes a **`ProfileTarget`**, which is what says where the request is
+  kept, how the name is rendered for the engine, and what a scan of it can compute: before it had
+  two arms, a confirmed scan of a remote relation fell through the workspace lookup and started
+  *nothing* — a cost the user had read and agreed to, with the panel still offering it.
+- **A profile's expression set and its `FROM` renderer are one decision, made where the scanned
+  name's identity is known.** `Profiled::{Workspace, Database}` (`engine/profile.rs`) is picked by
+  `run_profile` off `providers::in_workspace`, and it decides both: a workspace entry executes
+  here, so it gets the whole set and the fold-preserving `quote_ident`; a name in a database
+  connection's catalog federates into **one statement the server runs**, so it gets the restricted
+  set and the case-preserving `sql::qualified`. The median is the difference — DataFusion's is
+  `approx_percentile_cont`, which has no PostgreSQL spelling and no dialect hook in DF 54, and a
+  federated subplan has no per-expression fallback, so including it would fail the whole scan of
+  any remote table with a numeric column rather than costing one fact. It is **dropped and
+  stated** (`stats_footnote`), never substituted with a spelling nobody verified.
 - **Def/runtime split.** `strata-model` holds pure serde defs only (exactly what
   `.strata/project.json` stores — no runtime caches, no UI flags). The Freya store wraps defs in
   rows with `Reg<T> = Loading | Ready(T) | Failed(String)`, making invalid combos unrepresentable;

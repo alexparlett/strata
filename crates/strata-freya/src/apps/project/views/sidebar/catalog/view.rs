@@ -20,7 +20,8 @@ use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
 use super::connection::{
-    add_connection_row, connection_row, link_row, rel_group_row, relation_row, schema_row,
+    add_connection_row, connection_row, link_row, rel_group_row, relation_note_row, relation_row,
+    schema_row,
 };
 use super::entry::{column_row, entry_row, saved_query_row};
 use super::menu::{use_catalog_actions, use_connection_actions, CatalogActions, ConnectionActions};
@@ -112,6 +113,7 @@ impl Component for TreeRow {
             NodeKind::Schema { name, missing } => schema_row(&at, name, *missing, &cx),
             NodeKind::RelGroup { views, count } => rel_group_row(&at, *views, *count, &cx),
             NodeKind::Relation(relation) => relation_row(&at, relation, &cx),
+            NodeKind::RelationNote { text, problem } => relation_note_row(&at, text, *problem, &cx),
             NodeKind::AddConnection => add_connection_row(&at, &cx),
         };
 

@@ -292,8 +292,14 @@ Top level is **data sources**:
   `Engine::db_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
   the network — so collapse and re-open cost nothing and ↻, which re-connects, is the refresh. A
   schema the def enables and the server does not have renders as its own failed node naming that
-  fact. A relation is a leaf: its columns are an introspection, and the surface that reads them
-  (and can select one) is DB-07's inspector. What a relation row *does* is
+  fact. A relation **opens onto its columns** (DB-07), and it is the one node in the tree whose
+  children are not free: they are a round trip through the provider the connection caches per
+  relation, so an open relation shows a *Reading columns…* note until the read lands, or the
+  reason it did not. Selecting a column points the inspector at it exactly as a workspace column
+  does. Because the walk that builds the tree is synchronous — and is the only place the tree's
+  shape is decided — it *returns* the relations it drew open and the **pane** holds the one
+  subscription for their columns, keyed by those relations and the catalog epoch; a row cannot
+  hold it, since a virtualized row's scope is a slot. What a relation row *does* is
   [below](#gestures-on-a-remote-relation);
 - one node per **object-store connection**, opening onto the workspace defs that read through it
   as **links** — pressing one opens the def's ancestors and brings its own row into view, rather
@@ -335,15 +341,16 @@ list rather than by its measured rectangle, because the row it names has usually
 
 ### Gestures on a remote relation
 
-Two, and both **compose a statement into a new unrun tab** (DB-06) — the tree is where work
-starts, not where it runs; a full read of a remote table is not something to begin by pointing at
-a row:
+Three. The two that compose a statement do so **into a new unrun tab** (DB-06) — the tree is where
+work starts, not where it runs; a full read of a remote table is not something to begin by pointing
+at a row:
 
 - **Query table / Query view** — `SELECT * FROM <catalog>.<schema>.<relation>` at the row-limit
   setting, on the relation's double-press and on its ⋮. It is the workspace rows' *View table*
   over a three-part name: one funnel (`select_sql`), so the two cannot disagree about the shape or
-  the `LIMIT`. A single press does nothing — the row is a leaf, so there is no disclosure for a
-  press to mean.
+  the `LIMIT`. A single press still does nothing, and that survived the row gaining children
+  (DB-07): the **chevron** opens its columns, which is the *column* row's own arrangement one level
+  up rather than a new one.
 - **Pin as view…** — `CREATE VIEW <relation> AS SELECT * FROM <catalog>.<schema>.<relation>`, for
   the user to rename and run. This is the workstream's "make it a bare-named def" gesture, and
   composing rather than executing is the point: the name is a guess (frequently the wrong one in a
@@ -351,7 +358,14 @@ a row:
   view funnel that already exists. A gesture that created the view itself would have had to invent
   a name, or refuse.
 
-The menu carries these two and nothing else. Everything the workspace rows offer beyond them is
+- **Profile table / Profile view** (DB-07) — the same `ProfileActions::ask` every other profile
+  gesture goes through, so a first scan raises the cost confirm and a re-scan does not. It is the
+  one gesture here that does not compose a statement, because it is not a place to start work: it
+  *is* the work, which is why it is the one with a confirm in front of it. The confirm says the
+  scan runs on the server, and the numbers it promises are the ones a federated scan can actually
+  compute — see [profiling a remote relation](#profiling-a-remote-relation).
+
+The menu carries these three and nothing else. Everything the workspace rows offer beyond them is
 about a **def** — Configure edits one, Drop removes one, Refresh re-infers one — and a remote
 relation has none; the connection's own row is where its lifecycle lives.
 
@@ -360,6 +374,45 @@ belong to two different owners: the relation's address goes through
 `sql::qualified`/`quote_verbatim`, which preserves the server's spelling segment by segment, and
 the view's name through `engine::quote_ident`, which folds — that being the identity the workspace
 store will key the def under. `docs/COMPLETION_SPEC.md` §6 states the pair.
+
+## Profiling a remote relation
+
+The column inspector treats a relation inside a database connection's catalog exactly as it treats
+a workspace table (DB-07): a title, its type, a **connection badge** in the source-format slot, and
+a STATISTICS zone offering one opt-in full scan through the same `ProfileActions::ask` every other
+profile gesture uses. Two things differ, and both are consequences of *where* the work happens.
+
+**The free tier is the schema and nothing else.** There is no footer to read and no file listing to
+count, so a remote column shows its type and — until a scan runs — no row count and no completeness
+bar. `pg_class.reltuples` is deliberately **not** shown: it is an estimate, its only home would be
+the ROWS row, and the completeness bar *divides by* that row count. An estimated denominator under
+an exact null count is the "two reads pretending to be one" this panel refuses everywhere else, so
+the estimate is refused rather than dressed up. A scan answers both for real.
+
+**The scan runs one statement on the server, so its expression set is its own.** The aggregate
+federates whole — `datafusion-federation` sweeps it into a single remote statement or none, with no
+per-expression fallback — so every expression in it has to be one the unparser renders *and*
+PostgreSQL has. Count, distinct count, min, max and mean all are. The **median** is not:
+DataFusion's is `approx_percentile_cont`, a DF-only aggregate, and DataFusion 54's
+`PostgreSqlDialect` exposes scalar-function overrides only, so there is nowhere to teach it a
+spelling. Leaving it in would not cost a median — it would fail the scan of every remote table with
+a numeric column in it. It is therefore **dropped and stated**: the zone carries a footnote saying
+medians are not computed on a database, and the cost confirm does not promise one.
+`percentile_cont(0.5) WITHIN GROUP (ORDER BY …)` is not substituted for it — that is an ordered-set
+aggregate the unparser has no expression to emit, so it would be an assumption rather than a fix.
+
+`engine::profile`'s `Profiled` is the one value that decides this, and it decides the **`FROM`
+renderer** with it, because both turn on the same fact: a workspace name renders through the
+fold-preserving `engine::quote_ident`, a remote one segment-by-segment through `sql::qualified`, so
+"view as query" hands over a statement that runs. Both halves are pinned — `engine::profile`'s unit
+tests render every expression through DataFusion's own PostgreSQL dialect (no container needed), and
+`tests/postgres_federation.rs` pins that the aggregate federates into one node, that the server runs
+it, and that the *unsplit* set does not.
+
+The one structural difference is where the request lives. A remote relation has no `ProjectState`
+row, so its `ScanId` goes in a window-side satellite keyed by the relation, never a row minted into
+the store; it is dropped when its connection is no longer connected, which covers both a Forget and
+a ↻ without either being noticed specially.
 
 ## Completion over a connection
 

@@ -12,13 +12,26 @@
 //! an absent row rather than a blank one. The derivation lives in [`model`], where it can be
 //! tested without a window; this module is the frame and [`column`](mod@column) the body.
 //!
+//! ## Two owners, one panel
+//!
+//! A selected column belongs either to a **workspace** table or view — resolved against the
+//! project store, which is where its registration answer lives — or to a **relation inside a
+//! database connection's catalog** (DB-07), which has no store row at all: a database answers for
+//! itself, so its columns are an introspection this panel subscribes to. Both arms produce the
+//! same [`ColumnFacts`](model::ColumnFacts), so everything below the resolution — the title, the
+//! nested-fields box, the STATISTICS zone and the scan — is written once.
+//!
+//! The remote arm's columns come from the same `use_remote_schemas` the tree reads, on the one
+//! relation this panel is looking at — never dispatched at all while the selection is a workspace
+//! column, which is every other moment. It is that hook and not the query entry, for the reason
+//! stated there: the entry re-keys on every catalog epoch, and reading it directly would replace a
+//! panel showing settled scan numbers with "Loading…" because an unrelated view was saved.
+//!
 //! ## What is deliberately not here
 //!
-//! The STATISTICS zone's scan half belongs to **P3-09**: the age / view-as-query / re-scan
-//! controls, the distribution bars, the running state, and the `Profile table` action itself.
-//! Its call-to-action card *is* rendered, in full dress and with no press handler, so the zone
-//! keeps the shape the canvas specifies and the wiring has somewhere to land — the same call the
-//! row menus' parked `Profile table` item will make (`sidebar/catalog/menu.rs`).
+//! The canvas's **distribution bars**: the profile carries no distribution data, and binning would
+//! need a second full pass over data the confirm has just called expensive to read once
+//! ([`column`](mod@column) has the full reasoning).
 
 mod column;
 mod model;
@@ -28,12 +41,15 @@ mod tests;
 use freya::components::{define_theme, get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::use_radio;
-use strata_model::CatalogKind;
+use strata_model::{CatalogKind, ColOwner};
 
 use self::column::ColumnPanel;
-use self::model::{inspect, Inspected};
+use self::model::{inspect, inspect_remote, Inspected};
+use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::query::use_remote_schemas;
 use crate::apps::project::state::{
-    use_catalog_selection, Chan, ProjChan, ProjectState, SessionState,
+    use_catalog, use_catalog_selection, use_remote_scans, Chan, ProjChan, ProjectState,
+    SessionState,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -86,6 +102,10 @@ define_theme!(
         format_json_color: Color,
         format_arrow_color: Color,
         format_view_color: Color,
+        /// The same slot on a column read through a **database connection**, where the badge names
+        /// the connection rather than a format — Strata has no reader for it at all. It wears the
+        /// tone the tree's provider badge wears, because it says the same thing in the same words.
+        format_database_color: Color,
     }
 );
 
@@ -110,13 +130,34 @@ impl Component for Inspector {
         let theme = get_theme!(&self.theme, InspectorThemePreference, "inspector");
 
         let selected = selection.read().clone();
-        let channel = match selected.as_ref().map(|c| c.kind) {
-            Some(CatalogKind::View) => ProjChan::Views,
+        let channel = match selected.as_ref().map(|c| &c.owner) {
+            Some(ColOwner::Entry {
+                kind: CatalogKind::View,
+                ..
+            }) => ProjChan::Views,
             _ => ProjChan::Tables,
         };
         let project = use_radio::<ProjectState, ProjChan>(channel);
+        let remote_scans = use_remote_scans();
 
-        let inspected = selected.as_ref().map(|col| inspect(&project.read(), col));
+        let engine = use_consume::<EngineCtx>();
+        let epoch = use_catalog().read().epoch();
+        let relation = match selected.as_ref().map(|c| &c.owner) {
+            Some(ColOwner::Remote(relation)) => Some(relation.clone()),
+            _ => None,
+        };
+        let described = use_remote_schemas(&engine, relation.iter().cloned().collect(), epoch);
+
+        let inspected = selected.as_ref().map(|col| match &col.owner {
+            ColOwner::Entry { kind, name } => {
+                let scan = project.read().profile_scan(*kind, name);
+                inspect(&project.read(), col, *kind, name, scan)
+            }
+            ColOwner::Remote(relation) => {
+                let scan = remote_scans.read().get(relation).copied();
+                inspect_remote(col, relation, described.get(relation), scan)
+            }
+        });
 
         let body = match inspected {
             None => note("Select a column to inspect.", theme.note_color),

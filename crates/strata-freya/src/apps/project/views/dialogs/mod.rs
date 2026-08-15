@@ -18,5 +18,5 @@ pub use close_confirm::CloseConfirm;
 pub use drop_confirm::{DropConfirm, DropTarget};
 pub use load_failed::ProjectLoadFailed;
 pub use open_prompt::OpenPrompt;
-pub use profile_confirm::{use_profile_actions, ProfileActions, ProfileConfirm, ProfileTarget};
+pub use profile_confirm::{profile_verb, use_profile_actions, ProfileActions, ProfileConfirm};
 pub use schemas::{SchemasPicker, SchemasRequest};

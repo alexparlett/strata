@@ -22,31 +22,104 @@ pub struct RemoveTarget {
 }
 
 /// Which catalog section a right-clicked row belongs to.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// `Hash` because it rides a freya-query cache key (a profile is *of* a table or a view), and a
+/// key's identity has to be hashable all the way down.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CatalogKind {
     Table,
     View,
     Query,
 }
 
-/// A reference to one column in the catalog: what kind of thing owns it, its owner's name, and its
-/// **path** within it.
+/// One relation inside a database connection's catalog, addressed the way SQL addresses it: the
+/// catalog the connection registered, the server's own schema, and the relation.
+///
+/// The **catalog name** rather than the connection's URL, because every question asked of a remote
+/// relation is asked in SQL — its columns come from resolving `catalog.schema.relation`, and a
+/// profile's `FROM` renders those same three segments. A URL can say neither, and carrying both
+/// would be two statements of one identity that can disagree.
+///
+/// Each segment is kept in the server's own spelling, so a renderer decides the quoting once
+/// (`sql::qualified`); a joined string would have to be parsed back, and these names come from a
+/// server rather than from us.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RemoteRef {
+    pub connection: String,
+    pub schema: String,
+    pub relation: String,
+}
+
+impl RemoteRef {
+    /// The three segments as a person reads them — a panel header, never SQL.
+    pub fn label(&self) -> String {
+        format!("{}.{}.{}", self.connection, self.schema, self.relation)
+    }
+}
+
+/// Whose columns a [`ColRef`] addresses.
+///
+/// Two arms because a remote relation is not a workspace def and never becomes one: it has no
+/// stored def, no `Reg` row and no one-segment name, so a [`CatalogKind`] beside a `String` cannot
+/// say where it is. Which arm it is also decides where a profile request is *kept* — the workspace
+/// entry's own row, or the window's satellite — so the two questions are answered by one value.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ColOwner {
+    /// A workspace table or view, by name — their shared engine/SQL identity.
+    Entry { kind: CatalogKind, name: String },
+    /// A relation inside a database connection's catalog.
+    Remote(RemoteRef),
+}
+
+impl ColOwner {
+    /// What the owner is called, as a panel prints it.
+    pub fn label(&self) -> String {
+        match self {
+            ColOwner::Entry { name, .. } => name.clone(),
+            ColOwner::Remote(relation) => relation.label(),
+        }
+    }
+
+    /// The workspace collection that owns it, or `None` for a remote relation — which is the
+    /// question "does the project store have a row for this".
+    pub fn kind(&self) -> Option<CatalogKind> {
+        match self {
+            ColOwner::Entry { kind, .. } => Some(*kind),
+            ColOwner::Remote(_) => None,
+        }
+    }
+}
+
+/// A reference to one column in the catalog: what owns it, and its **path** within that owner.
 ///
 /// A path rather than a name because a name alone cannot say *which* `city`, the top-level one or
 /// the one inside `address`, and the sidebar renders both. A struct rather than a
 /// `"view::orders.address.city"` URN because names come from the user's files and may contain dots
 /// or `::`.
+///
+/// An **empty path is the owner itself** — the state a remote relation is selected in before its
+/// columns have been read, since only an introspection can name one. The panel resolves it to the
+/// owner's first column, which is the standing-on-the-first-column rule a workspace reveal applies
+/// up front, moved to where the columns are actually known.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ColRef {
-    /// `Table` or `View` — says which collection owns it, so resolving is one lookup.
-    pub kind: CatalogKind,
-    /// The owning table or view.
-    pub owner: String,
+    pub owner: ColOwner,
     /// Path within the owner. A top-level column is a one-segment path.
     pub path: Vec<String>,
 }
 
 impl ColRef {
+    /// A column of a workspace table or view.
+    pub fn entry(kind: CatalogKind, name: impl Into<String>, path: Vec<String>) -> Self {
+        Self {
+            owner: ColOwner::Entry {
+                kind,
+                name: name.into(),
+            },
+            path,
+        }
+    }
+
     /// A nested *field* — a struct's child. A position, not a type: a top-level column
     /// whose type is a struct is not one.
     pub fn is_child(&self) -> bool {
