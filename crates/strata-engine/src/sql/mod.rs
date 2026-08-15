@@ -10,6 +10,8 @@
 //!   name [`resolve`]r, and the engine **dry-plan**. Byte-spanned for squiggles.
 //! - [`resolve`] — the AST name resolver behind validation: every unknown table/column in a parsed
 //!   statement, multi-error and mid-edit tolerant, leaving types and arity to the dry-plan.
+//! - [`qualify`] — bare-name resolution across the connected databases (DB-09), in front of both
+//!   the router and the planner, so a statement is judged and run with the names it reaches.
 //! - [`complete`] — ranked completions for a caret position.
 //!
 //! Completion resolves against a [`Catalog`] snapshot, cheap to build on the UI thread; validation
@@ -20,6 +22,7 @@ pub mod context;
 mod fuzzy;
 pub mod ident;
 pub mod lex;
+mod qualify;
 mod resolve;
 pub mod symbols;
 pub mod validate;
@@ -28,7 +31,7 @@ pub use complete::{complete, Completion, CompletionKind};
 pub use ident::{needs_quoting, qualified, quote_verbatim};
 pub use symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym};
 pub use validate::{
-    classify, classify_one, policy_verdicts, read_policy, validate, Blocked, Capability,
+    classify, classify_one, parse_one, policy_verdicts, read_policy, validate, Blocked, Capability,
     PolicyRefusal, StmtKind, Verdict,
 };
 

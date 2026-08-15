@@ -269,6 +269,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     exotic_types_and_refusals(&engine).await;
     json_pushdown(&engine, &fixtures).await;
     statement_policy(&engine, &fixtures).await;
+    unqualified_names(&engine, port).await;
     cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
 
@@ -1033,6 +1034,204 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         !why.contains("reserved"),
         "a remote relation is not in Strata's reserved namespace: {why}"
     );
+}
+
+/// **Unqualified names** (DB-09) — a phase of the test above, and the half a fake catalog cannot
+/// show: whether a bare name genuinely *reaches* the server's relation.
+///
+/// Runs after [`statement_policy`], which set the data root a workspace table needs, and leaves
+/// the fixture as it found it.
+async fn unqualified_names(engine: &Engine, port: u16) {
+    assert_eq!(
+        rows(engine, 40, "SELECT count(*) FROM orders").await,
+        vec![vec!["3".to_string()]],
+        "a bare name only the database has reads the database"
+    );
+    assert_eq!(
+        rows(engine, 41, "SELECT id FROM big_orders").await,
+        vec![vec!["1".to_string()]],
+        "a remote **view** resolves like any other relation"
+    );
+    assert!(
+        engine
+            .run(
+                WsId(1),
+                RunTag(42),
+                "SELECT * FROM sessions".to_string(),
+                200,
+            )
+            .await
+            .is_err(),
+        "a schema the connection does not show must not capture a bare name"
+    );
+    assert_eq!(
+        rows(
+            engine,
+            43,
+            &format!("SELECT count(*) FROM {CATALOG}.analytics.sessions")
+        )
+        .await,
+        vec![vec!["2".to_string()]],
+        "…and writing it in full still resolves, which is the half that scoping never bounded"
+    );
+
+    engine.show_schemas(&connection(port, CATALOG, &["public", "analytics"]));
+    assert_eq!(
+        rows(engine, 44, "SELECT count(*) FROM sessions").await,
+        vec![vec!["2".to_string()]],
+        "showing the schema is what puts it in reach of a bare name"
+    );
+    engine.show_schemas(&connection(port, CATALOG, &["public"]));
+    assert!(
+        engine
+            .run(
+                WsId(1),
+                RunTag(45),
+                "SELECT * FROM sessions".to_string(),
+                200,
+            )
+            .await
+            .is_err(),
+        "and hiding it again takes it back out"
+    );
+
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(43),
+            "INSERT INTO customers VALUES (30, 'x')".to_string(),
+            200,
+        )
+        .await
+    else {
+        panic!("a write to a bare name that resolves remote was accepted");
+    };
+    assert!(
+        why.contains(&format!("database connection '{CATALOG}'")),
+        "a write target is refused as remote, not as missing: {why}"
+    );
+
+    engine
+        .run(
+            WsId(1),
+            RunTag(44),
+            "CREATE VIEW remote_orders AS SELECT id, total FROM orders".to_string(),
+            200,
+        )
+        .await
+        .expect("the view is created over the resolved name");
+    engine
+        .run(
+            WsId(1),
+            RunTag(45),
+            "CREATE TABLE orders AS SELECT 1 AS id, 1 AS total".to_string(),
+            200,
+        )
+        .await
+        .expect("a workspace table may take a name the database also has");
+    assert_eq!(
+        rows(engine, 46, "SELECT count(*) FROM orders").await,
+        vec![vec!["1".to_string()]],
+        "and from then on the workspace's own table is what the bare name means"
+    );
+    assert_eq!(
+        rows(
+            engine,
+            47,
+            &format!("SELECT count(*) FROM {CATALOG}.public.orders")
+        )
+        .await,
+        vec![vec!["3".to_string()]],
+        "the qualified name still reaches across"
+    );
+
+    let Ok(RunOutcome::Statement(report)) = engine
+        .run(WsId(1), RunTag(48), "DROP TABLE orders".to_string(), 200)
+        .await
+    else {
+        panic!("the workspace table drops");
+    };
+    assert!(
+        !report.message.contains("remote_orders"),
+        "dropping a same-named workspace table must not name a view that never read it: {}",
+        report.message
+    );
+    engine
+        .run(
+            WsId(1),
+            RunTag(49),
+            "DROP VIEW remote_orders".to_string(),
+            200,
+        )
+        .await
+        .expect("the view drops");
+
+    ambiguous_names(engine, port).await;
+}
+
+/// One name in two schemas of one database: refused by name, with both addresses in the sentence.
+///
+/// **Both schemas are shown**, which is what makes this a tie at all. Its own function because it
+/// moves the fixture — a relation added server-side is only visible after a reconnect, and the
+/// phase has to put it back.
+async fn ambiguous_names(engine: &Engine, port: u16) {
+    let (client, driver) = tokio_postgres::connect(
+        &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .expect("a raw client to add a second 'orders'");
+    tokio::spawn(async move {
+        if let Err(e) = driver.await {
+            eprintln!("fixture connection ended: {e}");
+        }
+    });
+    let conn = connection(port, CATALOG, &["public", "analytics"]);
+
+    client
+        .batch_execute("CREATE TABLE analytics.orders (id INT PRIMARY KEY);")
+        .await
+        .expect("a second relation of the same name");
+    engine.connect(conn.clone()).await.expect("re-enumerates");
+
+    let Err(why) = engine
+        .run(WsId(1), RunTag(50), "SELECT * FROM orders".to_string(), 200)
+        .await
+    else {
+        panic!("two relations of that name and one of them was picked");
+    };
+    assert!(
+        why.contains(&format!("{CATALOG}.public.orders"))
+            && why.contains(&format!("{CATALOG}.analytics.orders")),
+        "the refusal names every candidate: {why}"
+    );
+
+    assert_eq!(
+        rows(
+            engine,
+            51,
+            &format!("SELECT count(*) FROM {CATALOG}.analytics.orders")
+        )
+        .await,
+        vec![vec!["0".to_string()]],
+        "and qualifying it is the fix the message asks for"
+    );
+
+    engine.show_schemas(&connection(port, CATALOG, &["public"]));
+    assert_eq!(
+        rows(engine, 52, "SELECT count(*) FROM orders").await,
+        vec![vec!["3".to_string()]],
+        "with `analytics` hidden the name has one candidate again"
+    );
+
+    client
+        .batch_execute("DROP TABLE analytics.orders;")
+        .await
+        .expect("put the fixture back");
+    engine
+        .connect(connection(port, CATALOG, &["public"]))
+        .await
+        .expect("re-enumerates");
 }
 
 /// **The cross-source view** — the load-bearing case: one workspace def whose dependencies span

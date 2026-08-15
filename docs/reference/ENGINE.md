@@ -29,7 +29,11 @@ The refusal list: `CREATE DATABASE`/`SCHEMA`, `UPDATE`/`DELETE`,
 dialect key, `DROP` of a non-table/view object, reserved `__snap_` names, multi-statement buffers,
 and unknown kinds. A statement whose target is qualified into a **database connection's** catalog
 is refused by name at dispatch, in one sentence minted by `ddl::bare_name` (`STATEMENTS_SPEC.md`
-§4): v1 reads a database and manages nothing in it. Reading one is never refused.
+§4): v1 reads a database and manages nothing in it. Reading one is never refused — and it needs no
+qualifier: between the parse and the classification, `sql::qualify` resolves a bare name the
+workspace does not hold against the connected catalogs (one match rewritten whole, several refused
+by name, create targets never touched — `CONNECTIONS_SPEC.md` § *Unqualified names*), which is why
+the read path is handed the **statement** rather than the buffer.
 `Capability::Agent` is read-only and refuses every non-query with its original wording.
 `Engine::run` is where that classification is *spent*: `Query` delegates to `query()`'s body
 byte-for-byte (the only arm that touches the snapshot lifecycle, so "DDL does not retire

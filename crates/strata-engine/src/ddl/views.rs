@@ -29,7 +29,7 @@ use datafusion::sql::TableReference;
 
 use crate::catalog::{column_info, dependents_of_view, plan_deps, view_error, ViewMeta};
 use crate::query::is_snapshot_name;
-use crate::sql::{Blocked, StmtKind};
+use crate::sql::{parse_one, Blocked, StmtKind};
 use crate::{fold_ident, quote_ident};
 use strata_model::ViewDef;
 
@@ -46,6 +46,11 @@ const WHAT: &str = "Views";
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
 ///
+/// **Parsed and resolved rather than handed to `ctx.sql`** ([`parse_one`], DB-09): a view's body
+/// is a read like any other, and resolving it is what makes [`plan_deps`] record a body reading a
+/// connection's `orders` as the *remote* dependency it is. The def still stores the SQL the user
+/// wrote.
+///
 /// A failure comes back through [`view_error`], the table funnel's `register_error` from the
 /// other side: one diagnosis — a relation a database connection no longer has — in front of the
 /// same unwrapping a refused *table* gets. A view's failure lands in the same Problems list, one
@@ -57,8 +62,14 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         return Err(Blocked::ReservedName.editor_message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
+    let stmt = parse_one(ctx, &stmt).map_err(|e| view_error(ctx, &e))?;
+    let plan = ctx
+        .state()
+        .statement_to_plan(stmt)
+        .await
+        .map_err(|e| view_error(ctx, &e.to_string()))?;
     let df = ctx
-        .sql(&stmt)
+        .execute_logical_plan(plan)
         .await
         .map_err(|e| view_error(ctx, &e.to_string()))?;
     let _ = df.collect().await;

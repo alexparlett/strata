@@ -48,6 +48,21 @@ named.
   `ViewInfo::remote_deps`) records which workspace views read `pg.public.orders` qualified
   whole — so a remote `DROP` can name the workspace views it strands, in `left_invalid`'s own
   words, without cascading anything.
+- **A bare `DROP` target resolves too, and that collides with the span splice — resolve it here.**
+  DB-09's `sql::qualify` (`sql/qualify.rs`) rewrites bare names into three-part ones before
+  anything plans, and DB-10 settles that a target addressing an *existing* relation resolves
+  exactly as a read does (Alex, 2026-08-15: "I want the write to dispatch just like read does").
+  A `DROP TABLE` / `DROP VIEW` / `UPDATE` / `DELETE` target is such a name, so a bare `orders` that
+  only a connection has is this task's remote branch rather than today's "table 'orders' does not
+  exist" — one rule for every statement that manages a relation it did not create. **The friction
+  is that this task splices the user's own bytes**, and a resolved target has no bytes: the
+  three-part name the pass produced exists only in the AST. So the splice's input is the
+  **statement**, not the buffer, for the target segment — cut on the *typed* span when the user
+  qualified it, and render the resolved catalog away when the pass did, which is the same
+  operation over a name whose span is empty rather than a second code path. A name whose span
+  cannot be trusted is still a refusal, never a guess. Creation stays local unless qualified, for
+  the reason DB-10's file gives (there is nothing to resolve *to*, and resolving would read a
+  plainly local `CREATE VIEW v` as "make it on the server").
 
 ## Build
 

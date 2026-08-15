@@ -12,8 +12,8 @@ is the completion offer that catches up with them
 
 ```mermaid
 flowchart TD
-    RUN["Engine::run(ws, tag, sql)"] --> CLS{"sql::classify_one\n(parse, then classify(stmt, Editor))"}
-    CLS -- "empty buffer /\nmulti-statement" --> ERR1["Err — 'Nothing to run' /\n'Run executes one statement at a time'"]
+    RUN["Engine::run(ws, tag, sql)"] --> CLS{"sql::classify_one\n(parse, resolve bare reads,\nthen classify(stmt, Editor))"}
+    CLS -- "empty buffer / multi-statement /\nan ambiguous bare name" --> ERR1["Err — 'Nothing to run' /\n'Run executes one statement at a time' /\n''orders' is ambiguous: … Qualify it'"]
     CLS -- "Verdict::Query" --> Q["query() byte-for-byte\nthe only arm that touches\nthe snapshot lifecycle"]
     CLS -- "Verdict::Intercept(kind)" --> DDL["ddl::execute, under the bookkeep\nbracket explain shares\n(cancel / is_running / close confirm)"]
     CLS -- "Verdict::Refuse(blocked)" --> ERR2["Err(blocked.editor_message())\nbefore DataFusion can plan"]
@@ -29,6 +29,22 @@ takes exactly one statement from it — an empty buffer is `Nothing to run`, a m
 buffer is `Run executes one statement at a time`. The statement then classifies
 (`classify(stmt, Capability::Editor)`) into one of three verdicts, and `Engine::run` spends the
 verdict (§2).
+
+**Between the parse and the classification, the statement's bare reads resolve** (`sql::qualify`,
+DB-09): a name the workspace does not hold and exactly one connected database does is rewritten to
+its three-part form, so a `SELECT * FROM orders` over a connection is judged, planned and recorded
+as the `pg.public.orders` it reaches. It sits inside `sql::parse_one` — the one parse in front of
+the router — because it can *change* a classification: a bare `__snap_3` the workspace does not
+hold is not a reserved name once it resolves into a database connection, where the prefix reserves
+nothing, and a gate that judged the unresolved statement would refuse a read the run then performs.
+Create and drop targets are never rewritten; the full rule, and why it is a statement pass rather
+than a current-database setting, is `docs/CONNECTIONS_SPEC.md` § *Unqualified names*.
+
+That is also why the read path takes the **statement** rather than the buffer: `query::materialize`
+and `explain::run_explain` are handed what the router judged and plan it
+(`query::plan_statement` — `SessionContext::sql_with_options` with the parse taken out), because
+rendering a resolved statement back to text to keep the old signature is exactly the round trip
+`COPY`'s arm avoids for the same reason (§6.4).
 
 **What classifies `Query`** — the snapshot pipeline, unchanged: `SELECT`, `EXPLAIN` /
 `EXPLAIN ANALYZE`, `DESCRIBE`, and every `SHOW` form (`TABLES`, `COLUMNS`, `FUNCTIONS`,
@@ -177,6 +193,16 @@ The fourteen kinds, and what each answers for a remote-qualified name:
 
 Reading is never refused, and that is the point of the connection: a plain `SELECT`, a
 cross-source join, an `EXPLAIN` and a `PREPARE`d body all resolve `pg.public.orders` normally.
+
+**A bare name reaches the same refusal** (DB-09). An `INSERT` target that only a connection has is
+refused by `sql::qualify` with `ddl::in_database`'s own sentence, before the statement plans. One
+wording, two places it is reached from — the arm for a name the user qualified, the resolution
+pass for one it did not — because "not found" is the wrong answer about a relation the same
+session will happily read. That refusal is what the rule looks like while writing to a database is
+impossible: a write target addresses an existing relation and will **resolve** like a read once
+DB-10/DB-11 give it somewhere to go. A **create** target is the permanent exception — it names
+something that does not exist yet, so `CREATE TABLE orders` goes on making a workspace table while
+a connection has an `orders`.
 
 **Reserved names.** **Any** statement typed into the editor that references a `__snap_`-prefixed
 table **in the workspace catalog** — or names one as its target — refuses with
