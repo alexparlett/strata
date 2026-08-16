@@ -102,6 +102,15 @@ jobs:
           # change (a path dep, not a lockfile entry) reuses the cache and only
           # rebuilds the fork crates.
           cache: true
+          # A cancelled or failed run must not write a cache. rust-cache saves only when
+          # the key is NEW, so a partial target dir stored under a key becomes that key's
+          # permanent content: every later run full-matches it, skips the save, and rebuilds
+          # whatever the interrupted run had not reached. That is how `test` came to restore
+          # a 571 MB cache — half the size of the same key on a PR branch — and then spend
+          # 22 minutes recompiling the dependency graph while `clippy` ran warm off the same
+          # entry in two. The per-ref `cancel-in-progress` above generates interrupted runs
+          # deliberately, so this is not a rare case; the action's own default is `true`.
+          cache-on-failure: false
           # This action defaults `rustflags` to `-D warnings`, which would apply to
           # every cargo invocation in the job - including the dependency builds. The
           # first run of this workflow failed on exactly that: two long-standing
@@ -199,6 +208,8 @@ jobs:
         with:
           toolchain: stable
           cache: true
+          # See the note in `test`.
+          cache-on-failure: false
           # See the note in `test`: the action's `-D warnings` default would assert
           # something stricter than the check AGENTS.md section 7 describes.
           rustflags: ''
