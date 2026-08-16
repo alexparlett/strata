@@ -254,8 +254,9 @@ fn workspace_dml(kind: StmtKind) -> String {
 ///
 /// A CTE name is held back because the server binds it identically, and a table factor carrying an
 /// argument list because it is a function call (`FROM generate_series(1, 10)`) rather than a
-/// relation; the set is keyed by folded last part and deliberately flat, over-collecting only
-/// leaving a name alone.
+/// relation. Both are **single identifiers**, which is what the set holds and what it is matched
+/// against; it is deliberately flat across nesting, over-collecting there only leaving a name
+/// alone.
 #[derive(Default)]
 struct Named {
     names: Vec<ObjectName>,
@@ -300,15 +301,24 @@ impl Named {
         Ok(())
     }
 
+    /// Whether `name` is one the statement binds or calls rather than reads — **a single part
+    /// only**, because a CTE is referenced by its bare alias and an unqualified call is one
+    /// identifier, so a qualified name is never either. Matching on the last part alone would
+    /// exempt `warehouse.public.orders` from the check for no better reason than the statement
+    /// binding a CTE called `orders`, and the splice would then carry it to the wrong server.
     fn is_held(&self, name: &ObjectName) -> bool {
-        name.0
-            .last()
-            .and_then(ObjectNamePart::as_ident)
-            .is_some_and(|ident| self.held.contains(&fold_ident(&ident.value)))
+        match name.0.as_slice() {
+            [ObjectNamePart::Identifier(ident)] => self.held.contains(&fold_ident(&ident.value)),
+            _ => false,
+        }
     }
 
-    fn hold(&mut self, value: &str) {
-        self.held.insert(fold_ident(value));
+    /// Bind `name` if it is the one shape [`is_held`] can match; a qualified call needs no
+    /// holding, since it passes the check as the qualified name it is.
+    fn hold(&mut self, name: &ObjectName) {
+        if let [ObjectNamePart::Identifier(ident)] = name.0.as_slice() {
+            self.held.insert(fold_ident(&ident.value));
+        }
     }
 }
 
@@ -318,7 +328,7 @@ impl Visitor for Named {
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<()> {
         if let Some(with) = &query.with {
             for cte in &with.cte_tables {
-                self.hold(&cte.alias.name.value);
+                self.held.insert(fold_ident(&cte.alias.name.value));
             }
         }
         ControlFlow::Continue(())
@@ -331,9 +341,7 @@ impl Visitor for Named {
             ..
         } = factor
         {
-            if let Some(ident) = name.0.last().and_then(ObjectNamePart::as_ident) {
-                self.hold(&ident.value);
-            }
+            self.hold(name);
         }
         ControlFlow::Continue(())
     }
@@ -616,6 +624,38 @@ mod tests {
         let why =
             rewritten("CREATE VIEW pg.public.v AS SELECT * FROM public.orders").expect_err("part");
         assert!(why.contains("public.orders"), "{why}");
+    }
+
+    /// **A binding holds back the bare name and nothing else.** Matching a held name on its last
+    /// part alone exempted `warehouse.public.orders` from the check whenever the statement bound a
+    /// CTE called `orders` — and since the splice skips a name outside the target catalog, that
+    /// out-of-connection relation went to the `pg` server verbatim.
+    #[test]
+    fn a_binding_does_not_exempt_a_qualified_name_that_ends_in_it() {
+        let why = rewritten(
+            "CREATE VIEW pg.public.leak AS WITH orders AS (SELECT 1 AS id) SELECT * FROM \
+             orders, warehouse.public.orders",
+        )
+        .expect_err("the other connection is still refused");
+        assert!(why.contains("warehouse.public.orders"), "{why}");
+        assert!(why.contains("'pg'"), "{why}");
+    }
+
+    /// The same rule from the call side: a **qualified** function call needs no holding, since it
+    /// passes the check as the qualified name it is and is spliced like any other, and holding it
+    /// would have exempted a bare name of that spelling elsewhere in the statement.
+    #[test]
+    fn a_qualified_call_is_spliced_and_holds_nothing() {
+        assert_eq!(
+            rewritten("SELECT * FROM pg.public.readings(1)").expect("spliced"),
+            "SELECT * FROM public.readings(1)"
+        );
+        let why = rewritten("SELECT * FROM pg.public.readings(1), readings")
+            .expect_err("the bare name is nobody's binding");
+        assert!(
+            why.contains("'readings'") && why.contains("search path"),
+            "{why}"
+        );
     }
 
     /// A CTE and a table function are the statement's own, not the connection's, so neither is
