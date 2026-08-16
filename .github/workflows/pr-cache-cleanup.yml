@@ -1,0 +1,43 @@
+name: PR cache cleanup
+
+# A cache written on `refs/pull/N/merge` is readable by that pull request and by nothing
+# else — only the default branch's caches are visible to every branch — so the moment a PR
+# closes its caches are dead weight that can never be restored again. They are not free:
+# the repository has a 10 GB budget and GitHub evicts the least recently used entry over
+# it, so a few open PRs holding ~1 GB each evict the `main` caches every branch actually
+# depends on. That is measured, not theoretical: the budget stood at 11.2 GB with 5.8 GB
+# of it on merged PRs while `main`'s own entries were being turned over.
+#
+# Closed rather than merged: a PR abandoned without merging leaves exactly the same
+# unreachable caches.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    # A pull request from a fork gets a read-only token, so the delete would fail and
+    # report red on somebody else's contribution for nothing. Its caches are the fork's
+    # to hold.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Both refs, because which one a cache lands under is the triggering event's:
+      # `pull_request` builds the merge ref, and anything running on `push` for the same
+      # branch would write the head ref.
+      - name: Delete the caches this pull request wrote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          for ref in "refs/pull/$PR/merge" "refs/pull/$PR/head"; do
+            ids=$(gh cache list --ref "$ref" --limit 100 --json id --jq '.[].id')
+            for id in $ids; do
+              gh cache delete "$id" && echo "deleted $id ($ref)"
+            done
+          done
