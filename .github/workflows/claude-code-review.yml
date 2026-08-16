@@ -13,7 +13,20 @@ concurrency:
 jobs:
   review:
     # Drafts are skipped; ready_for_review picks them up when they are marked ready.
-    if: github.event.pull_request.draft == false
+    #
+    # Dependabot is skipped too, and deliberately as a job condition rather than by
+    # passing `allowed_bots` to the action below. claude-code-action refuses a run
+    # initiated by a bot (`Workflow initiated by non-human actor`), and that refusal is
+    # a hard failure, so every version-bump PR sat red on a check that was never going
+    # to do anything: the diff is a manifest line and a lockfile, the reviewer cannot
+    # read the upstream changelog that would make the bump judgeable, and the thing
+    # that actually judges a bump is `cargo test` in ci.yml. A skipped job reports as
+    # skipped, which satisfies a required status check; allowing the bot instead would
+    # run a `pull-requests: write` action on a branch no human authored, which is the
+    # case that check exists for.
+    if: >-
+      github.event.pull_request.draft == false
+      && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
