@@ -9,3 +9,29 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    # The DataFusion release train moves as one, so Dependabot must offer it as one.
+    #
+    # `datafusion-federation` and `datafusion-table-providers-*` each compile against a
+    # single DataFusion minor, and Arrow/Parquet/`object_store` are the versions
+    # DataFusion itself pins - so a PR that bumps `datafusion` alone does not resolve
+    # until the contrib crates catch up, and a PR that bumps a contrib crate alone does
+    # not resolve until DataFusion does. Ungrouped, that is a standing set of red PRs
+    # nobody can merge in either order. Grouped, the whole train arrives in one branch
+    # that either resolves and goes green or does not open at all, and the container job
+    # runs the Postgres federation test against the combination that would actually ship.
+    #
+    # Arrow, Parquet and `object_store` are transitive today and named anyway: they are
+    # on the same train, and the day one becomes a direct dependency (an Arrow fixture in
+    # a test, say) it belongs in this group without an edit here. Lance is named for the
+    # same reason - it pins DataFusion too, and is not in the tree yet.
+    groups:
+      datafusion:
+        patterns:
+          - "datafusion"
+          - "datafusion-*"
+          - "arrow"
+          - "arrow-*"
+          - "parquet"
+          - "object_store"
+          - "lance"
+          - "lance-*"
