@@ -933,11 +933,17 @@ fewer.
 
 A **`CopyTo` cannot be driven** that way: its sink is the file format's, built by DataFusion's
 physical planner from the node itself. So it is kept out of the rule's reach instead —
-`db::federate::optimizer_rules` wraps the crate's federation rule so a `Copy` root federates its
-**input** and is rebuilt around the result. The crate already draws this line one node short: it
+`db::federate::optimizer_rules` wraps the crate's federation rule so a write root federates its
+**input** and is rebuilt around the result. The crate already draws this line two nodes short: it
 exempts `LogicalPlan::Analyze` in the same recursion, with "cannot be converted to SQL by the
-Unparser" written beside it. `Dml` is deliberately not named in the wrapper, because none reaches
-the optimizer.
+Unparser" written beside it.
+
+The wrapper's predicate is `Copy | Dml`, so it names `Dml` too even though the arm above means none
+reaches the optimizer. The predicate is "a node that writes", and naming one of the two would make
+it a rule that happens to hold rather than one that does: whatever plans a `Dml` next would meet
+this failure again. The wrap is found by rule *name*, so `optimizer_rules` asserts rather than hand
+back a list that quietly lost the exemption, and a unit test beside it fails if a dependency bump
+moves the name.
 
 `sink::collapse_projections` belongs to the **input** for the same reason the whole section does:
 what decides whether anything is unparsed is where the rows are read from, never where they land.
