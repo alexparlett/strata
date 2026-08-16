@@ -14,6 +14,9 @@
 //!    reports **every** unknown table/column with a span (the planner below is fail-fast: one name
 //!    per statement), staying quiet where a mid-edit scope is unknowable. Name faults skip the
 //!    dry-plan.
+//!    A statement bound for a **server** (`ddl::dispatched`) stops there: its types, functions and
+//!    clauses are that server's vocabulary, so judging it here would squiggle a statement Run
+//!    performs.
 //! 4. **Semantic** — the allowed statements are **dry-planned** against the live `SessionContext`,
 //!    then optimized for the analyzer's type coercion, so unknown functions, bad casts and the
 //!    name semantics the resolver skips surface as the *same* errors a Run would hit. Nothing
@@ -155,6 +158,7 @@ pub async fn validate(
                 ));
                 continue;
             }
+            Verdict::Intercept(kind) if crate::ddl::dispatched(ctx, kind, &stmt) => continue,
             Verdict::Intercept(_) | Verdict::Query => {}
         }
         let resolution = resolve(ctx, &stmt, slice, stmt_range.start, sql).await;
@@ -281,6 +285,12 @@ pub enum StmtKind {
     Deallocate,
     CreateFunction,
     DropFunction,
+    /// Remote-only, so the arm refuses a workspace target in its own words; intercepted rather
+    /// than refused here because whose catalog the target is in is not something the parsed
+    /// statement says.
+    Update,
+    /// Remote-only, for [`Update`](StmtKind::Update)'s reason.
+    Delete,
 }
 
 impl StmtKind {
@@ -303,6 +313,8 @@ impl StmtKind {
             StmtKind::Deallocate => "DEALLOCATE",
             StmtKind::CreateFunction => "CREATE FUNCTION",
             StmtKind::DropFunction => "DROP FUNCTION",
+            StmtKind::Update => "UPDATE",
+            StmtKind::Delete => "DELETE",
         }
     }
 }
@@ -498,6 +510,8 @@ fn classify_form(stmt: &DFStatement) -> (Verdict, Option<Blocked>) {
             Some(Blocked::Insert),
         ),
         SqlStatement::Insert(_) => intercept(StmtKind::Insert, Blocked::Insert),
+        SqlStatement::Update(_) => intercept(StmtKind::Update, Blocked::Unsupported),
+        SqlStatement::Delete(_) => intercept(StmtKind::Delete, Blocked::Unsupported),
         SqlStatement::CreateDatabase { .. } | SqlStatement::CreateSchema { .. } => {
             refuse(Blocked::CreateDatabase)
         }
@@ -565,9 +579,10 @@ fn refuse(blocked: Blocked) -> (Verdict, Option<Blocked>) {
 /// `__strata_ord` into a user's file; the write half keeps `CREATE TABLE __snap_2` and
 /// friends off the namespace a Run mints into. sqlparser's own `visit_relations` covers
 /// the reads and the two sqlparser targets upstream annotates (`CREATE TABLE`'s name
-/// and `INSERT`'s), but `CREATE VIEW`'s name and `DROP`'s name list carry no
-/// annotation — and DataFusion's own extension statements are outside the visitor
-/// entirely — so those targets are named here rather than assumed.
+/// and `INSERT`'s), but `CREATE VIEW`'s name, `DROP`'s name list and `DELETE`'s
+/// multi-table list carry no annotation — and DataFusion's own extension statements are
+/// outside the visitor entirely — so those targets are named here rather than assumed.
+/// An `UPDATE`'s target and a `DELETE`'s `FROM` are table factors, so the visitor has them.
 fn names_reserved(stmt: &DFStatement) -> bool {
     match stmt {
         DFStatement::CreateExternalTable(create) => is_reserved(&create.name),
@@ -579,6 +594,7 @@ fn names_reserved(stmt: &DFStatement) -> bool {
             let targets: &[ObjectName] = match s.as_ref() {
                 SqlStatement::CreateView(view) => slice::from_ref(&view.name),
                 SqlStatement::Drop { names, .. } => names,
+                SqlStatement::Delete(delete) => &delete.tables,
                 _ => &[],
             };
             targets.iter().any(is_reserved) || reads_reserved(s.as_ref())
@@ -1421,11 +1437,11 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].message, Blocked::CreateDatabase.editor_message());
 
-        let sql = "DELETE FROM t";
+        let sql = "TRUNCATE TABLE t";
         let out = run(sql);
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].message, Blocked::Unsupported.editor_message());
-        assert_eq!(spanned(sql, &out[0]), "DELETE FROM");
+        assert_eq!(spanned(sql, &out[0]), "TRUNCATE TABLE");
 
         let out = run("INSERT OVERWRITE INTO t VALUES (3, 'c')");
         assert_eq!(out.len(), 1, "{out:?}");
@@ -1674,11 +1690,16 @@ mod tests {
             ),
             (
                 "UPDATE t SET name = 'x'",
-                Verdict::Refuse(Blocked::Unsupported),
+                Verdict::Intercept(StmtKind::Update),
                 Verdict::Refuse(Blocked::Unsupported),
             ),
             (
                 "DELETE FROM t",
+                Verdict::Intercept(StmtKind::Delete),
+                Verdict::Refuse(Blocked::Unsupported),
+            ),
+            (
+                "TRUNCATE TABLE t",
                 Verdict::Refuse(Blocked::Unsupported),
                 Verdict::Refuse(Blocked::Unsupported),
             ),
@@ -1800,8 +1821,8 @@ mod tests {
             "CREATE DATABASE other",
             "CREATE SCHEMA other",
             "DROP SCHEMA s",
-            "UPDATE t SET name = 'x'",
-            "DELETE FROM t",
+            "TRUNCATE TABLE t",
+            "MERGE INTO t USING u ON t.id = u.id WHEN MATCHED THEN DELETE",
         ] {
             let verdicts = policy_verdicts(&ctx, sql).expect("parses");
             assert_eq!(verdicts.len(), 1, "{sql}");

@@ -138,10 +138,13 @@ pub enum Verdict {
 }
 ```
 
-`StmtKind` names the fourteen intercepted forms: `CreateExternalTable`, `CreateTable`, `Ctas`,
+`StmtKind` names the sixteen intercepted forms: `CreateExternalTable`, `CreateTable`, `Ctas`,
 `Insert`, `DropTable`, `CreateView`, `DropView`, `Copy`, `Set`, `Reset`, `Prepare`, `Deallocate`,
-`CreateFunction`, `DropFunction`. `StmtKind::label` is the one spelling of each statement's name —
-stub refusals, reports and the results pane all read it.
+`CreateFunction`, `DropFunction`, `Update`, `Delete`. `StmtKind::label` is the one spelling of each
+statement's name — stub refusals, reports and the results pane all read it. The last two are
+**remote-only**: they are intercepted rather than refused because whose catalog the target is in is
+not something the parsed statement says, and the arm refuses a workspace target in its own words
+(§6.9).
 
 - **Both surfaces answer from one match arm.** `classify_form` returns
   `(Verdict, Option<Blocked>)` — the editor's answer and the agent's beside it — so an arm cannot
@@ -161,37 +164,41 @@ stub refusals, reports and the results pane all read it.
   so smuggled nested DDL still dies at the second gate — but it can only refuse a class of plan,
   not name the surface that owns a capability.
 
-**Names inside a database connection's catalog** (DB-03, relaxed by DB-10). Since the DB
+**Names inside a database connection's catalog** (DB-03, relaxed by DB-10 and DB-11). Since the DB
 workstream the session holds more than one catalog: the workspace's `strata`, plus one per live
-database connection. Two statements **write** a name qualified into one of those — `INSERT` and
-CTAS, on a connection whose `read_only` is off (`docs/CONNECTIONS_SPEC.md`) — and everything else
-about it is read like any other name and managed by nothing. Both refusals are minted in exactly
-one place, beside each other in `ddl`, and the choke point in front of every arm is two answers
-rather than one: `ddl::bare_name` for a workspace name, `ddl::remote_target` for a remote one.
-
-> `'pg.public.orders' is in the database connection 'pg'. INSERT and CREATE TABLE AS SELECT are
-> the only statements Strata can change a remote relation with`
+database connection. A statement may now **change** a name qualified into one of those, on a
+connection whose `read_only` is off (`docs/CONNECTIONS_SPEC.md`), and the split is by **mechanism**:
+`INSERT` and CTAS are what DataFusion can plan, so they are planned and driven (§6.8); the rest are
+what only the server can run, so they are dispatched as text (§6.9). The choke point in front of
+every arm is two answers rather than one: `ddl::bare_name` for a workspace name,
+`ddl::remote_target` for a remote one.
 
 > `The database connection 'pg' is read-only, so 'pg.public.loaded' cannot be written. Turn off
 > 'Read only' in the connection's settings`
 
-The first is not parameterised by what the statement makes: it is about the catalog, not about
-whether a table or a view was being made in it, and it names what *does* work rather than listing
-what does not. The second names the setting, because the user is one toggle away and a sentence
-that does not say which is no use. A qualifier that resolves to **no** catalog keeps the older
-wording ("Strata has one schema, 'public'. Tables cannot be created elsewhere"), because that is a
-different fact and there is no connection to name. All of it comes off the session's own catalog
-list, which holds a database's catalog exactly while its connection is live — the same window in
-which the user can address it at all.
+> `'pg.public.orders' is in the database connection 'pg', which describes its own relations.
+> Tables cannot be registered inside one`
 
-The fourteen kinds, and what each answers for a remote-qualified name:
+The first names the setting, because the user is one toggle away and a sentence that does not say
+which is no use; it is minted once and every arm reads it. The second is now about one statement
+rather than about the catalog — once every other statement gained a remote branch, registering a
+table externally is the only thing left that a database connection cannot take, and it says so. A
+qualifier that resolves to **no** catalog keeps the older wording ("Strata has one schema,
+'public'. Tables cannot be created elsewhere"), because that is a different fact and there is no
+connection to name. All of it comes off the session's own catalog list, which holds a database's
+catalog exactly while its connection is live — the same window in which the user can address it at
+all.
+
+The sixteen kinds, and what each answers for a remote-qualified name:
 
 | Kind | Remote-qualified target |
 |---|---|
 | `Ctas` | **runs** on a writable connection: the server table is created from the input's schema and filled, and a failed fill — or a cancel — drops it again. Read-only refuses by name; `OR REPLACE` is refused where the relation exists, since it would drop a server table, and creates where it does not |
 | `Insert` | **runs** on a writable connection, appending in one transaction — reached **before** `Engine::is_internal`, which is not a question to ask about a relation whose data Strata could never own. Read-only refuses by name; `INSERT OVERWRITE` is refused as it is locally |
-| `CreateTable` (column list) | refused, naming the connection. Its types are the server's vocabulary (`jsonb`, `serial`), which only the server should judge — DB-11's |
-| `DropTable`, `DropView`, `CreateView` | refused, naming the connection |
+| `CreateTable` (column list) | **runs** on the server, dispatched as text, so its types are the server's own vocabulary (`jsonb`, `serial`) and the server judges them |
+| `CreateView` | **runs** on the server, `MATERIALIZED` included — the one place that clause is accepted, the workspace having no such concept |
+| `DropTable`, `DropView` | **run** on the server. Existence is the server's question (`IF EXISTS` travels in the statement), and the workspace views left reading the relation are named without cascading |
+| `Update`, `Delete` | **run** on the server and report its own affected-row count. A **workspace** target is refused in its own words, since a project table is files that cannot be changed in place |
 | `CreateExternalTable` | refused, naming the connection. A `postgres://…` `LOCATION` is a separate rule: it splits like any remote location and lands on the membership refusal, naming a connection the project does not have |
 | `Copy` | **runs.** Its target is a path, and a remote relation in its *source* is an ordinary read |
 | `Prepare`, `Execute`, `Deallocate` | **run.** A prepared body over a remote relation is a query |
@@ -200,12 +207,15 @@ The fourteen kinds, and what each answers for a remote-qualified name:
 
 Reading is never refused, and that is the point of the connection: a plain `SELECT`, a
 cross-source join, an `EXPLAIN` and a `PREPARE`d body all resolve `pg.public.orders` normally.
-`Capability::Agent` is untouched by any of it — the agent surface refuses both write statements
-exactly as it did.
+`Capability::Agent` is untouched by any of it — the agent surface refuses every one of these
+statements exactly as it did, `UPDATE` and `DELETE` with the `Unsupported` variant they already
+had.
 
-**A bare name reaches the same arm** (DB-09, DB-10). A write target resolves exactly as a read
-does, so `INSERT INTO orders` dispatches to `pg.public.orders` the way `SELECT * FROM orders` reads
-it, and whatever refuses it is the arm's — one funnel, whether or not the qualifier was typed.
+**A bare name reaches the same arm** (DB-09, DB-10, DB-11). A target that addresses a relation
+which already exists resolves exactly as a read does, so `INSERT INTO orders`,
+`DROP TABLE orders`, `UPDATE orders` and `DELETE FROM orders` all dispatch to `pg.public.orders`
+the way `SELECT * FROM orders` reads it, and whatever refuses one is the arm's — one funnel,
+whether or not the qualifier was typed.
 Three things make that safe with no second gate in the resolution pass: the connection is
 read-only by default and someone opted this one in, an ambiguous name still refuses by name so a
 write never picks between two servers, and the arm is reached with a qualified name either way.
@@ -258,7 +268,7 @@ name, and a query naming it does not plan.
 | Statement | Wording |
 |---|---|
 | `CREATE DATABASE` / `CREATE SCHEMA` | "CREATE DATABASE and CREATE SCHEMA are not supported" |
-| `UPDATE`, `DELETE`, transactions, unknown kinds | "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and DESCRIBE can run here" |
+| `TRUNCATE`, `MERGE`, `ALTER`, transactions, unknown kinds | "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and DESCRIBE can run here" |
 | `DROP` of a non-table, non-view object | "DROP is not supported in the editor. Deregister tables from the catalog" |
 | `INSERT OVERWRITE` | "INSERT OVERWRITE is not supported. Drop the table and recreate it with CREATE TABLE AS" |
 | `PREPARE` of a non-query body | "PREPARE supports queries only" |
@@ -949,6 +959,77 @@ moves the name.
 what decides whether anything is unparsed is where the rows are read from, never where they land.
 It exists for the nested projection DataFusion's `INSERT` planner leaves, which the unparser
 renders as a derived table whose outer references still name the scan.
+
+### 6.9 Statements the server runs
+
+`CREATE VIEW pg.public.active AS …`, `CREATE MATERIALIZED VIEW`, `DROP VIEW`, `DROP TABLE`, a
+column-list `CREATE TABLE pg.public.t (payload jsonb, …)`, `UPDATE` and `DELETE` — all against a
+relation inside a database connection, all executed **on the server** (DB-11). DataFusion cannot
+plan any of them against a remote catalog, so the mechanism is dispatch rather than planning, and
+that is the whole of the split with §6.8: what DataFusion can plan is planned, what only the server
+can run is sent to it. The same opt-in gates both — a read-only connection refuses with the toggle
+named.
+
+**The statement the server runs is the statement the user typed**, with the catalog qualifier cut
+out of every name that carries it. Never an AST re-render (`Display` round-trip fidelity is exactly
+the bet not to make) and never a plan unparse (§6.8 is what the DF 54 unparser's gaps cost). The
+rewrite is a **span splice** over the buffer: sqlparser implements `Spanned`, so each identifier
+knows where it was written, and the edit runs from the catalog part's start to the schema part's
+start so the dot goes with it. Everything else is the user's own bytes — including their own
+quoting, which the server then judges, and including every clause Strata does not model. That is
+what makes this a generic capability rather than a clause whitelist: `WITH (security_barrier =
+true)` on a view reaches the server intact and the **server** is the clause gate. The exhaustive
+clause destructure the local view arm keeps (§6.3) has no counterpart here by its own argument —
+it exists because that arm *rebuilds* the statement around the query, and a dispatched statement
+drops nothing.
+
+**A target may never have been written.** DB-09's resolution rewrites a bare name into a three-part
+one before anything plans, and a target addressing an existing relation resolves like a read — so
+`DROP TABLE orders` is this section's when only a connection has an `orders`. Such a name has no
+three-part bytes to cut: its parts share the one span the bare token occupied, so the token is
+replaced by the server's spelling of `schema.relation`, quoted unconditionally as every identifier
+Strata composes is. A span that cannot be trusted — the empty sentinel, or bytes that do not match
+the identifier they claim to be — is a **refusal**, never a guess, because the guess would be a
+different statement sent to a server. A **create** target is still never resolved (§4).
+
+**Two gates in front of the dispatch.** The connection must accept writes, and every relation the
+statement names must be one of that connection's, refused **by name** otherwise: a server-side view
+cannot read across sources, and an unqualified name would resolve by the server's search path,
+which is a different answer from the one the editor gives the same spelling. The names are
+collected off the parsed statement — sqlparser's own relation visitor, plus the three targets it
+does not annotate (`CREATE VIEW`'s name, `DROP`'s name list, `DELETE`'s multi-table list, the same
+three the reserved-name fence names explicitly). A CTE name and a table factor carrying an argument
+list are held back: the server binds the first identically, and the second is a function call
+(`FROM generate_series(1, 10)`) rather than a relation.
+
+**The editor does not judge what it dispatches.** `validate`'s dry-plan is skipped for a
+statement bound for a server (`ddl::dispatched`, the same target resolution the arms branch on), and
+it has to be: `CREATE TABLE pg.public.t (payload jsonb)` has no Arrow mapping for its own type, and
+a view body naming a server-side function is unknown to DataFusion — both would draw a red squiggle
+on a statement Run performs, inverting §4's contract in the direction that matters. What is lost is
+editor feedback on names the server owns anyway, which is the same trade the dispatch itself makes.
+
+**What each reports.** The DDL arms answer in the server's terms — `View 'public.active' created on
+'pg'` — and carry `StoreEffect::RemoteRelationsChanged`, after re-enumerating the connection: that
+is what puts a new relation in the tree with no ↻ and what drops the cached provider of one a
+`DROP` removed, so a re-query gets the reconciliation's sentence rather than rows. A remote `DROP`
+names the workspace views left reading the relation, in the table drop's own words, off the
+`remote` half of their recorded dependencies — named, never cascaded. `UPDATE` and `DELETE` report
+the **server's** own affected-row count and carry no effect at all: rows are not relations, no
+listing moved, and the tree shows no remote row counts. There is no `WHERE`-less guard, on the same
+terms as every other statement here — `DROP TABLE` dispatches on those terms already, and a confirm
+only DML got would be a second, inconsistent surface.
+
+**A workspace `UPDATE` or `DELETE` gets its own sentence**, not `Blocked::Unsupported`'s generic
+one, which stops being honest the moment the same verb works one qualifier away: a project table is
+an append-only set of Arrow IPC files DataFusion has no way to rewrite in place, so the refusal says
+that and points at `CREATE TABLE AS`.
+
+**Still refused, by name.** `ALTER`, `TRUNCATE`, `MERGE` and everything else stay default-deny.
+`TRUNCATE` is a `WHERE`-less `DELETE` with nothing new to say; `ALTER` is a large surface with its
+own listing-refresh questions. The splice generalizes to any of them if asked for, and this is
+where that note lives. `CREATE`/`DROP FUNCTION` keep DataFusion's own qualified-name refusal, and
+`Capability::Agent` is unchanged.
 
 ## 7. A statement, end to end
 

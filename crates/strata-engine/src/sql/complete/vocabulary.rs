@@ -35,6 +35,8 @@ pub(super) const STATEMENT_LEADS: &[&str] = &[
     "CREATE OR REPLACE VIEW",
     "CREATE OR REPLACE FUNCTION",
     "INSERT INTO",
+    "UPDATE",
+    "DELETE FROM",
     "COPY",
     "DROP TABLE",
     "DROP VIEW",
@@ -276,7 +278,8 @@ pub(super) const MULTI_WORD: &[&str] = &[
 ///
 /// A word that leads both an intercepted form and a refused one is **not** here:
 /// `CREATE` leads `CREATE TABLE` and `CREATE EXTERNAL TABLE` as well as
-/// `CREATE DATABASE`, so the refusal is carried by `DATABASE`/`SCHEMA` alone.
+/// `CREATE DATABASE`, so the refusal is carried by `DATABASE`/`SCHEMA` alone. `UPDATE` and
+/// `DELETE` are not here either: the router intercepts both.
 pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
     "DATABASE",
     "SCHEMA",
@@ -288,8 +291,6 @@ pub(super) const BLOCKED_KEYWORDS: &[&str] = &[
     "TEMPORARY",
     "TEMP",
     "UNLOGGED",
-    "UPDATE",
-    "DELETE",
     "MERGE",
     "UPSERT",
     "OVERWRITE",

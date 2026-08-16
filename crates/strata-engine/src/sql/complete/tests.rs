@@ -358,12 +358,22 @@ fn rare_keywords_need_a_two_char_prefix() {
 
 #[test]
 fn blocked_ddl_keywords_are_never_offered() {
-    for sql in ["|", "SELECT upd| FROM events", "SELECT * FROM events alt|"] {
+    for sql in ["|", "SELECT mer| FROM events", "SELECT * FROM events alt|"] {
         let items = at(sql);
-        absent(&items, "UPDATE");
         absent(&items, "ALTER");
-        absent(&items, "DELETE");
+        absent(&items, "MERGE");
+        absent(&items, "TRUNCATE");
     }
+}
+
+/// The two statements only a database connection can take are offered like any other lead — the
+/// arm refuses a workspace target in its own words, which is a different thing from the editor
+/// pretending the verb does not exist.
+#[test]
+fn the_remote_dml_leads_are_offered_at_a_blank_statement() {
+    let items = at("|");
+    let _ = pos(&items, "UPDATE");
+    let _ = pos(&items, "DELETE FROM");
 }
 
 #[test]
@@ -659,8 +669,6 @@ fn policy_and_completion_agree_on_statement_leads() {
     use datafusion::sql::parser::DFParserBuilder;
     use datafusion::sql::sqlparser::dialect::GenericDialect;
     for blocked in [
-        "UPDATE",
-        "DELETE",
         "MERGE",
         "ALTER",
         "TRUNCATE",
@@ -677,7 +685,7 @@ fn policy_and_completion_agree_on_statement_leads() {
     }
     for allowed in [
         "SELECT", "WITH", "EXPLAIN", "SHOW", "DESCRIBE", "CREATE", "DROP", "TABLE", "VIEW",
-        "EXTERNAL", "INSERT", "INTO", "COPY", "STORED", "SET", "RESET",
+        "EXTERNAL", "INSERT", "INTO", "COPY", "STORED", "SET", "RESET", "UPDATE", "DELETE",
     ] {
         assert!(
             !BLOCKED_KEYWORDS
@@ -705,6 +713,8 @@ fn policy_and_completion_agree_on_statement_leads() {
             "CREATE OR REPLACE FUNCTION f(x BIGINT) RETURNS BIGINT RETURN x + 1"
         }
         "INSERT INTO" => "INSERT INTO t VALUES (1)",
+        "UPDATE" => "UPDATE t SET n = 1 WHERE n = 0",
+        "DELETE FROM" => "DELETE FROM t WHERE n = 0",
         "COPY" => "COPY t TO 'x.parquet'",
         "DROP TABLE" => "DROP TABLE t",
         "DROP VIEW" => "DROP VIEW v",

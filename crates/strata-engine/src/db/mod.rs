@@ -52,6 +52,7 @@ use strata_model::{
     check_catalog_name, parse_pg_address, ColumnInfo, ConnectionDef, PgStore, Provider,
 };
 
+use super::catalog::readable;
 use super::connect::{self, Registration};
 use super::fold_ident;
 use super::providers::deregister_catalog;
@@ -65,6 +66,8 @@ mod write;
 /// `build_context`, because federation is installed on every engine whether or not one ever
 /// connects to a database.
 pub(crate) use federate::optimizer_rules;
+/// An identifier as a statement **the server** parses may say it — see [`write::server_ident`].
+pub(crate) use write::server_ident;
 pub use write::RemoteTarget;
 
 /// The keystore family every database password is filed under — the `kind` half of
@@ -569,6 +572,42 @@ pub(crate) async fn create_table_as(
         relist(&live, dbs).await;
     }
     filled.map(Some)
+}
+
+/// Run one statement **on the server** and report the rows it moved, over the extended query
+/// protocol rather than `batch_execute`: it is the only one that answers with an affected-row
+/// count, and it carries exactly one statement, so a second one smuggled past the parser is
+/// refused by the driver rather than run.
+pub(crate) async fn execute(dbs: &Databases, catalog: &str, sql: &str) -> Result<u64, String> {
+    let live = connected(dbs, catalog)?;
+    let conn = live
+        .pool
+        .connect_direct()
+        .await
+        .map_err(|e| format!("Cannot reach '{catalog}': {e}"))?;
+    conn.conn
+        .execute(sql, &[])
+        .await
+        .map_err(|e| readable(&server_error(&e)))
+}
+
+/// What the server said, rather than the driver's own `db error` placeholder: `tokio_postgres`
+/// renders the useful sentence — the SQLSTATE, the position, the hint — on the wrapped `DbError`.
+fn server_error(e: &impl Error) -> String {
+    match e.source() {
+        Some(cause) => cause.to_string(),
+        None => e.to_string(),
+    }
+}
+
+/// [`relist`] reached by catalog name, for the arms that resolve a target and nothing else — a
+/// relation a drop removed loses its cached provider here, which is what keeps a stale one from
+/// answering scans for something the server no longer has.
+pub(crate) async fn relist_at(dbs: &Databases, catalog: &str) {
+    let Ok(live) = connected(dbs, catalog) else {
+        return;
+    };
+    relist(&live, dbs).await;
 }
 
 /// Re-enumerate `live` and hand the result to both halves that hold one — the map that

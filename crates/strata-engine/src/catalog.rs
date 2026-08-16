@@ -855,7 +855,23 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
 /// The plan a view carries was inlined when it was created, so a view reading `orders` through
 /// another view names `orders` at its leaf and is found here with no recursion of ours.
 pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
-    readers(ctx, name, |deps| &deps.tables).await
+    let target = fold_ident(name);
+    readers(ctx, name, |deps| deps.tables.contains(&target)).await
+}
+
+/// The registered views whose plans read `address` — `pg.public.orders` — inside a database
+/// connection, so a `DROP` that runs on the server can name what it strands.
+///
+/// The `remote` half of [`PlanDeps`], compared case-insensitively over the whole dotted address,
+/// which over-reports in the same direction the aliases half does: a spare name is one the user
+/// can look at, where a missed one is a destructive action reported as harmless.
+pub async fn remote_dependents(ctx: &SessionContext, address: &str) -> Vec<String> {
+    readers(ctx, address, |deps| {
+        deps.remote
+            .iter()
+            .any(|read| read.eq_ignore_ascii_case(address))
+    })
+    .await
 }
 
 /// The registered views whose plans read the **view** `name` — the same question a rung up
@@ -878,10 +894,12 @@ pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
 /// would mean comparing the aliased subtree against the view's own registered plan, which is a
 /// change to what `PlanDeps` *is* and would have to move both surfaces at once.
 pub async fn dependents_of_view(ctx: &SessionContext, name: &str) -> Vec<String> {
-    readers(ctx, name, |deps| &deps.aliases).await
+    let target = fold_ident(name);
+    readers(ctx, name, |deps| deps.aliases.contains(&target)).await
 }
 
-/// The registered views whose `deps` name `target`, sorted.
+/// The registered views `reads` answers `true` for, sorted — `name` is only ever the relation
+/// being dropped, held back so a view is never named as its own reader.
 ///
 /// Asked of the providers, because a drop's report is about what is registered at the moment it
 /// happens: a view is anything in the schema still carrying a plan
@@ -892,7 +910,7 @@ pub async fn dependents_of_view(ctx: &SessionContext, name: &str) -> Vec<String>
 async fn readers(
     ctx: &SessionContext,
     name: &str,
-    deps: fn(&PlanDeps) -> &Vec<String>,
+    reads: impl Fn(&PlanDeps) -> bool,
 ) -> Vec<String> {
     let Some(schema) = ctx.catalog(CATALOG).and_then(|c| c.schema(SCHEMA)) else {
         return Vec::new();
@@ -909,7 +927,7 @@ async fn readers(
         let Some(plan) = provider.get_logical_plan() else {
             continue;
         };
-        if deps(&plan_deps(&plan)).contains(&target) {
+        if reads(&plan_deps(&plan)) {
             readers.push(table);
         }
     }

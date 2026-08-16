@@ -754,6 +754,7 @@ impl Engine {
     ) -> Result<RunOutcome, String> {
         let (stmt, verdict) = {
             let ctx = self.ctx.clone();
+            let sql = sql.clone();
             self.rt()
                 .spawn(async move { sql::classify_one(&ctx, &sql) })
                 .await
@@ -770,6 +771,7 @@ impl Engine {
                 let ctx = self.ctx.clone();
                 let root = self.data_root.lock().unwrap().clone();
                 let engine = ddl::Dispatch {
+                    sql,
                     root,
                     internal: self.internal.clone(),
                     connections: self.connections.clone(),

@@ -285,6 +285,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     statement_policy(&engine, &fixtures).await;
     unqualified_names(&engine, port).await;
     remote_writes(&engine, port).await;
+    remote_statements(&engine, port).await;
     remote_source_into_a_workspace_table(&engine, &fixtures).await;
     cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
@@ -1355,6 +1356,349 @@ async fn remote_writes(engine: &Engine, port: u16) {
     assert!(why.contains("read-only"), "{why}");
 }
 
+/// **The statements the server runs** — a phase of the test above, and the one only a server can
+/// settle: a spliced statement is either `PostgreSQL`'s own SQL or it is a syntax error.
+///
+/// The unit tests next door pin the rewrite byte for byte; what is here is that the rewritten text
+/// parses, does what it says, and leaves the app's view of the database correct afterwards.
+async fn remote_statements(engine: &Engine, port: u16) {
+    let conn = writable(port, CATALOG, &["public"]);
+    engine
+        .connect(conn.clone())
+        .await
+        .expect("opted in to writes");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(90),
+            format!(
+                "CREATE VIEW {CATALOG}.public.barrier_view WITH (security_barrier = true) AS \
+                 SELECT id, total FROM {CATALOG}.public.orders WHERE total > 0"
+            ),
+            200,
+        )
+        .await
+        .expect("the server takes a view Strata cannot model")
+    else {
+        panic!("CREATE VIEW ran as a query");
+    };
+    assert_eq!(report.message, "View 'public.barrier_view' created on 'pg'");
+    assert_eq!(report.count, None);
+    assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
+
+    let (_, listing) = engine.db_listing(&conn).expect("a live listing");
+    assert!(
+        listing
+            .iter()
+            .find(|schema| schema.name == "public")
+            .is_some_and(|schema| schema
+                .relations
+                .iter()
+                .any(|r| r.name == "barrier_view" && r.is_view())),
+        "the tree sees the view, as a view, with no manual refresh"
+    );
+    assert!(
+        !rows(
+            engine,
+            91,
+            &format!("SELECT id FROM {CATALOG}.public.barrier_view")
+        )
+        .await
+        .is_empty(),
+        "and it reads"
+    );
+
+    clause_fidelity_survives_dispatch(port).await;
+    server_typed_columns(engine).await;
+    remote_dml_reports_the_servers_count(engine).await;
+    workspace_dml_says_where_it_works(engine).await;
+    a_remote_drop_names_its_readers(engine, port).await;
+    remote_bodies_stay_inside_the_connection(engine).await;
+    remote_statements_stay_refused_to_an_agent(engine).await;
+
+    engine
+        .connect(connection(port, CATALOG, &["public"]))
+        .await
+        .expect("the connection back to read-only");
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(99),
+            format!("DROP VIEW {CATALOG}.public.barrier_view"),
+            200,
+        )
+        .await
+    else {
+        panic!("the toggle is what allows the statement, and it is off again");
+    };
+    assert!(why.contains("read-only"), "{why}");
+}
+
+/// **The clause Strata does not model reaches the server intact** — the whole claim of splicing
+/// the buffer rather than re-rendering a parsed statement, asserted where only the server can
+/// answer: in its own catalog.
+async fn clause_fidelity_survives_dispatch(port: u16) {
+    let client = raw_client(port, "a raw client to read the server's own catalog").await;
+    let options: Option<Vec<String>> = client
+        .query_one(
+            "SELECT reloptions FROM pg_catalog.pg_class WHERE relname = 'barrier_view'",
+            &[],
+        )
+        .await
+        .expect("the view is there")
+        .get(0);
+    assert_eq!(
+        options,
+        Some(vec!["security_barrier=true".to_string()]),
+        "the storage parameter travelled verbatim"
+    );
+}
+
+/// **A column list in the server's own type vocabulary**, which is the half DataFusion cannot
+/// plan: `jsonb` has no Arrow mapping, so a statement asking to be planned would be refused before
+/// anything reached the connection.
+async fn server_typed_columns(engine: &Engine) {
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(92),
+            format!(
+                "CREATE TABLE {CATALOG}.public.typed (id INT, payload jsonb, made timestamptz)"
+            ),
+            200,
+        )
+        .await
+        .expect("the server judges its own types")
+    else {
+        panic!("CREATE TABLE ran as a query");
+    };
+    assert_eq!(report.message, "Table 'public.typed' created on 'pg'");
+
+    let described = engine
+        .describe_remote(format!("{CATALOG}.public.typed"))
+        .await
+        .expect("the new relation describes")
+        .expect("and the listing already has it");
+    assert_eq!(
+        described
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["id", "payload", "made"],
+        "and the app sees it with no manual refresh"
+    );
+}
+
+/// **`UPDATE` and `DELETE` report the server's own affected-row count**, confirmed by read-back —
+/// the one number nothing on this side could have computed.
+async fn remote_dml_reports_the_servers_count(engine: &Engine) {
+    for (tag, sql) in [
+        (
+            93,
+            format!("INSERT INTO {CATALOG}.public.typed (id) VALUES (1), (2), (3)"),
+        ),
+        (
+            94,
+            format!("UPDATE {CATALOG}.public.typed SET id = id + 10 WHERE id > 1"),
+        ),
+    ] {
+        engine
+            .run(WsId(1), RunTag(tag), sql.clone(), 200)
+            .await
+            .unwrap_or_else(|e| panic!("'{sql}': {e}"));
+    }
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(95),
+            format!("UPDATE {CATALOG}.public.typed SET id = 0 WHERE id > 5"),
+            200,
+        )
+        .await
+        .expect("updated")
+    else {
+        panic!("UPDATE ran as a query");
+    };
+    assert_eq!(report.message, "Updated 2 rows in 'public.typed' on 'pg'");
+    assert_eq!(report.count, Some(2));
+    assert_eq!(report.effect, None, "rows are not relations");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(96),
+            format!("DELETE FROM {CATALOG}.public.typed WHERE id = 0"),
+            200,
+        )
+        .await
+        .expect("deleted")
+    else {
+        panic!("DELETE ran as a query");
+    };
+    assert_eq!(report.message, "Deleted 2 rows from 'public.typed' on 'pg'");
+    assert_eq!(report.count, Some(2));
+    assert_eq!(
+        rows(
+            engine,
+            97,
+            &format!("SELECT count(*) FROM {CATALOG}.public.typed")
+        )
+        .await,
+        vec![vec!["1".to_string()]],
+        "the server's count is the truth, and the read-back agrees"
+    );
+}
+
+/// A workspace table is refused in its own words rather than as an unsupported statement, because
+/// the same verb works one qualifier away.
+async fn workspace_dml_says_where_it_works(engine: &Engine) {
+    engine
+        .run(
+            WsId(1),
+            RunTag(100),
+            "CREATE TABLE local_rows AS SELECT 1 AS n".to_string(),
+            200,
+        )
+        .await
+        .expect("a workspace table");
+    for sql in [
+        "UPDATE local_rows SET n = 2",
+        "DELETE FROM local_rows WHERE n = 1",
+    ] {
+        let Err(why) = engine.run(WsId(1), RunTag(101), sql.to_string(), 200).await else {
+            panic!("'{sql}' is not something a workspace table can take");
+        };
+        assert!(
+            why.contains("database connection") && why.contains("CREATE TABLE AS"),
+            "'{sql}': {why}"
+        );
+    }
+    engine
+        .run(
+            WsId(1),
+            RunTag(102),
+            "DROP TABLE local_rows".to_string(),
+            200,
+        )
+        .await
+        .expect("put the workspace back");
+}
+
+/// A remote `DROP` names the workspace views left invalid without cascading, and the relation
+/// stops answering — the cached provider goes with the listing, so a re-query gets the
+/// reconciliation's sentence rather than rows.
+async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
+    engine
+        .create_view(
+            "over_typed".to_string(),
+            format!("SELECT id FROM {CATALOG}.public.typed"),
+        )
+        .await
+        .expect("a workspace view over the remote table");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(103),
+            format!("DROP TABLE {CATALOG}.public.typed"),
+            200,
+        )
+        .await
+        .expect("dropped")
+    else {
+        panic!("DROP TABLE ran as a query");
+    };
+    assert_eq!(
+        report.message,
+        "Table 'public.typed' dropped on 'pg'. 1 view is left invalid: 'over_typed'"
+    );
+    assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
+
+    let conn = writable(port, CATALOG, &["public"]);
+    let (_, listing) = engine.db_listing(&conn).expect("a live listing");
+    assert!(
+        listing
+            .iter()
+            .find(|schema| schema.name == "public")
+            .is_some_and(|schema| !schema.relations.iter().any(|r| r.name == "typed")),
+        "the tree lost it with no manual refresh"
+    );
+    assert!(
+        engine
+            .query(
+                WsId(1),
+                RunTag(104),
+                format!("SELECT id FROM {CATALOG}.public.typed"),
+                200,
+            )
+            .await
+            .is_err(),
+        "and the cached provider went with it, so nothing answers for the relation"
+    );
+    engine
+        .drop_view("over_typed".to_string())
+        .await
+        .expect("put the workspace back");
+}
+
+/// A statement that runs on the server may only name that server's relations, refused **by name**
+/// otherwise — a workspace table, and a name left bare because nothing in the connection has it.
+async fn remote_bodies_stay_inside_the_connection(engine: &Engine) {
+    for (sql, named) in [
+        (
+            format!(
+                "CREATE VIEW {CATALOG}.public.crossed AS SELECT n FROM (SELECT 1 AS n) t \
+                 WHERE n IN (SELECT id FROM missing_everywhere)"
+            ),
+            "missing_everywhere",
+        ),
+        (
+            format!("CREATE VIEW {CATALOG}.public.crossed AS SELECT id FROM public.orders"),
+            "public.orders",
+        ),
+    ] {
+        let Err(why) = engine.run(WsId(1), RunTag(105), sql.clone(), 200).await else {
+            panic!("'{sql}' reaches outside the connection");
+        };
+        assert!(why.contains(named), "'{sql}': {why}");
+    }
+}
+
+/// The agent surface is unmoved: every statement this phase runs is refused to it.
+async fn remote_statements_stay_refused_to_an_agent(engine: &Engine) {
+    for sql in [
+        format!("CREATE VIEW {CATALOG}.public.agent_view AS SELECT 1 AS n"),
+        format!("DROP TABLE {CATALOG}.public.barrier_view"),
+        format!("UPDATE {CATALOG}.public.orders SET total = 0"),
+        format!("DELETE FROM {CATALOG}.public.orders"),
+    ] {
+        let refusals = engine
+            .policy_verdicts(sql.clone())
+            .await
+            .unwrap_or_else(|e| panic!("'{sql}': {e}"));
+        assert_eq!(refusals.len(), 1, "'{sql}' is refused to an agent");
+    }
+}
+
+/// A raw driver connection to the fixture, held by the caller's task for as long as it is used.
+async fn raw_client(port: u16, why: &str) -> tokio_postgres::Client {
+    let (client, driver) = tokio_postgres::connect(
+        &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{why}: {e}"));
+    tokio::spawn(async move {
+        if let Err(e) = driver.await {
+            eprintln!("fixture connection ended: {e}");
+        }
+    });
+    client
+}
+
 /// **Every shape of `INSERT` a remote target can take**: literal rows, a local source, a remote
 /// one, and a **bare** name that only the connection has — which is DB-10's other half, the write
 /// target resolving exactly as a read does.
@@ -1702,9 +2046,7 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
         .run(
             WsId(1),
             RunTag(96),
-            format!(
-                "CREATE TABLE local_orders AS SELECT id, total FROM {CATALOG}.public.orders"
-            ),
+            format!("CREATE TABLE local_orders AS SELECT id, total FROM {CATALOG}.public.orders"),
             200,
         )
         .await
