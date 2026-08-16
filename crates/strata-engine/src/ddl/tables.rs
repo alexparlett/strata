@@ -41,6 +41,7 @@ use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
+use crate::db::{self, Databases, RemoteTarget};
 use crate::export::copy_row_count;
 use crate::query::ipc_write_options;
 use crate::sql::{Blocked, StmtKind};
@@ -49,7 +50,10 @@ use strata_core::project::{internal_source, tables_dir};
 use strata_core::util::{plural, temp_dir_name};
 use strata_model::{SourceFormat, TableDef, TableOrigin};
 
-use super::{bare_name, existing, left_invalid, DataRoot, StatementOutcome, StoreEffect};
+use super::{
+    bare_name, existing, in_database, left_invalid, read_only, remote_target, DataRoot,
+    StatementOutcome, StoreEffect,
+};
 
 /// What [`bare_name`] calls the objects these statements create.
 const WHAT: &str = "Tables";
@@ -66,14 +70,8 @@ pub async fn create(
     kind: StmtKind,
     stmt: DFStatement,
     root: DataRoot,
+    databases: &Databases,
 ) -> Result<StatementOutcome, String> {
-    let Some(root) = root else {
-        return Err(format!(
-            "{} needs a project folder to store the table's data",
-            kind.label()
-        ));
-    };
-
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
@@ -95,7 +93,6 @@ pub async fn create(
         temporary: _,
     } = create;
 
-    let name = bare_name(ctx, &name, WHAT)?;
     let mut seen = Vec::new();
     for field in input.schema().fields() {
         let folded = fold_ident(field.name());
@@ -104,6 +101,17 @@ pub async fn create(
         }
         seen.push(folded);
     }
+
+    if let Some(at) = remote_target(ctx, &name) {
+        return remote(ctx, kind, &at, databases, &input, if_not_exists, or_replace).await;
+    }
+    let name = bare_name(ctx, &name, WHAT)?;
+    let Some(root) = root else {
+        return Err(format!(
+            "{} needs a project folder to store the table's data",
+            kind.label()
+        ));
+    };
 
     let replacing = match existing(ctx, &name).await {
         Some(TableType::View) => return Err(format!("'{name}' is a view")),
@@ -158,6 +166,73 @@ pub async fn create(
         message: format!("Table '{name}' {verb}, {}", plural(rows as usize, "row")),
         count: Some(rows),
         effect: Some(StoreEffect::TableUpserted { def, meta }),
+    })
+}
+
+/// **`CREATE TABLE pg.schema.t AS SELECT …`** — a result materialized as a real server table
+/// (DB-10).
+///
+/// The input plan is an ordinary query, so a local scan, a federated remote one and a
+/// cross-source join all reach here already working; what is added is where the rows land.
+///
+/// **A column list is not this.** `CREATE TABLE pg.public.t (id SERIAL)` declares a schema in the
+/// server's own type vocabulary, which only the server should judge — DB-11's, refused here by
+/// [`in_database`] exactly as before. The two are told apart by [`StmtKind`], which is what that
+/// distinction is for.
+///
+/// **The three name semantics are answered against the server as it is now**, by the same
+/// transaction that creates — never against the connect-time enumeration, and never by a round
+/// trip whose answer could go stale before the create (`db::create_table_as`). `OR REPLACE` is
+/// refused for `INSERT OVERWRITE`'s reason, but **only where there is something to replace**: it
+/// would drop a server table, and a statement that silently destroys one is not v1. Over a free
+/// name it simply creates, exactly as the local arm does.
+async fn remote(
+    ctx: &SessionContext,
+    kind: StmtKind,
+    at: &RemoteTarget,
+    databases: &Databases,
+    input: &Arc<LogicalPlan>,
+    if_not_exists: bool,
+    or_replace: bool,
+) -> Result<StatementOutcome, String> {
+    let address = at.address();
+    if kind == StmtKind::CreateTable {
+        return Err(in_database(&address, &at.catalog));
+    }
+    if !db::writable(databases, &at.catalog) {
+        return Err(read_only(at));
+    }
+
+    SQLOptions::new()
+        .with_allow_dml(false)
+        .with_allow_ddl(false)
+        .with_allow_statements(false)
+        .verify_plan(input)
+        .map_err(|e| e.to_string())?;
+
+    let Some(rows) = db::create_table_as(ctx, databases, at, input).await? else {
+        if or_replace {
+            return Err(format!(
+                "CREATE OR REPLACE TABLE is not supported on '{address}'. Drop it on the server \
+                 first"
+            ));
+        }
+        if !if_not_exists {
+            return Err(format!("Table '{address}' already exists"));
+        }
+        return Ok(StatementOutcome {
+            message: format!("Table '{address}' already exists"),
+            count: None,
+            effect: None,
+        });
+    };
+    Ok(StatementOutcome {
+        message: format!(
+            "Table '{address}' created, {}",
+            plural(rows as usize, "row")
+        ),
+        count: Some(rows),
+        effect: Some(StoreEffect::RemoteRelationsChanged),
     })
 }
 
@@ -264,13 +339,19 @@ fn not_a_column_type(typed: &str) -> String {
 /// owns one.
 ///
 /// The gate is in two halves and the **catalog** is the first: a relation inside a database
-/// connection is not a table whose data Strata could ever own, so [`bare_name`] refuses it before
-/// [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about it, and
-/// the answer every other arm gives — naming the connection — is the honest one here too.
+/// connection is not a table whose data Strata could ever own, so [`remote_target`] answers for it
+/// before [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about it,
+/// and the connection's own gate — is it writable — is the honest one there.
+///
+/// **The remote branch drives the sink itself**, because DataFusion cannot: the provider the
+/// catalog serves is the federated *read* provider, whose `insert_into` is the trait's own
+/// `not_impl_err`. The writer that can is built by [`db::insert_into`], used once and dropped, so
+/// no plan ever sees it and pushdown on every read is untouched.
 pub async fn insert(
     ctx: &SessionContext,
     stmt: DFStatement,
     internal: &InternalTables,
+    databases: &Databases,
 ) -> Result<StatementOutcome, String> {
     let plan = ctx
         .state()
@@ -283,20 +364,32 @@ pub async fn insert(
             StmtKind::Insert.label()
         ));
     };
-    let name = bare_name(ctx, &dml.table_name, WHAT)?;
-    if !internal.contains(&name) {
-        return Err(Blocked::InsertExternal.editor_message());
-    }
     if !matches!(dml.op, WriteOp::Insert(InsertOp::Append)) {
         return Err(Blocked::InsertOverwrite.editor_message());
     }
 
-    SQLOptions::new()
-        .with_allow_dml(true)
-        .with_allow_ddl(false)
-        .with_allow_statements(false)
-        .verify_plan(&plan)
-        .map_err(|e| e.to_string())?;
+    if let Some(at) = remote_target(ctx, &dml.table_name) {
+        if !db::writable(databases, &at.catalog) {
+            return Err(read_only(&at));
+        }
+        verify_insert(&plan)?;
+        let rows = db::insert_into(ctx, databases, &at, &dml.input).await?;
+        return Ok(StatementOutcome {
+            message: format!(
+                "Inserted {} into '{}'",
+                plural(rows as usize, "row"),
+                at.address()
+            ),
+            count: Some(rows),
+            effect: None,
+        });
+    }
+
+    let name = bare_name(ctx, &dml.table_name, WHAT)?;
+    if !internal.contains(&name) {
+        return Err(Blocked::InsertExternal.editor_message());
+    }
+    verify_insert(&plan)?;
 
     let batches = DataFrame::new(ctx.state(), plan)
         .collect()
@@ -309,6 +402,17 @@ pub async fn insert(
         count: Some(rows as u64),
         effect: Some(StoreEffect::RescanTable { name }),
     })
+}
+
+/// The `SQLOptions` floor an `INSERT` runs under — one call, so the local arm and the remote one
+/// cannot come to run under different ones.
+fn verify_insert(plan: &LogicalPlan) -> Result<(), String> {
+    SQLOptions::new()
+        .with_allow_dml(true)
+        .with_allow_ddl(false)
+        .with_allow_statements(false)
+        .verify_plan(plan)
+        .map_err(|e| e.to_string())
 }
 
 /// The table a typed `DROP TABLE` names, dropped — the statement half of [`drop_table`] (ED-05).

@@ -66,9 +66,11 @@ the reason. Anything refused is refused in one place with one wording, and every
 creates or changes something — a table, a view, an export — is a gesture into a funnel that
 already exists, never a second implementation of one.
 
-**Writes only touch data Strata owns.** Your source files are read, never written. Write
-statements are gated on the parsed plan's target; the agent surface is read-only; exports refuse
-to land inside storage Strata manages.
+**Writes only touch data Strata owns, or a database that opted in.** Your source files are read,
+never written. Write statements are gated on the parsed plan's target; a database connection is
+read-only until its own `read_only` setting says otherwise, and then only `INSERT` and
+`CREATE TABLE AS SELECT` reach it; the agent surface is read-only throughout; exports refuse to
+land inside storage Strata manages.
 
 ## Principles
 

@@ -480,6 +480,7 @@ and the per-relation cache are unchanged by the move.
 | `sslrootcert` | A root-certificate **file path**, read only by the two verifying modes. |
 | `password` | `none` or `keystore` — the **expectation**, never a reference. |
 | `schemas` | The schemas this connection *shows*. Defaults to `["public"]`. |
+| `read_only` | Whether Strata refuses to change this database. Defaults to `true`. |
 
 **The password.** This is where W7's "Strata never stores, prompts for or reads a secret" was
 deliberately **rewritten** rather than routed around: that rule was a consequence of the OS
@@ -564,8 +565,65 @@ takes no integer index, where the local function is false for both, so the faith
 arrow chain. None of this is reachable from a local JSON column: the rewrite rides the executor
 behind a remote relation's provider, and nothing else.
 
-**Read-only in v1.** Nothing writes to a database: `INSERT` gates on whether the target is a table
-Strata owns, and the schema provider refuses a registration in its own words underneath that.
+### Writing into a database (DB-10)
+
+`INSERT INTO pg.public.events SELECT … FROM local_parquet` loads a local result into PostgreSQL,
+and `CREATE TABLE pg.public.report AS SELECT …` materializes any result — local, remote, or a
+cross-source join — as a real server table. Those two statements are the whole write surface;
+everything else about a remote relation is still refused, in one sentence naming what does work:
+
+> `'pg.public.orders' is in the database connection 'pg'. INSERT and CREATE TABLE AS SELECT are the
+> only statements Strata can change a remote relation with`
+
+**Off unless the connection says otherwise.** `read_only` defaults to `true`, so a stored def that
+predates the field — and every connection nobody has opted in — refuses both statements by name,
+pointing at the one setting that would allow them ("Turn off 'Read only' in the connection's
+settings"). The gate is the **def** rather than a machine-local preference because a connection is
+committed and shared: a colleague pulling the project gets the same answer about the same server.
+The editor's row is **READ ONLY**, a switch that starts on.
+
+**A write target resolves exactly as a read does.** `INSERT INTO orders` reaches the relation
+`SELECT * FROM orders` reads (DB-09's resolution, with the write carve-out removed). Three things
+make that safe with no second gate: the connection was opted in, an ambiguous name still refuses by
+name so a write never picks between two servers, and the arm is reached with a qualified name — so
+one funnel answers whether or not the qualifier was typed. A **create** target is still never
+resolved, permanently; `CREATE TABLE pg.public.report AS …` is how the server is addressed.
+
+**The write provider is resolved by the arm and lives nowhere.** `PostgresTableWriter` *wraps* the
+federated read provider, so the node a plan sees would be the writer rather than the
+`FederatedTableProviderAdaptor` the federation rule downcasts to. Serving writers from the schema
+provider would silently forfeit pushdown on **every read** — exactly the failure the
+own-provider decision exists to prevent — so the catalog goes on serving read providers, and a
+write statement builds a writer over the one it resolved, drives the sink once and drops it. The
+input plan is coalesced to a single partition first, because `DataSinkExec` reads partition 0 and
+nothing else, and its redundant projection is collapsed first (`write::writable_shape`): DataFusion's
+`INSERT` planner leaves a renaming projection over the query's own, and the unparser renders that
+pair as a derived table while leaving the outer column references carrying the scan's qualifier — so
+a remote source would come back as `missing FROM-clause entry`. It has to happen before the
+federation *analyzer* runs, which is why it is not the executor's `logical_optimizer` hook.
+
+**What each statement does.** An `INSERT` runs in one transaction on one pooled connection, so an
+interrupted one rolls back and nothing half-lands; it changes no listing, so it carries no store
+effect. A CTAS creates the server table from its input's Arrow schema (`CreateTableBuilder`, under
+a `SET LOCAL search_path` of exactly the target schema, since the builder renders an unqualified
+name), re-enumerates the database, fills it, and on a failed fill drops the table again and
+re-enumerates — never a schema-only husk under a name the user thinks holds data. **A cancel is
+the other way out**, and it reaches no error path at all: the guard `write::Created` removes the
+table when the future is dropped, which is `ddl::tables::Staging`'s rule for the local half.
+Whether the relation already exists is asked **inside the create's own transaction** rather than
+by a round trip before it, because `CreateTableBuilder` hardcodes `IF NOT EXISTS`: a relation that
+appeared in between would be silently adopted and then dropped by the rollback. The successful
+CTAS carries `StoreEffect::RemoteRelationsChanged`, whose only job is the catalog epoch: a remote
+relation has no store row, and the tree, completion and every tab's diagnostics already key on the
+epoch, so the new table shows with no manual ↻.
+
+**Still refused**, each for its own reason: `INSERT OVERWRITE` (a statement that silently empties a
+server table is not v1), `CREATE OR REPLACE TABLE` over a relation that **exists** (it would drop
+one; over a free name it simply creates, as the local arm does),
+`CREATE TABLE pg.public.t (…)` with a column list — its types are the server's vocabulary
+(`jsonb`, `serial`), which only the server should judge — and every other statement that names a
+remote target (`docs/STATEMENTS_SPEC.md` §4 has the per-kind table). `Capability::Agent` is
+unchanged: the agent surface refuses both write statements as it always did.
 
 ### Unqualified names (DB-09)
 
@@ -589,20 +647,19 @@ the one parse in front of both the router and the planner).
    'pg.analytics.orders'. Qualify it`. Never a coin flip between two servers.
 4. None: left bare, which is the error DataFusion already gives.
 
-**Resolvable positions.** A CTAS body, an `INSERT`'s source query, a view's body and a `COPY`'s
-source are reads and resolve. A CTE name and a registered table function are held back. Two
-carve-outs, and they are not the same kind of thing:
+**Resolvable positions: everything but a create target.** A CTAS body, an `INSERT`'s source query
+and its **target**, a view's body and a `COPY`'s source all resolve. A CTE name and a registered
+table function are held back. The one carve-out:
 
 - **A create target is never resolved.** `CREATE TABLE orders` makes a workspace table while a
   connection has an `orders` — the name does not exist yet, so there is nothing to resolve *to*,
-  and resolving would read a plainly local intent as "make it on the server". Permanent.
-- **A write target is read but not rewritten**, and only to refuse it in the connection's own
-  words rather than as a name that does not exist: after `SELECT * FROM orders` works, "table
-  'strata.public.orders' not found" reads as a contradiction rather than as the read-only rule it
-  is. **Temporary** — a write target addresses a relation that already exists, so it resolves
-  exactly as a read does, and that is what it will do once a connection can be written to
-  (DB-10/DB-11). Today writing to a database is refused outright, so the refusal is the whole of
-  that rule's visible behaviour.
+  and resolving would read a plainly local intent as "make it on the server", which then fails as
+  already existing. Permanent, and the same for DB-11's `CREATE VIEW`.
+
+A **write** target was once read-but-not-rewritten, refused in the connection's own words rather
+than as a name that does not exist. That was what the rule looked like while writing to a database
+was impossible at all; DB-10 turned it into a rewrite, so `INSERT INTO orders` now dispatches to
+`pg.public.orders` the way `SELECT * FROM orders` reads it, and what refuses a write is the arm.
 
 **Why the statement and not the session.** DataFusion has one default catalog and one default
 schema and no search path, so the other design is to *move* the default. `providers::in_workspace`

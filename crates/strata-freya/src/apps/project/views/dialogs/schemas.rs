@@ -299,6 +299,7 @@ mod tests {
                 sslrootcert: String::new(),
                 password: PgPassword::None,
                 schemas: vec!["public".into(), "analytics".into()],
+                read_only: true,
             }),
             client_config: Default::default(),
         }

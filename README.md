@@ -44,8 +44,10 @@ from your machine's own chains. Running `aws sso login` in another terminal just
 
 A **PostgreSQL** connection goes further: the whole database joins your project as a catalog of
 its own, so `SELECT … FROM pg.public.orders JOIN local_events USING (id)` federates live server
-data against your files, with filters and whole subplans pushed down to the server. Read-only
-for now.
+data against your files, with filters and whole subplans pushed down to the server. Turn **Read
+only** off on the connection and it becomes a load path too: `INSERT INTO pg.public.events SELECT
+… FROM local_parquet`, and `CREATE TABLE pg.public.report AS SELECT …` to materialize any result —
+a cross-source join included — as a real server table. It stays on until you say otherwise.
 
 ### The editor
 

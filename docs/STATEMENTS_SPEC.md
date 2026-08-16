@@ -90,11 +90,11 @@ pub struct StatementReport {
 
 `StoreEffect` (`engine/ddl/mod.rs`) is the catalog mutation the statement leaves behind:
 `TableUpserted { def, meta }`, `TableRemoved { name, dependents }`, `ViewUpserted`, `ViewRemoved`,
-`RescanTable`, `FunctionsChanged`, `PreparedChanged`. An effect carries the def *and* what
-registration learned, so the sidebar row lands `Reg::Ready` directly. The last two persist nothing
-— functions and prepared statements are session-scoped (§8) — and are still effects for the reason
-an effect exists: a name that did not resolve a moment ago now does, so the catalog epoch has to
-move with it.
+`RescanTable`, `FunctionsChanged`, `PreparedChanged`, `RemoteRelationsChanged`. An effect carries
+the def *and* what registration learned, so the sidebar row lands `Reg::Ready` directly. The last
+three persist nothing — functions and prepared statements are session-scoped (§8), and a remote
+relation has no store row at all — and are still effects for the reason an effect exists: a name
+that did not resolve a moment ago now does, so the catalog epoch has to move with it.
 
 **The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
 tab's request keeper so a statement run in a background tab still lands: store upsert on the
@@ -161,28 +161,36 @@ stub refusals, reports and the results pane all read it.
   so smuggled nested DDL still dies at the second gate — but it can only refuse a class of plan,
   not name the surface that owns a capability.
 
-**Names inside a database connection's catalog** (DB-03). Since the DB workstream the session
-holds more than one catalog: the workspace's `strata`, plus one per live database connection. A
-name qualified into one of those is **read like any other name and managed by nothing** — v1 is
-read-only against a database — and the refusal is minted in exactly one place, `ddl::bare_name`,
-which every intercepted statement that resolves a target already goes through:
+**Names inside a database connection's catalog** (DB-03, relaxed by DB-10). Since the DB
+workstream the session holds more than one catalog: the workspace's `strata`, plus one per live
+database connection. Two statements **write** a name qualified into one of those — `INSERT` and
+CTAS, on a connection whose `read_only` is off (`docs/CONNECTIONS_SPEC.md`) — and everything else
+about it is read like any other name and managed by nothing. Both refusals are minted in exactly
+one place, beside each other in `ddl`, and the choke point in front of every arm is two answers
+rather than one: `ddl::bare_name` for a workspace name, `ddl::remote_target` for a remote one.
 
-> `'pg.public.orders' is in the database connection 'pg'. Strata reads remote tables; it does not
-> create, drop or write them`
+> `'pg.public.orders' is in the database connection 'pg'. INSERT and CREATE TABLE AS SELECT are
+> the only statements Strata can change a remote relation with`
 
-Not parameterised by what the statement makes: the sentence is about the catalog, not about
-whether a table or a view was being made in it. A qualifier that resolves to **no** catalog keeps
-the older wording ("Strata has one schema, 'public'. Tables cannot be created elsewhere"), because
-that is a different fact and there is no connection to name. Both come off the session's own
-catalog list, which holds a database's catalog exactly while its connection is live — the same
-window in which the user can address it at all.
+> `The database connection 'pg' is read-only, so 'pg.public.loaded' cannot be written. Turn off
+> 'Read only' in the connection's settings`
+
+The first is not parameterised by what the statement makes: it is about the catalog, not about
+whether a table or a view was being made in it, and it names what *does* work rather than listing
+what does not. The second names the setting, because the user is one toggle away and a sentence
+that does not say which is no use. A qualifier that resolves to **no** catalog keeps the older
+wording ("Strata has one schema, 'public'. Tables cannot be created elsewhere"), because that is a
+different fact and there is no connection to name. All of it comes off the session's own catalog
+list, which holds a database's catalog exactly while its connection is live — the same window in
+which the user can address it at all.
 
 The fourteen kinds, and what each answers for a remote-qualified name:
 
 | Kind | Remote-qualified target |
 |---|---|
-| `CreateTable`, `Ctas` | refused, naming the connection |
-| `Insert` | refused, naming the connection — **before** `Engine::is_internal`, which is not a question to ask about a relation whose data Strata could never own |
+| `Ctas` | **runs** on a writable connection: the server table is created from the input's schema and filled, and a failed fill — or a cancel — drops it again. Read-only refuses by name; `OR REPLACE` is refused where the relation exists, since it would drop a server table, and creates where it does not |
+| `Insert` | **runs** on a writable connection, appending in one transaction — reached **before** `Engine::is_internal`, which is not a question to ask about a relation whose data Strata could never own. Read-only refuses by name; `INSERT OVERWRITE` is refused as it is locally |
+| `CreateTable` (column list) | refused, naming the connection. Its types are the server's vocabulary (`jsonb`, `serial`), which only the server should judge — DB-11's |
 | `DropTable`, `DropView`, `CreateView` | refused, naming the connection |
 | `CreateExternalTable` | refused, naming the connection. A `postgres://…` `LOCATION` is a separate rule: it splits like any remote location and lands on the membership refusal, naming a connection the project does not have |
 | `Copy` | **runs.** Its target is a path, and a remote relation in its *source* is an ordinary read |
@@ -192,16 +200,20 @@ The fourteen kinds, and what each answers for a remote-qualified name:
 
 Reading is never refused, and that is the point of the connection: a plain `SELECT`, a
 cross-source join, an `EXPLAIN` and a `PREPARE`d body all resolve `pg.public.orders` normally.
+`Capability::Agent` is untouched by any of it — the agent surface refuses both write statements
+exactly as it did.
 
-**A bare name reaches the same refusal** (DB-09). An `INSERT` target that only a connection has is
-refused by `sql::qualify` with `ddl::in_database`'s own sentence, before the statement plans. One
-wording, two places it is reached from — the arm for a name the user qualified, the resolution
-pass for one it did not — because "not found" is the wrong answer about a relation the same
-session will happily read. That refusal is what the rule looks like while writing to a database is
-impossible: a write target addresses an existing relation and will **resolve** like a read once
-DB-10/DB-11 give it somewhere to go. A **create** target is the permanent exception — it names
-something that does not exist yet, so `CREATE TABLE orders` goes on making a workspace table while
-a connection has an `orders`.
+**A bare name reaches the same arm** (DB-09, DB-10). A write target resolves exactly as a read
+does, so `INSERT INTO orders` dispatches to `pg.public.orders` the way `SELECT * FROM orders` reads
+it, and whatever refuses it is the arm's — one funnel, whether or not the qualifier was typed.
+Three things make that safe with no second gate in the resolution pass: the connection is
+read-only by default and someone opted this one in, an ambiguous name still refuses by name so a
+write never picks between two servers, and the arm is reached with a qualified name either way.
+Until DB-10 the pass refused a bare remote write target itself, because "not found" is the wrong
+answer about a relation the same session will happily read; that was what the rule looked like
+while writing to a database was impossible at all. A **create** target is the permanent exception —
+it names something that does not exist yet, so `CREATE TABLE orders` goes on making a workspace
+table while a connection has an `orders`.
 
 **Reserved names.** **Any** statement typed into the editor that references a `__snap_`-prefixed
 table **in the workspace catalog** — or names one as its target — refuses with
@@ -320,6 +332,11 @@ The one implemented interception (`engine/ddl/tables.rs`). An internal table is 
 whose data Strata owns** — `TableOrigin::Internal` is a flag on `TableDef`, never a second kind of
 thing.
 
+The target is resolved **before** the project folder is looked at, because since DB-10 a CTAS whose
+target is qualified into a writable database connection needs no project folder: it branches to
+`db::create_table_as` and everything below is the workspace's path
+(`docs/CONNECTIONS_SPEC.md` for the remote half). The duplicate-column check is in front of both.
+
 The parsed statement goes to `SessionState::statement_to_plan`, which executes nothing and buys
 two things outright: DataFusion's planner already refuses every clause it does not implement
 (`TEMPORARY`, `LOCATION`, `PARTITION BY` and fifty more, each in its own words), and it already
@@ -384,7 +401,9 @@ settings, so the panel asks the planner rather than declaring anything.
 ### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
 **`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
-free) and the gate reads what the plan names: a target outside `Engine::is_internal` is refused
+free) and the gate reads what the plan names — first whether it is remote, since DB-10, which
+branches to `db::insert_into` and reports without a store effect; then, for a workspace name, the
+rest of this section. A target outside `Engine::is_internal` is refused
 (`Blocked::InsertExternal` — a view is the same refusal, neither being a directory a
 `CREATE TABLE` wrote), and any write op that is not `Append` is refused
 (`Blocked::InsertOverwrite`; the router already catches `INSERT OVERWRITE` off the bare statement,

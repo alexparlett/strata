@@ -587,6 +587,7 @@ impl ConnectionDraft {
                     sslrootcert: self.pg.sslrootcert.trim().to_string(),
                     password: self.pg.password,
                     schemas: self.pg.schemas.clone(),
+                    read_only: self.pg.read_only,
                 }),
             },
         }
@@ -756,6 +757,7 @@ mod tests {
                     sslrootcert: "/certs/rds.pem".into(),
                     password: PgPassword::Keystore,
                     schemas: vec!["public".into(), "analytics".into()],
+                    read_only: false,
                 }),
                 client_config: Default::default(),
             },
@@ -848,6 +850,7 @@ mod tests {
                 sslrootcert: " /certs/rds.pem ".into(),
                 password: PgPassword::Keystore,
                 schemas: vec!["public".into()],
+                read_only: false,
             },
             ..Default::default()
         };
@@ -860,6 +863,7 @@ mod tests {
         assert_eq!(pg.user, "reader");
         assert_eq!(pg.sslrootcert, "/certs/rds.pem");
         assert_eq!(pg.password, PgPassword::Keystore, "carried, never trimmed");
+        assert!(!pg.read_only, "and so is the write opt-in");
         assert_eq!(def.url(), "postgres://reader@db.internal:5432/analytics");
     }
 

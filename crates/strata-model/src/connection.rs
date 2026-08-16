@@ -583,6 +583,15 @@ pub struct PgStore {
     /// not enabled still resolves and runs. This scopes the data-sources tree and completion: "what
     /// am I working with", not "what may I read". Defaults to `public`.
     pub schemas: Vec<String>,
+    /// Whether Strata refuses to **change** this database: `INSERT` into one of its relations, and
+    /// `CREATE TABLE … AS SELECT` making one (DB-10).
+    ///
+    /// **Default `true`**, which is what makes shipping writes change nothing: a stored def that
+    /// predates the field deserializes read-only, and so does a connection nobody has opted in.
+    /// The gate is the def rather than a machine-local preference because a connection is
+    /// committed and shared — a colleague pulling the project gets the same answer about the same
+    /// server.
+    pub read_only: bool,
 }
 
 /// Hand-written rather than derived, for `schemas` alone: `#[serde(default)]` reads this, so a
@@ -597,6 +606,7 @@ impl Default for PgStore {
             sslrootcert: String::new(),
             password: PgPassword::default(),
             schemas: vec!["public".to_string()],
+            read_only: true,
         }
     }
 }
@@ -1104,6 +1114,7 @@ mod tests {
                     sslrootcert: "/certs/rds.pem".into(),
                     password: PgPassword::Keystore,
                     schemas: vec!["public".into(), "analytics".into()],
+                    read_only: false,
                 }),
                 client_config: Default::default(),
             },
@@ -1158,7 +1169,7 @@ mod tests {
         .expect("serialize");
         assert_eq!(
             json,
-            r#"{"address":"db.internal:5432/analytics","provider":{"provider":"postgres","catalog":"warehouse","user":"reader","sslmode":"prefer","sslrootcert":"","password":"keystore","schemas":["public"]}}"#
+            r#"{"address":"db.internal:5432/analytics","provider":{"provider":"postgres","catalog":"warehouse","user":"reader","sslmode":"prefer","sslrootcert":"","password":"keystore","schemas":["public"],"read_only":true}}"#
         );
     }
 
@@ -1228,7 +1239,10 @@ mod tests {
                 sslrootcert: String::new(),
                 password: PgPassword::None,
                 schemas: vec!["public".into()],
-            })
+                read_only: true,
+            }),
+            "a def that predates a field reads the Default's answer for it, and read-only is the \
+             one 'read_only' has to give"
         );
     }
 

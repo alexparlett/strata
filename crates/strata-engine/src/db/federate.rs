@@ -99,6 +99,11 @@ impl SQLExecutor for PgExecutor {
     /// a wrapper that answers for the executor has to answer for all of them: taking the trait's
     /// default here would silently drop a logical rewrite a later `datafusion-table-providers`
     /// adds, with nothing to fail.
+    ///
+    /// Note what it is *not* good for: the plan it receives is already wrapped in the federation
+    /// crate's own extension node, so an optimizer rule run here sees an opaque root and rewrites
+    /// nothing. A plan that has to be simplified before it can be unparsed must be simplified
+    /// before the federation analyzer runs — see [`db::write::append`](super::write).
     fn logical_optimizer(&self) -> Option<LogicalOptimizer> {
         self.inner.logical_optimizer()
     }

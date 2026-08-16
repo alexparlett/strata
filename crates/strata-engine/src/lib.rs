@@ -772,6 +772,7 @@ impl Engine {
                     root,
                     internal: self.internal.clone(),
                     connections: self.connections.clone(),
+                    databases: self.databases.clone(),
                     scope: self.session.clone(),
                     functions: self.functions.clone(),
                     baseline: self.overrides(),
@@ -817,7 +818,8 @@ impl Engine {
             }
             StoreEffect::RescanTable { .. }
             | StoreEffect::FunctionsChanged
-            | StoreEffect::PreparedChanged => {}
+            | StoreEffect::PreparedChanged
+            | StoreEffect::RemoteRelationsChanged => {}
         }
     }
 

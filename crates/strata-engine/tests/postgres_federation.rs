@@ -37,7 +37,7 @@ use strata_engine::db::{SchemaVisibility, PG_PASSWORD};
 use strata_engine::profile::{aggregates, profile_sql, Profiled};
 use strata_engine::register::{register_project, table_spec, RegOutcome};
 use strata_engine::{
-    column_info, sql, stopped_on_purpose, Engine, RunOutcome, RunTag, ViewMeta, WsId,
+    column_info, sql, stopped_on_purpose, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
 use strata_model::{
     Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, StatKey,
@@ -135,6 +135,9 @@ async fn seed(port: u16) {
 /// The connection under test. `sslmode=disable` because the container serves plain TCP; the two
 /// verifying modes are the provider crate's emulation and would need a certificate this fixture
 /// has no way to produce.
+///
+/// **Read-only**, which is the shipped default — [`writable`] is what the write phases connect
+/// with, so every phase before them is driven through exactly the connection a user gets.
 fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
     ConnectionDef {
         address: format!("127.0.0.1:{port}/{DATABASE}"),
@@ -145,9 +148,20 @@ fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
             sslrootcert: String::new(),
             password: PgPassword::Keystore,
             schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
+            read_only: true,
         }),
         client_config: BTreeMap::new(),
     }
+}
+
+/// The same connection opted in to writes (DB-10) — the one setting that separates them, so a
+/// re-connect with this is exactly the user turning the toggle off.
+fn writable(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
+    let mut def = connection(port, catalog, schemas);
+    if let Provider::Postgres(pg) = &mut def.provider {
+        pg.read_only = false;
+    }
+    def
 }
 
 /// **The keystore this binary uses**, installed once: an in-memory store, so the bridge under
@@ -270,6 +284,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     json_pushdown(&engine, &fixtures).await;
     statement_policy(&engine, &fixtures).await;
     unqualified_names(&engine, port).await;
+    remote_writes(&engine, port).await;
     cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
 
@@ -974,15 +989,15 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
 /// against a fake catalog a wrong refusal and a right one both look like an error.
 ///
 /// **The data root has to be set first**, which is the point of writing this against the real entry
-/// point: `CREATE TABLE AS` and `CREATE EXTERNAL TABLE` refuse a rootless engine *before* they look
-/// at the target, so those two rows would otherwise assert nothing about the catalog. That ordering
-/// is right and stays; it is unobservable in the app, where a window always has a project.
+/// point: `CREATE EXTERNAL TABLE` refuses a rootless engine before it looks at the target, so that
+/// row would otherwise assert nothing about the catalog. (A CTAS no longer does — since DB-10 it
+/// resolves the target first, because a remote one needs no project folder at all.)
 async fn statement_policy(engine: &Engine, dir: &Path) {
     engine.set_data_dir(dir);
     for sql in [
         format!("DROP TABLE {CATALOG}.public.orders"),
         format!("DROP VIEW {CATALOG}.public.big_orders"),
-        format!("CREATE TABLE {CATALOG}.public.mine AS SELECT 1 AS id"),
+        format!("CREATE TABLE {CATALOG}.public.mine (id INT)"),
         format!("CREATE VIEW {CATALOG}.public.mine AS SELECT 1 AS id"),
         format!(
             "CREATE EXTERNAL TABLE {CATALOG}.public.mine STORED AS PARQUET LOCATION 'x.parquet'"
@@ -994,6 +1009,19 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         assert!(
             why.contains(&format!("database connection '{CATALOG}'")),
             "'{sql}' must name the connection: {why}"
+        );
+    }
+
+    for sql in [
+        format!("INSERT INTO {CATALOG}.public.orders VALUES (9, 9, 9, NULL)"),
+        format!("CREATE TABLE {CATALOG}.public.mine AS SELECT 1 AS id"),
+    ] {
+        let Err(why) = engine.run(WsId(1), RunTag(25), sql.clone(), 200).await else {
+            panic!("'{sql}' was not refused");
+        };
+        assert!(
+            why.contains("read-only") && why.contains("Read only"),
+            "'{sql}' must name the setting that would allow it: {why}"
         );
     }
 
@@ -1232,6 +1260,369 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
         .connect(connection(port, CATALOG, &["public"]))
         .await
         .expect("re-enumerates");
+}
+
+/// **Writing into a database** (DB-10) — a phase of the test above, and the one no fake catalog
+/// can stand in for: an insert is only real once a server has taken it.
+///
+/// Opting in is a **re-connect with the toggle off**, which is exactly what the connection editor's
+/// Save does, so nothing here reaches past the def to arrange it.
+async fn remote_writes(engine: &Engine, port: u16) {
+    let conn = writable(port, CATALOG, &["public"]);
+    engine
+        .connect(conn.clone())
+        .await
+        .expect("the same connection, opted in to writes");
+
+    engine
+        .run(
+            WsId(1),
+            RunTag(60),
+            "CREATE TABLE loaders AS SELECT * FROM (VALUES (10, 'gold'), (20, 'silver')) \
+             AS t(customer, tier)"
+                .to_string(),
+            200,
+        )
+        .await
+        .expect("a workspace table to join across");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(61),
+            format!(
+                "CREATE TABLE {CATALOG}.public.loaded AS SELECT t.tier, o.total \
+                 FROM loaders t JOIN {CATALOG}.public.orders o ON t.customer = o.customer"
+            ),
+            200,
+        )
+        .await
+        .expect("a cross-source result materializes as a server table")
+    else {
+        panic!("CREATE TABLE AS ran as a query");
+    };
+    assert_eq!(report.message, "Table 'pg.public.loaded' created, 3 rows");
+    assert_eq!(report.count, Some(3));
+    assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
+
+    let (_, listing) = engine
+        .db_listing(&conn)
+        .expect("a live database has a listing");
+    assert!(
+        listing
+            .iter()
+            .find(|schema| schema.name == "public")
+            .is_some_and(|schema| schema.relations.iter().any(|r| r.name == "loaded")),
+        "the tree and completion see it with no manual refresh"
+    );
+    assert_eq!(
+        rows(
+            engine,
+            62,
+            &format!("SELECT count(*) FROM {CATALOG}.public.loaded")
+        )
+        .await,
+        vec![vec!["3".to_string()]],
+        "and the rows are on the server"
+    );
+
+    inserts_land(engine).await;
+    ctas_name_semantics(engine).await;
+    failed_ctas_leaves_nothing(engine, &conn).await;
+    cancelled_ctas_leaves_nothing(engine, port).await;
+    agent_stays_read_only(engine).await;
+
+    engine
+        .run(WsId(1), RunTag(78), "DROP TABLE loaders".to_string(), 200)
+        .await
+        .expect("put the workspace back");
+    engine
+        .connect(connection(port, CATALOG, &["public"]))
+        .await
+        .expect("and the connection back to read-only");
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(79),
+            format!("INSERT INTO {CATALOG}.public.loaded VALUES ('after', 1)"),
+            200,
+        )
+        .await
+    else {
+        panic!("the toggle is what allows the write, and it is off again");
+    };
+    assert!(why.contains("read-only"), "{why}");
+}
+
+/// **Every shape of `INSERT` a remote target can take**: literal rows, a local source, a remote
+/// one, and a **bare** name that only the connection has — which is DB-10's other half, the write
+/// target resolving exactly as a read does.
+///
+/// One loop rather than four blocks, because what is under test is that they answer identically:
+/// the same wording, the same count, and no effect, since an insert changes no listing.
+async fn inserts_land(engine: &Engine) {
+    for (tag, sql, count) in [
+        (
+            63,
+            format!("INSERT INTO {CATALOG}.public.loaded VALUES ('bronze', 1)"),
+            1u64,
+        ),
+        (
+            64,
+            format!("INSERT INTO {CATALOG}.public.loaded SELECT tier, 0 FROM loaders"),
+            2,
+        ),
+        (
+            65,
+            format!(
+                "INSERT INTO {CATALOG}.public.loaded SELECT name, id FROM \
+                 {CATALOG}.public.customers"
+            ),
+            2,
+        ),
+        (66, "INSERT INTO loaded VALUES ('bare', 9)".to_string(), 1),
+    ] {
+        let RunOutcome::Statement(report) = engine
+            .run(WsId(1), RunTag(tag), sql.clone(), 200)
+            .await
+            .unwrap_or_else(|e| panic!("'{sql}': {e}"))
+        else {
+            panic!("'{sql}' ran as a query");
+        };
+        assert_eq!(report.count, Some(count), "'{sql}'");
+        assert_eq!(
+            report.message,
+            format!(
+                "Inserted {count} row{} into 'pg.public.loaded'",
+                if count == 1 { "" } else { "s" }
+            ),
+            "a bare target reports the address it reached"
+        );
+        assert_eq!(report.effect, None, "an INSERT changes no listing");
+    }
+    assert_eq!(
+        rows(
+            engine,
+            67,
+            &format!("SELECT count(*) FROM {CATALOG}.public.loaded")
+        )
+        .await,
+        vec![vec!["9".to_string()]],
+        "every insert landed, the bare-name one included"
+    );
+
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(68),
+            format!("INSERT OVERWRITE INTO {CATALOG}.public.loaded VALUES ('x', 1)"),
+            200,
+        )
+        .await
+    else {
+        panic!("a statement that empties a server table is not v1");
+    };
+    assert!(why.contains("replaces rows"), "{why}");
+}
+
+/// **A remote CTAS answers about a name the way the local one does**, against the server as it is
+/// now rather than against the connect-time enumeration — with `OR REPLACE` refused, because it
+/// would drop a server table.
+async fn ctas_name_semantics(engine: &Engine) {
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(69),
+            format!("CREATE TABLE {CATALOG}.public.loaded AS SELECT 1 AS n"),
+            200,
+        )
+        .await
+    else {
+        panic!("the relation is already there");
+    };
+    assert_eq!(why, "Table 'pg.public.loaded' already exists");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(70),
+            format!("CREATE TABLE IF NOT EXISTS {CATALOG}.public.loaded AS SELECT 1 AS n"),
+            200,
+        )
+        .await
+        .expect("reported rather than refused")
+    else {
+        panic!("ran as a query");
+    };
+    assert_eq!(report.message, "Table 'pg.public.loaded' already exists");
+    assert_eq!(report.effect, None, "and nothing changed");
+
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(71),
+            format!("CREATE OR REPLACE TABLE {CATALOG}.public.loaded AS SELECT 1 AS n"),
+            200,
+        )
+        .await
+    else {
+        panic!("replacing a server table is not v1 either");
+    };
+    assert!(why.contains("Drop it on the server first"), "{why}");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(74),
+            format!("CREATE OR REPLACE TABLE {CATALOG}.public.replaceable AS SELECT 1 AS n"),
+            200,
+        )
+        .await
+        .expect("over a free name there is nothing to replace, so it creates")
+    else {
+        panic!("ran as a query");
+    };
+    assert_eq!(
+        report.message,
+        "Table 'pg.public.replaceable' created, 1 row"
+    );
+}
+
+/// **A CTAS whose insert fails leaves no table behind.** The create lands, the fill does not, and
+/// the rollback takes the relation back off the server — otherwise the user is left with an empty
+/// table under a name they believe holds their result.
+///
+/// The failure is a cast the *values* refuse: the plan's schema is `Int32`, so the server table is
+/// created with an `INTEGER` column, and 'acme' only fails once rows are actually moving. A
+/// literal would have been folded away at planning, before anything was created.
+async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
+    let Err(why) = engine
+        .run(
+            WsId(1),
+            RunTag(72),
+            format!(
+                "CREATE TABLE {CATALOG}.public.doomed AS \
+                 SELECT CAST(name AS INT) AS n FROM {CATALOG}.public.customers"
+            ),
+            200,
+        )
+        .await
+    else {
+        panic!("'acme' is not an integer");
+    };
+    assert!(!why.contains("already exists"), "{why}");
+
+    let (_, listing) = engine.db_listing(conn).expect("still live");
+    assert!(
+        listing
+            .iter()
+            .find(|schema| schema.name == "public")
+            .is_some_and(|schema| schema.relations.iter().all(|r| r.name != "doomed")),
+        "the half-made table went with the failure"
+    );
+    assert!(
+        engine
+            .query(
+                WsId(1),
+                RunTag(73),
+                format!("SELECT n FROM {CATALOG}.public.doomed"),
+                200,
+            )
+            .await
+            .is_err(),
+        "…and nothing resolves under its name"
+    );
+}
+
+/// **A cancelled CTAS takes its table with it.** A cancel aborts the task, so the future is
+/// *dropped* mid-fill and no error path runs — without `write::Created`'s guard the server would
+/// keep an empty table under the name the user chose, and the retry would then refuse it as
+/// already existing. The local half has the same guard and the same test
+/// (`a_cancelled_spool_takes_its_staging_directory_with_it`).
+///
+/// The fill is deliberately slow — `InsertBuilder` renders every row as a literal, so a hundred
+/// thousand of them take seconds over TCP — and the create is one statement, so the cancel lands
+/// between them. The rollback is *spawned* by the guard's `Drop`, so the assertion waits for it
+/// rather than reading once.
+async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
+    let (client, driver) = tokio_postgres::connect(
+        &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .expect("a raw client to watch the server directly");
+    tokio::spawn(async move {
+        if let Err(e) = driver.await {
+            eprintln!("cancel-watch connection ended: {e}");
+        }
+    });
+
+    let running = engine.run(
+        WsId(9),
+        RunTag(80),
+        format!(
+            "CREATE TABLE {CATALOG}.public.abandoned AS \
+             SELECT value AS n FROM generate_series(1, 100000)"
+        ),
+        200,
+    );
+    let cancelling = async {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !relation_exists(&client, "abandoned").await {
+            assert!(
+                Instant::now() < deadline,
+                "the CTAS never created its table"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        engine.cancel(WsId(9), RunTag(80))
+    };
+    let (settled, cancelled) = tokio::join!(running, cancelling);
+    assert!(
+        cancelled.is_some(),
+        "the CTAS is the workspace's in-flight call"
+    );
+    let Err(why) = settled else {
+        panic!("a cancelled run does not report success");
+    };
+    assert!(stopped_on_purpose(&why), "{why}");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while relation_exists(&client, "abandoned").await {
+        assert!(
+            Instant::now() < deadline,
+            "the cancelled CTAS left its table on the server"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Whether `public.<name>` is on the server right now, asked outside the engine entirely.
+async fn relation_exists(client: &tokio_postgres::Client, name: &str) -> bool {
+    client
+        .query_one(
+            "SELECT to_regclass($1) IS NOT NULL",
+            &[&format!("public.{name}")],
+        )
+        .await
+        .expect("ask the server")
+        .get(0)
+}
+
+/// **The agent is still read-only**, with a writable connection registered and the two write
+/// statements otherwise working. The parity matrix in `sql::validate` pins the classification;
+/// what this pins is that no part of DB-10 reached past it.
+async fn agent_stays_read_only(engine: &Engine) {
+    for sql in [
+        format!("INSERT INTO {CATALOG}.public.loaded VALUES ('agent', 1)"),
+        format!("CREATE TABLE {CATALOG}.public.agent_made AS SELECT 1 AS n"),
+    ] {
+        let refusals = engine
+            .policy_verdicts(sql.clone())
+            .await
+            .unwrap_or_else(|e| panic!("'{sql}': {e}"));
+        assert_eq!(refusals.len(), 1, "'{sql}' is refused to an agent");
+    }
 }
 
 /// **The cross-source view** — the load-bearing case: one workspace def whose dependencies span

@@ -4,9 +4,9 @@
 //!
 //! A database replaces the address box with **URL** and **DATABASE** — the two halves of
 //! `ConnectionDef::address`, split here because a server and the database on it are two things
-//! Postgres names separately — and follows them with **CATALOG**, **USER**, **PASSWORD** and
-//! **SSL MODE**. CATALOG is the odd one out and says so: it is Strata's prefix for the
-//! connection, not anything the server has.
+//! Postgres names separately — and follows them with **CATALOG**, **USER**, **PASSWORD**,
+//! **SSL MODE** and **READ ONLY**. CATALOG is the odd one out and says so: it is Strata's prefix
+//! for the connection, not anything the server has.
 //!
 //! Built from `components::form` — a [`Form`] of [`Row`]s, so the label register,
 //! the `REQUIRED` markers and the rhythm between rows are the app's rather than this window's.
@@ -102,7 +102,8 @@ impl Component for Fields {
                 .child(CatalogName { key: DiffKey::None }.key(format!("catalog·{scope}")))
                 .child(UserField { key: DiffKey::None }.key(format!("user·{scope}")))
                 .child(PasswordField { key: DiffKey::None }.key(format!("password·{scope}")))
-                .child(Ssl { key: DiffKey::None }.key(format!("ssl·{scope}"))),
+                .child(Ssl { key: DiffKey::None }.key(format!("ssl·{scope}")))
+                .child(ReadOnly { key: DiffKey::None }.key(format!("read_only·{scope}"))),
             _ => form.child(Authority { key: DiffKey::None }.key(format!("authority·{scope}"))),
         };
         if matches!(provider, ProviderId::S3 | ProviderId::Gcs) {
@@ -605,6 +606,53 @@ impl Component for RootCertificate {
                         ctx.edit(|draft| draft.pg.sslrootcert = path);
                     }),
             )
+    }
+}
+
+/// **READ ONLY** — whether statements may change this database (DB-10). Every other client calls
+/// it that, and it is **on** unless someone turns it off.
+///
+/// That default is the whole safety story: a connection is a read-only view of a server until this
+/// says otherwise, so shipping the write path changed nothing about any project already on disk.
+/// On the **def** rather than beside it, because a connection is committed and shared and the
+/// answer should be the same for a colleague.
+///
+/// The sentence beside the switch names the two statements turning it off opens rather than
+/// saying "writes": a reader has no reason to guess that `UPDATE` and `DELETE` are not among them.
+#[derive(PartialEq)]
+struct ReadOnly {
+    key: DiffKey,
+}
+
+impl KeyExt for ReadOnly {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ReadOnly {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let ctx = use_consume::<ConnectionCtx>();
+        let read_only = ctx.draft.read().pg.read_only;
+
+        Row::new("READ ONLY").child(
+            rect()
+                .width(Size::fill())
+                .horizontal()
+                .cross_align(Alignment::Center)
+                .spacing(QUALIFIER_GAP)
+                .child(Switch::new().toggled(read_only).on_toggle(move |()| {
+                    ctx.edit(|draft| draft.pg.read_only = !draft.pg.read_only);
+                }))
+                .child(Prose::new(
+                    "Strata never changes this database. Turn it off to allow INSERT and \
+                         CREATE TABLE AS SELECT",
+                )),
+        )
     }
 }
 
