@@ -77,7 +77,7 @@ pub use persist::{
 };
 pub use project::{ConnRow, FaultKind, ProjChan, ProjectState, Reg};
 /// The remaining catalog rows. A test that builds a store **inline** names these, which is what
-/// AGENTS.md §1 asks for instead of bending a signature to be testable (the command palette's index
+/// this codebase asks for instead of bending a signature to be testable (the command palette's index
 /// is tested exactly this way); [`ConnRow`] is above because the data-sources tree's walk reads a
 /// connection's registration off the row it is already iterating rather than looking it up again.
 #[cfg(test)]

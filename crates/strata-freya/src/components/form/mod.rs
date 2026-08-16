@@ -83,7 +83,7 @@ define_theme!(
 );
 
 /// Read the form dress. Every piece in this module resolves its colours through here, so a
-/// form's look is one theme rather than one per window (AGENTS.md §3).
+/// form's look is one theme rather than one per window.
 pub fn form_theme() -> FormTheme {
     get_theme!(&None::<FormThemePartial>, FormThemePreference, "form")
 }

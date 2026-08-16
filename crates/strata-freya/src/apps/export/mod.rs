@@ -96,7 +96,7 @@ define_theme!(
 /// and the DI handles both live (the results pane) and carried to the button as a prop.
 ///
 /// **Props, not context, deliberately.** The toolbar is a shallow, known consumer — the
-/// state-architecture's rule for exactly this (`AGENTS.md` §4: context is for DI handles and
+/// state-architecture's rule for exactly this (context is for DI handles and
 /// deep, open-ended trees). Consuming `EngineCtx` and `AppCtx` in the button itself would put a
 /// context requirement on a leaf that only ever renders inside the pane that already has both.
 #[derive(Clone)]

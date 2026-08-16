@@ -148,12 +148,6 @@ step "Strata $VERSION (build $BUILD_NUMBER, $GIT_SHA) - $ARCH_MODE"
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "this builds a macOS .app and only runs on macOS"
 
-# The build resolves Freya from the local submodule checkout, so an uninitialised one fails deep
-# in a long compile with a baffling missing-method error. Same check CI makes, for the same reason.
-if [[ ! -f "crates/freya/Cargo.toml" ]]; then
-  fail "crates/freya is not checked out. Run: git submodule update --init --checkout"
-fi
-
 for tool in cargo lipo sips iconutil codesign plutil; do
   command -v "$tool" >/dev/null 2>&1 || fail "'$tool' not found on PATH"
 done

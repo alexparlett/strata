@@ -1059,7 +1059,7 @@ impl Engine {
     /// renderer-first read `q` asks for: a projected, ordinal-ordered, capped read plus a
     /// long→wide pivot (`Rows`), raw points (`Raw`), or the one computed mark
     /// (`Histogram`). No aggregation, no bucketing, no imposed order — the withdrawn
-    /// pipeline's grouped reads must not come back here (AGENTS.md §2).
+    /// pipeline's grouped reads must not come back here.
     ///
     /// Snapshot-scoped and side-effect free like [`fetch_page`](Engine::fetch_page). Cache
     /// identity is `(snapshot, q)` **plus the engine's display config**: axis labels render

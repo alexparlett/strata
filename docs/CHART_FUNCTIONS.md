@@ -7,7 +7,7 @@ what chart shape each one buys, with an example where it helps.
 
 The enumeration was read from the **pinned DataFusion 54.0.0 sources** (`all_default_*_functions`
 in each functions crate), not from the upstream docs pages, which track a newer version. The live
-registry is always the truth (`docs/reference/ENGINE.md`).
+registry is always the truth.
 
 Two facts about the chart worth keeping in mind throughout:
 

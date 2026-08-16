@@ -11,7 +11,7 @@
 //! `datafusion.runtime.*` cannot be written to a running engine — the `RuntimeEnv` is fixed when
 //! the `SessionContext` is built — so the only honest way to apply one is to build a new engine
 //! and stand the project up against it. That is already what `ProjectRoot`'s `render_key` does
-//! for a re-root (AGENTS.md §2), so the restart is a bump of that key rather than a second path
+//! for a re-root, so the restart is a bump of that key rather than a second path
 //! that re-points a live store: the outgoing engine is dropped, its session flushed, and the
 //! project registers its tables and views through the very hooks that run at launch. And because
 //! it drops the engine it aborts whatever is in flight, which makes it one more action that

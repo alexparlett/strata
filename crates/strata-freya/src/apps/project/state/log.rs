@@ -42,7 +42,7 @@ use strata_engine::{stopped_on_purpose, CANCELLED};
 const CAP: usize = 200;
 
 /// What an event says about itself: the dot's tone, off the sheet's semantic ramp (`success` /
-/// `info` / `warning` / `error` — AGENTS.md §3). Four, because that ramp has four: the canvas's
+/// `info` / `warning` / `error`). Four, because that ramp has four: the canvas's
 /// separate `run` kind painted the same colour as `info` and differed in nothing else.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LogLevel {
@@ -167,7 +167,7 @@ pub fn use_run_logging(query: UseQuery<RunQuery>) {
 /// press that finished after a newer one replaced it) and `superseded by a newer scan` (the profile
 /// equivalent). This used to test `e == "cancelled"`, which mapped a supersede to a red `Error` row
 /// reading "superseded by a newer run" — a fault the user never had, and precisely the string
-/// AGENTS.md §2 says must never read as a problem. Everything else `Err` is the engine's own
+/// that must never read as a problem. Everything else `Err` is the engine's own
 /// message, the same text the results pane frames.
 ///
 /// `None` means **somebody else records this settle**, which today is exactly one case: an

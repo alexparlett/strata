@@ -167,7 +167,7 @@ impl Drop for AgentServer {
 /// Retract stateless agents that have gone quiet.
 ///
 /// **The one poll in this crate, and it is here because nothing on our side can observe the
-/// fact** (AGENTS.md §2): a client on MCP's discover lifecycle has no session, so its
+/// fact**: a client on MCP's discover lifecycle has no session, so its
 /// departure produces no close, no `DELETE` and no value whose drop means anything — see
 /// [`StrataTools::retire_idle`]. It exists only while the server does, which is the other
 /// half of that rule: the timer is not a standing cost of the app, it is a cost of having the

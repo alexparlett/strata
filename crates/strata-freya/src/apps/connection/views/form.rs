@@ -8,7 +8,7 @@
 //! **SSL MODE**. CATALOG is the odd one out and says so: it is Strata's prefix for the
 //! connection, not anything the server has.
 //!
-//! Built from `components::form` — a [`Form`] of [`Row`]s (AGENTS.md §3), so the label register,
+//! Built from `components::form` — a [`Form`] of [`Row`]s, so the label register,
 //! the `REQUIRED` markers and the rhythm between rows are the app's rather than this window's.
 //!
 //! **Which rows exist depends on the provider, and only on the provider.** HTTP is anonymous by
@@ -889,7 +889,7 @@ impl Component for Endpoint {
 /// and bare fields in the cells. Two columns, so it carries a header — where the single-column
 /// path list does not, because its section label already names the column.
 ///
-/// **Rows here, a map in the def** (AGENTS.md §2). The option is a `Select` over
+/// **Rows here, a map in the def**. The option is a `Select` over
 /// [`CLIENT_KEYS`] rather than a text box, because the set is closed and small — which removes
 /// the typo class outright and takes the autocomplete the Settings grid needs with it.
 #[derive(PartialEq)]

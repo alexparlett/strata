@@ -3,7 +3,7 @@
 //! the trailing filler, on the zebra background with the row rule. Built by the grid's
 //! `VirtualScrollView` builder for the ~viewport rows only; everything reactive (selection,
 //! widths, the column window) is read *inside* — the builder closure is memoized, so state
-//! must be read here, not snapshotted outside (the `VirtualScrollView` rule, AGENTS.md §3).
+//! must be read here, not snapshotted outside (the `VirtualScrollView` rule).
 //!
 //! The row also owns its cells' interaction handlers: gutter double-click → record view
 //! (P2-10), nested-cell double-click → value modal snapshotted at press time (P2-12), and

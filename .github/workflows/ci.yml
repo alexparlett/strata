@@ -37,7 +37,7 @@ env:
 # tell a busy provider from a missing one fails loud there.
 jobs:
   # The gate: both Rust jobs run only when the diff could have moved the build. A
-  # docs-only change (.claude/, docs/, markdown) compiles nothing and never queues for
+  # docs-only change (docs/, markdown) compiles nothing and never queues for
   # the shared container worker.
   #
   # A gate *job*, deliberately not a workflow-level `paths` filter: a path-skipped
@@ -48,7 +48,7 @@ jobs:
   # red - a broken filter can never read as a green run over unreviewed Rust.
   #
   # The filter list is what the build actually READS, not "*.rs": `crates/**` covers the
-  # workspace and the Freya fork gitlink; `themes/**` and `assets/**` are pulled in from
+  # workspace; `themes/**` and `assets/**` are pulled in from
   # the repo root by `include_str!`/`include_bytes!` (the theme JSONs, the schema that
   # `schema_in_sync` compares, the fonts); and this file itself, because a CI change must
   # prove CI still works.
@@ -58,9 +58,9 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
     steps:
-      # Full history, no submodule: push events diff against the previous head (a PR
-      # event reads the file list from the API and needs no history at all), and the
-      # filter never builds anything, so the fork checkout would be pure cost.
+      # Full history: push events diff against the previous head (a PR event reads the
+      # file list from the API and needs no history at all); the filter never builds
+      # anything.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -89,27 +89,11 @@ jobs:
     # is best-effort, so size this for the cold case.
     timeout-minutes: 90
     steps:
-      # Unlike the review job, this one MUST fetch the submodule: `crates/freya` is
-      # our Freya fork and the build resolves it by local path (root Cargo.toml
-      # `[workspace.dependencies]`), so without it nothing compiles at all.
+      # The Freya fork is an ordinary git dependency (root Cargo.toml,
+      # `[workspace.dependencies]`), pinned by Cargo.lock — cargo fetches it itself.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: true
-
-      # Fail loud, and early, on the one submodule failure that otherwise surfaces as
-      # a baffling "no method named ..." deep in a 40-minute compile: the recorded
-      # gitlink not being on the fork remote (a fork commit that was never pushed), or
-      # the checkout landing somewhere else. `git submodule status` prefixes the line
-      # with `+` (wrong commit) or `-` (not initialised) in exactly those cases.
-      - name: Verify the Freya submodule is at the recorded commit
-        run: |
-          git submodule status crates/freya
-          git submodule status crates/freya | grep -qE '^ ' || {
-            echo "::error::crates/freya is not checked out at the commit this repo records."
-            echo "The fork commit is probably not pushed to github.com/alexparlett/freya - see AGENTS.md section 6."
-            exit 1
-          }
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -207,23 +191,9 @@ jobs:
     # workspace, so no Skia and no Freya UI crates. DataFusion is still a cold compile.
     timeout-minutes: 60
     steps:
-      # Still `submodules: true` even though nothing here links Freya: cargo resolves the
-      # whole workspace graph before it builds one package of it, and the root
-      # `[workspace.dependencies]` names `crates/freya` by path. Without the checkout the
-      # manifest does not parse.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: true
-
-      - name: Verify the Freya submodule is at the recorded commit
-        run: |
-          git submodule status crates/freya
-          git submodule status crates/freya | grep -qE '^ ' || {
-            echo "::error::crates/freya is not checked out at the commit this repo records."
-            echo "The fork commit is probably not pushed to github.com/alexparlett/freya - see AGENTS.md section 6."
-            exit 1
-          }
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

@@ -483,7 +483,7 @@ pub fn rel_group_row(at: &Place, views: bool, count: usize, cx: &RowCtx) -> RowB
 /// remote table is still not something to start by pointing at it.
 ///
 /// **Double-press queries it**, in the one `on_press` handler — a second registration under the
-/// same event name would replace the first, so that is where a double is detected (AGENTS.md §3).
+/// same event name would replace the first, so that is where a double is detected.
 /// The ⋮ carries every gesture, and the right-click opens the same card.
 ///
 /// **A press that is not a mouse press is an activation, not a failed double.** Wiring `on_press`

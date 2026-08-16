@@ -82,10 +82,6 @@ write() {
   fi
 
   command -v cargo >/dev/null 2>&1 || fail "'cargo' not found on PATH (needed to update Cargo.lock)"
-  # Resolving the lockfile reads every path dependency, and Freya is one of them.
-  if [[ ! -f "crates/freya/Cargo.toml" ]]; then
-    fail "crates/freya is not checked out. Run: git submodule update --init --checkout"
-  fi
 
   # awk, not `sed -i`: the in-place flag differs between BSD and GNU sed, and only the *first*
   # matching line may be replaced.

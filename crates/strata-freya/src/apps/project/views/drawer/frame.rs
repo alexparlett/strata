@@ -50,7 +50,7 @@ impl Component for DrawerBody {
 /// A drawer tab with nothing to show: its glyph over one line of copy, centred in the body.
 /// Both paint the drawer theme's `empty_color`; the glyph alone stays overridable because a
 /// tab's can be **semantic** — Problems' tick is the shared ramp's `ok` — and semantic colours
-/// follow the app-wide ramp wherever they appear (AGENTS.md §3).
+/// follow the app-wide ramp wherever they appear.
 #[derive(PartialEq)]
 pub struct DrawerEmpty {
     icon: IconName,

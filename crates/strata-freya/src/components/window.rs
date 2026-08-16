@@ -2,7 +2,7 @@
 //! floats on, the recessed insets inside it, its rules, and the two status blocks.
 //!
 //! Only what a window's chrome actually paints: a field is added here when a surface reads it,
-//! not in anticipation (AGENTS.md §1) — an unread slot still has to be authored in every theme
+//! not in anticipation — an unread slot still has to be authored in every theme
 //! file and pinned by the committed schema, for no rendered pixel.
 //!
 //! One theme for *all* windows, not one per window. A window is not a component in the sense
@@ -15,7 +15,7 @@
 //! `use_roles()` and picking the nearest-sounding role instead tends to land the body on
 //! `background`, the app's darkest tone — a window wearing it reads as a hole. That mistake was
 //! built once, and it is why windows resolve their chrome through this one theme rather than
-//! each view picking roles for itself (AGENTS.md §3: a themed surface reads its theme).
+//! each view picking roles for itself (a themed surface reads its theme).
 //!
 //! The export, settings and launcher windows still carry their own copies and should migrate
 //! onto this (P5-09); their fields already map onto these very roles.

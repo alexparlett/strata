@@ -717,8 +717,8 @@ path through the same store.
 
 The whole arm is proven against a real MinIO in
 `crates/strata-engine/tests/object_store_minio.rs` — deliberately not `#[ignore]`d, because it is
-the only thing that would catch a regression in the S3 credential bridge (see CLAUDE.md for the
-container-runtime requirement).
+the only thing that would catch a regression in the S3 credential bridge (a container runtime —
+Docker, colima or Testcontainers Cloud — is required, and without one it fails rather than skips).
 
 ### How the two container tests are built
 
@@ -738,8 +738,10 @@ pins one; the AWS chain carries the other), so neither costs a build.
 
 `testcontainers` is pinned to the major `testcontainers-modules` itself depends on: the two share
 a `bollard`, and a newer `testcontainers` resolves a second one that conflicts outright. Its
-`properties-config` feature is not optional for us — CLAUDE.md explains why a runtime is otherwise
-up, configured and invisible.
+`properties-config` feature is not optional for us: the runtime is discovered from
+`~/.testcontainers.properties` (which a Testcontainers Cloud agent writes) or `DOCKER_HOST`, and
+without the feature that file is `#[cfg]`'d out — a perfectly good runtime reads as absent, while
+being up, configured and invisible.
 
 ## How a query reaches a bucket
 

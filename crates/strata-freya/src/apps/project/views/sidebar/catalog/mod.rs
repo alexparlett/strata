@@ -240,7 +240,7 @@ fn seeded() -> HashSet<String> {
 ///
 /// Both halves ride in the builder **data** rather than being captured, because a
 /// `VirtualScrollView` memoizes its builder closure: anything captured there goes stale on the next
-/// walk or the next theme (AGENTS.md §3).
+/// walk or the next theme.
 #[derive(Clone, PartialEq)]
 struct TreeData {
     nodes: Rc<Vec<Node>>,

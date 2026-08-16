@@ -19,7 +19,7 @@
 //!
 //! ## A focused `Input` owns the keyboard
 //!
-//! So the `@`-completion is driven from **this field** rather than from the popup (AGENTS.md §3):
+//! So the `@`-completion is driven from **this field** rather than from the popup:
 //! the arrow keys reach the focused input and nothing else, and moving focus to the list would
 //! stop the very typing that narrows it. `on_pre_key_down` claims the three keys the list is
 //! entitled to and hands everything else back to `Input::key_down_default` — the field's own rule,

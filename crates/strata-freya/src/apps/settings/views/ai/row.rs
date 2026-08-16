@@ -18,7 +18,7 @@
 //! line of what is known about it.
 //!
 //! **The switch is the only thing that toggles.** The header was a press target first, which put
-//! the `Switch` inside it — and a built-in control's press reaches its ancestors (AGENTS.md §3),
+//! the `Switch` inside it — and a built-in control's press reaches its ancestors,
 //! so pressing the switch fired both and the row looked inert while pressing anywhere else
 //! worked. The preferences form's answer is a label block *beside* the switch rather than around
 //! it (`Row::trailing`), and that shape would work — but a row carrying a second button reads

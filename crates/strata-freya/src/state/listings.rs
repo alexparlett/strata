@@ -135,7 +135,7 @@ impl Probe {
 }
 
 /// Which semantic tone a status line takes. The shared `tones()` hook resolves it — a pane does
-/// not own success/warning/error colours (AGENTS.md §3).
+/// not own success/warning/error colours.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
     Working,

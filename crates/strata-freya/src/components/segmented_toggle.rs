@@ -237,7 +237,7 @@ impl ToggleSegment {
     /// for a table that already has files).
     ///
     /// It gates the handler rather than going `interactive(false)`, which suppresses
-    /// `pointer_leave` and strands the hover (AGENTS.md §3).
+    /// `pointer_leave` and strands the hover.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self

@@ -2,8 +2,7 @@
 # Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core
 # crates (`strata-core`, the DataFusion boundary `strata-engine`, the leaf `strata-model`), the
 # vendored editor (`strata-code-editor`), agent access (`strata-agent`) and the
-# command-palette proc macro (`strata-command-macro`). The Freya fork (`crates/freya`) is
-# excluded but resolved by local path — see docs/ARCHITECTURE.md.
+# command-palette proc macro (`strata-command-macro`). See docs/ARCHITECTURE.md.
 members = [
     "crates/strata-freya",
     "crates/strata-model",
@@ -13,28 +12,21 @@ members = [
     "crates/strata-command-macro",
     "crates/strata-agent",
 ]
-# `crates/freya` is our Freya fork checkout (a git submodule, its own workspace); the build
-# resolves it from the local path (see `[workspace.dependencies]`), so it must NOT be treated as
-# a member of this workspace.
-exclude = ["crates/freya"]
 # Bare `cargo build` / `cargo run` at the root target the app.
 default-members = ["crates/strata-freya"]
 resolver = "2"
 
-# Freya (Skia/native GUI) — our fork. Resolved from the LOCAL checkout at `crates/freya` (a separate
-# workspace, excluded above), so edits there are picked up on the next `cargo build` — no push, no
-# `cargo update`. These paths canonicalize to one location, and the fork's own crates reference each
-# other by path too, so the umbrella `freya` and the sibling crates our vendored editor pulls still
-# share a single `freya-core`/`torin` (no duplicates in the graph).
-# For reproducible CI/release builds, swap these back to `{ git = "…", rev = "…" }` (pin a rev).
+# Freya (Skia/native GUI) — our fork. One git source for the umbrella crate and every sibling the
+# vendored editor pulls, so the graph shares a single `freya-core`/`torin` (no duplicates).
+# Cargo.lock pins the commit; `cargo update` moves it to the fork's current `main`.
 [workspace.dependencies]
-freya = { path = "crates/freya/crates/freya" }
-freya-core = { path = "crates/freya/crates/freya-core" }
-freya-testing = { path = "crates/freya/crates/freya-testing" }
-freya-engine = { path = "crates/freya/crates/freya-engine" }
-freya-edit = { path = "crates/freya/crates/freya-edit" }
-freya-components = { path = "crates/freya/crates/freya-components" }
-torin = { path = "crates/freya/crates/torin" }
+freya = { git = "https://github.com/alexparlett/freya", branch = "main" }
+freya-core = { git = "https://github.com/alexparlett/freya", branch = "main" }
+freya-testing = { git = "https://github.com/alexparlett/freya", branch = "main" }
+freya-engine = { git = "https://github.com/alexparlett/freya", branch = "main" }
+freya-edit = { git = "https://github.com/alexparlett/freya", branch = "main" }
+freya-components = { git = "https://github.com/alexparlett/freya", branch = "main" }
+torin = { git = "https://github.com/alexparlett/freya", branch = "main" }
 
 # Workspace lint policy, inherited by every member (`[lints] workspace = true`). The base is
 # `clippy::all` plus a hand-picked readability/complexity set — deliberately NOT the whole

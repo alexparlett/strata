@@ -96,23 +96,23 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # The review pulls the diff through gh, but reads the working tree for
-      # context (CLAUDE.md, AGENTS.md, surrounding code). `crates/freya` - our
-      # Freya fork - comes with it: it is the ground truth for Freya's APIs, so
-      # the reviewer can check a claim about a component, event or theme instead
-      # of guessing, and can tell a genuine fork limitation from app code working
-      # around one (AGENTS.md §6). It is a large checkout, but nothing here
-      # compiles it and `fetch-depth: 1` keeps the fetch shallow.
-      #
-      # `continue-on-error` because the one submodule failure that actually
-      # happens is a fork commit that was never pushed (AGENTS.md §6). CI already
-      # fails loudly on that; here it should cost the reviewer its Freya context,
-      # not the whole review. The prompt tells it to say so when the tree is empty.
+      # context (AGENTS.md, surrounding code).
       - uses: actions/checkout@v6
         if: steps.scope.outputs.skip != 'true'
-        continue-on-error: true
         with:
           fetch-depth: 1
-          submodules: true
+
+      # The Freya fork is a git dependency now, not part of the checkout - but it is
+      # still the ground truth for Freya's APIs, so the reviewer can check a claim
+      # about a component, event or theme instead of guessing, and can tell a genuine
+      # fork limitation from app code working around one. A shallow clone into the
+      # spot the prompt names keeps that ability; `continue-on-error` because a failed
+      # clone should cost the reviewer its Freya context, not the whole review. The
+      # prompt tells it to say so when the tree is empty.
+      - name: Fetch the Freya fork for reference
+        if: steps.scope.outputs.skip != 'true'
+        continue-on-error: true
+        run: git clone --depth 1 https://github.com/alexparlett/freya crates/freya
 
       - uses: anthropics/claude-code-action@v1
         if: steps.scope.outputs.skip != 'true'
@@ -130,8 +130,8 @@ jobs:
             ${{ steps.scope.outputs.scope }}
 
             Then read the surrounding files for context - a hunk on its own rarely says
-            whether it is correct. This repository's conventions live in CLAUDE.md and
-            AGENTS.md; a change that contradicts them is a finding.
+            whether it is correct. This repository's conventions live in AGENTS.md; a change
+            that contradicts them is a finding.
 
             Look for correctness above all: wrong or inverted conditions, off-by-one,
             unwrap/panic on reachable input, dropped errors, removed guards, broken
@@ -140,8 +140,8 @@ jobs:
             Prefer a handful of real problems to a long list of style notes.
 
             One further class of finding this repository cares about: app code that
-            works around a Freya limitation instead of fixing it in the fork. AGENTS.md
-            §6 is the rule, and the shapes it names are the tell - a registry or bus
+            works around a Freya limitation instead of fixing it in the fork - a rule
+            AGENTS.md states in its Architecture section. The shapes are the tell - a registry or bus
             standing in for something the framework should order, a scale-factor
             correction in component code, a theme token duplicated onto a consuming
             surface because a component's own theme lacks the state, a hand-rolled
@@ -153,8 +153,8 @@ jobs:
             file, and say what the fork change would be. A guess about Freya's API is
             worse than no finding - the fork is also the ground truth whenever the diff
             asserts anything about Freya's behaviour. If `crates/freya` is empty, the
-            submodule checkout failed (usually an unpushed fork commit): say so in the
-            summary, review the rest, and do not guess at Freya's APIs.
+            fork clone failed: say so in the summary, review the rest, and do not guess
+            at Freya's APIs.
 
             Do the whole review YOURSELF, in this conversation. Do not delegate to
             subagents and do not start background tasks: this runs headless, so the run
