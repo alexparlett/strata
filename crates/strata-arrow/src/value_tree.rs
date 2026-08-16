@@ -8,7 +8,7 @@
 //! JSON. So a leaf is formatted by the **same `ArrayFormatter` the grid formats a cell with**, and
 //! clipped by the same [`clip`] — a value reads identically whether you meet it in the grid, the
 //! record view or here. (The record view's sampled text preview,
-//! [`serialize::cell_preview_json`](super::serialize::cell_preview_json), is still JSON: it is a
+//! [`serialize::cell_preview_json`](crate::serialize::cell_preview_json), is still JSON: it is a
 //! *document* excerpt, where the braces are the whole point.)
 //!
 //! Nothing is materialized before it is asked for. A node is addressed by a **path** of entry
@@ -20,12 +20,12 @@
 //! Indices, not names, address a node: a duplicate or reordered key cannot mis-resolve a path, and
 //! a list has no names at all.
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
-use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+use arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
+use arrow::datatypes::{DataType, FieldRef};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use strata_model::Kind;
 
-use super::catalog::short_type;
+use super::column::short_type;
 use strata_core::util::{clip, DISPLAY_CHARS};
 
 /// One row of the tree: a child of the node that was expanded.
@@ -36,7 +36,7 @@ pub struct ValueNode {
     /// Position within its parent — the path step that reaches this node.
     pub index: usize,
     /// The type, in the spelling the grid's header and the column inspector use
-    /// (`catalog::short_type`), so one value cannot be described two ways.
+    /// (`column::short_type`), so one value cannot be described two ways.
     pub dtype: String,
     pub kind: Kind,
     pub value: NodeValue,
@@ -275,9 +275,9 @@ fn list_items(cursor: &Cursor) -> Option<(FieldRef, ArrayRef)> {
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::arrow::array::{Int32Array, ListArray, MapArray, StringArray, StructArray};
-    use datafusion::arrow::buffer::OffsetBuffer;
-    use datafusion::arrow::datatypes::{Field, Fields, Schema};
+    use arrow::array::{Int32Array, ListArray, MapArray, StringArray, StructArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{Field, Fields, Schema};
 
     use super::*;
 

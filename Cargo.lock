@@ -9193,6 +9193,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-arrow"
+version = "0.2.0"
+dependencies = [
+ "arrow",
+ "object_store",
+ "serde_json",
+ "strata-core",
+ "strata-model",
+]
+
+[[package]]
 name = "strata-code-editor"
 version = "0.1.0"
 dependencies = [
@@ -9260,6 +9271,7 @@ dependencies = [
  "regex",
  "secrecy",
  "serde_json",
+ "strata-arrow",
  "strata-core",
  "strata-model",
  "testcontainers",

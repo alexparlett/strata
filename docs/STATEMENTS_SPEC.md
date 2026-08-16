@@ -861,7 +861,7 @@ never a credential — so the list is split by namespace:
 | Key | Answer |
 |---|---|
 | a `format.` key the def has a field for | read onto it. The key set **is** the def: every `CsvRead` / `JsonRead` field has a DataFusion name and nothing else does (`docs/IMPORT_OPTIONS.md` is the same table from the other side) |
-| a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or a client option (`engine::store::CLIENT_KEYS`, shared rather than re-listed) | refused toward Connections, **on the key alone** — the value is never read and never echoed, because it may be a secret and a refusal is a sentence the user then reads and copies. (A refused statement is also never recorded: history keeps successful runs only, so a pasted key does not outlive the buffer) |
+| a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or a client option (`strata_arrow::client::CLIENT_KEYS`, shared rather than re-listed) | refused toward Connections, **on the key alone** — the value is never read and never echoed, because it may be a secret and a refusal is a sentence the user then reads and copies. (A refused statement is also never recorded: history keeps successful runs only, so a pasted key does not outlive the buffer) |
 | anything else | refused **by name**, which is what keeps the mechanism total rather than a list of the keys we thought of — a CSV option on a parquet table lands here, naming the format, which is the state `SourceFormat` exists to make unwritable |
 
 The three CSV options DataFusion has and the def deliberately lacks (`format.null_regex`,

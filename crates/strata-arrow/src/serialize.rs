@@ -21,16 +21,14 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, MapArray, RecordBatch, StringArray, UInt32Array,
-};
-use datafusion::arrow::compute::take;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
-use datafusion::arrow::error::ArrowError;
-use datafusion::arrow::json::writer::{make_encoder, EncoderOptions, JsonArray};
-use datafusion::arrow::json::{ArrayWriter, LineDelimitedWriter};
-use datafusion::arrow::record_batch::RecordBatchWriter;
-use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+use arrow::array::{Array, ArrayRef, AsArray, MapArray, RecordBatch, StringArray, UInt32Array};
+use arrow::compute::take;
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use arrow::error::ArrowError;
+use arrow::json::writer::{make_encoder, EncoderOptions, JsonArray};
+use arrow::json::{ArrayWriter, LineDelimitedWriter};
+use arrow::record_batch::RecordBatchWriter;
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use serde_json::{from_slice, to_string, to_string_pretty, to_writer_pretty, Value};
 
 use strata_core::util::{clip, fmt_int, plural, plural_noun, DISPLAY_CHARS};
@@ -93,7 +91,7 @@ pub fn write_batch<W: Write>(
         TextFormat::Tsv | TextFormat::Csv => {
             let flat = flatten_nested(batch)?;
             let delim = if fmt == TextFormat::Tsv { b'\t' } else { b',' };
-            let wr = datafusion::arrow::csv::WriterBuilder::new()
+            let wr = arrow::csv::WriterBuilder::new()
                 .with_delimiter(delim)
                 .with_header(header)
                 .build(w);
@@ -484,7 +482,7 @@ pub fn row_pretty_json(batch: &RecordBatch, row: usize) -> Option<String> {
     let one = batch.slice(row, 1);
     let mut buf = Vec::new();
     {
-        let mut w = datafusion::arrow::json::WriterBuilder::new()
+        let mut w = arrow::json::WriterBuilder::new()
             .with_explicit_nulls(true)
             .build::<_, JsonArray>(&mut buf);
         w.write(&one).ok()?;
@@ -687,9 +685,9 @@ fn md_escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int32Array, ListArray, NullArray, StructArray};
-    use datafusion::arrow::buffer::OffsetBuffer;
-    use datafusion::arrow::datatypes::Fields;
+    use arrow::array::{Int32Array, ListArray, NullArray, StructArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::Fields;
 
     use super::*;
 

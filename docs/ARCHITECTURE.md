@@ -9,22 +9,35 @@ links the document that owns its detail. If you are changing code rather than re
 
 ## The workspace
 
-A virtual Cargo workspace, seven member crates plus a vendored fork:
+A virtual Cargo workspace, eight member crates plus a vendored fork:
 
 | Crate | Role |
 |---|---|
 | `strata-freya` | The app — Freya (Skia, native) frontend. One module per OS window under `apps/`: launcher, project, settings, export, configure, connection. The default build target. |
 | `strata-core` | App services, DataFusion-free: config, keymap, themes, `.strata/` project persistence, the OS-keystore secret store, the model-listings satellite, the updater mechanism, shared `util`. |
-| `strata-engine` | The only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, the EXPLAIN model, the registration pass. Sits on `strata-core`. |
+| `strata-arrow` | The Arrow-level vocabulary, DataFusion-free: the `ColumnInfo` row an Arrow field becomes, the value tree, the Copy/record-view serializers, the EXPLAIN plan model, and the two written-down catalogues (DataFusion's config keys, `object_store`'s client options). Sits on `strata-core`. |
+| `strata-engine` | The only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, the registration pass. Sits on `strata-arrow`. |
 | `strata-model` | The leaf data vocabulary — schema, results, catalog, session, history, connections. Serde only, no logic, so every other crate can speak it without dragging dependencies. |
 | `strata-code-editor` | The vendored Skia code editor (Rope buffer, tree-sitter highlighting, completion popup, diagnostic squiggles) the SQL surface is built on. |
 | `strata-agent` | Agent access: the read-only MCP tool vocabulary, the HTTP server, and the headless stdio host. Deliberately Freya-free — one implementation serves the in-app server and `strata mcp` alike. |
 | `strata-command-macro` | One proc macro: `#[command_router]` / `#[command]`, the command palette's registration mechanism. Knows nothing of Strata's types. |
 | the Freya fork | [github.com/alexparlett/freya](https://github.com/alexparlett/freya) — an ordinary git dependency pinned by `Cargo.lock`; every build compiles against it. |
 
-The dependency direction is strict: `strata-freya` sits on top; `strata-engine` sits on `strata-core`; `strata-core` and `strata-agent`
-never depend on UI; `strata-model` depends on nothing of ours. When a Freya limitation shows up,
-the fix goes **into the fork**, not around it in app code.
+The dependency direction is strict: `strata-freya` sits on top; `strata-engine` sits on
+`strata-arrow`, `strata-core` and `strata-model` alike; `strata-arrow` sits on the last two;
+`strata-core` and `strata-agent` never depend on UI; `strata-model` depends on nothing of ours.
+`strata-arrow` is a layer **below** the engine rather than one in front of `strata-core` — the
+engine still reads core's services directly, and what the crate buys is the other direction: a
+consumer can take the Arrow vocabulary without the DataFusion boundary above it. When a Freya
+limitation shows up, the fix goes **into the fork**, not around it in app code.
+
+**Arrow is pinned once, at the workspace.** `strata-arrow` names `arrow` directly while
+`strata-engine` reaches the same crate through `datafusion::arrow`, and the two must resolve to
+one arrow or a `RecordBatch` built on either side is a different type to the other. DataFusion 54
+is on arrow 58, so the root manifest's `arrow` line and the engine's `datafusion` line move
+together or not at all. This is what lets a surface that formats a cell, expands a nested value or
+offers a config key depend on `strata-arrow` alone and compile no query planner to do it —
+a claim `crates/strata-arrow/Cargo.toml` keeps rather than care does.
 
 **Two reqwest majors, on purpose.** `strata-core` pins reqwest **0.12** because that is what
 `strata-engine`'s `object_store` resolves, so the updater's HTTP client is the crate already

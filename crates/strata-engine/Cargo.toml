@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
+strata-arrow = { path = "../strata-arrow" }
 datafusion = "54"
 datafusion-functions-json = "0.54"
 datafusion-federation = { version = "0.5.5", features = ["sql"] }

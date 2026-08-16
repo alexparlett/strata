@@ -32,7 +32,6 @@
 mod arrow_stats;
 mod catalog;
 mod chart;
-pub mod config;
 /// The all-or-nothing contract a connection registers under, shared by [`store`] and [`db`].
 mod connect;
 /// `pub` for the surfaces that read a live database's shape — the data-sources tree, the schema
@@ -43,12 +42,10 @@ mod explain;
 pub mod export;
 mod functions;
 pub mod json_poly;
-pub mod plan;
 pub mod profile;
 mod providers;
 mod query;
 pub mod register;
-pub mod serialize;
 mod sink;
 pub mod sql;
 /// `pub` for the connection editor, which offers the client options this module knows how to
@@ -56,7 +53,10 @@ pub mod sql;
 /// — the same call `connect` makes, so a form and the store cannot disagree about an option.
 pub mod store;
 mod udfs;
-pub mod value_tree;
+
+/// The Arrow-level vocabulary moved to [`strata_arrow`], re-exported at the paths callers already
+/// name so the crate split is invisible to them (EA-01; EA-02 flips the imports and drops these).
+pub use strata_arrow::{config, plan, serialize, value_tree};
 
 /// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
 /// from an Arrow field in exactly one place, and anything building a column — a fixture
@@ -83,11 +83,11 @@ use sql::{PolicyRefusal, Verdict};
 /// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
 /// re-exported so frontends can name it without their own DataFusion dependency (this
 /// crate is the one DataFusion boundary).
-pub use datafusion::arrow::record_batch::RecordBatch;
+pub use strata_arrow::RecordBatch;
 
 /// The Arrow schema type, re-exported for the same reason — code (and tests) holding a
 /// [`RecordBatch`] sometimes needs to name its schema.
-pub use datafusion::arrow::datatypes::Schema;
+pub use strata_arrow::Schema;
 
 /// A call the caller (or the app on their behalf) **stopped**: [`Engine::cancel`] aborted it, or
 /// [`Engine::cancel_profile`] did.
