@@ -33,7 +33,7 @@
 //!
 //! **Signing.** Keychain access is per code signature, so an item written by a `cargo run` dev
 //! binary is not readable by the signed `.app` without a prompt. macOS behaving correctly, not a
-//! bug — `.claude/tasks/workstream-assistant/AS-05-secret-store.md` records what was observed.
+//! bug: a dev build and a release build hold separate credentials by design.
 
 use std::fmt;
 

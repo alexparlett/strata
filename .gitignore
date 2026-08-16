@@ -7,12 +7,14 @@ sample/sample.strata
 themes/themes.strata/
 target/
 
-# Machine-local agent workflow: session context, the backlog, hooks, agents, workflows,
-# worktrees, design bundles and the engineering-reference corpus. Deliberately not part
-# of the repo — only the run-app skill is committed, for any contributor's agent to use.
+# Machine-local agent workflow: the session context (CLAUDE.local.md), and under .agent/ the
+# backlog, the engineering-reference corpus and the design bundles. Deliberately not part of
+# the repo — only the run-app and fmt skills are committed, for any contributor's agent to use.
+# No trailing slash on .agent: in a worktree it is a symlink to the main checkout, and git
+# matches a symlink as a blob, so a directory-only pattern would leave it showing as untracked.
 .claude/settings.local.json
 CLAUDE.local.md
-docs/reference/
+.agent
 
 # A local clone of the Freya fork (the build uses the git dependency; the review
 # workflow and local fork development clone here).
