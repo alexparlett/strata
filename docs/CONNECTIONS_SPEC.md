@@ -569,11 +569,9 @@ behind a remote relation's provider, and nothing else.
 
 `INSERT INTO pg.public.events SELECT … FROM local_parquet` loads a local result into PostgreSQL,
 and `CREATE TABLE pg.public.report AS SELECT …` materializes any result — local, remote, or a
-cross-source join — as a real server table. Those two statements are the whole write surface;
-everything else about a remote relation is still refused, in one sentence naming what does work:
-
-> `'pg.public.orders' is in the database connection 'pg'. INSERT and CREATE TABLE AS SELECT are the
-> only statements Strata can change a remote relation with`
+cross-source join — as a real server table. Those two are the statements **DataFusion can plan**
+against a remote catalog, so they are planned here and driven; the ones only the server can run are
+dispatched as text (below).
 
 **Off unless the connection says otherwise.** `read_only` defaults to `true`, so a stored def that
 predates the field — and every connection nobody has opted in — refuses both statements by name,
@@ -619,12 +617,33 @@ relation has no store row, and the tree, completion and every tab's diagnostics 
 epoch, so the new table shows with no manual ↻.
 
 **Still refused**, each for its own reason: `INSERT OVERWRITE` (a statement that silently empties a
-server table is not v1), `CREATE OR REPLACE TABLE` over a relation that **exists** (it would drop
-one; over a free name it simply creates, as the local arm does),
-`CREATE TABLE pg.public.t (…)` with a column list — its types are the server's vocabulary
-(`jsonb`, `serial`), which only the server should judge — and every other statement that names a
-remote target (`docs/STATEMENTS_SPEC.md` §4 has the per-kind table). `Capability::Agent` is
+server table is not v1) and `CREATE OR REPLACE TABLE` over a relation that **exists** (it would
+drop one; over a free name it simply creates, as the local arm does). `Capability::Agent` is
 unchanged: the agent surface refuses both write statements as it always did.
+
+### Statements the server runs (DB-11)
+
+`CREATE VIEW pg.public.active AS …`, `CREATE MATERIALIZED VIEW`, `DROP VIEW`, `DROP TABLE`, a
+column-list `CREATE TABLE pg.public.t (payload jsonb, …)` with the server's own types, and
+`UPDATE` / `DELETE` with the server's own affected-row count. DataFusion can plan none of them
+against a remote catalog, so the mechanism is **dispatch**: the statement the user typed, with the
+catalog qualifier spliced out by span, sent over the connection's own pool. The read-only toggle
+gates them exactly as it gates the two above, and the full design — the splice, the body check, the
+refusals and what each arm reports — is `docs/STATEMENTS_SPEC.md` §6.9.
+
+Two consequences worth knowing at the connection level. A statement that changed what the server
+holds **re-enumerates the connection**, so a new view is in the tree with no ↻ and a dropped
+relation loses its cached provider rather than going on answering scans. And a body may only name
+relations of the connection it runs on: a server-side view cannot read across sources, so a
+workspace table, another connection's relation, or a name left unqualified is refused **by name**
+before anything is sent.
+
+**Still refused**, and this is where the note lives: `ALTER`, `TRUNCATE` and `MERGE` stay
+default-deny. `TRUNCATE` is a `WHERE`-less `DELETE` with nothing new to say, `ALTER` is a large
+surface with its own listing-refresh questions, and the splice generalizes to either if it is ever
+asked for. Registering a table externally over a remote relation is refused for a different
+reason — a database describes its own relations — and that is the one sentence
+`ddl::in_database` still carries.
 
 ### Unqualified names (DB-09)
 
@@ -649,18 +668,21 @@ the one parse in front of both the router and the planner).
 4. None: left bare, which is the error DataFusion already gives.
 
 **Resolvable positions: everything but a create target.** A CTAS body, an `INSERT`'s source query
-and its **target**, a view's body and a `COPY`'s source all resolve. A CTE name and a registered
-table function are held back. The one carve-out:
+and its **target**, a `DROP`'s target, an `UPDATE`/`DELETE`'s target and clauses, a view's body and
+a `COPY`'s source all resolve. A CTE name and a registered table function are held back. The one
+carve-out:
 
 - **A create target is never resolved.** `CREATE TABLE orders` makes a workspace table while a
   connection has an `orders` — the name does not exist yet, so there is nothing to resolve *to*,
   and resolving would read a plainly local intent as "make it on the server", which then fails as
-  already existing. Permanent, and the same for DB-11's `CREATE VIEW`.
+  already existing. Permanent, and the same for `CREATE VIEW`.
 
 A **write** target was once read-but-not-rewritten, refused in the connection's own words rather
 than as a name that does not exist. That was what the rule looked like while writing to a database
 was impossible at all; DB-10 turned it into a rewrite, so `INSERT INTO orders` now dispatches to
 `pg.public.orders` the way `SELECT * FROM orders` reads it, and what refuses a write is the arm.
+DB-11 extended the same rule to every target that addresses a relation which already exists — a
+`DROP`'s, an `UPDATE`'s, a `DELETE`'s — for the same reason and with the same three safeguards.
 
 **Why the statement and not the session.** DataFusion has one default catalog and one default
 schema and no search path, so the other design is to *move* the default. `providers::in_workspace`

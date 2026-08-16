@@ -68,9 +68,11 @@ already exists, never a second implementation of one.
 
 **Writes only touch data Strata owns, or a database that opted in.** Your source files are read,
 never written. Write statements are gated on the parsed plan's target; a database connection is
-read-only until its own `read_only` setting says otherwise, and then only `INSERT` and
-`CREATE TABLE AS SELECT` reach it; the agent surface is read-only throughout; exports refuse to
-land inside storage Strata manages.
+read-only until its own `read_only` setting says otherwise, and then it takes the statements
+DataFusion can plan against it (`INSERT`, `CREATE TABLE AS SELECT`) and the ones only the server
+can run (`CREATE VIEW`, the `DROP`s, a column-list `CREATE TABLE`, `UPDATE`, `DELETE`), the second
+group dispatched as the text you typed with the connection's qualifier cut out. The agent surface
+is read-only throughout; exports refuse to land inside storage Strata manages.
 
 ## Principles
 
@@ -83,9 +85,12 @@ land inside storage Strata manages.
 - **Framework-native idiom.** Standard Freya components first — themed, not hand-rolled. Colours
   come from theme roles, spacing from the shared scale, fonts from the typography components;
   never a literal at a call site.
-- **Doc comments describe the code, not the change.** One line or a short paragraph, stating a
-  decision, a constraint, or the failure it prevents — never the task, review or conversation
-  that produced it. No inline `//` comments inside bodies; extract or rename instead.
+- **Doc comments describe the code, not the change.** **One sentence**, or a short paragraph where
+  one sentence genuinely cannot carry it — stating a decision, a constraint, or the failure it
+  prevents. Never the task, the review or the conversation that produced it, and **a task id is a
+  task reference**: no `(DB-11)`, no "DB-04 adds this", no "corrected in review". Where the *why*
+  needs more than a paragraph, it belongs in `.agent/`, not in the file. No inline `//` comments
+  inside bodies; extract or rename instead.
 - **Verify from source before agreeing.** Check the crate or the fork before confirming a claim
   about an API — including your own.
 - **User-facing text reads like a standard IDE.** Terse plain sentences, single-quoted

@@ -25,6 +25,7 @@
 mod copy;
 mod external;
 mod functions;
+mod remote;
 mod session;
 mod tables;
 mod views;
@@ -38,6 +39,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::logical_expr::TableType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
+use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::TableReference;
 
 use crate::catalog::{TableMeta, ViewMeta};
@@ -56,6 +58,9 @@ pub(crate) use external::{option_keys_for, OptionKind, STORED_AS_FORMATS};
 /// DataFusion's own seam for `CREATE FUNCTION` (ED-09) — installed on every engine by
 /// `build_context`, which is what makes the statement dispatchable at all.
 pub(super) use functions::StrataFunctionFactory;
+/// Whether a statement is dispatched to a server rather than planned — see
+/// [`remote::dispatched`]. Read by the validator, which must not judge SQL the server owns.
+pub(crate) use remote::dispatched;
 /// The `SET` overlay's key fence (ED-08) — also the `SET` key pool's filter (ED-11), so
 /// what completion offers and what dispatch accepts cannot drift.
 pub(crate) use session::refuse_reserved_key;
@@ -175,6 +180,9 @@ pub type DataRoot = Option<PathBuf>;
 /// One value rather than a parameter list because it is one thing — the engine, minus everything
 /// an arm may not touch — and it gains a member for each capability this workstream lifts.
 pub struct Dispatch {
+    /// The buffer the statement was parsed from, which [`remote`] splices the text it dispatches
+    /// out of; every other arm works off the parsed statement.
+    pub sql: String,
     /// Where an internal table's data may be written (ED-04).
     pub root: DataRoot,
     /// Which registered tables Strata owns the data of (ED-04/05).
@@ -205,6 +213,7 @@ pub async fn execute(
     engine: Dispatch,
 ) -> Result<StatementReport, String> {
     let Dispatch {
+        sql,
         root,
         internal,
         connections,
@@ -216,12 +225,17 @@ pub async fn execute(
     let start = Instant::now();
     let outcome: StatementOutcome = match kind {
         StmtKind::CreateTable | StmtKind::Ctas => {
-            tables::create(ctx, kind, stmt, root, &databases).await
+            tables::create(ctx, kind, stmt, root, &databases, &sql).await
         }
         StmtKind::Insert => tables::insert(ctx, stmt, &internal, &databases).await,
-        StmtKind::DropTable => tables::drop_statement(ctx, &root, &internal, stmt).await,
-        StmtKind::CreateView => views::create_statement(ctx, stmt).await,
-        StmtKind::DropView => views::drop_statement(ctx, stmt).await,
+        StmtKind::DropTable => {
+            tables::drop_statement(ctx, &root, &internal, stmt, &databases, &sql).await
+        }
+        StmtKind::CreateView => views::create_statement(ctx, stmt, &databases, &sql).await,
+        StmtKind::DropView => views::drop_statement(ctx, stmt, &databases, &sql).await,
+        StmtKind::Update | StmtKind::Delete => {
+            remote::dml(ctx, kind, &databases, &stmt, &sql).await
+        }
         StmtKind::Copy => copy::copy_to(ctx, stmt, &root).await,
         StmtKind::Set => session::set(ctx, stmt, &scope).await,
         StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,
@@ -329,22 +343,26 @@ pub(super) fn remote_target(ctx: &SessionContext, name: &TableReference) -> Opti
     })
 }
 
-/// The wording for a name inside a database connection's catalog that Strata will **not** touch:
-/// creating a relation from a column list, creating or dropping a view, dropping a table,
-/// registering one externally. Those are the server's own schema, and its client is not something
-/// this app can point at.
+/// [`remote_target`] off a **parsed** name, for the arms that must answer before anything plans:
+/// `CREATE TABLE pg.public.t (payload jsonb)` names a type DataFusion has no Arrow mapping for,
+/// so planning it to find its target would refuse the statement first.
+pub(super) fn remote_named(ctx: &SessionContext, name: &ObjectName) -> Option<RemoteTarget> {
+    match name.0.len() <= 3 {
+        true => remote_target(ctx, &TableReference::parse_str(&name.to_string())),
+        false => None,
+    }
+}
+
+/// The wording for the one statement that will **not** touch a name inside a database
+/// connection's catalog — registering a table externally, which declares files and a format for a
+/// relation the server already describes itself.
 ///
-/// Not parameterised by `what`: the answer is the same for a table and for a view, because it is
-/// about the *catalog* and not about the kind of thing being made in it. It names what does work
-/// rather than listing what does not, since the two that do are the whole of the write surface.
-///
-/// `name` is already rendered, because its two callers render it differently and each is right
-/// where it is: [`bare_name`] has DataFusion's own `TableReference`, and the remote arms have a
-/// [`RemoteTarget`] whose `address` quotes the parts that need it.
+/// It stays here rather than moving beside its one caller because [`bare_name`] is the choke
+/// point that reaches it, and a sentence about a remote target belongs next to [`read_only`].
 pub(super) fn in_database(name: &str, catalog: &str) -> String {
     format!(
-        "'{name}' is in the database connection '{catalog}'. INSERT and CREATE TABLE AS SELECT \
-         are the only statements Strata can change a remote relation with"
+        "'{name}' is in the database connection '{catalog}', which describes its own relations. \
+         Tables cannot be registered inside one"
     )
 }
 
@@ -457,38 +475,32 @@ mod tests {
         }
     }
 
-    /// Every statement Strata will not run against a remote relation: refused, naming the
-    /// connection, whatever the arm.
-    ///
-    /// One test over the list rather than five, because the point *is* that they answer
-    /// identically — five tests asserting one sentence would let four of them keep passing while
-    /// an arm quietly grew a wording of its own.
-    ///
-    /// A `CREATE TABLE` with a **column list** is here and a CTAS is not: the first declares a
-    /// schema in the server's own type vocabulary, which only the server should judge (DB-11), and
-    /// the second materializes a result Strata already has.
+    /// The one statement left that will not touch a relation inside a database connection —
+    /// registering a table externally, which declares files and a format for something the server
+    /// already describes.
     #[tokio::test]
-    async fn every_statement_that_manages_a_remote_relation_refuses() {
+    async fn registering_a_remote_relation_externally_refuses() {
         let (_root, eng) = engine("targets").await;
-        let expected = in_database("pg.public.orders", "pg");
-        for sql in [
-            "CREATE TABLE pg.public.orders (id INT)",
-            "DROP TABLE pg.public.orders",
-            "DROP VIEW pg.public.orders",
-            "CREATE VIEW pg.public.orders AS SELECT 1 AS id",
-            "CREATE EXTERNAL TABLE pg.public.orders STORED AS PARQUET LOCATION 'data/'",
-        ] {
-            assert_eq!(refusal(&eng, sql).await, expected, "'{sql}'");
-        }
+        assert_eq!(
+            refusal(
+                &eng,
+                "CREATE EXTERNAL TABLE pg.public.orders STORED AS PARQUET LOCATION 'data/'"
+            )
+            .await,
+            in_database("pg.public.orders", "pg")
+        );
     }
 
-    /// **A write against a connection nobody opted in names the toggle** (DB-10), whichever of
-    /// the two statements it is — one sentence, minted once, because the fix is one setting.
+    /// **A write against a connection nobody opted in names the toggle**, whichever statement it
+    /// is — one sentence, minted once, because the fix is one setting.
     ///
     /// The `INSERT` takes its source from the target's own columns, so the target's *schema*
     /// cannot be what refuses it: this is about the connection and nothing else. And the refusal
     /// is reached **before** `Engine::is_internal`, which is not a question to ask about a
     /// relation whose data Strata could never own.
+    ///
+    /// The last five are the statements the **server** would have run, so the gate is the same one
+    /// standing in front of a different mechanism.
     #[tokio::test]
     async fn a_write_into_a_read_only_connection_names_the_toggle() {
         let (_root, eng) = engine("read_only").await;
@@ -500,6 +512,11 @@ mod tests {
         for sql in [
             "INSERT INTO pg.public.orders SELECT id, total FROM pg.public.orders",
             "CREATE TABLE pg.public.orders AS SELECT 1 AS id",
+            "CREATE TABLE pg.public.orders (id INT)",
+            "CREATE VIEW pg.public.orders AS SELECT id FROM pg.public.orders",
+            "DROP TABLE pg.public.orders",
+            "DROP VIEW pg.public.orders",
+            "DELETE FROM pg.public.orders WHERE id = 1",
         ] {
             assert_eq!(refusal(&eng, sql).await, expected, "'{sql}'");
         }

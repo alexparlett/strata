@@ -28,12 +28,13 @@ use datafusion::sql::sqlparser::ast::{CreateTableOptions, CreateView, Statement 
 use datafusion::sql::TableReference;
 
 use crate::catalog::{column_info, dependents_of_view, plan_deps, view_error, ViewMeta};
+use crate::db::Databases;
 use crate::query::is_snapshot_name;
 use crate::sql::{parse_one, Blocked, StmtKind};
 use crate::{fold_ident, quote_ident};
 use strata_model::ViewDef;
 
-use super::{bare_name, elsewhere, existing, left_invalid, StatementOutcome, StoreEffect};
+use super::{bare_name, elsewhere, existing, left_invalid, remote, StatementOutcome, StoreEffect};
 
 /// What [`bare_name`] calls the objects these statements create.
 const WHAT: &str = "Views";
@@ -102,9 +103,15 @@ pub async fn drop(ctx: &SessionContext, name: &str) -> Result<(), String> {
 /// query's text and only the AST still carries it: `statement_to_plan` hands back a resolved
 /// `LogicalPlan` and a `definition` string that is the whole `CREATE VIEW` rebuilt, neither of
 /// which is the query on its own.
+///
+/// A name inside a database connection is [`remote`]'s: the view is the server's, so the
+/// statement is dispatched rather than reduced to a def, and `MATERIALIZED` is accepted there and
+/// nowhere else.
 pub async fn create_statement(
     ctx: &SessionContext,
     stmt: DFStatement,
+    databases: &Databases,
+    source: &str,
 ) -> Result<StatementOutcome, String> {
     let DFStatement::Statement(s) = &stmt else {
         return Err(not_a_view(StmtKind::CreateView));
@@ -112,6 +119,9 @@ pub async fn create_statement(
     let SqlStatement::CreateView(view) = s.as_ref() else {
         return Err(not_a_view(StmtKind::CreateView));
     };
+    if let Some(at) = remote::target(ctx, StmtKind::CreateView, &stmt) {
+        return remote::create_view(ctx, databases, &at, view.materialized, &stmt, source).await;
+    }
     let (name, sql) = definition(ctx, view)?;
 
     let replacing = match existing(ctx, &name).await {
@@ -149,10 +159,18 @@ pub async fn create_statement(
 /// preserve, and planning is what resolves the name and refuses the forms DataFusion does not
 /// implement (a list of several objects) in its own words. Planning a `DROP` executes nothing —
 /// the existence test lives in `execute_logical_plan`, which is the half we are replacing.
+///
+/// The remote branch is taken before that, off the AST, because a plan of a name in a database
+/// connection tells this arm nothing it does not already have.
 pub async fn drop_statement(
     ctx: &SessionContext,
     stmt: DFStatement,
+    databases: &Databases,
+    source: &str,
 ) -> Result<StatementOutcome, String> {
+    if let Some(at) = remote::target(ctx, StmtKind::DropView, &stmt) {
+        return remote::drop_relation(ctx, databases, &at, true, &stmt, source).await;
+    }
     let plan = ctx
         .state()
         .statement_to_plan(stmt)

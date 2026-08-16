@@ -54,7 +54,7 @@ use strata_core::util::{plural, temp_dir_name};
 use strata_model::{SourceFormat, TableDef, TableOrigin};
 
 use super::{
-    bare_name, existing, in_database, left_invalid, read_only, remote_target, DataRoot,
+    bare_name, existing, left_invalid, read_only, remote, remote_target, DataRoot,
     StatementOutcome, StoreEffect,
 };
 
@@ -68,13 +68,21 @@ const WHAT: &str = "Tables";
 /// writes it as a schema-carrying, zero-row Arrow file. The router still names them apart
 /// (`StmtKind`) because the *report* says different things, and because a kind that classifies is
 /// a kind some later task may implement differently.
+///
+/// A column-list create inside a database connection is the one branch taken **before** planning,
+/// its types being the server's vocabulary: asking DataFusion to plan it in order to find its
+/// target would refuse `jsonb` before anything looked.
 pub async fn create(
     ctx: &SessionContext,
     kind: StmtKind,
     stmt: DFStatement,
     root: DataRoot,
     databases: &Databases,
+    source: &str,
 ) -> Result<StatementOutcome, String> {
+    if let Some(at) = remote::target(ctx, kind, &stmt) {
+        return remote::create_table(ctx, databases, &at, &stmt, source).await;
+    }
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
@@ -106,7 +114,7 @@ pub async fn create(
     }
 
     if let Some(at) = remote_target(ctx, &name) {
-        return remote(ctx, kind, &at, databases, &input, if_not_exists, or_replace).await;
+        return materialize(ctx, &at, databases, &input, if_not_exists, or_replace).await;
     }
     let name = bare_name(ctx, &name, WHAT)?;
     let Some(root) = root else {
@@ -179,9 +187,9 @@ pub async fn create(
 /// cross-source join all reach here already working; what is added is where the rows land.
 ///
 /// **A column list is not this.** `CREATE TABLE pg.public.t (id SERIAL)` declares a schema in the
-/// server's own type vocabulary, which only the server should judge — DB-11's, refused here by
-/// [`in_database`] exactly as before. The two are told apart by [`StmtKind`], which is what that
-/// distinction is for.
+/// server's own type vocabulary, which only the server should judge, so it is dispatched as text
+/// by [`remote::create_table`] and never reaches here. The two are told apart by [`StmtKind`],
+/// which is what that distinction is for.
 ///
 /// **The three name semantics are answered against the server as it is now**, by the same
 /// transaction that creates — never against the connect-time enumeration, and never by a round
@@ -189,9 +197,8 @@ pub async fn create(
 /// refused for `INSERT OVERWRITE`'s reason, but **only where there is something to replace**: it
 /// would drop a server table, and a statement that silently destroys one is not v1. Over a free
 /// name it simply creates, exactly as the local arm does.
-async fn remote(
+async fn materialize(
     ctx: &SessionContext,
-    kind: StmtKind,
     at: &RemoteTarget,
     databases: &Databases,
     input: &Arc<LogicalPlan>,
@@ -199,9 +206,6 @@ async fn remote(
     or_replace: bool,
 ) -> Result<StatementOutcome, String> {
     let address = at.address();
-    if kind == StmtKind::CreateTable {
-        return Err(in_database(&address, &at.catalog));
-    }
     if !db::writable(databases, &at.catalog) {
         return Err(read_only(at));
     }
@@ -431,13 +435,19 @@ fn verify_insert(plan: &LogicalPlan) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// The table a typed `DROP TABLE` names, dropped — the statement half of [`drop_table`] (ED-05).
+/// The table a typed `DROP TABLE` names, dropped — the statement half of [`drop_table`], or
+/// [`remote::drop_relation`]'s dispatch for a name inside a database connection.
 pub async fn drop_statement(
     ctx: &SessionContext,
     root: &DataRoot,
     internal: &InternalTables,
     stmt: DFStatement,
+    databases: &Databases,
+    source: &str,
 ) -> Result<StatementOutcome, String> {
+    if let Some(at) = remote::target(ctx, StmtKind::DropTable, &stmt) {
+        return remote::drop_relation(ctx, databases, &at, false, &stmt, source).await;
+    }
     let plan = ctx
         .state()
         .statement_to_plan(stmt)

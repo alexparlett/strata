@@ -56,6 +56,21 @@ impl RemoteTarget {
         ])
     }
 
+    /// The address as a **plan** renders it: every part bare, dots between, which is what
+    /// `TableReference::to_string` gives and therefore the spelling `PlanDeps::remote` holds.
+    /// Never [`address`](Self::address), which quotes a part that needs it and so matches nothing
+    /// the moment a schema or relation is not a plain lowercase word.
+    pub fn dotted(&self) -> String {
+        format!("{}.{}.{}", self.catalog, self.schema, self.table)
+    }
+
+    /// The address as the **server** knows it, `schema.relation` — what a report about a
+    /// statement the server ran names, the catalog being Strata's word for the connection and
+    /// already in that report's other half ("on 'pg'").
+    pub fn server_address(&self) -> String {
+        qualified([self.schema.as_str(), self.table.as_str()])
+    }
+
     /// How the **server** is addressed: `schema.table`, never the catalog, which is Strata's own
     /// prefix for the connection and means nothing to Postgres. `InsertBuilder` and
     /// `Postgres::table_exists` both read this reference, so a full one would render
@@ -85,7 +100,11 @@ SELECT EXISTS ( \
 /// [`discard`], means the rollback silently fails and leaves the husk it exists to remove.
 /// The server treats `"loaded"` and `loaded` as one name, so quoting always costs nothing, and it
 /// is what `CreateTableBuilder` already does for the other half of the same operation.
-fn server_ident(name: &str) -> String {
+///
+/// The rule is about identifiers **Strata composes**: a dispatched statement carries the parts
+/// the user typed exactly as typed, for the server to judge, and only what the splice renders
+/// itself comes through here.
+pub(crate) fn server_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
@@ -115,7 +134,12 @@ pub(super) async fn append(
         schema,
         Constraints::default(),
     );
-    append_rows(ctx, PostgresTableWriter::create(provider, target, None), input).await
+    append_rows(
+        ctx,
+        PostgresTableWriter::create(provider, target, None),
+        input,
+    )
+    .await
 }
 
 /// Create the relation `at` from `schema` — the server table a CTAS then fills. `false` means the

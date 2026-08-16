@@ -25,13 +25,13 @@
 //!    two servers.
 //! 4. None: left bare, which is the error DataFusion already gives.
 //!
-//! **Resolvable positions: everything but a create target.** A write target addresses a relation
-//! that already exists, so `INSERT INTO orders` resolves exactly as `SELECT * FROM orders` does
-//! and dispatches to the same relation (DB-10). Three things make that safe with no second gate
-//! here: a connection is **read-only by default** and the user opted this one in, an ambiguous
-//! name still refuses by name so a write never picks between two servers, and the arm is reached
-//! with a qualified name — so `ddl::remote_target` answers identically whether or not the
-//! qualifier was typed.
+//! **Resolvable positions: everything but a create target.** A target that addresses a relation
+//! which already exists resolves like a read, so `INSERT INTO orders`, `DROP TABLE orders`,
+//! `UPDATE orders` and `DELETE FROM orders` all reach the relation `SELECT * FROM orders` reads.
+//! Three things make that safe with no second gate here: a connection is **read-only by default**
+//! and the user opted this one in, an ambiguous name still refuses by name so a write never picks
+//! between two servers, and the arm is reached with a qualified name — so `ddl::remote_target`
+//! answers identically whether or not the qualifier was typed.
 //!
 //! **A create target is never resolved**, permanently, and it is the one carve-out.
 //! `CREATE TABLE orders` names a relation that does not exist yet, so there is nothing to resolve
@@ -46,7 +46,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{CopyToSource, Statement as DFStatement};
 use datafusion::sql::sqlparser::ast::{
     visit_relations_mut, Ident, ObjectName, ObjectNamePart, Query, Statement as SqlStatement,
-    TableObject, Visit, Visitor,
+    TableObject, Visit, VisitMut, Visitor,
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
 
@@ -129,11 +129,15 @@ impl Qualified {
     /// The name written back into the statement, **every part quoted** — the only rendering that
     /// means the same thing under either `enable_ident_normalization`, which would otherwise
     /// lower-case a server's `Orders`. [`rendered`](Self::rendered) is what a message uses.
-    fn object_name(&self) -> ObjectName {
+    ///
+    /// Every part carries the **bare name's** span, because the name does have a place in the
+    /// buffer and a statement dispatched to a server is spliced out of it; the synthesized node's
+    /// own [`Span::empty`] would say there is none.
+    fn object_name(&self, span: Span) -> ObjectName {
         ObjectName(
             [&self.catalog, &self.schema, &self.table]
                 .into_iter()
-                .map(|part| ObjectNamePart::Identifier(Ident::with_quote('"', part)))
+                .map(|part| ObjectNamePart::Identifier(Ident::with_quote_and_span('"', span, part)))
                 .collect(),
         )
     }
@@ -309,16 +313,33 @@ impl Pass<'_> {
                 }
             }
             SqlStatement::CreateView(view) => self.query(&mut view.query),
+            SqlStatement::Update(_) | SqlStatement::Delete(_) => self.relations(stmt),
+            SqlStatement::Drop { names, .. } => {
+                for name in names {
+                    self.read(name, &HashSet::new());
+                }
+            }
             _ => {}
         }
     }
 
     /// Every relation `query` reads, its own CTE names held back.
     fn query(&mut self, query: &mut Query) {
+        self.relations(query);
+    }
+
+    /// Every relation `node` names, its own CTE names and nested create targets held back.
+    ///
+    /// Whole-statement for an `UPDATE` and a `DELETE`, because everything in them is a read
+    /// position: the target addresses a relation that already exists, and the
+    /// `SET`/`WHERE`/`FROM`/`USING` clauses are ordinary reads. `MySQL`'s multi-table
+    /// `Delete::tables` carries no `visit_relation` annotation and is left bare here, which
+    /// `ddl::remote`'s body check reads explicitly.
+    fn relations<N: Visit + VisitMut>(&mut self, node: &mut N) {
         let mut held = HeldBack::default();
-        let _ = query.visit(&mut held);
+        let _ = Visit::visit(node, &mut held);
         let mut refusals = Vec::new();
-        let _ = visit_relations_mut(query, |name: &mut ObjectName| {
+        let _ = visit_relations_mut(node, |name: &mut ObjectName| {
             refusals.extend(self.resolve(name, &held.0));
             ControlFlow::<()>::Continue(())
         });
@@ -341,7 +362,7 @@ impl Pass<'_> {
         }
         match self.names.candidates(&bare.value)?.as_slice() {
             [one] => {
-                *name = one.object_name();
+                *name = one.object_name(bare.span);
                 None
             }
             many => Some(Refusal::ambiguous(&bare, many)),
