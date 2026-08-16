@@ -17,3 +17,4 @@ docs/reference/
 # A local clone of the Freya fork (the build uses the git dependency; the review
 # workflow and local fork development clone here).
 /crates/freya/
+.agent
