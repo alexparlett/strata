@@ -11,14 +11,18 @@
 //! What is added is [`PgExecutor`], which is the crate's own executor plus the two things only
 //! Strata can supply: the [`json`] rewrite in front of the statement that leaves, and the
 //! connection's name in front of the error that comes back.
+//!
+//! And [`optimizer_rules`], which is the crate's rule list with the exemption it is missing.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProvider;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DataFusionError, Result as DfResult, Statistics};
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
@@ -28,13 +32,90 @@ use datafusion_federation::sql::{
     AstAnalyzer, LogicalOptimizer, RemoteTableRef, SQLExecutor, SQLFederationProvider,
     SQLTableSource,
 };
-use datafusion_federation::FederatedTableProviderAdaptor;
+use datafusion_federation::{default_optimizer_rules, FederatedTableProviderAdaptor};
 use datafusion_table_providers_common::sql::sql_provider_datafusion::SqlTable;
 use datafusion_table_providers_postgres::pool::PostgresConnectionPool;
 use datafusion_table_providers_postgres::DynPostgresConnectionPool;
 use futures::TryStreamExt;
 
 use super::json;
+
+/// The name `datafusion-federation` gives its rule, which is how it is found in the list.
+const FEDERATION_RULE: &str = "federation_optimizer_rule";
+
+/// DataFusion's optimizer rules with federation among them — the crate's own list, with its
+/// federation rule wrapped so a **write** node is never federated whole (DB-12).
+///
+/// **Panics if the rule is not in the list**, because the alternative is worse: an unwrapped list
+/// is a working engine that has quietly lost the exemption, and what it loses is a CTAS or a
+/// `COPY` over a database connection answering with a page of `LogicalPlan` debug. The crate takes
+/// the same position one level down — `default_optimizer_rules` panics rather than return a list
+/// it could not insert federation into. `the_federation_rule_is_still_named_what_we_look_for`
+/// is what makes a dependency bump fail in CI rather than here.
+pub(crate) fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
+    let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = default_optimizer_rules()
+        .into_iter()
+        .map(|rule| match rule.name() == FEDERATION_RULE {
+            true => Arc::new(WritesStayHome(rule)) as Arc<dyn OptimizerRule + Send + Sync>,
+            false => rule,
+        })
+        .collect();
+    assert!(
+        rules.iter().any(|rule| rule.name() == FEDERATION_RULE),
+        "datafusion-federation no longer contributes a rule called '{FEDERATION_RULE}'"
+    );
+    rules
+}
+
+/// The federation rule, kept off a node that **writes**: its input is federated and the node is
+/// rebuilt around the result.
+///
+/// A `CopyTo` or a `Dml` at the root of a plan whose every scan is one connection's — a CTAS
+/// spooling a remote query into an internal table, a typed `COPY … TO` reading one, an `INSERT`
+/// from one — is federated whole by the crate, and then unparsed, and `plan_to_sql` has no arm for
+/// a write. What comes back is several hundred characters of `LogicalPlan` debug where the rows
+/// should be.
+///
+/// The crate already draws this line and stops two nodes short of it: `LogicalPlan::Analyze` is
+/// exempted in the same recursion for the same reason, with "cannot be converted to SQL by the
+/// Unparser" written beside it. This adds the nodes the exemption is missing, from outside, and is
+/// the whole of `UPSTREAM_REPORTS.md`'s `datafusion-federation` entry.
+///
+/// **`Dml` is named even though no `Dml` reaches the optimizer today** — both `INSERT` arms drive
+/// the target's own sink over the DML's input ([`sink::append_rows`](crate::sink::append_rows)),
+/// which is the better shape for its own reasons. The predicate here is "a node that writes", and
+/// leaving one of the two out would make it a rule that happens to hold rather than one that does:
+/// whatever plans a `Dml` next would meet DB-12 again, as a page of debug text.
+#[derive(Debug)]
+struct WritesStayHome(Arc<dyn OptimizerRule + Send + Sync>);
+
+impl OptimizerRule for WritesStayHome {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    /// Delegated, so the wrapper is transparent about how it wants to be driven: `None` means the
+    /// rule walks the plan itself and is handed the root once, which is what makes matching on
+    /// `plan` here the same test the crate makes on its own root.
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        self.0.apply_order()
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> DfResult<Transformed<LogicalPlan>> {
+        if !matches!(plan, LogicalPlan::Copy(_) | LogicalPlan::Dml(_)) {
+            return self.0.rewrite(plan, config);
+        }
+        plan.map_children(|input| self.0.rewrite(input, config))
+    }
+}
 
 /// A federated provider for one remote relation, reading through `pool` and answering for the
 /// connection registered as `connection`.
@@ -103,7 +184,7 @@ impl SQLExecutor for PgExecutor {
     /// Note what it is *not* good for: the plan it receives is already wrapped in the federation
     /// crate's own extension node, so an optimizer rule run here sees an opaque root and rewrites
     /// nothing. A plan that has to be simplified before it can be unparsed must be simplified
-    /// before the federation analyzer runs — see [`db::write::append`](super::write).
+    /// before the federation rule runs — see [`sink::append_rows`](crate::sink::append_rows).
     fn logical_optimizer(&self) -> Option<LogicalOptimizer> {
         self.inner.logical_optimizer()
     }
@@ -149,5 +230,29 @@ impl SQLExecutor for PgExecutor {
 
     fn metrics(&self) -> Option<MetricsSet> {
         self.inner.metrics()
+    }
+}
+
+/// **The one thing [`optimizer_rules`] cannot check for itself at a useful moment.**
+///
+/// The wrap is found by name, and a name is a dependency's to change. Unwrapped, the engine still
+/// builds and every query still runs — what stops working is a CTAS or a `COPY` over a database
+/// connection, which only `tests/postgres_federation.rs` exercises, twelve minutes and a container
+/// runtime away. This fails in the ordinary suite instead, naming what moved.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_federation_rule_is_still_named_what_we_look_for() {
+        assert_eq!(
+            default_optimizer_rules()
+                .iter()
+                .filter(|rule| rule.name() == FEDERATION_RULE)
+                .count(),
+            1,
+            "datafusion-federation contributes exactly one rule under this name, and \
+             optimizer_rules wraps it by that name"
+        );
     }
 }

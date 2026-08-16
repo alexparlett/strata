@@ -21,12 +21,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProvider;
 use datafusion::common::Constraints;
-use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::optimizer::optimize_projections::OptimizeProjections;
-use datafusion::optimizer::{Optimizer, OptimizerContext};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{collect, ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::arrow_sql_gen::statement::CreateTableBuilder;
@@ -35,7 +30,7 @@ use datafusion_table_providers_postgres::pool::PostgresConnectionPool;
 use datafusion_table_providers_postgres::write::PostgresTableWriter;
 use datafusion_table_providers_postgres::Postgres;
 
-use crate::export::copy_row_count;
+use crate::sink::append_rows;
 use crate::sql::qualified;
 
 /// One relation inside a database connection, as a **write target**: the connection's catalog in
@@ -104,9 +99,8 @@ fn server_relation(at: &RemoteTarget) -> String {
 /// `schema` is what the sink validates each batch against — see the module docs for why it is the
 /// caller's answer rather than one derived here.
 ///
-/// **The input is coalesced first.** `DataSinkExec` reads partition 0 and nothing else, and says
-/// so: a plan built outside the physical optimizer has to arrive single-partition, or a
-/// repartitioned scan would write a fraction of its rows and report the fraction as the whole.
+/// The writer is the only part of this the remote arm owns; the drive is
+/// [`append_rows`](crate::sink::append_rows), shared with the workspace arm.
 pub(super) async fn append(
     ctx: &SessionContext,
     pool: &Arc<PostgresConnectionPool>,
@@ -115,55 +109,13 @@ pub(super) async fn append(
     schema: SchemaRef,
     input: &LogicalPlan,
 ) -> Result<u64, String> {
-    let state = ctx.state();
-    let planned = state
-        .create_physical_plan(&collapse_projections(input)?)
-        .await
-        .map_err(|e| e.to_string())?;
-    let single: Arc<dyn ExecutionPlan> = match planned.output_partitioning().partition_count() {
-        1 => planned,
-        _ => Arc::new(CoalescePartitionsExec::new(planned)),
-    };
-
     let target = Postgres::new(
         at.relation(),
         Arc::clone(pool),
         schema,
         Constraints::default(),
     );
-    let writer = PostgresTableWriter::create(provider, target, None);
-    let sink = writer
-        .insert_into(&state, single, InsertOp::Append)
-        .await
-        .map_err(|e| e.to_string())?;
-    let batches = collect(sink, ctx.task_ctx())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(copy_row_count(&batches) as u64)
-}
-
-/// Collapse the redundant projection DataFusion's `INSERT` planner leaves, **before** the
-/// federation analyzer wraps the plan.
-///
-/// `INSERT INTO t SELECT a, b FROM u` plans as a renaming projection over the query's own
-/// projection, and DataFusion's unparser renders `Projection -> Projection -> TableScan` as a
-/// derived table (`… FROM (SELECT …) AS "derived_projection"`) while leaving the **outer** column
-/// references carrying the scan's qualifier — so a remote source comes back from the server as
-/// `missing FROM-clause entry for table "customers"`. No statement a user can *write* produces
-/// that shape (a subquery carries an alias the outer refs then use); only a planner-built plan
-/// does, which is why it surfaced here first.
-///
-/// It has to be done here rather than through the executor's `logical_optimizer` hook, which is
-/// otherwise exactly the seam for it: by the time that hook runs the plan is already inside the
-/// federation crate's extension node, so a rule walking it rewrites nothing.
-///
-/// One rule rather than the default optimizer — the rest of that pass is about *execution*, and
-/// this is about what can be written down. `create_physical_plan` still runs the full analyzer and
-/// optimizer over the result.
-fn collapse_projections(input: &LogicalPlan) -> Result<LogicalPlan, String> {
-    Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())])
-        .optimize(input.clone(), &OptimizerContext::new(), |_, _| {})
-        .map_err(|e| e.to_string())
+    append_rows(ctx, PostgresTableWriter::create(provider, target, None), input).await
 }
 
 /// Create the relation `at` from `schema` — the server table a CTAS then fills. `false` means the
@@ -294,78 +246,4 @@ impl Drop for Created {
 /// A round trip that did not happen, named by the relation it was about.
 fn refused(at: &RemoteTarget, e: &impl std::fmt::Display) -> String {
     format!("Cannot write to '{}': {e}", at.address())
-}
-
-/// **The shape [`collapse_projections`] exists for, pinned on both sides** — that DataFusion's
-/// `INSERT` planner still produces it, and that one `OptimizeProjections` pass still removes it.
-///
-/// Its own test rather than only the integration test's insert-from-a-remote-source, because that
-/// one fails twelve minutes away in another binary and says only that a server rejected some SQL.
-/// What can actually move under this is DataFusion: a planner that stops nesting the projections
-/// makes the first assertion fail (the collapse becomes dead weight), and an `OptimizeProjections`
-/// that stops merging them makes the second fail (the unparse breaks again). Neither needs a
-/// database to notice, so neither should wait for one.
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::datasource::empty::EmptyTable;
-
-    use super::*;
-
-    /// A session with a source and a target whose columns differ in name — which is what makes
-    /// the planner add its renaming projection, and is the real statement's shape
-    /// (`INSERT INTO pg.public.loaded SELECT name, id FROM pg.public.customers`).
-    fn session() -> SessionContext {
-        let ctx = crate::build_context(&BTreeMap::new());
-        for (name, columns) in [("source", ["name", "id"]), ("target", ["tier", "total"])] {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new(columns[0], DataType::Utf8, true),
-                Field::new(columns[1], DataType::Int32, true),
-            ]));
-            ctx.register_table(name, Arc::new(EmptyTable::new(schema)))
-                .expect("table");
-        }
-        ctx
-    }
-
-    /// How many `Projection` nodes `plan` holds, root included.
-    fn projections(plan: &LogicalPlan) -> usize {
-        let here = usize::from(matches!(plan, LogicalPlan::Projection(_)));
-        plan.inputs().iter().map(|i| projections(i)).sum::<usize>() + here
-    }
-
-    #[tokio::test]
-    async fn an_inserts_input_arrives_as_nested_projections_and_leaves_as_one() {
-        let ctx = session();
-        let plan = ctx
-            .state()
-            .create_logical_plan("INSERT INTO target SELECT name, id FROM source")
-            .await
-            .expect("planned");
-        let LogicalPlan::Dml(dml) = &plan else {
-            panic!("{plan:?}");
-        };
-
-        assert_eq!(
-            projections(&dml.input),
-            2,
-            "the planner still stacks its renaming projection on the query's own: {}",
-            dml.input.display_indent()
-        );
-
-        let collapsed = collapse_projections(&dml.input).expect("collapsed");
-        assert_eq!(
-            projections(&collapsed),
-            1,
-            "and the pair the unparser cannot render is gone: {}",
-            collapsed.display_indent()
-        );
-        assert_eq!(
-            collapsed.schema(),
-            dml.input.schema(),
-            "without moving what the sink is handed"
-        );
-    }
 }

@@ -61,6 +61,10 @@ mod federate;
 mod json;
 mod write;
 
+/// The federation rule list, wrapped so a write node is never federated whole (DB-12) — read by
+/// `build_context`, because federation is installed on every engine whether or not one ever
+/// connects to a database.
+pub(crate) use federate::optimizer_rules;
 pub use write::RemoteTarget;
 
 /// The keystore family every database password is filed under — the `kind` half of

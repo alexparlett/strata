@@ -285,6 +285,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     statement_policy(&engine, &fixtures).await;
     unqualified_names(&engine, port).await;
     remote_writes(&engine, port).await;
+    remote_source_into_a_workspace_table(&engine, &fixtures).await;
     cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
 
@@ -1594,6 +1595,149 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
             "the cancelled CTAS left its table on the server"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// **Loading a remote relation into a workspace table** (DB-12) — the fourth direction, and a
+/// phase of the test above.
+///
+/// Only a server can reach the fault: the plan's every scan belongs to the connection, so
+/// `datafusion-federation` swept the whole plan up including the node that *writes*, and the
+/// unparser was then asked for SQL a write has no spelling in. A fake catalog federates nothing and
+/// would pass either way.
+///
+/// **All three writing statements are here**, because the fault was never the `INSERT`'s: a CTAS
+/// spooling a remote query and a typed `COPY` reading one carry a `CopyTo` at the same root and
+/// failed the same way — the task's premise that a CTAS was "the working spelling" was wrong, and
+/// this phase is what says so.
+///
+/// The connection is **read-only** here — [`remote_writes`] put it back — because pulling rows in
+/// is a read of the database and must need no opt-in.
+///
+/// The target's columns are deliberately named apart from the source's, which is what makes the
+/// planner stack its renaming projection on the query's own — the shape the unparser renders as a
+/// derived table whose outer references still carry the scan's qualifier.
+async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
+    engine
+        .run(
+            WsId(1),
+            RunTag(90),
+            format!(
+                "CREATE TABLE local_customers AS SELECT id AS customer_id, name AS customer_name \
+                 FROM {CATALOG}.public.customers WHERE false"
+            ),
+            200,
+        )
+        .await
+        .expect("an empty internal table carrying the remote relation's types");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(91),
+            format!("INSERT INTO local_customers SELECT id, name FROM {CATALOG}.public.customers"),
+            200,
+        )
+        .await
+        .expect("a remote source lands in a workspace table")
+    else {
+        panic!("INSERT ran as a query");
+    };
+    assert_eq!(report.message, "Inserted 2 rows into 'local_customers'");
+    assert_eq!(report.count, Some(2));
+    assert_eq!(
+        report.effect,
+        Some(StoreEffect::RescanTable {
+            name: "local_customers".into()
+        }),
+        "the row count is still the scan driver's to re-read"
+    );
+    assert_eq!(
+        rows(
+            engine,
+            92,
+            "SELECT customer_name FROM local_customers ORDER BY customer_id"
+        )
+        .await,
+        vec![vec!["acme".to_string()], vec!["globex".to_string()]],
+        "and the rows read back out of the project's own files"
+    );
+
+    engine
+        .run(
+            WsId(1),
+            RunTag(93),
+            format!(
+                "CREATE TABLE local_spanning AS SELECT t.tier, o.total FROM tiers t \
+                 JOIN {CATALOG}.public.orders o ON t.customer = o.customer WHERE false"
+            ),
+            200,
+        )
+        .await
+        .expect("a table for the cross-source half");
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(94),
+            format!(
+                "INSERT INTO local_spanning SELECT t.tier, o.total FROM tiers t \
+                 JOIN {CATALOG}.public.orders o ON t.customer = o.customer"
+            ),
+            200,
+        )
+        .await
+        .expect("a file joined onto the database lands too")
+    else {
+        panic!("INSERT ran as a query");
+    };
+    assert_eq!(report.message, "Inserted 3 rows into 'local_spanning'");
+    assert_eq!(
+        rows(engine, 95, "SELECT count(*) FROM local_spanning").await,
+        vec![vec!["3".to_string()]],
+        "only the remote side federated, and every row still arrived"
+    );
+
+    let RunOutcome::Statement(report) = engine
+        .run(
+            WsId(1),
+            RunTag(96),
+            format!(
+                "CREATE TABLE local_orders AS SELECT id, total FROM {CATALOG}.public.orders"
+            ),
+            200,
+        )
+        .await
+        .expect("a CTAS reads the connection and spools the result")
+    else {
+        panic!("CREATE TABLE AS ran as a query");
+    };
+    assert_eq!(report.message, "Table 'local_orders' created, 3 rows");
+
+    let out = dir.join("remote_copy.parquet");
+    engine
+        .run(
+            WsId(1),
+            RunTag(97),
+            format!(
+                "COPY (SELECT id FROM {CATALOG}.public.orders) TO '{}'",
+                out.display()
+            ),
+            200,
+        )
+        .await
+        .expect("and a typed COPY may take its source from one");
+    assert!(out.exists(), "the export wrote its file");
+
+    for sql in [
+        "DROP TABLE local_customers",
+        "DROP TABLE local_spanning",
+        "DROP TABLE local_orders",
+    ] {
+        engine
+            .run(WsId(1), RunTag(98), sql.to_string(), 200)
+            .await
+            .unwrap_or_else(|e| panic!("'{sql}': {e}"));
     }
 }
 

@@ -336,6 +336,8 @@ The target is resolved **before** the project folder is looked at, because since
 target is qualified into a writable database connection needs no project folder: it branches to
 `db::create_table_as` and everything below is the workspace's path
 (`docs/CONNECTIONS_SPEC.md` for the remote half). The duplicate-column check is in front of both.
+A workspace CTAS whose *query* reads a connection spools through the same `CopyTo` as any other,
+and what makes that work is §6.8.
 
 The parsed statement goes to `SessionState::statement_to_plan`, which executes nothing and buys
 two things outright: DataFusion's planner already refuses every clause it does not implement
@@ -409,9 +411,13 @@ rest of this section. A target outside `Engine::is_internal` is refused
 (`Blocked::InsertOverwrite`; the router already catches `INSERT OVERWRITE` off the bare statement,
 while `REPLACE INTO` reaches the arm because only the plan names it). Everything after the gate is
 DataFusion's INSERT path unchanged — the column list, the source query, the schema check, and the
-single LZ4-frame IPC file the Arrow sink appends. **The plan that was gated is the plan that
-runs**: driving it *is* `execute_logical_plan`'s own arm for a DML node, so re-dispatching the
-text would gate one value and execute another.
+single LZ4-frame IPC file the Arrow sink appends.
+
+**The plan that was gated is the plan that runs, and what runs it is the sink.** Both branches go
+through `sink::append_rows`: the `Dml`'s input is physical-planned, coalesced to one partition and
+handed to `insert_into` on the provider the plan already resolved — DataFusion's own DML arm minus
+the node it would have consumed. Re-dispatching the text would gate one value and execute another.
+Handing the **node** to a planner breaks it the other way — see §6.8.
 
 One file per statement and **no compaction** — `DROP TABLE` plus `CREATE TABLE AS SELECT * FROM t`
 is the compaction story until a task owns one.
@@ -560,6 +566,7 @@ once — planning a `COPY` executes nothing — and that one value is what the g
 what is then driven, so **the plan that was judged is the plan that runs**, the rule the `INSERT`
 arm already keeps. Driving it is `ctx.sql` minus the re-parse: `execute_logical_plan` special-cases
 `Ddl` and `Statement` and hands everything else, `LogicalPlan::Copy` included, to exactly that.
+A source inside a database connection needs one more thing of that plan — §6.8.
 
 The Export window is **unchanged** and remains the snapshot-backed, race-free path: it writes the
 immutable table the grid is paging, so the file matches what was on screen. A typed COPY reads live
@@ -905,6 +912,43 @@ format-aware, NDJSON minus the shape key, empty for Parquet/Arrow/unwritten — 
 `Enum` value offers. Store-namespace and client keys are never offered: the arm refuses them
 toward Connections, and absence from the offer is the same policy. `LOCATION '…'` stays silent —
 a path, the user's filesystem.
+
+### 6.8 Writing over a federated read
+
+Three of the statements above put a node that **writes** at the root of a plan that may read
+nothing but a database connection: a CTAS spooling a remote query (§6.1), an `INSERT` from one
+(§6.2), and a typed `COPY … TO` (§6.4). `datafusion-federation` federates any plan whose every scan
+belongs to one source, root node included; the federated node then writes itself down as SQL to
+execute, and `plan_to_sql` has no arm for a write. What the user got was several hundred characters
+of `LogicalPlan` debug where the rows should be — for every one of the three, though only the
+`INSERT` had been noticed (DB-12).
+
+Two answers, one per node, each for its own reason.
+
+A **`Dml` is driven, not planned**: `sink::append_rows` physical-plans the DML's input, coalesces
+it to one partition and calls `insert_into` on the provider the plan already resolved, which is
+what DataFusion's own physical planner does for that node. The node therefore reaches no planner
+at all, and the fidelity §6.2 asks for is kept exactly — same plan, same resolved target, one node
+fewer.
+
+A **`CopyTo` cannot be driven** that way: its sink is the file format's, built by DataFusion's
+physical planner from the node itself. So it is kept out of the rule's reach instead —
+`db::federate::optimizer_rules` wraps the crate's federation rule so a write root federates its
+**input** and is rebuilt around the result. The crate already draws this line two nodes short: it
+exempts `LogicalPlan::Analyze` in the same recursion, with "cannot be converted to SQL by the
+Unparser" written beside it.
+
+The wrapper's predicate is `Copy | Dml`, so it names `Dml` too even though the arm above means none
+reaches the optimizer. The predicate is "a node that writes", and naming one of the two would make
+it a rule that happens to hold rather than one that does: whatever plans a `Dml` next would meet
+this failure again. The wrap is found by rule *name*, so `optimizer_rules` asserts rather than hand
+back a list that quietly lost the exemption, and a unit test beside it fails if a dependency bump
+moves the name.
+
+`sink::collapse_projections` belongs to the **input** for the same reason the whole section does:
+what decides whether anything is unparsed is where the rows are read from, never where they land.
+It exists for the nested projection DataFusion's `INSERT` planner leaves, which the unparser
+renders as a derived table whose outer references still name the scan.
 
 ## 7. A statement, end to end
 
