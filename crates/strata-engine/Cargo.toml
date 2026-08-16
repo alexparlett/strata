@@ -14,7 +14,7 @@ datafusion-federation = { version = "0.5.5", features = ["sql"] }
 datafusion-table-providers-postgres = "0.13"
 datafusion-table-providers-common = "0.13"
 secrecy = "0.10"
-object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.14", features = ["aws", "gcp", "http"] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
 aws-types = "1"
