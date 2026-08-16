@@ -10,15 +10,7 @@ target/
 # Machine-local agent workflow: session context, the backlog, hooks, agents, workflows,
 # worktrees, design bundles and the engineering-reference corpus. Deliberately not part
 # of the repo — only the run-app skill is committed, for any contributor's agent to use.
-.claude/tasks/
-.claude/worktrees/
-.claude/design-handoff/
-.claude/hooks/
-.claude/settings.json
 .claude/settings.local.json
-.claude/skills/fmt/
-.claude/skills/freya-submodule/
-.claude/.DS_Store
 CLAUDE.local.md
 docs/reference/
 
