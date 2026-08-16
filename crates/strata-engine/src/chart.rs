@@ -407,14 +407,10 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
     ))
 }
 
-/// The most bins a request may ask for. A histogram is a *picture* of a distribution, and
-/// past a couple of hundred bars there are more bins than the canvas has columns of pixels.
-/// It also keeps a bin count that arrived as a number from allocating against it.
-///
-/// Public because the surface offering the control has to bound its input by the same number
-/// the read clamps to — a box that accepts 5 000 and a read that quietly answers 200 is a
-/// control that shows one thing and means another.
-pub const MAX_BINS: usize = 200;
+/// The bin cap both the read and the control offering a bin count clamp to, in
+/// [`strata_arrow::chart`] because it is a number the two sides share rather than anything the
+/// read computes — re-exported here at the path callers already name (EA-01).
+pub use strata_arrow::MAX_BINS;
 
 /// Bin count when the request leaves it open: `√n`, floored at 6 and capped at 24 — enough
 /// shape to read, few enough bars to label.

@@ -204,7 +204,8 @@ folds against what is *registered*, because a connection that failed to connect 
 `client_config` is `object_store`'s own `ClientConfigKey` map, offered on every provider because
 all three stores are built on one HTTP client: timeouts, connection pooling, proxy settings, HTTP
 version and keep-alive, user agent, certificate trust — 16 keys, enumerated in
-`engine::store::CLIENT_KEYS` with a description each (the editor offers them with autocomplete).
+`strata_arrow::client::CLIENT_KEYS` with a description each (the editor offers them with
+autocomplete).
 `check_client_config` validates the map in both the editor and `connect`: an unknown name or a
 blank value is refused by name rather than silently dropped at build time.
 

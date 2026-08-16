@@ -1,12 +1,14 @@
 [workspace]
 # Virtual manifest — no root package. The Freya frontend (`strata-freya`) + the shared core
-# crates (`strata-core`, the DataFusion boundary `strata-engine`, the leaf `strata-model`), the
-# vendored editor (`strata-code-editor`), agent access (`strata-agent`) and the
-# command-palette proc macro (`strata-command-macro`). See docs/ARCHITECTURE.md.
+# crates (`strata-core`, the DataFusion boundary `strata-engine`, the Arrow vocabulary
+# `strata-arrow`, the leaf `strata-model`), the vendored editor (`strata-code-editor`), agent
+# access (`strata-agent`) and the command-palette proc macro (`strata-command-macro`).
+# See docs/ARCHITECTURE.md.
 members = [
     "crates/strata-freya",
     "crates/strata-model",
     "crates/strata-core",
+    "crates/strata-arrow",
     "crates/strata-engine",
     "crates/strata-code-editor",
     "crates/strata-command-macro",
@@ -27,6 +29,13 @@ freya-engine = { git = "https://github.com/alexparlett/freya", branch = "main" }
 freya-edit = { git = "https://github.com/alexparlett/freya", branch = "main" }
 freya-components = { git = "https://github.com/alexparlett/freya", branch = "main" }
 torin = { git = "https://github.com/alexparlett/freya", branch = "main" }
+
+# Arrow, pinned once for the whole workspace. `strata-arrow` names it directly while
+# `strata-engine` reaches the same crate through `datafusion::arrow`, and the two must be the
+# *same* arrow or a `RecordBatch` built on one side is a different type on the other. DataFusion
+# 54 is on arrow 58; moving either without the other forks that type identity, so this line and
+# the engine's `datafusion` line move together. See docs/ARCHITECTURE.md.
+arrow = "58"
 
 # Workspace lint policy, inherited by every member (`[lints] workspace = true`). The base is
 # `clippy::all` plus a hand-picked readability/complexity set — deliberately NOT the whole

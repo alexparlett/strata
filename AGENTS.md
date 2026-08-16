@@ -16,6 +16,7 @@ flowchart LR
     freya["<b>strata-freya</b><br/>the app — one module per OS window"]
     agent["<b>strata-agent</b><br/>MCP server + headless host + assistant"]
     engine["<b>strata-engine</b><br/>the DataFusion boundary"]
+    arrow["<b>strata-arrow</b><br/>the Arrow vocabulary"]
     core["<b>strata-core</b><br/>config · themes · persistence · secrets"]
     model["<b>strata-model</b><br/>serde data vocabulary"]
     editor["<b>strata-code-editor</b><br/>Skia code editor"]
@@ -27,15 +28,19 @@ flowchart LR
     freya --> agent
     freya --> macro_
     agent --> engine
-    engine --> core
-    engine --> model
+    engine --> arrow
     engine --> df
+    arrow --> core
     core --> model
 ```
 
 - **`strata-freya`** — the Freya (Skia/native) frontend and the default build target.
 - **`strata-engine`** — query, snapshots, the statement router, export, profiling, the SQL
   language service. **The only crate that touches DataFusion**; the arrow never points back up.
+- **`strata-arrow`** — the Arrow-level vocabulary below the engine, DataFusion-free: the
+  `ColumnInfo` an Arrow field becomes, the value tree, the Copy serializers, the EXPLAIN plan
+  model, the engine-key and client-option catalogues. Arrow is pinned once at the workspace so it
+  is the same arrow `datafusion::arrow` resolves.
 - **`strata-core`** — app services below the engine, DataFusion-free: config, keymap, themes,
   `.strata/` project persistence, the OS-keystore secret store, the updater mechanism.
 - **`strata-model`** — leaf data vocabulary, serde only. No logic.

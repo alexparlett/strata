@@ -1,0 +1,16 @@
+[package]
+name = "strata-arrow"
+version = "0.2.0"
+edition = "2021"
+description = "Strata's Arrow-level vocabulary: column info, value trees, results serialization, the EXPLAIN plan model, the engine-key and client-option catalogues. Sits between `strata-model` and `strata-engine` and touches no DataFusion."
+license = "MIT"
+
+[dependencies]
+strata-core = { path = "../strata-core" }
+strata-model = { path = "../strata-model" }
+arrow = { workspace = true }
+object_store = { version = "0.13", features = ["cloud"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+
+[lints]
+workspace = true

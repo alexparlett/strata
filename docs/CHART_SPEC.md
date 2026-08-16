@@ -56,7 +56,7 @@ The chart body (`results/chart/`) is two panes under that toolbar:
 ## 3. Column roles (from the Arrow type)
 
 Each result column carries a `ChartRole` beside its `Kind`, derived from its Arrow `DataType`
-where that type is still in hand: `engine::catalog::chart_role`, called by `column_info`. A role
+where that type is still in hand: `strata_arrow::column::chart_role`, called by `column_info`. A role
 comes from the type — never from a column's name, and never from a type's *spelling* (which is a
 rendering of a type, not the type). The measure arm **is** `DataType::is_numeric`, the same
 predicate the read gates a Y on, so an encoder cannot offer a measure the read then refuses.
