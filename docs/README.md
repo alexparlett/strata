@@ -20,7 +20,6 @@ everything below.
 | [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md) | Remote data: S3 / GCS / HTTP / PostgreSQL connections, the credential model (host chains for buckets, an OS-keystore password for a database), address rules, tables over buckets, and the federated database catalog. |
 | [IMPORT_OPTIONS.md](IMPORT_OPTIONS.md) | Table Config's per-format read options (CSV, JSON, parquet/Arrow) and Hive partition detection. |
 | [EXPORT_OPTIONS.md](EXPORT_OPTIONS.md) | The export window: formats, per-format options, partitioning, the preview, and the `COPY … TO` it produces. |
-| [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md) | Agent access: the MCP tool vocabulary, the in-app server and headless host, identity, and the policy gate. |
 | [MCP_CLIENTS.md](MCP_CLIENTS.md) | Connecting MCP clients to the agent access server: per-client configuration (Claude Code, Claude Desktop, VS Code, Cursor, Gemini CLI, Codex CLI) and the headless stdio server. |
 | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) | The theme format: the role vocabulary, syntax scopes, fonts and typography — for anyone writing a theme. |
 

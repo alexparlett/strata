@@ -1,4 +1,4 @@
-//! The error taxonomy (`docs/AGENT_ACCESS_SPEC.md`, "Error taxonomy") — every fault an agent can see,
+//! The error taxonomy — every fault an agent can see,
 //! typed once and rendered once.
 //!
 //! Two absences are the design:

@@ -1,9 +1,7 @@
 # Connecting MCP clients
 
-How to point specific MCP clients at Strata's agent access server. The feature itself — what an
-agent can and cannot do, the tool vocabulary, the policy gate — is
-[AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md); the short user-facing account is the
-[README](../README.md#agent-access).
+How to point specific MCP clients at Strata's agent access server. What an agent can and cannot
+do is the [README's agent access section](../README.md#agent-access).
 
 Turn the server on in **Settings ▸ Agent access**, which is also where the port and the bearer
 token live. Every client needs the same three facts:

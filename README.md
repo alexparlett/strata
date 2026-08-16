@@ -139,7 +139,7 @@ The same tools work with the app closed: `strata mcp <project folder>` serves on
 stdio, no port or token needed, for clients that spawn their servers themselves. And to be
 clear about what you are exposing either way: within those bounds an agent can read any data
 the project can reach, so turn it off when you are not using it and treat the token as a
-credential. The full design is [docs/AGENT_ACCESS_SPEC.md](docs/AGENT_ACCESS_SPEC.md).
+credential.
 
 ## Building it yourself
 

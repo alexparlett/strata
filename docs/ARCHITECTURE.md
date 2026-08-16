@@ -198,8 +198,8 @@ the project folder, and there is no reopen-in-place path.
 validate, run, page — as MCP tools over a `Host` seam, with two deployments today: the in-app
 HTTP server (loopback, bearer token, off by default) and the headless stdio host
 (`strata mcp <project>`). Agent runs are real engine runs on query sessions of the agent's own,
-so they share the snapshot machinery and none of the user's tabs, history or settings. The
-vocabulary, identity model and UI bridge are [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md).
+so they share the snapshot machinery and none of the user's tabs, history or settings.
+Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
 
 ## Data in and out
 
@@ -227,6 +227,6 @@ vocabulary, identity model and UI bridge are [AGENT_ACCESS_SPEC.md](AGENT_ACCESS
 | The chart view | [CHART_SPEC.md](CHART_SPEC.md) |
 | Remote data | [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md) |
 | Per-window state | [FREYA_STATE_ARCHITECTURE.md](FREYA_STATE_ARCHITECTURE.md) |
-| Agent access | [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md) |
+| Connecting MCP clients | [MCP_CLIENTS.md](MCP_CLIENTS.md) |
 | Themes | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) |
 | Shipping a build | [RELEASING.md](RELEASING.md) |

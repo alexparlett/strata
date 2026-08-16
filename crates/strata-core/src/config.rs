@@ -220,7 +220,7 @@ pub struct Settings {
     pub ai: Ai,
 }
 
-/// The agent-access server's settings (`docs/AGENT_ACCESS_SPEC.md`, "The in-app server"): one app-wide
+/// The agent-access server's settings: one app-wide
 /// Streamable-HTTP server on loopback, opt-in, bearer-authenticated.
 ///
 /// One nested struct rather than three flat fields because they are read and written as a
