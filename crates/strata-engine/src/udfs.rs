@@ -24,8 +24,8 @@
 //! `datafusion-variant` took the other road, and its own path parser documents where that ends —
 //! a `List` overload for keys containing dots. A key in a keyed map is data, not an expression.
 //!
-//! **Why these and not `datafusion-variant`** (the spike this task opened with; evidence in
-//! `.claude/tasks/`). Its published release resolves a second DataFusion into the graph and carries
+//! **Why these and not `datafusion-variant`**, which this work opened with as a spike. Its
+//! published release resolves a second DataFusion into the graph and carries
 //! no key-enumeration function; only its unreleased HEAD builds against our pin, and that does work
 //! against the fixture. What decided it is the result side and the cost: a Variant column arrives as
 //! `Struct{metadata: BinaryView, value: BinaryView}`, which the grid, inspector and export each

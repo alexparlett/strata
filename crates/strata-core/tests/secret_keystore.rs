@@ -16,8 +16,7 @@
 //! a dialog nobody is there to answer. So this reads only what it just wrote, in the process
 //! that wrote it, and every run mints a fresh reference so it can never meet an item another
 //! build left behind. Persistence across a restart, and the signed `.app` reading its own
-//! items, are manual checks recorded in
-//! `.claude/tasks/workstream-assistant/AS-05-secret-store.md`.
+//! items, are manual checks — no test binary can stand in for either.
 
 use strata_core::secret::{open_keystore, Secret, SecretRef};
 
