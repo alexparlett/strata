@@ -32,10 +32,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datafusion::arrow::ipc::writer::FileWriter;
+use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::format_as_file_type;
-use datafusion::logical_expr::dml::{InsertOp, WriteOp};
+use datafusion::datasource::DefaultTableSource;
+use datafusion::logical_expr::dml::{DmlStatement, InsertOp, WriteOp};
 use datafusion::logical_expr::{CreateMemoryTable, DdlStatement, LogicalPlan, TableType};
 use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
@@ -44,6 +46,7 @@ use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
 use crate::db::{self, Databases, RemoteTarget};
 use crate::export::copy_row_count;
 use crate::query::ipc_write_options;
+use crate::sink::append_rows;
 use crate::sql::{Blocked, StmtKind};
 use crate::{fold_ident, InternalTables};
 use strata_core::project::{internal_source, tables_dir};
@@ -333,6 +336,10 @@ fn not_a_column_type(typed: &str) -> String {
 /// (`logically_equivalent_names_and_types`, which surfaces a mismatch in its own words), and the
 /// single LZ4-frame IPC file the Arrow sink appends.
 ///
+/// **The sink is driven rather than the node executed** (DB-12), on both branches — over the
+/// provider the plan already resolved, so a source inside a database connection reaches a
+/// workspace table rather than a `Dml` reaching the unparser ([`crate::sink`]).
+///
 /// **One file per statement, and no compaction.** The sink appends rather than rewrites, so a
 /// table inserted into a thousand times is a thousand files and every scan lists them all.
 /// `DROP TABLE` plus a `CREATE TABLE AS SELECT * FROM t` is the compaction story until a task
@@ -343,10 +350,10 @@ fn not_a_column_type(typed: &str) -> String {
 /// before [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about it,
 /// and the connection's own gate — is it writable — is the honest one there.
 ///
-/// **The remote branch drives the sink itself**, because DataFusion cannot: the provider the
-/// catalog serves is the federated *read* provider, whose `insert_into` is the trait's own
-/// `not_impl_err`. The writer that can is built by [`db::insert_into`], used once and dropped, so
-/// no plan ever sees it and pushdown on every read is untouched.
+/// **The remote branch builds the provider it drives**, because the one the catalog serves is the
+/// federated *read* provider, whose `insert_into` is the trait's own `not_impl_err`. The writer
+/// that can is built by [`db::insert_into`], used once and dropped, so no plan ever sees it and
+/// pushdown on every read is untouched.
 pub async fn insert(
     ctx: &SessionContext,
     stmt: DFStatement,
@@ -390,18 +397,27 @@ pub async fn insert(
         return Err(Blocked::InsertExternal.editor_message());
     }
     verify_insert(&plan)?;
-
-    let batches = DataFrame::new(ctx.state(), plan)
-        .collect()
-        .await
-        .map_err(|e| e.to_string())?;
-    let rows = copy_row_count(&batches);
+    let rows = append_rows(ctx, target_provider(dml)?, &dml.input).await?;
 
     Ok(StatementOutcome {
-        message: format!("Inserted {} into '{name}'", plural(rows, "row")),
-        count: Some(rows as u64),
+        message: format!("Inserted {} into '{name}'", plural(rows as usize, "row")),
+        count: Some(rows),
         effect: Some(StoreEffect::RescanTable { name }),
     })
+}
+
+/// The provider the plan's own target resolved to — asked of the plan rather than of the catalog
+/// a second time, so what was gated is what is written to.
+///
+/// The SQL planner wraps a registered provider in a `DefaultTableSource` on the way into a plan,
+/// so the downcast holds for anything a typed statement can reach; stated rather than unwrapped
+/// because a hand-built plan could carry another `TableSource`, which DataFusion's own arm
+/// answers too.
+fn target_provider(dml: &DmlStatement) -> Result<Arc<dyn TableProvider>, String> {
+    dml.target
+        .downcast_ref::<DefaultTableSource>()
+        .map(|source| Arc::clone(&source.table_provider))
+        .ok_or_else(|| format!("'{}' cannot be written to", dml.table_name))
 }
 
 /// The `SQLOptions` floor an `INSERT` runs under — one call, so the local arm and the remote one

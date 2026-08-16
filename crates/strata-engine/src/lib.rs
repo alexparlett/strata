@@ -49,6 +49,7 @@ mod providers;
 mod query;
 pub mod register;
 pub mod serialize;
+mod sink;
 pub mod sql;
 /// `pub` for the connection editor, which offers the client options this module knows how to
 /// apply ([`store::CLIENT_KEYS`]) and refuses the ones it does not ([`store::check_client_config`])
@@ -126,7 +127,7 @@ use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder}
 use datafusion::logical_expr::{ScalarUDF, TableType};
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement as DFStatement;
-use datafusion_federation::{default_optimizer_rules, FederatedQueryPlanner};
+use datafusion_federation::FederatedQueryPlanner;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
@@ -1985,7 +1986,7 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
         .with_runtime_env(rt)
         .with_default_features()
         .with_catalog_list(Arc::new(StrataCatalogList::default()))
-        .with_optimizer_rules(default_optimizer_rules())
+        .with_optimizer_rules(db::optimizer_rules())
         .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
         .build();
     let mut ctx = SessionContext::new_with_state(state);

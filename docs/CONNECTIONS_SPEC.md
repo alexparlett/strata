@@ -595,12 +595,13 @@ federated read provider, so the node a plan sees would be the writer rather than
 provider would silently forfeit pushdown on **every read** — exactly the failure the
 own-provider decision exists to prevent — so the catalog goes on serving read providers, and a
 write statement builds a writer over the one it resolved, drives the sink once and drops it. The
-input plan is coalesced to a single partition first, because `DataSinkExec` reads partition 0 and
-nothing else, and its redundant projection is collapsed first (`write::collapse_projections`): DataFusion's
+drive itself is `sink::append_rows`, shared with the workspace `INSERT` since DB-12. The input plan
+is coalesced to a single partition first, because `DataSinkExec` reads partition 0 and nothing
+else, and its redundant projection is collapsed first (`sink::collapse_projections`): DataFusion's
 `INSERT` planner leaves a renaming projection over the query's own, and the unparser renders that
 pair as a derived table while leaving the outer column references carrying the scan's qualifier — so
 a remote source would come back as `missing FROM-clause entry`. It has to happen before the
-federation *analyzer* runs, which is why it is not the executor's `logical_optimizer` hook.
+federation rule runs, which is why it is not the executor's `logical_optimizer` hook.
 
 **What each statement does.** An `INSERT` runs in one transaction on one pooled connection, so an
 interrupted one rolls back and nothing half-lands; it changes no listing, so it carries no store
