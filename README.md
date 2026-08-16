@@ -187,8 +187,7 @@ in review. Agent-written code is reviewed like any other code, and CI runs clipp
 `-D warnings` plus a test suite that deliberately fails rather than skips when its
 dependencies are missing.
 
-For contributions the policy is the same one [darkly](https://github.com/darkly-art/darkly)
-puts well: AI assistance is welcome, careless vibe coding is not. Whoever opens a PR must
+For contributions AI assistance is welcome, careless vibe coding is not. Whoever opens a PR must
 understand the change and its consequences for the codebase, whether they typed it or an agent
 did. Every PR opens with a short human-written paragraph saying why the work was done and who
 it helps; PRs that read entirely machine-generated and don't engage with the codebase's
