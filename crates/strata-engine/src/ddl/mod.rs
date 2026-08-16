@@ -41,6 +41,7 @@ use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::TableReference;
 
 use crate::catalog::{TableMeta, ViewMeta};
+use crate::db::{Databases, RemoteTarget};
 use crate::functions::Functions;
 use crate::providers::in_workspace;
 use crate::sql::StmtKind;
@@ -141,6 +142,12 @@ pub enum StoreEffect {
     /// and did not a moment ago, so both the language service's snapshot and every tab's
     /// diagnostics have to be re-derived against the session the engine now holds.
     PreparedChanged,
+    /// A database connection holds a relation it did not a moment ago — a remote CTAS (DB-10).
+    /// The store has no row for a remote relation and never will (*discovery gets catalogs*), so
+    /// there is nothing to upsert; what has to move is the catalog epoch, which the tree,
+    /// completion and every tab's diagnostics already key on. The `FunctionsChanged` shape, for
+    /// the same reason.
+    RemoteRelationsChanged,
 }
 
 /// Where an intercepted statement may write, and what it may write **relative to**.
@@ -175,6 +182,9 @@ pub struct Dispatch {
     /// Which object stores this project has a connection to (ED-10) — what a typed
     /// `CREATE EXTERNAL TABLE`'s `LOCATION` may name.
     pub connections: Connections,
+    /// The live database connections (DB-10) — what a write into a remote relation goes through,
+    /// and what says whether one accepts writes at all.
+    pub(crate) databases: Databases,
     /// The `SET` overlay and the prepared-statement mirror (ED-08).
     pub scope: SessionScope,
     /// The function catalog and the names this session created (ED-09).
@@ -198,14 +208,17 @@ pub async fn execute(
         root,
         internal,
         connections,
+        databases,
         scope,
         functions: registry,
         baseline,
     } = engine;
     let start = Instant::now();
     let outcome: StatementOutcome = match kind {
-        StmtKind::CreateTable | StmtKind::Ctas => tables::create(ctx, kind, stmt, root).await,
-        StmtKind::Insert => tables::insert(ctx, stmt, &internal).await,
+        StmtKind::CreateTable | StmtKind::Ctas => {
+            tables::create(ctx, kind, stmt, root, &databases).await
+        }
+        StmtKind::Insert => tables::insert(ctx, stmt, &internal, &databases).await,
         StmtKind::DropTable => tables::drop_statement(ctx, &root, &internal, stmt).await,
         StmtKind::CreateView => views::create_statement(ctx, stmt).await,
         StmtKind::DropView => views::drop_statement(ctx, stmt).await,
@@ -267,7 +280,7 @@ pub(super) fn bare_name(
         return Ok(name.table().to_string());
     }
     Err(match database_catalog(ctx, name) {
-        Some(catalog) => in_database(name, &catalog),
+        Some(catalog) => in_database(&name.to_string(), &catalog),
         None => elsewhere(what),
     })
 }
@@ -298,19 +311,54 @@ fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<Strin
         .find(|registered| fold_ident(registered) == folded)
 }
 
-/// The wording for a name inside a database connection's catalog — read-only in v1, and the
-/// sentence says which of the two halves is true rather than naming a surface to go and use:
-/// there is no Strata surface that creates a remote table, and the server's own client is not
-/// something this app can point at.
+/// One relation inside a database connection, as a **write target** — `None` for the workspace's
+/// own name and for a qualifier that resolves to no catalog, which [`bare_name`] answers for.
+///
+/// The second answer beside [`bare_name`], for the two arms that gained a remote branch (DB-10).
+/// An arm that stays workspace-only goes on calling `bare_name` and is untouched; an arm that has
+/// a branch asks this first, because a relation whose data lives on a server is not a question
+/// about the workspace's one schema.
+pub(super) fn remote_target(ctx: &SessionContext, name: &TableReference) -> Option<RemoteTarget> {
+    let TableReference::Full { schema, table, .. } = name else {
+        return None;
+    };
+    Some(RemoteTarget {
+        catalog: database_catalog(ctx, name)?,
+        schema: schema.to_string(),
+        table: table.to_string(),
+    })
+}
+
+/// The wording for a name inside a database connection's catalog that Strata will **not** touch:
+/// creating a relation from a column list, creating or dropping a view, dropping a table,
+/// registering one externally. Those are the server's own schema, and its client is not something
+/// this app can point at.
 ///
 /// Not parameterised by `what`: the answer is the same for a table and for a view, because it is
-/// about the *catalog* and not about the kind of thing being made in it — which is also why
-/// [`sql::qualify`](crate::sql) reaches it for the write target it refuses before planning
-/// rather than wording that refusal a second way.
-pub(crate) fn in_database(name: &TableReference, catalog: &str) -> String {
+/// about the *catalog* and not about the kind of thing being made in it. It names what does work
+/// rather than listing what does not, since the two that do are the whole of the write surface.
+///
+/// `name` is already rendered, because its two callers render it differently and each is right
+/// where it is: [`bare_name`] has DataFusion's own `TableReference`, and the remote arms have a
+/// [`RemoteTarget`] whose `address` quotes the parts that need it.
+pub(super) fn in_database(name: &str, catalog: &str) -> String {
     format!(
-        "'{name}' is in the database connection '{catalog}'. Strata reads remote tables; it does \
-         not create, drop or write them"
+        "'{name}' is in the database connection '{catalog}'. INSERT and CREATE TABLE AS SELECT \
+         are the only statements Strata can change a remote relation with"
+    )
+}
+
+/// The wording for a write into a connection that has not been opted in — **minted once**, beside
+/// [`in_database`], because both arms that can reach it must say the same thing.
+///
+/// It names the setting rather than the rule: a connection is read-only by default (DB-10), so the
+/// user is one toggle away and the sentence is only useful if it says which.
+pub(super) fn read_only(at: &RemoteTarget) -> String {
+    format!(
+        "The database connection '{}' is read-only, so '{}' cannot be written. Turn off 'Read \
+         only' in the connection's settings",
+        at.catalog,
+        at.address()
     )
 }
 
@@ -347,14 +395,18 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
 /// every intercepted statement that resolves a target, so what is under test is that *no arm
 /// gets there another way*.
 ///
-/// The fourteen [`StmtKind`]s divide into four answers and each is pinned below: a target inside
-/// a remote catalog is refused by name (the seven kinds that name a target), a **read** of one is
-/// not (`COPY`'s source, `PREPARE`'s body, and every plain query), a function name cannot be
-/// qualified at all (DataFusion refuses it while planning, which is one refusal in one place
-/// rather than a second of ours), and the four session statements name no relation.
+/// The fourteen [`StmtKind`]s divide into five answers and each is pinned below: `INSERT` and
+/// CTAS **write** a remote relation once the connection is opted in and are refused by the
+/// read-only sentence until it is (DB-10), the other five kinds that name a target are refused by
+/// [`in_database`], a **read** of one is never refused (`COPY`'s source, `PREPARE`'s body, and
+/// every plain query), a function name cannot be qualified at all (DataFusion refuses it while
+/// planning, which is one refusal in one place rather than a second of ours), and the four session
+/// statements name no relation.
 ///
 /// Against a fake catalog rather than a server: see `providers::fake_database` for what that does
-/// and does not stand in for.
+/// and does not stand in for. It is registered on the session and held by no `Databases`, which is
+/// exactly a connection that is not opted in — so the write half is pinned here at its refusal and
+/// the landing is `tests/postgres_federation.rs`'s, where a real server can take an insert.
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -405,22 +457,22 @@ mod tests {
         }
     }
 
-    /// Every statement that names a target: refused, naming the connection, whatever the arm.
+    /// Every statement Strata will not run against a remote relation: refused, naming the
+    /// connection, whatever the arm.
     ///
-    /// One test over the list rather than seven, because the point *is* that they answer
-    /// identically — seven tests asserting one sentence would let six of them keep passing while
+    /// One test over the list rather than five, because the point *is* that they answer
+    /// identically — five tests asserting one sentence would let four of them keep passing while
     /// an arm quietly grew a wording of its own.
     ///
-    /// The `INSERT` takes its source from the target's own columns, so the target's *schema*
-    /// cannot be what refuses it: this is about the target's catalog and nothing else.
+    /// A `CREATE TABLE` with a **column list** is here and a CTAS is not: the first declares a
+    /// schema in the server's own type vocabulary, which only the server should judge (DB-11), and
+    /// the second materializes a result Strata already has.
     #[tokio::test]
-    async fn every_statement_that_names_a_target_refuses_a_remote_one() {
+    async fn every_statement_that_manages_a_remote_relation_refuses() {
         let (_root, eng) = engine("targets").await;
-        let expected = in_database(&TableReference::parse_str("pg.public.orders"), "pg");
+        let expected = in_database("pg.public.orders", "pg");
         for sql in [
             "CREATE TABLE pg.public.orders (id INT)",
-            "CREATE TABLE pg.public.orders AS SELECT 1 AS id",
-            "INSERT INTO pg.public.orders SELECT id, total FROM pg.public.orders",
             "DROP TABLE pg.public.orders",
             "DROP VIEW pg.public.orders",
             "CREATE VIEW pg.public.orders AS SELECT 1 AS id",
@@ -428,6 +480,53 @@ mod tests {
         ] {
             assert_eq!(refusal(&eng, sql).await, expected, "'{sql}'");
         }
+    }
+
+    /// **A write against a connection nobody opted in names the toggle** (DB-10), whichever of
+    /// the two statements it is — one sentence, minted once, because the fix is one setting.
+    ///
+    /// The `INSERT` takes its source from the target's own columns, so the target's *schema*
+    /// cannot be what refuses it: this is about the connection and nothing else. And the refusal
+    /// is reached **before** `Engine::is_internal`, which is not a question to ask about a
+    /// relation whose data Strata could never own.
+    #[tokio::test]
+    async fn a_write_into_a_read_only_connection_names_the_toggle() {
+        let (_root, eng) = engine("read_only").await;
+        let expected = read_only(&RemoteTarget {
+            catalog: "pg".into(),
+            schema: "public".into(),
+            table: "orders".into(),
+        });
+        for sql in [
+            "INSERT INTO pg.public.orders SELECT id, total FROM pg.public.orders",
+            "CREATE TABLE pg.public.orders AS SELECT 1 AS id",
+        ] {
+            assert_eq!(refusal(&eng, sql).await, expected, "'{sql}'");
+        }
+        assert!(
+            expected.contains("Read only"),
+            "the sentence names the setting: {expected}"
+        );
+    }
+
+    /// **A bare write target resolves like a bare read** (DB-10). Before it, `sql::qualify`
+    /// refused one that only a connection had, because "not found" was the wrong answer about a
+    /// relation the same session would happily read. Now it rewrites, and the refusal that lands
+    /// is the arm's own — which is the point: one funnel, whether or not the qualifier was typed.
+    #[tokio::test]
+    async fn a_bare_write_target_reaches_the_arm_the_qualified_one_does() {
+        let (_root, eng) = engine("bare_write").await;
+        fake_database(&eng.ctx, "warehouse", &["shipments"]);
+
+        let expected = read_only(&RemoteTarget {
+            catalog: "warehouse".into(),
+            schema: "public".into(),
+            table: "shipments".into(),
+        });
+        assert_eq!(
+            refusal(&eng, "INSERT INTO shipments VALUES (1, 2)").await,
+            expected
+        );
     }
 
     /// And the workspace table of the same bare name is untouched by all of it — the collision

@@ -14,7 +14,7 @@
 //! before. There is no mode, nothing to display and nothing a restart has to clear.
 //!
 //! The rule, in one line: **a bare name is the workspace's wherever a statement can *make* one,
-//! and resolved across sources wherever it only reads.**
+//! and resolved across sources everywhere else.**
 //!
 //! 1. The workspace wins. Asked of [`SchemaProvider::table_exist`], which sees tables, views and
 //!    the snapshot spool — so `__snap_3` is the workspace's whether or not a run has minted it.
@@ -25,18 +25,19 @@
 //!    two servers.
 //! 4. None: left bare, which is the error DataFusion already gives.
 //!
-//! **Resolvable positions, named per statement kind** — a kind this pass does not name keeps
-//! today's meaning, which is the safe direction. Two carve-outs, different in kind:
+//! **Resolvable positions: everything but a create target.** A write target addresses a relation
+//! that already exists, so `INSERT INTO orders` resolves exactly as `SELECT * FROM orders` does
+//! and dispatches to the same relation (DB-10). Three things make that safe with no second gate
+//! here: a connection is **read-only by default** and the user opted this one in, an ambiguous
+//! name still refuses by name so a write never picks between two servers, and the arm is reached
+//! with a qualified name — so `ddl::remote_target` answers identically whether or not the
+//! qualifier was typed.
 //!
-//! * **A create target is never resolved**, permanently. `CREATE TABLE orders` names a relation
-//!   that does not exist yet, so there is nothing to resolve *to*, and resolving would read a
-//!   plainly local intent as "make it on the server" — which then fails as already existing.
-//! * **A write target is read but not rewritten**, and only to refuse it in the connection's own
-//!   words: after `SELECT * FROM orders` works, `table 'strata.public.orders' not found` reads as
-//!   a contradiction rather than as the read-only rule it is. **Temporary.** A write target
-//!   addresses a relation that already exists, so it resolves exactly as a read does; this is
-//!   what that rule looks like while writing to a database is impossible at all, and DB-10 turns
-//!   [`Pass::write_target`] from a refusal into a rewrite once there is a write path to reach.
+//! **A create target is never resolved**, permanently, and it is the one carve-out.
+//! `CREATE TABLE orders` names a relation that does not exist yet, so there is nothing to resolve
+//! *to*, and resolving would read a plainly local intent as "make it on the server" — which then
+//! fails as already existing. `CREATE TABLE pg.public.orders AS SELECT …` is how the server is
+//! addressed, by typing the qualifier.
 
 use std::collections::HashSet;
 use std::ops::ControlFlow;
@@ -48,9 +49,7 @@ use datafusion::sql::sqlparser::ast::{
     TableObject, Visit, Visitor,
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
-use datafusion::sql::TableReference;
 
-use crate::ddl::in_database;
 use crate::sql::qualified;
 use crate::{db, fold_ident};
 
@@ -75,19 +74,10 @@ impl Refusal {
             span: name.span,
         }
     }
-
-    /// A write whose target only exists in a database connection — the same sentence every other
-    /// arm gives about a remote relation, reached earlier so the user is not told the name does
-    /// not exist by a session that just read from it.
-    fn remote_target(name: &Ident, at: &Qualified) -> Self {
-        Refusal {
-            message: in_database(&at.reference(), &at.catalog),
-            span: name.span,
-        }
-    }
 }
 
-/// Resolve every bare **read** in `stmt` against the connected databases, in place.
+/// Resolve every bare name in `stmt` that is not a create target against the connected databases,
+/// in place.
 ///
 /// Runs per statement on every re-validation, so it reads the session under its own lock rather
 /// than through `SessionContext::state` (which deep-clones every function registry), and collects
@@ -145,14 +135,6 @@ impl Qualified {
                 .into_iter()
                 .map(|part| ObjectNamePart::Identifier(Ident::with_quote('"', part)))
                 .collect(),
-        )
-    }
-
-    fn reference(&self) -> TableReference {
-        TableReference::full(
-            self.catalog.clone(),
-            self.schema.clone(),
-            self.table.clone(),
         )
     }
 
@@ -314,7 +296,9 @@ impl Pass<'_> {
             SqlStatement::Prepare { statement, .. } => self.sql_statement(statement),
             SqlStatement::ExplainTable { table_name, .. } => self.read(table_name, &HashSet::new()),
             SqlStatement::Insert(insert) => {
-                self.write_target(&insert.table);
+                if let TableObject::TableName(name) = &mut insert.table {
+                    self.read(name, &HashSet::new());
+                }
                 if let Some(source) = &mut insert.source {
                     self.query(source);
                 }
@@ -363,25 +347,6 @@ impl Pass<'_> {
             many => Some(Refusal::ambiguous(&bare, many)),
         }
     }
-
-    /// A write target is read but **not** rewritten while there is nothing for a rewrite to
-    /// reach: a name only a connection has is refused as remote rather than as missing.
-    ///
-    /// **DB-10 makes this a rewrite** (see the module docs) — a write addresses an existing
-    /// relation, so it resolves as a read does. The *create* target is the carve-out that stays.
-    fn write_target(&mut self, table: &TableObject) {
-        let TableObject::TableName(name) = table else {
-            return;
-        };
-        let Some(bare) = single(name) else { return };
-        let Some(candidates) = self.names.candidates(&bare.value) else {
-            return;
-        };
-        self.refusals.push(match candidates.as_slice() {
-            [one] => Refusal::remote_target(bare, one),
-            many => Refusal::ambiguous(bare, many),
-        });
-    }
 }
 
 /// The single identifier a one-part name is made of — `None` for a name already qualified, and
@@ -393,13 +358,14 @@ fn single(name: &ObjectName) -> Option<&Ident> {
     }
 }
 
-/// The names a read position must **not** resolve, folded: every CTE alias, and every write
+/// The names a read position must **not** resolve, folded: every CTE alias, and every **create**
 /// target of a statement nested in the query.
 ///
 /// The CTE half is deliberately flat — over-collecting leaves a name bare, which is what it is
 /// today, where a miss would rewrite a reference to a CTE into a table on a server. The target
-/// half is why this is a visitor: `WITH x AS (…) INSERT INTO t …` parses as a **query** whose body
-/// is the insert, so a write target sits inside what [`Pass::query`] treats as pure read.
+/// half is why this is a visitor: `WITH x AS (…) CREATE TABLE t AS …` parses as a **query** whose
+/// body is the create, so a create target sits inside what [`Pass::query`] treats as pure read.
+/// An `INSERT`'s target is deliberately *not* held back — it resolves like a read (DB-10).
 #[derive(Default)]
 struct HeldBack(HashSet<String>);
 
@@ -425,11 +391,6 @@ impl Visitor for HeldBack {
 
     fn pre_visit_statement(&mut self, stmt: &SqlStatement) -> ControlFlow<()> {
         match stmt {
-            SqlStatement::Insert(insert) => {
-                if let TableObject::TableName(name) = &insert.table {
-                    self.hold(name);
-                }
-            }
             SqlStatement::CreateTable(create) => self.hold(&create.name),
             SqlStatement::CreateView(view) => self.hold(&view.name),
             _ => {}
@@ -540,22 +501,39 @@ mod tests {
         );
     }
 
-    /// `WITH … INSERT` parses as a *query* whose body is the insert, so the write target sits
-    /// inside a read position and has to be held back there too.
+    /// **A write target resolves exactly as a read does** (DB-10), so `INSERT INTO orders`
+    /// dispatches to the relation `SELECT * FROM orders` reads. What is refused about it — a
+    /// read-only connection — is the arm's, reached with the qualified name this produced.
     #[test]
-    fn a_write_target_under_a_with_is_not_resolved() {
+    fn a_write_target_resolves_like_a_read() {
         let ctx = session(&[("pg", &["orders"])]);
-        let sql = "WITH n AS (SELECT 1 AS id) INSERT INTO orders SELECT id FROM n";
-        assert_eq!(resolved(&ctx, sql).expect("resolves"), sql);
+        assert_eq!(
+            resolved(&ctx, "INSERT INTO orders VALUES (1)").expect("resolves"),
+            r#"INSERT INTO "pg"."public"."orders" VALUES (1)"#
+        );
     }
 
-    /// A write whose target is only a server's is refused in the words every other arm uses for
-    /// a remote relation, rather than as a name that does not exist.
+    /// `WITH … INSERT` parses as a *query* whose body is the insert, so the write target sits
+    /// inside a read position — and is resolved there too, which is the same rule seen from the
+    /// awkward side rather than an exception to it.
     #[test]
-    fn an_insert_into_a_remote_only_name_is_refused_as_remote() {
+    fn a_write_target_under_a_with_resolves_too() {
         let ctx = session(&[("pg", &["orders"])]);
-        let err = resolved(&ctx, "INSERT INTO orders VALUES (1)").expect_err("refused");
-        assert!(err.contains("database connection 'pg'"), "{err}");
+        let sql = "WITH n AS (SELECT 1 AS id) INSERT INTO orders SELECT id FROM n";
+        assert_eq!(
+            resolved(&ctx, sql).expect("resolves"),
+            r#"WITH n AS (SELECT 1 AS id) INSERT INTO "pg"."public"."orders" SELECT id FROM n"#
+        );
+    }
+
+    /// A write whose target two servers have is still refused by name: resolving a write like a
+    /// read never means picking one of them.
+    #[test]
+    fn an_ambiguous_write_target_is_still_refused() {
+        let ctx = session(&[("pg", &["orders"]), ("warehouse", &["orders"])]);
+        let err = resolved(&ctx, "INSERT INTO orders VALUES (1)").expect_err("ambiguous");
+        assert!(err.contains("pg.public.orders"), "{err}");
+        assert!(err.contains("warehouse.public.orders"), "{err}");
     }
 
     /// The `__snap_` namespace is the **workspace catalog's**, so a live snapshot is still the

@@ -157,7 +157,9 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
             refresh_table_rows(engine.clone(), to.project, name.clone());
             true
         }
-        StoreEffect::FunctionsChanged | StoreEffect::PreparedChanged => {
+        StoreEffect::FunctionsChanged
+        | StoreEffect::PreparedChanged
+        | StoreEffect::RemoteRelationsChanged => {
             catalog_settled(to.catalog);
             true
         }

@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use async_trait::async_trait;
 use datafusion::catalog::{CatalogProvider, SchemaProvider, TableProvider};
 use datafusion::common::{exec_err, DataFusionError, Result as DfResult};
-use datafusion::logical_expr::TableType;
+use datafusion::logical_expr::{LogicalPlan, TableType};
 use datafusion::prelude::*;
 use datafusion::sql::TableReference;
 use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
@@ -59,6 +59,9 @@ use strata_core::secret::SecretRef;
 
 mod federate;
 mod json;
+mod write;
+
+pub use write::RemoteTarget;
 
 /// The keystore family every database password is filed under — the `kind` half of
 /// [`SecretRef::derived`]. One string, here, because the editor's put and this module's read
@@ -116,22 +119,27 @@ impl Relation {
 /// def whose URL is unchanged and whose catalog name moved) takes the *old* name back out.
 struct Live {
     catalog: String,
-    /// Held for its `Drop`, never read. Each pooled connection has a driver task spawned on the
-    /// engine runtime, and that task ends when its client is dropped — so on a Forget, dropping
-    /// this handle is what ends them, and on window close the engine's own
-    /// `shutdown_background` does. Which is why the pool lives on the engine and not inside a
-    /// task the engine's `Drop` is supposed to abort.
-    _pool: Arc<PostgresConnectionPool>,
+    /// Held for its `Drop` — and, since DB-10, read: a write statement resolves its target
+    /// through the catalog and then needs the pool the catalog reads through. Each pooled
+    /// connection has a driver task spawned on the engine runtime, and that task ends when its
+    /// client is dropped — so on a Forget, dropping this handle is what ends them, and on window
+    /// close the engine's own `shutdown_background` does. Which is why the pool lives on the
+    /// engine and not inside a task the engine's `Drop` is supposed to abort.
+    pool: Arc<PostgresConnectionPool>,
     /// The connection's def, so a later connect can ask [`check_catalog_name`] which names are
     /// already taken **on the session** — a live fact this map owns, where the editor asks the
-    /// same question of the project's stored defs.
+    /// same question of the project's stored defs. It is also what says whether the connection
+    /// accepts writes ([`PgStore::read_only`]).
     def: ConnectionDef,
-    /// The connect-time enumeration, shared with the catalog provider so
-    /// [`Engine::db_listing`](super::Engine::db_listing) reads what was registered rather than
-    /// asking the server again.
+    /// The latest enumeration — the connect-time one until a statement that changed what the
+    /// server holds re-runs it ([`relist`](Databases::relist)). Read by
+    /// [`Engine::db_listing`](super::Engine::db_listing) rather than asking the server again.
     listing: Arc<Listing>,
     /// The schemas this connection **shows**, shared with the catalog provider — see [`Shown`].
     shown: Shown,
+    /// The catalog this connection registered, held so a refresh can hand it a fresh enumeration
+    /// without downcasting its way back out of the session's catalog list.
+    provider: Arc<DbCatalogProvider>,
 }
 
 /// Which of a connection's schemas it shows, folded — **one live cell**, shared between the
@@ -193,6 +201,39 @@ impl Databases {
         self.0.lock().unwrap().remove(url).map(|live| live.catalog)
     }
 
+    /// What a write statement needs of the connection registered as `catalog`: its identity, its
+    /// pool, its catalog provider, and whether it accepts writes at all.
+    ///
+    /// Keyed by the **catalog name** rather than the URL, because that is what a statement wrote
+    /// and what the session's catalog list resolved; folded on both sides, since a catalog name is
+    /// an unquoted identifier ([`StrataCatalogList`](crate::providers::StrataCatalogList)).
+    fn at(&self, catalog: &str) -> Option<Connected> {
+        let folded = fold_ident(catalog);
+        let held = self.0.lock().unwrap();
+        let (url, live) = held
+            .iter()
+            .find(|(_, live)| fold_ident(&live.catalog) == folded)?;
+        Some(Connected {
+            url: url.clone(),
+            pool: Arc::clone(&live.pool),
+            provider: Arc::clone(&live.provider),
+            writable: match &live.def.provider {
+                Provider::Postgres(pg) => !pg.read_only,
+                _ => false,
+            },
+        })
+    }
+
+    /// Record a fresh enumeration for `url` — the half of a refresh the *map* owns, where
+    /// [`DbCatalogProvider::adopt`] is the half the catalog owns. Both, because
+    /// [`Engine::db_listing`](super::Engine::db_listing) reads this one and a query resolves
+    /// through the other.
+    fn relist(&self, url: &str, listing: Arc<Listing>) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(url) {
+            live.listing = listing;
+        }
+    }
+
     /// Point this connection's [`Shown`] and its held def at what the stored def now says — the
     /// Schemas… picker's engine half, and the only writer besides [`connect`].
     ///
@@ -223,6 +264,16 @@ impl Databases {
     fn put(&self, url: String, live: Live) -> Option<Live> {
         self.0.lock().unwrap().insert(url, live)
     }
+}
+
+/// One live database connection, as a write statement reaches it — see [`Databases::at`].
+struct Connected {
+    /// [`ConnectionDef::url`], which is what [`Databases`] is keyed by and therefore what a
+    /// refresh has to name to put a new listing back.
+    url: String,
+    pool: Arc<PostgresConnectionPool>,
+    provider: Arc<DbCatalogProvider>,
+    writable: bool,
 }
 
 /// The connect-time shape of one database: its schemas in the server's own spelling, each with
@@ -381,14 +432,15 @@ async fn prepare(
     Ok((
         Prepared {
             name: catalog.clone(),
-            provider,
+            provider: Arc::clone(&provider) as Arc<dyn CatalogProvider>,
         },
         Live {
             catalog,
-            _pool: pool,
+            pool,
             def: conn.clone(),
             listing,
             shown,
+            provider,
         },
     ))
 }
@@ -445,6 +497,115 @@ pub(crate) fn listing(
     );
     views.sort_by(|a, b| a.name.cmp(&b.name));
     Some((catalog, views))
+}
+
+/// Whether the connection registered as `catalog` accepts writes — the inverse of
+/// [`PgStore::read_only`], and `false` for a catalog no live database registered.
+///
+/// The *answer*, never the refusal: what a user is told about a read-only connection is
+/// [`ddl`](crate::ddl)'s, beside every other sentence about a remote target.
+pub(crate) fn writable(dbs: &Databases, catalog: &str) -> bool {
+    dbs.at(catalog).is_some_and(|live| live.writable)
+}
+
+/// Append `input`'s rows to the remote relation `at` — the `INSERT` arm's engine half (DB-10).
+///
+/// The read provider comes from the **catalog**, which is where it is already built and cached;
+/// the writer wraps it, drives the sink once and is dropped. The schema the sink validates
+/// against is that provider's — the server's own — because DataFusion planned `input` against it.
+pub(crate) async fn insert_into(
+    ctx: &SessionContext,
+    dbs: &Databases,
+    at: &RemoteTarget,
+    input: &LogicalPlan,
+) -> Result<u64, String> {
+    let live = connected(dbs, &at.catalog)?;
+    let provider = relation_provider(ctx, at).await?;
+    let schema = provider.schema();
+    write::append(ctx, &live.pool, at, provider, schema, input).await
+}
+
+/// Create the remote relation `at` from `input`'s schema and fill it — the CTAS arm's engine half.
+/// `None` means the server already held the relation and nothing was created, which is the arm's
+/// to word (`IF NOT EXISTS`, `OR REPLACE`, or a plain refusal).
+///
+/// **The rollback is the point of the ordering.** The table is created, the catalog re-enumerated
+/// so the new relation resolves, and only then filled; a fill that fails takes the table back off
+/// the server and re-enumerates again, so nothing is left holding a name the user thinks has data
+/// in it. A **cancel** is the other way out and reaches no error path at all, which is what
+/// [`write::Created`] is for — armed only while the awaits ahead of `settled` can be dropped.
+///
+/// The existence question is answered inside [`write::create`]'s own transaction rather than by a
+/// round trip before it, so the answer cannot go stale in between: `CreateTableBuilder` hardcodes
+/// `IF NOT EXISTS`, and a relation adopted that way would be dropped by a failed fill.
+///
+/// A refresh that itself fails is logged rather than reported: the statement did what it said, and
+/// a ↻ re-runs the registration pass.
+pub(crate) async fn create_table_as(
+    ctx: &SessionContext,
+    dbs: &Databases,
+    at: &RemoteTarget,
+    input: &LogicalPlan,
+) -> Result<Option<u64>, String> {
+    let live = connected(dbs, &at.catalog)?;
+    let schema = Arc::clone(input.schema().inner());
+    if !write::create(&live.pool, at, Arc::clone(&schema)).await? {
+        return Ok(None);
+    }
+    let mut created = write::Created::open(Arc::clone(&live.pool), at.clone());
+    relist(&live, dbs).await;
+
+    let filled = match relation_provider(ctx, at).await {
+        Ok(provider) => write::append(ctx, &live.pool, at, provider, schema, input).await,
+        Err(why) => Err(why),
+    };
+    created.settled();
+    if filled.is_err() {
+        write::discard(&live.pool, at).await;
+        relist(&live, dbs).await;
+    }
+    filled.map(Some)
+}
+
+/// Re-enumerate `live` and hand the result to both halves that hold one — the map that
+/// [`Engine::db_listing`](super::Engine::db_listing) reads, and the catalog a query resolves
+/// through.
+async fn relist(live: &Connected, dbs: &Databases) {
+    match enumerate(&live.pool).await {
+        Ok(listing) => {
+            let listing = Arc::new(listing);
+            live.provider.adopt(&listing);
+            dbs.relist(&live.url, listing);
+        }
+        Err(why) => tracing::warn!(
+            "could not re-read the database's schemas after a statement changed them ({why}); \
+             refresh the catalog to see it"
+        ),
+    }
+}
+
+/// The live connection registered as `catalog`, or a sentence saying it is not one.
+///
+/// Unreachable in the app — a write arm gets here only after the session's catalog list resolved
+/// the name — and stated anyway, because the headless host and the tests can register a catalog
+/// this map has never heard of.
+fn connected(dbs: &Databases, catalog: &str) -> Result<Connected, String> {
+    dbs.at(catalog)
+        .ok_or_else(|| format!("'{catalog}' is not a connected database"))
+}
+
+/// The read provider for one remote relation, resolved the way a query resolves it.
+async fn relation_provider(
+    ctx: &SessionContext,
+    at: &RemoteTarget,
+) -> Result<Arc<dyn TableProvider>, String> {
+    ctx.table_provider(TableReference::full(
+        at.catalog.clone(),
+        at.schema.clone(),
+        at.table.clone(),
+    ))
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// The pool itself, with every failure turned into a sentence naming what to fix.
@@ -629,14 +790,21 @@ async fn enumerate(pool: &Arc<PostgresConnectionPool>) -> Result<Listing, String
     Ok(Listing { schemas })
 }
 
-/// One database, as DataFusion sees it: the schemas the connect-time enumeration found, each a
+/// One database, as DataFusion sees it: the schemas the latest enumeration found, each a
 /// [`DbSchemaProvider`].
 ///
-/// Read-only, and it says so rather than leaning on the trait's default refusal — the sentence
-/// a user gets should name the connection they are addressing, not "catalog provider".
+/// Read-only *of its own shape* — schemas and tables are not created or dropped through the
+/// provider traits — and it says so rather than leaning on the trait's default refusal, because
+/// the sentence a user gets should name the connection they are addressing rather than "catalog
+/// provider". A write statement does not come through here: it resolves its target through this
+/// catalog and then builds a writer of its own ([`write`]).
 struct DbCatalogProvider {
     catalog: String,
-    schemas: BTreeMap<String, Arc<DbSchemaProvider>>,
+    /// Behind a lock because a statement that changes what the server holds re-enumerates and
+    /// hands the result to [`adopt`](Self::adopt) — the alternative is a re-connect, which drops
+    /// a live pool mid-session.
+    schemas: RwLock<BTreeMap<String, Arc<DbSchemaProvider>>>,
+    pool: Arc<PostgresConnectionPool>,
     /// What an unqualified name's search is scoped to — see [`Shown`]. Never consulted by
     /// [`schema`](CatalogProvider::schema) or by enumeration: a schema switched off is still
     /// resolvable, still listed by `information_schema`, and still queryable in full.
@@ -650,26 +818,43 @@ impl DbCatalogProvider {
         listing: Arc<Listing>,
         shown: Shown,
     ) -> Self {
-        let schemas = listing
-            .schemas
-            .iter()
-            .map(|(folded, schema)| {
-                (
-                    folded.clone(),
-                    Arc::new(DbSchemaProvider {
-                        catalog: catalog.clone(),
-                        schema: schema.name.clone(),
-                        pool: Arc::clone(&pool),
-                        relations: schema.relations.clone(),
-                        built: Mutex::new(BTreeMap::new()),
-                    }),
-                )
-            })
-            .collect();
-        Self {
+        let provider = Self {
             catalog,
-            schemas,
+            schemas: RwLock::new(BTreeMap::new()),
+            pool,
             shown,
+        };
+        provider.adopt(&listing);
+        provider
+    }
+
+    /// Take on a fresh enumeration: a schema the server has gained gets a provider, one it has
+    /// lost loses its, and **a schema that survives keeps the provider it had** with its relation
+    /// list replaced.
+    ///
+    /// Kept rather than rebuilt because a `DbSchemaProvider` carries the built-provider cache, and
+    /// rebuilding would make the next diagnostics pass re-introspect every remote relation the
+    /// open buffers mention. What a relation the enumeration no longer lists loses is exactly its
+    /// own cache entry.
+    fn adopt(&self, listing: &Listing) {
+        let mut schemas = self.schemas.write().unwrap();
+        schemas.retain(|folded, _| listing.schemas.contains_key(folded));
+        for (folded, schema) in &listing.schemas {
+            match schemas.get(folded) {
+                Some(held) => held.relist(&schema.relations),
+                None => {
+                    schemas.insert(
+                        folded.clone(),
+                        Arc::new(DbSchemaProvider {
+                            catalog: self.catalog.clone(),
+                            schema: schema.name.clone(),
+                            pool: Arc::clone(&self.pool),
+                            relations: RwLock::new(schema.relations.clone()),
+                            built: Mutex::new(BTreeMap::new()),
+                        }),
+                    );
+                }
+            }
         }
     }
 }
@@ -678,7 +863,10 @@ impl fmt::Debug for DbCatalogProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DbCatalogProvider")
             .field("catalog", &self.catalog)
-            .field("schemas", &self.schemas.keys().collect::<Vec<_>>())
+            .field(
+                "schemas",
+                &self.schemas.read().unwrap().keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -686,6 +874,8 @@ impl fmt::Debug for DbCatalogProvider {
 impl CatalogProvider for DbCatalogProvider {
     fn schema_names(&self) -> Vec<String> {
         self.schemas
+            .read()
+            .unwrap()
             .values()
             .map(|schema| schema.schema.clone())
             .collect()
@@ -693,6 +883,8 @@ impl CatalogProvider for DbCatalogProvider {
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         self.schemas
+            .read()
+            .unwrap()
             .get(&fold_ident(name))
             .map(|schema| Arc::clone(schema) as Arc<dyn SchemaProvider>)
     }
@@ -732,8 +924,30 @@ struct DbSchemaProvider {
     catalog: String,
     schema: String,
     pool: Arc<PostgresConnectionPool>,
-    relations: BTreeMap<String, Relation>,
+    relations: RwLock<BTreeMap<String, Relation>>,
     built: Mutex<BTreeMap<String, Arc<dyn TableProvider>>>,
+}
+
+impl DbSchemaProvider {
+    /// Adopt a fresh relation list, dropping the cached provider of anything no longer in it —
+    /// see [`DbCatalogProvider::adopt`]. A relation that survives keeps its provider, which is
+    /// the whole reason the cache is kept across a refresh at all.
+    fn relist(&self, relations: &BTreeMap<String, Relation>) {
+        *self.relations.write().unwrap() = relations.clone();
+        self.built
+            .lock()
+            .unwrap()
+            .retain(|folded, _| relations.contains_key(folded));
+    }
+
+    /// The relation `name` names, in the server's own spelling.
+    fn relation(&self, name: &str) -> Option<Relation> {
+        self.relations
+            .read()
+            .unwrap()
+            .get(&fold_ident(name))
+            .cloned()
+    }
 }
 
 impl fmt::Debug for DbSchemaProvider {
@@ -741,7 +955,7 @@ impl fmt::Debug for DbSchemaProvider {
         f.debug_struct("DbSchemaProvider")
             .field("catalog", &self.catalog)
             .field("schema", &self.schema)
-            .field("relations", &self.relations.len())
+            .field("relations", &self.relations.read().unwrap().len())
             .finish()
     }
 }
@@ -750,13 +964,15 @@ impl fmt::Debug for DbSchemaProvider {
 impl SchemaProvider for DbSchemaProvider {
     fn table_names(&self) -> Vec<String> {
         self.relations
+            .read()
+            .unwrap()
             .values()
             .map(|relation| relation.name.clone())
             .collect()
     }
 
     async fn table(&self, name: &str) -> DfResult<Option<Arc<dyn TableProvider>>> {
-        let Some(relation) = self.relations.get(&fold_ident(name)) else {
+        let Some(relation) = self.relation(name) else {
             return Ok(None);
         };
         if let Some(built) = self.built.lock().unwrap().get(&fold_ident(name)) {
@@ -791,10 +1007,7 @@ impl SchemaProvider for DbSchemaProvider {
     /// the schema; that is bounded by the cache above (once per relation per connection) and
     /// accepted.
     async fn table_type(&self, name: &str) -> DfResult<Option<TableType>> {
-        Ok(self
-            .relations
-            .get(&fold_ident(name))
-            .map(Relation::table_type))
+        Ok(self.relation(name).map(|relation| relation.table_type()))
     }
 
     fn register_table(
@@ -816,6 +1029,9 @@ impl SchemaProvider for DbSchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.relations.contains_key(&fold_ident(name))
+        self.relations
+            .read()
+            .unwrap()
+            .contains_key(&fold_ident(name))
     }
 }
