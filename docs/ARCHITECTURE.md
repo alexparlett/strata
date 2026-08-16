@@ -3,7 +3,7 @@
 How Strata is put together, end to end: the workspace, the engine, the query round trip, the
 statement router, where state lives, and how windows relate. This is the guided tour; each section
 links the document that owns its detail. If you are changing code rather than reading about it,
-[reference/](reference/) holds the engineering rules and their reasoning.
+[AGENTS.md](../AGENTS.md) holds the conventions and principles.
 
 ---
 
@@ -20,7 +20,7 @@ A virtual Cargo workspace, seven member crates plus a vendored fork:
 | `strata-code-editor` | The vendored Skia code editor (Rope buffer, tree-sitter highlighting, completion popup, diagnostic squiggles) the SQL surface is built on. |
 | `strata-agent` | Agent access: the read-only MCP tool vocabulary, the HTTP server, and the headless stdio host. Deliberately Freya-free — one implementation serves the in-app server and `strata mcp` alike. |
 | `strata-command-macro` | One proc macro: `#[command_router]` / `#[command]`, the command palette's registration mechanism. Knows nothing of Strata's types. |
-| `crates/freya` | Our Freya fork, a git submodule resolved by **local path** — excluded from the workspace, but every build compiles against this checkout. |
+| the Freya fork | [github.com/alexparlett/freya](https://github.com/alexparlett/freya) — an ordinary git dependency pinned by `Cargo.lock`; every build compiles against it. |
 
 The dependency direction is strict: `strata-freya` sits on top; `strata-engine` sits on `strata-core`; `strata-core` and `strata-agent`
 never depend on UI; `strata-model` depends on nothing of ours. When a Freya limitation shows up,
@@ -198,8 +198,8 @@ the project folder, and there is no reopen-in-place path.
 validate, run, page — as MCP tools over a `Host` seam, with two deployments today: the in-app
 HTTP server (loopback, bearer token, off by default) and the headless stdio host
 (`strata mcp <project>`). Agent runs are real engine runs on query sessions of the agent's own,
-so they share the snapshot machinery and none of the user's tabs, history or settings. The
-vocabulary, identity model and UI bridge are [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md).
+so they share the snapshot machinery and none of the user's tabs, history or settings.
+Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
 
 ## Data in and out
 
@@ -227,8 +227,6 @@ vocabulary, identity model and UI bridge are [AGENT_ACCESS_SPEC.md](AGENT_ACCESS
 | The chart view | [CHART_SPEC.md](CHART_SPEC.md) |
 | Remote data | [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md) |
 | Per-window state | [FREYA_STATE_ARCHITECTURE.md](FREYA_STATE_ARCHITECTURE.md) |
-| Agent access | [AGENT_ACCESS_SPEC.md](AGENT_ACCESS_SPEC.md) |
+| Connecting MCP clients | [MCP_CLIENTS.md](MCP_CLIENTS.md) |
 | Themes | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) |
 | Shipping a build | [RELEASING.md](RELEASING.md) |
-| The annotated module tree | [reference/MODULE_MAP.md](reference/MODULE_MAP.md) |
-| The rules and their reasoning | [reference/](reference/) |

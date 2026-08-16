@@ -1,3 +1,0 @@
-[submodule "crates/freya"]
-	path = crates/freya
-	url = git@github.com:alexparlett/freya.git

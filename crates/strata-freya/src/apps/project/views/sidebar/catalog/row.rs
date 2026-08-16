@@ -400,7 +400,7 @@ pub struct Folds {
 /// for a glyph, [`name_width`] plus a gap for a label, `0.` for a row that draws none — because a
 /// budget stated for the wrong item folds the ranks above it to pay for room the row never needed.
 /// The name never sets a floor of its own: below the point where everything has folded it goes on
-/// ellipsizing, because a chrome row folds rather than spills (AGENTS.md §3).
+/// ellipsizing, because a chrome row folds rather than spills.
 pub fn fold_plan(run_width: f32, name_width: f32, badge: bool, mark: f32) -> Folds {
     let needs = |f: Folds| {
         name_width

@@ -145,7 +145,7 @@ const GEOMETRY_DEADLINE: Duration = Duration::from_millis(250);
 /// render thread** and given up on after [`GEOMETRY_DEADLINE`].
 ///
 /// A launch input, like the project folder beside it — resolved before the window exists because
-/// that is the only moment Freya can act on it (AGENTS.md §2). Giving up yields `None`, which is
+/// that is the only moment Freya can act on it. Giving up yields `None`, which is
 /// the same answer a project that has never been saved gives, and it costs nothing durable: the
 /// autosave seed is taken from the session the project actually loads
 /// ([`use_autosave`]), not from this, so a window that opened at the default size still keeps the

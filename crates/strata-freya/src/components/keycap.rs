@@ -4,7 +4,7 @@
 //! a row's chord is the thing being edited, and the command palette, where a row's chord is a hint
 //! and `ESC` labels the way out. Before this they were the same three colours authored twice — the
 //! `settings` theme carried a `keycap_*` trio no other window could name, which is the split
-//! AGENTS.md §3 rules out: a component's own dress is the component's, not a consuming surface's.
+//! the theme conventions rule out: a component's own dress is the component's, not a consuming surface's.
 //!
 //! ## The two shapes, named rather than averaged
 //!

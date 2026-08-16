@@ -210,7 +210,7 @@ pub fn offers(store: &ProjectState, session: &SessionState, matching: &str) -> V
 /// **The mention being typed, and everything an accepted one needs to land.**
 ///
 /// The completion list is driven from the composer's own field rather than from the popup: a
-/// focused `Input` owns the keyboard (AGENTS.md §3), so the arrow keys reach it and nothing else,
+/// focused `Input` owns the keyboard, so the arrow keys reach it and nothing else,
 /// and taking focus *away* to a list would stop the very typing that narrows it. The field keeps
 /// focus throughout and hands this three keys; what moves is the highlight.
 ///

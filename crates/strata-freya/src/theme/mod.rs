@@ -143,7 +143,7 @@ fn resolve_roles(t: &StrataTheme) -> RoleColors {
 /// is the fork's control fill, so it reads `element.background`; `disabled` is overwhelmingly
 /// a text tone, so it reads `text.disabled`.
 ///
-/// The fork's own vocabulary deliberately stays untouched (upstream-shaped, AGENTS.md §6):
+/// The fork's own vocabulary deliberately stays untouched (upstream-shaped):
 /// the pluggable `Palette` commit was the fork-level fix, and this bridge is the app's use of
 /// that seam.
 fn bridge_sheet(roles: &RoleColors) -> ColorsSheet {

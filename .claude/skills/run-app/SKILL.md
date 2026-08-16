@@ -3,10 +3,10 @@ name: run-app
 description: Launch the Strata app (the Freya/Skia native frontend) via cargo run. Use when asked to run, spin up, or visually check the app.
 ---
 
-# Run Strata (the Freya app)
+# Run Strata
 
-> **One window across every session.** A `PreToolUse` hook
-> (`.claude/hooks/block-second-strata.sh`) refuses a launch while any Strata is alive — in *any*
+> **One window across every session.** A `PreToolUse` hook (present on machines with the local
+> hook set) refuses a launch while any Strata is alive — in *any*
 > worktree — and names the directory that owns the running one. It is a refusal, not a kill: that
 > window may be what someone is looking at right now. If it is stale, ask the user to close it or
 > to run the `kill` the message quotes. Don't try to route around it; the guard exists because two

@@ -20,7 +20,7 @@
 //! failure is a panic on an unrelated repaint.
 //!
 //! **The catalog is answered from [`ProjectState`]**, never from DataFusion introspection
-//! (AGENTS.md §2): introspection hides the defs whose registration failed — precisely the rows an
+//!: introspection hides the defs whose registration failed — precisely the rows an
 //! agent most needs to see, because a table that is merely broken looks exactly like a table that
 //! was never registered.
 //!
@@ -337,7 +337,7 @@ mod tests {
     }
 
     /// A store with one ready table, one refused table, one ready view and a saved query —
-    /// built directly, the way AGENTS.md §1 asks (no production signature bent to be
+    /// built directly (no production signature bent to be
     /// testable).
     fn store() -> ProjectState {
         let mut project = ProjectState::from_defs(

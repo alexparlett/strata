@@ -20,7 +20,7 @@
 //! automatically.
 //!
 //! The measured width lives in local state, never in the session store. A fold verdict is derived,
-//! transient and per-mount — the same reason the theme is deliberately not stored (AGENTS.md §2) —
+//! transient and per-mount — the same reason the theme is deliberately not stored —
 //! and `Chan::LayoutSize` has no subscribers by design, so it could not drive a re-render anyway.
 
 use std::cmp::Reverse;

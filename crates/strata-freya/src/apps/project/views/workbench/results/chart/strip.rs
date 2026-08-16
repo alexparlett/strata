@@ -106,7 +106,7 @@ fn commit(session: Radio<SessionState, Chan>, tab: TabId, next: ChartConfig) {
 /// that commits from an effect rather than from a press.
 ///
 /// A press handler is rebuilt on every render, so the config it captured is fresh. A
-/// `use_side_effect` closure is built *once* (AGENTS.md §3), so a config captured for one is
+/// `use_side_effect` closure is built *once*, so a config captured for one is
 /// the config from the first render — and committing it would undo every encoder edit made
 /// since. `Radio` has no non-subscribing read, and it does not need one: the guard that writes
 /// dereferences to the store, so the read and the write are the same borrow.
@@ -798,7 +798,7 @@ fn bins_digits() -> usize {
 ///
 /// Follows [`NumberField`](crate::components::form::NumberField)'s contract, including the half
 /// that matters most here: it **publishes on every keystroke and normalizes its box when the
-/// box is left** (AGENTS.md §3). Without the second half the field is the very thing this
+/// box is left**. Without the second half the field is the very thing this
 /// change made [`MAX_BINS`] public to prevent — a control showing one number over a chart
 /// drawn with another.
 ///
@@ -1284,7 +1284,7 @@ mod tests {
     }
 
     /// **The bin count commits from a `use_side_effect`, so it must read the config rather
-    /// than capture it.** That closure is built once (AGENTS.md §3); a captured config is the
+    /// than capture it.** That closure is built once; a captured config is the
     /// one from the first render, and typing a count would silently undo every encoder change
     /// made since the histogram was picked.
     #[test]

@@ -253,7 +253,7 @@ fn pick(ctx: ConfigureCtx, kind: Pick) {
 ///
 /// **Freya's built-in `Table`**, the same one Settings ▸ Engine's properties grid is built from
 /// (`apps/settings/views/engine/table.rs`) — not a hand-rolled box-with-rules lookalike
-/// (AGENTS.md §3). The row rule, the shared column width and the hover response come with it,
+///. The row rule, the shared column width and the hover response come with it,
 /// and the four fork additions that pane paid for (`TableRow::theme`, `TableRow::on_press`,
 /// `TableCell::main_align`, flex content) are exactly what a selectable single-column list of
 /// text fields needs. One column, so no header: the section's own label already names it.

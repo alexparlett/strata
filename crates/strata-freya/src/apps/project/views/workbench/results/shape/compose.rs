@@ -3,9 +3,9 @@
 //!
 //! **The aggregate vocabulary is UI-local and renders to SQL text** — it must not enter
 //! strata-model, `ChartQuery`, or any engine type, because an engine-side aggregation
-//! pipeline was built, adversarially reviewed and withdrawn (`docs/reference/INVARIANTS.md`,
-//! the chart entry). What this module produces is a *query the user owns*: opened unrun in a
-//! new tab, editable, and never executed on the user's behalf.
+//! pipeline was built, adversarially reviewed and withdrawn. What this module
+//! produces is a *query the user owns*: opened unrun in a new tab, editable, and never
+//! executed on the user's behalf.
 //!
 //! Pure functions over strings and picks — no Freya types, so the golden tests read as SQL.
 

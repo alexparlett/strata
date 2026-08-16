@@ -4,8 +4,7 @@
 //!
 //! **Renderer-first** (spec §1.2): the chart computes nothing SQL can say. A request names columns
 //! and a cap — never an aggregate, a bucket, or an order. The engine-side aggregation vocabulary
-//! that used to live here was built, reviewed and withdrawn; `docs/reference/INVARIANTS.md` has the
-//! history, and it must not come back.
+//! that used to live here was built, reviewed and withdrawn, and it must not come back.
 //!
 //! [`ChartQuery`] is freya-query **cache identity**, which is why every field is hashable and
 //! comparable — no floats. [`ChartData`] carries no "was it capped" flag beside a half-filled

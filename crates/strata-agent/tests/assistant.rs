@@ -5,7 +5,7 @@
 //! reached through the roster's own **OpenAI-compatible** kind. That is the point of testing it
 //! this way rather than through a resolver rigged for the test — the path exercised here is one
 //! a user can configure in Settings, so nothing about the production signature is bent to be
-//! testable (AGENTS.md §1).
+//! testable.
 //!
 //! It streams its replies with a delay between chunks, which is what makes the ordering and the
 //! cancel assertions mean anything: a body delivered all at once would settle before a stop

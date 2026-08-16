@@ -66,7 +66,7 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
 /// One window it does not cover, deliberately: between setting the request here and the engine
 /// dispatching it, `is_running` is still false. A second press landing in that gap supersedes the
 /// first, which the engine already settles as `superseded by a newer run` — a stop, not a fault
-/// (AGENTS.md §2), so the outcome is the run the user last asked for and nothing to report.
+///, so the outcome is the run the user last asked for and nothing to report.
 ///
 /// Not the Run *button*: it wears Cancel while a run is in flight, so there is nothing there to
 /// gate, and it presses [`press_query`] directly.

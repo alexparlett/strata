@@ -256,7 +256,7 @@ build is a different application as far as the Keychain is concerned, and a test
 allow access again after each update. A Developer ID signature anchors on the bundle identifier
 plus the team certificate, which stays the same across versions. That identifier is
 `strata_core::secret::APP_ID`, read out of the Rust source by the bundle script for exactly this
-reason (see `.claude/tasks/workstream-assistant/AS-05-secret-store.md`).
+reason.
 
 `strata_core::secret::TEAM_ID` sits beside it and is read the same way. It is the team the in-app
 updater requires a downloaded bundle to be signed by, so a signed build whose signature names a

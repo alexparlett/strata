@@ -1,7 +1,7 @@
 //! **Agent access** — the tool vocabulary an AI agent drives a Strata project with, everything
 //! about it that is frontend-agnostic.
 //!
-//! `docs/AGENT_ACCESS_SPEC.md` is the contract; this crate is the tool vocabulary, the policy gate,
+//! This crate is the tool vocabulary, the policy gate,
 //! the transport's guard rails and the error taxonomy, over one deliberate abstraction: the [`Host`]
 //! seam. There is **no Freya dependency**, and that is the property doing the work — it is what
 //! lets the vocabulary be tested against [`mock::MockHost`] with no window, reused headless

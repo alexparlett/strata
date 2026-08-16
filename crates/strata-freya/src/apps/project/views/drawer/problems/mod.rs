@@ -160,7 +160,7 @@ impl Component for ScopeStrip {
 
 /// One scope in the strip: its name, and its own error count when it has any.
 ///
-/// Freya's [`FloatingTab`] rather than a rect that looks like one (AGENTS.md §3). The three
+/// Freya's [`FloatingTab`] rather than a rect that looks like one. The three
 /// things it brings are the three a hand-rolled version silently goes without: the
 /// `AccessibilityRole::Tab` that tells a screen reader this *is* a tab, the focusability that
 /// lets the keyboard reach it, and the hover fill + pointer cursor that make it read as

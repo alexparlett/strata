@@ -1,4 +1,4 @@
-//! The **vocabulary** — the eleven tools of `docs/AGENT_ACCESS_SPEC.md`, over a [`Host`].
+//! The **vocabulary** — the eleven agent-access tools, over a [`Host`].
 //!
 //! Ten of them read; the eleventh, [`export_result`](StrataTools::export_result), writes one file
 //! at a path the caller names (QE-05). It is not a hole in the read-only rule — the gate `run`
@@ -498,7 +498,7 @@ impl<H: Host> StrataTools<H> {
     /// Retract every stateless agent unheard from for longer than `ttl` and with nothing in
     /// flight, releasing its query sessions exactly as a disconnection would.
     ///
-    /// **A poll, because nothing on our side can observe the fact** (AGENTS.md §2): a client
+    /// **A poll, because nothing on our side can observe the fact**: a client
     /// on the discover lifecycle has no connection, so its departure is not an event anywhere
     /// — there is no socket close, no `DELETE`, and no value whose drop means anything. The
     /// staleness is therefore bounded and stated rather than hidden — and the bound is `ttl`
@@ -954,7 +954,7 @@ impl<H: Host> StrataTools<H> {
     /// agent's own `COPY`, the classification is untouched, and this writes nowhere a statement
     /// could reach anyway: `Engine::export_result`'s fence is the whole of what a caller-named
     /// path is allowed to be. What made a consent gate pointless is that `read_page` already
-    /// hands over every byte — the decision and its reasoning are in `docs/AGENT_ACCESS_SPEC.md`.
+    /// hands over every byte — which is why a consent gate was considered and declined.
     ///
     /// A run that returned **no rows** materialized nothing, so there is no snapshot table to copy
     /// from and this refuses rather than writing an empty file. That is the one place it parts
@@ -1636,11 +1636,10 @@ mod tests {
         }
     }
 
-    /// **The bound a model plans against is the constant that enforces it.** Three surfaces
-    /// state the idle window in prose — this tool description, the assistant's system prompt
-    /// and `docs/AGENT_ACCESS_SPEC.md` — and a doc comment cannot interpolate a `Duration`, so
-    /// the agreement is checked rather than generated. Two of the three are readable from here;
-    /// the spec is prose the same edit has to carry.
+    /// **The bound a model plans against is the constant that enforces it.** Two surfaces
+    /// state the idle window in prose — this tool description and the assistant's system
+    /// prompt — and a doc comment cannot interpolate a `Duration`, so the agreement is
+    /// checked rather than generated.
     ///
     /// The wording is deliberately "may be retired": the sweep is the *stateless* branch's, and
     /// a connected client's sessions live until its connection drops. A ceiling is honest for

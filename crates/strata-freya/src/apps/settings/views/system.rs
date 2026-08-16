@@ -13,7 +13,7 @@
 //! **Check for updates on startup** gates only the automatic check (UP-02/UP-03) — App ▸ Check
 //! for Updates… and the launcher rail's action run whatever it says. That is in the title
 //! rather than in subtext under it: "on startup" is the whole of what the row does, and a
-//! sentence restating it is the near-duplicate wording AGENTS.md §3 says to merge. Hence the
+//! sentence restating it is the near-duplicate wording this codebase merges. Hence the
 //! empty hint in the index, like `Theme`'s.
 //!
 //! **Opening a project** is the row worth naming. Until now the only thing that wrote

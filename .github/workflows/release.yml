@@ -72,8 +72,6 @@ jobs:
       # review workflow makes.
       id-token: write
     steps:
-      # `submodules: true` is not optional: the build resolves Freya from the local `crates/freya`
-      # checkout, so without it nothing compiles at all.
       - uses: actions/checkout@v6
         with:
           # The bundle script derives CFBundleVersion from `git rev-list --count HEAD`, which a
@@ -81,21 +79,9 @@ jobs:
           # stop seeing newer ones as newer. Full depth also brings the tags, which the version
           # preflight and the release-notes range both read.
           fetch-depth: 0
-          submodules: true
           # Stated rather than left to the default, because the version-bump push below depends on
           # it: this is what leaves the token in the local git config for `git push` to use.
           persist-credentials: true
-
-      # Same guard as ci.yml, for the same reason: a submodule that is not at the recorded commit
-      # otherwise surfaces an hour into the compile as a missing method. See AGENTS.md section 6.
-      - name: Verify the Freya submodule is at the recorded commit
-        run: |
-          git submodule status crates/freya
-          git submodule status crates/freya | grep -qE '^ ' || {
-            echo "::error::crates/freya is not checked out at the commit this repo records."
-            echo "The fork commit is probably not pushed to github.com/alexparlett/freya - see AGENTS.md section 6."
-            exit 1
-          }
 
       # Everything about *what this build calls itself*, decided before the two hours of compiling
       # rather than after. A tag that already exists is the failure worth catching early: the

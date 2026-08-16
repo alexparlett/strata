@@ -209,7 +209,7 @@ pub fn press(status: UpdateStatus, ask: AskSlot) {
 ///
 /// **The affordance is bound before the match, never resolved in its scrutinee**: a `peek`
 /// guard in a `match` head lives for the whole match, and the `check` below writes that same
-/// state — the generational-borrow panic AGENTS.md §2 records for the confirm dialogs. It cost
+/// state — the generational-borrow panic that already bit the confirm dialogs. It cost
 /// exactly this function once already.
 ///
 /// **Call it from a Freya scope**, for [`press`]'s reason — the check arms start a check.
@@ -272,7 +272,7 @@ pub type AskSlot = State<Option<UpdateAsk>>;
 /// open rather than calling `OpenCtx::apply`.)
 ///
 /// So the press records the intent and the **focused** window performs it, from the
-/// `use_side_effect` in [`use_file_menu`](crate::menu::use_file_menu) — AGENTS.md §3's rule for
+/// `use_side_effect` in [`use_file_menu`](crate::menu::use_file_menu) — the standing shape for
 /// a press with no scope to run in, and it rides the call every window root already makes.
 /// A `bool` rather than a parked handle: the window doing the work already has its own
 /// [`AskSlot`] from its [`MenuScope`](crate::menu::MenuScope), so there is nothing to point at.
@@ -667,7 +667,7 @@ fn release_notes(roles: RoleColors, page_url: String) -> impl IntoElement {
 /// so there is one thing to test rather than three. `press` itself is not
 /// exercised here: it asks [`install_site`], and a test binary is never a bundle, so every arm
 /// would resolve to `Inert`. Handing the site in as an argument to make it testable is the
-/// production-signature-for-a-test shape AGENTS.md §1 refuses.
+/// production-signature-for-a-test shape this codebase refuses.
 ///
 /// Nor is **confirming** the dialog: the press is an install, and an install is a `quit` plus a
 /// process-global intent. What is covered is every path that leaves the status alone.

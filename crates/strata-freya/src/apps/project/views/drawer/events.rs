@@ -14,7 +14,7 @@
 //!
 //! A [`LogLevel`]'s dot is `success` / `info` / `warning` / `error` through the shared `tones()`
 //! hook, like Problems' glyphs and the status bar's state dot: those four are semantic, and a
-//! semantic colour follows the app-wide ramp wherever it appears (AGENTS.md §3). Everything else
+//! semantic colour follows the app-wide ramp wherever it appears. Everything else
 //! the tab paints — the message, the timestamp, the row rule, the empty state — is the `drawer`
 //! theme's.
 
