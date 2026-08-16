@@ -29,10 +29,18 @@ flowchart LR
     freya --> macro_
     agent --> engine
     engine --> arrow
+    engine --> core
+    engine --> model
     engine --> df
     arrow --> core
+    arrow --> model
     core --> model
 ```
+
+`strata-arrow` is a layer below the engine, not a layer in front of `strata-core`: the engine
+still reads core's services and model's vocabulary directly, and both edges stay drawn. What the
+new crate buys is the *other* direction — a consumer can take the Arrow vocabulary without the
+DataFusion boundary above it.
 
 - **`strata-freya`** — the Freya (Skia/native) frontend and the default build target.
 - **`strata-engine`** — query, snapshots, the statement router, export, profiling, the SQL

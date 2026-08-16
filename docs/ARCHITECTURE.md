@@ -24,9 +24,12 @@ A virtual Cargo workspace, eight member crates plus a vendored fork:
 | the Freya fork | [github.com/alexparlett/freya](https://github.com/alexparlett/freya) — an ordinary git dependency pinned by `Cargo.lock`; every build compiles against it. |
 
 The dependency direction is strict: `strata-freya` sits on top; `strata-engine` sits on
-`strata-arrow`, which sits on `strata-core`; `strata-core` and `strata-agent`
-never depend on UI; `strata-model` depends on nothing of ours. When a Freya limitation shows up,
-the fix goes **into the fork**, not around it in app code.
+`strata-arrow`, `strata-core` and `strata-model` alike; `strata-arrow` sits on the last two;
+`strata-core` and `strata-agent` never depend on UI; `strata-model` depends on nothing of ours.
+`strata-arrow` is a layer **below** the engine rather than one in front of `strata-core` — the
+engine still reads core's services directly, and what the crate buys is the other direction: a
+consumer can take the Arrow vocabulary without the DataFusion boundary above it. When a Freya
+limitation shows up, the fix goes **into the fork**, not around it in app code.
 
 **Arrow is pinned once, at the workspace.** `strata-arrow` names `arrow` directly while
 `strata-engine` reaches the same crate through `datafusion::arrow`, and the two must resolve to
