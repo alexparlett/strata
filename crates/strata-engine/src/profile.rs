@@ -36,10 +36,7 @@ use strata_model::{ColumnInfo, Stat, StatKey};
 
 pub use strata_model::CatalogProfile;
 
-/// Where a scan runs, what it computes there and what it therefore leaves out — the half of
-/// profiling every surface has to agree with this one about, so it lives in
-/// [`strata_arrow::profile`] and is re-exported here at the path callers already name (EA-01).
-pub use strata_arrow::profile::{stats_footnote, Profiled};
+use strata_arrow::profile::Profiled;
 
 /// What one output column of the aggregate means.
 ///
@@ -204,8 +201,10 @@ mod tests {
     use datafusion::sql::unparser::dialect::PostgreSqlDialect;
     use datafusion::sql::unparser::Unparser;
 
+    use strata_arrow::column_info;
+    use strata_arrow::profile::stats_footnote;
+
     use super::*;
-    use crate::column_info;
     use crate::sql::qualified;
 
     fn col(name: &str, dtype: DataType) -> ColumnInfo {

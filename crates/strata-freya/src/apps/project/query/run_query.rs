@@ -21,8 +21,9 @@
 use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
-use strata_engine::plan::{as_explain, QueryPlan};
-use strata_engine::{RecordBatch, RunOutcome, RunTag, StatementReport};
+use strata_arrow::plan::{as_explain, QueryPlan};
+use strata_arrow::RecordBatch;
+use strata_engine::{RunOutcome, RunTag, StatementReport};
 use strata_model::{Cell, QueryOutput, SnapshotId};
 use uuid::Uuid;
 

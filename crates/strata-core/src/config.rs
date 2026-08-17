@@ -206,7 +206,7 @@ pub struct Settings {
     pub keybinds: Vec<KeyBind>,
     /// Curated DataFusion engine option overrides (only non-default keys), applied to
     /// each window's `SessionContext` (W2). Keyed by `datafusion.*` option name; see
-    /// `strata_engine::config`, which holds the key catalog and applies them.
+    /// `strata_arrow::config`, which holds the key catalog, and `strata_engine`, which applies it.
     #[serde(default)]
     pub engine: BTreeMap<String, String>,
     /// Agent access (AA-03): whether the in-app MCP server listens, and on what. Off by

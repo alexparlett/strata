@@ -1,7 +1,7 @@
 //! The EXPLAIN plan view (`EXPLAIN_PLAN_SPEC` §5): a toolbar
 //! (Physical/Logical text segments, ANALYZE badge, Raw/Tree toggle) over an indented tree
 //! of operator cards — or the raw plan text. All values arrive pre-typed and pre-labelled
-//! from the engine (`strata_engine::plan`) — the view does no unit math.
+//! (`strata_arrow::plan`, which the engine reads a plan into) — the view does no unit math.
 //!
 //! Split like the datagrid: this file owns the `explain_plan` theme component and the
 //! [`ExplainPlan`] shell (toolbar + tree/raw body); [`node`] renders one railed operator
@@ -10,7 +10,7 @@
 
 use freya::prelude::*;
 
-use strata_engine::plan::{guide_rails, PlanTab, QueryPlan};
+use strata_arrow::plan::{guide_rails, PlanTab, QueryPlan};
 
 use crate::components::badge::Badge;
 use crate::components::divider::Divider;
@@ -227,7 +227,7 @@ impl Component for ExplainPlan {
 
 #[cfg(test)]
 mod tests {
-    use strata_engine::plan::{PlanKind, PlanNode};
+    use strata_arrow::plan::{PlanKind, PlanNode};
 
     use super::*;
 

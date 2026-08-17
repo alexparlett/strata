@@ -11,11 +11,13 @@ use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
 use datafusion::sql::TableReference;
 
+use strata_arrow::column_info;
+use strata_arrow::profile::Profiled;
 use strata_model::{ColumnInfo, CsvRead, FileCompression, JsonShape, SourceFormat, Stat, StatKey};
 
 use crate::arrow_stats::StrataArrowFormat;
 use crate::json_poly::PolyJsonFormat;
-use crate::profile::{aggregates, decode, profile_sql, CatalogProfile, Profiled};
+use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::providers::in_workspace;
 use crate::query::is_snapshot_name;
 use crate::sql::{qualified, Blocked};
@@ -1042,9 +1044,6 @@ fn stat_of(key: StatKey, p: &Precision<ScalarValue>) -> Option<Stat> {
 }
 
 pub(crate) use strata_arrow::column::short_type;
-/// The column vocabulary lives in [`strata_arrow::column`] — no DataFusion is needed to read an
-/// Arrow field into a row — and is re-exported here at the path callers already name (EA-01).
-pub use strata_arrow::column::{chart_role, column_info};
 
 fn parse_dtype(label: &str) -> DataType {
     match label {

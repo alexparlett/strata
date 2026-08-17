@@ -6,10 +6,10 @@
 
 use freya::prelude::*;
 
-use strata_core::util::fmt_int;
-use strata_engine::plan::{
+use strata_arrow::plan::{
     detail_parts, insights, metric_group, DetailPart, PlanKind, PlanNode, METRIC_GROUPS,
 };
+use strata_core::util::fmt_int;
 
 use super::palette::PlanPalette;
 use crate::components::badge::Badge;

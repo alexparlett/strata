@@ -27,7 +27,9 @@ use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{CreateTableOptions, CreateView, Statement as SqlStatement};
 use datafusion::sql::TableReference;
 
-use crate::catalog::{column_info, dependents_of_view, plan_deps, view_error, ViewMeta};
+use strata_arrow::column_info;
+
+use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
 use crate::db::Databases;
 use crate::query::is_snapshot_name;
 use crate::sql::{parse_one, Blocked, StmtKind};

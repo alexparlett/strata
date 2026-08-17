@@ -41,8 +41,8 @@ use datafusion::sql::TableReference;
 use crate::catalog::register_external;
 use crate::export::partition_columns_are_bare_words;
 use crate::register::table_spec;
-use crate::store::client_key;
 use crate::{Connections, InternalTables};
+use strata_arrow::client::client_key;
 use strata_core::project::{relativize, split_remote};
 use strata_core::util::{one_char, plural};
 use strata_model::{
@@ -386,7 +386,7 @@ fn read_format(
 /// `None` for every other key, so the caller's refusal-by-name stays the total answer.
 ///
 /// The namespaces are `object_store`'s own provider prefixes plus the client options Strata
-/// already publishes ([`crate::store::CLIENT_KEYS`], shared rather than re-listed). It is
+/// already publishes ([`strata_arrow::client::CLIENT_KEYS`], shared rather than re-listed). It is
 /// an enumeration used **only to choose a better sentence** — every key it does not recognise is
 /// still refused by the caller — so it is not a gate that can let something through by omission.
 fn store_key(key: &str) -> Option<&'static str> {

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use freya_testing::prelude::{KeyboardEventName, MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
+use strata_arrow::{column_info, RecordBatch, Schema};
 use strata_core::config::AppConfig;
 use strata_core::theme::load;
-use strata_engine::{column_info, RecordBatch, Schema};
 use strata_model::Cell as CellData;
 
 use super::super::find::FindState;

@@ -34,6 +34,7 @@ use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use object_store::http::HttpBuilder;
 use object_store::{ClientConfigKey, CredentialProvider, Error, ObjectStore};
 
+use strata_arrow::client::check_client_config;
 use strata_model::{ConnectionDef, GcsAuth, Provider, S3Auth};
 
 use super::connect::{self, Registration};
@@ -236,11 +237,6 @@ pub async fn aws_profiles() -> Vec<String> {
     profiles.sort_unstable();
     profiles
 }
-
-/// The client-option catalogue and the check both the editor and this module make against it
-/// live in [`strata_arrow::client`] — a written-down table over `object_store`'s own keys, with
-/// no DataFusion in it — and are re-exported here at the paths callers already name (EA-01).
-pub use strata_arrow::client::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
 
 /// Resolve a connection's client options into `object_store`'s own keys, in a stable order.
 ///

@@ -352,7 +352,7 @@ pub enum SchemaVisibility {
 /// Build the connection pool `conn` describes, enumerate the database, and register it as a
 /// catalog on `ctx` — the database arm of `Engine::connect`.
 ///
-/// **Building the pool is the probe**, all-or-nothing exactly as [`store::connect`] is, and for
+/// **Building the pool is the probe**, all-or-nothing exactly as `store::connect` is, and for
 /// free: `PostgresConnectionPool::new` resolves the host, opens a TCP connection, authenticates,
 /// builds the pool and runs `SELECT 1`, failing on any of them. There is no separate
 /// `reachable` step here because there is nothing left to ask — where an object store's
@@ -457,7 +457,7 @@ async fn prepare(
 /// Forget the catalog a connection registered — the Forget gesture's engine half, and the half
 /// an edit that moves a connection's URL also needs.
 ///
-/// Addressed by [`ConnectionDef::url`] like [`store::disconnect`], and silent about doing
+/// Addressed by [`ConnectionDef::url`] like `store::disconnect`, and silent about doing
 /// nothing for the same reason: a URL this engine holds no database for is the ordinary case
 /// (every object-store connection, and every database that never connected).
 pub(crate) fn disconnect(ctx: &SessionContext, dbs: &Databases, url: &str) {

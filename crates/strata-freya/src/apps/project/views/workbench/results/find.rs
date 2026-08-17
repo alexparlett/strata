@@ -209,7 +209,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_engine::{column_info, RecordBatch, Schema};
+    use strata_arrow::{column_info, RecordBatch, Schema};
     use strata_model::{Cell, SnapshotId};
 
     use super::*;

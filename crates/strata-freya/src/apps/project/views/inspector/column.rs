@@ -23,10 +23,10 @@ use freya::components::CircularLoader;
 use freya::prelude::*;
 use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
+use strata_arrow::profile::stats_footnote;
 use strata_core::util::iso8601;
-use strata_engine::profile::{stats_footnote, CatalogProfile};
 use strata_engine::stopped_on_purpose;
-use strata_model::Origin;
+use strata_model::{CatalogProfile, Origin};
 
 use super::model::{
     completeness, fact_rows, nested_fields, scan_age, scan_footnote, with_scan, ColumnFacts,

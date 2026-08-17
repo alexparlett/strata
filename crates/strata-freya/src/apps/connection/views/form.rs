@@ -25,7 +25,7 @@
 //! because that is a fact about the field rather than a verdict on what is in it.
 
 use freya::prelude::*;
-use strata_engine::store::ClientKey;
+use strata_arrow::client::ClientKey;
 use strata_model::{PgPassword, PgSslMode, ProviderId};
 
 use crate::apps::connection::model::{GcsAuthId, S3AuthId};

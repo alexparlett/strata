@@ -17,9 +17,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use strata_arrow::plan::QueryPlan;
 use strata_core::util::{clip, collapse_sql};
 use strata_engine::export::{Csv, ExportReport, Format, Json, Parquet};
-use strata_engine::plan::QueryPlan;
 use strata_engine::sql::{FunctionCatalog, FunctionSym};
 use strata_model::{Cell, ColumnInfo, Diagnostic, Kind, QueryOutput, Severity, Stat, StatKey};
 
