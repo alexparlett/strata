@@ -1,4 +1,4 @@
-//! **SQL functions** (ED-09) — `CREATE FUNCTION` for SQL-bodied scalar macros, and the
+//! **SQL functions** — `CREATE FUNCTION` for SQL-bodied scalar macros, and the
 //! `DROP FUNCTION` that takes one back. `docs/STATEMENTS_SPEC.md` §6.6.
 //!
 //! Both run **natively** over DataFusion's own [`FunctionFactory`] seam, which is the framework's
@@ -990,7 +990,7 @@ mod tests {
     /// `SessionContext` and takes the catalog by handle for its lexical lints. A squiggle left
     /// under a call the very same buffer can Run is the disagreement the epoch bump exists to
     /// prevent, and it is worth pinning from this end because the app-side wiring
-    /// (`FunctionsChanged` -> `catalog_settled`) is ED-08's and is not re-tested here.
+    /// (`FunctionsChanged` -> `catalog_settled`) is the session layer's and is not re-tested here.
     #[tokio::test]
     async fn a_created_function_stops_being_a_diagnostic() {
         let eng = Engine::builder().build();

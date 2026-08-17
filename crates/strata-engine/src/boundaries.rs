@@ -1,5 +1,5 @@
 //! The two import directions nothing in the workspace may take, checked by reading the source
-//! (EA-02).
+//!.
 //!
 //! Both are boundaries a type system cannot state. The **module** one replaces a crate split the
 //! re-architecture deliberately did not make: `sources` and `sql` are peers inside this crate, and
@@ -8,9 +8,8 @@
 //! having: a re-export added back here would let a surface that formats a cell go on compiling a
 //! query planner to do it, and every such re-export was removed to stop exactly that.
 //!
-//! A missing directory is not a pass. `sources/` arrives with EA-05, so today only the
-//! `sql ↛ sources` half has files to read; the other half goes live the moment the module exists,
-//! with no edit here.
+//! A missing directory is not a pass: the half whose directory does not exist reads no files and
+//! goes live the moment one does, with no edit here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,8 +101,8 @@ fn the_sources_and_language_layers_do_not_import_each_other() {
 }
 
 /// The items `strata-arrow` owns, by the name a `use` would write. The engine re-exported every
-/// one of them until EA-02; naming any of them through `strata_engine` again means a re-export
-/// came back.
+/// one of them once; naming any of them through `strata_engine` again means a re-export came
+/// back.
 const ARROW_VOCABULARY: &[&str] = &[
     "chart_role",
     "check_client_config",

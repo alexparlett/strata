@@ -1,4 +1,4 @@
-//! **Bare-name resolution across the connected databases** (DB-09) — what turns
+//! **Bare-name resolution across the connected databases** — what turns
 //! `SELECT * FROM orders` into `SELECT * FROM "pg"."public"."orders"` before anything plans it.
 //!
 //! DataFusion has one default catalog and one default schema and no search path, so a bare name
@@ -386,7 +386,7 @@ fn single(name: &ObjectName) -> Option<&Ident> {
 /// today, where a miss would rewrite a reference to a CTE into a table on a server. The target
 /// half is why this is a visitor: `WITH x AS (…) CREATE TABLE t AS …` parses as a **query** whose
 /// body is the create, so a create target sits inside what [`Pass::query`] treats as pure read.
-/// An `INSERT`'s target is deliberately *not* held back — it resolves like a read (DB-10).
+/// An `INSERT`'s target is deliberately *not* held back — it resolves like a read.
 #[derive(Default)]
 struct HeldBack(HashSet<String>);
 
@@ -523,7 +523,7 @@ mod tests {
         );
     }
 
-    /// **A write target resolves exactly as a read does** (DB-10), so `INSERT INTO orders`
+    /// **A write target resolves exactly as a read does**, so `INSERT INTO orders`
     /// dispatches to the relation `SELECT * FROM orders` reads. What is refused about it — a
     /// read-only connection — is the arm's, reached with the qualified name this produced.
     #[test]

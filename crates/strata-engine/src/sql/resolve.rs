@@ -1,4 +1,4 @@
-//! The native **name resolver** (P2-23) — every unknown table/column in a parsed
+//! The native **name resolver** — every unknown table/column in a parsed
 //! statement, not just the first.
 //!
 //! The DataFusion dry-plan behind [`super::validate`] is engine-authoritative but

@@ -1,4 +1,4 @@
-//! **The vocabulary with no transport under it** (AS-01) — the eleven tools driven as plain
+//! **The vocabulary with no transport under it** — the eleven tools driven as plain
 //! methods, from outside the crate, with no rmcp type anywhere in this file.
 //!
 //! `mcp_over_http.rs` and `mcp_over_stdio.rs` prove the two MCP deployments; this proves the

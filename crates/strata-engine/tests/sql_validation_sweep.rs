@@ -1,4 +1,4 @@
-//! Validation sweep (P2-23 acceptance): the validator against a wide corpus of
+//! Validation sweep: the validator against a wide corpus of
 //! query shapes over a realistic multi-table catalog.
 //!
 //! Four properties:

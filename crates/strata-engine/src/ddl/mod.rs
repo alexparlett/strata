@@ -1,5 +1,5 @@
-//! Statement **execution** — the `Verdict::Intercept` half of the router (ED-02,
-//! `docs/STATEMENTS_SPEC.md` §4 + §7).
+//! Statement **execution** — what the pipeline admits as a statement rather than a query
+//! (`docs/STATEMENTS_SPEC.md` §4 + §7).
 //!
 //! [`Engine::run`](crate::Engine::run) classifies once, in front of dispatch; a
 //! statement the editor implements itself lands here as its [`StmtKind`], and comes back as a
@@ -18,9 +18,8 @@
 //! **Every arm is one call into a funnel that already exists.** Typed `CREATE VIEW` runs
 //! [`views::create`] — the body [`Engine::create_view`](crate::Engine::create_view) runs
 //! for ⌘S; typed `CREATE EXTERNAL TABLE` and a CTAS's spooled output are both
-//! `catalog::register_external`. ED-02 shipped the dispatch and the vocabulary and each arm was
-//! filled by the task that owned its capability; ED-10 was the last of them, so there is no stub
-//! refusal left and the `match` below is exhaustive on `StmtKind` with every arm real.
+//! `catalog::register_external`. Every kind has a real arm, so the `match` below is exhaustive on
+//! `StmtKind` with no stub refusal in it.
 
 mod copy;
 mod external;
@@ -102,10 +101,10 @@ pub struct StatementOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub enum StoreEffect {
     /// A table def arrived or was rewritten, already registered — an internal table's CTAS
-    /// output (ED-04) or a typed `CREATE EXTERNAL TABLE` (ED-10). The def is the durable,
+    /// output or a typed `CREATE EXTERNAL TABLE`. The def is the durable,
     /// shareable half; the meta is the answer that lands on its row.
     TableUpserted { def: TableDef, meta: TableMeta },
-    /// A table def is gone and its provider deregistered (ED-05). `dependents` are the views
+    /// A table def is gone and its provider deregistered. `dependents` are the views
     /// left reading it — **named, never cascaded**: a `ViewTable`'s inlined plan goes on
     /// executing until reload, and the epoch bump makes diagnostics re-derive immediately,
     /// which is the surface that matters. They go `Reg::Failed` honestly on the next pass.
@@ -113,24 +112,24 @@ pub enum StoreEffect {
         name: String,
         dependents: Vec<String>,
     },
-    /// A view def arrived or was rewritten, already created (ED-06) — the same pair ⌘S folds.
+    /// A view def arrived or was rewritten, already created — the same pair ⌘S folds.
     ViewUpserted { def: ViewDef, meta: ViewMeta },
-    /// A view def is gone and the view dropped (ED-06).
+    /// A view def is gone and the view dropped.
     ViewRemoved { name: String },
-    /// The table's *data* moved but its def did not — an `INSERT` appending a file (ED-05).
+    /// The table's *data* moved but its def did not — an `INSERT` appending a file.
     /// A re-scan is what refreshes `TableMeta.rows`, because a row count is something the
     /// scan driver reads, never something the store adds up for itself.
     RescanTable { name: String },
-    /// The session's function catalog moved (ED-09). Nothing persists — functions are
+    /// The session's function catalog moved. Nothing persists — functions are
     /// session-scoped (spec §8) — but names that did not resolve a moment ago now do, so the
     /// catalog epoch has to move with them.
     FunctionsChanged,
-    /// The session's prepared statements moved (ED-08) — a `PREPARE` or a `DEALLOCATE`. Nothing
+    /// The session's prepared statements moved — a `PREPARE` or a `DEALLOCATE`. Nothing
     /// persists either, and for the same reason it is still an effect: `EXECUTE p` resolves now
     /// and did not a moment ago, so both the language service's snapshot and every tab's
     /// diagnostics have to be re-derived against the session the engine now holds.
     PreparedChanged,
-    /// A database connection holds a relation it did not a moment ago — a remote CTAS (DB-10).
+    /// A database connection holds a relation it did not a moment ago — a remote CTAS.
     /// The store has no row for a remote relation and never will (*discovery gets catalogs*), so
     /// there is nothing to upsert; what has to move is the catalog epoch, which the tree,
     /// completion and every tab's diagnostics already key on. The `FunctionsChanged` shape, for
@@ -166,19 +165,19 @@ pub struct Dispatch {
     /// The buffer the statement was parsed from, which [`remote`] splices the text it dispatches
     /// out of; every other arm works off the parsed statement.
     pub sql: String,
-    /// Where an internal table's data may be written (ED-04).
+    /// Where an internal table's data may be written.
     pub root: DataRoot,
-    /// Which registered tables Strata owns the data of (ED-04/05).
+    /// Which registered tables Strata owns the data of.
     pub internal: InternalTables,
-    /// Which object stores this project has a connection to (ED-10) — what a typed
+    /// Which object stores this project has a connection to — what a typed
     /// `CREATE EXTERNAL TABLE`'s `LOCATION` may name.
     pub connections: Connections,
-    /// The live database connections (DB-10) — what a write into a remote relation goes through,
+    /// The live database connections — what a write into a remote relation goes through,
     /// and what says whether one accepts writes at all.
     pub(crate) databases: Databases,
-    /// The `SET` overlay and the prepared-statement mirror (ED-08).
+    /// The `SET` overlay and the prepared-statement mirror.
     pub scope: SessionScope,
-    /// The function catalog and the names this session created (ED-09).
+    /// The function catalog and the names this session created.
     pub functions: Functions,
     /// The engine's `datafusion.*` overrides — what a `RESET` puts a key back to
     /// (`session::reset`), which is the Settings baseline rather than DataFusion's default.
@@ -311,7 +310,7 @@ fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<Strin
 /// One relation inside a database connection, as a **write target** — `None` for the workspace's
 /// own name and for a qualifier that resolves to no catalog, which [`bare_name`] answers for.
 ///
-/// The second answer beside [`bare_name`], for the two arms that gained a remote branch (DB-10).
+/// The second answer beside [`bare_name`], for the two arms that gained a remote branch.
 /// An arm that stays workspace-only goes on calling `bare_name` and is untouched; an arm that has
 /// a branch asks this first, because a relation whose data lives on a server is not a question
 /// about the workspace's one schema.
@@ -352,7 +351,7 @@ pub(super) fn in_database(name: &str, catalog: &str) -> String {
 /// The wording for a write into a connection that has not been opted in — **minted once**, beside
 /// [`in_database`], because both arms that can reach it must say the same thing.
 ///
-/// It names the setting rather than the rule: a connection is read-only by default (DB-10), so the
+/// It names the setting rather than the rule: a connection is read-only by default, so the
 /// user is one toggle away and the sentence is only useful if it says which.
 pub(super) fn read_only(at: &RemoteTarget) -> String {
     format!(
@@ -391,14 +390,14 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
     )
 }
 
-/// **The statement policy over a database connection's catalog** (DB-03) — one test module for
+/// **The statement policy over a database connection's catalog** — one test module for
 /// one rule, because the rule is cross-arm: `bare_name` is the single choke point in front of
 /// every intercepted statement that resolves a target, so what is under test is that *no arm
 /// gets there another way*.
 ///
 /// The fourteen [`StmtKind`]s divide into five answers and each is pinned below: `INSERT` and
 /// CTAS **write** a remote relation once the connection is opted in and are refused by the
-/// read-only sentence until it is (DB-10), the other five kinds that name a target are refused by
+/// read-only sentence until it is, the other five kinds that name a target are refused by
 /// [`in_database`], a **read** of one is never refused (`COPY`'s source, `PREPARE`'s body, and
 /// every plain query), a function name cannot be qualified at all (DataFusion refuses it while
 /// planning, which is one refusal in one place rather than a second of ours), and the four session
@@ -508,7 +507,7 @@ mod tests {
         );
     }
 
-    /// **A bare write target resolves like a bare read** (DB-10). Before it, `sql::qualify`
+    /// **A bare write target resolves like a bare read**. Before it, `sql::qualify`
     /// refused one that only a connection had, because "not found" was the wrong answer about a
     /// relation the same session would happily read. Now it rewrites, and the refusal that lands
     /// is the arm's own — which is the point: one funnel, whether or not the qualifier was typed.

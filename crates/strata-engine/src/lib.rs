@@ -160,7 +160,7 @@ impl From<TabId> for WsId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RunTag(pub u128);
 
-/// What a **Run** settled to ([`Engine::run`], ED-02) — the two things a press can produce.
+/// What a **Run** settled to ([`Engine::run`]) — the two things a press can produce.
 ///
 /// The split is the router's, not a mode the caller picks: a Run is one press, and whether it
 /// produces rows or performs a statement is a property of what was typed.
@@ -174,7 +174,7 @@ pub enum RunOutcome {
     Statement(StatementReport),
 }
 
-/// An in-flight **profile scan** (D4): which dispatch it is, and the handle that cancels it.
+/// An in-flight **profile scan**: which dispatch it is, and the handle that cancels it.
 ///
 /// Keyed by catalog entry rather than by workspace, because a profile belongs to the *data*:
 /// it is asked for from the catalog, cached per entry, and two tables profile concurrently.
@@ -206,7 +206,7 @@ struct InFlight {
 ///
 /// A dispatch publishes its [`InFlight`] entry *before* awaiting the spawned work, so until
 /// the settle path runs the workspace looks busy. That was safe while every caller was
-/// freya-query, which by design never cancels an execution — but an agent's run (AA-03b) is
+/// freya-query, which by design never cancels an execution — but an agent's run is
 /// awaited inside an MCP request future, and a client cancellation, a dropped connection or
 /// the agent server shutting down all drop it mid-await. Without this the entry is never
 /// removed: [`publish_inflight`](Engine::publish_inflight) latches the window's in-flight flag
@@ -269,7 +269,7 @@ struct Lifecycle {
     /// views share one namespace).
     profiles: HashMap<String, ProfileRun>,
     /// How many pieces of **background** work are in flight — an export writing a file, a
-    /// drop deleting a table's data (ED-05). A **count, not a map**: nothing addresses one of
+    /// drop deleting a table's data. A **count, not a map**: nothing addresses one of
     /// these — no cancel, no supersede, no per-item state to look up. All it has to do is keep
     /// [`publish_inflight`](Engine::publish_inflight) true while something is half-done, so the
     /// close-while-running confirm asks before the window takes the runtime away.
@@ -332,10 +332,10 @@ pub struct Engine {
     /// winit close hook (T2), which runs outside the UI and must be `Send`. Installed once
     /// by [`Engine::watch_inflight`]; `None` until then, and for engines nobody watches.
     inflight_flag: OnceLock<Arc<AtomicBool>>,
-    /// The registered SQL functions (built-ins + UDFs) for the language service (S26/S7/S25),
-    /// walked at build and re-walked by a statement that moves the registry (ED-09).
+    /// The registered SQL functions (built-ins + UDFs) for the language service,
+    /// walked at build and re-walked by a statement that moves the registry.
     functions: Functions,
-    /// The project folder this engine may write internal tables into (ED-04), set at project
+    /// The project folder this engine may write internal tables into, set at project
     /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir), or
     /// [`with_data_dir`](EngineBuilder::with_data_dir), which says it at construction. `None`
     /// until then, and forever for an engine with no project behind it.
@@ -345,10 +345,10 @@ pub struct Engine {
     /// Which connections this engine has been told about — see [`Connections`].
     connections: Connections,
     /// The database connections that are **live**: their pools and the catalogs they registered
-    /// (DB-02) — see [`Databases`]. A field on the engine rather than something a task holds,
+    /// — see [`Databases`]. A field on the engine rather than something a task holds,
     /// because a pool owns bb8's driver tasks and the engine's `Drop` has to be what ends them.
     databases: Databases,
-    /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
+    /// The `SET` overlay and the prepared-statement mirror — see [`SessionScope`].
     /// Default on a fresh engine, which is what makes a restart clear the session.
     session: SessionScope,
     /// Where a secret this engine needs comes from ([`EngineBuilder::with_secrets`]).
@@ -362,11 +362,11 @@ pub struct Engine {
     policy: Arc<dyn PolicyProvider>,
 }
 
-/// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
+/// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names.
 ///
 /// Derived state, rebuilt by the same registration pass that builds everything else, and
 /// deliberately **not a second catalog**: it holds names and nothing else, and answers exactly
-/// one engine-side question — may a write statement target this provider (ED-05). Everything
+/// one engine-side question — may a write statement target this provider. Everything
 /// the UI asks about the catalog is still the store's to answer.
 ///
 /// **Shared by handle rather than borrowed**, because the two statements that ask it —
@@ -395,7 +395,7 @@ impl InternalTables {
     }
 }
 
-/// The connection **URLs** this engine has been told about (ED-10) — the same shape as
+/// The connection **URLs** this engine has been told about — the same shape as
 /// [`InternalTables`], for the same reasons and with the same limits.
 ///
 /// It holds URLs and nothing else, and answers exactly one engine-side question: **may a typed
@@ -462,7 +462,7 @@ impl Engine {
         self.self_ref.upgrade().expect("the engine's own handle")
     }
 
-    /// Tell this engine which **project folder** it belongs to (ED-04).
+    /// Tell this engine which **project folder** it belongs to.
     ///
     /// `root` is the project folder, not `.strata/tables`, because a statement that creates an
     /// internal table needs both: the absolute directory to spool into, and the project-relative
@@ -516,7 +516,7 @@ impl Engine {
     /// mutation of `Lifecycle::inflight` / `Lifecycle::profiles`, with the lock held, so a
     /// reader can never see a flag that disagrees with the maps.
     ///
-    /// A **profile counts** (D4): a scan is the most expensive thing the app does, and closing
+    /// A **profile counts**: a scan is the most expensive thing the app does, and closing
     /// the window would throw it away — exactly what the confirm exists to ask about. The
     /// per-tab probe below deliberately does not, because a profile is not a tab's work.
     ///
@@ -588,7 +588,7 @@ impl Engine {
     /// configure the `RuntimeEnv`, which is fixed when the `SessionContext` is built. They
     /// are recorded, not applied, and `true` means the caller owes the user a restart.
     ///
-    /// A key the **session overlay** holds is recorded and not applied either (ED-08): a typed
+    /// A key the **session overlay** holds is recorded and not applied either: a typed
     /// `SET` wins for its key until `RESET` or restart, so the new value becomes the baseline a
     /// `RESET` will land on rather than something that quietly overwrites what the user just
     /// typed. That is the whole precedence rule, and it lives here because this is the only place
@@ -636,7 +636,7 @@ impl Engine {
         self.overrides.lock().unwrap().clone()
     }
 
-    /// The statements `PREPARE` has left in this session (ED-08), as language-service symbols —
+    /// The statements `PREPARE` has left in this session, as language-service symbols —
     /// what completion offers at an `EXECUTE` / `DEALLOCATE` operand.
     ///
     /// Off the engine's own mirror, because DataFusion's `SessionState::prepared_plans` is
@@ -645,7 +645,7 @@ impl Engine {
         self.session.prepared()
     }
 
-    /// Validate `sql` against this engine's live session (P2-18): lexical lints,
+    /// Validate `sql` against this engine's live session: lexical lints,
     /// managed-DDL policy, and a **dry-plan** of each statement — parse → resolve →
     /// analyze, never execute — so the diagnostics are exactly the errors a Run would
     /// hit. Total by design: faults come back as `Diagnostic`s, not an `Err`.
@@ -681,7 +681,7 @@ impl Engine {
     }
 
     /// What this session's planner makes of one **SQL column type** — the empty-table panel's
-    /// per-row validation (IT-01). `Ok` is the Arrow type in the spelling every surface shows
+    /// per-row validation. `Ok` is the Arrow type in the spelling every surface shows
     /// it in; `Err` is the planner's own refusal, verbatim.
     ///
     /// A plan and nothing more, so it is as cheap as a diagnostics pass and has no more effect
@@ -804,7 +804,7 @@ impl Engine {
         }
     }
 
-    /// Drop the registered table `name` — **the one funnel both surfaces drop through** (ED-05).
+    /// Drop the registered table `name` — **the one funnel both surfaces drop through**.
     ///
     /// A typed `DROP TABLE` reaches the same body through [`run`](Engine::run)'s interception;
     /// the catalog pane's confirm reaches it here, after it has taken the def out of the store
@@ -1122,7 +1122,7 @@ impl Engine {
         .await
     }
 
-    /// Cancel `ws`'s in-flight run/explain **iff** it is still run `tag` (S14 — a stale
+    /// Cancel `ws`'s in-flight run/explain **iff** it is still run `tag` (a stale
     /// cancel can't abort a just-started newer run). Returns the elapsed time when
     /// something was actually cancelled; the awaiting `query`/`explain` settles
     /// `Err("cancelled")`.
@@ -1145,11 +1145,11 @@ impl Engine {
     }
 
     /// Profile the catalog entry `name` — **one full scan, one aggregate, every column at
-    /// once** (D4, see [`profile`]). Works for a table or a view: a view has no footer at all,
+    /// once** (see [`profile`]). Works for a table or a view: a view has no footer at all,
     /// so a scan is the only way it learns anything beyond a column's type.
     ///
     /// Deliberately expensive and deliberately opt-in: distinct counts can't be merged across
-    /// files, so there is no cheaper form. The UI confirms before a first scan (P3-10) and
+    /// files, so there is no cheaper form. The UI confirms before a first scan and
     /// caches the result until the entry changes.
     ///
     /// Superseded-by-dispatch like [`query`](Engine::query): a re-scan aborts the scan it
@@ -1283,7 +1283,7 @@ impl Engine {
         retire_snapshot(&self.ctx, self.engine_id, snapshot);
     }
 
-    /// Write `snapshot` to disk per `spec` (D6) — one file, or a Hive directory when the
+    /// Write `snapshot` to disk per `spec` — one file, or a Hive directory when the
     /// spec carries partition columns. Returns `(path, rows_written)`.
     ///
     /// **The snapshot is the source, not the SQL.** An export never re-runs the query: it
@@ -1331,7 +1331,7 @@ impl Engine {
         }
     }
 
-    /// Write `snapshot` to a **caller-named** file (QE-05) — [`export`](Engine::export)'s funnel
+    /// Write `snapshot` to a **caller-named** file — [`export`](Engine::export)'s funnel
     /// for a caller with no file dialog in front of it, and the agent vocabulary's one write.
     ///
     /// A third gesture into the export the window and the typed `COPY` already make, never a third
@@ -1368,7 +1368,7 @@ impl Engine {
 
     /// Register what one [`ConnectionDef`] describes: an **object store**, so tables can be
     /// registered over its bucket (W7), or a **database catalog**, so its relations resolve as
-    /// `pg.public.orders` (DB-02).
+    /// `pg.public.orders`.
     ///
     /// **Before any table that reads it.** DataFusion resolves no remote scheme on its own:
     /// without this, a source path under `s3://acme-lake` fails its registration with "No
@@ -1453,7 +1453,7 @@ impl Engine {
     /// Tell the session which schemas `conn` now **shows** — the Schemas… picker's engine half,
     /// which writes the def without reconnecting.
     ///
-    /// Since DB-09 an unqualified name searches what a connection shows, so the session has to
+    /// An unqualified name searches what a connection shows, so the session has to
     /// learn the new set as the picker commits it. A no-op for a connection that is not live.
     pub fn show_schemas(&self, conn: &ConnectionDef) {
         let Provider::Postgres(pg) = &conn.provider else {
@@ -1463,7 +1463,7 @@ impl Engine {
     }
 
     /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
-    /// connection (DB-06), its schemas and relations from [`db_listing`](Self::db_listing).
+    /// connection, its schemas and relations from [`db_listing`](Self::db_listing).
     ///
     /// Built here rather than in the editor because both halves are read the way the rest of the
     /// engine reads them: the catalog name off the def, so a connection that has never answered
@@ -1646,11 +1646,11 @@ impl Engine {
     }
 
     /// What `name`'s row says **now** — its columns and free row count — read from the files
-    /// without re-registering the table (ED-05).
+    /// without re-registering the table.
     ///
     /// The answer an `INSERT` needs, and the reason it is not [`register`](Engine::register):
     /// re-registering deregisters the provider and builds a fresh one, and **that** is what
-    /// leaves every view above it holding a stale `Arc` (D10/D11). Views survive it only
+    /// leaves every view above it holding a stale `Arc`. Views survive it only
     /// because the caller then re-creates them. An append cannot make them stale — the sink
     /// schema-checks before it writes, so the shape a view captured is the shape that is still
     /// there — so re-registering after one would break the views and repair them again for
@@ -1667,7 +1667,7 @@ impl Engine {
     }
 
     /// The Hive partition keys under `paths`, outermost first — what the Configure window's
-    /// Hive section offers (P4-11). Listed through the session's object store, so it answers for
+    /// Hive section offers. Listed through the session's object store, so it answers for
     /// a bucket as readily as for a local folder.
     pub async fn detect_partitions(&self, paths: Vec<String>) -> Vec<String> {
         let ctx = self.ctx.clone();
@@ -1685,7 +1685,7 @@ impl Engine {
     }
 
     /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
-    /// what it reads (D10) — **the ⌘S gesture's entry into [`ddl::create_view`]**, which a
+    /// what it reads — **the ⌘S gesture's entry into [`ddl::create_view`]**, which a
     /// typed `CREATE VIEW` enters through [`run`](Engine::run) instead. `CREATE OR REPLACE`:
     /// redefinition is the ⌘S-on-a-view path.
     pub async fn create_view(&self, name: String, sql: String) -> Result<ViewMeta, String> {
@@ -1887,7 +1887,7 @@ impl Drop for Engine {
 /// one schema and a catalog name is an opaque label, so `a.b` is the literal name `a.b`.
 /// (Nothing regresses: `register_table("a.b")` resolves to schema `a`, which doesn't exist,
 /// so such a table never registered either.)
-/// `pub` because the empty-table panel asks the same question of its column rows (IT-01): two
+/// `pub` because the empty-table panel asks the same question of its column rows: two
 /// rows collide exactly when the create arm's own fold says they do, and a form approximating
 /// that with a case-insensitive compare would refuse pairs the engine accepts.
 pub fn fold_ident(name: &str) -> String {
@@ -1919,7 +1919,7 @@ pub fn fold_ident(name: &str) -> String {
 /// completion's quoting uses — but the two renderers are **not** interchangeable, and
 /// [`sql::quote_verbatim`] states the difference: that one preserves the spelling, for a name
 /// whose identity belongs to a server. `pub` because a surface composing a statement about a
-/// *workspace* def has to say the name that def will be keyed under (DB-06's Pin as view).
+/// *workspace* def has to say the name that def will be keyed under (Pin as view).
 pub fn quote_ident(name: &str) -> String {
     let id = fold_ident(name);
     let mut rest = id.chars();
@@ -2064,7 +2064,7 @@ fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, Stri
 /// **Every key [`config::ENGINE_KEYS`] catalogues as `runtime.*` is read here.** Four of them
 /// were catalogued — named, described, and treated as restart-required by
 /// [`is_restart_key`](config::is_restart_key) — but never consumed, which nothing noticed while
-/// there was no way to set them. P4-07's properties editor is that way: it offers the key,
+/// there was no way to set them. The properties editor is that way: it offers the key,
 /// validates the value, badges it RESTART and rebuilds the engine, and the setting then did
 /// nothing, with no error to say so. A catalogue entry is a promise that the key applies, so
 /// adding one to `ENGINE_KEYS` means adding it here in the same change.
@@ -2168,7 +2168,7 @@ mod tests {
     ///
     /// Every caller used to be freya-query, which never cancels an execution, so `query`
     /// could publish its in-flight entry and rely on its own settle path to clear it. An
-    /// agent's run (AA-03b) is awaited inside an MCP request future instead, and a client
+    /// agent's run is awaited inside an MCP request future instead, and a client
     /// cancellation, a dropped connection or the agent server shutting down all drop it
     /// mid-await. Without `DispatchGuard` the entry survives forever: the window's in-flight
     /// flag latches on, so every later close, re-root and engine restart raises the
@@ -2434,7 +2434,7 @@ mod tests {
 
     /// A catalogue entry is a promise that the key applies. Four `runtime.*` keys were
     /// catalogued, described and badged RESTART while `build_runtime` never read them, so setting
-    /// one did nothing at all — invisible until P4-07 gave them an editor. This is the guard:
+    /// one did nothing at all — invisible until they had an editor. This is the guard:
     /// every `runtime.*` key the catalogue names must reach `RuntimeEnvBuilder`.
     ///
     /// It shows up as **the builder rejecting a value that key's kind cannot hold**, which is
@@ -2801,7 +2801,7 @@ mod tests {
 
     /// Cancel, and what the flag says while a scan runs. Both halves are the point: a scan is
     /// the most expensive thing the app does, so the window-close confirm counts it as work in
-    /// flight (D4) — and the Cancel in the inspector's running state has to actually stop it.
+    /// flight — and the Cancel in the inspector's running state has to actually stop it.
     ///
     /// The subject is a **view** over `generate_series`, which is also the case a scan matters
     /// most for (a view has no footer at all): 50M rows of `count(distinct …)` is comfortably
@@ -3026,9 +3026,9 @@ mod tests {
 
     /// A statement that creates something still needs somewhere to put it, and an engine with no
     /// project behind it says so rather than failing in DataFusion's words about a path nobody
-    /// chose (ED-04). Both creating statements, because what is missing differs: a `CREATE TABLE`
+    /// chose. Both creating statements, because what is missing differs: a `CREATE TABLE`
     /// has nowhere to write the **data**, and a typed registration has nowhere to write the
-    /// **def**, which is the durable half of one (ED-10).
+    /// **def**, which is the durable half of one.
     ///
     /// Every interception has a real arm, so there is no stub refusal to assert.
     #[tokio::test]
@@ -3138,7 +3138,7 @@ mod tests {
 /// **Read options, end to end** — every option the Configure window offers, proved against a
 /// real file rather than against DataFusion's builder signature.
 ///
-/// This is the point of P4-11's validation pass. The bar for offering an option is that it
+/// This is the point of the validation pass. The bar for offering an option is that it
 /// reaches the read, and the only way to hold that bar over a DataFusion upgrade is to register
 /// a table whose schema or rows are *different* because the option is set. Each test here
 /// therefore asserts the difference, not the call.
@@ -3761,7 +3761,7 @@ mod read_options_tests {
     }
 }
 
-/// **What the engine can say about a database connection's catalog** (DB-03) — the two reads
+/// **What the engine can say about a database connection's catalog** — the two reads
 /// the agent vocabulary needs so it stops answering "not found" about relations it can query.
 #[cfg(test)]
 mod remote_catalog_tests {

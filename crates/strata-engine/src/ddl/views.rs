@@ -1,4 +1,4 @@
-//! **Views** (ED-06) — the body every gesture that creates or drops one runs, and the two typed
+//! **Views** — the body every gesture that creates or drops one runs, and the two typed
 //! statements that are a second gesture into it. `docs/STATEMENTS_SPEC.md` §6.3.
 //!
 //! A view is Save's artifact: ⌘S wraps the tab's plain query in `CREATE OR REPLACE VIEW` and
@@ -43,7 +43,7 @@ use super::{bare_name, elsewhere, existing, left_invalid, remote, StatementOutco
 const WHAT: &str = "Views";
 
 /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and what it reads
-/// (D10) — the body behind both gestures.
+/// — the body behind both gestures.
 ///
 /// `name` is whatever the user typed (it rides in `.strata/project.json`, a shared, committed
 /// file), so it goes through [`quote_ident`] rather than straight into the statement — which is

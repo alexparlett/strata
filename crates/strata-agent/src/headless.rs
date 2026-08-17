@@ -1,9 +1,9 @@
-//! The **headless host** (AA-05): the same vocabulary with the app closed.
+//! The **headless host**: the same vocabulary with the app closed.
 //!
 //! `strata mcp <project>` serves MCP over **stdio** — the transport for a locally-spawned
 //! server, where the client owns the process, so there is no port to bind and no token to
 //! present: process ownership *is* the auth. Behind it sits a plain [`Engine`] with the
-//! project's registration pass replayed over it (AA-01's [`register_project`]), and the same
+//! project's registration pass replayed over it ([`register_project`]), and the same
 //! [`StrataTools`] the in-app server routes to. One vocabulary, two deployments.
 //!
 //! What makes this a *second host* rather than a second implementation:
@@ -69,7 +69,7 @@ pub struct HeadlessHost {
     /// so there is no epoch and nothing to invalidate.
     catalog: Vec<CatalogEntry>,
     /// What registration *learned* per table and view — `describe_table`'s answer, and only
-    /// real facts (P3-08): every number in it was read by the pass.
+    /// real facts: every number in it was read by the pass.
     described: Vec<Described>,
     page_size: usize,
     /// The agent's open query sessions — **deliberately unbounded**, unlike the app's, which

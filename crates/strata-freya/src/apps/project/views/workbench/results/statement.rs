@@ -7,7 +7,7 @@ use crate::components::tones::tones;
 use crate::components::typography::{Readout, Title};
 use crate::theme::{use_roles, Role};
 
-/// The results pane after an **intercepted statement** ran (ED-02): the empty-state layout in
+/// The results pane after an **intercepted statement** ran: the empty-state layout in
 /// success dress — a rounded icon tile over what ran, then the engine's own sentence.
 ///
 /// No grid and no pager, because there is nothing to page: a statement returns no rows. The

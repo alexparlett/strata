@@ -485,7 +485,7 @@ pub enum ReadPolicy {
     /// Queries and introspection: DDL, DML and statements all refused.
     #[default]
     ReadOnly,
-    /// The above, plus `LogicalPlan::Statement` — `EXECUTE` of a prepared query (ED-08).
+    /// The above, plus `LogicalPlan::Statement` — `EXECUTE` of a prepared query.
     Statements,
 }
 

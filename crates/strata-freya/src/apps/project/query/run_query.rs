@@ -95,7 +95,7 @@ pub struct QueryPage {
 ///
 /// Three, not two, and the third is not a mode: `Explain` is something the *press* asked for,
 /// while whether a Run produces rows or performs a statement is a property of what was typed
-/// — the engine's router decides it (ED-02), and this enum carries its answer through.
+/// — the engine's router decides it, and this enum carries its answer through.
 pub enum QueryOutcome {
     Rows(QueryPage),
     Plan(QueryPlan),
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(sorted.rows[0][0].text, "3");
     }
 
-    /// A Run press now goes through the **router** (ED-02), so a statement the editor refuses
+    /// A Run press now goes through the **router**, so a statement the editor refuses
     /// settles the capability `Err` with the words the squiggle showed — not a DataFusion
     /// error about a policy that is ours, and not rows.
     #[test]

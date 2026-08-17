@@ -20,7 +20,7 @@ pub(super) const QUERY_LEADS: &[&str] = &[
 ];
 
 /// The statement leads — every statement the router intercepts for the editor
-/// (ED-04…ED-10), offered at `Start` only and **after** the query leads: a blank tab
+/// offered at `Start` only and **after** the query leads: a blank tab
 /// is usually a query. Kept honest against `statements::classify_stmt` by
 /// `policy_and_completion_agree_on_statement_leads`, whose lead → canonical-tail
 /// table panics on a lead with no entry — so a lead added here without extending the

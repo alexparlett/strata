@@ -1262,7 +1262,7 @@ fn completions_resume_after_a_closed_string() {
     pos(&items, "status");
 }
 
-/// **Qualified names over a database connection** (DB-06) — the offer grows a catalog segment,
+/// **Qualified names over a database connection** — the offer grows a catalog segment,
 /// then a schema segment, and stops where the network would begin.
 mod qualified {
     use super::*;
@@ -1408,7 +1408,7 @@ mod qualified {
         absent(&items, "pg");
     }
 
-    /// **A connection's relations are offered where a relation goes** (DB-09), not only behind a
+    /// **A connection's relations are offered where a relation goes**, not only behind a
     /// qualifier — the offer catching up with the fact that a bare name resolves. The detail names
     /// the schema it came from, because the label alone cannot say which source it is.
     #[test]

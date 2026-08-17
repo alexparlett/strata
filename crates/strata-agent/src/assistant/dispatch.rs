@@ -2,15 +2,14 @@
 //!
 //! A model replies with a tool *name* and a JSON object; [`StrataTools`] offers eleven typed
 //! methods. Turning one into the other needs a message for bad arguments that reads well *to a
-//! model*, which is why this lives here rather than in AS-01: a crate with no provider in it
-//! has no register to write that message in.
+//! model*, which is why this lives here rather than in the tool crate: a crate with no provider
+//! in it has no register to write that message in.
 //!
 //! **It is one match, and a test walks the manifest through it** — so a tool added to the
 //! router cannot reach the model with no arm behind it. Deliberately *not* a second tool trait
 //! or a name-keyed registry: rmcp's own `ToolRouter` already is that registry (it is what
 //! [`StrataTools::manifest`] reads), its dispatch path needs a live `Peer` the in-process
-//! caller does not have, and it answers in content blocks rather than typed values. The AS-01
-//! file records that survey.
+//! caller does not have, and it answers in content blocks rather than typed values.
 //!
 //! Two things happen here that do not happen on the MCP path:
 //!
@@ -64,7 +63,7 @@ pub struct Scope {
 /// What the transcript's step card shows beyond the tool's name — the facts a person reads,
 /// none of them derived.
 ///
-/// Serde-able because a step card outlives its window (AS-07): every field is a recorded number
+/// Serde-able because a step card outlives its window: every field is a recorded number
 /// or the engine's own wording, so a card read back from disk shows what it always showed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

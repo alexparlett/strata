@@ -1,4 +1,4 @@
-//! The SQL **validator** (S25 / P2-18) — everything the editor squiggles.
+//! The SQL **validator** — everything the editor squiggles.
 //!
 //! One entry point, [`validate`], accumulating four tiers of diagnostics:
 //!
@@ -491,7 +491,7 @@ fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
 /// caller decides how each hint surfaces: merged into an overlapping parse error's
 /// message, dropped under a better engine error, or a standalone warning.
 ///
-/// **"Resolves" is `qualify::resolves`, not the workspace's own catalog** (DB-09): asking the
+/// **"Resolves" is `qualify::resolves`, not the workspace's own catalog**: asking the
 /// narrower question squiggled `SELECT * FROM orders` — a query that runs — as an unknown word one
 /// edit from `ORDER`, which only the *table not found* error over the same span had been hiding.
 fn keyword_typo_hints(

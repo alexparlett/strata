@@ -1,4 +1,4 @@
-//! **Typed `COPY … TO`** (ED-07) — dispatched natively, behind the two checks only the Export
+//! **Typed `COPY … TO`** — dispatched natively, behind the two checks only the Export
 //! window used to provide. `docs/STATEMENTS_SPEC.md` §6.4.
 //!
 //! Nothing about the *write* is ours. What the editor adds is the pair of refusals the managed

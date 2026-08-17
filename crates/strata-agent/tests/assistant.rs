@@ -1,4 +1,4 @@
-//! **The assistant's loop, end to end** (AS-02) — a real turn, against a real engine, with no
+//! **The assistant's loop, end to end** — a real turn, against a real engine, with no
 //! window, no renderer and no vendor account.
 //!
 //! The model is a stub: a local HTTP server speaking the OpenAI chat-completions wire shape,

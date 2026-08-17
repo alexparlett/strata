@@ -1,4 +1,4 @@
-//! **Session statements** (ED-08) — `SET` / `RESET` over a session overlay, and
+//! **Session statements** — `SET` / `RESET` over a session overlay, and
 //! `PREPARE` / `DEALLOCATE` over DataFusion's own prepared-plan store.
 //! `docs/STATEMENTS_SPEC.md` §6.5.
 //!
@@ -189,10 +189,10 @@ pub async fn reset(
 /// read's cache identity; `datafusion.sql_parser.dialect` is the language service, which carries
 /// it on its own `Catalog` snapshot because a completion pass reached from a keystroke has no
 /// engine to ask — while the planner and the validator read it live. A session value there leaves
-/// the editor lexing the buffer by rules the planner has stopped using, which is WJ-04 exactly.
+/// the editor lexing the buffer by rules the planner has stopped using.
 ///
 /// `pub(crate)` because the `SET` key **pool** calls it to filter `config::ENGINE_KEYS`
-/// (ED-11) — zero drift by construction, and the fourth class is the reason a filter written
+/// — zero drift by construction, and the fourth class is the reason a filter written
 /// from the three predicates alone would not do: `DIALECT_KEY` is a plain
 /// `datafusion.sql_parser.*` key with no predicate of its own.
 pub(crate) fn refuse_reserved_key(key: &str) -> Result<(), String> {
@@ -500,7 +500,7 @@ mod tests {
     /// silently: the language service carries the dialect on its own `Catalog` snapshot, built
     /// from the **Settings** store, while the validator and the planner read it **live** — so a
     /// session value leaves completion lexing the buffer by rules the planner has already stopped
-    /// using (WJ-04). Nothing fails; the two layers just quietly disagree.
+    /// using. Nothing fails; the two layers just quietly disagree.
     #[tokio::test]
     async fn keys_the_app_reads_from_settings_refuse_toward_settings() {
         let eng = engine(&[]);

@@ -1,4 +1,4 @@
-//! **Internal tables** (ED-04, ED-05) — `CREATE TABLE` and CTAS, spooled into the project's own
+//! **Internal tables** — `CREATE TABLE` and CTAS, spooled into the project's own
 //! `.strata/tables/` and registered through the funnel every other table goes through, plus the
 //! two statements that then write over them: `INSERT` and `DROP TABLE`.
 //! `docs/STATEMENTS_SPEC.md` §6.1 + §7.
@@ -181,7 +181,7 @@ pub async fn create(
 }
 
 /// **`CREATE TABLE pg.schema.t AS SELECT …`** — a result materialized as a real server table
-/// (DB-10).
+///.
 ///
 /// The input plan is an ordinary query, so a local scan, a federated remote one and a
 /// cross-source join all reach here already working; what is added is where the rows land.
@@ -251,7 +251,7 @@ async fn materialize(
 ///
 /// Held apart from [`create`] because [`column_type`] has to ask the same question of the same
 /// planned statement: a `PRIMARY KEY` typed into the empty-table panel's type box has to be
-/// refused *while it is being typed*, in the words the create would have used (IT-01).
+/// refused *while it is being typed*, in the words the create would have used.
 fn unenforced_clause(create: &CreateMemoryTable) -> Option<&'static str> {
     if !create.constraints.is_empty() {
         return Some("Table constraints are not supported");
@@ -268,7 +268,7 @@ fn unenforced_clause(create: &CreateMemoryTable) -> Option<&'static str> {
 /// CTAS never writes a file, and an IPC file *would* store both columns, after which every read
 /// of the table resolves the second by name onto the first.
 ///
-/// `pub` because the empty-table panel refuses the same thing as its rows are typed (IT-01), and
+/// `pub` because the empty-table panel refuses the same thing as its rows are typed, and
 /// a form that said it in its own words would be a second wording for one rule.
 pub fn duplicate_column(name: &str) -> String {
     format!("Duplicate column name '{name}'. Alias one of them")
@@ -282,7 +282,7 @@ const PROBE_TABLE: &str = "__strata_probe";
 const PROBE_COLUMN: &str = "c";
 
 /// What DataFusion's planner makes of one **SQL column type** on this session — the empty-table
-/// panel's per-row validation (IT-01).
+/// panel's per-row validation.
 ///
 /// **There is no Arrow → SQL inverse to author an offer from**, which is why that panel's type
 /// field is free text and why this stands behind it. `convert_simple_data_type` is many-to-one
@@ -337,7 +337,7 @@ fn not_a_column_type(typed: &str) -> String {
 const INSERT_EXTERNAL: &str =
     "INSERT targets internal tables. Load external table data through Table Config";
 
-/// Append rows to an internal table from an `INSERT` (ED-05).
+/// Append rows to an internal table from an `INSERT`.
 ///
 /// **Native execution behind a target gate.** The only thing intercepted is *where* the write
 /// lands, because that is the one question DataFusion has no opinion about: a `ListingTable`
@@ -347,7 +347,7 @@ const INSERT_EXTERNAL: &str =
 /// (`logically_equivalent_names_and_types`, which surfaces a mismatch in its own words), and the
 /// single LZ4-frame IPC file the Arrow sink appends.
 ///
-/// **The sink is driven rather than the node executed** (DB-12), on both branches — over the
+/// **The sink is driven rather than the node executed**, on both branches — over the
 /// provider the plan already resolved, so a source inside a database connection reaches a
 /// workspace table rather than a `Dml` reaching the unparser ([`crate::sink`]).
 ///
@@ -757,7 +757,7 @@ fn dir_path(dir: &Path) -> String {
 /// the directory an **existing** table's data is already in, and `table_dir` re-derives it from
 /// the name on every drop. Changing the rule would therefore move the slug of tables already on
 /// disk, whose drop would then delete a path that does not exist and orphan the real one forever
-/// (the ED-05 failure the one-drop funnel exists to prevent). A collision that needs a user to
+/// (the failure the one-drop funnel exists to prevent). A collision that needs a user to
 /// name one table the hash of another is the smaller hazard, and it is the one that stays.
 fn slug(name: &str) -> String {
     let safe: String = name
@@ -1006,7 +1006,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// **The type probe answers what the create will actually produce** (IT-01) — in the
+    /// **The type probe answers what the create will actually produce** — in the
     /// spelling every other surface shows a type in, on this session's own config, and with the
     /// planner's refusal verbatim where there is one.
     ///
@@ -1338,7 +1338,7 @@ mod tests {
         .expect("registered");
     }
 
-    /// **The whole ED-05 shape, end to end.** A table is created, inserted into twice — each
+    /// **The whole shape, end to end.** A table is created, inserted into twice — each
     /// statement appending its own file — read back as the union, and then dropped, taking its
     /// data directory with it.
     #[tokio::test]
@@ -1487,7 +1487,7 @@ mod tests {
     /// **An append does not disturb the views above the table, so nothing has to repair them.**
     ///
     /// A `ViewTable` captures its sources by `Arc` when it is created and never re-resolves them
-    /// (D10/D11), which is why every path that *re-registers* a table re-creates the views over
+    ///, which is why every path that *re-registers* a table re-creates the views over
     /// it. An `INSERT` replaces no provider, and could not invalidate one if it did: the sink
     /// schema-checks before it writes, so the shape a view captured is the shape still there, and
     /// the provider re-LISTs per scan (this engine runs no `ListFilesCache`) so it finds the new

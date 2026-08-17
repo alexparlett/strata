@@ -1,5 +1,5 @@
-//! The **SQL language service** (S26) — one analysis layer over the SQL buffer that
-//! backs both autocomplete (S7) and validation (S25). See `docs/SQL_LANGUAGE_SPEC.md`.
+//! The **SQL language service** — one analysis layer over the SQL buffer that
+//! backs both autocomplete and validation. See `docs/SQL_LANGUAGE_SPEC.md`.
 //!
 //! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds), under the engine's
 //!   configured `datafusion.sql_parser.dialect`.
@@ -10,7 +10,7 @@
 //!   name [`resolve`]r, and the engine **dry-plan**. Byte-spanned for squiggles.
 //! - [`resolve`] — the AST name resolver behind validation: every unknown table/column in a parsed
 //!   statement, multi-error and mid-edit tolerant, leaving types and arity to the dry-plan.
-//! - [`qualify`] — bare-name resolution across the connected databases (DB-09), in front of both
+//! - [`qualify`] — bare-name resolution across the connected databases, in front of both
 //!   the router and the planner, so a statement is judged and run with the names it reaches.
 //! - [`complete`] — ranked completions for a caret position.
 //!
@@ -75,7 +75,7 @@ pub struct FunctionSym {
     pub ret: Option<String>,
     /// One-line description from the registry's documentation, when present.
     pub description: Option<String>,
-    /// `true` for a function **this session created** (`CREATE FUNCTION`, ED-09) —
+    /// `true` for a function **this session created** (`CREATE FUNCTION`) —
     /// what `DROP FUNCTION |` filters on, marked at registry-snapshot time from the
     /// one authority (the `Functions` registry's created-name set).
     pub created: bool,
@@ -165,8 +165,8 @@ impl From<&str> for FunctionSym {
 
 /// The engine's registered functions (built-ins + any UDFs), by category —
 /// enriched to [`FunctionSym`]s (name + overload signatures + return type). Walked from the
-/// engine's registry at startup (`Engine::new`, F5) and again by any statement that moves that
-/// registry (`CREATE FUNCTION` / `DROP FUNCTION`, ED-09), held on the per-window
+/// engine's registry at startup (`Engine::new`) and again by any statement that moves that
+/// registry (`CREATE FUNCTION` / `DROP FUNCTION`), held on the per-window
 /// [`Engine`](crate::Engine); folded into a [`Catalog`] for completion + validation +
 /// signature help.
 #[derive(Clone, Debug, Default, PartialEq)]

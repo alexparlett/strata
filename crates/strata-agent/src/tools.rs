@@ -1,14 +1,14 @@
 //! The **vocabulary** — the eleven agent-access tools, over a [`Host`].
 //!
 //! Ten of them read; the eleventh, [`export_result`](StrataTools::export_result), writes one file
-//! at a path the caller names (QE-05). It is not a hole in the read-only rule — the gate `run`
+//! at a path the caller names. It is not a hole in the read-only rule — the gate `run`
 //! asks is untouched and refuses the agent's own `COPY` exactly as before — because there is no
 //! data behind it that `read_page` does not already hand over byte for byte. What it *does* need
 //! guarding is the destination, and that fence is `Engine::export_result`'s.
 //!
 //! [`StrataTools`] is the rmcp `ServerHandler`, and it is deliberately transport-free: the
-//! Streamable-HTTP server ([`crate::server`]) serves it, the headless host (AA-05) serves the
-//! same value over stdio, and the assistant (AS-01) calls it in-process. One surface, three
+//! Streamable-HTTP server ([`crate::server`]) serves it, the headless host serves the
+//! same value over stdio, and the assistant calls it in-process. One surface, three
 //! frontends.
 //!
 //! **The vocabulary is methods; the tools are wrappers.** The public methods on [`StrataTools`]
@@ -77,7 +77,7 @@ pub const MAX_PAGE_SIZE: usize = 10_000;
 /// One tool as a model is offered it: what it is called, what it does, and the JSON its
 /// arguments have to be.
 ///
-/// Plain data on purpose — no rmcp type reaches the caller, so the in-process loop (AS-02)
+/// Plain data on purpose — no rmcp type reaches the caller, so the in-process loop
 /// can hand these to whatever the provider's tool shape is without depending on the MCP SDK.
 /// Built only by [`StrataTools::manifest`], which derives it from the router, so there is one
 /// vocabulary with two transports rather than two vocabularies.
@@ -382,7 +382,7 @@ impl<H: Host> StrataTools<H> {
         Self::rooted(host, false)
     }
 
-    /// The vocabulary over `host` **as the app's own assistant** (AS-02) — the same eleven tools,
+    /// The vocabulary over `host` **as the app's own assistant** — the same eleven tools,
     /// marked so every [`Host`] can tell it from a client that dialled in.
     ///
     /// The mark rides [`Agent::in_app`] to `open_query_session`, which is where a host first
@@ -683,7 +683,7 @@ impl<H: Host> StrataTools<H> {
 
     /// The project's catalog, plus the database catalogs its connections registered.
     ///
-    /// **The entries are the store's defs and only those** (the P3-02 correction: introspection
+    /// **The entries are the store's defs and only those** (introspection
     /// would hide exactly the failed rows an agent most needs to see). A database connection has
     /// no defs to show — the whole catalog comes through the connection — so listing its
     /// relations here would mean an unbounded remote enumeration inside a paged listing of
@@ -941,7 +941,7 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
-    /// **The vocabulary's one write** (QE-05): a query session's settled result, on the user's
+    /// **The vocabulary's one write**: a query session's settled result, on the user's
     /// disk, at a path the caller names.
     ///
     /// Reaches the engine directly, exactly as [`read_page`](Self::read_page) does and for the
@@ -1465,7 +1465,7 @@ mod tests {
         assert!(message.contains("'nope'"), "{message}");
     }
 
-    /// **The remote fallback does not swallow the store's answer** (DB-03). A qualified name
+    /// **The remote fallback does not swallow the store's answer**. A qualified name
     /// with no database behind it resolves nowhere, so what comes back is the host's own
     /// not-found — never a blank remote row, and never a different error for the same fault
     /// spelled with dots.
@@ -1591,8 +1591,8 @@ mod tests {
         };
     }
 
-    /// **An agent sees its own sessions and nothing else** — the rule AA-03b exists for,
-    /// where AA-03's `list_tabs` handed over every open tab including the user's.
+    /// **An agent sees its own sessions and nothing else.** An earlier `list_tabs` handed over
+    /// every open tab, including the user's.
     ///
     /// Two connections over one host and one run cache, which is the arrangement that could
     /// leak: the second lists nothing, and a handle it should never have had answers exactly
@@ -2218,7 +2218,7 @@ mod tests {
         assert!(page.rows.is_empty());
     }
 
-    /// **The one write in the vocabulary, end to end** (QE-05): the session's settled result on
+    /// **The one write in the vocabulary, end to end**: the session's settled result on
     /// disk, at a path the caller named, with the figures the write pass produced.
     ///
     /// The file is read back rather than trusted: the ordinal column must not be in it, the row
