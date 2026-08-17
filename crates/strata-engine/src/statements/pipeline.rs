@@ -9,7 +9,7 @@
 //!
 //! [`accept`] composes all three for one statement. It is not the only composition — the agent's
 //! gate ([`policy_verdicts`]) runs them over a buffer, the diagnostics pass runs them per statement
-//! range so it can span each, and [`resolved_one`] runs the first two for a caller already inside
+//! range so it can span each, and `resolved_one` runs the first two for a caller already inside
 //! an admitted arm. What there is exactly one of is the **classifier**, which is the property that
 //! matters and the one a source-reading test pins: every surface asks the same function what a
 //! statement is.
@@ -34,7 +34,7 @@ use crate::sql::qualify::{qualify as resolve_names, Refusal as NameRefusal};
 ///
 /// Deliberately not the policy as well: the two grammar stages are pure over the session, and a
 /// caller already inside an admitted arm resolves a statement of its own composing with no policy
-/// to hand ([`resolved_one`]). Who decides travels with the caller, at the one stage that asks.
+/// to hand (`resolved_one`). Who decides travels with the caller, at the one stage that asks.
 pub struct Pipeline<'e> {
     ctx: &'e SessionContext,
 }

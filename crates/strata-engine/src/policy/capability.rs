@@ -115,6 +115,8 @@ impl Grants {
 }
 
 /// Which database connections a capability's remote grants reach.
+///
+/// Read by [`PolicyProvider::permit`], which has no call sites until EA-14 — see [`Capability`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteScope {
     /// Every connection.
@@ -149,9 +151,26 @@ pub enum RemoteSel {
 
 /// What a caller may do.
 ///
+/// # The locality half is not enforced yet
+///
+/// A capability is checked in two phases: [`PolicyProvider::admit`] asks the **family** at
+/// classification, and [`PolicyProvider::permit`] asks the family against a **resolved target** at
+/// the arm. Only the first has call sites today — resolving a target is the dispatch layer's, and
+/// it lands with the Target axis in EA-14. Until then `admit` answers "does this capability hold
+/// this family at *any* locality", and nothing asks the narrower question.
+///
+/// So the [`Locality`] on a grant and the [`RemoteScope`] set by [`remote_only`](Self::remote_only)
+/// are **recorded and not yet consulted**. Build a capability that differentiates by locality and
+/// it will be admitted as though it did not: `read_only().with(Grant::Write(Locality::Remote))`
+/// admits `INSERT` anywhere, not only into a connection, and narrowing it to one backend restricts
+/// nothing. The two presets are unaffected, and that is not luck — [`full`](Self::full) holds every
+/// locality of every grant and [`read_only`](Self::read_only) holds none, so for both the coarse
+/// answer is exactly what the arm would give (`every_shipped_preset_is_locality_symmetric`).
+///
 /// # Example
 ///
-/// An MCP client that may read anything and write only the sqlite connections:
+/// An MCP client that may read anything and write only the sqlite connections — the shape the
+/// fine phase enforces once EA-14 wires it, and today a capability that may write anything:
 ///
 /// ```
 /// use strata_engine::{Capability, Grant, Locality, RemoteSel};
@@ -190,6 +209,9 @@ impl Capability {
     }
 
     /// Returns this capability with its remote grants narrowed to `selectors`.
+    ///
+    /// **Recorded, not yet enforced** — see the type's own docs. Nothing asks
+    /// [`PolicyProvider::permit`] until the arms can resolve a target to hand it (EA-14).
     pub fn remote_only(mut self, selectors: impl IntoIterator<Item = RemoteSel>) -> Self {
         self.remote = RemoteScope::Only(selectors.into_iter().collect());
         self
@@ -466,6 +488,41 @@ mod tests {
             )),
             Ok(Admit::Deny(DenyCode::OutOfScope))
         );
+    }
+
+    /// **The coarse phase is only equivalent to the full check while a capability's localities
+    /// agree, and every capability this crate ships is one where they do.**
+    ///
+    /// `admits` answers "at *any* locality", because at classification nothing has resolved a
+    /// target yet; the narrower question is `permits`, and nothing asks it until the arms can hand
+    /// it a resolved target (EA-14). So a capability holding `Ddl(Remote)` and not `Ddl(Local)` is
+    /// admitted for a workspace `CREATE TABLE` that only the fine phase would refuse.
+    ///
+    /// This is what says the gap is unreachable through anything shipped, and it is not luck:
+    /// `full()` holds every locality of every grant and `read_only()` holds none, so for both the
+    /// coarse answer *is* what the arm would give. Add a third preset that differentiates by
+    /// locality and this fails — which is the point, because it would have to be wired at the arm
+    /// before it meant anything.
+    #[test]
+    fn every_shipped_preset_is_locality_symmetric() {
+        let remote = TargetFacts::remote("postgres", "postgres://acme/orders");
+        for capability in [Capability::full(), Capability::read_only()] {
+            for family in GrantFamily::ALL {
+                let local = capability
+                    .permits(family, &TargetFacts::workspace())
+                    .is_ok();
+                assert_eq!(
+                    local,
+                    capability.permits(family, &remote).is_ok(),
+                    "{family:?} differs by locality, so the coarse phase would over-admit it"
+                );
+                assert_eq!(
+                    capability.admits(family),
+                    local,
+                    "so the coarse answer must be exactly what the arm would give for {family:?}"
+                );
+            }
+        }
     }
 
     /// **Two selectors can name the same connection**, so the ceiling and the caller are asked

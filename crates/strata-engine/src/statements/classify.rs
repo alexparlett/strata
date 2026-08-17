@@ -2,7 +2,7 @@
 //!
 //! [`classify_stmt`] matches the parsed AST rather than sniffing a leading keyword, and answers
 //! with a [`Form`] plus, where the statement itself is at fault, a [`Fault`]. The capability axis
-//! is [`grants`](super::grants), and [`pipeline::classify`](super::pipeline::classify) is the one
+//! is [`crate::policy`], and [`pipeline::classify`](super::pipeline::classify) is the one
 //! place the two meet.
 //!
 //! A fault rides on the answer rather than replacing it, so the pipeline can refuse the form
@@ -78,7 +78,7 @@ impl StmtKind {
 ///
 /// `Execute` is a read and still its own form, because it reaches session state: it belongs to
 /// the `Session` grant family, so a caller that may not `PREPARE` may not `EXECUTE`. How a read
-/// *plans* is a separate question, answered by [`read_policy`].
+/// *plans* is a separate question, answered by `read_policy` a few items down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Form {
     /// A read — the snapshot pipeline, unchanged.

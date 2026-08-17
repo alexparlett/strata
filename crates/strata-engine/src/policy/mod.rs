@@ -26,7 +26,8 @@ use crate::WsId;
 /// Where a statement's target lives.
 ///
 /// Shared with the dispatch layer's own target axis, so the fine check is derived from the
-/// resolved target and an arm never names a scope or checks the wrong one.
+/// resolved target and an arm never names a scope or checks the wrong one. Only
+/// [`PolicyProvider::permit`] reads it, so nothing reads it yet — see [`Capability`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Locality {
     /// The workspace catalog: a project table, view or internal table.
@@ -64,6 +65,9 @@ impl GrantFamily {
 }
 
 /// What a policy decision may turn on about a statement's resolved target.
+///
+/// Built by the arm that resolved it and handed to [`PolicyProvider::permit`], which has no call
+/// sites until EA-14 — see [`Capability`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetFacts {
     pub locality: Locality,
@@ -92,8 +96,9 @@ impl TargetFacts {
 /// Who is asking.
 ///
 /// The capability is the caller's own ask, and it only ever narrows what the engine's provider
-/// allows ([`Capability::intersect`]) — which is what lets one engine serve a full editor and a
-/// read-only agent without either being able to promote itself. The claims are the embedder's: a
+/// allows — [`CapabilityPolicyProvider`] asks both and grants what both grant — which is what lets
+/// one engine serve a full editor and a read-only agent without either being able to promote
+/// itself. The claims are the embedder's: a
 /// bearer token, a tenant, a role, attached verbatim and never read here.
 #[derive(Clone)]
 pub struct Principal {
@@ -210,7 +215,11 @@ pub trait PolicyProvider: Send + Sync + 'static {
 
     /// Returns whether `who` may perform `family` against this resolved target.
     ///
-    /// Asked at the arm, once the target is known.
+    /// Asked at the arm, once the target is known — **which nothing does yet**. Resolving a target
+    /// belongs to the dispatch layer and lands with the Target axis in EA-14; until then only
+    /// [`admit`](PolicyProvider::admit) has call sites, and the locality half of a [`Capability`]
+    /// is recorded rather than consulted. Implement this now and it will be correct when the arms
+    /// start asking; do not rely on it to restrict anything today.
     ///
     /// # Errors
     ///
