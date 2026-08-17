@@ -1,13 +1,8 @@
 //! What the engine does with one statement.
 //!
-//! - [`pipeline`] — the typed stages (`Parsed → Qualified → Admitted`) and [`accept`], which
-//!   composes all three for one statement.
-//! - [`classify`] — the grammar: what a parsed statement is, the faults no capability makes
-//!   well-formed, and the sentence every refusal is worded from.
-//!
-//! Who may perform what is [`crate::policy`]; this module maps its own forms onto that vocabulary
-//! ([`Form::family`]) and never the other way round. Statement execution is `engine::ddl`, which
-//! switches on [`StmtKind`].
+//! [`pipeline`] turns SQL text into an accepted statement; [`classify`] says what a parsed
+//! statement is. Who may perform it is [`crate::policy`], which this module maps its own forms
+//! onto through [`Form::family`].
 
 pub mod classify;
 pub mod pipeline;

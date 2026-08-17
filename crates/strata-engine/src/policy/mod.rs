@@ -66,8 +66,7 @@ impl GrantFamily {
 
 /// What a policy decision may turn on about a statement's resolved target.
 ///
-/// Built by the arm that resolved it and handed to [`PolicyProvider::permit`], which has no call
-/// sites until EA-14 — see [`Capability`].
+/// Handed to [`PolicyProvider::permit`], which the engine does not yet call. See [`Capability`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetFacts {
     pub locality: Locality,
@@ -95,11 +94,9 @@ impl TargetFacts {
 
 /// Who is asking.
 ///
-/// The capability is the caller's own ask, and it only ever narrows what the engine's provider
-/// allows — [`CapabilityPolicyProvider`] asks both and grants what both grant — which is what lets
-/// one engine serve a full editor and a read-only agent without either being able to promote
-/// itself. The claims are the embedder's: a
-/// bearer token, a tenant, a role, attached verbatim and never read here.
+/// The capability a principal carries only ever narrows what the provider allows, so one engine
+/// can serve callers of differing authority without any of them promoting itself. Claims are the
+/// embedder's own facts about the caller and are never read here.
 #[derive(Clone)]
 pub struct Principal {
     capability: Capability,
@@ -213,17 +210,14 @@ pub trait PolicyProvider: Send + Sync + 'static {
     /// The engine surfaces the message and refuses the statement.
     async fn admit(&self, who: &Principal, family: GrantFamily) -> Result<Admit, String>;
 
-    /// Returns whether `who` may perform `family` against this resolved target.
+    /// Returns whether `who` may perform `family` against a resolved target.
     ///
-    /// Asked at the arm, once the target is known — **which nothing does yet**. Resolving a target
-    /// belongs to the dispatch layer and lands with the Target axis in EA-14; until then only
-    /// [`admit`](PolicyProvider::admit) has call sites, and the locality half of a [`Capability`]
-    /// is recorded rather than consulted. Implement this now and it will be correct when the arms
-    /// start asking; do not rely on it to restrict anything today.
+    /// The engine does not yet call this, so an implementation of it restricts nothing today. See
+    /// [`Capability`].
     ///
     /// # Errors
     ///
-    /// As [`admit`](PolicyProvider::admit).
+    /// As [`admit`](Self::admit).
     async fn permit(
         &self,
         who: &Principal,

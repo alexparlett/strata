@@ -6,7 +6,7 @@
 //!    unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`).
 //! 2. **Policy** — each statement goes through the statement layer's own stages
 //!    ([`statements::pipeline`](crate::statements::pipeline)): its bare reads resolve against the
-//!    connected databases ([`qualify`](crate::statements::pipeline::qualify), DB-09 — before the
+//!    connected databases ([`qualify`](crate::statements::pipeline::qualify), before the
 //!    classification, and its refusals squiggle the name), then it classifies for a caller
 //!    holding [`Capability::full`]. **These are the Run's own stages, not a second reading of the
 //!    same rules**: a statement the editor did not underline is a statement Run is prepared to

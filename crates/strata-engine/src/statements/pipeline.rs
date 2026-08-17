@@ -1,18 +1,11 @@
-//! The one place a statement becomes something the engine will act on.
+//! Turning SQL text into a statement the engine will act on.
 //!
-//! Three stages, whose order the types enforce: [`parse`] mints a [`Parsed`], [`qualify`] mints a
-//! [`Qualified`] from one, and [`classify`] takes only a `Qualified`. Both have private fields and
-//! no constructor, so qualify-before-classify is a property of the types rather than a call
-//! discipline nobody can check. It has to be: the resolution can change a classification, since a
-//! bare `__snap_3` the workspace does not hold stops being a reserved name once it resolves into a
-//! connection, where the prefix reserves nothing.
+//! Three stages whose order the types enforce: [`parse`] mints a [`Parsed`], [`qualify`] mints a
+//! [`Qualified`] from one, and [`classify`] takes only a `Qualified`. Neither can be built any
+//! other way, so a statement cannot be classified before its names resolve — which matters,
+//! because resolving them can change the answer.
 //!
-//! [`accept`] composes all three for one statement. It is not the only composition — the agent's
-//! gate ([`policy_verdicts`]) runs them over a buffer, the diagnostics pass runs them per statement
-//! range so it can span each, and `resolved_one` runs the first two for a caller already inside
-//! an admitted arm. What there is exactly one of is the **classifier**, which is the property that
-//! matters and the one a source-reading test pins: every surface asks the same function what a
-//! statement is.
+//! [`accept`] runs all three for a single statement. [`policy_verdicts`] runs them over a buffer.
 
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -31,10 +24,6 @@ use crate::query::ReadPolicy;
 use crate::sql::qualify::{qualify as resolve_names, Refusal as NameRefusal};
 
 /// What the stages read a statement against.
-///
-/// Deliberately not the policy as well: the two grammar stages are pure over the session, and a
-/// caller already inside an admitted arm resolves a statement of its own composing with no policy
-/// to hand (`resolved_one`). Who decides travels with the caller, at the one stage that asks.
 pub struct Pipeline<'e> {
     ctx: &'e SessionContext,
 }
@@ -44,21 +33,22 @@ impl<'e> Pipeline<'e> {
         Pipeline { ctx }
     }
 
-    /// Returns the session the stages read from, for the tiers that run after one: name
-    /// resolution and the dry-plan both work against the session the classification judged.
+    /// Returns the session the stages read from.
     pub fn context(&self) -> &'e SessionContext {
         self.ctx
     }
 }
 
-/// One statement, parsed. Private field: only this module's parse entries mint one.
+/// One parsed statement.
+///
+/// Only [`parse`] and [`parse_one`] mint one.
 pub struct Parsed {
     stmt: DFStatement,
 }
 
-/// One statement whose bare reads have been resolved against the connected databases. Private
-/// field: only [`qualify`] mints one, which is what makes qualify-before-classify a property of
-/// the types.
+/// One statement whose bare names have been resolved against the connected databases.
+///
+/// Only [`qualify`] mints one.
 pub struct Qualified {
     stmt: DFStatement,
 }
@@ -83,7 +73,7 @@ impl Deref for Qualified {
     }
 }
 
-/// A statement the pipeline will act on, and how.
+/// An accepted statement, and how the engine will run it.
 pub enum Admitted {
     /// The snapshot pipeline, carrying the [`ReadPolicy`] the statement is planned under.
     Query { stmt: Qualified, policy: ReadPolicy },
@@ -104,9 +94,8 @@ impl Admitted {
 
 /// Why a statement was refused.
 ///
-/// Carried rather than rendered, so a consumer can log the classification and a surface can print
-/// the sentence from the one table [`message`](Reason::message) mints it in — including the
-/// stage-level refusals, which would otherwise each carry a string of their own.
+/// Carried rather than rendered, so a caller can match on the classification and still print the
+/// sentence with [`message`](Self::message).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reason {
     /// The input does not parse, or the session's dialect is unknown. The parser's own words.
@@ -128,8 +117,6 @@ pub enum Reason {
 
 impl Reason {
     /// Returns the sentence the user reads.
-    ///
-    /// **The one table.** A policy provider answers in codes precisely so it cannot reword this.
     pub fn message(&self) -> String {
         match self {
             Reason::Parse(why) | Reason::Unresolved(why) | Reason::Undecided(why) => why.clone(),
@@ -140,20 +127,15 @@ impl Reason {
         }
     }
 
-    /// Whether this is a policy provider that could not answer, rather than an answer.
-    ///
-    /// The gate reports it as an input it could not judge, where a surface that shows one
-    /// statement at a time simply shows the message.
+    /// Whether the policy provider failed to answer, rather than answering no.
     pub fn is_undecided(&self) -> bool {
         matches!(self, Reason::Undecided(_))
     }
 }
 
-/// A refusal as a surface reads it: why, and where in the buffer to point.
+/// A refused statement, and where in the buffer to point.
 ///
-/// `span` is set where the stage that minted the refusal knows a position — the resolution pass,
-/// which can name the identifier it refused. A grammar or policy refusal is about the statement as
-/// a whole, so it carries none and the editor underlines the leading keywords.
+/// `span` is set only where the refusal has a position of its own, such as an ambiguous name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
     pub reason: Reason,
@@ -182,7 +164,7 @@ impl From<NameRefusal> for Refusal {
     }
 }
 
-/// One statement [`policy_verdicts`] refuses.
+/// One statement [`policy_verdicts`] refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyRefusal {
     /// Zero-based position of the refused statement in the input.
@@ -317,15 +299,16 @@ pub async fn classify(
 
 /// Returns `sql` as one statement `who` may perform.
 ///
-/// Composes all three stages for one statement.
-///
 /// # Errors
 ///
-/// Anything [`parse_one`], [`qualify`] or [`classify`] refuses, as the sentence a surface shows.
+/// Anything [`parse_one`], [`qualify`] or [`classify`] refuses.
+///
+/// # Example
+///
+/// A [`Parsed`] is not a [`Qualified`], so a statement cannot be classified before its names
+/// resolve:
 ///
 /// ```compile_fail,E0308
-/// // Classifying an unqualified statement does not compile: `classify` takes a `Qualified`, and
-/// // only `qualify` mints one.
 /// fn hand_over(parsed: strata_engine::statements::Parsed) -> strata_engine::statements::Qualified {
 ///     parsed
 /// }

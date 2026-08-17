@@ -1,13 +1,10 @@
-//! The grammar: what one parsed statement is, before any question of who is asking.
+//! What a parsed statement is, before any question of who is asking.
 //!
-//! [`classify_stmt`] matches the parsed AST rather than sniffing a leading keyword, and answers
-//! with a [`Form`] plus, where the statement itself is at fault, a [`Fault`]. The capability axis
-//! is [`crate::policy`], and [`pipeline::classify`](super::pipeline::classify) is the one
-//! place the two meet.
+//! [`classify_stmt`] reads the parsed AST and answers with a [`Form`], plus a [`Fault`] where the
+//! statement itself is at fault. Who may perform it is [`crate::policy`].
 //!
-//! A fault rides on the answer rather than replacing it, so the pipeline can refuse the form
-//! first: a caller that may not write at all is owed "INSERT is not supported" rather than a note
-//! about the `OVERWRITE` on it.
+//! A fault rides on the answer rather than replacing it, so a caller refused a form outright is
+//! told about the form rather than about a clause within it.
 
 use std::ops::ControlFlow;
 use std::slice;
@@ -23,9 +20,6 @@ use crate::query::{is_snapshot_name, is_snapshot_ref, ReadPolicy};
 use crate::sql::unwrap_statement;
 
 /// A statement the engine implements itself.
-///
-/// Each kind is an engine method rather than a `ctx.sql` passthrough, because each has an outcome
-/// the catalog store folds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StmtKind {
     CreateExternalTable,
@@ -76,9 +70,8 @@ impl StmtKind {
 
 /// What a parsed statement is.
 ///
-/// `Execute` is a read and still its own form, because it reaches session state: it belongs to
-/// the `Session` grant family, so a caller that may not `PREPARE` may not `EXECUTE`. How a read
-/// *plans* is a separate question, answered by `read_policy` a few items down.
+/// `Execute` is a read and still its own form, reaching session state: a caller that may not
+/// `PREPARE` may not `EXECUTE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Form {
     /// A read — the snapshot pipeline, unchanged.
@@ -90,24 +83,17 @@ pub enum Form {
 }
 
 /// A refusal the statement itself earns, worded the same for every caller.
-///
-/// No capability makes a malformed statement well-formed, so none of these is a policy question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
-    /// `CREATE DATABASE` / `CREATE SCHEMA` — hard-blocked, no owning surface. The
-    /// `CatalogProviderList` has no way to refuse a registration, so this is its gate.
+    /// `CREATE DATABASE` or `CREATE SCHEMA`, neither of which the engine supports.
     CreateDatabase,
     /// `DROP` of anything that is not a table or a view.
     Drop,
-    /// Every other DDL/DML form — the sqlparser wildcard, so default stays deny.
+    /// Any other form the engine does not run.
     Unsupported,
-    /// An `INSERT` that replaces rows rather than appending — `INSERT OVERWRITE` (refused here,
-    /// off the parsed statement) and `REPLACE INTO` (refused at dispatch, since only the plan
-    /// names it). DataFusion folds both onto the one thing the Arrow sink has no implementation
-    /// for, so they are one refusal.
+    /// An `INSERT` that replaces rows rather than appending.
     InsertOverwrite,
-    /// `PREPARE` of a non-query body: `verify_plan` cannot see through the later `EXECUTE`, so
-    /// the fence is here.
+    /// `PREPARE` of a body that is not a query.
     PrepareNonQuery,
     /// A `__snap_`-prefixed identifier in the workspace catalog, read or written.
     ReservedName,
@@ -128,8 +114,7 @@ pub(super) const UNSUPPORTED: &str =
      run here";
 
 impl Fault {
-    /// Returns the sentence the user reads, naming the surface that owns the capability where
-    /// there is one. The editor's diagnostics show this verbatim.
+    /// Returns the sentence the user reads.
     pub fn message(self) -> String {
         match self {
             Fault::CreateDatabase => "CREATE DATABASE and CREATE SCHEMA are not supported",
@@ -146,12 +131,11 @@ impl Fault {
     }
 }
 
-/// What the grammar makes of one statement.
+/// What one parsed statement is, and what is wrong with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Classified {
     pub form: Form,
-    /// A fault the statement carries, reached only by a caller the policy phase permits the form
-    /// to — see this module's header for why the ordering is that way round.
+    /// A fault in the statement, reached only once the caller is permitted the form.
     pub fault: Option<Fault>,
 }
 
@@ -159,9 +143,7 @@ pub struct Classified {
 ///
 /// # Errors
 ///
-/// A statement form the engine has no arm for at all: `CREATE DATABASE` and `CREATE SCHEMA`, a
-/// `DROP` of anything but a table or a view, and every kind the parser produces that is not one
-/// of the sixteen. A fault the statement carries but a caller may be refused *before* rides on
+/// A form the engine does not run at all. A fault in a form it does run rides on
 /// [`Classified::fault`] instead.
 pub fn classify_stmt(stmt: &DFStatement) -> Result<Classified, Fault> {
     let form = form_of(stmt)?;

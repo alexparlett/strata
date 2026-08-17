@@ -1,18 +1,10 @@
-//! The shipped [`PolicyProvider`]: grants as data.
+//! Grants as data, and the [`PolicyProvider`] that decides from them.
 //!
-//! A [`Capability`] is a bitset of [`Grant`]s over a [`Locality`] axis, plus a [`RemoteScope`]
-//! refining the remote half. Two presets carry the app — [`Capability::full`] for an editor,
-//! [`Capability::read_only`] for an agent — and everything else is composed from them.
+//! A [`Capability`] is a set of [`Grant`]s over a [`Locality`] axis, narrowed for remote targets
+//! by a [`RemoteScope`]. Start from [`Capability::full`] or [`Capability::read_only`] and compose.
 //!
-//! [`CapabilityPolicyProvider`]'s own capability is a **ceiling**: it asks the ceiling and the
-//! caller and allows only what both allow, so an engine built read-only stays read-only whatever a
-//! caller asks for, while an engine built full is exactly as permissive as its callers ask to be.
-//! That is what lets one engine serve a full editor and a read-only agent at once.
-//!
-//! Both are asked separately rather than merged into one capability, because a [`RemoteScope`] has
-//! no lossless merge: `Kind("postgres")` and `Connection("postgres://acme/orders")` can denote the
-//! same connection while being different selectors, so intersecting the selector sets would refuse
-//! a connection both operands reach.
+//! [`CapabilityPolicyProvider`] holds a capability of its own and allows only what both it and the
+//! caller allow, so an engine built read-only stays read-only whatever a caller asks for.
 
 use std::collections::BTreeSet;
 
@@ -20,29 +12,25 @@ use async_trait::async_trait;
 
 use super::{Admit, DenyCode, GrantFamily, Locality, PolicyProvider, Principal, TargetFacts};
 
-/// One thing a caller may do, factored by action and locality.
+/// One thing a caller may do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Grant {
-    /// Reading, of any source. Held by every preset: reading is what a connection is for, and a
-    /// policy that refuses it refuses the product.
+    /// Reading, of any source.
     Read,
-    /// `INSERT` and `CREATE TABLE AS SELECT`, into a workspace internal table or a connection that
-    /// opted in.
+    /// `INSERT` and `CREATE TABLE AS SELECT`.
     Write(Locality),
-    /// Table DDL: the workspace's `CREATE` / `DROP` / `CREATE EXTERNAL TABLE`, and the statements
-    /// only a server can run. `UPDATE` and `DELETE` are among them, both being refused a workspace
-    /// target outright, so the only data they can reach is a server's own.
+    /// `CREATE TABLE`, `DROP TABLE`, `CREATE EXTERNAL TABLE`, `UPDATE` and `DELETE`.
+    ///
+    /// A remote view needs this at [`Locality::Remote`], since there it is the server's schema
+    /// that changes.
     Ddl(Locality),
-    /// Workspace views. Split from [`Ddl`](Grant::Ddl) because "may save views, may not reshape
-    /// tables" is a plausible policy; a remote view is `Ddl(Remote)`, since there it is the
-    /// server's schema that changes.
+    /// `CREATE VIEW` and `DROP VIEW` over the workspace.
     ViewDdl,
-    /// `COPY … TO` and export. Scope-free: it is file egress, and the file is in no catalog.
+    /// `COPY … TO` and export. Never narrowed by a [`RemoteScope`], the target being a file.
     CopyOut,
-    /// `SET` / `RESET` and `PREPARE` / `EXECUTE` / `DEALLOCATE`: engine-local session state.
+    /// `SET`, `RESET`, `PREPARE`, `EXECUTE` and `DEALLOCATE`.
     Session,
-    /// `CREATE FUNCTION` and `DROP FUNCTION`. Engine-local, DataFusion refusing a qualified
-    /// function name itself, so there is no remote half to have.
+    /// `CREATE FUNCTION` and `DROP FUNCTION`.
     Functions,
 }
 
@@ -60,8 +48,10 @@ impl Grant {
         Grant::Functions,
     ];
 
-    /// This grant's bit. Hand-rolled rather than a bitflags dependency: nine bits, one table, and
-    /// the payload means the enum cannot be `as`-cast into one.
+    /// This grant's bit.
+    ///
+    /// Hand-rolled rather than a bitflags dependency: the payload means the enum cannot be
+    /// `as`-cast into an index.
     fn bit(self) -> u16 {
         let index = match self {
             Grant::Read => 0,
@@ -77,9 +67,9 @@ impl Grant {
         1 << index
     }
 
-    /// Whether a [`RemoteScope`] refines this grant: true exactly for the remote-locality ones.
-    /// [`Read`](Grant::Read) is not among them, or "reading is never refused per source" would be
-    /// a claim the type contradicts.
+    /// Whether a [`RemoteScope`] refines this grant.
+    ///
+    /// True for the remote-locality grants only. Reading is never narrowed by a scope.
     fn scoped(self) -> bool {
         matches!(
             self,
@@ -116,7 +106,7 @@ impl Grants {
 
 /// Which database connections a capability's remote grants reach.
 ///
-/// Read by [`PolicyProvider::permit`], which has no call sites until EA-14 — see [`Capability`].
+/// Read by [`PolicyProvider::permit`], which the engine does not yet call. See [`Capability`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteScope {
     /// Every connection.
@@ -126,9 +116,9 @@ pub enum RemoteScope {
 }
 
 impl RemoteScope {
-    /// Whether this scope reaches the connection `facts` names. A remote target with neither a
-    /// kind nor a url matches nothing but [`All`](RemoteScope::All): an unidentified connection is
-    /// not one a selector can have been written for.
+    /// Whether this scope reaches the connection `facts` names.
+    ///
+    /// A target carrying neither a kind nor a url matches nothing but [`All`](RemoteScope::All).
     fn reaches(&self, facts: &TargetFacts) -> bool {
         match self {
             RemoteScope::All => true,
@@ -151,31 +141,26 @@ pub enum RemoteSel {
 
 /// What a caller may do.
 ///
-/// # The locality half is not enforced yet
+/// # The locality half is not enforced
 ///
-/// A capability is checked in two phases: [`PolicyProvider::admit`] asks the **family** at
-/// classification, and [`PolicyProvider::permit`] asks the family against a **resolved target** at
-/// the arm. Only the first has call sites today — resolving a target is the dispatch layer's, and
-/// it lands with the Target axis in EA-14. Until then `admit` answers "does this capability hold
-/// this family at *any* locality", and nothing asks the narrower question.
+/// A capability is checked in two phases. [`PolicyProvider::admit`] asks whether the caller holds
+/// a family at any locality, and [`PolicyProvider::permit`] asks the same against a resolved
+/// target. The engine only calls the first, so the [`Locality`] on a grant and the [`RemoteScope`]
+/// set by [`remote_only`](Self::remote_only) are recorded and not consulted.
 ///
-/// So the [`Locality`] on a grant and the [`RemoteScope`] set by [`remote_only`](Self::remote_only)
-/// are **recorded and not yet consulted**. Build a capability that differentiates by locality and
-/// it will be admitted as though it did not: `read_only().with(Grant::Write(Locality::Remote))`
-/// admits `INSERT` anywhere, not only into a connection, and narrowing it to one backend restricts
-/// nothing. The two presets are unaffected, and that is not luck — [`full`](Self::full) holds every
-/// locality of every grant and [`read_only`](Self::read_only) holds none, so for both the coarse
-/// answer is exactly what the arm would give (`every_shipped_preset_is_locality_symmetric`).
+/// A capability that differentiates by locality is therefore admitted as though it did not:
+/// `read_only().with(Grant::Write(Locality::Remote))` admits `INSERT` against any target, and
+/// narrowing it to one backend restricts nothing. [`full`](Self::full) and
+/// [`read_only`](Self::read_only) are unaffected, holding every locality and none respectively.
 ///
 /// # Example
 ///
-/// An MCP client that may read anything and write only the sqlite connections — the shape the
-/// fine phase enforces once EA-14 wires it, and today a capability that may write anything:
+/// A client that may read anything and write only the sqlite connections:
 ///
 /// ```
 /// use strata_engine::{Capability, Grant, Locality, RemoteSel};
 ///
-/// let mcp = Capability::read_only()
+/// let client = Capability::read_only()
 ///     .with(Grant::Write(Locality::Remote))
 ///     .remote_only([RemoteSel::Kind("sqlite".into())]);
 /// ```
@@ -210,8 +195,7 @@ impl Capability {
 
     /// Returns this capability with its remote grants narrowed to `selectors`.
     ///
-    /// **Recorded, not yet enforced** — see the type's own docs. Nothing asks
-    /// [`PolicyProvider::permit`] until the arms can resolve a target to hand it (EA-14).
+    /// Recorded but not enforced. See the type's own documentation.
     pub fn remote_only(mut self, selectors: impl IntoIterator<Item = RemoteSel>) -> Self {
         self.remote = RemoteScope::Only(selectors.into_iter().collect());
         self
@@ -222,8 +206,9 @@ impl Capability {
         self.grants.holds(grant)
     }
 
-    /// The coarse answer: may this capability perform `family` at any locality? Derived from the
-    /// grant table rather than tabulated beside the fine check, so the two cannot disagree.
+    /// Whether this capability may perform `family` at any locality.
+    ///
+    /// Derived from the same grant table the fine check uses, so the two cannot disagree.
     fn admits(&self, family: GrantFamily) -> bool {
         [Locality::Local, Locality::Remote]
             .into_iter()
@@ -247,9 +232,7 @@ impl Capability {
 
 /// The grant `family` needs at `locality`.
 ///
-/// The one derivation, so an arm never names a grant and cannot check the wrong one. A remote view
-/// is the server's schema changing, so it takes that connection's DDL grant rather than the
-/// workspace's view grant.
+/// The one derivation, so a caller never names a grant and cannot check the wrong one.
 fn grant_for(family: GrantFamily, locality: Locality) -> Grant {
     match family {
         GrantFamily::Read => Grant::Read,
@@ -277,8 +260,7 @@ impl CapabilityPolicyProvider {
         CapabilityPolicyProvider { ceiling }
     }
 
-    /// The two capabilities every answer is the conjunction of: this provider's ceiling, then the
-    /// caller's own ask.
+    /// The two capabilities every answer is the conjunction of.
     fn both<'a>(&'a self, who: &'a Principal) -> [&'a Capability; 2] {
         [&self.ceiling, who.capability()]
     }
@@ -495,7 +477,7 @@ mod tests {
     ///
     /// `admits` answers "at *any* locality", because at classification nothing has resolved a
     /// target yet; the narrower question is `permits`, and nothing asks it until the arms can hand
-    /// it a resolved target (EA-14). So a capability holding `Ddl(Remote)` and not `Ddl(Local)` is
+    /// it a resolved target. So a capability holding `Ddl(Remote)` and not `Ddl(Local)` is
     /// admitted for a workspace `CREATE TABLE` that only the fine phase would refuse.
     ///
     /// This is what says the gap is unreachable through anything shipped, and it is not luck:

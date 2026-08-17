@@ -362,15 +362,12 @@ pub struct Engine {
     session: SessionScope,
     /// Where a secret this engine needs comes from ([`EngineBuilder::with_secrets`]).
     secrets: Arc<dyn SecretProvider>,
-    /// Who may perform what ([`EngineBuilder::with_policy`]).
+    /// Who may perform what.
     ///
-    /// Asked by the three entries that classify a statement — [`run`](Engine::run),
-    /// [`validate`](Engine::validate) and [`policy_verdicts`](Engine::policy_verdicts) — and by
-    /// nothing else. The read entries ([`query`](Engine::query), [`explain`](Engine::explain))
-    /// take a statement rather than a capability and are limited to reading by the read path's
-    /// own `SQLOptions`, not by this; the same is true of `export`, `chart` and `profile`, which
-    /// read a settled snapshot. Widening the ask to those is EA-09's, with the group handles that
-    /// give a call somewhere to carry a caller.
+    /// Asked by the three entries that classify a statement: [`run`](Engine::run),
+    /// [`validate`](Engine::validate) and [`policy_verdicts`](Engine::policy_verdicts). The read
+    /// entries take a statement rather than a caller and are limited to reading by the read path's
+    /// own `SQLOptions` instead.
     policy: Arc<dyn PolicyProvider>,
 }
 
@@ -674,16 +671,11 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    /// The statement policy over `sql` as a pre-dispatch gate for a **read-only** caller (AA-01):
-    /// the same pipeline [`validate`](Engine::validate) squiggles and [`run`](Engine::run)
-    /// dispatches, one capability apart. `Ok(vec![])` is a clean pass; `Ok(refusals)` names each
-    /// refused statement; `Err` means the input could not be judged (it does not parse) — the
-    /// caller refuses dispatch on either non-clean answer, so the gate fails closed.
+    /// Returns every statement in `sql` that a read-only caller may not perform.
     ///
-    /// The capability is stated here rather than taken from the caller because that is what the
-    /// agent surface *is* today; it becomes a per-session value when the group handles land
-    /// (EA-09). It is a narrowing either way: this engine's [`PolicyProvider`] is the ceiling,
-    /// so a read-only engine cannot be widened by asking.
+    /// The same pipeline [`validate`](Engine::validate) and [`run`](Engine::run) use, one
+    /// capability apart. An empty answer is a clean pass; a caller refuses dispatch on any other
+    /// answer, including an `Err`.
     pub async fn policy_verdicts(&self, sql: String) -> Result<Vec<PolicyRefusal>, String> {
         let ctx = self.ctx.clone();
         let policy = self.policy.clone();
@@ -716,17 +708,15 @@ impl Engine {
         self.rt.as_ref().expect("engine runtime")
     }
 
-    /// **The editor's Run** (ED-02): accept `sql`, then route it.
+    /// Runs `sql` for workspace `ws`, as a query or as a statement the engine performs itself.
     ///
-    /// One pipeline in front of dispatch, and it is the same one the squiggles came from
-    /// ([`statements::accept`] at [`Capability::full`]) — so a statement the editor did not
-    /// underline is a statement Run is prepared to perform, and a refusal fails the run with
-    /// the words the squiggle showed rather than a DataFusion error about a rule that is ours.
+    /// One pipeline in front of dispatch, the same one [`validate`](Engine::validate) reports
+    /// from, so a statement the editor did not underline is one this is prepared to perform.
     ///
     /// - `Query` delegates to [`query`](Engine::query)'s body **byte-for-byte**, carrying only
     ///   the one thing the pipeline knows and the read path cannot: the [`ReadPolicy`] an
-    ///   `EXECUTE` needs (ED-08). It is the only arm that touches the snapshot lifecycle, which
-    ///   is what keeps "DDL does not retire snapshots" true by construction rather than by care.
+    ///   `EXECUTE` needs. It is the only arm that touches the snapshot lifecycle, which is what
+    ///   keeps "DDL does not retire snapshots" true by construction rather than by care.
     /// - `Statement(kind)` goes to `ddl::execute`, bracketed by
     ///   [`bookkeep`](Engine::bookkeep) so `cancel` / `is_running` / the close-while-running
     ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
@@ -932,12 +922,10 @@ impl Engine {
             .await
     }
 
-    /// `sql` as one parsed statement with its bare reads resolved (DB-09) — the entry every read
-    /// arriving as *text* goes through. [`run`](Engine::run) does not: its classification already
-    /// produced the statement.
+    /// `sql` as one parsed statement with its bare names resolved.
     ///
-    /// The pipeline's first two stages and no third: these callers are not asking whether the
-    /// statement may run, they are reads the facade already limits to reading.
+    /// The entry every read arriving as text goes through; [`run`](Engine::run) does not, its
+    /// classification having already produced the statement.
     ///
     /// **Not spawned onto the runtime**, unlike every call that touches the context to *do*
     /// something: it has to land before the first await, or `query` stops publishing its in-flight

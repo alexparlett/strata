@@ -30,7 +30,7 @@ const UNJUDGED: &str = "The statement was refused, but no reason was recorded.";
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentError {
     /// Refused DDL/DML. Carries the refusals so the message is the **engine's own**, from the
-    /// statement layer's one message table — one pipeline, two surfaces, zero copies (AA-01).
+    /// statement layer's one message table — one pipeline, two surfaces, zero copies.
     Policy(Vec<PolicyRefusal>),
     /// The engine's `Err` from a real fault, unedited — it already reads like an IDE's.
     /// Also the home of "this did not parse": the gate fails closed on unjudgeable input

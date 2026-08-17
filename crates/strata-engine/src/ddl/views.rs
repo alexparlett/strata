@@ -50,7 +50,7 @@ const WHAT: &str = "Views";
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
 ///
-/// **Parsed and resolved rather than handed to `ctx.sql`** ([`resolved_one`], DB-09): a view's body
+/// **Parsed and resolved rather than handed to `ctx.sql`** ([`resolved_one`]): a view's body
 /// is a read like any other, and resolving it is what makes [`plan_deps`] record a body reading a
 /// connection's `orders` as the *remote* dependency it is. The def still stores the SQL the user
 /// wrote.
