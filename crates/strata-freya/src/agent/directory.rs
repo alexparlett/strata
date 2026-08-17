@@ -361,8 +361,6 @@ impl Drop for SettleOnDrop {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use futures::executor::block_on;
     use futures::future::join;
     use strata_agent::{AgentIdentity, QuerySessionState};
@@ -378,11 +376,8 @@ mod tests {
     );
 
     fn window(directory: &AgentDirectory, name: &str, root: &str) -> Lent {
-        let (_, asks, notices) = directory.register(
-            PathBuf::from(root),
-            name.into(),
-            Arc::new(Engine::new(BTreeMap::new())),
-        );
+        let (_, asks, notices) =
+            directory.register(PathBuf::from(root), name.into(), Engine::builder().build());
         (asks, notices)
     }
 
@@ -454,7 +449,7 @@ mod tests {
         let (id, asks, _notices) = directory.register(
             PathBuf::from("/w/sales"),
             "sales".into(),
-            Arc::new(Engine::new(BTreeMap::new())),
+            Engine::builder().build(),
         );
         drop(asks);
         assert!(matches!(
@@ -583,7 +578,7 @@ mod tests {
         let (id, mut asks, mut before) = directory.register(
             PathBuf::from("/w/sales"),
             "sales".into(),
-            Arc::new(Engine::new(BTreeMap::new())),
+            Engine::builder().build(),
         );
         let who = AgentId::new();
         let session = QuerySessionId::new();
@@ -607,7 +602,7 @@ mod tests {
                 let (_, _new_asks, new_notices) = directory.register(
                     PathBuf::from("/w/sales"),
                     "sales".into(),
-                    Arc::new(Engine::new(BTreeMap::new())),
+                    Engine::builder().build(),
                 );
                 after = Some(new_notices);
             },

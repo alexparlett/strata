@@ -623,7 +623,6 @@ impl ScalarUDFImpl for SqlMacro {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use crate::sql::{complete, Catalog, CompletionKind};
     use crate::{Engine, RunOutcome, RunTag, StatementReport, StoreEffect, WsId};
@@ -679,7 +678,7 @@ mod tests {
     /// cannot see anywhere else — that it dies with the engine (spec §8).
     #[tokio::test]
     async fn a_created_function_runs_completes_and_says_it_is_session_scoped() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         assert!(offered(&eng, "SELECT add_o").is_empty(), "not yet");
 
         let report = statement(
@@ -735,7 +734,7 @@ mod tests {
     /// one planned body; the case-insensitive match is the same rule an unquoted column follows.
     #[tokio::test]
     async fn every_spelling_of_an_argument_reaches_the_same_body() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         for (n, body) in [
             (1, "a * 10 + b"),
             (2, "$a * 10 + $b"),
@@ -773,7 +772,7 @@ mod tests {
     /// own `return_type` and the fault surfaces deep in the optimizer instead of as an answer.
     #[tokio::test]
     async fn the_declared_return_type_is_what_the_call_has() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         statement(
             &eng,
             "CREATE FUNCTION narrow(x BIGINT) RETURNS INT RETURN x + 1",
@@ -791,7 +790,7 @@ mod tests {
     /// that failed.
     #[tokio::test]
     async fn a_drop_removes_it_from_execution_and_from_completion() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         statement(
             &eng,
             "CREATE FUNCTION add_one(x BIGINT) RETURNS BIGINT RETURN x + 1",
@@ -829,7 +828,7 @@ mod tests {
     /// `SELECT addone(…)` could never resolve.
     #[tokio::test]
     async fn a_name_is_folded_and_replacing_one_is_asked_for() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         statement(
             &eng,
             "CREATE FUNCTION AddOne(x BIGINT) RETURNS BIGINT RETURN x + 1",
@@ -877,7 +876,7 @@ mod tests {
     /// half a scalar-only check would miss.
     #[tokio::test]
     async fn a_built_in_is_neither_redefined_nor_dropped() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         for name in ["abs", "count", "row_number"] {
             for sql in [
                 format!("CREATE FUNCTION {name}(x BIGINT) RETURNS BIGINT RETURN 0"),
@@ -909,7 +908,7 @@ mod tests {
     /// arguments; and a clause DataFusion's planner would drop on the floor.
     #[tokio::test]
     async fn the_forms_that_are_not_a_sql_function_refuse() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         statement(&eng, "CREATE VIEW v AS SELECT 1 AS a")
             .await
             .expect("created");
@@ -994,7 +993,7 @@ mod tests {
     /// (`FunctionsChanged` -> `catalog_settled`) is ED-08's and is not re-tested here.
     #[tokio::test]
     async fn a_created_function_stops_being_a_diagnostic() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         let sql = "SELECT add_one(41)";
         assert!(
             !eng.validate(sql.into()).await.is_empty(),
@@ -1037,7 +1036,7 @@ mod tests {
     /// the half that *is* observable, and it is the last assertion.
     #[tokio::test]
     async fn the_built_in_fence_covers_the_registries_a_drop_clears() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         for name in [
             "array_filter",
             "array_transform",
@@ -1076,7 +1075,7 @@ mod tests {
     /// The second half is the assertion that matters: both functions are still callable.
     #[tokio::test]
     async fn a_drop_refuses_what_its_planner_would_discard() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         for n in [1, 2] {
             statement(
                 &eng,
@@ -1120,7 +1119,7 @@ mod tests {
     /// this task exists to fix, so the equality is what says the built-in set is untouched.
     #[tokio::test]
     async fn a_restart_clears_created_functions_and_leaves_the_built_ins_alone() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         let built_in = eng.functions();
         statement(
             &eng,
@@ -1148,7 +1147,7 @@ mod tests {
         )
         .await
         .expect("created");
-        let restarted = Engine::new(BTreeMap::new());
+        let restarted = Engine::builder().build();
         assert!(run_err(&restarted, "SELECT add_one(1)")
             .await
             .contains("Invalid function 'add_one'"));

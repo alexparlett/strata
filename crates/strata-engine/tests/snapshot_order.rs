@@ -9,8 +9,6 @@
 //! The fixtures here are deliberately **over** the split threshold — the failure was invisible
 //! below it, which is why no test ever saw it.
 
-use std::sync::Arc;
-
 use strata_engine::export::{Compression, Csv, ExportSpec, Format, Partition, Scope};
 use strata_engine::{Engine, RunTag, WsId};
 use strata_model::{Cell, SnapshotId};
@@ -37,7 +35,7 @@ fn ints(rows: &[Vec<Cell>], col: usize) -> Vec<i64> {
 /// however often they are re-read.
 #[tokio::test]
 async fn pages_over_the_split_threshold_are_stable_and_in_result_order() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng, BIG).await;
 
     let page_size = 100usize;
@@ -64,7 +62,7 @@ async fn pages_over_the_split_threshold_are_stable_and_in_result_order() {
 /// tie.
 #[tokio::test]
 async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let snap = snapshot(
         &eng,
         "SELECT 0 AS k, i, md5(i::text) AS h FROM generate_series(1, 3000000) t(i) ORDER BY i",
@@ -101,7 +99,7 @@ async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
 /// rows duplicated and vanished as the user paged.)
 #[tokio::test]
 async fn an_unordered_query_pages_the_order_the_spool_froze() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let (out, _) = eng
         .query(
             WsId(1),
@@ -137,7 +135,7 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
 /// batch, not an exported file.
 #[tokio::test]
 async fn the_ordinal_is_bookkeeping_and_never_leaks() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let (out, page1) = eng
         .query(
             WsId(1),
@@ -195,7 +193,7 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
 /// escalates around the user's, and the user's survives every surface with its data intact.
 #[tokio::test]
 async fn a_user_column_named_like_the_ordinal_survives() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let (out, _) = eng
         .query(
             WsId(1),
@@ -227,7 +225,7 @@ async fn a_user_column_named_like_the_ordinal_survives() {
 /// stream the writer consumes.
 #[tokio::test]
 async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let snap = snapshot(
         &eng,
         "SELECT i, md5(i::text) AS h, \
@@ -259,7 +257,7 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
 /// per row regardless of arrival order.
 #[tokio::test]
 async fn an_unordered_partitioned_window_stays_row_consistent() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let (out, _) = eng
         .query(
             WsId(1),
@@ -297,7 +295,7 @@ async fn an_unordered_partitioned_window_stays_row_consistent() {
 /// the user's order.
 #[tokio::test]
 async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let snap = snapshot(
         &eng,
         "SELECT i, md5(i::text) AS h, \
@@ -330,7 +328,7 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
 /// editor can run, and that its pages read back.
 #[tokio::test]
 async fn explain_runs_and_pages_without_an_ordinal() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     for sql in ["EXPLAIN SELECT 1", "EXPLAIN ANALYZE SELECT 1"] {
         let (out, _) = eng
             .query(WsId(1), RunTag(1), sql.into(), 10)
@@ -353,7 +351,7 @@ async fn explain_runs_and_pages_without_an_ordinal() {
 /// later read; such a result now spools ordinal-less and reads exactly as it did at base.
 #[tokio::test]
 async fn duplicate_named_columns_still_read() {
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
     let (out, _) = eng
         .query(
             WsId(1),
@@ -385,7 +383,7 @@ async fn duplicate_named_columns_still_read() {
 /// `keep_partition_by_columns`.
 #[tokio::test]
 async fn a_partitioned_export_never_writes_the_ordinal() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let (out, _) = eng
         .query(
             WsId(1),

@@ -24,7 +24,8 @@
 //! [`DbSchemaProvider`] is still the one place a provider is constructed.
 //!
 //! **This module holds a password for the length of one login, and never stores one.** The def says
-//! only that one is expected; the value is read from the OS keystore per pool connection, under a
+//! only that one is expected; the value is read per pool connection from the engine's
+//! [`SecretProvider`] — the OS keystore in the app — under a
 //! [reference derived](strata_core::secret::SecretRef::derived) from the connection's own identity.
 //! [`connect`] takes the provider as an argument, so passwordless authentication is `None` rather
 //! than a mode this module has to know about.
@@ -56,6 +57,7 @@ use super::catalog::readable;
 use super::connect::{self, Registration};
 use super::fold_ident;
 use super::providers::deregister_catalog;
+use super::secrets::SecretProvider;
 use strata_core::secret::SecretRef;
 
 mod federate;
@@ -358,7 +360,7 @@ pub enum SchemaVisibility {
 /// let us in or did not.
 ///
 /// `passwords` is the password seam, and it is an argument rather than something read here:
-/// [`Engine::connect`](super::Engine::connect) hands in [`KeystorePassword`], and the
+/// [`Engine::connect`](super::Engine::connect) hands in [`SecretPassword`], and the
 /// integration test hands in the crate's `StaticPasswordProvider`, so both drive this same entry
 /// point and no test process opens a keystore. `None` is passwordless authentication (`trust`,
 /// `peer`, certificate).
@@ -691,7 +693,7 @@ async fn build_pool(
 /// rewritten here are the ones it cannot word as well as we can, because it does not know there
 /// is a connection editor behind them. Nothing in any of it is a password: the crate builds its
 /// connection string without one on purpose, and our own provider's failure is
-/// [`KeystorePassword`]'s sentence.
+/// [`SecretPassword`]'s sentence.
 fn refused(conn: &ConnectionDef, pg: &PgStore, e: pool::Error) -> String {
     match e {
         pool::Error::InvalidHostOrPortError { host, port, .. } => format!(
@@ -707,8 +709,8 @@ fn refused(conn: &ConnectionDef, pg: &PgStore, e: pool::Error) -> String {
     }
 }
 
-/// The keystore behind one connection's password: read **per new pool connection**, never
-/// cached, never held past the login it is for.
+/// One connection's password: read **per new pool connection**, never cached, never held past the
+/// login it is for.
 ///
 /// The reference is [derived](SecretRef::derived) from the connection's URL rather than stored
 /// on the def, so the committed `project.json` carries no machine-local id — see
@@ -716,34 +718,36 @@ fn refused(conn: &ConnectionDef, pg: &PgStore, e: pool::Error) -> String {
 /// machine is *there is no entry*, and that is a sentence rather than a fault: they enter the
 /// password once, into their own keystore, and nothing in git changes.
 ///
-/// The read is blocking (a keystore call is a platform call that can wait on a lock or a user
-/// prompt), so it goes through `spawn_blocking` rather than stalling a runtime worker while bb8
-/// opens a connection.
-pub(crate) struct KeystorePassword {
+/// The read is blocking — a keystore call can wait on a platform lock or on the user — so it goes
+/// through `spawn_blocking` rather than stalling a runtime worker while bb8 opens a connection.
+pub(crate) struct SecretPassword {
     key: SecretRef,
+    secrets: Arc<dyn SecretProvider>,
     /// For the message alone. The URL rather than the host, because that is what the row and
     /// the editor both name a connection by.
     url: String,
 }
 
-impl KeystorePassword {
+impl SecretPassword {
     /// The provider for `url`'s password, addressing the slot that URL derives.
-    pub(crate) fn new(url: String) -> Self {
+    pub(crate) fn new(url: String, secrets: Arc<dyn SecretProvider>) -> Self {
         Self {
             key: SecretRef::derived(PG_PASSWORD, &url),
+            secrets,
             url,
         }
     }
 }
 
 #[async_trait]
-impl PasswordProvider for KeystorePassword {
+impl PasswordProvider for SecretPassword {
     async fn get_password(&self) -> Result<SecretString, Box<dyn Error + Send + Sync>> {
         let key = self.key.clone();
-        let read = spawn_blocking(move || key.get())
+        let secrets = Arc::clone(&self.secrets);
+        let read = spawn_blocking(move || secrets.secret(&key))
             .await
             .map_err(|e| format!("Reading the password for '{}' failed: {e}", self.url))?;
-        match read.map_err(|e| format!("{e}"))? {
+        match read? {
             Some(secret) => Ok(SecretString::from(secret.expose().to_string())),
             None => Err(format!(
                 "No password is stored on this machine for '{}'. Open the connection and enter \

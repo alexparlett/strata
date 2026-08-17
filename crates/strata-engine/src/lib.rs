@@ -33,6 +33,7 @@
 mod arrow_stats;
 #[cfg(test)]
 mod boundaries;
+pub mod builder;
 mod catalog;
 mod chart;
 /// The all-or-nothing contract a connection registers under, shared by [`store`] and [`db`].
@@ -49,9 +50,11 @@ pub mod profile;
 mod providers;
 mod query;
 pub mod register;
+pub mod secrets;
 mod sink;
 pub mod sql;
 mod store;
+pub mod udf_package;
 mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
@@ -67,6 +70,10 @@ pub use ddl::{
 };
 pub use query::purge_snapshot_root;
 
+pub use builder::EngineBuilder;
+pub use udf_package::UdfPackage;
+
+use secrets::SecretProvider;
 use sql::{PolicyRefusal, Verdict};
 
 use strata_arrow::{column_info, config, RecordBatch};
@@ -104,13 +111,14 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
 use datafusion::common::TableReference;
+use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
 use datafusion::logical_expr::{ScalarUDF, TableType};
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion_federation::FederatedQueryPlanner;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::Runtime;
 use tokio::task::AbortHandle;
 
 use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
@@ -118,10 +126,7 @@ use db::Databases;
 use ddl::StrataFunctionFactory;
 use functions::Functions;
 use providers::{StrataCatalogList, StrataCatalogProvider};
-use query::{
-    claim_snapshot_dir, discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat,
-    ReadPolicy,
-};
+use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat, ReadPolicy};
 use sql::{DatabaseSym, FunctionCatalog, PreparedSym, RelationSym, SchemaSym};
 use strata_arrow::plan::QueryPlan;
 use strata_model::{
@@ -167,10 +172,6 @@ pub enum RunOutcome {
     /// (`docs/SNAPSHOT_SPEC.md` §4 — DDL does not retire snapshots).
     Statement(StatementReport),
 }
-
-/// Process-unique id per engine (one per project window), scoping snapshot files so
-/// windows never collide.
-static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// An in-flight **profile scan** (D4): which dispatch it is, and the handle that cancels it.
 ///
@@ -295,6 +296,10 @@ struct Lifecycle {
 /// dropping it aborts in-flight work and removes its snapshot directory.
 pub struct Engine {
     engine_id: u64,
+    /// This engine's own handle, from [`Arc::new_cyclic`]. It is what lets a method handing out an
+    /// owning guard still take `&self`, and so still be reachable through a `Deref`. Weak, because
+    /// a strong handle here would be a cycle.
+    self_ref: Weak<Engine>,
     /// DataFusion's home: the private multi-thread runtime every call spawns onto.
     /// `Option` only so `Drop` can take it for a context-safe `shutdown_background`
     /// (a plain field drop panics when the engine is dropped inside another runtime,
@@ -330,8 +335,9 @@ pub struct Engine {
     /// walked at build and re-walked by a statement that moves the registry (ED-09).
     functions: Functions,
     /// The project folder this engine may write internal tables into (ED-04), set at project
-    /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir). `None` until
-    /// then, and forever for an engine with no project behind it.
+    /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir), or
+    /// [`with_data_dir`](EngineBuilder::with_data_dir), which says it at construction. `None`
+    /// until then, and forever for an engine with no project behind it.
     data_root: Mutex<Option<PathBuf>>,
     /// Which registered tables are **internal** — see [`InternalTables`].
     internal: InternalTables,
@@ -344,6 +350,8 @@ pub struct Engine {
     /// The `SET` overlay and the prepared-statement mirror (ED-08) — see [`SessionScope`].
     /// Default on a fresh engine, which is what makes a restart clear the session.
     session: SessionScope,
+    /// Where a secret this engine needs comes from ([`EngineBuilder::with_secrets`]).
+    secrets: Arc<dyn SecretProvider>,
 }
 
 /// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
@@ -433,46 +441,17 @@ impl Connections {
 }
 
 impl Engine {
-    /// Build a window's engine, honouring the given `datafusion.*` `overrides` (W2).
-    pub fn new(overrides: BTreeMap<String, String>) -> Engine {
-        let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
-        let rt = Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name(format!("df-engine-{engine_id}"))
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        let ctx = build_context(&overrides);
-        let functions = Functions::new(&ctx);
-        let snapshot_lock = match claim_snapshot_dir(engine_id) {
-            Ok(lock) => Some(lock),
-            Err(why) => {
-                tracing::warn!(
-                    "engine {engine_id}: could not claim {} ({why}); its snapshots are \
-                     unprotected against another instance's startup purge",
-                    query::snapshot_dir(engine_id)
-                );
-                None
-            }
-        };
-        Engine {
-            engine_id,
-            rt: Some(rt),
-            ctx,
-            built_runtime: runtime_subset(&overrides),
-            overrides: Mutex::new(overrides),
-            snap_seq: AtomicU64::new(1),
-            dispatch_seq: AtomicU64::new(1),
-            _snapshot_lock: snapshot_lock,
-            lifecycle: Mutex::default(),
-            inflight_flag: OnceLock::new(),
-            functions,
-            data_root: Mutex::default(),
-            internal: InternalTables::default(),
-            connections: Connections::default(),
-            databases: Databases::default(),
-            session: SessionScope::default(),
-        }
+    /// Creates an [`EngineBuilder`] to configure an `Engine`.
+    ///
+    /// This is the same as [`EngineBuilder::new`].
+    pub fn builder() -> EngineBuilder {
+        EngineBuilder::new()
+    }
+
+    /// This engine's own `Arc`, for a guard that has to keep it reachable past the call that made
+    /// it. Upgrading cannot fail: reaching a method at all means the engine is alive.
+    fn owned(&self) -> Arc<Engine> {
+        self.self_ref.upgrade().expect("the engine's own handle")
     }
 
     /// Tell this engine which **project folder** it belongs to (ED-04).
@@ -1059,11 +1038,7 @@ impl Engine {
     ///
     /// The chart never re-reads the source files: it charts the result the grid is paging,
     /// which is what makes the two agree when the data underneath has since moved.
-    pub async fn chart(
-        self: &Arc<Self>,
-        snapshot: SnapshotId,
-        q: ChartQuery,
-    ) -> Result<ChartData, String> {
+    pub async fn chart(&self, snapshot: SnapshotId, q: ChartQuery) -> Result<ChartData, String> {
         let _reading = self.pin_snapshot(snapshot);
         let ctx = self.ctx.clone();
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
@@ -1086,7 +1061,7 @@ impl Engine {
     /// pairs, or no x-variance): the overlay simply does not draw, never an error the user
     /// must dismiss.
     pub async fn trend(
-        self: &Arc<Self>,
+        &self,
         snapshot: SnapshotId,
         x: String,
         y: String,
@@ -1238,12 +1213,12 @@ impl Engine {
     /// cache entries live by (lifetime is a held handle, never imperative bookkeeping), so a
     /// caller expresses "I still need this" by keeping the guard, and an early return, a
     /// panic or a dropped window all release it.
-    pub fn pin_snapshot(self: &Arc<Self>, snapshot: SnapshotId) -> SnapshotPin {
+    pub fn pin_snapshot(&self, snapshot: SnapshotId) -> SnapshotPin {
         let mut lc = self.lifecycle.lock().unwrap();
         *lc.pins.entry(snapshot).or_insert(0) += 1;
         drop(lc);
         SnapshotPin {
-            engine: Arc::clone(self),
+            engine: self.owned(),
             snapshot,
         }
     }
@@ -1308,7 +1283,7 @@ impl Engine {
     /// its own for its whole life; this one makes the call correct on its own terms, for a
     /// caller that has no window.
     pub async fn export(
-        self: &Arc<Self>,
+        &self,
         snapshot: SnapshotId,
         spec: export::ExportSpec,
     ) -> Result<(String, usize), String> {
@@ -1350,7 +1325,7 @@ impl Engine {
     /// say no — so [`export::check_destination`] is the fence, and it is the whole fence: the data
     /// itself is already readable page by page by whoever can call this.
     pub async fn export_result(
-        self: &Arc<Self>,
+        &self,
         snapshot: SnapshotId,
         path: String,
         format: export::Format,
@@ -1397,6 +1372,7 @@ impl Engine {
         let url = conn.url();
         self.connections.note(&url);
         let dbs = self.databases.clone();
+        let secrets = Arc::clone(&self.secrets);
         let settled = self
             .rt()
             .spawn(async move {
@@ -1405,7 +1381,7 @@ impl Engine {
                         let passwords = match pg.password {
                             PgPassword::None => None,
                             PgPassword::Keystore => {
-                                Some(Arc::new(db::KeystorePassword::new(conn.url()))
+                                Some(Arc::new(db::SecretPassword::new(conn.url(), secrets))
                                     as Arc<dyn PasswordProvider>)
                             }
                         };
@@ -1800,7 +1776,7 @@ struct ExportHold {
 impl ExportHold {
     /// Claim both halves. Constructing the hold *is* the acquire, so there is no way to hold one
     /// without having taken what it releases.
-    fn new(engine: &Arc<Engine>, snapshot: SnapshotId) -> Self {
+    fn new(engine: &Engine, snapshot: SnapshotId) -> Self {
         let mut lc = engine.lifecycle.lock().unwrap();
         *lc.pins.entry(snapshot).or_insert(0) += 1;
         lc.background += 1;
@@ -1808,7 +1784,7 @@ impl ExportHold {
         drop(lc);
         Self {
             snapshot,
-            engine: Arc::downgrade(engine),
+            engine: engine.self_ref.clone(),
         }
     }
 }
@@ -1943,7 +1919,14 @@ pub fn quote_ident(name: &str) -> String {
 /// `ConfigOptions` keys go on the `SessionConfig`; the `datafusion.runtime.*` keys
 /// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
 /// and skipped rather than failing the whole engine.
-fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
+///
+/// `packages` supply the engine's SQL functions; `pool`, when given, is the memory pool
+/// DataFusion executes against.
+fn build_context(
+    overrides: &BTreeMap<String, String>,
+    packages: &[Arc<dyn UdfPackage>],
+    pool: Option<Arc<dyn MemoryPool>>,
+) -> SessionContext {
     let mut config = SessionConfig::new().with_information_schema(true);
     for (key, value) in overrides {
         if key.starts_with("datafusion.runtime.") {
@@ -1958,11 +1941,11 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     }
     let mut config = config.with_default_catalog_and_schema(CATALOG, SCHEMA);
     config.options_mut().sql_parser.collect_spans = true;
-    let rt = match build_runtime(overrides) {
+    let rt = match build_runtime(overrides, pool.clone()) {
         Ok(rt) => rt,
         Err(e) => {
             tracing::warn!("engine runtime config invalid ({e}); using defaults");
-            build_runtime(&BTreeMap::new()).expect("default runtime")
+            build_runtime(&BTreeMap::new(), pool).expect("default runtime")
         }
     };
     let state = SessionStateBuilder::new()
@@ -1978,7 +1961,7 @@ fn build_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     if let Err(e) = datafusion_functions_json::register_all(&mut ctx) {
         tracing::warn!("engine: JSON functions unavailable: {e}");
     }
-    udfs::register(&ctx);
+    udf_package::register_packages(&ctx, packages);
     ctx.with_function_factory(Arc::new(StrataFunctionFactory))
 }
 
@@ -2067,7 +2050,13 @@ fn runtime_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, Stri
 /// validates the value, badges it RESTART and rebuilds the engine, and the setting then did
 /// nothing, with no error to say so. A catalogue entry is a promise that the key applies, so
 /// adding one to `ENGINE_KEYS` means adding it here in the same change.
-fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Arc<RuntimeEnv>, String> {
+///
+/// A `pool` given here takes precedence over `memory_limit`, which otherwise builds one. The limit
+/// is still parsed either way, so a malformed value is reported whether or not it is used.
+fn build_runtime(
+    overrides: &BTreeMap<String, String>,
+    pool: Option<Arc<dyn MemoryPool>>,
+) -> Result<Arc<RuntimeEnv>, String> {
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     let val = |k: &str| {
         overrides
@@ -2092,8 +2081,14 @@ fn build_runtime(overrides: &BTreeMap<String, String>) -> Result<Arc<RuntimeEnv>
             .expect("the catalogued key")
             .default,
     )?);
-    if let Some(v) = &mem {
-        b = b.with_memory_limit(bytes("datafusion.runtime.memory_limit", v)?, 1.0);
+    let mem = mem
+        .as_deref()
+        .map(|v| bytes("datafusion.runtime.memory_limit", v))
+        .transpose()?;
+    match (pool, mem) {
+        (Some(pool), _) => b = b.with_memory_pool(pool),
+        (None, Some(limit)) => b = b.with_memory_limit(limit, 1.0),
+        (None, None) => {}
     }
     if let Some(v) = &max_temp {
         b = b.with_max_temp_directory_size(
@@ -2123,6 +2118,7 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Waker};
 
+    use crate::builder::test_context;
     use crate::sql::Blocked;
     use strata_model::{SourceFormat, StatKey};
 
@@ -2161,7 +2157,7 @@ mod tests {
     /// close-while-running confirm for a query that finished long ago.
     #[test]
     fn a_dropped_run_future_does_not_leave_the_workspace_running() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         let ws = WsId(1);
         let flag = Arc::new(AtomicBool::new(false));
         engine.watch_inflight(Arc::clone(&flag));
@@ -2189,7 +2185,7 @@ mod tests {
     /// rule the settle path follows, for the same reason.
     #[test]
     fn a_dropped_superseded_run_leaves_the_newer_dispatch_alone() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         let ws = WsId(1);
 
         let first = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
@@ -2229,7 +2225,9 @@ mod tests {
 
     #[test]
     fn set_config_moves_a_live_option_and_puts_a_removed_one_back_to_its_default() {
-        let engine = Engine::new(overrides(&[(BATCH, "4096")]));
+        let engine = Engine::builder()
+            .with_config(overrides(&[(BATCH, "4096")]))
+            .build();
         assert_eq!(live(&engine, BATCH), "4096", "built with the override");
 
         assert!(!engine.set_config(overrides(&[(BATCH, "1024")])));
@@ -2245,7 +2243,7 @@ mod tests {
 
     #[test]
     fn a_runtime_key_owes_a_restart_until_the_engine_is_rebuilt() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         assert!(!engine.restart_owed());
 
         assert!(
@@ -2258,7 +2256,7 @@ mod tests {
             "a second write still owes the same restart"
         );
 
-        let restarted = Engine::new(engine.overrides());
+        let restarted = Engine::builder().with_config(engine.overrides()).build();
         assert!(!restarted.restart_owed());
     }
 
@@ -2271,7 +2269,7 @@ mod tests {
     /// the registry is the easy half, and it is the *snapshot* that the surfaces read.
     #[test]
     fn json_accessors_reach_the_function_catalogue() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         let functions = engine.functions();
         let names: Vec<&str> = functions.scalar.iter().map(|f| f.name.as_str()).collect();
         for want in [
@@ -2301,7 +2299,7 @@ mod tests {
     /// this a test of the *flattening* rather than of one expression.
     #[tokio::test]
     async fn a_bare_json_arrow_yields_text_instead_of_panicking() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let doc = r#"'{"s": "x", "n": 7, "b": true, "o": {"k": 1}, "a": [1,2], "z": null}'"#;
 
         let (out, _) = eng
@@ -2349,7 +2347,7 @@ mod tests {
     /// is the type the query produced, and no coercion or refusal stands between them.
     #[tokio::test]
     async fn a_json_value_nested_in_a_struct_round_trips() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let (out, _) = eng
             .query(
                 WsId(1),
@@ -2371,7 +2369,7 @@ mod tests {
     async fn a_json_accessor_needs_no_table() {
         use datafusion::arrow::array::StringArray;
 
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let batches = ctx
             .sql(r#"SELECT json_get_str('{"a":{"b":"deep"}}', 'a', 'b') AS v"#)
             .await
@@ -2413,14 +2411,14 @@ mod tests {
                 },
                 default => default,
             };
-            build_runtime(&overrides(&[(entry.key, value)]))
+            build_runtime(&overrides(&[(entry.key, value)]), None)
                 .unwrap_or_else(|e| panic!("{} = {value} was rejected: {e}", entry.key));
 
             if entry.key == "datafusion.runtime.temp_directory" {
                 continue;
             }
             assert!(
-                build_runtime(&overrides(&[(entry.key, "nonsense")])).is_err(),
+                build_runtime(&overrides(&[(entry.key, "nonsense")]), None).is_err(),
                 "{} accepted a value its kind cannot hold — the key is catalogued but never \
                  read, so setting it does nothing and says nothing",
                 entry.key
@@ -2434,40 +2432,40 @@ mod tests {
     /// sources again", and a cached listing answers each of them with the previous file set.
     #[test]
     fn the_list_files_cache_is_off_unless_the_user_asks_for_one() {
-        let default = build_runtime(&BTreeMap::new()).expect("runtime");
+        let default = build_runtime(&BTreeMap::new(), None).expect("runtime");
         assert!(
             default.cache_manager.get_list_files_cache().is_none(),
             "a fresh engine caches no listing"
         );
-        let asked = build_runtime(&overrides(&[(
-            "datafusion.runtime.list_files_cache_limit",
-            "4M",
-        )]))
+        let asked = build_runtime(
+            &overrides(&[("datafusion.runtime.list_files_cache_limit", "4M")]),
+            None,
+        )
         .expect("runtime");
         assert!(asked.cache_manager.get_list_files_cache().is_some());
     }
 
     #[test]
     fn a_runtime_ttl_is_read_the_way_the_field_validates_it() {
-        assert!(build_runtime(&overrides(&[(
-            "datafusion.runtime.list_files_cache_ttl",
-            "2m"
-        )]))
+        assert!(build_runtime(
+            &overrides(&[("datafusion.runtime.list_files_cache_ttl", "2m")]),
+            None
+        )
         .is_ok());
         assert_eq!(
             strata_core::util::parse_duration("2m"),
             Some(std::time::Duration::from_secs(120))
         );
-        assert!(build_runtime(&overrides(&[(
-            "datafusion.runtime.list_files_cache_ttl",
-            "nonsense"
-        )]))
+        assert!(build_runtime(
+            &overrides(&[("datafusion.runtime.list_files_cache_ttl", "nonsense")]),
+            None
+        )
         .is_err());
     }
 
     #[test]
     fn set_config_leaves_the_catalog_names_alone() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         engine.set_config(overrides(&[(
             "datafusion.catalog.default_schema",
             "elsewhere",
@@ -2513,7 +2511,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_view_round_trips_under_the_name_it_was_given() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         for (i, name) in ["daily_sales", "Sales 2024", "say \"hi\"", "Order"]
             .iter()
             .enumerate()
@@ -2546,7 +2544,7 @@ mod tests {
     /// sibling defs / saved queries say `FROM dailysales`. Quoting must not re-key it.
     #[tokio::test]
     async fn a_mixed_case_view_still_registers_under_its_folded_name() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         eng.create_view("DailySales".into(), "SELECT 1 AS n".into())
             .await
             .expect("create");
@@ -2620,8 +2618,8 @@ mod tests {
             "Order",
         ];
 
-        let legacy = Engine::new(Default::default());
-        let now = Engine::new(Default::default());
+        let legacy = Engine::builder().build();
+        let now = Engine::builder().build();
         for name in NAMES {
             let df = legacy
                 .ctx
@@ -2662,7 +2660,7 @@ mod tests {
     /// defensive, not a repair, and the doc on [`quote_ident`] says so.
     #[tokio::test]
     async fn the_names_quoting_added_were_malformed_sql_before() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         for name in ["Sales 2024", "sales-eu", "2024", "say \"hi\""] {
             let stmt = format!("CREATE OR REPLACE VIEW {name} AS SELECT 1 AS n");
             assert!(
@@ -2696,7 +2694,7 @@ mod tests {
     /// nothing.
     #[tokio::test]
     async fn the_profile_sql_for_a_mixed_case_table_actually_runs() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         register_regions(&eng, "Regions").await;
 
         let profile = eng.profile("Regions".into()).await.expect("profile");
@@ -2716,7 +2714,7 @@ mod tests {
     /// fail the whole aggregate rather than one column (`profile::aggregates`).
     #[tokio::test]
     async fn a_scan_lands_the_per_type_facts_of_every_column() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         register_regions(&eng, "regions").await;
 
         let profile = eng.profile("regions".into()).await.expect("profile");
@@ -2764,7 +2762,7 @@ mod tests {
     /// slow enough to observe, and aborts at the next await.
     #[tokio::test]
     async fn a_scan_is_work_in_flight_and_cancel_stops_it() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let flag = Arc::new(AtomicBool::new(false));
         eng.watch_inflight(flag.clone());
         eng.create_view("slow".into(), SLOW_ROWS.into())
@@ -2802,7 +2800,7 @@ mod tests {
     /// superseded by it.
     #[tokio::test]
     async fn a_re_scan_supersedes_its_own_entry_and_nobody_elses() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         eng.create_view("slow".into(), SLOW_ROWS.into())
             .await
             .expect("create view");
@@ -2838,7 +2836,7 @@ mod tests {
     /// the caller, so every path that re-registers gets it.
     #[tokio::test]
     async fn re_registering_a_table_aborts_its_scan() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         eng.create_view("slow".into(), SLOW_ROWS.into())
             .await
             .expect("create view");
@@ -2860,7 +2858,7 @@ mod tests {
     /// exactly the background-tab case a mounted-view derivation cannot see.
     #[tokio::test]
     async fn the_inflight_flag_and_the_per_workspace_probe_track_a_run() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let flag = Arc::new(AtomicBool::new(false));
         eng.watch_inflight(flag.clone());
         assert!(!flag.load(Ordering::Relaxed), "seeded from an idle engine");
@@ -2891,7 +2889,7 @@ mod tests {
     /// against a filesystem.
     #[test]
     fn background_work_raises_the_close_confirms_flag_and_releases_it() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let flag = Arc::new(AtomicBool::new(false));
         eng.watch_inflight(flag.clone());
         assert!(!flag.load(Ordering::Relaxed), "seeded from an idle engine");
@@ -2915,7 +2913,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_repeat_dispatch_of_one_tag_leaves_the_newer_run_intact() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let (ws, tag) = (WsId(1), RunTag(7));
         let first = eng.query(ws, tag, SLOW.into(), 10);
         let second = async {
@@ -2943,7 +2941,7 @@ mod tests {
     /// regression here is the router having grown an opinion it has no business having.
     #[tokio::test]
     async fn a_query_routed_through_run_is_the_query_path_unchanged() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let sql = "SELECT * FROM (VALUES (2), (1), (3)) AS t";
 
         let RunOutcome::Rows(routed, _) = eng
@@ -2971,7 +2969,7 @@ mod tests {
     /// stays refused: it is structurally impossible, not merely unimplemented.
     #[tokio::test]
     async fn a_refused_statement_fails_with_the_editors_message() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let err = eng
             .run(WsId(1), RunTag(1), "CREATE DATABASE d".into(), 10)
             .await
@@ -2991,7 +2989,7 @@ mod tests {
     /// one is gone rather than pointed at a statement that now runs.)
     #[tokio::test]
     async fn creating_a_table_without_a_project_folder_says_why() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         for (sql, expected) in [
             (
                 "CREATE TABLE t AS SELECT 1",
@@ -3017,7 +3015,7 @@ mod tests {
     /// snapshot survives" claim true rather than hopeful.
     #[tokio::test]
     async fn a_statement_leaves_the_workspaces_snapshot_alone() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let (ws, sql) = (WsId(1), "SELECT * FROM (VALUES (1), (2)) AS t");
 
         let (out, _) = eng
@@ -3044,7 +3042,7 @@ mod tests {
     /// do next; the buffer is still validated per statement, so the squiggles are unaffected.
     #[tokio::test]
     async fn a_multi_statement_run_is_refused_as_a_batch() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let err = eng
             .run(WsId(1), RunTag(1), "SELECT 1; SELECT 2".into(), 10)
             .await
@@ -3062,7 +3060,7 @@ mod tests {
     /// is the tokenizer's, so it must not be a text split.
     #[tokio::test]
     async fn a_terminated_statement_is_still_one_statement() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         for sql in [
             "SELECT 1 AS n;",
             "SELECT 1 AS n;\n",
@@ -3083,7 +3081,7 @@ mod tests {
     /// gate upstream (`press_query`) trims whitespace, and a comment is not whitespace.
     #[tokio::test]
     async fn a_buffer_of_only_comments_has_nothing_to_run() {
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
         let err = eng
             .run(WsId(1), RunTag(1), "-- just thinking out loud\n".into(), 10)
             .await
@@ -3214,7 +3212,7 @@ mod read_options_tests {
     async fn a_delimiter_changes_how_the_columns_are_found() {
         let d = dir("delimiter");
         let path = write(&d, "s.csv", "a;b;c\n1;2;3\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3244,7 +3242,7 @@ mod read_options_tests {
     async fn no_header_row_names_the_columns_positionally() {
         let d = dir("header");
         let path = write(&d, "s.csv", "1,2\n3,4\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3264,7 +3262,7 @@ mod read_options_tests {
     async fn a_comment_character_keeps_the_commented_line_out_of_the_schema() {
         let d = dir("comment");
         let path = write(&d, "s.csv", "# generated\na,b\n1,2\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let err = eng
             .register(spec(
@@ -3304,7 +3302,7 @@ mod read_options_tests {
         write(&d, "a.csv", "x,y\n1,2\n");
         write(&d, "b.csv", "x,y,z\n3,4,5\n");
         let path = d.to_string_lossy().into_owned();
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3343,7 +3341,7 @@ mod read_options_tests {
     async fn truncated_rows_also_covers_a_ragged_row_inside_one_file() {
         let d = dir("ragged");
         let path = write(&d, "r.csv", "x,y\n1,2\n3\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         assert!(eng
             .register(spec(
@@ -3377,7 +3375,7 @@ mod read_options_tests {
     async fn zero_infer_rows_reads_every_csv_column_as_text() {
         let d = dir("infer");
         let path = write(&d, "s.csv", "n\n1\n2\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3409,7 +3407,7 @@ mod read_options_tests {
     async fn a_compressed_csv_is_both_found_and_decoded() {
         let d = dir("gzip");
         let path = write_gz(&d, "s.csv.gz", "a,b\n1,2\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let err = eng
             .register(spec(
@@ -3459,7 +3457,7 @@ mod read_options_tests {
                 "\n",
             ),
         );
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3508,7 +3506,7 @@ mod read_options_tests {
     async fn an_empty_json_object_stays_an_empty_struct() {
         let d = dir("json_poly_empty_obj");
         let path = write(&d, "t.json", "{\"id\": 1, \"tags\": {}}\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3545,7 +3543,7 @@ mod read_options_tests {
         let d = dir("json_poly_multifile");
         write(&d, "a.json", "{\"id\": 1, \"content\": \"text\"}\n");
         write(&d, "b.json", "{\"id\": 2, \"content\": {\"k\": 1}}\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let meta = eng
             .register(spec(
@@ -3571,7 +3569,7 @@ mod read_options_tests {
     async fn zero_infer_rows_is_refused_rather_than_registering_no_columns() {
         let d = dir("json_poly_zero_infer");
         let path = write(&d, "t.json", "{\"a\": 1}\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let err = eng
             .register(spec(
@@ -3606,7 +3604,7 @@ mod read_options_tests {
                 "datafusion.execution.batch_size".to_string(),
                 size.to_string(),
             );
-            let eng = Engine::new(ov);
+            let eng = Engine::builder().with_config(ov).build();
             eng.register(spec(
                 "rows",
                 vec![path.clone()],
@@ -3634,7 +3632,7 @@ mod read_options_tests {
     async fn a_json_array_document_reads_in_array_shape_and_explains_itself_in_the_other() {
         let d = dir("json_shape");
         let path = write(&d, "s.json", "[{\"a\": 1}, {\"a\": 2}]\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let err = eng
             .register(spec(
@@ -3667,7 +3665,7 @@ mod read_options_tests {
     async fn an_unreadable_format_fails_by_name_rather_than_being_read_as_parquet() {
         let d = dir("unknown");
         let path = write(&d, "s.avro", "not really avro");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let err = eng
             .register(spec(
@@ -3689,7 +3687,7 @@ mod read_options_tests {
     async fn a_multi_byte_delimiter_is_refused_by_name() {
         let d = dir("wide_delimiter");
         let path = write(&d, "s.csv", "a,b\n1,2\n");
-        let eng = Engine::new(Default::default());
+        let eng = Engine::builder().build();
 
         let err = eng
             .register(spec(
@@ -3728,7 +3726,7 @@ mod remote_catalog_tests {
 
     #[tokio::test]
     async fn the_workspace_catalog_is_not_a_database() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         assert!(
             engine.database_catalogs().is_empty(),
             "a project with no database connection has no database catalogs"
@@ -3757,7 +3755,7 @@ mod remote_catalog_tests {
     /// into one at all, which is a def's name for the store to answer.
     #[tokio::test]
     async fn describe_remote_answers_for_a_relation_and_nothing_else() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         fake_database(&engine.ctx, "pg", &["orders"]);
 
         let described = engine

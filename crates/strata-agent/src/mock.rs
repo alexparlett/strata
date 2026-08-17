@@ -10,7 +10,6 @@
 //! [`MockProject::settling`] is the one deliberate lever, making the next run settle with an engine
 //! string of the test's choosing.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,18 +44,16 @@ pub struct MockProject {
 impl MockProject {
     /// A project with its own engine and an empty catalog.
     ///
-    /// The engine is told where the project is, because **every** host that opens one does
-    /// ([`Engine::set_data_dir`]) — a mock that skipped it would leave the engine's
-    /// owned-storage fence with no `.strata/` to fence, and `export_result` would then read a
-    /// path inside it as an ordinary folder that happens not to exist yet.
+    /// The engine is given the project directory, because every host that opens one does. A mock
+    /// that skipped it would leave the engine's owned-storage fence with no `.strata/` to fence,
+    /// and `export_result` would read a path inside it as an ordinary folder.
     pub fn new(name: &str, root: impl Into<PathBuf>) -> MockProject {
         let root = root.into();
-        let engine = Engine::new(BTreeMap::new());
-        engine.set_data_dir(&root);
+        let engine = Engine::builder().with_data_dir(&root).build();
         MockProject {
             name: name.into(),
             root,
-            engine: Arc::new(engine),
+            engine,
             catalog: Vec::new(),
             described: Vec::new(),
             sessions: Vec::new(),

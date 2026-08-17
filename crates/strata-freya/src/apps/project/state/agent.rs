@@ -321,8 +321,6 @@ fn reg_state<T>(reg: &Reg<T>) -> RegState {
 /// session listing, which is the part that reaches the engine.
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_agent::{Agent, AgentIdentity};
     use strata_arrow::column_info;
@@ -486,7 +484,7 @@ mod tests {
     /// `is_running`, which this reads rather than re-derives.)
     #[test]
     fn query_sessions_are_listed_per_agent_with_their_state() {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         let mut agents = Agents::default();
         let mine = Agent {
             id: AgentId::new(),

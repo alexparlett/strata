@@ -218,7 +218,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let (_pg, port) = postgres().await;
     seed(port).await;
 
-    let engine = Engine::new(BTreeMap::new());
+    let engine = Engine::builder().build();
     let conn = connection(port, CATALOG, &["public"]);
     store_password(&conn, PASSWORD);
 
@@ -2166,7 +2166,7 @@ async fn cross_source_views(port: u16, dir: &Path) {
         ..ProjectDefs::default()
     };
 
-    let engine = Engine::new(BTreeMap::new());
+    let engine = Engine::builder().build();
     let outcomes = replay(&engine, dir, &defs).await;
 
     let spanning = view_meta(&outcomes, "spanning").expect("the cross-source view re-registers");
@@ -2196,7 +2196,7 @@ async fn cross_source_views(port: u16, dir: &Path) {
         .batch_execute("DROP TABLE public.transient;")
         .await
         .expect("take the relation away");
-    let engine = Engine::new(BTreeMap::new());
+    let engine = Engine::builder().build();
     let outcomes = replay(&engine, dir, &defs).await;
     let why = view_error(&outcomes, "over_transient").expect("the view can no longer plan");
     assert!(

@@ -71,7 +71,10 @@ Three load-bearing ideas:
 Tokio runtime, spawns each call onto it, and the caller awaits the result — no channels, no
 request ids, no UI-side runtime, no worker loop. A Run materializes an immutable on-disk Arrow
 IPC snapshot, and every later read — page, sort, chart, export — is a bounded read of that
-snapshot, which is what makes paging stable and caching sound.
+snapshot, which is what makes paging stable and caching sound. It is built one way, by
+`Engine::builder()`, which is where an embedder's choices go — config, secrets, SQL functions, the
+memory pool — and every method on the built engine takes `&self`, so a handle reaches all of them
+through `Deref` and no wrapper needs forwarders.
 
 **One statement router in front of dispatch.** `Engine::run` classifies every statement off the
 parsed AST: run it as a query, intercept it with a real implementation, or refuse it by name with
@@ -103,7 +106,9 @@ is read-only throughout; exports refuse to land inside storage Strata manages.
   prevents. Never the task, the review or the conversation that produced it, and **a task id is a
   task reference**: no `(DB-11)`, no "DB-04 adds this", no "corrected in review". Where the *why*
   needs more than a paragraph, it belongs in `.agent/`, not in the file. No inline `//` comments
-  inside bodies; extract or rename instead.
+  inside bodies; extract or rename instead. A `pub` item's comment is library documentation for a
+  stranger — read [reference/COMMENTS.md](.agent/reference/COMMENTS.md) before writing one, and
+  again before calling a change done.
 - **Verify from source before agreeing.** Check the crate or the fork before confirming a claim
   about an API — including your own.
 - **User-facing text reads like a standard IDE.** Terse plain sentences, single-quoted

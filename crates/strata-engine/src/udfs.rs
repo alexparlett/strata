@@ -56,17 +56,16 @@ use datafusion::arrow::json::writer::{
 };
 use datafusion::common::{exec_err, internal_datafusion_err, plan_err};
 use datafusion::error::Result;
-use datafusion::execution::FunctionRegistry;
 use datafusion::functions::regex::{compile_and_cache_regex, compile_regex};
 use datafusion::logical_expr::scalar_doc_sections::{DOC_SECTION_REGEX, DOC_SECTION_STRUCT};
 use datafusion::logical_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, TypeSignature, Volatility,
 };
-use datafusion::prelude::SessionContext;
 use regex::Regex;
 
 use crate::json_poly::infer::JSON_TEXT_KEY;
+use crate::udf_package::UdfPackage;
 
 /// The sentence every one of these functions ends with. One wording, because it is one fact:
 /// `json_poly` unions a file's keys, so both an absent key and a source-level `null` arrive as an
@@ -74,29 +73,21 @@ use crate::json_poly::infer::JSON_TEXT_KEY;
 const NULL_NOTE: &str =
     "A key whose value is null in the source is indistinguishable from a key the row does not have.";
 
-/// Register Strata's built-ins into `ctx`.
+/// Strata's built-in SQL functions.
 ///
-/// One call is the whole integration: `functions::snapshot` walks the live registry, so completion,
-/// signature detail, the docs panel and the agent's `list_functions` follow with no further wiring.
-///
-/// A name already in the registry is **shadowed silently** by `register_udf`, which returns
-/// nothing, so the registry is asked first — taking a built-in's name would replace it for the
-/// session with no way to put it back. Warned rather than fatal, because the failure names itself
-/// on the first query that wanted the function.
-pub fn register(ctx: &SessionContext) {
-    let udfs = [
-        ScalarUDF::from(StructKeys::new()),
-        ScalarUDF::from(StructEntries::new()),
-        ScalarUDF::from(StructGet::new()),
-        ScalarUDF::from(ToJson::new()),
-        ScalarUDF::from(RegexpExtractAll::new()),
-    ];
-    for udf in udfs {
-        let name = udf.name().to_string();
-        if ctx.udf(&name).is_ok() {
-            tracing::warn!("engine: '{name}' is already registered and will be replaced");
-        }
-        ctx.register_udf(udf);
+/// Registered on every engine, ahead of any package an embedder adds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StrataFunctions;
+
+impl UdfPackage for StrataFunctions {
+    fn scalar(&self) -> Vec<ScalarUDF> {
+        vec![
+            ScalarUDF::from(StructKeys::new()),
+            ScalarUDF::from(StructEntries::new()),
+            ScalarUDF::from(StructGet::new()),
+            ScalarUDF::from(ToJson::new()),
+            ScalarUDF::from(RegexpExtractAll::new()),
+        ]
     }
 }
 
@@ -875,6 +866,7 @@ fn extract_all<'a, S: StringArrayType<'a>>(
 mod tests {
     use std::path::PathBuf;
     use std::process;
+    use std::sync::Arc;
 
     use strata_model::{JsonRead, QueryOutput, SourceFormat};
 
@@ -884,14 +876,14 @@ mod tests {
     /// reader every one of these functions exists for, so the structs under test are the ones the
     /// app actually produces (keys unioned across records, absent keys as null fields) rather than
     /// ones a `named_struct` literal built to suit the assertion.
-    async fn fixture(name: &str, body: &str) -> Engine {
+    async fn fixture(name: &str, body: &str) -> Arc<Engine> {
         let dir = std::env::temp_dir().join(format!("strata_udfs_{}_{name}", process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path: PathBuf = dir.join("t.json");
         std::fs::write(&path, body).expect("fixture");
 
-        let engine = Engine::new(Default::default());
+        let engine = Engine::builder().build();
         engine
             .register(TableSpec {
                 name: "t".into(),
@@ -1293,7 +1285,7 @@ mod tests {
     /// descriptions — the registry walk unedited.
     #[test]
     fn the_built_ins_are_in_the_function_catalog() {
-        let engine = Engine::new(Default::default());
+        let engine = Engine::builder().build();
         let catalog = engine.functions();
         for name in [
             "struct_keys",

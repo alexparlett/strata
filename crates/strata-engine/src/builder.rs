@@ -1,0 +1,333 @@
+//! Engine construction. See [`EngineBuilder`].
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use datafusion::execution::memory_pool::MemoryPool;
+#[cfg(test)]
+use datafusion::prelude::SessionContext;
+use tokio::runtime::Builder as RuntimeBuilder;
+
+use crate::db::Databases;
+use crate::functions::Functions;
+use crate::query::claim_snapshot_dir;
+use crate::secrets::{KeystoreSecrets, SecretProvider};
+use crate::udf_package::UdfPackage;
+use crate::{
+    build_context, query, runtime_subset, Connections, Engine, InternalTables, SessionScope,
+};
+
+/// The engine-id allocator — see [`Engine::id`].
+static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Configure and build an [`Engine`].
+///
+/// Every setting has a default, so `Engine::builder().build()` is a complete engine.
+///
+/// Beyond the builder, embedding the engine takes few calls:
+/// [`register_pass`](crate::register::register_pass) to load a project's catalog,
+/// [`Engine::run`] and [`Engine::explain`] to execute a statement, [`Engine::fetch_page`],
+/// [`Engine::export_result`] and [`Engine::snapshot_live`] to read a result, and
+/// [`Engine::policy_verdicts`] to check what a caller may run.
+///
+/// # Example
+///
+/// ```no_run
+/// use strata_engine::{secrets::MemSecrets, Engine};
+///
+/// let engine = Engine::builder()
+///     .with_data_dir("/data/lake")
+///     .with_secrets(MemSecrets::new())
+///     .build();
+/// ```
+pub struct EngineBuilder {
+    config: BTreeMap<String, String>,
+    data_dir: Option<PathBuf>,
+    secrets: Arc<dyn SecretProvider>,
+    udfs: Vec<Arc<dyn UdfPackage>>,
+    memory_pool: Option<Arc<dyn MemoryPool>>,
+}
+
+impl Default for EngineBuilder {
+    fn default() -> Self {
+        Self {
+            config: BTreeMap::new(),
+            data_dir: None,
+            secrets: Arc::new(KeystoreSecrets),
+            udfs: vec![Arc::new(crate::udfs::StrataFunctions)],
+            memory_pool: None,
+        }
+    }
+}
+
+impl EngineBuilder {
+    /// Creates an `EngineBuilder` with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the project directory, defaults to unset
+    ///
+    /// Tables the engine owns are stored under it, and `COPY` may not write into it. An engine
+    /// with no project directory cannot create a table. [`Engine::set_data_dir`] sets the same
+    /// value on a built engine.
+    pub fn with_data_dir(mut self, root: impl AsRef<Path>) -> Self {
+        self.data_dir = Some(root.as_ref().to_path_buf());
+        self
+    }
+
+    /// Sets the `datafusion.*` configuration overrides
+    ///
+    /// `datafusion.runtime.*` keys are read only here. [`Engine::set_config`] changes the others
+    /// on a built engine; changing a runtime key requires a new engine.
+    pub fn with_config(mut self, overrides: BTreeMap<String, String>) -> Self {
+        self.config = overrides;
+        self
+    }
+
+    /// Sets the source of secrets, defaults to [`KeystoreSecrets`]
+    pub fn with_secrets(mut self, secrets: impl SecretProvider + 'static) -> Self {
+        self.secrets = Arc::new(secrets);
+        self
+    }
+
+    /// Adds a package of SQL functions
+    ///
+    /// May be called more than once. Packages are registered in the order added, after the
+    /// built-ins.
+    pub fn with_udfs(mut self, package: impl UdfPackage + 'static) -> Self {
+        self.udfs.push(Arc::new(package));
+        self
+    }
+
+    /// Sets the memory pool DataFusion allocates from
+    ///
+    /// Takes precedence over `datafusion.runtime.memory_limit`, which otherwise builds one.
+    pub fn with_memory_pool(mut self, pool: impl MemoryPool + 'static) -> Self {
+        self.memory_pool = Some(Arc::new(pool));
+        self
+    }
+
+    /// Returns an [`Engine`] that uses this configuration.
+    ///
+    /// The engine owns a Tokio runtime and a snapshot directory, both released when the last
+    /// handle to it is dropped.
+    pub fn build(self) -> Arc<Engine> {
+        let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let rt = RuntimeBuilder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name(format!("df-engine-{engine_id}"))
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let ctx = build_context(&self.config, &self.udfs, self.memory_pool);
+        let functions = Functions::new(&ctx);
+        let snapshot_lock = match claim_snapshot_dir(engine_id) {
+            Ok(lock) => Some(lock),
+            Err(why) => {
+                tracing::warn!(
+                    "engine {engine_id}: could not claim {} ({why}); its snapshots are \
+                     unprotected against another instance's startup purge",
+                    query::snapshot_dir(engine_id)
+                );
+                None
+            }
+        };
+        Arc::new_cyclic(|self_ref| Engine {
+            engine_id,
+            self_ref: self_ref.clone(),
+            rt: Some(rt),
+            ctx,
+            built_runtime: runtime_subset(&self.config),
+            overrides: Mutex::new(self.config),
+            snap_seq: AtomicU64::new(1),
+            dispatch_seq: AtomicU64::new(1),
+            _snapshot_lock: snapshot_lock,
+            lifecycle: Mutex::default(),
+            inflight_flag: OnceLock::new(),
+            functions,
+            data_root: Mutex::new(self.data_dir),
+            internal: InternalTables::default(),
+            connections: Connections::default(),
+            databases: Databases::default(),
+            session: SessionScope::default(),
+            secrets: self.secrets,
+        })
+    }
+}
+
+/// The `SessionContext` a default builder produces, for a test that needs a session and not a
+/// whole engine. Through the builder, so what those tests run on cannot drift from what an engine
+/// runs on.
+#[cfg(test)]
+pub(crate) fn test_context(overrides: &BTreeMap<String, String>) -> SessionContext {
+    let builder = EngineBuilder::new().with_config(overrides.clone());
+    build_context(&builder.config, &builder.udfs, builder.memory_pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::fmt;
+
+    use datafusion::error::Result as DFResult;
+    use datafusion::execution::memory_pool::{MemoryLimit, MemoryReservation, UnboundedMemoryPool};
+    use strata_core::secret::{Secret, SecretRef};
+
+    use super::*;
+    use crate::secrets::MemSecrets;
+    use crate::udf_package::tests::OnePackage;
+
+    /// A pool that delegates every decision, so the only thing it carries is its identity — which
+    /// is what a test asking "did *this* pool reach the runtime" needs.
+    #[derive(Debug, Default)]
+    struct NamedPool(UnboundedMemoryPool);
+
+    impl fmt::Display for NamedPool {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "NamedPool")
+        }
+    }
+
+    impl MemoryPool for NamedPool {
+        fn name(&self) -> &str {
+            "NamedPool"
+        }
+
+        fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+            self.0.grow(reservation, additional);
+        }
+
+        fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+            self.0.shrink(reservation, shrink);
+        }
+
+        fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> DFResult<()> {
+            self.0.try_grow(reservation, additional)
+        }
+
+        fn reserved(&self) -> usize {
+            self.0.reserved()
+        }
+    }
+
+    /// Whether `engine` is allocating from a [`NamedPool`].
+    fn pool_is_ours(engine: &Engine) -> bool {
+        let pool = engine.ctx.runtime_env().memory_pool.clone();
+        (pool.as_ref() as &dyn Any).is::<NamedPool>()
+    }
+
+    fn key() -> SecretRef {
+        SecretRef::derived("pg-password", "postgres://acme/orders")
+    }
+
+    /// A package reaches the engine the builder built. What a package may *contain*, and the rules
+    /// registration applies, are [`crate::udf_package`]'s tests.
+    #[test]
+    fn a_package_given_to_the_builder_reaches_the_engine() {
+        let engine = Engine::builder()
+            .with_udfs(OnePackage("embedder_answer"))
+            .build();
+        assert!(engine.functions().contains("embedder_answer"));
+    }
+
+    /// The defaults build the engine the app has always built.
+    ///
+    /// The secrets default is deliberately not asserted here: the only way to tell
+    /// [`KeystoreSecrets`] from another provider is to ask it, and what a keystore answers depends
+    /// on whether some other test in this binary installed a process-global store. It is pinned
+    /// where it is set, in [`EngineBuilder::default`].
+    #[test]
+    fn the_default_build_is_todays_engine() {
+        let engine = Engine::builder().build();
+        assert!(!engine.restart_owed());
+        assert_eq!(engine.overrides(), BTreeMap::new());
+        assert!(engine.functions().contains("struct_get"));
+        assert_eq!(*engine.data_root.lock().unwrap(), None);
+        assert!(
+            !pool_is_ours(&engine),
+            "no pool was given, so DataFusion's own is in place"
+        );
+    }
+
+    /// The provider the builder was given is the one the engine reads through — the slug
+    /// `db::SecretPassword` resolves a connection's password with.
+    #[test]
+    fn secrets_given_to_the_builder_are_the_ones_the_engine_reads() {
+        let engine = Engine::builder()
+            .with_secrets(MemSecrets::new().with(key(), Secret::new("hunter2").unwrap()))
+            .build();
+        assert_eq!(
+            engine
+                .secrets
+                .secret(&key())
+                .unwrap()
+                .map(|s| s.expose().to_string()),
+            Some("hunter2".to_string())
+        );
+    }
+
+    /// A pool reaches the `RuntimeEnv` DataFusion allocates from.
+    #[test]
+    fn a_memory_pool_given_to_the_builder_is_the_one_datafusion_allocates_from() {
+        let engine = Engine::builder()
+            .with_memory_pool(NamedPool::default())
+            .build();
+        assert!(pool_is_ours(&engine));
+    }
+
+    /// A pool wins over `memory_limit`, which otherwise builds one of its own. Both halves are
+    /// asserted, because the rule is only meaningful if the limit does build a pool when it is
+    /// the only thing said.
+    #[test]
+    fn a_memory_pool_takes_precedence_over_the_memory_limit() {
+        let limit = BTreeMap::from([(
+            "datafusion.runtime.memory_limit".to_string(),
+            "64M".to_string(),
+        )]);
+        let with_both = Engine::builder()
+            .with_config(limit.clone())
+            .with_memory_pool(NamedPool::default())
+            .build();
+        assert!(pool_is_ours(&with_both), "the given pool is in place");
+
+        let limit_only = Engine::builder().with_config(limit).build();
+        assert!(
+            !pool_is_ours(&limit_only),
+            "and the limit builds a pool of its own when nothing else is said"
+        );
+        assert!(matches!(
+            limit_only.ctx.runtime_env().memory_pool.memory_limit(),
+            MemoryLimit::Finite(bytes) if bytes == 64 * 1024 * 1024
+        ));
+    }
+
+    #[test]
+    fn a_data_dir_given_to_the_builder_is_the_one_set_data_dir_would_have_set() {
+        let root = std::env::temp_dir().join("strata-builder-data-dir");
+        let built = Engine::builder().with_data_dir(&root).build();
+        let set = Engine::builder().build();
+        set.set_data_dir(&root);
+        assert_eq!(
+            *built.data_root.lock().unwrap(),
+            *set.data_root.lock().unwrap()
+        );
+    }
+
+    /// An override reaches the session it was given for.
+    #[test]
+    fn config_given_to_the_builder_reaches_the_session() {
+        let engine = Engine::builder()
+            .with_config(BTreeMap::from([(
+                "datafusion.execution.batch_size".to_string(),
+                "512".to_string(),
+            )]))
+            .build();
+        assert_eq!(
+            engine.ctx.state().config().options().execution.batch_size,
+            512
+        );
+    }
+}

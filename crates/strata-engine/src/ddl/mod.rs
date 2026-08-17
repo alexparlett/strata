@@ -427,7 +427,6 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
 /// the landing is `tests/postgres_federation.rs`'s, where a real server can take an insert.
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};
@@ -444,9 +443,9 @@ mod tests {
     /// The workspace table is called `orders` **too**, on purpose: every refusal below has to
     /// be about the name the user wrote and not about the bare component it ends with, and a
     /// fixture where the two could not collide would prove neither.
-    async fn engine(tag: &str) -> (PathBuf, Engine) {
+    async fn engine(tag: &str) -> (PathBuf, Arc<Engine>) {
         let root = scratch(tag);
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         run(&eng, "CREATE TABLE orders AS SELECT 1 AS id, 2 AS total")
             .await
