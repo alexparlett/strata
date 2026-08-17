@@ -304,13 +304,15 @@ mod tests {
 
     /// An engine whose Settings baseline is `overrides` — a `(key, value)` list, because that is
     /// how a Settings row reads.
-    fn engine(overrides: &[(&str, &str)]) -> Engine {
-        Engine::new(
-            overrides
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect::<BTreeMap<_, _>>(),
-        )
+    fn engine(overrides: &[(&str, &str)]) -> Arc<Engine> {
+        Engine::builder()
+            .with_config(
+                overrides
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+            .build()
     }
 
     /// Run one statement and take its report — anything else is a test asking the wrong question.

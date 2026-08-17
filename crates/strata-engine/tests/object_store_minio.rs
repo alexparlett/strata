@@ -380,7 +380,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     .await;
     ambient();
 
-    let engine = Engine::new(BTreeMap::new());
+    let engine = Engine::builder().build();
     engine
         .connect(connection(&endpoint, S3Auth::Ambient))
         .await
@@ -557,7 +557,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     env::set_var("AWS_ACCESS_KEY_ID", "AKIAWRONGKEY");
     env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-secret");
 
-    let engine = Engine::new(BTreeMap::new());
+    let engine = Engine::builder().build();
     engine
         .connect(connection(&endpoint, S3Auth::Ambient))
         .await

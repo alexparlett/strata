@@ -39,7 +39,7 @@ of the process. It is the snapshot's identity and its storage name:
 - file: `<tmp>/strata_snapshots/e_{pid}_{engine_id}/s_{id}.arrow` (pid-scoped: engine ids
   are only process-unique, and the temp root is machine-shared)
 - lock: `<tmp>/strata_snapshots/e_{pid}_{engine_id}.lock` — a **sibling** of the directory,
-  opened and exclusively locked by `Engine::new` and held open for the engine's whole life
+  opened and exclusively locked by `EngineBuilder::build` and held open for the engine's whole life
 
 Because every *execution* allocates a fresh id, snapshot ids are never reused — a re-run of
 identical SQL produces a **new** snapshot. There is deliberately no sharing between two tabs
@@ -63,7 +63,7 @@ So the startup sweep is **selective**, not a `remove_dir_all` of the root:
   and is removed.
 
 An engine whose own claim fails still runs (the directory is created on demand) but is
-unprotected against another instance's sweep — `Engine::new` warns with the reason.
+unprotected against another instance's sweep — `EngineBuilder::build` warns with the reason.
 
 ## 3. The handle
 

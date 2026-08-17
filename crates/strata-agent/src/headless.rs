@@ -25,7 +25,6 @@
 //! key on, a Streamable-HTTP condition. Over stdio there is one client whose departure closes the
 //! transport, so the service value's drop is the disconnection.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -108,8 +107,7 @@ impl HeadlessHost {
             ));
         }
         let defs = load_defs(&root)?;
-        let engine = Arc::new(Engine::new(BTreeMap::new()));
-        engine.set_data_dir(&root);
+        let engine = Engine::builder().with_data_dir(&root).build();
         let mut outcomes = Vec::new();
         register_project(&engine, &root, &defs, |o| outcomes.push(o)).await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))

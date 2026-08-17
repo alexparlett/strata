@@ -232,7 +232,6 @@ pub async fn register_project(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};
@@ -272,7 +271,7 @@ mod tests {
     }
 
     async fn run(root: &Path, defs: &ProjectDefs) -> Vec<RegOutcome> {
-        let engine = Engine::new(BTreeMap::new());
+        let engine = Engine::builder().build();
         let mut out = Vec::new();
         register_project(&engine, root, defs, |o| out.push(o)).await;
         out

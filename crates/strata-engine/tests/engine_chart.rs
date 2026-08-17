@@ -8,8 +8,6 @@
 //! applies, types surviving IPC, the chart and the grid agreeing on the same result, and a
 //! retired snapshot failing cleanly.
 
-use std::sync::Arc;
-
 use strata_engine::{Engine, RunTag, WsId};
 use strata_model::{CapUnit, ChartData, ChartPoint, ChartQuery, SnapshotId};
 
@@ -42,7 +40,7 @@ fn rows_q(x: Option<&str>, ys: &[&str], series: Option<&str>) -> ChartQuery {
 /// exactly that, and the same snapshot still pages for the grid.
 #[tokio::test]
 async fn the_chart_draws_the_result_in_its_own_order() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
 
     let data = eng
@@ -68,7 +66,7 @@ async fn the_chart_draws_the_result_in_its_own_order() {
 /// Multiple Y columns are multiple series over a real snapshot too.
 #[tokio::test]
 async fn several_ys_split_into_series_over_a_real_snapshot() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
 
     let data = eng
@@ -87,7 +85,7 @@ async fn several_ys_split_into_series_over_a_real_snapshot() {
 /// categories in result order, absent cells as gaps.
 #[tokio::test]
 async fn a_series_column_pivots_over_a_real_snapshot() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let (out, _) = eng
         .query(
             WsId(1),
@@ -118,7 +116,7 @@ async fn a_series_column_pivots_over_a_real_snapshot() {
 /// The raw shape: finite points, cap honoured with a refusal.
 #[tokio::test]
 async fn scatter_returns_points_and_refuses_over_cap() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
 
     let data = eng
@@ -168,7 +166,7 @@ async fn scatter_returns_points_and_refuses_over_cap() {
 /// The binned shape over a real snapshot.
 #[tokio::test]
 async fn a_histogram_bins_the_snapshot() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
 
     let data = eng
@@ -194,7 +192,7 @@ async fn a_histogram_bins_the_snapshot() {
 /// an absent overlay rather than an error the user must dismiss (Chart 11).
 #[tokio::test]
 async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
 
     let fit = eng
@@ -222,7 +220,7 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
 /// from a real fault by asking `Engine::snapshot_live`, never by matching prose.
 #[tokio::test]
 async fn charting_a_retired_snapshot_fails_like_any_other_read() {
-    let eng = Arc::new(Engine::new(Default::default()));
+    let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
     let _ = eng
         .query(WsId(1), RunTag(2), "SELECT 1 AS n".into(), 10)

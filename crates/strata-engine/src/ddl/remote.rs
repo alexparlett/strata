@@ -507,15 +507,16 @@ fn spelled(lexeme: &str) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::builder::test_context;
+    use crate::fold_ident;
     use crate::providers::fake_database;
     use crate::sql::parse_one;
-    use crate::{build_context, fold_ident};
 
     use super::*;
 
     /// A session holding a workspace table `local` and two connections, `pg` and `warehouse`.
     fn session() -> SessionContext {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         ctx.register_table(
             "local",
             std::sync::Arc::new(datafusion::datasource::empty::EmptyTable::new(

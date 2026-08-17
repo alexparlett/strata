@@ -430,14 +430,15 @@ mod tests {
     use datafusion::arrow::record_batch::RecordBatch;
 
     use super::SessionContext;
+    use crate::builder::test_context;
     use crate::providers::fake_database;
     use crate::sql::parse_one;
-    use crate::{build_context, Engine, RunTag, WsId};
+    use crate::{Engine, RunTag, WsId};
 
     /// A session with one workspace table (`events`) and whichever database connections the test
     /// names, each holding the relations it lists.
     fn session(databases: &[(&str, &[&str])]) -> SessionContext {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
             vec![Arc::new(Int32Array::from(vec![1]))],
@@ -561,7 +562,7 @@ mod tests {
     /// workspace's by this pass and still reserved by the router.
     #[tokio::test]
     async fn a_live_snapshot_is_not_resolved_into_a_database() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.query(WsId(1), RunTag(1), "SELECT 1 AS n".into(), 10)
             .await
             .expect("run");

@@ -790,7 +790,7 @@ wrapped in a `Cast`, so `RETURNS INT` over an `Int64` body answers `Int32` rathe
 in the optimizer.
 
 **The catalog is swappable, and that is the whole app-side change.** `functions::snapshot` used to
-run exactly once at `Engine::new` into an immutable field — true of the registry until this
+run exactly once at engine construction into an immutable field — true of the registry until this
 statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
 that changed the registry **and by nothing else**, so the built-in set still costs one walk;
 `Engine::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,

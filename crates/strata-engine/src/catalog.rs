@@ -1580,8 +1580,9 @@ mod cross_source_tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
+    use crate::builder::test_context;
+    use crate::fold_ident;
     use crate::providers::fake_database;
-    use crate::{build_context, fold_ident};
 
     /// A session with a workspace table `orders`, a connection `pg` whose catalog holds its own
     /// `orders`, and nothing else. The shared bare name is the fixture's whole point.
@@ -1590,7 +1591,7 @@ mod cross_source_tests {
     /// plan-build time, so a view named `orders` leaves a `SubqueryAlias` and no `TableScan` at
     /// all — a fixture that would make every assertion below vacuously pass.
     async fn session() -> SessionContext {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("total", DataType::Int64, true),
@@ -1687,7 +1688,7 @@ mod cross_source_tests {
     /// under — the same rule `StrataCatalogList` keeps for resolution, applied to the sentence.
     #[tokio::test]
     async fn the_connection_is_named_as_it_was_registered() {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         fake_database(&ctx, "Sales", &["orders"]);
         assert_eq!(fold_ident("Sales"), "sales");
         assert!(view_error(

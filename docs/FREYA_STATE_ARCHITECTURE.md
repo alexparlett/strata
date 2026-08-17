@@ -520,8 +520,9 @@ impl EngineCtx {
     pub fn captured(&self) -> Captured<EngineCtx>;   // capability field, cache-invisible
     pub fn cleanup(&self, tab: TabId);               // → engine.cleanup_ws(tab.into())
     pub fn arc(&self) -> Arc<Engine>;                // for off-render-thread holders (agent server)
-    pub fn pin_snapshot(&self, snapshot: SnapshotId) -> SnapshotPin;  // export's RAII pin
 }
+// Nothing else: every engine method takes `&self`, so `pin_snapshot`, `export`, `chart` and
+// `trend` are reached through `Deref` rather than forwarded.
 ```
 
 Tab-close cleanup is one funnel in the window root — a `use_side_effect` diffs the session's

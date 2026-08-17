@@ -31,7 +31,7 @@ async fn fixture_project_registers_and_queries() {
     assert!(!defs.views.is_empty());
     assert!(!defs.saved_queries.is_empty());
 
-    let eng = Engine::new(Default::default());
+    let eng = Engine::builder().build();
 
     let mut outcomes = Vec::new();
     register_project(&eng, root, &defs, |o| outcomes.push(o)).await;

@@ -277,7 +277,6 @@ fn not_a_view(kind: StmtKind) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};
@@ -333,7 +332,7 @@ mod tests {
     #[tokio::test]
     async fn a_typed_create_lands_what_save_as_view_lands() {
         let root = scratch("create");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(
             &eng,
@@ -394,7 +393,7 @@ mod tests {
     #[tokio::test]
     async fn a_plain_create_points_at_or_replace_and_a_table_name_is_refused() {
         let root = scratch("names");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(&eng, "CREATE TABLE sales AS SELECT 1 AS n")
             .await
@@ -440,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn a_drop_reports_its_readers_and_honours_if_exists() {
         let root = scratch("drop");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(&eng, "CREATE TABLE t AS SELECT 1 AS n")
             .await
@@ -501,7 +500,7 @@ mod tests {
     /// permanent view out of a statement asking for a session-scoped one.
     #[tokio::test]
     async fn unsupported_clauses_refuse_before_the_view_exists() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
 
         for (sql, message) in [
             (
@@ -545,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn a_drops_readers_over_report_rather_than_miss_one() {
         let root = scratch("aliases");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(&eng, "CREATE TABLE t AS SELECT 1 AS n")
             .await
@@ -584,7 +583,7 @@ mod tests {
     /// which `DROP VIEW a.b.c.d` then could not drop (DataFusion's planner refuses that name).
     #[tokio::test]
     async fn a_name_outside_the_one_schema_is_refused_however_it_is_spelled() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         let elsewhere = elsewhere(WHAT);
 
         statement(&eng, "CREATE VIEW strata.public.qualified AS SELECT 1 AS n")
@@ -613,7 +612,7 @@ mod tests {
     /// prefix hides from every catalog reader.
     #[tokio::test]
     async fn a_reserved_view_name_is_refused() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         assert_eq!(
             statement(&eng, "CREATE VIEW __snap_1 AS SELECT 1 AS n")
                 .await
@@ -631,7 +630,7 @@ mod tests {
     async fn a_typed_view_chain_survives_a_restart() {
         let root = scratch("replay");
         let defs = {
-            let eng = Engine::new(BTreeMap::new());
+            let eng = Engine::builder().build();
             eng.set_data_dir(&root);
             let table = statement(&eng, "CREATE TABLE t AS SELECT 1 AS n")
                 .await
@@ -653,7 +652,7 @@ mod tests {
         };
         save_defs(&root, &defs).expect("written");
 
-        let cold = Engine::new(BTreeMap::new());
+        let cold = Engine::builder().build();
         let mut out = Vec::new();
         register_project(&cold, &root, &defs, |o| out.push(o)).await;
 

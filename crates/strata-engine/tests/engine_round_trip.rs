@@ -6,13 +6,15 @@
 //! freya-query capability calls it. The test runtime awaits the engine's `JoinHandle`s
 //! across runtimes, which is the same executor-agnostic await the Freya executor does.
 
+use std::sync::Arc;
+
 use strata_engine::{Engine, RunTag, WsId};
 
 /// Five rows, three columns, unsorted on `column1` so the sort read is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
 
-fn engine() -> Engine {
-    Engine::new(Default::default())
+fn engine() -> Arc<Engine> {
+    Engine::builder().build()
 }
 
 fn ws(n: u128) -> WsId {

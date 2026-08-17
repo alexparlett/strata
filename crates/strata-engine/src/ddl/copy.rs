@@ -167,7 +167,6 @@ async fn no_null_partition_values(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::{env, process};
@@ -208,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn an_unpartitioned_copy_writes_the_file_and_counts_its_rows() {
         let root = scratch("flat");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
 
         for (format, name) in [
@@ -245,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn a_copy_out_of_a_snapshot_is_refused_and_writes_nothing() {
         let root = scratch("reserved");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         let out = root.join("leak.csv");
 
@@ -273,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn a_partitioned_copy_over_a_null_refuses_and_writes_the_tree_once_it_cannot() {
         let root = scratch("partition");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(
             &eng,
@@ -317,7 +316,7 @@ mod tests {
     #[tokio::test]
     async fn the_gate_only_looks_at_partition_columns() {
         let root = scratch("gate-scope");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(
             &eng,
@@ -358,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn a_column_partitioned_by_twice_is_counted_once() {
         let root = scratch("repeat");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(&eng, "CREATE TABLE t AS SELECT 1 AS id, 'emea' AS region")
             .await
@@ -395,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn a_quoted_partition_identifier_is_refused_in_the_export_windows_words() {
         let root = scratch("quoted");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(&eng, "CREATE TABLE t AS SELECT 1 AS id, 'emea' AS region")
             .await
@@ -426,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn a_partitioned_copy_does_not_move_the_engines_own_options() {
         let root = scratch("options");
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         statement(&eng, "CREATE TABLE t AS SELECT 1 AS id, 'emea' AS region")
             .await

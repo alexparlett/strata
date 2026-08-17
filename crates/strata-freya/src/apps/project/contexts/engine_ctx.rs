@@ -11,10 +11,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use freya::query::Captured;
-use strata_engine::export::ExportSpec;
-use strata_engine::{Engine, SnapshotPin};
+use strata_engine::Engine;
 
-use strata_model::{ChartData, ChartQuery, SnapshotId, TabId, Trend};
+use strata_model::TabId;
 
 /// A window's engine handle for context — an `Arc` over the shared [`Engine`], cheap to
 /// `Clone`, provided once via `use_provide_context`. Derefs to the engine, so callers
@@ -34,7 +33,7 @@ impl EngineCtx {
     /// [`use_engine_config`](crate::apps::project::state::use_engine_config)'s job.
     pub fn new(overrides: BTreeMap<String, String>) -> Self {
         Self {
-            eng: Arc::new(Engine::new(overrides)),
+            eng: Engine::builder().with_config(overrides).build(),
         }
     }
 
@@ -43,9 +42,8 @@ impl EngineCtx {
     /// `functions` from its own runtime while the UI is busy.
     ///
     /// Handing out the `Arc` rather than the [`EngineCtx`] is the point: `EngineCtx` is this
-    /// window's *UI* handle, and everything it adds over the facade (`cleanup`, `captured`,
-    /// `pin_snapshot`) belongs to the render thread. A cross-thread holder wants the facade
-    /// and nothing else.
+    /// window's *UI* handle, and everything it adds over the facade (`cleanup`, `captured`)
+    /// belongs to the render thread. A cross-thread holder wants the facade and nothing else.
     pub fn arc(&self) -> Arc<Engine> {
         Arc::clone(&self.eng)
     }
@@ -61,51 +59,6 @@ impl EngineCtx {
     /// tabs, so every close path funnels through one place.
     pub fn cleanup(&self, tab: TabId) {
         self.eng.cleanup_ws(tab.into());
-    }
-
-    /// Hold `snapshot` open for as long as the returned pin lives — the escape hatch from
-    /// retire-on-dispatch for a reader that outlives one Run (`SNAPSHOT_SPEC` §4). The export
-    /// window holds one for its whole life.
-    ///
-    /// Not reachable through `Deref`: [`Engine::pin_snapshot`] takes `&Arc<Engine>` (the pin
-    /// keeps the engine alive), and deref only ever hands out `&Engine`.
-    pub fn pin_snapshot(&self, snapshot: SnapshotId) -> SnapshotPin {
-        self.eng.pin_snapshot(snapshot)
-    }
-
-    /// Write `snapshot` to a file (P4-06) — the Export window's footer press.
-    ///
-    /// Not reachable through `Deref` for the same reason [`Self::pin_snapshot`] isn't:
-    /// [`Engine::export`] takes `&Arc<Engine>`, because the pin and the in-flight count it
-    /// claims are handed to the spawned write and have to outlive this call.
-    pub async fn export(
-        &self,
-        snapshot: SnapshotId,
-        spec: ExportSpec,
-    ) -> Result<(String, usize), String> {
-        self.eng.export(snapshot, spec).await
-    }
-
-    /// Read `snapshot` as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the results Chart body's
-    /// capability, behind `FetchChart`.
-    ///
-    /// Not reachable through `Deref` for the same reason [`Self::pin_snapshot`] isn't:
-    /// [`Engine::chart`] takes `&Arc<Engine>` (it holds a pin across its own reads, and the
-    /// pin keeps the engine alive), and deref only ever hands out `&Engine`.
-    pub async fn chart(&self, snapshot: SnapshotId, q: ChartQuery) -> Result<ChartData, String> {
-        self.eng.chart(snapshot, q).await
-    }
-
-    /// The scatter's least-squares fit (Chart 11), behind `FetchTrend` — not reachable
-    /// through `Deref` for the same reason [`Self::chart`] isn't: [`Engine::trend`] takes
-    /// `&Arc<Engine>`.
-    pub async fn trend(
-        &self,
-        snapshot: SnapshotId,
-        x: String,
-        y: String,
-    ) -> Result<Option<Trend>, String> {
-        self.eng.trend(snapshot, x, y).await
     }
 }
 

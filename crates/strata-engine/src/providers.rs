@@ -301,14 +301,15 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
+    use crate::builder::test_context;
     use crate::query::snapshot_name;
-    use crate::{build_context, Engine, RunTag, WsId, CATALOG};
+    use crate::{Engine, RunTag, WsId, CATALOG};
     use strata_model::SnapshotId;
 
     /// A context shaped like a live engine's: one user table, one view, one registered
     /// result snapshot carrying the ordinal column every real snapshot has.
     async fn live_context() -> SessionContext {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let ids: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let user = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
@@ -402,7 +403,7 @@ mod tests {
     /// Arrow file, and that is the path a user's `SHOW TABLES` has to survive.
     #[tokio::test]
     async fn the_snapshot_a_run_mints_is_hidden_and_still_readable() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.query(WsId(1), RunTag(1), "SELECT 1 AS n".into(), 10)
             .await
             .expect("run");
@@ -444,14 +445,14 @@ mod tests {
             "datafusion.catalog.information_schema".to_string(),
             "false".to_string(),
         )]);
-        assert!(build_context(&off).sql("SHOW TABLES").await.is_err());
+        assert!(test_context(&off).sql("SHOW TABLES").await.is_err());
     }
 
     /// Structural, not policy: the router refuses `CREATE SCHEMA` first, and this is what
     /// answers when something reaches `ctx.sql` without asking it.
     #[tokio::test]
     async fn a_second_schema_cannot_be_created() {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let err = ctx
             .sql("CREATE SCHEMA extra")
             .await
@@ -468,7 +469,7 @@ mod tests {
     /// fold before asking.
     #[tokio::test]
     async fn registration_is_keyed_case_insensitively() {
-        let ctx = build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))]).expect("batch");

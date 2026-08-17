@@ -103,13 +103,15 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::empty::EmptyTable;
 
+    use crate::builder::test_context;
+
     use super::*;
 
     /// A session with a source and a target whose columns differ in name — which is what makes
     /// the planner add its renaming projection, and is the real statement's shape
     /// (`INSERT INTO pg.public.loaded SELECT name, id FROM pg.public.customers`).
     fn session() -> SessionContext {
-        let ctx = crate::build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         for (name, columns) in [("source", ["name", "id"]), ("target", ["tier", "total"])] {
             let schema = Arc::new(Schema::new(vec![
                 Field::new(columns[0], DataType::Utf8, true),

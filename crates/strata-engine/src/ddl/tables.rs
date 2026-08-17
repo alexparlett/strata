@@ -784,6 +784,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::{env, process};
 
+    use crate::builder::test_context;
     use crate::register::{register_project, table_spec, RegOutcome};
     use crate::sql::Blocked;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
@@ -802,8 +803,8 @@ mod tests {
     }
 
     /// An engine pointed at `root`, exactly as a host points one (`Engine::set_data_dir`).
-    fn engine(root: &Path, overrides: BTreeMap<String, String>) -> Engine {
-        let eng = Engine::new(overrides);
+    fn engine(root: &Path, overrides: BTreeMap<String, String>) -> Arc<Engine> {
+        let eng = Engine::builder().with_config(overrides).build();
         eng.set_data_dir(root);
         eng
     }
@@ -1007,7 +1008,7 @@ mod tests {
     /// `execution.time_zone`, and the empty-table panel promises what the user is about to get.
     #[tokio::test]
     async fn the_type_probe_answers_with_the_planners_own_arrow_type() {
-        let ctx = crate::build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
 
         assert_eq!(column_type(&ctx, "INT").await.unwrap(), "Int32");
         assert_eq!(column_type(&ctx, "INTEGER").await.unwrap(), "Int32");
@@ -1131,7 +1132,7 @@ mod tests {
         )
         .unwrap();
 
-        let cold = Engine::new(BTreeMap::new());
+        let cold = Engine::builder().build();
         let defs = load_defs(&root).unwrap();
         let mut out = Vec::new();
         register_project(&cold, &root, &defs, |o| out.push(o)).await;
@@ -1165,7 +1166,7 @@ mod tests {
         };
         fs::remove_dir_all(tables_dir(&root)).unwrap();
 
-        let cold = Engine::new(BTreeMap::new());
+        let cold = Engine::builder().build();
         let error = cold
             .register(table_spec(&root, &def))
             .await
@@ -1245,7 +1246,7 @@ mod tests {
     #[tokio::test]
     async fn a_cancelled_spool_takes_its_staging_directory_with_it() {
         let root = scratch("cancelled");
-        let ctx = crate::build_context(&BTreeMap::new());
+        let ctx = test_context(&BTreeMap::new());
         let tables = tables_dir(&root);
         fs::create_dir_all(&tables).unwrap();
 

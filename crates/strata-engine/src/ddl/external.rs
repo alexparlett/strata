@@ -615,6 +615,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::{env, process};
 
     use strata_model::{ConnectionDef, Provider, S3Auth, S3Store};
@@ -658,10 +659,10 @@ mod tests {
     }
 
     /// A project folder with one CSV in it, and an engine pointed at it.
-    fn project(tag: &str, file: &str, body: &str) -> (PathBuf, Engine) {
+    fn project(tag: &str, file: &str, body: &str) -> (PathBuf, Arc<Engine>) {
         let root = scratch(tag);
         fs::write(root.join(file), body).unwrap();
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         (root, eng)
     }
@@ -749,7 +750,7 @@ mod tests {
             tables: vec![def_of(&report).clone()],
             ..Default::default()
         };
-        let cold = Engine::new(BTreeMap::new());
+        let cold = Engine::builder().build();
         let mut outcomes = Vec::new();
         register_project(&cold, &root, &defs, |o| outcomes.push(o)).await;
         assert_eq!(outcomes.len(), 1);
@@ -920,7 +921,7 @@ mod tests {
     /// still one the user can point a table at, and the fix happens afterwards.
     #[tokio::test]
     async fn a_connection_that_failed_to_connect_is_still_one_a_statement_may_name() {
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         let conn = ConnectionDef {
             address: "acme-lake".into(),
             provider: Provider::S3(S3Store {
@@ -993,7 +994,7 @@ mod tests {
         let lake = root.join("lake/year=2024");
         fs::create_dir_all(&lake).unwrap();
         fs::write(lake.join("part.csv"), "id\n1\n").unwrap();
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
 
         let report = statement(
@@ -1210,7 +1211,7 @@ mod tests {
     async fn ndjson_states_the_shape_it_cannot_then_be_told() {
         let root = scratch("json_shape");
         fs::write(root.join("a.json"), "[{\"id\":1},{\"id\":2}]").unwrap();
-        let eng = Engine::new(BTreeMap::new());
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
 
         assert_eq!(

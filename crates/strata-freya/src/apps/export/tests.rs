@@ -94,7 +94,7 @@ fn lines(path: &Path) -> Vec<String> {
 fn the_default_draft_writes_a_plain_csv() {
     let dir = scratch("default-csv");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let rows = export_to(&engine, &ExportDraft::default(), &target, &out);
@@ -116,7 +116,7 @@ fn the_default_draft_writes_a_plain_csv() {
 fn editing_the_delimiter_in_the_window_reaches_the_file() {
     let dir = scratch("delimiter");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -137,7 +137,7 @@ fn editing_the_delimiter_in_the_window_reaches_the_file() {
 fn a_tab_delimiter_typed_as_an_escape_lands_as_a_real_tab() {
     let dir = scratch("tab-delimiter");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -157,7 +157,7 @@ fn a_tab_delimiter_typed_as_an_escape_lands_as_a_real_tab() {
 fn turning_the_header_off_removes_the_column_row() {
     let dir = scratch("no-header");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -174,7 +174,7 @@ fn turning_the_header_off_removes_the_column_row() {
 #[test]
 fn the_chosen_null_text_is_what_a_null_cell_becomes() {
     let dir = scratch("null-text");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     for (choice, custom, expected) in [
@@ -203,7 +203,7 @@ fn the_chosen_null_text_is_what_a_null_cell_becomes() {
 fn the_grids_sort_is_the_order_in_the_file() {
     let dir = scratch("sorted");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, Some(("id".into(), false)));
 
     export_to(&engine, &ExportDraft::default(), &target, &out);
@@ -221,7 +221,7 @@ fn the_grids_sort_is_the_order_in_the_file() {
 fn this_page_writes_only_the_page_the_grid_is_showing() {
     let dir = scratch("page-scope");
     let out = dir.join("page2.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let mut target = open_on_a_result(&engine, Some(("id".into(), true)));
     target.page = 2;
     target.page_size = 2;
@@ -244,7 +244,7 @@ fn this_page_writes_only_the_page_the_grid_is_showing() {
 #[test]
 fn switching_the_format_card_changes_what_is_written() {
     let dir = scratch("formats");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let json = dir.join("out.json");
@@ -275,7 +275,7 @@ fn switching_the_format_card_changes_what_is_written() {
 #[test]
 fn every_parquet_codec_the_window_offers_writes_a_readable_file() {
     let dir = scratch("parquet-codecs");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     for codec in [
@@ -304,7 +304,7 @@ fn every_parquet_codec_the_window_offers_writes_a_readable_file() {
 #[test]
 fn a_compressed_csv_lands_under_the_suffix_the_window_suggested() {
     let dir = scratch("compressed");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -324,7 +324,7 @@ fn a_compressed_csv_lands_under_the_suffix_the_window_suggested() {
 #[test]
 fn the_partition_toggle_is_what_decides_between_a_file_and_a_tree() {
     let dir = scratch("partition-gate");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let flat = dir.join("flat.csv");
@@ -355,7 +355,7 @@ fn the_partition_toggle_is_what_decides_between_a_file_and_a_tree() {
 #[test]
 fn the_selected_order_is_the_directory_nesting_order() {
     let dir = scratch("partition-order");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -383,7 +383,7 @@ fn the_selected_order_is_the_directory_nesting_order() {
 #[test]
 fn keeping_partition_columns_is_visible_in_the_written_rows() {
     let dir = scratch("partition-keep");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let read_header = |tree: &Path| -> String {
@@ -429,7 +429,7 @@ fn keeping_partition_columns_is_visible_in_the_written_rows() {
 fn partitioning_on_a_column_with_nulls_is_refused() {
     let dir = scratch("partition-null");
     let out = dir.join("tree");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -450,7 +450,7 @@ fn partitioning_on_a_column_with_nulls_is_refused() {
 fn a_draft_the_engine_would_choke_on_is_refused_before_any_file_is_made() {
     let dir = scratch("bad-draft");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -468,7 +468,7 @@ fn a_draft_the_engine_would_choke_on_is_refused_before_any_file_is_made() {
 fn the_preview_matches_the_file_the_same_draft_writes() {
     let dir = scratch("preview-truth");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let mut draft = ExportDraft::default();
@@ -491,7 +491,7 @@ fn the_preview_matches_the_file_the_same_draft_writes() {
 fn a_rerun_behind_the_window_does_not_change_what_it_writes() {
     let dir = scratch("pinned-rerun");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
     let pin = engine.pin_snapshot(target.snapshot);
@@ -520,7 +520,7 @@ fn a_rerun_behind_the_window_does_not_change_what_it_writes() {
 /// A guard on the honesty rule: the preview may only show rows the result actually has.
 #[test]
 fn the_preview_only_ever_shows_rows_the_run_returned() {
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
     let preview = super::preview::build(&ExportDraft::default(), &target);
 
@@ -542,7 +542,7 @@ fn the_preview_only_ever_shows_rows_the_run_returned() {
 /// makes about a NULL cell rather than trusting it.
 #[test]
 fn a_null_cell_arrives_flagged_rather_than_as_the_text_null() {
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
     let null_cell: &Cell = target
         .sample
@@ -559,7 +559,7 @@ fn a_null_cell_arrives_flagged_rather_than_as_the_text_null() {
 fn exporting_a_snapshot_that_is_gone_writes_nothing_and_says_why() {
     let dir = scratch("gone");
     let out = dir.join("out.csv");
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let mut target = open_on_a_result(&engine, None);
     target.snapshot = SnapshotId(9999);
 
@@ -577,7 +577,7 @@ fn exporting_a_snapshot_that_is_gone_writes_nothing_and_says_why() {
 /// ones a directory name can't sensibly carry.
 #[test]
 fn the_partitionable_columns_are_the_ones_a_directory_name_can_hold() {
-    let engine = Arc::new(Engine::new(Default::default()));
+    let engine = Engine::builder().build();
     let mut target = open_on_a_result(&engine, None);
     target.columns.push(col(
         "created_at",

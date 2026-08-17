@@ -781,7 +781,6 @@ pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::{fs, process};
 
@@ -1073,7 +1072,7 @@ mod tests {
     #[tokio::test]
     async fn a_callers_export_writes_the_result_in_order_and_never_the_ordinal() {
         let root = scratch("agent-export");
-        let eng = Arc::new(Engine::new(BTreeMap::new()));
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         let snapshot = settled(
             &eng,
@@ -1105,7 +1104,7 @@ mod tests {
     #[tokio::test]
     async fn a_callers_export_is_fenced_out_of_owned_storage_and_never_overwrites() {
         let root = scratch("agent-fence");
-        let eng = Arc::new(Engine::new(BTreeMap::new()));
+        let eng = Engine::builder().build();
         eng.set_data_dir(&root);
         let snapshot = settled(&eng, "SELECT 1 AS n").await;
         let export = |path: PathBuf| {
