@@ -3,7 +3,7 @@
 //!
 //! Freya's `Tree` is virtualized over a flat list of visible rows, which is what lets this be lazy:
 //! [`TreeModel::rows`] walks only the paths that are **open**, asking
-//! [`value_tree::cell_children`](strata_engine::value_tree::cell_children) for each one's
+//! [`value_tree::cell_children`](strata_arrow::value_tree::cell_children) for each one's
 //! children as it goes. A closed node costs nothing but the row that names it, so a 19,311-key
 //! object left shut is one row, and opened is one paged read.
 //!
@@ -17,9 +17,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use freya::components::Disclosure;
+use strata_arrow::value_tree::{cell_children, cell_len, NodeValue, ValueNode};
+use strata_arrow::RecordBatch;
 use strata_core::util::{fmt_int, plural_noun};
-use strata_engine::value_tree::{cell_children, cell_len, NodeValue, ValueNode};
-use strata_engine::RecordBatch;
 
 /// Entries revealed per press, and shown initially. Generous because a row is cheap once the tree
 /// is virtualized — the cost of a wide container is the *read*, which is paged, not the rows.

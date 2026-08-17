@@ -539,8 +539,9 @@ mod tests {
     use std::time::Duration;
 
     use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_arrow::column_info;
     use strata_core::project::ProjectDefs;
-    use strata_engine::{column_info, TableMeta, ViewMeta};
+    use strata_engine::{TableMeta, ViewMeta};
     use strata_model::{ColOwner, TableDef, TableOrigin, ViewDef};
 
     use super::*;

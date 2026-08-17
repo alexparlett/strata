@@ -28,8 +28,14 @@ The dependency direction is strict: `strata-freya` sits on top; `strata-engine` 
 `strata-core` and `strata-agent` never depend on UI; `strata-model` depends on nothing of ours.
 `strata-arrow` is a layer **below** the engine rather than one in front of `strata-core` — the
 engine still reads core's services directly, and what the crate buys is the other direction: a
-consumer can take the Arrow vocabulary without the DataFusion boundary above it. When a Freya
-limitation shows up, the fix goes **into the fork**, not around it in app code.
+consumer can take the Arrow vocabulary without the DataFusion boundary above it. That is why
+`strata-freya` and `strata-agent` name **both**: the engine for what only a planner can answer,
+`strata-arrow` for everything else. The engine re-exports none of it — a `strata_engine` path to
+an Arrow-vocabulary item fails the use-direction check
+(`crates/strata-engine/src/boundaries.rs`), which reads the frontend's own `use` declarations
+because a re-export added back here would silently undo the split. The same check holds the
+engine's one internal boundary, the peer modules `sources` and `sql`. When a Freya limitation
+shows up, the fix goes **into the fork**, not around it in app code.
 
 **Arrow is pinned once, at the workspace.** `strata-arrow` names `arrow` directly while
 `strata-engine` reaches the same crate through `datafusion::arrow`, and the two must resolve to

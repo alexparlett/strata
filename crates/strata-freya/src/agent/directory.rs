@@ -33,7 +33,7 @@ use strata_agent::{
     Agent, AgentError, AgentId, CatalogEntry, Described, Host, Project, QuerySessionId,
     QuerySessionInfo, RunMode, RunSettle, Settled,
 };
-use strata_engine::plan::as_explain;
+use strata_arrow::plan::as_explain;
 use strata_engine::{Engine, RunTag, WsId, CANCELLED};
 use tokio::sync::{mpsc, oneshot};
 

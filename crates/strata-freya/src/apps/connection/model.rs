@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::store::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
+use strata_arrow::client::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
 use strata_model::{
     ConnectionDef, GcsAuth, GcsStore, PgPassword, PgStore, Provider, ProviderId, S3Auth, S3Store,
 };

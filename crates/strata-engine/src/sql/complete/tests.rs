@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 
-use crate::column_info;
 use crate::sql::FunctionCatalog;
+use strata_arrow::column_info;
 use strata_model::ColumnInfo;
 
 /// `events(user_id, amount, status, ts)` + `users(user_id, name, guid)` + a saved
@@ -786,8 +786,8 @@ fn set_key_completes_and_replaces_the_whole_dotted_chain() {
 
 #[test]
 fn set_key_pool_agrees_bidirectionally_with_the_dispatch_fence() {
-    use crate::config::{DIALECT_KEY, ENGINE_KEYS};
     use crate::ddl::refuse_reserved_key;
+    use strata_arrow::config::{DIALECT_KEY, ENGINE_KEYS};
     let items = at("SET |");
     for k in ENGINE_KEYS {
         assert_eq!(

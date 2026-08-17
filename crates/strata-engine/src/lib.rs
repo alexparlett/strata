@@ -1,14 +1,15 @@
 //! The DataFusion engine — a **direct-call async facade** over a runtime it owns.
 //!
-//! This crate is the workspace's **one DataFusion boundary**: nothing else names DataFusion or
-//! Arrow (`strata-freya` carries a dev-dependency so a test can build a fixture, and that is
-//! all). It sits on `strata-core`, whose services it reads — `util`, `project` and `secret` —
-//! and never the other way round.
+//! This crate is the workspace's **one DataFusion boundary**: nothing else names DataFusion
+//! (`strata-freya` carries a dev-dependency so a test can build a fixture, and that is all). It
+//! sits on [`strata_arrow`], whose Arrow-level vocabulary it hands back — [`RecordBatch`],
+//! [`column_info`](strata_arrow::column_info), the [`plan`](strata_arrow::plan) model an EXPLAIN
+//! is read into — and on `strata-core`, whose services it reads: `util`, `project` and `secret`.
+//! Neither points back.
 //!
 //! Beside the facade live [`sql`] (the language service: validation, completion, symbols),
-//! [`plan`] (the DataFusion-free EXPLAIN model the UI renders), [`profile`] (a catalog entry's
-//! column statistics) and [`register`] (the project registration pass: connect, register tables,
-//! create views).
+//! [`profile`] (a catalog entry's column statistics) and [`register`] (the project registration
+//! pass: connect, register tables, create views).
 //!
 //! [`Engine`] holds the `SessionContext` plus a private multi-thread Tokio runtime: every call
 //! spawns its work onto that runtime and awaits the `JoinHandle`, which is executor-agnostic — so
@@ -30,6 +31,8 @@
 //! `profile`) as plain async functions over `&SessionContext`.
 
 mod arrow_stats;
+#[cfg(test)]
+mod boundaries;
 mod catalog;
 mod chart;
 /// The all-or-nothing contract a connection registers under, shared by [`store`] and [`db`].
@@ -48,24 +51,10 @@ mod query;
 pub mod register;
 mod sink;
 pub mod sql;
-/// `pub` for the connection editor, which offers the client options this module knows how to
-/// apply ([`store::CLIENT_KEYS`]) and refuses the ones it does not ([`store::check_client_config`])
-/// — the same call `connect` makes, so a form and the store cannot disagree about an option.
-pub mod store;
+mod store;
 mod udfs;
 
-/// The Arrow-level vocabulary moved to [`strata_arrow`], re-exported at the paths callers already
-/// name so the crate split is invisible to them (EA-01; EA-02 flips the imports and drops these).
-pub use strata_arrow::{config, plan, serialize, value_tree};
-
-/// [`column_info`] and [`chart_role`] are `pub` because a column's vocabulary row is derived
-/// from an Arrow field in exactly one place, and anything building a column — a fixture
-/// included — should go through it rather than hand-writing a row whose `kind` and `role` are
-/// then a second opinion about the same type.
-pub use catalog::{chart_role, column_info, TableMeta, TableSpec, ViewMeta};
-/// The bin cap the histogram read clamps to — `pub` so the control offering a bin count is
-/// bounded by the same number rather than a second copy of it.
-pub use chart::MAX_BINS;
+pub use catalog::{TableMeta, TableSpec, ViewMeta};
 /// What a surface can be told about one relation inside a database connection's catalog
 /// ([`Engine::describe_remote`]) — beside `TableMeta` because it answers the same question for
 /// the kind of source that has no def.
@@ -80,14 +69,7 @@ pub use query::purge_snapshot_root;
 
 use sql::{PolicyRefusal, Verdict};
 
-/// The Arrow batch type engine results carry (the type-aware source for Copy/Export),
-/// re-exported so frontends can name it without their own DataFusion dependency (this
-/// crate is the one DataFusion boundary).
-pub use strata_arrow::RecordBatch;
-
-/// The Arrow schema type, re-exported for the same reason — code (and tests) holding a
-/// [`RecordBatch`] sometimes needs to name its schema.
-pub use strata_arrow::Schema;
+use strata_arrow::{column_info, config, RecordBatch};
 
 /// A call the caller (or the app on their behalf) **stopped**: [`Engine::cancel`] aborted it, or
 /// [`Engine::cancel_profile`] did.
@@ -131,7 +113,6 @@ use datafusion_federation::FederatedQueryPlanner;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::AbortHandle;
 
-use crate::plan::QueryPlan;
 use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
 use db::Databases;
 use ddl::StrataFunctionFactory;
@@ -142,6 +123,7 @@ use query::{
     ReadPolicy,
 };
 use sql::{DatabaseSym, FunctionCatalog, PreparedSym, RelationSym, SchemaSym};
+use strata_arrow::plan::QueryPlan;
 use strata_model::{
     Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, PgPassword, Provider, QueryOutput,
     SnapshotId, TabId, Trend,
@@ -1409,7 +1391,7 @@ impl Engine {
     ///
     /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
     /// the credential chain does not answer for, a server that refused the user, a password this
-    /// machine does not have. See [`store::connect`] and [`db::connect`].
+    /// machine does not have. See `store::connect` and [`db::connect`].
     pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
         let ctx = self.ctx.clone();
         let url = conn.url();
@@ -1449,7 +1431,7 @@ impl Engine {
     /// runtime they were spawned on.
     ///
     /// **Both arms are asked**, because a URL is all this is given — the def is gone by the time
-    /// a Forget reaches here. Neither is a fault when it does nothing: see [`store::disconnect`]
+    /// a Forget reaches here. Neither is a fault when it does nothing: see `store::disconnect`
     /// and [`db::disconnect`].
     pub fn disconnect(&self, url: &str) {
         self.connections.forget(url);
@@ -1635,7 +1617,7 @@ impl Engine {
     }
 
     /// The AWS profile names this machine's own configuration defines — what the connection
-    /// editor's **Named profile** picker offers (W7 · 03). See [`store::aws_profiles`]; no
+    /// editor's **Named profile** picker offers (W7 · 03). See `store::aws_profiles`; no
     /// profile's *contents* are read.
     ///
     /// On the engine rather than beside the surface that asks for it, for the two reasons every

@@ -274,7 +274,7 @@ fn resolve(raw: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_engine::column_info;
+    use strata_arrow::column_info;
 
     use super::*;
     use crate::apps::export::model::{CodecChoice, ScopeChoice};

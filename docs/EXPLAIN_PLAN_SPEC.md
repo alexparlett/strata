@@ -66,9 +66,8 @@ sequenceDiagram
 
 ## 2. The data model
 
-All types are in `strata_arrow::plan` (re-exported from `plan/mod.rs`, and from
-`strata_engine::plan` until EA-02 flips the imports), with no DataFusion dependency — the view
-links against the model, never the planner.
+All types are in `strata_arrow::plan` (re-exported from `plan/mod.rs`), with no DataFusion
+dependency — the view links against the model, never the planner.
 
 ### `QueryPlan` (`plan/tree.rs`)
 

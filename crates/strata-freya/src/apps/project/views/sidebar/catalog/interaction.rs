@@ -13,9 +13,10 @@ use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
+use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::{column_info, TableMeta, ViewMeta};
+use strata_engine::{TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, PgStore, Provider,
     ProviderId, RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef,

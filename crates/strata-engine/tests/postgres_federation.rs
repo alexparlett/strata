@@ -31,13 +31,15 @@ use std::{env, fs, process};
 
 use datafusion::arrow::datatypes::{DataType, Field};
 use keyring_core::mock;
+use strata_arrow::column_info;
+use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
 use strata_core::secret::{Secret, SecretRef};
 use strata_engine::db::{SchemaVisibility, PG_PASSWORD};
-use strata_engine::profile::{aggregates, profile_sql, Profiled};
+use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::{register_project, table_spec, RegOutcome};
 use strata_engine::{
-    column_info, sql, stopped_on_purpose, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
+    sql, stopped_on_purpose, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
 use strata_model::{
     Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, StatKey,

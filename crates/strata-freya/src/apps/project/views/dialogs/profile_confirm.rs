@@ -383,9 +383,9 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use freya_testing::TestingRunner;
+    use strata_arrow::column_info;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_engine::column_info;
     use strata_engine::{TableMeta, ViewMeta};
     use strata_model::{ColumnInfo, RemoteRef, TableDef, TableOrigin, ViewDef};
 

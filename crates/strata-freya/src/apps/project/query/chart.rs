@@ -36,7 +36,7 @@ pub struct ChartSpec {
     pub snapshot: SnapshotId,
     pub query: ChartQuery,
     /// The engine's `datafusion.format.*` overrides — see the module note. Built with
-    /// [`strata_engine::config::display_subset`], never assembled by hand.
+    /// [`strata_arrow::config::display_subset`], never assembled by hand.
     pub display: BTreeMap<String, String>,
 }
 
