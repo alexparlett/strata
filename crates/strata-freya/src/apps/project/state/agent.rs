@@ -325,8 +325,9 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_agent::{Agent, AgentIdentity};
+    use strata_arrow::column_info;
     use strata_core::project::ProjectDefs;
-    use strata_engine::{column_info, TableMeta, ViewMeta};
+    use strata_engine::{TableMeta, ViewMeta};
     use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef};
     use uuid::Uuid;
 

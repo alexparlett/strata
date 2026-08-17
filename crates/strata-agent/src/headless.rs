@@ -32,9 +32,9 @@ use std::sync::{Arc, Mutex};
 
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
+use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
-use strata_engine::plan::as_explain;
 use strata_engine::register::{register_project, RegOutcome};
 use strata_engine::{Engine, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;

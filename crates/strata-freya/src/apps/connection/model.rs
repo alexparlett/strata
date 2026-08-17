@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::store::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
+use strata_arrow::client::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
 use strata_model::{
     ConnectionDef, GcsAuth, GcsStore, PgPassword, PgStore, Provider, ProviderId, S3Auth, S3Store,
 };
@@ -601,7 +601,7 @@ impl ConnectionDraft {
     ///
     /// The **address is checked by the def's own rules** ([`Provider::check_address`]) rather
     /// than by a copy kept here, so a name this form accepts is exactly a name
-    /// `strata_engine::store::connect` accepts, in the same words. That is stronger than
+    /// `engine::store::connect` accepts, in the same words. That is stronger than
     /// the two agreeing by inspection: S3's rules and GCS's differ in four places, and a form
     /// holding its own copy would drift from the store's the first time either moved.
     ///

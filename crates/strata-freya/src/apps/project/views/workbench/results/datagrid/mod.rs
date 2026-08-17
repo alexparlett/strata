@@ -25,8 +25,8 @@ use freya::components::{define_theme, get_theme, CircularLoader};
 use freya::prelude::*;
 
 use crate::state::{use_config, use_config_station, ConfigChan};
+use strata_arrow::serialize::TextFormat;
 use strata_core::config::Command;
-use strata_engine::serialize::TextFormat;
 
 use super::cell_view::{CellValue, CellView};
 use super::copy;

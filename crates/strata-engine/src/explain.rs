@@ -1,4 +1,4 @@
-//! `EXPLAIN [ANALYZE]` → a structured [`crate::plan::QueryPlan`], walked from
+//! `EXPLAIN [ANALYZE]` → a structured [`strata_arrow::plan::QueryPlan`], walked from
 //! DataFusion's own typed logical/physical plans (no plan-text parsing).
 
 use datafusion::logical_expr::LogicalPlan;
@@ -8,10 +8,10 @@ use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement as DFStatement;
 
-use crate::plan::{
+use crate::query::{plan_statement, ReadPolicy};
+use strata_arrow::plan::{
     fmt_ms, self_time_ms, split_name_detail, Metric, MetricKind, PlanKind, PlanNode, QueryPlan,
 };
-use crate::query::{plan_statement, ReadPolicy};
 
 /// Build a structured [`QueryPlan`] for an `EXPLAIN [ANALYZE]` statement by
 /// walking DataFusion's own typed plans — **no plan-text parsing**.
@@ -123,7 +123,7 @@ fn walk_physical(root: &dyn ExecutionPlan) -> Vec<PlanNode> {
 }
 
 /// Read a physical operator's metrics: output rows (the `rows` field) plus every
-/// other named metric as a typed, pre-labelled [`crate::plan::Metric`] — classified
+/// other named metric as a typed, pre-labelled [`strata_arrow::plan::Metric`] — classified
 /// by `MetricValue` variant so the UI can format + group without unit math. The raw
 /// `elapsed_compute` timestamps are dropped; `output_rows` becomes `rows`.
 fn node_metrics(p: &dyn ExecutionPlan) -> (Option<u64>, Vec<Metric>) {
@@ -156,11 +156,11 @@ fn node_metrics(p: &dyn ExecutionPlan) -> (Option<u64>, Vec<Metric>) {
     (rows, metrics)
 }
 
-/// Classify a DataFusion `MetricValue` into the UI's [`crate::plan::MetricKind`],
+/// Classify a DataFusion `MetricValue` into the UI's [`strata_arrow::plan::MetricKind`],
 /// by variant first (robust — `elapsed_compute`'s name has no "time" in it), then a
 /// name heuristic for the generic operator-defined `Count`/`Gauge` metrics.
 fn metric_kind(v: &MetricValue) -> MetricKind {
-    use crate::plan::MetricKind as K;
+    use strata_arrow::plan::MetricKind as K;
     match v {
         MetricValue::ElapsedCompute(_) | MetricValue::Time { .. } => K::Time,
         MetricValue::SpilledBytes(_) | MetricValue::OutputBytes(_) => K::Bytes,

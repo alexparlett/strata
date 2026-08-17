@@ -13,15 +13,15 @@
 //! autocomplete all address, and it has to survive a rename — the name cannot be the key of the
 //! thing whose whole purpose is to let you retype a name.
 //!
-//! Validation is [`strata_engine::config`]'s, not this module's: `value_error` already
+//! Validation is [`strata_arrow::config`]'s, not this module's: `value_error` already
 //! knows every catalogued key's shape, and the two problems it cannot see (an unnamed value, a
 //! duplicated name) are properties of the *list* rather than of a key, which is why they live
 //! here and nowhere else.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use strata_arrow::config::{is_owned_key, key_def, value_error, EngineKey, ENGINE_KEYS};
 use strata_core::util::contains_lowercased;
-use strata_engine::config::{is_owned_key, key_def, value_error, EngineKey, ENGINE_KEYS};
 
 /// How many catalogue matches the name field offers at once (canvas: 7).
 const MAX_SUGGESTIONS: usize = 7;
@@ -41,7 +41,7 @@ pub enum KeyStatus {
     Known(&'static EngineKey),
     /// A key the **app** owns and config may never set — the catalog and schema our tables live
     /// in, and the planner spans the editor's diagnostics need
-    /// ([`is_owned_key`](strata_engine::config::is_owned_key)). Absent from the catalogue,
+    /// ([`is_owned_key`](strata_arrow::config::is_owned_key)). Absent from the catalogue,
     /// so it can only ever be typed by hand or arrive as a stale saved override.
     Reserved,
     /// Not in the catalogue. Not an error: it may be a key from a DataFusion newer than this

@@ -20,9 +20,9 @@
 use std::time::Duration;
 
 use freya::query::{use_query, Captured, Query, QueryCapability, UseQuery};
-use strata_engine::profile::{CatalogProfile, Profiled};
+use strata_arrow::profile::Profiled;
 use strata_engine::sql::qualified;
-use strata_model::{CatalogKind, RemoteRef};
+use strata_model::{CatalogKind, CatalogProfile, RemoteRef};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;

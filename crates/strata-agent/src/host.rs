@@ -26,7 +26,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use strata_engine::plan::QueryPlan;
+use strata_arrow::plan::QueryPlan;
 use strata_engine::{Engine, WsId};
 use strata_model::{ColumnInfo, QueryOutput};
 use uuid::Uuid;

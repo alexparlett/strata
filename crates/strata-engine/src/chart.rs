@@ -32,8 +32,10 @@ use strata_model::{
     Axis, CapUnit, ChartBin, ChartData, ChartPoint, ChartQuery, ChartSeries, SnapshotId, Trend,
 };
 
-use super::query::{snapshot_name, CellFormat};
+use strata_arrow::MAX_BINS;
 use strata_core::util::{clip, DISPLAY_CHARS};
+
+use super::query::{snapshot_name, CellFormat};
 
 /// What a NULL reads as on an axis or in a legend (spec §5). Only ever a *label*: categories
 /// and series are keyed by the value itself, so this never merges with a real `(null)`
@@ -406,11 +408,6 @@ async fn histogram(df: DataFrame, column: &str, bins: Option<usize>) -> Result<C
             .collect(),
     ))
 }
-
-/// The bin cap both the read and the control offering a bin count clamp to, in
-/// [`strata_arrow::chart`] because it is a number the two sides share rather than anything the
-/// read computes — re-exported here at the path callers already name (EA-01).
-pub use strata_arrow::MAX_BINS;
 
 /// Bin count when the request leaves it open: `√n`, floored at 6 and capped at 24 — enough
 /// shape to read, few enough bars to label.

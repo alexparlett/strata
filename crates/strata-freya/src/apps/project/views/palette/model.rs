@@ -335,7 +335,8 @@ mod tests {
     use std::path::PathBuf;
 
     use datafusion::arrow::datatypes::{DataType, Field};
-    use strata_engine::{column_info, TableMeta};
+    use strata_arrow::column_info;
+    use strata_engine::TableMeta;
     use strata_model::{ColumnInfo, SourceFormat, TableDef, TableOrigin, ViewDef};
 
     use super::*;

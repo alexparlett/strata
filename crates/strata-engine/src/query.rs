@@ -45,9 +45,9 @@ use datafusion_functions_json::JSON_UNION_DATA_TYPE;
 use futures::StreamExt;
 use std::sync::Arc;
 
-use super::catalog::column_info;
-use super::config::effective;
 use super::providers::in_workspace;
+use strata_arrow::column_info;
+use strata_arrow::config::effective;
 use strata_core::util::{clip, DISPLAY_CHARS};
 use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 

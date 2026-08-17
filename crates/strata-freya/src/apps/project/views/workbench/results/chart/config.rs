@@ -19,7 +19,7 @@
 //! a column that vanishes from one result and returns in the next must bring the user's
 //! choice back with it, and a config the surface silently rewrote could not do that.
 
-use strata_engine::MAX_BINS;
+use strata_arrow::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartQuery, ChartRole, ChartSort, ChartX, ColumnInfo};
 
 /// How many result rows the renderer-first read will draw before it refuses (spec §7).
@@ -34,8 +34,8 @@ const DEFAULT_YS: usize = 4;
 
 /// A result's columns, each with the role its Arrow type resolved to, in result order.
 ///
-/// The role is read off the column, not derived here: it was resolved where the engine still
-/// had the `DataType` (`engine::catalog::chart_role`), so the encoder and the read agree on
+/// The role is read off the column, not derived here: it was resolved where the reader still
+/// had the `DataType` (`strata_arrow::column::chart_role`), so the encoder and the read agree on
 /// what a measure is by construction. [`ChartRole::Other`] never enters — a nested column has
 /// no axis to sit on and no value to plot, so it is offered nowhere.
 #[derive(Clone, PartialEq, Debug, Default)]
@@ -585,7 +585,7 @@ fn plural(n: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-    use strata_engine::column_info;
+    use strata_arrow::column_info;
 
     use super::*;
 

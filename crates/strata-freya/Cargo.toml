@@ -18,6 +18,7 @@ freya = { workspace = true, features = [
 
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
+strata-arrow = { path = "../strata-arrow" }
 strata-engine = { path = "../strata-engine" }
 
 strata-agent = { path = "../strata-agent" }

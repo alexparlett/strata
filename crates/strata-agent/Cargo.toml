@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
+strata-arrow = { path = "../strata-arrow" }
 strata-engine = { path = "../strata-engine" }
 rmcp = { version = "3.0.1", features = [
     "server",

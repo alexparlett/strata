@@ -12,13 +12,13 @@ use freya::prelude::{
     Key, KeyExt, KeyboardEventData, Modifiers, NamedKey, Size, State,
 };
 use freya::radio::{use_radio, use_radio_station};
+use strata_arrow::config::{effective, DIALECT_KEY};
 use strata_code_editor::prelude::{
     CodeEditor, CodeEditorData, CompletionItem, CompletionItemKind, CompletionRequest,
     EditorLanguage, Rope,
 };
 use strata_core::config::Command;
 use strata_core::keymap::resolve;
-use strata_engine::config::{effective, DIALECT_KEY};
 use strata_engine::sql;
 use strata_model::TabId;
 

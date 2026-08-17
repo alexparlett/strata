@@ -37,9 +37,9 @@ use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::catalog::short_type;
-use crate::config::{effective, is_display_key, is_owned_key, is_restart_key, DIALECT_KEY};
 use crate::refresh_config_dependent_udfs;
 use crate::sql::{Blocked, PreparedSym, StmtKind};
+use strata_arrow::config::{effective, is_display_key, is_owned_key, is_restart_key, DIALECT_KEY};
 
 use super::{StatementOutcome, StoreEffect};
 
