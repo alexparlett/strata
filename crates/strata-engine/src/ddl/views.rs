@@ -1,4 +1,4 @@
-//! **Views** (ED-06) — the body every gesture that creates or drops one runs, and the two typed
+//! **Views** — the body every gesture that creates or drops one runs, and the two typed
 //! statements that are a second gesture into it. `docs/STATEMENTS_SPEC.md` §6.3.
 //!
 //! A view is Save's artifact: ⌘S wraps the tab's plain query in `CREATE OR REPLACE VIEW` and
@@ -32,7 +32,8 @@ use strata_arrow::column_info;
 use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
 use crate::db::Databases;
 use crate::query::is_snapshot_name;
-use crate::sql::{parse_one, Blocked, StmtKind};
+use crate::statements::pipeline::resolved_one;
+use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, quote_ident};
 use strata_model::ViewDef;
 
@@ -42,14 +43,14 @@ use super::{bare_name, elsewhere, existing, left_invalid, remote, StatementOutco
 const WHAT: &str = "Views";
 
 /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and what it reads
-/// (D10) — the body behind both gestures.
+/// — the body behind both gestures.
 ///
 /// `name` is whatever the user typed (it rides in `.strata/project.json`, a shared, committed
 /// file), so it goes through [`quote_ident`] rather than straight into the statement — which is
 /// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
 /// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
 ///
-/// **Parsed and resolved rather than handed to `ctx.sql`** ([`parse_one`], DB-09): a view's body
+/// **Parsed and resolved rather than handed to `ctx.sql`** ([`resolved_one`]): a view's body
 /// is a read like any other, and resolving it is what makes [`plan_deps`] record a body reading a
 /// connection's `orders` as the *remote* dependency it is. The def still stores the SQL the user
 /// wrote.
@@ -62,10 +63,10 @@ const WHAT: &str = "Views";
 /// they do not recognise, which is most of them.
 pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewMeta, String> {
     if is_snapshot_name(name) {
-        return Err(Blocked::ReservedName.editor_message());
+        return Err(Fault::ReservedName.message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    let stmt = parse_one(ctx, &stmt).map_err(|e| view_error(ctx, &e))?;
+    let stmt = resolved_one(ctx, &stmt).map_err(|e| view_error(ctx, &e))?;
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
@@ -284,7 +285,7 @@ mod tests {
     use std::{env, process};
 
     use crate::register::{register_project, RegOutcome};
-    use crate::sql::Blocked;
+    use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
@@ -619,7 +620,7 @@ mod tests {
             statement(&eng, "CREATE VIEW __snap_1 AS SELECT 1 AS n")
                 .await
                 .expect_err("refused"),
-            Blocked::ReservedName.editor_message()
+            Fault::ReservedName.message()
         );
     }
 

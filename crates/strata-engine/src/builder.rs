@@ -12,6 +12,7 @@ use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::db::Databases;
 use crate::functions::Functions;
+use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::query::claim_snapshot_dir;
 use crate::secrets::{KeystoreSecrets, SecretProvider};
 use crate::udf_package::UdfPackage;
@@ -48,6 +49,7 @@ pub struct EngineBuilder {
     secrets: Arc<dyn SecretProvider>,
     udfs: Vec<Arc<dyn UdfPackage>>,
     memory_pool: Option<Arc<dyn MemoryPool>>,
+    policy: Arc<dyn PolicyProvider>,
 }
 
 impl Default for EngineBuilder {
@@ -58,6 +60,7 @@ impl Default for EngineBuilder {
             secrets: Arc::new(KeystoreSecrets),
             udfs: vec![Arc::new(crate::udfs::StrataFunctions)],
             memory_pool: None,
+            policy: Arc::new(CapabilityPolicyProvider::new(Capability::full())),
         }
     }
 }
@@ -99,6 +102,23 @@ impl EngineBuilder {
     /// built-ins.
     pub fn with_udfs(mut self, package: impl UdfPackage + 'static) -> Self {
         self.udfs.push(Arc::new(package));
+        self
+    }
+
+    /// Sets who may perform what, defaults to `CapabilityPolicyProvider::new(Capability::full())`
+    ///
+    /// The default refuses nothing, so restriction is something an embedder says rather than
+    /// something it has to switch off: pass `CapabilityPolicyProvider::new(Capability::read_only())`
+    /// for an engine whose statements may only read, or your own [`PolicyProvider`] to decide
+    /// against a policy service. A caller's own capability narrows this one and never widens it,
+    /// so this is a ceiling.
+    ///
+    /// Asked by [`Engine::run`], [`Engine::validate`] and [`Engine::policy_verdicts`] — the
+    /// entries that classify a statement. [`Engine::query`] and [`Engine::explain`] are handed a
+    /// statement to read and are limited to reading by the read path's own `SQLOptions`; they do
+    /// not consult this.
+    pub fn with_policy(mut self, policy: impl PolicyProvider) -> Self {
+        self.policy = Arc::new(policy);
         self
     }
 
@@ -154,6 +174,7 @@ impl EngineBuilder {
             databases: Databases::default(),
             session: SessionScope::default(),
             secrets: self.secrets,
+            policy: self.policy,
         })
     }
 }

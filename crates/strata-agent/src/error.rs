@@ -18,7 +18,7 @@ use std::fmt;
 use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock};
 use rmcp::ErrorData;
-use strata_engine::sql::PolicyRefusal;
+use strata_engine::PolicyRefusal;
 
 use crate::host::{Project, QuerySessionId};
 
@@ -29,8 +29,8 @@ const UNJUDGED: &str = "The statement was refused, but no reason was recorded.";
 /// One of the taxonomy's classes. The `Display` is what the agent reads.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentError {
-    /// Blocked DDL/DML. Carries the refusals so the message is the **editor's own**, from
-    /// `Blocked::editor_message()` — one predicate, two surfaces, zero copies (AA-01).
+    /// Refused DDL/DML. Carries the refusals so the message is the **engine's own**, from the
+    /// statement layer's one message table — one pipeline, two surfaces, zero copies.
     Policy(Vec<PolicyRefusal>),
     /// The engine's `Err` from a real fault, unedited — it already reads like an IDE's.
     /// Also the home of "this did not parse": the gate fails closed on unjudgeable input
@@ -81,7 +81,7 @@ impl fmt::Display for AgentError {
         match self {
             AgentError::Policy(refusals) => match &refusals[..] {
                 [] => f.write_str(UNJUDGED),
-                [one] => f.write_str(&one.blocked.editor_message()),
+                [one] => f.write_str(&one.message()),
                 many => {
                     let mut first = true;
                     for r in many {
@@ -89,12 +89,7 @@ impl fmt::Display for AgentError {
                             writeln!(f)?;
                         }
                         first = false;
-                        write!(
-                            f,
-                            "Statement {}: {}",
-                            r.index + 1,
-                            r.blocked.editor_message()
-                        )?;
+                        write!(f, "Statement {}: {}", r.index + 1, r.message())?;
                     }
                     Ok(())
                 }
@@ -129,38 +124,40 @@ impl IntoCallToolResult for AgentError {
 mod tests {
     use std::path::PathBuf;
 
-    use strata_engine::sql::Blocked;
+    use strata_engine::{DenyCode, Form, Reason, StmtKind};
 
     use super::*;
 
-    fn refusal(index: usize, blocked: Blocked) -> PolicyRefusal {
+    fn refusal(index: usize, kind: StmtKind) -> PolicyRefusal {
         PolicyRefusal {
             index,
             statement: String::new(),
-            blocked,
+            reason: Reason::Policy {
+                form: Form::Statement(kind),
+                code: DenyCode::NotGranted,
+            },
         }
     }
 
-    /// The whole point of carrying `Blocked` rather than a string: the agent reads exactly
-    /// what the editor squiggles.
+    /// The whole point of carrying the classification rather than a string: the agent reads
+    /// exactly what the engine's one message table mints.
     #[test]
-    fn a_single_refusal_is_the_editors_message_verbatim() {
-        let e = AgentError::Policy(vec![refusal(0, Blocked::CreateTable)]);
-        assert_eq!(e.to_string(), Blocked::CreateTable.editor_message());
+    fn a_single_refusal_is_the_engines_message_verbatim() {
+        let one = refusal(0, StmtKind::CreateTable);
+        let e = AgentError::Policy(vec![one.clone()]);
+        assert_eq!(e.to_string(), one.message());
     }
 
     #[test]
     fn several_refusals_are_indexed_from_one() {
-        let e = AgentError::Policy(vec![
-            refusal(0, Blocked::Insert),
-            refusal(2, Blocked::CreateDatabase),
-        ]);
+        let (first, second) = (refusal(0, StmtKind::Insert), refusal(2, StmtKind::DropView));
+        let e = AgentError::Policy(vec![first.clone(), second.clone()]);
         assert_eq!(
             e.to_string(),
             format!(
                 "Statement 1: {}\nStatement 3: {}",
-                Blocked::Insert.editor_message(),
-                Blocked::CreateDatabase.editor_message()
+                first.message(),
+                second.message()
             )
         );
     }

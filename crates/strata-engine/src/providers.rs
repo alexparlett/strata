@@ -9,7 +9,7 @@
 //! * **Identity** — the workspace catalog has one schema, tables keyed by [`fold_ident`].
 //!   [`StrataCatalogProvider::register_schema`] refuses, so `CREATE SCHEMA x` fails at the provider
 //!   even with the router bypassed. `CREATE DATABASE` cannot be stopped here — `register_catalog`
-//!   returns an `Option` and has no way to refuse — so the router's `Blocked::CreateDatabase` is
+//!   returns an `Option` and has no way to refuse — so the classifier's `Fault::CreateDatabase` is
 //!   its only gate. The scoping is load-bearing since the DB workstream: the session holds one
 //!   catalog per database connection too, and it is the *workspace* whose flat bare-name namespace
 //!   is one-catalog-one-schema.

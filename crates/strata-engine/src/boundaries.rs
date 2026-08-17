@@ -1,5 +1,4 @@
-//! The two import directions nothing in the workspace may take, checked by reading the source
-//! (EA-02).
+//! The two import directions nothing in the workspace may take, checked by reading the source.
 //!
 //! Both are boundaries a type system cannot state. The **module** one replaces a crate split the
 //! re-architecture deliberately did not make: `sources` and `sql` are peers inside this crate, and
@@ -8,9 +7,8 @@
 //! having: a re-export added back here would let a surface that formats a cell go on compiling a
 //! query planner to do it, and every such re-export was removed to stop exactly that.
 //!
-//! A missing directory is not a pass. `sources/` arrives with EA-05, so today only the
-//! `sql ↛ sources` half has files to read; the other half goes live the moment the module exists,
-//! with no edit here.
+//! A missing directory is not a pass: the half whose directory does not exist reads no files and
+//! goes live the moment one does, with no edit here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,8 +100,8 @@ fn the_sources_and_language_layers_do_not_import_each_other() {
 }
 
 /// The items `strata-arrow` owns, by the name a `use` would write. The engine re-exported every
-/// one of them until EA-02; naming any of them through `strata_engine` again means a re-export
-/// came back.
+/// one of them once; naming any of them through `strata_engine` again means a re-export came
+/// back.
 const ARROW_VOCABULARY: &[&str] = &[
     "chart_role",
     "check_client_config",
@@ -170,17 +168,17 @@ fn the_frontend_names_strata_arrow_for_the_arrow_vocabulary() {
 fn a_use_declaration_is_read_to_its_semicolon_and_prose_is_not_one() {
     let source = "//! A doc comment that says use strata_engine::plan; in prose.\n\
                   use strata_engine::{\n    RunTag,\n    WsId,\n};\n\
-                  pub use crate::sql::Blocked;\n";
+                  pub use crate::sql::validate;\n";
     assert_eq!(
         use_declarations(source),
         vec![
             "use strata_engine::{ RunTag, WsId, }".to_string(),
-            "use crate::sql::Blocked".to_string(),
+            "use crate::sql::validate".to_string(),
         ]
     );
-    assert!(reaches("use crate::sql::Blocked", "sql"));
-    assert!(reaches("use super::sql::Blocked", "sql"));
-    assert!(!reaches("use strata_engine::sql::Blocked", "sql"));
+    assert!(reaches("use crate::sql::validate", "sql"));
+    assert!(reaches("use super::sql::validate", "sql"));
+    assert!(!reaches("use strata_engine::sql::validate", "sql"));
 }
 
 #[test]

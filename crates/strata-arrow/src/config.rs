@@ -451,7 +451,7 @@ pub fn is_owned_key(name: &str) -> bool {
 /// rendered rather than what is read.
 ///
 /// Two rules ask it and must not drift: [`display_subset`] carries these into a cached read's
-/// identity, and the session overlay refuses them (`Blocked::SetFormat`, ED-08) because the grid
+/// identity, and the session overlay refuses them toward Settings because the grid
 /// formatter and the chart read take them from the Settings store, so a session value would leave
 /// the two disagreeing about the same column.
 pub fn is_display_key(name: &str) -> bool {

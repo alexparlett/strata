@@ -1,4 +1,4 @@
-//! The results-pane footer (P2-08, comp `StatusBar.dc.html` / `data-rg="statusbar"`): a
+//! The results-pane footer (comp `StatusBar.dc.html` / `data-rg="statusbar"`): a
 //! state-toned dot + label + muted sub-label on the left, then the snapshot chip (clock +
 //! relative age, live-ticking) and the accent selection aggregate (Rz3 — count over every
 //! selected cell, Σ / avg / min / max over the numeric ones); the pager cluster — page-size
@@ -12,7 +12,7 @@ use freya::prelude::*;
 use strata_arrow::plan::PlanTab;
 use strata_core::config::Command;
 use strata_core::util::fmt_int;
-use strata_engine::sql::StmtKind;
+use strata_engine::StmtKind;
 use strata_model::Kind;
 
 use super::datagrid::{GridData, PageRead};
@@ -111,7 +111,7 @@ pub struct StatusBar {
     info: Option<RunInfo>,
     /// The plan state's sub-label: operator count of the shown tree + which tree it is.
     plan: Option<(usize, PlanTab)>,
-    /// The statement state's readouts: what ran, and how long the engine took (ED-02).
+    /// The statement state's readouts: what ran, and how long the engine took.
     statement: Option<(StmtKind, u128)>,
     /// The resolved current page (grid state) — the selection aggregate reads its real cells.
     view: Option<PageRead>,
@@ -143,14 +143,14 @@ impl StatusBar {
         self
     }
 
-    /// The plan state's sub-label: the shown tree's operator count + which tree (P2-05 —
+    /// The plan state's sub-label: the shown tree's operator count + which tree (
     /// tracks the view's Physical/Logical selection).
     pub fn plan(mut self, ops: usize, tab: PlanTab) -> Self {
         self.plan = Some((ops, tab));
         self
     }
 
-    /// The statement state's readouts (ED-02): the statement's own SQL name, off the same
+    /// The statement state's readouts: the statement's own SQL name, off the same
     /// `StmtKind::label` table the body's title reads, and the engine's elapsed.
     pub fn statement(mut self, kind: StmtKind, elapsed_ms: u128) -> Self {
         self.statement = Some((kind, elapsed_ms));
@@ -422,7 +422,7 @@ impl AggView {
 }
 
 /// Aggregate the selection over the page's real cells — the Dioxus `selection_agg`. The view
-/// handed in is the *find-filtered* page (P2-09), which the page-local selection indexes
+/// handed in is the *find-filtered* page, which the page-local selection indexes
 /// into, so the aggregate stays honest under an active filter.
 ///
 /// The selection is walked and folded in one pass — Select-All over the pager's largest cut is

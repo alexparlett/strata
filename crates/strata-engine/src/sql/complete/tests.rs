@@ -665,7 +665,7 @@ fn manual_trigger_lifts_the_tail_gate() {
 
 #[test]
 fn policy_and_completion_agree_on_statement_leads() {
-    use crate::sql::{classify, Capability, Verdict};
+    use crate::statements::classify_stmt;
     use datafusion::sql::parser::DFParserBuilder;
     use datafusion::sql::sqlparser::dialect::GenericDialect;
     for blocked in [
@@ -734,10 +734,10 @@ fn policy_and_completion_agree_on_statement_leads() {
             .parse_statements()
             .unwrap_or_else(|e| panic!("{sql}: {e}"));
         assert_eq!(stmts.len(), 1, "{sql}");
-        let verdict = classify(&stmts.pop_back().unwrap(), Capability::Editor);
+        let classified = classify_stmt(&stmts.pop_back().unwrap());
         assert!(
-            matches!(verdict, Verdict::Query | Verdict::Intercept(_)),
-            "{lead} → {sql}: {verdict:?}"
+            classified.as_ref().is_ok_and(|c| c.fault.is_none()),
+            "{lead} → {sql}: {classified:?}"
         );
     }
 }
@@ -1262,7 +1262,7 @@ fn completions_resume_after_a_closed_string() {
     pos(&items, "status");
 }
 
-/// **Qualified names over a database connection** (DB-06) — the offer grows a catalog segment,
+/// **Qualified names over a database connection** — the offer grows a catalog segment,
 /// then a schema segment, and stops where the network would begin.
 mod qualified {
     use super::*;
@@ -1408,7 +1408,7 @@ mod qualified {
         absent(&items, "pg");
     }
 
-    /// **A connection's relations are offered where a relation goes** (DB-09), not only behind a
+    /// **A connection's relations are offered where a relation goes**, not only behind a
     /// qualifier — the offer catching up with the fact that a bare name resolves. The detail names
     /// the schema it came from, because the label alone cannot say which source it is.
     #[test]

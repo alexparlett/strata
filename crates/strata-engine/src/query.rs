@@ -54,7 +54,7 @@ use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
 /// The prefix every result snapshot is registered under. Named here, next to the
 /// only thing that mints one, because two other rules key off it: the statement
 /// router refuses an intercepted statement that names a table with this prefix
-/// (`sql::validate::classify`), and the schema provider hides such tables from every
+/// (`statements::classify_stmt`), and the schema provider hides such tables from every
 /// enumeration (`engine::providers`) — the naming rule and the hiding rule must not
 /// be able to drift apart.
 const SNAPSHOT_PREFIX: &str = "__snap_";
@@ -485,12 +485,12 @@ pub enum ReadPolicy {
     /// Queries and introspection: DDL, DML and statements all refused.
     #[default]
     ReadOnly,
-    /// The above, plus `LogicalPlan::Statement` — `EXECUTE` of a prepared query (ED-08).
+    /// The above, plus `LogicalPlan::Statement` — `EXECUTE` of a prepared query.
     Statements,
 }
 
 /// Plan one **already-resolved** statement under `policy` — `SessionContext::sql_with_options`
-/// with the parse taken out, since [`parse_one`](crate::sql::parse_one) did it.
+/// with the parse taken out, since `statements::pipeline::parse_one` did it.
 ///
 /// The same three steps in the same order: plan, verify, `execute_logical_plan` (the half of that
 /// method which performs a DDL plan — none the read policy admits). Rendering the resolved

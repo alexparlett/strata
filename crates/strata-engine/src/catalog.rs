@@ -1,5 +1,5 @@
 //! Catalog side of the engine: registering external tables, reading their free
-//! (footer) statistics, view-dependency extraction (D10), and full-scan profiling (D4).
+//! (footer) statistics, view-dependency extraction, and full-scan profiling.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -20,7 +20,8 @@ use crate::json_poly::PolyJsonFormat;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::providers::in_workspace;
 use crate::query::is_snapshot_name;
-use crate::sql::{qualified, Blocked};
+use crate::sql::qualified;
+use crate::statements::Fault;
 use crate::{fold_ident, quote_ident, CATALOG, SCHEMA};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
@@ -43,7 +44,7 @@ pub struct TableSpec {
     pub partitions: Vec<(String, String)>,
     /// [`TableOrigin::Internal`](strata_model::TableOrigin::Internal) — the data under
     /// [`paths`](Self::paths) is Strata's, spooled into the project's `.strata/tables/` by a
-    /// `CREATE TABLE` (ED-04).
+    /// `CREATE TABLE`.
     ///
     /// The registration path itself is **identical** either way; this is carried so two things
     /// downstream can be true. A failure to list the files reads differently (`.strata/tables`
@@ -53,7 +54,7 @@ pub struct TableSpec {
     pub internal: bool,
 }
 
-/// What creating a view learned: its columns and what it reads (D10). `tables` / `remote` /
+/// What creating a view learned: its columns and what it reads. `tables` / `remote` /
 /// `aliases` come straight from [`PlanDeps`] — `aliases` is raw (view inlines mixed
 /// with table-alias / CTE noise); the caller keeps only the names that are actually
 /// views.
@@ -72,7 +73,7 @@ pub struct ViewMeta {
 /// Register (or **re**-register) one external table from its spec, returning its
 /// inferred schema + free metadata.
 ///
-/// This is also the catalog **re-scan** step (D5 / P3-03): it deregisters whatever is
+/// This is also the catalog **re-scan** step: it deregisters whatever is
 /// registered under `spec.name` and builds a *fresh* `ListingTable` from a
 /// re-`infer_schema`d config, because re-registering the same provider wouldn't re-infer
 /// anything. The spec is the source of truth on every pass — paths, format and partition
@@ -94,7 +95,7 @@ pub async fn register_external(
     use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 
     if is_snapshot_name(&spec.name) {
-        return Err(Blocked::ReservedName.editor_message());
+        return Err(Fault::ReservedName.message());
     }
 
     let _ = ctx.deregister_table(spec.name.as_str());
@@ -777,7 +778,7 @@ fn holds_ext(dir: &Path, ext: &str) -> Option<bool> {
     Some(false)
 }
 
-/// What a view plan reads (D10): its **base tables** and the **names it inlines**.
+/// What a view plan reads: its **base tables** and the **names it inlines**.
 ///
 /// Asks the planner, not the SQL text, which matters three ways:
 ///
@@ -849,8 +850,8 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     }
 }
 
-/// The registered views whose plans read the table `name` — the readers a drop leaves invalid
-/// (ED-05), sorted, and **named rather than cascaded**.
+/// The registered views whose plans read the table `name` — the readers a drop leaves invalid,
+/// sorted, and **named rather than cascaded**.
 ///
 /// The plan a view carries was inlined when it was created, so a view reading `orders` through
 /// another view names `orders` at its leaf and is found here with no recursion of ours.
@@ -874,8 +875,8 @@ pub async fn remote_dependents(ctx: &SessionContext, address: &str) -> Vec<Strin
     .await
 }
 
-/// The registered views whose plans read the **view** `name` — the same question a rung up
-/// (ED-06), and the answer the catalog pane's own view-drop confirm shows.
+/// The registered views whose plans read the **view** `name` — the same question a rung up, and
+/// the answer the catalog pane's own view-drop confirm shows.
 ///
 /// A different half of [`PlanDeps`], because a view is not a leaf: the inliner leaves the view's
 /// *name* behind as a `SubqueryAlias` and its base tables at the leaves, so a reader of `orders`
@@ -1567,7 +1568,7 @@ mod tests {
     }
 }
 
-/// **Dependency recording across sources** (DB-03) — the half of `plan_deps` a database
+/// **Dependency recording across sources** — the half of `plan_deps` a database
 /// connection changed, and the collision it exists to prevent.
 #[cfg(test)]
 mod cross_source_tests {

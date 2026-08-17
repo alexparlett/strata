@@ -1,9 +1,9 @@
-//! The **headless host** (AA-05): the same vocabulary with the app closed.
+//! The **headless host**: the same vocabulary with the app closed.
 //!
 //! `strata mcp <project>` serves MCP over **stdio** — the transport for a locally-spawned
 //! server, where the client owns the process, so there is no port to bind and no token to
 //! present: process ownership *is* the auth. Behind it sits a plain [`Engine`] with the
-//! project's registration pass replayed over it (AA-01's [`register_project`]), and the same
+//! project's registration pass replayed over it ([`register_project`]), and the same
 //! [`StrataTools`] the in-app server routes to. One vocabulary, two deployments.
 //!
 //! What makes this a *second host* rather than a second implementation:
@@ -35,7 +35,7 @@ use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
 use strata_engine::register::{register_project, RegOutcome};
-use strata_engine::{Engine, RunTag, WsId};
+use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::error::AgentError;
@@ -52,7 +52,7 @@ struct Session {
     /// Whether anything has ever run in it — `Empty` against `Settled`. Whether a run is *in
     /// flight* is asked of the engine instead, which is the only thing that knows.
     ran: bool,
-    /// Runs dispatched into it and not yet seen settle. More than one is ordinary: a second
+    /// Runs dispatched into it whose settle has not been seen. More than one is ordinary: a second
     /// `run` supersedes the first, and both awaits are still outstanding.
     dispatched: usize,
     /// Closed while a run was in flight. The handle stops answering immediately (this is a
@@ -69,7 +69,7 @@ pub struct HeadlessHost {
     /// so there is no epoch and nothing to invalidate.
     catalog: Vec<CatalogEntry>,
     /// What registration *learned* per table and view — `describe_table`'s answer, and only
-    /// real facts (P3-08): every number in it was read by the pass.
+    /// real facts: every number in it was read by the pass.
     described: Vec<Described>,
     page_size: usize,
     /// The agent's open query sessions — **deliberately unbounded**, unlike the app's, which
@@ -99,6 +99,12 @@ impl HeadlessHost {
     /// exactly as it does in a window. A connection is not itself a catalog entry, so
     /// [`settled`](Self::settled) does not list one — a refused connection surfaces as the `failed`
     /// rows of the tables that needed it.
+    ///
+    /// The engine is built with a read-only policy ceiling, which is what
+    /// [`StrataTools::run`]'s gate is narrowed against: this process has no editor and no user to
+    /// ask, so the capability is stated once rather than per tool. It is a ceiling and not the
+    /// whole fence — [`run`](Host::run) reads through `Engine::query`, whose limit is the read
+    /// path's own `SQLOptions`.
     pub async fn open(root: PathBuf) -> Result<HeadlessHost, String> {
         if !exists_at(&root) {
             return Err(format!(
@@ -107,7 +113,10 @@ impl HeadlessHost {
             ));
         }
         let defs = load_defs(&root)?;
-        let engine = Engine::builder().with_data_dir(&root).build();
+        let engine = Engine::builder()
+            .with_data_dir(&root)
+            .with_policy(CapabilityPolicyProvider::new(Capability::read_only()))
+            .build();
         let mut outcomes = Vec::new();
         register_project(&engine, &root, &defs, |o| outcomes.push(o)).await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))

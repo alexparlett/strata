@@ -356,7 +356,7 @@ struct Decode {
     decoder: Decoder,
     records: Box<dyn Iterator<Item = Result<Value>> + Send>,
     schema: SchemaRef,
-    /// Bytes handed to the decoder but not yet consumed by it — see [`Decode::next_batch`].
+    /// The decoder's unconsumed input. See [`Decode::next_batch`].
     pending: Vec<u8>,
 }
 

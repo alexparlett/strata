@@ -1,4 +1,4 @@
-//! Validation sweep (P2-23 acceptance): the validator against a wide corpus of
+//! Validation sweep: the validator against a wide corpus of
 //! query shapes over a realistic multi-table catalog.
 //!
 //! Four properties:
@@ -21,6 +21,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use strata_engine::sql::{validate, FunctionCatalog};
+use strata_engine::statements::pipeline::Pipeline;
+use strata_engine::{Capability, CapabilityPolicyProvider};
 use strata_model::Diagnostic;
 
 /// A catalog shaped like a real project: plain tables, a keyword-named table,
@@ -161,7 +163,8 @@ fn function_catalog(ctx: &SessionContext) -> FunctionCatalog {
 }
 
 async fn run(ctx: &SessionContext, sql: &str) -> Vec<Diagnostic> {
-    validate(ctx, &function_catalog(ctx), sql).await
+    let policy = CapabilityPolicyProvider::new(Capability::full());
+    validate(&Pipeline::new(ctx), &policy, &function_catalog(ctx), sql).await
 }
 
 /// Whether the engine itself accepts `sql` — the same parse→plan→analyze chain

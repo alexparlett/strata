@@ -18,7 +18,7 @@ use strata_arrow::plan::{
 ///
 /// Given the statement rather than the text, under the read path's own [`ReadPolicy`]: an
 /// EXPLAIN's bare names are resolved by the same pass a Run's are
-/// ([`parse_one`](crate::sql::parse_one)), or the plan pane would answer about a query the editor
+/// (`statements::pipeline::parse_one`), or the plan pane would answer about a query the editor
 /// cannot run.
 ///
 /// We plan the EXPLAIN, unwrap the `Explain`/`Analyze` wrapper to the real inner

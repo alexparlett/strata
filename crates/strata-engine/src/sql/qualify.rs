@@ -1,4 +1,4 @@
-//! **Bare-name resolution across the connected databases** (DB-09) — what turns
+//! **Bare-name resolution across the connected databases** — what turns
 //! `SELECT * FROM orders` into `SELECT * FROM "pg"."public"."orders"` before anything plans it.
 //!
 //! DataFusion has one default catalog and one default schema and no search path, so a bare name
@@ -34,7 +34,7 @@
 //! answers identically whether or not the qualifier was typed.
 //!
 //! **A create target is never resolved**, permanently, and it is the one carve-out.
-//! `CREATE TABLE orders` names a relation that does not exist yet, so there is nothing to resolve
+//! `CREATE TABLE orders` names a relation that does not exist, so there is nothing to resolve
 //! *to*, and resolving would read a plainly local intent as "make it on the server" — which then
 //! fails as already existing. `CREATE TABLE pg.public.orders AS SELECT …` is how the server is
 //! addressed, by typing the qualifier.
@@ -386,7 +386,7 @@ fn single(name: &ObjectName) -> Option<&Ident> {
 /// today, where a miss would rewrite a reference to a CTE into a table on a server. The target
 /// half is why this is a visitor: `WITH x AS (…) CREATE TABLE t AS …` parses as a **query** whose
 /// body is the create, so a create target sits inside what [`Pass::query`] treats as pure read.
-/// An `INSERT`'s target is deliberately *not* held back — it resolves like a read (DB-10).
+/// An `INSERT`'s target is deliberately *not* held back — it resolves like a read.
 #[derive(Default)]
 struct HeldBack(HashSet<String>);
 
@@ -432,7 +432,7 @@ mod tests {
     use super::SessionContext;
     use crate::builder::test_context;
     use crate::providers::fake_database;
-    use crate::sql::parse_one;
+    use crate::statements::pipeline::resolved_one;
     use crate::{Engine, RunTag, WsId};
 
     /// A session with one workspace table (`events`) and whichever database connections the test
@@ -454,7 +454,7 @@ mod tests {
     /// `sql` through the one funnel every surface enters, rendered back — the statement as the
     /// planner will receive it.
     fn resolved(ctx: &SessionContext, sql: &str) -> Result<String, String> {
-        parse_one(ctx, sql).map(|stmt| stmt.to_string())
+        resolved_one(ctx, sql).map(|stmt| stmt.to_string())
     }
 
     /// The point of the task: a name only a database connection has is reached without the
@@ -523,7 +523,7 @@ mod tests {
         );
     }
 
-    /// **A write target resolves exactly as a read does** (DB-10), so `INSERT INTO orders`
+    /// **A write target resolves exactly as a read does**, so `INSERT INTO orders`
     /// dispatches to the relation `SELECT * FROM orders` reads. What is refused about it — a
     /// read-only connection — is the arm's, reached with the qualified name this produced.
     #[test]

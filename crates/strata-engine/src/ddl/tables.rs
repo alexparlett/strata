@@ -1,4 +1,4 @@
-//! **Internal tables** (ED-04, ED-05) — `CREATE TABLE` and CTAS, spooled into the project's own
+//! **Internal tables** — `CREATE TABLE` and CTAS, spooled into the project's own
 //! `.strata/tables/` and registered through the funnel every other table goes through, plus the
 //! two statements that then write over them: `INSERT` and `DROP TABLE`.
 //! `docs/STATEMENTS_SPEC.md` §6.1 + §7.
@@ -47,7 +47,7 @@ use crate::db::{self, Databases, RemoteTarget};
 use crate::export::copy_row_count;
 use crate::query::ipc_write_options;
 use crate::sink::append_rows;
-use crate::sql::{Blocked, StmtKind};
+use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, InternalTables};
 use strata_core::project::{internal_source, tables_dir};
 use strata_core::util::{plural, temp_dir_name};
@@ -180,8 +180,7 @@ pub async fn create(
     })
 }
 
-/// **`CREATE TABLE pg.schema.t AS SELECT …`** — a result materialized as a real server table
-/// (DB-10).
+/// **`CREATE TABLE pg.schema.t AS SELECT …`** — a result materialized as a real server table.
 ///
 /// The input plan is an ordinary query, so a local scan, a federated remote one and a
 /// cross-source join all reach here already working; what is added is where the rows land.
@@ -251,7 +250,7 @@ async fn materialize(
 ///
 /// Held apart from [`create`] because [`column_type`] has to ask the same question of the same
 /// planned statement: a `PRIMARY KEY` typed into the empty-table panel's type box has to be
-/// refused *while it is being typed*, in the words the create would have used (IT-01).
+/// refused *while it is being typed*, in the words the create would have used.
 fn unenforced_clause(create: &CreateMemoryTable) -> Option<&'static str> {
     if !create.constraints.is_empty() {
         return Some("Table constraints are not supported");
@@ -268,7 +267,7 @@ fn unenforced_clause(create: &CreateMemoryTable) -> Option<&'static str> {
 /// CTAS never writes a file, and an IPC file *would* store both columns, after which every read
 /// of the table resolves the second by name onto the first.
 ///
-/// `pub` because the empty-table panel refuses the same thing as its rows are typed (IT-01), and
+/// `pub` because the empty-table panel refuses the same thing as its rows are typed, and
 /// a form that said it in its own words would be a second wording for one rule.
 pub fn duplicate_column(name: &str) -> String {
     format!("Duplicate column name '{name}'. Alias one of them")
@@ -282,7 +281,7 @@ const PROBE_TABLE: &str = "__strata_probe";
 const PROBE_COLUMN: &str = "c";
 
 /// What DataFusion's planner makes of one **SQL column type** on this session — the empty-table
-/// panel's per-row validation (IT-01).
+/// panel's per-row validation.
 ///
 /// **There is no Arrow → SQL inverse to author an offer from**, which is why that panel's type
 /// field is free text and why this stands behind it. `convert_simple_data_type` is many-to-one
@@ -330,7 +329,14 @@ fn not_a_column_type(typed: &str) -> String {
     format!("'{typed}' is not a column type")
 }
 
-/// Append rows to an internal table from an `INSERT` (ED-05).
+/// The one wording for an `INSERT` into a relation whose data Strata does not own — an external
+/// table or a view. **The arm's own**, like every refusal that needs context the parsed statement
+/// does not carry: which registered tables are internal is a fact about now, so this arrives at
+/// Run rather than as a squiggle while the user is typing.
+const INSERT_EXTERNAL: &str =
+    "INSERT targets internal tables. Load external table data through Table Config";
+
+/// Append rows to an internal table from an `INSERT`.
 ///
 /// **Native execution behind a target gate.** The only thing intercepted is *where* the write
 /// lands, because that is the one question DataFusion has no opinion about: a `ListingTable`
@@ -340,7 +346,7 @@ fn not_a_column_type(typed: &str) -> String {
 /// (`logically_equivalent_names_and_types`, which surfaces a mismatch in its own words), and the
 /// single LZ4-frame IPC file the Arrow sink appends.
 ///
-/// **The sink is driven rather than the node executed** (DB-12), on both branches — over the
+/// **The sink is driven rather than the node executed**, on both branches — over the
 /// provider the plan already resolved, so a source inside a database connection reaches a
 /// workspace table rather than a `Dml` reaching the unparser ([`crate::sink`]).
 ///
@@ -376,7 +382,7 @@ pub async fn insert(
         ));
     };
     if !matches!(dml.op, WriteOp::Insert(InsertOp::Append)) {
-        return Err(Blocked::InsertOverwrite.editor_message());
+        return Err(Fault::InsertOverwrite.message());
     }
 
     if let Some(at) = remote_target(ctx, &dml.table_name) {
@@ -398,7 +404,7 @@ pub async fn insert(
 
     let name = bare_name(ctx, &dml.table_name, WHAT)?;
     if !internal.contains(&name) {
-        return Err(Blocked::InsertExternal.editor_message());
+        return Err(INSERT_EXTERNAL.into());
     }
     verify_insert(&plan)?;
     let rows = append_rows(ctx, target_provider(dml)?, &dml.input).await?;
@@ -479,7 +485,7 @@ pub async fn drop_statement(
 /// puts the provider back rather than reporting a drop that failed *after* half of it landed.
 ///
 /// **No cascade.** Dependent views are *named*, never dropped: a `ViewTable`'s plan was inlined
-/// when it was created and goes on executing until reload, so nothing is stale yet — and the
+/// when it was created and goes on executing until reload, so nothing is stale, and the
 /// catalog epoch the fold bumps makes every tab's diagnostics re-derive at once, which is the
 /// surface that actually tells the user.
 pub async fn drop_table(
@@ -750,7 +756,7 @@ fn dir_path(dir: &Path) -> String {
 /// the directory an **existing** table's data is already in, and `table_dir` re-derives it from
 /// the name on every drop. Changing the rule would therefore move the slug of tables already on
 /// disk, whose drop would then delete a path that does not exist and orphan the real one forever
-/// (the ED-05 failure the one-drop funnel exists to prevent). A collision that needs a user to
+/// (the failure the one-drop funnel exists to prevent). A collision that needs a user to
 /// name one table the hash of another is the smaller hazard, and it is the one that stays.
 fn slug(name: &str) -> String {
     let safe: String = name
@@ -786,7 +792,7 @@ mod tests {
 
     use crate::builder::test_context;
     use crate::register::{register_project, table_spec, RegOutcome};
-    use crate::sql::Blocked;
+    use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
 
@@ -999,7 +1005,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// **The type probe answers what the create will actually produce** (IT-01) — in the
+    /// **The type probe answers what the create will actually produce** — in the
     /// spelling every other surface shows a type in, on this session's own config, and with the
     /// planner's refusal verbatim where there is one.
     ///
@@ -1082,7 +1088,7 @@ mod tests {
     async fn a_reserved_name_is_refused_by_the_router_and_by_the_funnel() {
         let root = scratch("reserved");
         let eng = engine(&root, BTreeMap::new());
-        let reserved = Blocked::ReservedName.editor_message();
+        let reserved = Fault::ReservedName.message();
 
         assert_eq!(
             statement(&eng, "CREATE TABLE __snap_1 (a INT)")
@@ -1331,7 +1337,7 @@ mod tests {
         .expect("registered");
     }
 
-    /// **The whole ED-05 shape, end to end.** A table is created, inserted into twice — each
+    /// **The whole shape, end to end.** A table is created, inserted into twice — each
     /// statement appending its own file — read back as the union, and then dropped, taking its
     /// data directory with it.
     #[tokio::test]
@@ -1479,9 +1485,8 @@ mod tests {
 
     /// **An append does not disturb the views above the table, so nothing has to repair them.**
     ///
-    /// A `ViewTable` captures its sources by `Arc` when it is created and never re-resolves them
-    /// (D10/D11), which is why every path that *re-registers* a table re-creates the views over
-    /// it. An `INSERT` replaces no provider, and could not invalidate one if it did: the sink
+    /// A `ViewTable` captures its sources by `Arc` when it is created and never re-resolves them,
+    /// which is why every path that *re-registers* a table re-creates the views over it. An `INSERT` replaces no provider, and could not invalidate one if it did: the sink
     /// schema-checks before it writes, so the shape a view captured is the shape still there, and
     /// the provider re-LISTs per scan (this engine runs no `ListFilesCache`) so it finds the new
     /// file on its own. Hence [`Engine::table_meta`] rather than a re-registration — this pins
@@ -1624,7 +1629,7 @@ mod tests {
                 statement(&eng, &format!("INSERT INTO {target} VALUES (2)"))
                     .await
                     .expect_err("refused"),
-                Blocked::InsertExternal.editor_message(),
+                INSERT_EXTERNAL,
                 "{target}"
             );
         }
@@ -1638,7 +1643,7 @@ mod tests {
             statement(&eng, "REPLACE INTO owned VALUES (2)")
                 .await
                 .expect_err("refused"),
-            Blocked::InsertOverwrite.editor_message()
+            Fault::InsertOverwrite.message()
         );
         assert_eq!(read(&eng, "SELECT n FROM owned").await, vec![vec!["1"]]);
         let _ = fs::remove_dir_all(&root);

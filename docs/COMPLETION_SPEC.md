@@ -142,7 +142,7 @@ Two kinds, deliberately distinguished:
 
 - **Parser-derived** (track the engine automatically): the keyword universe
   (`ALL_KEYWORDS` minus `BLOCKED_KEYWORDS` — the statement router's refused forms,
-  kept honest against `validate::classify` by test; `docs/STATEMENTS_SPEC.md`),
+  kept honest against `statements::classify_stmt` by test; `docs/STATEMENTS_SPEC.md`),
   name-position reservedness (`lex::is_reserved_in_name_position` over the
   `RESERVED_FOR_*_ALIAS` tables — also the identifier-quoting rule).
 - **Declared** (grammar/policy knowledge no parser table encodes, one definition each):

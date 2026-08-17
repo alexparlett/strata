@@ -95,7 +95,7 @@ pub struct QueryPage {
 ///
 /// Three, not two, and the third is not a mode: `Explain` is something the *press* asked for,
 /// while whether a Run produces rows or performs a statement is a property of what was typed
-/// — the engine's router decides it (ED-02), and this enum carries its answer through.
+/// — the engine's router decides it, and this enum carries its answer through.
 pub enum QueryOutcome {
     Rows(QueryPage),
     Plan(QueryPlan),
@@ -197,7 +197,7 @@ impl QueryCapability for FetchSnapshotPage {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use strata_engine::sql::Blocked;
+    use strata_engine::Fault;
 
     use super::*;
 
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(sorted.rows[0][0].text, "3");
     }
 
-    /// A Run press now goes through the **router** (ED-02), so a statement the editor refuses
+    /// A Run press now goes through the **router**, so a statement the editor refuses
     /// settles the capability `Err` with the words the squiggle showed — not a DataFusion
     /// error about a policy that is ours, and not rows.
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         spec.sql = "CREATE DATABASE d".into();
 
         let err = block_on(run.run(&spec)).err().expect("refused");
-        assert_eq!(err, Blocked::CreateDatabase.editor_message());
+        assert_eq!(err, Fault::CreateDatabase.message());
     }
 
     #[test]

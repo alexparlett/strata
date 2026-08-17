@@ -23,7 +23,7 @@ use datafusion::sql::TableReference;
 use crate::catalog::remote_dependents;
 use crate::db::{self, Databases, RemoteTarget};
 use crate::providers::in_workspace;
-use crate::sql::StmtKind;
+use crate::statements::StmtKind;
 use crate::{fold_ident, CATALOG, SCHEMA};
 use strata_core::util::plural;
 
@@ -238,7 +238,7 @@ fn one_relation() -> String {
 }
 
 /// What an `UPDATE` or a `DELETE` over a workspace table says — its own sentence, because
-/// `Blocked::Unsupported`'s generic wording stops being honest the moment the same verb works one
+/// `Fault::Unsupported`'s generic wording stops being honest the moment the same verb works one
 /// qualifier away.
 fn workspace_dml(kind: StmtKind) -> String {
     format!(
@@ -509,8 +509,9 @@ mod tests {
 
     use crate::builder::test_context;
     use crate::fold_ident;
+    use crate::policy::{Capability, CapabilityPolicyProvider};
     use crate::providers::fake_database;
-    use crate::sql::parse_one;
+    use crate::statements::pipeline::{resolved_one, Pipeline};
 
     use super::*;
 
@@ -532,7 +533,7 @@ mod tests {
     /// `sql` through the one parse every surface enters, then spliced for `pg`.
     fn rewritten(sql: &str) -> Result<String, String> {
         let ctx = session();
-        let stmt = parse_one(&ctx, sql)?;
+        let stmt = resolved_one(&ctx, sql)?;
         let named = Named::of(&stmt);
         named.check(&ctx, "pg")?;
         splice(sql, &named.names, "pg")
@@ -680,7 +681,7 @@ mod tests {
     fn only_a_statement_bound_for_the_server_is_left_unjudged() {
         let ctx = session();
         let asks = |sql: &str, kind| {
-            let stmt = parse_one(&ctx, sql).unwrap_or_else(|e| panic!("'{sql}': {e}"));
+            let stmt = resolved_one(&ctx, sql).unwrap_or_else(|e| panic!("'{sql}': {e}"));
             dispatched(&ctx, kind, &stmt)
         };
         for (sql, kind) in [
@@ -758,19 +759,22 @@ mod tests {
     #[tokio::test]
     async fn a_dispatched_statement_draws_no_diagnostic() {
         let ctx = session();
+        let policy = CapabilityPolicyProvider::new(Capability::full());
+        let pipeline = Pipeline::new(&ctx);
+        let functions = crate::sql::FunctionCatalog::default();
         for sql in [
             "CREATE TABLE pg.public.t (id INT, payload jsonb)",
             "CREATE VIEW pg.public.v AS SELECT postgres_only(id) FROM pg.public.orders",
             "UPDATE pg.public.orders SET total = 1 WHERE id = 2",
             "DELETE FROM pg.public.orders WHERE id = 2",
         ] {
-            let diags =
-                crate::sql::validate(&ctx, &crate::sql::FunctionCatalog::default(), sql).await;
+            let diags = crate::sql::validate(&pipeline, &policy, &functions, sql).await;
             assert!(diags.is_empty(), "'{sql}': {diags:?}");
         }
         let local = crate::sql::validate(
-            &ctx,
-            &crate::sql::FunctionCatalog::default(),
+            &pipeline,
+            &policy,
+            &functions,
             "CREATE TABLE mine (payload jsonb)",
         )
         .await;
