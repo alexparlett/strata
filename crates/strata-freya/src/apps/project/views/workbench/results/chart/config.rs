@@ -34,8 +34,8 @@ const DEFAULT_YS: usize = 4;
 
 /// A result's columns, each with the role its Arrow type resolved to, in result order.
 ///
-/// The role is read off the column, not derived here: it was resolved where the engine still
-/// had the `DataType` (`engine::catalog::chart_role`), so the encoder and the read agree on
+/// The role is read off the column, not derived here: it was resolved where the reader still
+/// had the `DataType` (`strata_arrow::column::chart_role`), so the encoder and the read agree on
 /// what a measure is by construction. [`ChartRole::Other`] never enters — a nested column has
 /// no axis to sit on and no value to plot, so it is offered nowhere.
 #[derive(Clone, PartialEq, Debug, Default)]
