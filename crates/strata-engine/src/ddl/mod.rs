@@ -51,31 +51,14 @@ use crate::{fold_ident, Connections, InternalTables, CATALOG, SCHEMA};
 use strata_core::util::plural;
 use strata_model::{TableDef, ViewDef};
 
-/// The statement family's completion vocabulary (ED-11) — the format words `STORED AS`
-/// takes and the per-format `OPTIONS` key tables, owned by the module whose arms they
-/// mirror and read by `sql::complete` so the offer and the arm set are one table.
 pub(crate) use external::{option_keys_for, OptionKind, STORED_AS_FORMATS};
-/// DataFusion's own seam for `CREATE FUNCTION` (ED-09) — installed on every engine by
-/// `build_context`, which is what makes the statement dispatchable at all.
 pub(super) use functions::StrataFunctionFactory;
-/// Whether a statement is dispatched to a server rather than planned — see
-/// [`remote::dispatched`]. Read by the validator, which must not judge SQL the server owns.
 pub(crate) use remote::dispatched;
-/// The `SET` overlay's key fence (ED-08) — also the `SET` key pool's filter (ED-11), so
-/// what completion offers and what dispatch accepts cannot drift.
 pub(crate) use session::refuse_reserved_key;
-/// The session state a statement can move (ED-08) — held by the engine, reached by the arms.
 pub use session::SessionScope;
-/// The per-row type probe behind that panel's free-text type field — see
-/// [`tables::column_type`].
 pub(super) use tables::column_type;
-/// A table drop's own words — see [`tables::drop_intent`]. Re-exported here because the
-/// catalog pane says them too, and `ddl` is the vocabulary module the app already reads.
 pub use tables::drop_intent;
 pub(super) use tables::drop_table;
-/// A repeated column name's refusal — see [`tables::duplicate_column`]. Re-exported for the
-/// same reason `drop_intent` is: the empty-table panel (IT-01) refuses one as it is typed, and
-/// it must say what the create arm would have said.
 pub use tables::duplicate_column;
 pub(super) use views::{create as create_view, drop as drop_view};
 

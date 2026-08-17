@@ -60,24 +60,15 @@ pub mod udf_package;
 mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
-/// What a surface can be told about one relation inside a database connection's catalog
-/// ([`Engine::describe_remote`]) — beside `TableMeta` because it answers the same question for
-/// the kind of source that has no def.
 pub use db::RemoteRelation;
-/// The intercepted-statement vocabulary (ED-02): what an arm answers with, what the app folds.
-/// [`drop_intent`](ddl::drop_intent) rides with them because a drop's wording is the engine's
-/// (ED-05) — the catalog's confirm says before the fact what the report says after it.
 pub use ddl::{
     drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
 };
-/// Who may perform what: the seam an embedder injects through [`EngineBuilder::with_policy`], and
-/// the grants the shipped provider decides from.
 pub use policy::{
     Admit, Capability, CapabilityPolicyProvider, DenyCode, Grant, GrantFamily, Grants, Locality,
     PolicyProvider, Principal, RemoteScope, RemoteSel, TargetFacts,
 };
 pub use query::{purge_snapshot_root, ReadPolicy};
-/// What a statement is, and why one was refused.
 pub use statements::{Fault, Form, PolicyRefusal, Reason, StmtKind};
 
 pub use builder::EngineBuilder;

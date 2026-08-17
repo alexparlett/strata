@@ -29,9 +29,6 @@ pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
 pub use ident::{needs_quoting, qualified, quote_verbatim};
-/// The `EXPLAIN`-unwrapping every consumer of a parsed statement shares — see
-/// [`resolve::unwrap_statement`]. Read by the statement layer's `read_policy`, which asks the same
-/// question of the same two wrappers.
 pub(crate) use resolve::unwrap_statement;
 pub use symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym};
 pub use validate::validate;
