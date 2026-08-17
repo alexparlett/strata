@@ -2220,6 +2220,34 @@ mod tests {
         );
     }
 
+    /// **A refusal must not supersede.** Classification runs before `Engine::run` brackets
+    /// anything, and that ordering is load-bearing: a Run press that turns out to be a statement
+    /// the engine will not perform leaves the workspace's in-flight run alone.
+    ///
+    /// Bracketing the classification is the obvious way to let Stop reach a slow policy check —
+    /// today `cancel` is a no-op while a statement is being classified, because nothing is
+    /// registered yet. This is what that would cost: `bookkeep` aborts whatever the workspace was
+    /// running *before* it registers, so a typo would destroy a scan that is minutes in. Anything
+    /// that closes the cancel window has to register without superseding.
+    #[tokio::test]
+    async fn a_refused_statement_leaves_the_workspaces_run_alone() {
+        let engine = Engine::builder().build();
+        let ws = WsId(1);
+        let _running = dispatched(engine.query(ws, RunTag(1), SLOW.into(), 10));
+        assert!(engine.is_running(ws), "the scan is in flight");
+
+        let refused = engine
+            .run(ws, RunTag(2), "CREATE DATABASE d".into(), 10)
+            .await
+            .err()
+            .expect("refused");
+        assert_eq!(refused, Fault::CreateDatabase.message());
+        assert!(
+            engine.is_running(ws),
+            "a statement the engine refuses must not take the scan with it"
+        );
+    }
+
     /// The guard must not tear down an entry a **newer** dispatch owns — the same `latest`
     /// rule the settle path follows, for the same reason.
     #[test]
