@@ -24,10 +24,6 @@ use async_trait::async_trait;
 use crate::WsId;
 
 /// Where a statement's target lives.
-///
-/// Shared with the dispatch layer's own target axis, so the fine check is derived from the
-/// resolved target and an arm never names a scope or checks the wrong one. Only
-/// [`PolicyProvider::permit`] reads it, so nothing reads it yet — see [`Capability`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Locality {
     /// The workspace catalog: a project table, view or internal table.
@@ -65,8 +61,6 @@ impl GrantFamily {
 }
 
 /// What a policy decision may turn on about a statement's resolved target.
-///
-/// Handed to [`PolicyProvider::permit`], which the engine does not yet call. See [`Capability`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetFacts {
     pub locality: Locality,
@@ -212,8 +206,8 @@ pub trait PolicyProvider: Send + Sync + 'static {
 
     /// Returns whether `who` may perform `family` against a resolved target.
     ///
-    /// The engine does not yet call this, so an implementation of it restricts nothing today. See
-    /// [`Capability`].
+    /// Refines [`admit`](Self::admit) once the statement's target is known, and is never more
+    /// permissive than it.
     ///
     /// # Errors
     ///

@@ -3,7 +3,7 @@
 //!
 //! The DataFusion dry-plan behind [`super::validate`] is engine-authoritative but
 //! fail-fast: it stops at the first unresolved name, and it resolves mid-edit drafts
-//! (`SELECT draft_col` with no FROM yet) against an empty schema. This module walks
+//! (`SELECT draft_col`, with no FROM) against an empty schema. This module walks
 //! the **sqlparser AST** of a statement that parsed, resolves every table and column
 //! reference against the live session (catalog + CTEs + aliases + derived tables),
 //! and reports **all** unknown names with byte spans. The dry-plan stays behind it as

@@ -486,7 +486,7 @@ pub async fn drop_statement(
 /// puts the provider back rather than reporting a drop that failed *after* half of it landed.
 ///
 /// **No cascade.** Dependent views are *named*, never dropped: a `ViewTable`'s plan was inlined
-/// when it was created and goes on executing until reload, so nothing is stale yet — and the
+/// when it was created and goes on executing until reload, so nothing is stale, and the
 /// catalog epoch the fold bumps makes every tab's diagnostics re-derive at once, which is the
 /// surface that actually tells the user.
 pub async fn drop_table(

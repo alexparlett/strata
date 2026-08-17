@@ -390,7 +390,7 @@ pub(super) fn elsewhere(what: &str) -> String {
 /// What a drop leaves behind, appended to its report — empty when it leaves nothing.
 ///
 /// One wording for both drops, because "left invalid" is one fact: a dependent's plan was inlined
-/// when it was created and goes on executing until reload, so nothing is stale yet and nothing is
+/// when it was created and goes on executing until reload, so nothing is stale and nothing is
 /// cascaded. Shared so a table drop and a view drop cannot describe the same consequence two ways.
 pub(super) fn left_invalid(dependents: &[String]) -> String {
     if dependents.is_empty() {

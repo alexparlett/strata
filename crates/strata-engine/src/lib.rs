@@ -1640,7 +1640,7 @@ impl Engine {
     /// Aborts the table's profile scan first: re-registration re-infers the schema from
     /// whatever is on disk *now*, so a scan in flight is computing numbers about files the
     /// register is replacing. Done here rather than left to the caller because it is engine
-    /// truth — every path that re-registers gets it, including ones not yet written.
+    /// truth, so every path that re-registers gets it, including ones written later.
     pub async fn register(&self, spec: TableSpec) -> Result<TableMeta, String> {
         self.cancel_profile(&spec.name);
         let ctx = self.ctx.clone();
@@ -2212,11 +2212,11 @@ mod tests {
     /// anything, and that ordering is load-bearing: a Run press that turns out to be a statement
     /// the engine will not perform leaves the workspace's in-flight run alone.
     ///
-    /// Bracketing the classification is the obvious way to let Stop reach a slow policy check —
-    /// today `cancel` is a no-op while a statement is being classified, because nothing is
-    /// registered yet. This is what that would cost: `bookkeep` aborts whatever the workspace was
-    /// running *before* it registers, so a typo would destroy a scan that is minutes in. Anything
-    /// that closes the cancel window has to register without superseding.
+    /// Bracketing the classification would let `cancel` reach a slow policy check, since nothing
+    /// is registered while a statement classifies. This is what that costs: `bookkeep` aborts
+    /// whatever the workspace was running *before* it registers, so a typo would destroy a scan
+    /// that is minutes in. Anything that reaches a classifying statement has to register without
+    /// superseding.
     #[tokio::test]
     async fn a_refused_statement_leaves_the_workspaces_run_alone() {
         let engine = Engine::builder().build();
@@ -3039,9 +3039,7 @@ mod tests {
     /// has nowhere to write the **data**, and a typed registration has nowhere to write the
     /// **def**, which is the durable half of one (ED-10).
     ///
-    /// (This is where the "not implemented yet" stub refusal used to be checked. There is no
-    /// unimplemented interception left — ED-10 filled the last arm — so the test that asserted
-    /// one is gone rather than pointed at a statement that now runs.)
+    /// Every interception has a real arm, so there is no stub refusal to assert.
     #[tokio::test]
     async fn creating_a_table_without_a_project_folder_says_why() {
         let eng = Engine::builder().build();

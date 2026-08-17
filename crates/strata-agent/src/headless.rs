@@ -52,7 +52,7 @@ struct Session {
     /// Whether anything has ever run in it — `Empty` against `Settled`. Whether a run is *in
     /// flight* is asked of the engine instead, which is the only thing that knows.
     ran: bool,
-    /// Runs dispatched into it and not yet seen settle. More than one is ordinary: a second
+    /// Runs dispatched into it whose settle has not been seen. More than one is ordinary: a second
     /// `run` supersedes the first, and both awaits are still outstanding.
     dispatched: usize,
     /// Closed while a run was in flight. The handle stops answering immediately (this is a

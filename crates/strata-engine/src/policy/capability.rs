@@ -106,7 +106,7 @@ impl Grants {
 
 /// Which database connections a capability's remote grants reach.
 ///
-/// Read by [`PolicyProvider::permit`], which the engine does not yet call. See [`Capability`].
+/// Applied by [`PolicyProvider::permit`] to the grants carrying [`Locality::Remote`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteScope {
     /// Every connection.
@@ -141,17 +141,9 @@ pub enum RemoteSel {
 
 /// What a caller may do.
 ///
-/// # The locality half is not enforced
-///
-/// A capability is checked in two phases. [`PolicyProvider::admit`] asks whether the caller holds
-/// a family at any locality, and [`PolicyProvider::permit`] asks the same against a resolved
-/// target. The engine only calls the first, so the [`Locality`] on a grant and the [`RemoteScope`]
-/// set by [`remote_only`](Self::remote_only) are recorded and not consulted.
-///
-/// A capability that differentiates by locality is therefore admitted as though it did not:
-/// `read_only().with(Grant::Write(Locality::Remote))` admits `INSERT` against any target, and
-/// narrowing it to one backend restricts nothing. [`full`](Self::full) and
-/// [`read_only`](Self::read_only) are unaffected, holding every locality and none respectively.
+/// Checked in two phases: [`PolicyProvider::admit`] asks whether the caller holds a family at any
+/// locality, and [`PolicyProvider::permit`] asks the same of a resolved target, applying the
+/// [`Locality`] on each grant and the [`RemoteScope`] narrowing the remote ones.
 ///
 /// # Example
 ///
@@ -195,7 +187,7 @@ impl Capability {
 
     /// Returns this capability with its remote grants narrowed to `selectors`.
     ///
-    /// Recorded but not enforced. See the type's own documentation.
+    /// Narrows the grants carrying [`Locality::Remote`] only. Reading is never narrowed.
     pub fn remote_only(mut self, selectors: impl IntoIterator<Item = RemoteSel>) -> Self {
         self.remote = RemoteScope::Only(selectors.into_iter().collect());
         self
@@ -215,9 +207,10 @@ impl Capability {
             .any(|locality| self.grants.holds(grant_for(family, locality)))
     }
 
-    /// The fine answer, through two named gates in order: the grant the family needs at that
-    /// locality, then the remote scope. The code says which one refused, so an embedder's log can
-    /// tell "may not write at all" from "may not write *this* connection".
+    /// Whether this capability may perform `family` against `facts`.
+    ///
+    /// Two gates in order: the grant the family needs at that locality, then the remote scope. The
+    /// returned code says which one refused.
     fn permits(&self, family: GrantFamily, facts: &TargetFacts) -> Result<(), DenyCode> {
         let grant = grant_for(family, facts.locality);
         if !self.grants.holds(grant) {
@@ -475,10 +468,9 @@ mod tests {
     /// **The coarse phase is only equivalent to the full check while a capability's localities
     /// agree, and every capability this crate ships is one where they do.**
     ///
-    /// `admits` answers "at *any* locality", because at classification nothing has resolved a
-    /// target yet; the narrower question is `permits`, and nothing asks it until the arms can hand
-    /// it a resolved target. So a capability holding `Ddl(Remote)` and not `Ddl(Local)` is
-    /// admitted for a workspace `CREATE TABLE` that only the fine phase would refuse.
+    /// `admits` answers "at *any* locality", since a target is not resolved at classification;
+    /// `permits` asks the narrower question. So a capability holding `Ddl(Remote)` and not
+    /// `Ddl(Local)` is admitted for a workspace `CREATE TABLE` that only `permits` refuses.
     ///
     /// This is what says the gap is unreachable through anything shipped, and it is not luck:
     /// `full()` holds every locality of every grant and `read_only()` holds none, so for both the

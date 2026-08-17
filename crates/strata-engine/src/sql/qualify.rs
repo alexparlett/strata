@@ -34,7 +34,7 @@
 //! answers identically whether or not the qualifier was typed.
 //!
 //! **A create target is never resolved**, permanently, and it is the one carve-out.
-//! `CREATE TABLE orders` names a relation that does not exist yet, so there is nothing to resolve
+//! `CREATE TABLE orders` names a relation that does not exist, so there is nothing to resolve
 //! *to*, and resolving would read a plainly local intent as "make it on the server" — which then
 //! fails as already existing. `CREATE TABLE pg.public.orders AS SELECT …` is how the server is
 //! addressed, by typing the qualifier.
