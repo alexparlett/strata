@@ -12,9 +12,9 @@ use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::db::Databases;
 use crate::functions::Functions;
+use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::query::claim_snapshot_dir;
 use crate::secrets::{KeystoreSecrets, SecretProvider};
-use crate::statements::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::udf_package::UdfPackage;
 use crate::{
     build_context, query, runtime_subset, Connections, Engine, InternalTables, SessionScope,

@@ -1,16 +1,13 @@
-//! **The grammar** — what one parsed statement *is*, before any question of who is asking.
+//! The grammar: what one parsed statement is, before any question of who is asking.
 //!
-//! [`classify_stmt`] is a pure function of the parsed statement: it matches the AST rather than
-//! sniffing a leading keyword, and it answers with a [`Form`] plus, where the statement itself is
-//! at fault, a [`Fault`]. The capability axis lives one file over ([`grants`](super::grants)) and
-//! is applied by [`pipeline::classify`](super::pipeline::classify), which is the only place the
-//! two meet.
+//! [`classify_stmt`] matches the parsed AST rather than sniffing a leading keyword, and answers
+//! with a [`Form`] plus, where the statement itself is at fault, a [`Fault`]. The capability axis
+//! is [`grants`](super::grants), and [`pipeline::classify`](super::pipeline::classify) is the one
+//! place the two meet.
 //!
-//! **A fault is held rather than raised**, and that ordering is the whole reason this module
-//! answers in two parts. A caller the policy phase refuses the form to outright is owed *that*
-//! sentence — a read-only agent asking for `INSERT OVERWRITE` hears "INSERT is not supported",
-//! not a note about `OVERWRITE` on a statement it may not write at all. So the pipeline asks
-//! policy first and reaches the fault only for a caller permitted the form.
+//! A fault rides on the answer rather than replacing it, so the pipeline can refuse the form
+//! first: a caller that may not write at all is owed "INSERT is not supported" rather than a note
+//! about the `OVERWRITE` on it.
 
 use std::ops::ControlFlow;
 use std::slice;
@@ -21,12 +18,14 @@ use datafusion::sql::sqlparser::ast::{
     visit_relations, ObjectName, ObjectType, Statement as SqlStatement, Visit,
 };
 
+use crate::policy::{DenyCode, GrantFamily};
 use crate::query::{is_snapshot_name, is_snapshot_ref, ReadPolicy};
 use crate::sql::unwrap_statement;
 
-/// What an intercepted statement *is* — [`Form::Statement`]'s payload, and the arm the dispatcher
-/// (`engine::ddl::execute`) switches on. Each kind is an engine method rather than a `ctx.sql`
-/// passthrough because each has an outcome the catalog store has to fold.
+/// A statement the engine implements itself.
+///
+/// Each kind is an engine method rather than a `ctx.sql` passthrough, because each has an outcome
+/// the catalog store folds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StmtKind {
     CreateExternalTable,
@@ -52,9 +51,7 @@ pub enum StmtKind {
 }
 
 impl StmtKind {
-    /// The statement's SQL name — what a stub refusal, a report and the results pane's
-    /// statement row all call it. One table, because three surfaces naming the same kind in
-    /// three spellings is the drift a shared vocabulary exists to prevent.
+    /// Returns the statement's SQL name, as every surface that names one spells it.
     pub fn label(self) -> &'static str {
         match self {
             StmtKind::CreateExternalTable => "CREATE EXTERNAL TABLE",
@@ -77,12 +74,11 @@ impl StmtKind {
     }
 }
 
-/// The **form** a statement takes — the grammar's whole answer about what it is.
+/// What a parsed statement is.
 ///
-/// `Execute` is a read the engine runs and is still its own form, because it is the one read that
-/// moves nothing but reaches session state: it belongs to the `Session` grant family, and a
-/// caller that may not `PREPARE` may not `EXECUTE` either. How a read *plans* is a different
-/// question with a different answer — see [`read_policy`].
+/// `Execute` is a read and still its own form, because it reaches session state: it belongs to
+/// the `Session` grant family, so a caller that may not `PREPARE` may not `EXECUTE`. How a read
+/// *plans* is a separate question, answered by [`read_policy`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Form {
     /// A read — the snapshot pipeline, unchanged.
@@ -93,8 +89,9 @@ pub enum Form {
     Statement(StmtKind),
 }
 
-/// A fault in the **statement itself** — a refusal the grammar mints, in the same words on every
-/// surface, because no capability makes a malformed statement well-formed.
+/// A refusal the statement itself earns, worded the same for every caller.
+///
+/// No capability makes a malformed statement well-formed, so none of these is a policy question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
     /// `CREATE DATABASE` / `CREATE SCHEMA` — hard-blocked, no owning surface. The
@@ -116,22 +113,23 @@ pub enum Fault {
     ReservedName,
 }
 
-/// The wording of a `DROP` the engine has no arm for — **one literal**, because it is both a
-/// grammar refusal (a `DROP SCHEMA`, which no capability enables) and the policy sentence a
-/// caller refused `DROP TABLE` reads. Two spellings of one fact is the drift a shared table
-/// exists to prevent.
+/// The wording of a `DROP` the engine has no arm for.
+///
+/// One literal, because it is both a grammar refusal (a `DROP SCHEMA`) and the policy sentence a
+/// caller refused `DROP TABLE` reads; two spellings of one fact is what a shared constant
+/// prevents.
 pub(super) const DROP_UNSUPPORTED: &str =
     "DROP is not supported in the editor. Deregister tables from the catalog";
 
 /// The wording for a form the engine has no arm for, and for every statement family a restricted
-/// caller may not reach — shared for [`DROP_UNSUPPORTED`]'s reason.
+/// caller may not reach. Shared for [`DROP_UNSUPPORTED`]'s reason.
 pub(super) const UNSUPPORTED: &str =
     "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and DESCRIBE can \
      run here";
 
 impl Fault {
-    /// The sentence the user reads: IDE register, naming the surface that owns the capability
-    /// where there is one. The validator's policy diagnostics are this, verbatim.
+    /// Returns the sentence the user reads, naming the surface that owns the capability where
+    /// there is one. The editor's diagnostics show this verbatim.
     pub fn message(self) -> String {
         match self {
             Fault::CreateDatabase => "CREATE DATABASE and CREATE SCHEMA are not supported",
@@ -148,7 +146,7 @@ impl Fault {
     }
 }
 
-/// The grammar's whole answer for one statement: what it is, and what is wrong with it.
+/// What the grammar makes of one statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Classified {
     pub form: Form,
@@ -157,18 +155,25 @@ pub struct Classified {
     pub fault: Option<Fault>,
 }
 
-/// **The classifier.** What `stmt` is, or the fault that refuses it on every surface.
+/// Returns what `stmt` is.
 ///
-/// Wildcard-free over `DFStatement`, so a new DataFusion statement variant is a compile error
-/// rather than a form that slips through; the sqlparser match below it has the one deliberate
-/// wildcard, landing [`Fault::Unsupported`], which is what keeps default-deny true.
+/// # Errors
+///
+/// A statement form the engine has no arm for at all: `CREATE DATABASE` and `CREATE SCHEMA`, a
+/// `DROP` of anything but a table or a view, and every kind the parser produces that is not one
+/// of the sixteen. A fault the statement carries but a caller may be refused *before* rides on
+/// [`Classified::fault`] instead.
 pub fn classify_stmt(stmt: &DFStatement) -> Result<Classified, Fault> {
     let form = form_of(stmt)?;
     let fault = form_fault(stmt).or_else(|| names_reserved(stmt).then_some(Fault::ReservedName));
     Ok(Classified { form, fault })
 }
 
-/// The form `stmt` takes — the match that has to stay total.
+/// The form `stmt` takes.
+///
+/// Wildcard-free over `DFStatement`, so a new DataFusion statement variant is a compile error
+/// rather than a form that slips through; the sqlparser match below it carries the one deliberate
+/// wildcard, landing [`Fault::Unsupported`], which is what keeps default-deny true.
 fn form_of(stmt: &DFStatement) -> Result<Form, Fault> {
     let s = match stmt {
         DFStatement::CreateExternalTable(_) => {
@@ -216,9 +221,11 @@ fn form_of(stmt: &DFStatement) -> Result<Form, Fault> {
     })
 }
 
-/// The fault a **well-formed** form still carries — the two clauses the grammar can see and the
-/// arms cannot be trusted to. Held on [`Classified`] rather than returned as an `Err`, so a
-/// caller refused the form entire hears about the form.
+/// The fault a well-formed form still carries: the two clauses the grammar can see and the arms
+/// cannot be trusted to.
+///
+/// Held on [`Classified`] rather than returned as an `Err`, so a caller refused the form entire
+/// hears about the form.
 fn form_fault(stmt: &DFStatement) -> Option<Fault> {
     let DFStatement::Statement(s) = stmt else {
         return None;
@@ -276,18 +283,18 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
     .is_break()
 }
 
-/// Whether `name` addresses the snapshot namespace. The predicate itself is
-/// [`is_snapshot_ref`], next to the function that mints those names, because the provider's
-/// hiding rule asks the same question and the two must not drift.
+/// Whether `name` addresses the snapshot namespace.
 ///
-/// **Where the name points, not merely how it is spelled.** The namespace is the workspace
-/// catalog's, and a database connection's `__snap_3` is whatever the server called a table. So the
-/// qualifier is read through DataFusion's **own** normalization rather than a second reading of the
-/// identifier rules, and the reference judged is the one the planner would resolve. A name it
-/// refuses resolves nowhere and is reserved by nothing.
+/// The predicate itself is [`is_snapshot_ref`], beside the function that mints those names,
+/// because the provider's hiding rule asks the same question and the two must not drift.
 ///
-/// **The prefix is tested first, and only then the qualifier**, because this runs per relation per
-/// statement on every re-validation and the answer is almost always no.
+/// Where the name points, not merely how it is spelled: the namespace is the workspace catalog's,
+/// and a database connection's `__snap_3` is whatever the server called a table. The qualifier is
+/// read through DataFusion's own normalization rather than a second reading of the identifier
+/// rules, so the reference judged is the one the planner would resolve.
+///
+/// The prefix is tested before the qualifier, because this runs per relation per statement on
+/// every re-validation and the answer is almost always no.
 fn is_reserved(name: &ObjectName) -> bool {
     let named = name
         .0
@@ -297,25 +304,106 @@ fn is_reserved(name: &ObjectName) -> bool {
     named && object_name_to_table_reference(name.clone(), true).is_ok_and(|n| is_snapshot_ref(&n))
 }
 
-/// How a read has to be **planned** — the second half of the classifier's answer, for the one
-/// query form whose plan is not a plain query.
+/// How a read has to be planned: the second half of the classifier's answer, for the one query
+/// form whose plan is not a plain query.
 ///
 /// `EXECUTE` returns rows and rides the snapshot pipeline whole, but its plan is a
-/// `LogicalPlan::Statement`, which the read path's all-false triple refuses. Widening rides the
-/// **dispatch** rather than the path, because the widening is only sound for a statement that came
-/// through this classifier: `PREPARE` verified the prepared plan under the read triple, and
-/// `verify_plan` cannot see through an `Execute` node to check it again.
+/// `LogicalPlan::Statement`, which the read path's all-false triple refuses. The widening rides
+/// the dispatch rather than the path, because it is only sound for a statement that came through
+/// this classifier: `PREPARE` verified the prepared plan under the read triple, and `verify_plan`
+/// cannot see through an `Execute` node to check it again.
 ///
-/// **Through `EXPLAIN`, because `verify_plan` visits the whole tree** — which is also why this is
-/// a question about the statement rather than about the [`Form`]. An `EXPLAIN EXECUTE p` is an
-/// `EXPLAIN`, and its form says so; its *plan* is `Explain { Statement(Execute) }`, and the
-/// visitor reaches that child, so it needs the same widening the run of one does. Unwrapped
-/// through the resolver's own [`unwrap_statement`], because DataFusion spells `EXPLAIN` twice and
-/// answering differently by parser arm is the drift one shared unwrap prevents.
+/// It descends through `EXPLAIN`, because `verify_plan` visits the whole tree — which is also why
+/// this asks about the statement rather than about the [`Form`]. An `EXPLAIN EXECUTE p` is an
+/// `EXPLAIN` and its form says so, but its plan is `Explain { Statement(Execute) }` and the
+/// visitor reaches that child. Unwrapped through the resolver's own [`unwrap_statement`], because
+/// DataFusion spells `EXPLAIN` twice and answering differently by parser arm is the drift one
+/// shared unwrap prevents.
 pub(crate) fn read_policy(stmt: &DFStatement) -> ReadPolicy {
     match unwrap_statement(stmt) {
         Some(SqlStatement::Execute { .. }) => ReadPolicy::Statements,
         _ => ReadPolicy::ReadOnly,
+    }
+}
+
+impl Form {
+    /// Returns the grant family this form belongs to: the coarse question, any locality.
+    ///
+    /// Wildcard-free on [`StmtKind`], so a new kind is a compile error here rather than a
+    /// statement that silently inherits somebody else's policy.
+    pub fn family(self) -> GrantFamily {
+        let kind = match self {
+            Form::Read => return GrantFamily::Read,
+            Form::Execute => return GrantFamily::Session,
+            Form::Statement(kind) => kind,
+        };
+        match kind {
+            StmtKind::Insert | StmtKind::Ctas => GrantFamily::Write,
+            StmtKind::CreateTable
+            | StmtKind::CreateExternalTable
+            | StmtKind::DropTable
+            | StmtKind::Update
+            | StmtKind::Delete => GrantFamily::Ddl,
+            StmtKind::CreateView | StmtKind::DropView => GrantFamily::ViewDdl,
+            StmtKind::Copy => GrantFamily::CopyOut,
+            StmtKind::Set | StmtKind::Reset | StmtKind::Prepare | StmtKind::Deallocate => {
+                GrantFamily::Session
+            }
+            StmtKind::CreateFunction | StmtKind::DropFunction => GrantFamily::Functions,
+        }
+    }
+}
+
+/// The sentence a policy refusal reads as.
+///
+/// The `code` says why and the [`Form`] says what, and it is the what that the user is owed: a
+/// refusal names the statement and the surface that owns the capability, which is actionable,
+/// where the code is bookkeeping. Both codes therefore land on the same sentence today rather than
+/// inventing a second wording nobody has read; the arms are spelled out so a third code has to
+/// come here and decide.
+pub(super) fn denied(form: Form, code: DenyCode) -> String {
+    match code {
+        DenyCode::NotGranted | DenyCode::OutOfScope => refusal_for(form),
+    }
+    .into()
+}
+
+/// The sentence each form is refused with.
+///
+/// A refused read is reachable only through a provider that denies [`GrantFamily::Read`], which
+/// neither preset does; it has no owning surface to point the user at, and says so plainly.
+fn refusal_for(form: Form) -> &'static str {
+    let kind = match form {
+        Form::Read => return "Reading is not permitted",
+        Form::Execute => return UNSUPPORTED,
+        Form::Statement(kind) => kind,
+    };
+    match kind {
+        StmtKind::CreateExternalTable => {
+            "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in Table Config"
+        }
+        StmtKind::Copy => "COPY TO is not supported in the editor. Use Export",
+        StmtKind::Reset => {
+            "RESET is not supported in the editor. Engine options are set in Settings"
+        }
+        StmtKind::CreateView => {
+            "CREATE VIEW is not supported in the editor. Write the query and use Save as view"
+        }
+        StmtKind::DropView => {
+            "DROP VIEW is not supported in the editor. Drop views from the catalog"
+        }
+        StmtKind::DropTable => DROP_UNSUPPORTED,
+        StmtKind::CreateTable | StmtKind::Ctas => {
+            "CREATE TABLE is not supported in the editor. Register tables in Table Config"
+        }
+        StmtKind::Insert => "INSERT is not supported in the editor. Load data through Table Config",
+        StmtKind::Set => "SET is not supported in the editor. Engine options are set in Settings",
+        StmtKind::Prepare
+        | StmtKind::Deallocate
+        | StmtKind::CreateFunction
+        | StmtKind::DropFunction
+        | StmtKind::Update
+        | StmtKind::Delete => UNSUPPORTED,
     }
 }
 
@@ -325,6 +413,7 @@ mod tests {
     use datafusion::sql::sqlparser::dialect::GenericDialect;
 
     use super::*;
+    use crate::policy::DenyCode;
 
     /// The one parsed statement in `sql`.
     fn parse_one(sql: &str) -> DFStatement {
@@ -529,5 +618,91 @@ mod tests {
     fn the_shared_refusal_literals_are_one_string() {
         assert_eq!(Fault::Drop.message(), DROP_UNSUPPORTED);
         assert_eq!(Fault::Unsupported.message(), UNSUPPORTED);
+    }
+
+    /// **The agent path's messages, pinned verbatim.** These variants are unreachable from a full
+    /// capability, so a future task rewording one would silently change the agent surface with
+    /// every other test green. `strata-agent`'s own parity tests cannot catch it either: they
+    /// compare `AgentError`'s rendering against this table, so both sides would move together.
+    /// These are the literals.
+    #[test]
+    fn the_agent_paths_messages_are_pinned_verbatim() {
+        for (form, message) in [
+            (
+                Form::Statement(StmtKind::CreateExternalTable),
+                "CREATE EXTERNAL TABLE is not supported in the editor. Register tables in \
+                 Table Config",
+            ),
+            (
+                Form::Statement(StmtKind::Copy),
+                "COPY TO is not supported in the editor. Use Export",
+            ),
+            (
+                Form::Statement(StmtKind::Reset),
+                "RESET is not supported in the editor. Engine options are set in Settings",
+            ),
+            (
+                Form::Statement(StmtKind::CreateView),
+                "CREATE VIEW is not supported in the editor. Write the query and use Save as view",
+            ),
+            (
+                Form::Statement(StmtKind::DropView),
+                "DROP VIEW is not supported in the editor. Drop views from the catalog",
+            ),
+            (
+                Form::Statement(StmtKind::DropTable),
+                "DROP is not supported in the editor. Deregister tables from the catalog",
+            ),
+            (
+                Form::Statement(StmtKind::CreateTable),
+                "CREATE TABLE is not supported in the editor. Register tables in Table Config",
+            ),
+            (
+                Form::Statement(StmtKind::Ctas),
+                "CREATE TABLE is not supported in the editor. Register tables in Table Config",
+            ),
+            (
+                Form::Statement(StmtKind::Insert),
+                "INSERT is not supported in the editor. Load data through Table Config",
+            ),
+            (
+                Form::Statement(StmtKind::Set),
+                "SET is not supported in the editor. Engine options are set in Settings",
+            ),
+            (
+                Form::Statement(StmtKind::Prepare),
+                "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
+                 DESCRIBE can run here",
+            ),
+            (
+                Form::Execute,
+                "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and \
+                 DESCRIBE can run here",
+            ),
+        ] {
+            assert_eq!(denied(form, DenyCode::NotGranted), message, "{form:?}");
+            assert_eq!(
+                denied(form, DenyCode::OutOfScope),
+                message,
+                "and the code is bookkeeping, not a second wording: {form:?}"
+            );
+        }
+    }
+
+    /// Every form has a family, and the two read forms differ — which is what keeps `EXECUTE`
+    /// refused on a read-only surface that cannot `PREPARE`.
+    #[test]
+    fn a_read_and_an_execute_are_different_families() {
+        assert_eq!(Form::Read.family(), GrantFamily::Read);
+        assert_eq!(Form::Execute.family(), GrantFamily::Session);
+        assert_eq!(
+            Form::Statement(StmtKind::Ctas).family(),
+            GrantFamily::Write,
+            "a CTAS writes rows; a column-list CREATE TABLE only shapes a catalog"
+        );
+        assert_eq!(
+            Form::Statement(StmtKind::CreateTable).family(),
+            GrantFamily::Ddl
+        );
     }
 }

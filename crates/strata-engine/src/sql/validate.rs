@@ -36,6 +36,7 @@ use datafusion::common::{DataFusionError, SchemaError, TableReference};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::parser::ParserError;
 
+use crate::policy::{Capability, Principal};
 use crate::sql::lex::{
     byte_span, is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -43,7 +44,6 @@ use crate::sql::qualify::Names;
 use crate::sql::resolve::resolve;
 use crate::sql::FunctionCatalog;
 use crate::statements::pipeline::{classify, parse_range, qualify, Admitted, Pipeline};
-use crate::statements::{Capability, Principal};
 use strata_model::{Diagnostic, Severity};
 
 /// Clause keywords we typo-check bare identifiers against (edit distance ≤ 1).
@@ -623,8 +623,9 @@ fn adjacent_transposition(a: &[char], b: &[char]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::CapabilityPolicyProvider;
     use crate::statements::pipeline::policy_verdicts;
-    use crate::statements::{CapabilityPolicyProvider, Fault};
+    use crate::statements::Fault;
     use datafusion::arrow::array::{Int64Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;

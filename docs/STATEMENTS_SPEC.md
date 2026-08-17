@@ -139,9 +139,12 @@ of `ctx.sql`, and the providers keep the two jobs the traits can carry: identity
 
 ## 4. The classifier and the policy seam
 
-The statement layer is `engine/statements/`: `pipeline.rs` (the typed stages and `accept`),
-`classify.rs` (the grammar), `grants.rs` (the policy). Two questions, answered by two files, met in
-exactly one place.
+The statement layer is `engine/statements/`: `pipeline.rs` (the typed stages and `accept`) and
+`classify.rs` (the grammar). **Who may perform what is `engine/policy/`, a peer** — nothing in it
+knows what a statement is, which is why an embedder wiring up a decision service does not have to
+reach through the statement layer to find it. The dependency points one way: `classify.rs` maps
+its own forms onto `GrantFamily` and words every refusal; `policy/` answers about callers and
+targets.
 
 **The grammar** — `classify_stmt(stmt: &DFStatement) -> Result<Classified, Fault>`, a pure function
 of the parsed statement:
@@ -350,7 +353,7 @@ Known wording drift: the `Unsupported` message still says "Only SELECT, EXPLAIN,
 can run here", which is stale now that `CREATE TABLE` / CTAS run. The policy message table
 (`grants::denied`) carries the agent path's wording for every `StmtKind`, unreachable from a full
 capability — `strata-agent` names `Form`, `StmtKind` and `DenyCode` directly, so deleting a code is
-a compile break, and `grants`'s own test pins those literals verbatim.
+a compile break, and `classify`'s own test pins those literals verbatim.
 
 ## 5. The provider layer — identity and visibility, never lifecycle
 

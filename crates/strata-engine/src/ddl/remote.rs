@@ -509,9 +509,9 @@ mod tests {
 
     use crate::builder::test_context;
     use crate::fold_ident;
+    use crate::policy::{Capability, CapabilityPolicyProvider};
     use crate::providers::fake_database;
     use crate::statements::pipeline::{resolved_one, Pipeline};
-    use crate::statements::{Capability, CapabilityPolicyProvider};
 
     use super::*;
 

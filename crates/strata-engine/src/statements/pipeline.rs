@@ -1,17 +1,16 @@
-//! **The pipeline** — the one place a statement becomes something the engine will act on.
+//! The one place a statement becomes something the engine will act on.
 //!
-//! Three stages, and the types make the order unforgeable: [`parse`] mints a [`Parsed`],
-//! [`qualify`] mints a [`Qualified`] from one, and [`classify`] takes only a `Qualified`. Both
-//! have private fields and no constructor, so qualify-before-classify is a property of the types
-//! rather than a call discipline nobody can check — which matters because the resolution can
-//! *change* a classification: a bare `__snap_3` the workspace does not hold stops being a reserved
-//! name once it resolves into a connection, where the prefix reserves nothing.
+//! Three stages, whose order the types enforce: [`parse`] mints a [`Parsed`], [`qualify`] mints a
+//! [`Qualified`] from one, and [`classify`] takes only a `Qualified`. Both have private fields and
+//! no constructor, so qualify-before-classify is a property of the types rather than a call
+//! discipline nobody can check. It has to be: the resolution can change a classification, since a
+//! bare `__snap_3` the workspace does not hold stops being a reserved name once it resolves into a
+//! connection, where the prefix reserves nothing.
 //!
-//! [`accept`] is the composition, and the **one** of them: a Run, the agent's pre-dispatch gate
-//! and the editor's diagnostics pass all enter here, so a statement the editor did not underline
-//! is a statement Run is prepared to perform. (The diagnostics pass drives the stages one at a
-//! time rather than calling `accept`, because it reports every statement in a buffer with a span
-//! each — but they are these stages, and nothing else classifies.)
+//! [`accept`] is the one composition of them. A Run, the agent's pre-dispatch gate and the
+//! editor's diagnostics pass all enter here, so a statement the editor did not underline is a
+//! statement Run is prepared to perform. (The diagnostics pass drives the stages one at a time
+//! rather than calling `accept`, because it reports every statement in a buffer with a span each.)
 
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -24,13 +23,12 @@ use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::tokenizer::Span;
 
-use super::classify::{classify_stmt, read_policy, Classified, Fault, Form, StmtKind};
-use super::grants::{denied, Admit, DenyCode, PolicyProvider, Principal};
+use super::classify::{classify_stmt, denied, read_policy, Classified, Fault, Form, StmtKind};
+use crate::policy::{Admit, DenyCode, PolicyProvider, Principal};
 use crate::query::ReadPolicy;
 use crate::sql::qualify::{qualify as resolve_names, Refusal as NameRefusal};
 
-/// The composition's read-only view of the engine: the session a statement is judged against, and
-/// the policy that judges it.
+/// The session a statement is judged against, and the policy that judges it.
 ///
 /// The two grammar stages take the session alone, which is what lets a caller already inside an
 /// admitted arm resolve a statement of its own composing ([`resolved_one`]) with no policy to
@@ -45,8 +43,8 @@ impl<'e> Pipeline<'e> {
         Pipeline { ctx, policy }
     }
 
-    /// The session the stages read from — for the tiers that run *after* one (name resolution,
-    /// the dry-plan), which plan against the same session the classification judged.
+    /// Returns the session the stages read from, for the tiers that run after one: name
+    /// resolution and the dry-plan both work against the session the classification judged.
     pub fn context(&self) -> &'e SessionContext {
         self.ctx
     }
@@ -65,12 +63,12 @@ pub struct Qualified {
 }
 
 impl Qualified {
-    /// The statement, for a caller that has to hand it to the planner.
+    /// Returns the statement.
     pub fn statement(&self) -> &DFStatement {
         &self.stmt
     }
 
-    /// The statement, owned — what the read path plans and what an arm performs.
+    /// Consumes this and returns the statement, for the read path to plan or an arm to perform.
     pub fn into_statement(self) -> DFStatement {
         self.stmt
     }
@@ -93,8 +91,7 @@ pub enum Admitted {
 }
 
 impl Admitted {
-    /// The statement, whichever arm this is — what the diagnostics pass goes on to resolve and
-    /// dry-plan.
+    /// Consumes this and returns the statement, whichever arm it is.
     pub fn into_statement(self) -> DFStatement {
         match self {
             Admitted::Query { stmt, .. } | Admitted::Statement { stmt, .. } => {
@@ -120,10 +117,10 @@ pub enum Refused {
 }
 
 impl Refused {
-    /// The sentence the user reads.
+    /// Returns the sentence the user reads.
     ///
-    /// One table per refusal family, and both are the engine's: a policy provider answers in
-    /// codes precisely so it cannot reword this.
+    /// One table per refusal family, and both are the engine's: a policy provider answers in codes
+    /// precisely so it cannot reword this.
     pub fn message(&self) -> String {
         match self {
             Refused::Grammar(fault) => fault.message(),
@@ -135,9 +132,9 @@ impl Refused {
 
 /// A refusal as a surface reads it: the sentence, and where in the buffer to point.
 ///
-/// `span` is the fault's own position where the stage that minted it knows one — the resolution
-/// pass, which can name the identifier it refused. A grammar or policy refusal is about the
-/// statement as a whole, so it carries none and the editor underlines the leading keywords.
+/// `span` is set where the stage that minted the refusal knows a position — the resolution pass,
+/// which can name the identifier it refused. A grammar or policy refusal is about the statement as
+/// a whole, so it carries none and the editor underlines the leading keywords.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
     pub message: String,
@@ -162,7 +159,7 @@ impl From<NameRefusal> for Refusal {
     }
 }
 
-/// One statement the policy refuses — [`policy_verdicts`]' per-statement answer.
+/// One statement [`policy_verdicts`] refuses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyRefusal {
     /// Zero-based position of the refused statement in the input.
@@ -177,16 +174,21 @@ pub struct PolicyRefusal {
 }
 
 impl PolicyRefusal {
-    /// The sentence the caller reads.
+    /// Returns the sentence the caller reads.
     pub fn message(&self) -> String {
         self.reason.message()
     }
 }
 
-/// Parse `sql` with **this session's own** dialect and recursion limit — the same resolution
-/// `SessionState::sql_to_statement` performs, and the one parse in front of the classification.
+/// Parses `sql` with this session's own dialect and recursion limit, the same resolution
+/// `SessionState::sql_to_statement` performs.
 ///
-/// One funnel, because the gates that call it must not read the same buffer differently.
+/// The one parse in front of the classification, because the gates that call it must not read the
+/// same buffer differently.
+///
+/// # Errors
+///
+/// The input does not parse, or the session's configured dialect is unknown.
 pub fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<Parsed>, Refusal> {
     let state = ctx.state();
     let options = state.config_options();
@@ -206,13 +208,16 @@ pub fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<Parsed>, Refusa
         })
 }
 
-/// `sql` as exactly **one** parsed statement.
+/// Parses `sql` as exactly one statement.
 ///
-/// One statement per Run, which is today's behaviour kept rather than a new rule: a buffer holding
-/// several is still judged per statement by the diagnostics pass, and a Run refuses the batch here
-/// with a policy sentence instead of letting DataFusion answer for a limit that is ours
-/// (`SessionContext::sql` refuses a batch too, in its own words about its own parser — which tells
-/// the user nothing about what to do next).
+/// A buffer holding several is still judged per statement by the diagnostics pass; it is a *Run*
+/// that takes one, and it refuses the batch here rather than letting DataFusion answer for a limit
+/// that is ours (`SessionContext::sql` refuses a batch too, in its own words about its own parser,
+/// which tells the user nothing about what to do next).
+///
+/// # Errors
+///
+/// As [`parse`], plus an empty buffer and a buffer holding more than one statement.
 pub fn parse_one(ctx: &SessionContext, sql: &str) -> Result<Parsed, Refusal> {
     let mut statements = parse(ctx, sql)?;
     if statements.len() > 1 {
@@ -227,12 +232,12 @@ pub fn parse_one(ctx: &SessionContext, sql: &str) -> Result<Parsed, Refusal> {
     })
 }
 
-/// One statement parsed off an **already-taken** session state, keeping DataFusion's own error.
+/// Parses one statement off an already-taken session state, keeping DataFusion's own error.
 ///
 /// The diagnostics pass's mint: it parses one statement range at a time and reads the fault's
 /// `Line: N, Column: M` back into a byte span, which needs the `DataFusionError` rather than a
-/// message — and it hoists the state, because taking one deep-clones every function registry and
-/// a buffer has as many statements as the user typed.
+/// message. It hoists the state because taking one deep-clones every function registry, and a
+/// buffer has as many statements as the user typed.
 pub(crate) fn parse_range(
     state: &SessionState,
     dialect: &Dialect,
@@ -246,8 +251,10 @@ pub(crate) fn parse_range(
 /// Resolves every bare read in `parsed` against the connected databases, minting the
 /// [`Qualified`] every later stage takes.
 ///
-/// **Every** refusal, because the diagnostics pass squiggles each name it could not resolve; a
-/// caller that judges one statement takes the first.
+/// # Errors
+///
+/// A bare name more than one connected database holds, one entry per name. All of them, because
+/// the diagnostics pass squiggles each; a caller judging one statement takes the first.
 pub fn qualify(ctx: &SessionContext, parsed: Parsed) -> Result<Qualified, Vec<Refusal>> {
     let Parsed { mut stmt } = parsed;
     let refusals = resolve_names(ctx, &mut stmt);
@@ -257,12 +264,17 @@ pub fn qualify(ctx: &SessionContext, parsed: Parsed) -> Result<Qualified, Vec<Re
     }
 }
 
-/// **Classify**: the grammar, then the policy, then the statement's own fault.
+/// Returns what `who` may do with `stmt`.
 ///
-/// The order is the design. A caller the policy phase refuses the form to outright is owed *that*
-/// sentence — a read-only agent asking for `INSERT OVERWRITE` hears "INSERT is not supported", not
-/// a note about `OVERWRITE` on a statement it may not write at all — so the fault the grammar held
-/// is reached only once the caller is permitted the form.
+/// The grammar first, then the policy, then the statement's own fault. That order is the design: a
+/// caller refused the form outright is owed that sentence, so a read-only agent asking for
+/// `INSERT OVERWRITE` hears "INSERT is not supported" rather than a note about the `OVERWRITE` on
+/// a statement it may not write at all.
+///
+/// # Errors
+///
+/// A form the engine has no arm for, a form `who` may not perform, a fault the statement carries,
+/// or a policy provider that could not decide.
 pub async fn classify(
     p: &Pipeline<'_>,
     who: &Principal,
@@ -286,8 +298,13 @@ pub async fn classify(
     })
 }
 
-/// **The one composition site**: `sql` as one statement `who` may perform, or the refusal that
-/// stopped it.
+/// Returns `sql` as one statement `who` may perform.
+///
+/// The one composition of the three stages.
+///
+/// # Errors
+///
+/// Anything [`parse_one`], [`qualify`] or [`classify`] refuses, as the sentence a surface shows.
 ///
 /// ```compile_fail,E0308
 /// // Classifying an unqualified statement does not compile: `classify` takes a `Qualified`, and
@@ -302,13 +319,16 @@ pub async fn accept(p: &Pipeline<'_>, sql: &str, who: &Principal) -> Result<Admi
     classify(p, who, qualified).await.map_err(Refusal::from)
 }
 
-/// The **agent gate**: every statement in `sql` that `who` may not perform.
+/// Returns every statement in `sql` that `who` may not perform.
 ///
-/// `Ok(vec![])` is a clean pass and `Ok(refusals)` names each refused statement. **`Err` means
-/// the input could not be judged, and the gate fails closed**: the input does not parse (or the
-/// configured dialect is unknown), so the caller refuses dispatch and surfaces the returned error
-/// — the engine's own parse wording, the same terminal a Run would reach. Unparseable input is
-/// never a policy pass, and one broken statement never silently approves its neighbours.
+/// An empty answer is a clean pass. A pre-dispatch gate, so the caller refuses dispatch on either
+/// non-clean answer.
+///
+/// # Errors
+///
+/// The input could not be judged: it does not parse, the dialect is unknown, or a bare name is
+/// ambiguous. The gate fails closed on all three — unjudgeable input is never a policy pass, and
+/// one broken statement never silently approves its neighbours.
 pub async fn policy_verdicts(
     p: &Pipeline<'_>,
     who: &Principal,
@@ -333,13 +353,13 @@ pub async fn policy_verdicts(
     Ok(refusals)
 }
 
-/// `sql` as one parsed, **resolved** statement — [`parse_one`] then [`qualify`], for the callers
-/// that compose a statement of their own and have to hand it to the planner.
+/// [`parse_one`] then [`qualify`], for the callers that compose a statement of their own and have
+/// to hand it to the planner.
 ///
 /// No classification, deliberately: these are either already inside an arm the pipeline admitted
 /// (a view's body, a statement bound for a server) or a read the facade limits to reading. What
-/// they need from this module is the *resolution*, because a resolved statement cannot be
-/// rendered back to text without losing the buffer the user wrote.
+/// they need is the resolution, because a resolved statement cannot be rendered back to text
+/// without losing the buffer the user wrote.
 pub(crate) fn resolved_one(ctx: &SessionContext, sql: &str) -> Result<DFStatement, String> {
     let parsed = parse_one(ctx, sql).map_err(|r| r.message)?;
     qualify(ctx, parsed)
@@ -363,9 +383,8 @@ mod tests {
     use futures::executor::block_on;
     use std::sync::Arc;
 
-    use super::super::grants::{Capability, CapabilityPolicyProvider};
-    use super::super::StmtKind;
     use super::*;
+    use crate::policy::{Capability, CapabilityPolicyProvider};
 
     /// A context with one table `t(id, name)` — enough for every classification below.
     fn ctx() -> SessionContext {

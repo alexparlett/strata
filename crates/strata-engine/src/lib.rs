@@ -46,6 +46,7 @@ mod explain;
 pub mod export;
 mod functions;
 pub mod json_poly;
+pub mod policy;
 pub mod profile;
 mod providers;
 mod query;
@@ -69,14 +70,15 @@ pub use db::RemoteRelation;
 pub use ddl::{
     drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
 };
-pub use query::{purge_snapshot_root, ReadPolicy};
-/// The statement layer's vocabulary (EA-04): what a statement is, who may perform it, and the
-/// policy seam an embedder injects through [`EngineBuilder::with_policy`].
-pub use statements::{
-    Admit, Capability, CapabilityPolicyProvider, DenyCode, Fault, Form, Grant, GrantFamily, Grants,
-    Locality, PolicyProvider, PolicyRefusal, Principal, Refused, RemoteScope, RemoteSel, StmtKind,
-    TargetFacts,
+/// Who may perform what: the seam an embedder injects through [`EngineBuilder::with_policy`], and
+/// the grants the shipped provider decides from.
+pub use policy::{
+    Admit, Capability, CapabilityPolicyProvider, DenyCode, Grant, GrantFamily, Grants, Locality,
+    PolicyProvider, Principal, RemoteScope, RemoteSel, TargetFacts,
 };
+pub use query::{purge_snapshot_root, ReadPolicy};
+/// What a statement is, and why one was refused.
+pub use statements::{Fault, Form, PolicyRefusal, Refused, StmtKind};
 
 pub use builder::EngineBuilder;
 pub use udf_package::UdfPackage;
