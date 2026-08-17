@@ -158,8 +158,8 @@ pub enum Admit {
 
 /// Why a [`PolicyProvider`] said no.
 ///
-/// A code and never prose: the engine mints every sentence, so a provider cannot reword a refusal,
-/// and an embedder logging denials gets a value rather than a string to match on.
+/// A code rather than prose, so the engine words every refusal and a caller logging denials has a
+/// value to match on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DenyCode {
     /// The caller does not hold the grant this family needs.
@@ -170,38 +170,26 @@ pub enum DenyCode {
 
 /// Decides what a caller may do.
 ///
-/// Injected through `EngineBuilder::with_policy`; unset, the engine builds
-/// `CapabilityPolicyProvider::new(Capability::full())`, so an engine nobody restricted refuses
-/// nothing.
+/// Set with `EngineBuilder::with_policy`, defaulting to
+/// `CapabilityPolicyProvider::new(Capability::full())`.
 ///
-/// # Contract
+/// An implementation must keep three clauses:
 ///
-/// The conformance module in [`capability`] asserts all three for every implementation.
+/// - Two identical asks answer identically.
+/// - [`permit`](Self::permit) is never more permissive than [`admit`](Self::admit).
+/// - An `Err` refuses the statement. It is never read as an allow.
 ///
-/// - **Deterministic within a check.** Two identical asks answer identically; a decision that
-///   flips mid-statement would refuse an arm the classifier admitted for no reason the user can
-///   see.
-/// - **`permit` is never more permissive than `admit`.** The fine phase refines the coarse one; it
-///   does not overturn it. The engine fails closed if an implementation breaks this — the arm asks
-///   last and its answer stands — so an inconsistency can delay a refusal and never grant one.
-/// - **`Err` is a fault, not a decision.** An unreachable policy service is not a pass.
-///
-/// # Refresh and revocation
-///
-/// A [`Principal`] carries no expiry and the engine caches no answer, so both methods are called
-/// per statement: an implementation backed by a token or a remote decision point owns its own TTL,
-/// and a revocation takes effect at the next call rather than at a renewal the engine would have
-/// to schedule.
+/// Both methods are called once per statement and no answer is cached, so an implementation that
+/// consults a token or a remote service owns its own caching, and a revocation takes effect at the
+/// next call.
 #[async_trait]
 pub trait PolicyProvider: Send + Sync + 'static {
     /// Returns whether `who` may ever perform `family`, at any locality.
     ///
-    /// Asked once per statement, at classification.
-    ///
     /// # Errors
     ///
-    /// The implementation could not decide — expired credentials, an unreachable decision point.
-    /// The engine surfaces the message and refuses the statement.
+    /// The implementation could not decide. The engine surfaces the message and refuses the
+    /// statement.
     async fn admit(&self, who: &Principal, family: GrantFamily) -> Result<Admit, String>;
 
     /// Returns whether `who` may perform `family` against a resolved target.
