@@ -1,7 +1,7 @@
 //! What the engine does with one statement.
 //!
-//! - [`pipeline`] — the typed stages (`Parsed → Qualified → Admitted`) and [`accept`], the one
-//!   composition site every surface enters.
+//! - [`pipeline`] — the typed stages (`Parsed → Qualified → Admitted`) and [`accept`], which
+//!   composes all three for one statement.
 //! - [`classify`] — the grammar: what a parsed statement is, the faults no capability makes
 //!   well-formed, and the sentence every refusal is worded from.
 //!

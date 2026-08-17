@@ -317,7 +317,7 @@ pub async fn classify(
 
 /// Returns `sql` as one statement `who` may perform.
 ///
-/// The one composition of the three stages.
+/// Composes all three stages for one statement.
 ///
 /// # Errors
 ///
