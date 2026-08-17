@@ -1,5 +1,4 @@
-//! The two import directions nothing in the workspace may take, checked by reading the source
-//!.
+//! The two import directions nothing in the workspace may take, checked by reading the source.
 //!
 //! Both are boundaries a type system cannot state. The **module** one replaces a crate split the
 //! re-architecture deliberately did not make: `sources` and `sql` are peers inside this crate, and

@@ -850,8 +850,8 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     }
 }
 
-/// The registered views whose plans read the table `name` — the readers a drop leaves invalid
-///, sorted, and **named rather than cascaded**.
+/// The registered views whose plans read the table `name` — the readers a drop leaves invalid,
+/// sorted, and **named rather than cascaded**.
 ///
 /// The plan a view carries was inlined when it was created, so a view reading `orders` through
 /// another view names `orders` at its leaf and is found here with no recursion of ours.
@@ -875,8 +875,8 @@ pub async fn remote_dependents(ctx: &SessionContext, address: &str) -> Vec<Strin
     .await
 }
 
-/// The registered views whose plans read the **view** `name` — the same question a rung up
-///, and the answer the catalog pane's own view-drop confirm shows.
+/// The registered views whose plans read the **view** `name` — the same question a rung up, and
+/// the answer the catalog pane's own view-drop confirm shows.
 ///
 /// A different half of [`PlanDeps`], because a view is not a leaf: the inliner leaves the view's
 /// *name* behind as a `SubqueryAlias` and its base tables at the leaves, so a reader of `orders`

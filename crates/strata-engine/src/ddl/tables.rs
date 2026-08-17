@@ -180,8 +180,7 @@ pub async fn create(
     })
 }
 
-/// **`CREATE TABLE pg.schema.t AS SELECT …`** — a result materialized as a real server table
-///.
+/// **`CREATE TABLE pg.schema.t AS SELECT …`** — a result materialized as a real server table.
 ///
 /// The input plan is an ordinary query, so a local scan, a federated remote one and a
 /// cross-source join all reach here already working; what is added is where the rows land.
@@ -1486,9 +1485,8 @@ mod tests {
 
     /// **An append does not disturb the views above the table, so nothing has to repair them.**
     ///
-    /// A `ViewTable` captures its sources by `Arc` when it is created and never re-resolves them
-    ///, which is why every path that *re-registers* a table re-creates the views over
-    /// it. An `INSERT` replaces no provider, and could not invalidate one if it did: the sink
+    /// A `ViewTable` captures its sources by `Arc` when it is created and never re-resolves them,
+    /// which is why every path that *re-registers* a table re-creates the views over it. An `INSERT` replaces no provider, and could not invalidate one if it did: the sink
     /// schema-checks before it writes, so the shape a view captured is the shape still there, and
     /// the provider re-LISTs per scan (this engine runs no `ListFilesCache`) so it finds the new
     /// file on its own. Hence [`Engine::table_meta`] rather than a re-registration — this pins
