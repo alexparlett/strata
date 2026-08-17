@@ -47,7 +47,7 @@ use crate::db::{self, Databases, RemoteTarget};
 use crate::export::copy_row_count;
 use crate::query::ipc_write_options;
 use crate::sink::append_rows;
-use crate::sql::{Blocked, StmtKind};
+use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, InternalTables};
 use strata_core::project::{internal_source, tables_dir};
 use strata_core::util::{plural, temp_dir_name};
@@ -330,6 +330,13 @@ fn not_a_column_type(typed: &str) -> String {
     format!("'{typed}' is not a column type")
 }
 
+/// The one wording for an `INSERT` into a relation whose data Strata does not own — an external
+/// table or a view. **The arm's own**, like every refusal that needs context the parsed statement
+/// does not carry: which registered tables are internal is a fact about now, so this arrives at
+/// Run rather than as a squiggle while the user is typing.
+const INSERT_EXTERNAL: &str =
+    "INSERT targets internal tables. Load external table data through Table Config";
+
 /// Append rows to an internal table from an `INSERT` (ED-05).
 ///
 /// **Native execution behind a target gate.** The only thing intercepted is *where* the write
@@ -376,7 +383,7 @@ pub async fn insert(
         ));
     };
     if !matches!(dml.op, WriteOp::Insert(InsertOp::Append)) {
-        return Err(Blocked::InsertOverwrite.editor_message());
+        return Err(Fault::InsertOverwrite.message());
     }
 
     if let Some(at) = remote_target(ctx, &dml.table_name) {
@@ -398,7 +405,7 @@ pub async fn insert(
 
     let name = bare_name(ctx, &dml.table_name, WHAT)?;
     if !internal.contains(&name) {
-        return Err(Blocked::InsertExternal.editor_message());
+        return Err(INSERT_EXTERNAL.into());
     }
     verify_insert(&plan)?;
     let rows = append_rows(ctx, target_provider(dml)?, &dml.input).await?;
@@ -786,7 +793,7 @@ mod tests {
 
     use crate::builder::test_context;
     use crate::register::{register_project, table_spec, RegOutcome};
-    use crate::sql::Blocked;
+    use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
 
@@ -1082,7 +1089,7 @@ mod tests {
     async fn a_reserved_name_is_refused_by_the_router_and_by_the_funnel() {
         let root = scratch("reserved");
         let eng = engine(&root, BTreeMap::new());
-        let reserved = Blocked::ReservedName.editor_message();
+        let reserved = Fault::ReservedName.message();
 
         assert_eq!(
             statement(&eng, "CREATE TABLE __snap_1 (a INT)")
@@ -1624,7 +1631,7 @@ mod tests {
                 statement(&eng, &format!("INSERT INTO {target} VALUES (2)"))
                     .await
                     .expect_err("refused"),
-                Blocked::InsertExternal.editor_message(),
+                INSERT_EXTERNAL,
                 "{target}"
             );
         }
@@ -1638,7 +1645,7 @@ mod tests {
             statement(&eng, "REPLACE INTO owned VALUES (2)")
                 .await
                 .expect_err("refused"),
-            Blocked::InsertOverwrite.editor_message()
+            Fault::InsertOverwrite.message()
         );
         assert_eq!(read(&eng, "SELECT n FROM owned").await, vec![vec!["1"]]);
         let _ = fs::remove_dir_all(&root);

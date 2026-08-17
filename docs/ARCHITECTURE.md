@@ -1,7 +1,7 @@
 # Architecture — the system as built
 
 How Strata is put together, end to end: the workspace, the engine, the query round trip, the
-statement router, where state lives, and how windows relate. This is the guided tour; each section
+statement pipeline, where state lives, and how windows relate. This is the guided tour; each section
 links the document that owns its detail. If you are changing code rather than reading about it,
 [AGENTS.md](../AGENTS.md) holds the conventions and principles.
 
@@ -16,7 +16,7 @@ A virtual Cargo workspace, eight member crates plus a vendored fork:
 | `strata-freya` | The app — Freya (Skia, native) frontend. One module per OS window under `apps/`: launcher, project, settings, export, configure, connection. The default build target. |
 | `strata-core` | App services, DataFusion-free: config, keymap, themes, `.strata/` project persistence, the OS-keystore secret store, the model-listings satellite, the updater mechanism, shared `util`. |
 | `strata-arrow` | The Arrow-level vocabulary, DataFusion-free: the `ColumnInfo` row an Arrow field becomes, the value tree, the Copy/record-view serializers, the EXPLAIN plan model, and the two written-down catalogues (DataFusion's config keys, `object_store`'s client options). Sits on `strata-core`. |
-| `strata-engine` | The only place DataFusion is touched: query execution, the statement router, snapshots, export, profiling, the SQL language service, the registration pass. Sits on `strata-arrow`. |
+| `strata-engine` | The only place DataFusion is touched: query execution, the statement pipeline, snapshots, export, profiling, the SQL language service, the registration pass. Sits on `strata-arrow`. |
 | `strata-model` | The leaf data vocabulary — schema, results, catalog, session, history, connections. Serde only, no logic, so every other crate can speak it without dragging dependencies. |
 | `strata-code-editor` | The vendored Skia code editor (Rope buffer, tree-sitter highlighting, completion popup, diagnostic squiggles) the SQL surface is built on. |
 | `strata-agent` | Agent access: the read-only MCP tool vocabulary, the HTTP server, and the headless stdio host. Deliberately Freya-free — one implementation serves the in-app server and `strata mcp` alike. |
@@ -112,22 +112,26 @@ The load-bearing rules, each held by construction rather than by care:
 The full read model — identity, the lock-file sweep, pins, the ordinal measurements — is
 [SNAPSHOT_SPEC.md](SNAPSHOT_SPEC.md).
 
-## The statement router
+## The statement pipeline
 
-One classification sits in front of dispatch: `classify(statement, capability)` answers from the
-parsed statement, and `Engine::run` spends the answer.
+One pipeline sits in front of dispatch — `statements::accept`, three typed stages
+(`Parsed → Qualified → Admitted`) whose order the types enforce — and `Engine::run` spends the
+answer.
 
 ```mermaid
 flowchart LR
-    RUN["Engine::run<br/>(one statement per press)"] --> C{classify}
+    RUN["Engine::run<br/>(one statement per press)"] --> C{"accept<br/>parse → qualify → classify"}
     C -->|Query| Q["query()<br/>SELECT · EXPLAIN · SHOW · DESCRIBE<br/>→ snapshot pipeline"]
-    C -->|Intercept| I["ddl::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
-    C -->|Refuse| R["the editor's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]
+    C -->|Statement| I["ddl::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
+    C -->|Refusal| R["the engine's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]
 ```
 
-- The classification carries a **capability axis**: the editor runs queries and intercepts
-  statements; the agent surface is read-only and refuses every non-query. Both answers come from
-  the same match arm, so the two surfaces cannot drift.
+- **Grammar and policy are two questions.** `classify_stmt` answers what a statement *is*, purely
+  from the parsed AST; an injected `PolicyProvider` answers whether the caller may perform it,
+  in **codes** rather than prose so the engine mints every sentence from one table. The shipped
+  provider is data — a `Capability` of grants over a local/remote axis — and its two presets are
+  the app's editor (`full()`) and its agent (`read_only()`). A caller's capability narrows the
+  engine's and never widens it, which is what lets one engine serve both.
 - An interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS spools into
   `.strata/tables/<slug>/` as Arrow IPC and registers through the ordinary external-table path —
   the def it produces is a plain `TableDef` flagged `origin: Internal`, so persist, replay and the

@@ -55,7 +55,7 @@ use datafusion::sql::sqlparser::ast::{
 };
 
 use crate::functions::Functions;
-use crate::sql::StmtKind;
+use crate::statements::StmtKind;
 use crate::{fold_ident, registered_function};
 
 use super::{StatementOutcome, StoreEffect};

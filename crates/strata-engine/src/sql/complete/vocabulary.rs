@@ -2,7 +2,7 @@
 //! each one a named, documented policy: the clause ladder and its derived
 //! continuations, the statement leads offered first, the curated common
 //! vocabulary, the presentation phrases, and the blocked DDL/DML set (kept
-//! honest against the statement router, `validate::classify`, by test).
+//! honest against the statement classifier, `statements::classify_stmt`, by test).
 
 use crate::sql::context::Clause;
 
@@ -21,7 +21,7 @@ pub(super) const QUERY_LEADS: &[&str] = &[
 
 /// The statement leads — every statement the router intercepts for the editor
 /// (ED-04…ED-10), offered at `Start` only and **after** the query leads: a blank tab
-/// is usually a query. Kept honest against `validate::classify` by
+/// is usually a query. Kept honest against `statements::classify_stmt` by
 /// `policy_and_completion_agree_on_statement_leads`, whose lead → canonical-tail
 /// table panics on a lead with no entry — so a lead added here without extending the
 /// test fails the suite. (`CREATE TABLE AS` is not a lead: the name sits between
@@ -269,9 +269,8 @@ pub(super) const MULTI_WORD: &[&str] = &[
 ];
 
 /// DDL/DML keywords excluded from completion — the words that appear **only** in
-/// statement forms `validate.rs`'s router still refuses for
-/// [`Capability::Editor`](crate::sql::Capability). Offering what validation
-/// squiggles would mislead. Filtered (case-insensitively) out of `ALL_KEYWORDS`;
+/// statement forms the classifier still refuses whatever the caller holds
+/// ([`Fault`](crate::statements::Fault)). Offering what validation squiggles would mislead. Filtered (case-insensitively) out of `ALL_KEYWORDS`;
 /// `policy_and_completion_agree` keeps the two encodings from drifting. (Scalar
 /// fns like `replace` still come from the engine registry, so blocking the
 /// *keyword* doesn't hide the function.)

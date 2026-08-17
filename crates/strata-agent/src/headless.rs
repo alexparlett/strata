@@ -35,7 +35,7 @@ use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
 use strata_engine::register::{register_project, RegOutcome};
-use strata_engine::{Engine, RunTag, WsId};
+use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::error::AgentError;
@@ -99,6 +99,11 @@ impl HeadlessHost {
     /// exactly as it does in a window. A connection is not itself a catalog entry, so
     /// [`settled`](Self::settled) does not list one — a refused connection surfaces as the `failed`
     /// rows of the tables that needed it.
+    ///
+    /// **The engine itself is built read-only**, not merely served read-only. Nothing this host
+    /// exposes was ever allowed to write, but a ceiling is a different claim from a discipline:
+    /// this process has no editor and no user to ask, so the capability every caller is narrowed
+    /// against says so once, where a future tool cannot forget to.
     pub async fn open(root: PathBuf) -> Result<HeadlessHost, String> {
         if !exists_at(&root) {
             return Err(format!(
@@ -107,7 +112,10 @@ impl HeadlessHost {
             ));
         }
         let defs = load_defs(&root)?;
-        let engine = Engine::builder().with_data_dir(&root).build();
+        let engine = Engine::builder()
+            .with_data_dir(&root)
+            .with_policy(CapabilityPolicyProvider::new(Capability::read_only()))
+            .build();
         let mut outcomes = Vec::new();
         register_project(&engine, &root, &defs, |o| outcomes.push(o)).await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))

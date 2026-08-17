@@ -20,7 +20,8 @@ use crate::json_poly::PolyJsonFormat;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::providers::in_workspace;
 use crate::query::is_snapshot_name;
-use crate::sql::{qualified, Blocked};
+use crate::sql::qualified;
+use crate::statements::Fault;
 use crate::{fold_ident, quote_ident, CATALOG, SCHEMA};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
@@ -94,7 +95,7 @@ pub async fn register_external(
     use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 
     if is_snapshot_name(&spec.name) {
-        return Err(Blocked::ReservedName.editor_message());
+        return Err(Fault::ReservedName.message());
     }
 
     let _ = ctx.deregister_table(spec.name.as_str());

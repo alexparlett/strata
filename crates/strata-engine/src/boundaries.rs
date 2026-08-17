@@ -170,17 +170,17 @@ fn the_frontend_names_strata_arrow_for_the_arrow_vocabulary() {
 fn a_use_declaration_is_read_to_its_semicolon_and_prose_is_not_one() {
     let source = "//! A doc comment that says use strata_engine::plan; in prose.\n\
                   use strata_engine::{\n    RunTag,\n    WsId,\n};\n\
-                  pub use crate::sql::Blocked;\n";
+                  pub use crate::sql::validate;\n";
     assert_eq!(
         use_declarations(source),
         vec![
             "use strata_engine::{ RunTag, WsId, }".to_string(),
-            "use crate::sql::Blocked".to_string(),
+            "use crate::sql::validate".to_string(),
         ]
     );
-    assert!(reaches("use crate::sql::Blocked", "sql"));
-    assert!(reaches("use super::sql::Blocked", "sql"));
-    assert!(!reaches("use strata_engine::sql::Blocked", "sql"));
+    assert!(reaches("use crate::sql::validate", "sql"));
+    assert!(reaches("use super::sql::validate", "sql"));
+    assert!(!reaches("use strata_engine::sql::validate", "sql"));
 }
 
 #[test]

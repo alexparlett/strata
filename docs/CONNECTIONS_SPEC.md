@@ -619,7 +619,7 @@ epoch, so the new table shows with no manual ↻.
 
 **Still refused**, each for its own reason: `INSERT OVERWRITE` (a statement that silently empties a
 server table is not v1) and `CREATE OR REPLACE TABLE` over a relation that **exists** (it would
-drop one; over a free name it simply creates, as the local arm does). `Capability::Agent` is
+drop one; over a free name it simply creates, as the local arm does). A read-only capability is
 unchanged: the agent surface refuses both write statements as it always did.
 
 ### Statements the server runs (DB-11)

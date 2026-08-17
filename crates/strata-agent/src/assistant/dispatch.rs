@@ -372,7 +372,7 @@ mod tests {
     use std::{env, fs, process};
 
     use serde_json::json;
-    use strata_engine::sql::Blocked;
+    use strata_engine::{DenyCode, Form, Refused, StmtKind};
     use strata_engine::{TableSpec, CANCELLED};
     use strata_model::SourceFormat;
 
@@ -563,7 +563,14 @@ mod tests {
         .await;
         assert!(ran.failed);
         assert_eq!(ran.facts.sql.as_deref(), Some(sql));
-        assert_eq!(ran.answer, Blocked::CreateTable.editor_message());
+        assert_eq!(
+            ran.answer,
+            Refused::Policy {
+                form: Form::Statement(StmtKind::CreateTable),
+                code: DenyCode::NotGranted,
+            }
+            .message()
+        );
     }
 
     /// A stop is a status, and the card must not dress it as a fault.

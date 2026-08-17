@@ -665,7 +665,7 @@ fn manual_trigger_lifts_the_tail_gate() {
 
 #[test]
 fn policy_and_completion_agree_on_statement_leads() {
-    use crate::sql::{classify, Capability, Verdict};
+    use crate::statements::classify_stmt;
     use datafusion::sql::parser::DFParserBuilder;
     use datafusion::sql::sqlparser::dialect::GenericDialect;
     for blocked in [
@@ -734,10 +734,10 @@ fn policy_and_completion_agree_on_statement_leads() {
             .parse_statements()
             .unwrap_or_else(|e| panic!("{sql}: {e}"));
         assert_eq!(stmts.len(), 1, "{sql}");
-        let verdict = classify(&stmts.pop_back().unwrap(), Capability::Editor);
+        let classified = classify_stmt(&stmts.pop_back().unwrap());
         assert!(
-            matches!(verdict, Verdict::Query | Verdict::Intercept(_)),
-            "{lead} → {sql}: {verdict:?}"
+            classified.as_ref().is_ok_and(|c| c.fault.is_none()),
+            "{lead} → {sql}: {classified:?}"
         );
     }
 }

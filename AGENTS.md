@@ -43,7 +43,7 @@ new crate buys is the *other* direction — a consumer can take the Arrow vocabu
 DataFusion boundary above it.
 
 - **`strata-freya`** — the Freya (Skia/native) frontend and the default build target.
-- **`strata-engine`** — query, snapshots, the statement router, export, profiling, the SQL
+- **`strata-engine`** — query, snapshots, the statement pipeline, export, profiling, the SQL
   language service. **The only crate that touches DataFusion**; the arrow never points back up.
 - **`strata-arrow`** — the Arrow-level vocabulary below the engine, DataFusion-free: the
   `ColumnInfo` an Arrow field becomes, the value tree, the Copy serializers, the EXPLAIN plan
@@ -76,11 +76,20 @@ snapshot, which is what makes paging stable and caching sound. It is built one w
 memory pool — and every method on the built engine takes `&self`, so a handle reaches all of them
 through `Deref` and no wrapper needs forwarders.
 
-**One statement router in front of dispatch.** `Engine::run` classifies every statement off the
-parsed AST: run it as a query, intercept it with a real implementation, or refuse it by name with
-the reason. Anything refused is refused in one place with one wording, and every surface that
-creates or changes something — a table, a view, an export — is a gesture into a funnel that
-already exists, never a second implementation of one.
+**One statement pipeline in front of dispatch.** `Engine::run` puts every statement through
+`statements::accept` — parse, resolve its bare names, classify — and spends the answer: run it as a
+query, perform it with a real implementation, or refuse it by name with the reason. The stages are
+typed so their order cannot be got wrong, the grammar and the policy are separate questions, and
+anything refused is refused in one place with one wording. Every surface that creates or changes
+something — a table, a view, an export — is a gesture into a funnel that already exists, never a
+second implementation of one.
+
+**Who may do what is data an embedder supplies.** `EngineBuilder::with_policy` takes a
+`PolicyProvider` that answers in codes, never prose, so the engine mints every refusal; the shipped
+one is a `Capability` — a set of grants over a local/remote axis, with a per-connection scope for
+the remote half. Unset, it allows everything: restriction is something you say, not something you
+switch off. A caller's own capability narrows the engine's and never widens it, which is how one
+engine serves a full editor and a read-only agent at once.
 
 **Writes only touch data Strata owns, or a database that opted in.** Your source files are read,
 never written. Write statements are gated on the parsed plan's target; a database connection is
@@ -88,7 +97,7 @@ read-only until its own `read_only` setting says otherwise, and then it takes th
 DataFusion can plan against it (`INSERT`, `CREATE TABLE AS SELECT`) and the ones only the server
 can run (`CREATE VIEW`, the `DROP`s, a column-list `CREATE TABLE`, `UPDATE`, `DELETE`), the second
 group dispatched as the text you typed with the connection's qualifier cut out. The agent surface
-is read-only throughout; exports refuse to land inside storage Strata manages.
+is opened read-only; exports refuse to land inside storage Strata manages.
 
 ## Principles
 

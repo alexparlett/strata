@@ -98,11 +98,11 @@ pub(crate) async fn resolve(
 /// The sqlparser statement inside a DataFusion statement, with `EXPLAIN` layers
 /// unwrapped; `None` for DataFusion extensions (policy handles those).
 ///
-/// Shared with [`read_policy`](crate::sql::read_policy), which asks the same question of
+/// Shared with the statement layer's `read_policy`, which asks the same question of
 /// the same two wrappers: DataFusion spells `EXPLAIN` twice (its own extension statement and
 /// sqlparser's), and a consumer that unwrapped only one would answer differently about
 /// `EXPLAIN EXECUTE p` depending on which parser arm produced it.
-pub(super) fn unwrap_statement(stmt: &DFStatement) -> Option<&SqlStatement> {
+pub(crate) fn unwrap_statement(stmt: &DFStatement) -> Option<&SqlStatement> {
     match stmt {
         DFStatement::Statement(s) => {
             let mut s: &SqlStatement = s;

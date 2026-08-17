@@ -35,7 +35,7 @@ use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::wire::ProjectParams;
 use strata_agent::{AgentIdentity, StrataTools};
 use strata_core::ai::ProviderKind;
-use strata_engine::sql::Blocked;
+use strata_engine::{DenyCode, Form, Refused, StmtKind};
 use strata_engine::{Engine, TableSpec, WsId};
 use strata_model::SourceFormat;
 use tokio::net::TcpListener;
@@ -528,7 +528,13 @@ async fn a_policy_refusal_reaches_the_model_and_the_turn_still_answers() {
 
     let told = stub.request(1).to_string();
     assert!(
-        told.contains(&Blocked::CreateTable.editor_message()),
+        told.contains(
+            &Refused::Policy {
+                form: Form::Statement(StmtKind::CreateTable),
+                code: DenyCode::NotGranted,
+            }
+            .message()
+        ),
         "{told}"
     );
     assert_eq!(running.settle().await, Settle::Answered);

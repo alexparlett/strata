@@ -22,18 +22,19 @@ pub mod context;
 mod fuzzy;
 pub mod ident;
 pub mod lex;
-mod qualify;
+pub(crate) mod qualify;
 mod resolve;
 pub mod symbols;
 pub mod validate;
 
 pub use complete::{complete, Completion, CompletionKind};
 pub use ident::{needs_quoting, qualified, quote_verbatim};
+/// The `EXPLAIN`-unwrapping every consumer of a parsed statement shares — see
+/// [`resolve::unwrap_statement`]. Read by the statement layer's `read_policy`, which asks the same
+/// question of the same two wrappers.
+pub(crate) use resolve::unwrap_statement;
 pub use symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym};
-pub use validate::{
-    classify, classify_one, parse_one, policy_verdicts, read_policy, validate, Blocked, Capability,
-    PolicyRefusal, StmtKind, Verdict,
-};
+pub use validate::validate;
 
 /// Which registry a function came from — the docs-panel header word, and (for the
 /// caller) a coarse category. `Default` is `Scalar` so a name-only [`FunctionSym`]

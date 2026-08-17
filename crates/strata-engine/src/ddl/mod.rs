@@ -46,7 +46,7 @@ use crate::catalog::{TableMeta, ViewMeta};
 use crate::db::{Databases, RemoteTarget};
 use crate::functions::Functions;
 use crate::providers::in_workspace;
-use crate::sql::StmtKind;
+use crate::statements::StmtKind;
 use crate::{fold_ident, Connections, InternalTables, CATALOG, SCHEMA};
 use strata_core::util::plural;
 use strata_model::{TableDef, ViewDef};

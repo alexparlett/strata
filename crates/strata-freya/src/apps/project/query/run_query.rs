@@ -197,7 +197,7 @@ impl QueryCapability for FetchSnapshotPage {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
-    use strata_engine::sql::Blocked;
+    use strata_engine::Fault;
 
     use super::*;
 
@@ -258,7 +258,7 @@ mod tests {
         spec.sql = "CREATE DATABASE d".into();
 
         let err = block_on(run.run(&spec)).err().expect("refused");
-        assert_eq!(err, Blocked::CreateDatabase.editor_message());
+        assert_eq!(err, Fault::CreateDatabase.message());
     }
 
     #[test]

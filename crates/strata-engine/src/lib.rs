@@ -53,6 +53,7 @@ pub mod register;
 pub mod secrets;
 mod sink;
 pub mod sql;
+pub mod statements;
 mod store;
 pub mod udf_package;
 mod udfs;
@@ -68,13 +69,20 @@ pub use db::RemoteRelation;
 pub use ddl::{
     drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
 };
-pub use query::purge_snapshot_root;
+pub use query::{purge_snapshot_root, ReadPolicy};
+/// The statement layer's vocabulary (EA-04): what a statement is, who may perform it, and the
+/// policy seam an embedder injects through [`EngineBuilder::with_policy`].
+pub use statements::{
+    Admit, Capability, CapabilityPolicyProvider, DenyCode, Fault, Form, Grant, GrantFamily, Grants,
+    Locality, PolicyProvider, PolicyRefusal, Principal, Refused, RemoteScope, RemoteSel, StmtKind,
+    TargetFacts,
+};
 
 pub use builder::EngineBuilder;
 pub use udf_package::UdfPackage;
 
 use secrets::SecretProvider;
-use sql::{PolicyRefusal, Verdict};
+use statements::pipeline::{accept, Admitted, Pipeline};
 
 use strata_arrow::{column_info, config, RecordBatch};
 
@@ -126,7 +134,7 @@ use db::Databases;
 use ddl::StrataFunctionFactory;
 use functions::Functions;
 use providers::{StrataCatalogList, StrataCatalogProvider};
-use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat, ReadPolicy};
+use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat};
 use sql::{DatabaseSym, FunctionCatalog, PreparedSym, RelationSym, SchemaSym};
 use strata_arrow::plan::QueryPlan;
 use strata_model::{
@@ -352,6 +360,10 @@ pub struct Engine {
     session: SessionScope,
     /// Where a secret this engine needs comes from ([`EngineBuilder::with_secrets`]).
     secrets: Arc<dyn SecretProvider>,
+    /// Who may perform what ([`EngineBuilder::with_policy`]) — asked once per statement, in front
+    /// of every dispatch. The default allows everything, so an engine nobody restricted refuses
+    /// nothing; restriction is explicit data.
+    policy: Arc<dyn PolicyProvider>,
 }
 
 /// The engine-side set of tables whose data Strata owns — [`fold_ident`]ed names (ED-04).
@@ -643,23 +655,36 @@ impl Engine {
     /// hit. Total by design: faults come back as `Diagnostic`s, not an `Err`.
     pub async fn validate(&self, sql: String) -> Vec<Diagnostic> {
         let ctx = self.ctx.clone();
+        let policy = self.policy.clone();
         let functions = self.functions.catalog();
         self.rt()
-            .spawn(async move { sql::validate(&ctx, &functions, &sql).await })
+            .spawn(async move {
+                let pipeline = Pipeline::new(&ctx, policy.as_ref());
+                sql::validate(&pipeline, &functions, &sql).await
+            })
             .await
             .unwrap_or_default()
     }
 
-    /// The managed-DDL policy over `sql` as a pre-dispatch gate (AA-01): the same
-    /// classification [`validate`](Engine::validate) squiggles, parsed with this
-    /// session's own dialect on the engine runtime. `Ok(vec![])` is a clean pass;
-    /// `Ok(refusals)` names each blocked statement; `Err` means the input could not be
-    /// judged (it does not parse) — the caller refuses dispatch on either non-clean
-    /// answer, so the gate fails closed.
+    /// The statement policy over `sql` as a pre-dispatch gate for a **read-only** caller (AA-01):
+    /// the same pipeline [`validate`](Engine::validate) squiggles and [`run`](Engine::run)
+    /// dispatches, one capability apart. `Ok(vec![])` is a clean pass; `Ok(refusals)` names each
+    /// refused statement; `Err` means the input could not be judged (it does not parse) — the
+    /// caller refuses dispatch on either non-clean answer, so the gate fails closed.
+    ///
+    /// The capability is stated here rather than taken from the caller because that is what the
+    /// agent surface *is* today; it becomes a per-session value when the group handles land
+    /// (EA-09). It is a narrowing either way: this engine's [`PolicyProvider`] is the ceiling,
+    /// so a read-only engine cannot be widened by asking.
     pub async fn policy_verdicts(&self, sql: String) -> Result<Vec<PolicyRefusal>, String> {
         let ctx = self.ctx.clone();
+        let policy = self.policy.clone();
         self.rt()
-            .spawn(async move { sql::policy_verdicts(&ctx, &sql) })
+            .spawn(async move {
+                let pipeline = Pipeline::new(&ctx, policy.as_ref());
+                let who = Principal::new(Capability::read_only());
+                statements::pipeline::policy_verdicts(&pipeline, &who, &sql).await
+            })
             .await
             .map_err(|e| format!("policy task failed: {e}"))?
     }
@@ -683,23 +708,22 @@ impl Engine {
         self.rt.as_ref().expect("engine runtime")
     }
 
-    /// **The editor's Run** (ED-02): classify `sql`, then route it.
+    /// **The editor's Run** (ED-02): accept `sql`, then route it.
     ///
-    /// One classification in front of dispatch, and it is the same one the squiggles came from
-    /// ([`sql::classify_one`], `Capability::Editor`) — so a statement the editor did not
+    /// One pipeline in front of dispatch, and it is the same one the squiggles came from
+    /// ([`statements::accept`] at [`Capability::full`]) — so a statement the editor did not
     /// underline is a statement Run is prepared to perform, and a refusal fails the run with
     /// the words the squiggle showed rather than a DataFusion error about a rule that is ours.
     ///
     /// - `Query` delegates to [`query`](Engine::query)'s body **byte-for-byte**, carrying only
-    ///   the one thing the router knows and the read path cannot: the [`ReadPolicy`] an `EXECUTE`
-    ///   needs ([`sql::read_policy`], ED-08). It is the only arm that touches the snapshot
-    ///   lifecycle, which is what keeps "DDL does not retire snapshots" true by construction
-    ///   rather than by care.
-    /// - `Intercept(kind)` goes to `ddl::execute`, bracketed by
+    ///   the one thing the pipeline knows and the read path cannot: the [`ReadPolicy`] an
+    ///   `EXECUTE` needs (ED-08). It is the only arm that touches the snapshot lifecycle, which
+    ///   is what keeps "DDL does not retire snapshots" true by construction rather than by care.
+    /// - `Statement(kind)` goes to `ddl::execute`, bracketed by
     ///   [`bookkeep`](Engine::bookkeep) so `cancel` / `is_running` / the close-while-running
     ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
     ///   one has to ask.
-    /// - `Refuse(b)` never reaches DataFusion at all: classification is in front of `ctx.sql`
+    /// - A refusal never reaches DataFusion at all: the pipeline is in front of `ctx.sql`
     ///   precisely because DDL executes *eagerly* inside it (spec §3), so anything that must
     ///   not run cannot be allowed to plan.
     ///
@@ -713,22 +737,25 @@ impl Engine {
         sql: String,
         page_size: usize,
     ) -> Result<RunOutcome, String> {
-        let (stmt, verdict) = {
+        let admitted = {
             let ctx = self.ctx.clone();
+            let policy = self.policy.clone();
             let sql = sql.clone();
             self.rt()
-                .spawn(async move { sql::classify_one(&ctx, &sql) })
+                .spawn(async move {
+                    let pipeline = Pipeline::new(&ctx, policy.as_ref());
+                    let who = Principal::new(Capability::full()).in_session(ws);
+                    accept(&pipeline, &sql, &who).await.map_err(|r| r.message)
+                })
                 .await
                 .map_err(|e| format!("policy task failed: {e}"))??
         };
-        match verdict {
-            Verdict::Query => {
-                let policy = sql::read_policy(&stmt);
-                self.read(ws, tag, stmt, page_size, policy)
-                    .await
-                    .map(|(output, batch)| RunOutcome::Rows(output, batch))
-            }
-            Verdict::Intercept(kind) => {
+        match admitted {
+            Admitted::Query { stmt, policy } => self
+                .read(ws, tag, stmt.into_statement(), page_size, policy)
+                .await
+                .map(|(output, batch)| RunOutcome::Rows(output, batch)),
+            Admitted::Statement { kind, stmt } => {
                 let ctx = self.ctx.clone();
                 let root = self.data_root.lock().unwrap().clone();
                 let engine = ddl::Dispatch {
@@ -743,13 +770,12 @@ impl Engine {
                 };
                 let report = self
                     .bookkeep(ws, tag, "statement", async move {
-                        ddl::execute(&ctx, kind, stmt, engine).await
+                        ddl::execute(&ctx, kind, stmt.into_statement(), engine).await
                     })
                     .await?;
                 self.settle_effect(report.effect.as_ref());
                 Ok(RunOutcome::Statement(report))
             }
-            Verdict::Refuse(blocked) => Err(blocked.editor_message()),
         }
     }
 
@@ -896,15 +922,18 @@ impl Engine {
             .await
     }
 
-    /// `sql` as one parsed statement with its bare reads resolved ([`sql::parse_one`], DB-09) —
-    /// the entry every read arriving as *text* goes through. [`run`](Engine::run) does not: its
-    /// classification already produced the statement.
+    /// `sql` as one parsed statement with its bare reads resolved (DB-09) — the entry every read
+    /// arriving as *text* goes through. [`run`](Engine::run) does not: its classification already
+    /// produced the statement.
+    ///
+    /// The pipeline's first two stages and no third: these callers are not asking whether the
+    /// statement may run, they are reads the facade already limits to reading.
     ///
     /// **Not spawned onto the runtime**, unlike every call that touches the context to *do*
     /// something: it has to land before the first await, or `query` stops publishing its in-flight
     /// entry on the first poll and `DispatchGuard` has nothing to retract.
     fn parse_one(&self, sql: &str) -> Result<DFStatement, String> {
-        sql::parse_one(&self.ctx, sql)
+        statements::pipeline::resolved_one(&self.ctx, sql)
     }
 
     /// [`query`](Engine::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
@@ -2119,7 +2148,7 @@ mod tests {
     use std::task::{Context, Waker};
 
     use crate::builder::test_context;
-    use crate::sql::Blocked;
+    use crate::statements::Fault;
     use strata_model::{SourceFormat, StatKey};
 
     use super::*;
@@ -2964,7 +2993,7 @@ mod tests {
         assert_eq!(page2.len(), 1);
     }
 
-    /// A refused statement fails with **the squiggle's own words** — `Blocked::editor_message`,
+    /// A refused statement fails with **the squiggle's own words** — the classifier's own table,
     /// not DataFusion's account of a rule that is ours. `CREATE DATABASE` is the refusal that
     /// stays refused: it is structurally impossible, not merely unimplemented.
     #[tokio::test]
@@ -2975,7 +3004,7 @@ mod tests {
             .await
             .err()
             .expect("refused");
-        assert_eq!(err, Blocked::CreateDatabase.editor_message());
+        assert_eq!(err, Fault::CreateDatabase.message());
     }
 
     /// A statement that creates something still needs somewhere to put it, and an engine with no

@@ -950,7 +950,7 @@ impl<H: Host> StrataTools<H> {
     /// headless server and the in-process assistant all answer it from the engine they already
     /// hand over, with no [`Host`] method and no channel hop behind it.
     ///
-    /// **It is not a loosening of [`run`](Self::run).** `Blocked::CopyTo` still refuses the
+    /// **It is not a loosening of [`run`](Self::run).** A typed `COPY` is still refused the
     /// agent's own `COPY`, the classification is untouched, and this writes nowhere a statement
     /// could reach anyway: `Engine::export_result`'s fence is the whole of what a caller-named
     /// path is allowed to be. What made a consent gate pointless is that `read_page` already
@@ -1232,7 +1232,7 @@ mod tests {
     use std::fs;
     use std::{env, process};
 
-    use strata_engine::sql::Blocked;
+    use strata_engine::{DenyCode, Form, Refused, StmtKind};
     use strata_engine::{RunTag, TableSpec, WsId, CANCELLED};
     use strata_model::SourceFormat;
 
@@ -2040,7 +2040,14 @@ mod tests {
         else {
             panic!("expected a policy refusal");
         };
-        assert_eq!(e.to_string(), Blocked::CreateTable.editor_message());
+        assert_eq!(
+            e.to_string(),
+            Refused::Policy {
+                form: Form::Statement(StmtKind::CreateTable),
+                code: DenyCode::NotGranted,
+            }
+            .message()
+        );
     }
 
     /// Fail closed: input that cannot be judged is never a policy pass.

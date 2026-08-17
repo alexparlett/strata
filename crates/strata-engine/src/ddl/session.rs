@@ -38,7 +38,8 @@ use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::catalog::short_type;
 use crate::refresh_config_dependent_udfs;
-use crate::sql::{Blocked, PreparedSym, StmtKind};
+use crate::sql::PreparedSym;
+use crate::statements::StmtKind;
 use strata_arrow::config::{effective, is_display_key, is_owned_key, is_restart_key, DIALECT_KEY};
 
 use super::{StatementOutcome, StoreEffect};
@@ -196,19 +197,28 @@ pub async fn reset(
 /// `datafusion.sql_parser.*` key with no predicate of its own.
 pub(crate) fn refuse_reserved_key(key: &str) -> Result<(), String> {
     if is_owned_key(key) {
-        return Err(Blocked::SetOwned.editor_message());
+        return Err(OWNED.into());
     }
     if is_restart_key(key) {
-        return Err(Blocked::SetRuntime.editor_message());
+        return Err(RESTART.into());
     }
     if is_display_key(key) {
-        return Err(Blocked::SetFormat.editor_message());
+        return Err(DISPLAY.into());
     }
     if key.trim() == DIALECT_KEY {
-        return Err(Blocked::SetDialect.editor_message());
+        return Err(DIALECT.into());
     }
     Ok(())
 }
+
+/// The four sentences [`refuse_reserved_key`] can say, one per class. **The arm's own words**,
+/// not the classification's: which class a key is in is not something the parsed statement
+/// carries, so the pipeline cannot know them while the user is typing and each is a sentence
+/// about one key rather than about a family of statements.
+const OWNED: &str = "This option is managed by Strata and cannot be set";
+const RESTART: &str = "Engine runtime options require a restart. Set them in Settings";
+const DISPLAY: &str = "Display options are set in Settings";
+const DIALECT: &str = "The SQL dialect is set in Settings";
 
 /// `PREPARE name [(types)] AS <query>` — dispatched natively, mirrored for completion.
 pub async fn prepare(
@@ -299,7 +309,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use crate::sql::{complete, Blocked, Catalog, CompletionKind};
+    use super::{DIALECT, DISPLAY, OWNED, RESTART};
+    use crate::sql::{complete, Catalog, CompletionKind};
+    use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, StoreEffect, WsId, CATALOG, SCHEMA};
 
     /// An engine whose Settings baseline is `overrides` — a `(key, value)` list, because that is
@@ -493,18 +505,18 @@ mod tests {
     async fn keys_the_app_reads_from_settings_refuse_toward_settings() {
         let eng = engine(&[]);
         let cases = [
-            ("datafusion.catalog.default_catalog", Blocked::SetOwned),
-            ("datafusion.catalog.default_schema", Blocked::SetOwned),
-            ("datafusion.sql_parser.collect_spans", Blocked::SetOwned),
-            ("datafusion.runtime.memory_limit", Blocked::SetRuntime),
-            ("datafusion.format.null", Blocked::SetFormat),
-            ("datafusion.sql_parser.dialect", Blocked::SetDialect),
+            ("datafusion.catalog.default_catalog", OWNED),
+            ("datafusion.catalog.default_schema", OWNED),
+            ("datafusion.sql_parser.collect_spans", OWNED),
+            ("datafusion.runtime.memory_limit", RESTART),
+            ("datafusion.format.null", DISPLAY),
+            ("datafusion.sql_parser.dialect", DIALECT),
         ];
-        for (key, blocked) in cases {
+        for (key, refusal) in cases {
             for sql in [format!("SET {key} = 'x'"), format!("RESET {key}")] {
                 assert_eq!(
                     statement(&eng, &sql).await.expect_err("refused"),
-                    blocked.editor_message(),
+                    refusal,
                     "{sql}"
                 );
             }
@@ -625,7 +637,7 @@ mod tests {
         let eng = engine(&[]);
         assert_eq!(
             run_err(&eng, "PREPARE bad AS INSERT INTO t VALUES (1)").await,
-            Blocked::PrepareNonQuery.editor_message()
+            Fault::PrepareNonQuery.message()
         );
         assert!(eng.prepared().is_empty());
     }

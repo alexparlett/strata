@@ -1,21 +1,21 @@
 # SQL statements — how the editor runs, intercepts and refuses them
 
-The editor is a **full-statement surface**: one classification in front of dispatch decides, per
+The editor is a **full-statement surface**: one pipeline in front of dispatch decides, per
 parsed statement, whether Run executes a query, performs the statement as an engine method, or
-refuses it with the same words the squiggle showed. The agent surface asks the same classifier and
-stays read-only. This file documents that surface as built — the router, the dispatch, the
+refuses it with the same words the squiggle showed. The agent surface enters the same pipeline and
+stays read-only. This file documents that surface as built — the pipeline, the dispatch, the
 provider layer, and the whole statement family: internal tables and the two writes over them,
 typed view DDL, typed `COPY`, the session statements, SQL functions, and typed
 `CREATE EXTERNAL TABLE`. Every intercepted kind now has a real arm, and the completion offer
-covers every statement the router intercepts.
+covers every statement the classifier intercepts.
 
 ```mermaid
 flowchart TD
-    RUN["Engine::run(ws, tag, sql)"] --> CLS{"sql::classify_one\n(parse, resolve bare reads,\nthen classify(stmt, Editor))"}
+    RUN["Engine::run(ws, tag, sql)"] --> CLS{"statements::accept\n(parse → qualify → classify,\nat Capability::full)"}
     CLS -- "empty buffer / multi-statement /\nan ambiguous bare name" --> ERR1["Err — 'Nothing to run' /\n'Run executes one statement at a time' /\n''orders' is ambiguous: … Qualify it'"]
-    CLS -- "Verdict::Query" --> Q["query() byte-for-byte\nthe only arm that touches\nthe snapshot lifecycle"]
-    CLS -- "Verdict::Intercept(kind)" --> DDL["ddl::execute, under the bookkeep\nbracket explain shares\n(cancel / is_running / close confirm)"]
-    CLS -- "Verdict::Refuse(blocked)" --> ERR2["Err(blocked.editor_message())\nbefore DataFusion can plan"]
+    CLS -- "Admitted::Query" --> Q["query() byte-for-byte\nthe only arm that touches\nthe snapshot lifecycle"]
+    CLS -- "Admitted::Statement(kind)" --> DDL["ddl::execute, under the bookkeep\nbracket explain shares\n(cancel / is_running / close confirm)"]
+    CLS -- "Refusal" --> ERR2["Err(refusal.message)\nbefore DataFusion can plan"]
     Q --> ROWS["RunOutcome::Rows\nresults grid, snapshot, pages"]
     DDL --> REP["RunOutcome::Statement(report)"]
     REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog epoch →\nhistory + event log"]
@@ -23,52 +23,66 @@ flowchart TD
 
 ## 1. The shape of a Run
 
-`sql::classify_one` (`engine/sql/validate.rs`) parses the buffer with the engine's own dialect and
-takes exactly one statement from it — an empty buffer is `Nothing to run`, a multi-statement
-buffer is `Run executes one statement at a time`. The statement then classifies
-(`classify(stmt, Capability::Editor)`) into one of three verdicts, and `Engine::run` spends the
-verdict (§2).
+`statements::accept` (`engine/statements/pipeline.rs`) is **the one composition site**: it parses
+the buffer with the engine's own dialect and takes exactly one statement from it — an empty buffer
+is `Nothing to run`, a multi-statement buffer is `Run executes one statement at a time` — resolves
+its bare reads, and classifies the result for the caller asking. `Engine::run` spends the answer
+(§2).
+
+**The three stages are typed, and the order is unforgeable.** `parse` mints a `Parsed`, `qualify`
+mints a `Qualified` from one, and `classify` takes only a `Qualified`; both have private fields and
+no constructor, so qualify-before-classify is a property of the types rather than a call discipline
+(a `compile_fail` doctest on `accept` pins it). That matters because the resolution can *change* a
+classification.
 
 **Between the parse and the classification, the statement's bare reads resolve** (`sql::qualify`,
 DB-09): a name the workspace does not hold and exactly one connected database does is rewritten to
 its three-part form, so a `SELECT * FROM orders` over a connection is judged, planned and recorded
-as the `pg.public.orders` it reaches. It sits inside `sql::parse_one` — the one parse in front of
-the router — because it can *change* a classification: a bare `__snap_3` the workspace does not
-hold is not a reserved name once it resolves into a database connection, where the prefix reserves
-nothing, and a gate that judged the unresolved statement would refuse a read the run then performs.
-Create and drop targets are never rewritten; the full rule, and why it is a statement pass rather
-than a current-database setting, is `docs/CONNECTIONS_SPEC.md` § *Unqualified names*.
+as the `pg.public.orders` it reaches. It sits inside the pipeline — in front of the classification
+— because a bare `__snap_3` the workspace does not hold is not a reserved name once it resolves
+into a database connection, where the prefix reserves nothing, and a gate that judged the
+unresolved statement would refuse a read the run then performs. Create and drop targets are never
+rewritten; the full rule, and why it is a statement pass rather than a current-database setting, is
+`docs/CONNECTIONS_SPEC.md` § *Unqualified names*.
+
+**The diagnostics pass enters the same stages** (`engine/sql/validate.rs`, tier 2), one statement
+at a time so it can span each — never a second reading of the same rules. That is the property the
+whole module family exists for: a statement the editor did not underline is a statement Run is
+prepared to perform. A structural test asserts the classifier has one definition site and that
+`validate.rs` reaches it rather than growing its own.
 
 That is also why the read path takes the **statement** rather than the buffer: `query::materialize`
-and `explain::run_explain` are handed what the router judged and plan it
+and `explain::run_explain` are handed what the pipeline judged and plan it
 (`query::plan_statement` — `SessionContext::sql_with_options` with the parse taken out), because
 rendering a resolved statement back to text to keep the old signature is exactly the round trip
 `COPY`'s arm avoids for the same reason (§6.4).
 
-**What classifies `Query`** — the snapshot pipeline, unchanged: `SELECT`, `EXPLAIN` /
-`EXPLAIN ANALYZE`, `DESCRIBE`, and every `SHOW` form (`TABLES`, `COLUMNS`, `FUNCTIONS`,
-`VARIABLES`, `DATABASES`, `SCHEMAS`), and `EXECUTE` of a prepared query. `EXECUTE` is the one
-query form whose plan is a `LogicalPlan::Statement`, which the read path's all-false `SQLOptions`
-triple refuses — so the router answers a second thing about it, `sql::read_policy`, and the
-widening rides that **dispatch** rather than the path (§6.5).
+**What reads** — the snapshot pipeline, unchanged: `SELECT`, `EXPLAIN` / `EXPLAIN ANALYZE`,
+`DESCRIBE`, and every `SHOW` form (`TABLES`, `COLUMNS`, `FUNCTIONS`, `VARIABLES`, `DATABASES`,
+`SCHEMAS`), and `EXECUTE` of a prepared query. `EXECUTE` is the one query form whose plan is a
+`LogicalPlan::Statement`, which the read path's all-false `SQLOptions` triple refuses — so the
+classifier answers a second thing about it, `read_policy`, and the widening rides that **dispatch**
+rather than the path (§6.5). `EXECUTE` is also its own `Form`, because it is the one read that
+reaches session state: it belongs to the `Session` grant family, so a caller that may not `PREPARE`
+may not `EXECUTE` either.
 
 Everything else is either **intercepted** (an engine-method implementation whose outcome the store
-folds — §6) or **refused** (the short list in §4).
+folds — §6) or **refused** (§4).
 
 ## 2. Dispatch and outcomes
 
 `Engine::run` (`engine/mod.rs`) routes; nothing else does:
 
-- **`Query`** delegates to `query()`'s body **byte-for-byte** — same supersede, same
-  retire-on-dispatch, same pins — carrying only the `ReadPolicy` the router answered (§1). It is
+- **`Admitted::Query`** delegates to `query()`'s body **byte-for-byte** — same supersede, same
+  retire-on-dispatch, same pins — carrying only the `ReadPolicy` the classifier answered (§1). It is
   the only arm that touches the snapshot lifecycle, which is what keeps "DDL does not retire
   snapshots" true by construction rather than by care.
-- **`Intercept(kind)`** goes to `engine/ddl/`'s `execute`, bracketed by `Engine::bookkeep` — the
+- **`Admitted::Statement { kind, .. }`** goes to `engine/ddl/`'s `execute`, bracketed by `Engine::bookkeep` — the
   same in-flight lifecycle `explain` uses — so `cancel`, `is_running` and the close-while-running
   confirm see an intercepted statement like any other work. A CTAS is a full scan; a window
   closing over one has to ask.
-- **`Refuse(blocked)`** returns `Err(blocked.editor_message())` before DataFusion can plan — the
-  run fails in the results pane with the words the squiggle showed.
+- **A `Refusal`** returns `Err(refusal.message)` before DataFusion can plan — the run fails in the
+  results pane with the words the squiggle showed.
 
 A statement's outcome is a **value the app folds**, never something to read back out of
 DataFusion:
@@ -123,20 +137,68 @@ interception returns the outcome as a value one fold applies. So lifecycle is in
 of `ctx.sql`, and the providers keep the two jobs the traits can carry: identity and visibility
 (§5). Settled — do not re-litigate.
 
-## 4. The router
+## 4. The classifier and the policy seam
 
-`classify(stmt: &DFStatement, cap: Capability) -> Verdict` (`engine/sql/validate.rs`) is the whole
-statement policy:
+The statement layer is `engine/statements/`: `pipeline.rs` (the typed stages and `accept`),
+`classify.rs` (the grammar), `grants.rs` (the policy). Two questions, answered by two files, met in
+exactly one place.
+
+**The grammar** — `classify_stmt(stmt: &DFStatement) -> Result<Classified, Fault>`, a pure function
+of the parsed statement:
 
 ```rust
-pub enum Capability { Editor, Agent }
+pub enum Form {
+    Read,                   // the snapshot pipeline, unchanged
+    Execute,                // a read that reaches session state (ED-08)
+    Statement(StmtKind),    // engine-method implementation + store fold
+}
 
-pub enum Verdict {
-    Query,                  // the snapshot pipeline, unchanged
-    Intercept(StmtKind),    // engine-method implementation + store fold
-    Refuse(Blocked),        // rendered per surface
+pub struct Classified { pub form: Form, pub fault: Option<Fault> }
+
+pub enum Fault {            // refusals no capability makes well-formed
+    CreateDatabase, Drop, Unsupported, InsertOverwrite, PrepareNonQuery, ReservedName,
 }
 ```
+
+**The policy** — an injected `PolicyProvider`, asked once per statement:
+
+```rust
+pub trait PolicyProvider: Send + Sync + 'static {
+    async fn admit(&self, who: &Principal, family: GrantFamily) -> Result<Admit, String>;
+    async fn permit(&self, who: &Principal, f: GrantFamily, t: &TargetFacts) -> Result<Admit, String>;
+}
+pub enum Admit { Allow, Deny(DenyCode) }   // codes, never prose
+```
+
+`admit` is **coarse** and runs at classification (may this principal ever perform this family, at
+any locality?); `permit` is **fine** and runs at the arm, once the target is resolved — its call
+sites land with the Target axis in EA-14, and until then the coarse phase carries the whole refusal
+set, which the presets make equivalent. The engine **fails closed** under a provider that answers
+the two inconsistently: the arm asks last and its answer stands, so an inconsistency can delay a
+refusal and never grant one.
+
+**Deny codes, never prose.** The provider says *why* in a `DenyCode`; the engine mints every
+sentence from one table keyed on the `Form`, which is what keeps the agent surface's wording pinned
+whoever is deciding.
+
+**The shipped provider is data.** `CapabilityPolicyProvider` answers from a `Capability`: a bitset
+of `Grant::{Read, Write(Locality), Ddl(Locality), ViewDdl, CopyOut, Session, Functions}` plus a
+`RemoteScope::{All, Only([Kind|Connection])}` refining the remote half — so "this MCP may write the
+sqlite connections, never the RDS postgres" is one expression. `Locality::{Local, Remote}` is shared
+with the Target axis, so the fine check is derived from the resolved target and an arm never names
+a scope.
+
+Two presets carry the app: `Capability::full()` is the editor and `Capability::read_only()` is the
+agent. **A caller's capability narrows the provider's and never widens it**, which is what lets one
+engine serve a full editor and a read-only agent while an engine built read-only — the headless
+host's — stays read-only whatever a caller asks for. `EngineBuilder::with_policy` is the one slot;
+unset it is `CapabilityPolicyProvider::new(Capability::full())`, so an engine nobody restricted
+refuses nothing and restriction is explicit data.
+
+**Order: grammar, then policy, then the statement's own fault.** A caller the policy phase refuses
+the form to outright is owed *that* sentence — a read-only agent asking for `INSERT OVERWRITE`
+hears "INSERT is not supported", not a note about `OVERWRITE` on a statement it may not write at
+all. This is why `classify_stmt` *holds* a fault on `Classified` rather than raising it.
 
 `StmtKind` names the sixteen intercepted forms: `CreateExternalTable`, `CreateTable`, `Ctas`,
 `Insert`, `DropTable`, `CreateView`, `DropView`, `Copy`, `Set`, `Reset`, `Prepare`, `Deallocate`,
@@ -146,19 +208,19 @@ statement's name — stub refusals, reports and the results pane all read it. Th
 not something the parsed statement says, and the arm refuses a workspace target in its own words
 (§6.9).
 
-- **Both surfaces answer from one match arm.** `classify_form` returns
-  `(Verdict, Option<Blocked>)` — the editor's answer and the agent's beside it — so an arm cannot
-  answer one surface and forget the other. `Capability::Agent` never intercepts: every non-query
-  refuses with the exact `Blocked` variant and wording the agent gate shipped with, and
-  `Engine::policy_verdicts` stays the agent-facing wrapper. Parity is a test of a table, not of
-  two functions kept in step.
-- **Fail closed, default deny.** Parse failure is `Err` ("could not judge"); the sqlparser
-  wildcard lands `Refuse(Unsupported)`; the DFParser match is wildcard-free, so a new DataFusion
-  statement variant is a compile error rather than a statement that slips through.
+- **One classification, two capabilities.** The grammar answers once and the capability is a
+  parameter of the policy phase, so there is no second traversal to keep in step. A read-only
+  capability never reaches an arm: every non-query refuses with the wording the agent gate shipped
+  with, and `Engine::policy_verdicts` stays the agent-facing wrapper. Parity is a test of a table
+  (`statements::pipeline`'s matrix, over the two presets), not of two functions kept in step.
+- **Fail closed, default deny.** Parse failure is `Err` ("could not judge"); a policy provider that
+  cannot decide is `Refused::Undecided`, refused with its own words rather than read as a pass; the
+  sqlparser wildcard lands `Fault::Unsupported`; the DFParser match is wildcard-free, so a new
+  DataFusion statement variant is a compile error rather than a statement that slips through, and
+  so is `kind_family`, so a new kind cannot silently inherit somebody else's policy.
 - **Classification is a pure function of the parsed statement.** A refusal that needs context the
-  statement does not carry (an INSERT target's origin, a SET key's class) is decided at dispatch,
-  with the same `Blocked` vocabulary, so every refusal's wording has one home
-  (`Blocked::editor_message`).
+  statement does not carry (an INSERT target's origin, a SET key's class) is the **arm's**, worded
+  where it is decided.
 - **The `SQLOptions` triple is defense in depth behind this, not the gate.** The read path stays
   all-false; intercepted arms set a per-class floor at dispatch. `verify_plan` visits subqueries,
   so smuggled nested DDL still dies at the second gate — but it can only refuse a class of plan,
@@ -207,8 +269,8 @@ The sixteen kinds, and what each answers for a remote-qualified name:
 
 Reading is never refused, and that is the point of the connection: a plain `SELECT`, a
 cross-source join, an `EXPLAIN` and a `PREPARE`d body all resolve `pg.public.orders` normally.
-`Capability::Agent` is untouched by any of it — the agent surface refuses every one of these
-statements exactly as it did, `UPDATE` and `DELETE` with the `Unsupported` variant they already
+`Capability::read_only()` is untouched by any of it — the agent surface refuses every one of these
+statements exactly as it did, `UPDATE` and `DELETE` with the `Unsupported` wording they already
 had.
 
 **A bare name reaches the same arm** (DB-09, DB-10, DB-11). A target that addresses a relation
@@ -227,7 +289,7 @@ table while a connection has an `orders`.
 
 **Reserved names.** **Any** statement typed into the editor that references a `__snap_`-prefixed
 table **in the workspace catalog** — or names one as its target — refuses with
-`Blocked::ReservedName` ("Names starting with '__snap_' are reserved for query results"). The read
+`Fault::ReservedName` ("Names starting with '__snap_' are reserved for query results"). The read
 half keeps a typed
 `COPY (SELECT * FROM __snap_3)` from ever writing `__strata_ord` into a user's file; the write half
 keeps `CREATE TABLE __snap_2` and friends off the namespace a Run mints into, where the provider
@@ -239,7 +301,7 @@ older build.
 *Queries included, and this is a correction.* The fence was once scoped to the **intercepted**
 forms, on the grounds that snapshots are how results are addressed at all. They are — but that
 addressing is `fetch_page`'s, the chart's and the export's, all of which reach a snapshot through
-`ctx.sql` and never pass the router. What a typed `SELECT * FROM __snap_3` bought instead was a
+`ctx.sql` and never pass the pipeline. What a typed `SELECT * FROM __snap_3` bought instead was a
 way to read another tab's retained result with `__strata_ord` showing as an ordinary column, and
 then to send it through the **Export window** — the ordinal reaching a user's file down a route
 the COPY fence never sees, which is the single thing that fence exists to prevent. `EXPLAIN`
@@ -270,7 +332,7 @@ name, and a query naming it does not plan.
 | `CREATE DATABASE` / `CREATE SCHEMA` | "CREATE DATABASE and CREATE SCHEMA are not supported" |
 | `TRUNCATE`, `MERGE`, `ALTER`, transactions, unknown kinds | "This statement is not supported in the editor. Only SELECT, EXPLAIN, SHOW and DESCRIBE can run here" |
 | `DROP` of a non-table, non-view object | "DROP is not supported in the editor. Deregister tables from the catalog" |
-| `INSERT OVERWRITE` | "INSERT OVERWRITE is not supported. Drop the table and recreate it with CREATE TABLE AS" |
+| `INSERT OVERWRITE` | "An INSERT that replaces rows is not supported. Drop the table and recreate it with CREATE TABLE AS" |
 | `PREPARE` of a non-query body | "PREPARE supports queries only" |
 | A `__snap_` name in any statement, read or written | "Names starting with '__snap_' are reserved for query results" |
 | A multi-statement buffer | "Run executes one statement at a time" |
@@ -278,18 +340,17 @@ name, and a query naming it does not plan.
 
 **The dispatch-time refusals are deliberately not in that table**, because they draw no squiggle:
 they need context the parsed statement does not carry, so the editor cannot know them while the
-user is typing and the refusal arrives at Run. They share the `Blocked` vocabulary and nothing
-else. Today they are an `INSERT`'s target origin and write op (§6.2, `Blocked::InsertExternal` /
-`InsertOverwrite`) and a `SET` / `RESET` key's class (§6.5, four of them). Every intercepted arm
-also has refusals of its **own** wording — clauses, options, a `LOCATION` naming no connection —
-which are the arm's rather than the `Blocked` vocabulary's for the same reason: the buffer alone
-cannot answer them, and each is a sentence about one statement rather than about a class of them.
+user is typing and the refusal arrives at Run. Each is worded **by the arm that decides it** —
+an `INSERT` into a relation Strata does not own (§6.2), the four `SET` / `RESET` key classes
+(§6.5), a `REPLACE INTO` only the plan names — for the same reason every intercepted arm words its
+own clause and option refusals: the buffer alone cannot answer them, and each is a sentence about
+one statement rather than about a class of them.
 
 Known wording drift: the `Unsupported` message still says "Only SELECT, EXPLAIN, SHOW and DESCRIBE
-can run here", which is stale now that `CREATE TABLE` / CTAS run. The older `Blocked` variants
-(`CreateTable`, `Insert`, `CopyTo`, `Set`, …) stay defined as **the agent path's error messages** —
-`strata-agent` names them directly, so deleting one is a compile break — and are unreachable from
-the editor, which intercepts every one of those statements.
+can run here", which is stale now that `CREATE TABLE` / CTAS run. The policy message table
+(`grants::denied`) carries the agent path's wording for every `StmtKind`, unreachable from a full
+capability — `strata-agent` names `Form`, `StmtKind` and `DenyCode` directly, so deleting a code is
+a compile break, and `grants`'s own test pins those literals verbatim.
 
 ## 5. The provider layer — identity and visibility, never lifecycle
 
@@ -302,7 +363,7 @@ third:
   `deregister_schema` refuse, so `CREATE SCHEMA` is impossible **by construction**, not by policy.
   `CREATE DATABASE` cannot be stopped here: DataFusion registers it into the
   `CatalogProviderList`, whose `register_catalog` returns an `Option` with no way to fail — a
-  refusing list could only lie or silently no-op — so the router's `Blocked::CreateDatabase` is
+  refusing list could only lie or silently no-op — so the classifier's `Fault::CreateDatabase` is
   its only gate, and the first line for `CREATE SCHEMA` too.
 - **Visibility.** `table_names()` filters the `__snap_` result snapshots while `table()` still
   resolves them. Every `information_schema` view and every `SHOW` form enumerates through
@@ -416,9 +477,9 @@ settings, so the panel asks the planner rather than declaring anything.
 free) and the gate reads what the plan names — first whether it is remote, since DB-10, which
 branches to `db::insert_into` and reports without a store effect; then, for a workspace name, the
 rest of this section. A target outside `Engine::is_internal` is refused
-(`Blocked::InsertExternal` — a view is the same refusal, neither being a directory a
+(`ddl::tables::INSERT_EXTERNAL` — a view is the same refusal, neither being a directory a
 `CREATE TABLE` wrote), and any write op that is not `Append` is refused
-(`Blocked::InsertOverwrite`; the router already catches `INSERT OVERWRITE` off the bare statement,
+(`Fault::InsertOverwrite`; the classifier already catches `INSERT OVERWRITE` off the bare statement,
 while `REPLACE INTO` reaches the arm because only the plan names it). Everything after the gate is
 DataFusion's INSERT path unchanged — the column list, the source query, the schema check, and the
 single LZ4-frame IPC file the Arrow sink appends.
@@ -442,7 +503,7 @@ The count is still read from the footers, never added up from what the statement
 
 **`DROP TABLE` works on both origins, and is the one place a table is dropped.** The catalog
 pane's confirm reaches `ddl::tables::drop_table` through `Engine::drop_table` after its store-first
-write; a typed statement reaches it through the router. That sharing is the point: a pane that
+write; a typed statement reaches it through the pipeline. That sharing is the point: a pane that
 merely deregistered would orphan an internal table's data forever, since no def would point at it
 and `tidy_strata_dir` sweeps only `.tmp-…`.
 
@@ -509,7 +570,7 @@ The fences, all resolved before anything runs:
 | `IF NOT EXISTS` | "CREATE VIEW IF NOT EXISTS is not supported. Use CREATE OR REPLACE VIEW" |
 | A column list | "A view's column list is not supported. Alias the columns in the query" |
 | `TEMPORARY`, `MATERIALIZED`, `SECURE`, `OR ALTER`, `TO`, `COMMENT`, `CLUSTER BY`, `COPY GRANTS`, `WITH NO SCHEMA BINDING`, view options, MySQL's `ALGORITHM`/`DEFINER`/`SQL SECURITY` | "CREATE VIEW does not support *CLAUSE*" |
-| A `__snap_` view name or a `__snap_` read in its body | `Blocked::ReservedName`, at the router (§4), with `ddl::views::create` backstopping |
+| A `__snap_` view name or a `__snap_` read in its body | `Fault::ReservedName`, at the classifier (§4), with `ddl::views::create` backstopping |
 
 `DROP VIEW` resolves the target the same way — an unknown name errors, `IF EXISTS` reports a
 no-op with nothing to fold, a table name says which statement drops it ("'t' is a table. Use DROP
@@ -589,7 +650,7 @@ something wrong:
 |---|---|---|
 | A partition identifier is one bare word | DF 54's COPY parser renders each with `Ident::to_string()` and the planner looks it up by that string, so `PARTITIONED BY ("order date")` reaches `field_with_name` with its quotes attached and fails about a column nobody named | `export::partition_columns_are_bare_words` — **shared**, not copied, and asked before planning so the refusal is ours |
 | No NULL in a partition column | DF 54 has no `__HIVE_DEFAULT_PARTITION__`: it files the row under a *neighbouring* value's directory, so the output reads back claiming a value it never had | `ddl::copy::no_null_partition_values`, in `export::partition_null_refusal`'s wording |
-| No `__snap_` source | a snapshot carries `__strata_ord`, which must never reach a user's file | the router (§4), `Blocked::ReservedName` |
+| No `__snap_` source | a snapshot carries `__strata_ord`, which must never reach a user's file | the classifier (§4), `Fault::ReservedName` |
 | The target is not storage Strata owns | a file dropped under `.strata/tables/<slug>/` is listed by that table's next scan — phantom rows if the schema matches, a table that has started failing if it does not — and silent corruption is refused rather than warned about | `ddl::copy::refuse_owned_target`, off the *resolved* path |
 
 The target check is the one that looks at where the write **lands** rather than what it reads, and
@@ -613,7 +674,7 @@ to decline just as a positive one is.
 
 The report is "Exported N rows to '<path>'" off the sink's own `count` column, and the effect is
 `None` — a COPY changes nothing the catalog holds, while history and the event log record it like
-any successful run. `Blocked::CopyTo` and its message stay defined as the **agent** path's refusal;
+any successful run. `COPY`'s policy message stays defined as the **agent** path's refusal;
 the editor path simply no longer reaches them.
 
 One thing moved on the window's side with this: `keep_partition_by_columns` is now stated in the
@@ -688,7 +749,7 @@ fence and the mirror:
 - **The fence is `PREPARE`'s, and it can be nowhere else.** `SQLOptions::verify_plan` descends into
   a `Prepare` node's input but an `Execute` node has no inputs, so a DML/DDL body has to be refused
   at `PREPARE` or it never is. The router refuses a non-query body off the parsed statement
-  (`Blocked::PrepareNonQuery`, "PREPARE supports queries only"); the dispatch verifies the *plan*
+  (`Fault::PrepareNonQuery`, "PREPARE supports queries only"); the dispatch verifies the *plan*
   under `dml=false, ddl=false, statements=true`, the same defense-in-depth the `INSERT` and `COPY`
   arms keep. Storing the plan is `execute_logical_plan`'s own arm, so the optimizer pass, the arity
   check against declared types and the duplicate-name error are all DataFusion's.
@@ -843,7 +904,7 @@ clause sqlparser learns later is a compile error rather than a promise quietly b
 | a column list | refused: "Schemas are inferred. Remove the column list" — unless every entry is a partition column's *definition*, which is how a partition states its type (`VARCHAR`, `INT`, `BIGINT`, `DATE`, the four Configure offers, so a def cannot carry a type its picker can't show) |
 | `TEMPORARY` · `UNBOUNDED` · `WITH ORDER` · constraints | refused by name — a `TableDef` has no field for any of them, and a constraint is refused for `CREATE TABLE`'s reason (DataFusion does not enforce one) |
 | `IF NOT EXISTS` / `OR REPLACE` / plain | resolved against the one namespace tables and views share, before anything registers. An **internal** table's name is fenced off from a *replacement* ("'t' is a table Strata stores in this project. Drop it first"), because pointing it at the user's own directory would strand `.strata/tables/<slug>/` with no def naming it and nothing left that could ever delete it. Only from a replacement: `IF NOT EXISTS` and a plain create never perform one, so they get the answers every other taken name gets rather than advice to drop a table the statement asked not to touch |
-| a `__snap_` name | `Blocked::ReservedName`, at the router (§4), with `register_external` backstopping |
+| a `__snap_` name | `Fault::ReservedName`, at the classifier (§4), with `register_external` backstopping |
 
 `PARTITIONED BY` shares `export::partition_columns_are_bare_words` with the typed `COPY` (§6.4) —
 one clause, one rule, so the wording names `PARTITIONED BY` rather than either statement. Both
@@ -1020,7 +1081,7 @@ listing moved, and the tree shows no remote row counts. There is no `WHERE`-less
 terms as every other statement here — `DROP TABLE` dispatches on those terms already, and a confirm
 only DML got would be a second, inconsistent surface.
 
-**A workspace `UPDATE` or `DELETE` gets its own sentence**, not `Blocked::Unsupported`'s generic
+**A workspace `UPDATE` or `DELETE` gets its own sentence**, not `Fault::Unsupported`'s generic
 one, which stops being honest the moment the same verb works one qualifier away: a project table is
 an append-only set of Arrow IPC files DataFusion has no way to rewrite in place, so the refusal says
 that and points at `CREATE TABLE AS`.
@@ -1029,7 +1090,7 @@ that and points at `CREATE TABLE AS`.
 `TRUNCATE` is a `WHERE`-less `DELETE` with nothing new to say; `ALTER` is a large surface with its
 own listing-refresh questions. The splice generalizes to any of them if asked for, and this is
 where that note lives. `CREATE`/`DROP FUNCTION` keep DataFusion's own qualified-name refusal, and
-`Capability::Agent` is unchanged.
+`Capability::read_only()` is unchanged.
 
 ## 7. A statement, end to end
 

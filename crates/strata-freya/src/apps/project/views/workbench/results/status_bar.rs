@@ -12,7 +12,7 @@ use freya::prelude::*;
 use strata_arrow::plan::PlanTab;
 use strata_core::config::Command;
 use strata_core::util::fmt_int;
-use strata_engine::sql::StmtKind;
+use strata_engine::StmtKind;
 use strata_model::Kind;
 
 use super::datagrid::{GridData, PageRead};

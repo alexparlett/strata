@@ -21,7 +21,7 @@
 //!   reads one rule.
 //!
 //! The reserved-name half is the router's: a `__snap_` relation anywhere in the source refuses with
-//! `Blocked::ReservedName`, which keeps `COPY (SELECT * FROM __snap_3) TO …` from writing
+//! `Fault::ReservedName`, which keeps `COPY (SELECT * FROM __snap_3) TO …` from writing
 //! `__strata_ord` into a user's file.
 //!
 //! The Export window is **unchanged** and remains the snapshot-backed, race-free path. A typed COPY
@@ -40,7 +40,7 @@ use datafusion::sql::parser::Statement as DFStatement;
 use crate::export::{
     copy_row_count, partition_columns_are_bare_words, partition_null_refusal, refuse_owned_target,
 };
-use crate::sql::StmtKind;
+use crate::statements::StmtKind;
 use strata_core::util::plural;
 
 use super::{DataRoot, StatementOutcome};
@@ -171,7 +171,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::{env, process};
 
-    use crate::sql::Blocked;
+    use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
@@ -256,7 +256,7 @@ mod tests {
                 )
                 .await
                 .expect_err("refused"),
-                Blocked::ReservedName.editor_message()
+                Fault::ReservedName.message()
             );
         }
         assert!(!out.exists(), "a refusal writes nothing");

@@ -432,7 +432,7 @@ mod tests {
     use super::SessionContext;
     use crate::builder::test_context;
     use crate::providers::fake_database;
-    use crate::sql::parse_one;
+    use crate::statements::pipeline::resolved_one;
     use crate::{Engine, RunTag, WsId};
 
     /// A session with one workspace table (`events`) and whichever database connections the test
@@ -454,7 +454,7 @@ mod tests {
     /// `sql` through the one funnel every surface enters, rendered back — the statement as the
     /// planner will receive it.
     fn resolved(ctx: &SessionContext, sql: &str) -> Result<String, String> {
-        parse_one(ctx, sql).map(|stmt| stmt.to_string())
+        resolved_one(ctx, sql).map(|stmt| stmt.to_string())
     }
 
     /// The point of the task: a name only a database connection has is reached without the
