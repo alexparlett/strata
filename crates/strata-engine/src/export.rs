@@ -781,7 +781,6 @@ pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::{fs, process};
 
     use datafusion::arrow::datatypes::{DataType, Field};
@@ -1129,7 +1128,7 @@ mod tests {
     }
 
     /// The snapshot one run settled, which is what an export reads.
-    async fn settled(eng: &Arc<Engine>, sql: &str) -> SnapshotId {
+    async fn settled(eng: &Engine, sql: &str) -> SnapshotId {
         let (output, _) = eng
             .query(WsId(1), RunTag(1), sql.into(), 10)
             .await

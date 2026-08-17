@@ -19,8 +19,6 @@ use strata_engine::{Engine, RunOutcome, RunTag, WsId};
 /// Five rows, three columns, unsorted on `column1` so a sorted export is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
 
-/// An `Arc`, because `Engine::export` takes `&Arc<Self>`: the pin and the in-flight count it
-/// claims are handed to the spawned write and have to outlive the call that started it.
 fn engine() -> Arc<Engine> {
     Engine::builder().build()
 }

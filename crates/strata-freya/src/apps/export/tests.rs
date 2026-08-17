@@ -15,7 +15,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use futures::executor::block_on;
@@ -55,7 +54,7 @@ fn col(name: &str, dtype: DataType) -> ColumnInfo {
 
 /// Run `SQL` and build the [`ExportTarget`] the results pane would hand the window — the real
 /// snapshot, the real schema and row count, the real page-1 rows.
-fn open_on_a_result(engine: &Arc<Engine>, sort: Option<(String, bool)>) -> ExportTarget {
+fn open_on_a_result(engine: &Engine, sort: Option<(String, bool)>) -> ExportTarget {
     let (output, _) = block_on(engine.query(WsId(1), RunTag(1), SQL.into(), 100)).expect("run");
     ExportTarget {
         snapshot: output.snapshot.expect("a non-empty result snapshots"),
@@ -70,12 +69,7 @@ fn open_on_a_result(engine: &Arc<Engine>, sort: Option<(String, bool)>) -> Expor
 }
 
 /// Press Export: build the spec for `path` exactly as the footer does, and write it.
-fn export_to(
-    engine: &Arc<Engine>,
-    draft: &ExportDraft,
-    target: &ExportTarget,
-    path: &Path,
-) -> usize {
+fn export_to(engine: &Engine, draft: &ExportDraft, target: &ExportTarget, path: &Path) -> usize {
     let spec = draft
         .spec(target, path.to_string_lossy().into_owned())
         .expect("the draft builds a spec");
