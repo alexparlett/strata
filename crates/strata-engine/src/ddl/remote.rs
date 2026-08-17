@@ -760,7 +760,7 @@ mod tests {
     async fn a_dispatched_statement_draws_no_diagnostic() {
         let ctx = session();
         let policy = CapabilityPolicyProvider::new(Capability::full());
-        let pipeline = Pipeline::new(&ctx, &policy);
+        let pipeline = Pipeline::new(&ctx);
         let functions = crate::sql::FunctionCatalog::default();
         for sql in [
             "CREATE TABLE pg.public.t (id INT, payload jsonb)",
@@ -768,11 +768,16 @@ mod tests {
             "UPDATE pg.public.orders SET total = 1 WHERE id = 2",
             "DELETE FROM pg.public.orders WHERE id = 2",
         ] {
-            let diags = crate::sql::validate(&pipeline, &functions, sql).await;
+            let diags = crate::sql::validate(&pipeline, &policy, &functions, sql).await;
             assert!(diags.is_empty(), "'{sql}': {diags:?}");
         }
-        let local =
-            crate::sql::validate(&pipeline, &functions, "CREATE TABLE mine (payload jsonb)").await;
+        let local = crate::sql::validate(
+            &pipeline,
+            &policy,
+            &functions,
+            "CREATE TABLE mine (payload jsonb)",
+        )
+        .await;
         assert!(
             !local.is_empty(),
             "a workspace table is still Strata's to judge"

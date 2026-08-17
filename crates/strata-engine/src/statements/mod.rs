@@ -13,6 +13,4 @@ pub mod classify;
 pub mod pipeline;
 
 pub use classify::{classify_stmt, Classified, Fault, Form, StmtKind};
-pub use pipeline::{
-    accept, Admitted, Parsed, Pipeline, PolicyRefusal, Qualified, Refusal, Refused,
-};
+pub use pipeline::{accept, Admitted, Parsed, Pipeline, PolicyRefusal, Qualified, Reason, Refusal};

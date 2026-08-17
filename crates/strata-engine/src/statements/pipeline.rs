@@ -7,10 +7,12 @@
 //! bare `__snap_3` the workspace does not hold stops being a reserved name once it resolves into a
 //! connection, where the prefix reserves nothing.
 //!
-//! [`accept`] is the one composition of them. A Run, the agent's pre-dispatch gate and the
-//! editor's diagnostics pass all enter here, so a statement the editor did not underline is a
-//! statement Run is prepared to perform. (The diagnostics pass drives the stages one at a time
-//! rather than calling `accept`, because it reports every statement in a buffer with a span each.)
+//! [`accept`] composes all three for one statement. It is not the only composition — the agent's
+//! gate ([`policy_verdicts`]) runs them over a buffer, the diagnostics pass runs them per statement
+//! range so it can span each, and [`resolved_one`] runs the first two for a caller already inside
+//! an admitted arm. What there is exactly one of is the **classifier**, which is the property that
+//! matters and the one a source-reading test pins: every surface asks the same function what a
+//! statement is.
 
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -28,19 +30,18 @@ use crate::policy::{Admit, DenyCode, PolicyProvider, Principal};
 use crate::query::ReadPolicy;
 use crate::sql::qualify::{qualify as resolve_names, Refusal as NameRefusal};
 
-/// The session a statement is judged against, and the policy that judges it.
+/// What the stages read a statement against.
 ///
-/// The two grammar stages take the session alone, which is what lets a caller already inside an
-/// admitted arm resolve a statement of its own composing ([`resolved_one`]) with no policy to
-/// ask.
+/// Deliberately not the policy as well: the two grammar stages are pure over the session, and a
+/// caller already inside an admitted arm resolves a statement of its own composing with no policy
+/// to hand ([`resolved_one`]). Who decides travels with the caller, at the one stage that asks.
 pub struct Pipeline<'e> {
     ctx: &'e SessionContext,
-    policy: &'e dyn PolicyProvider,
 }
 
 impl<'e> Pipeline<'e> {
-    pub fn new(ctx: &'e SessionContext, policy: &'e dyn PolicyProvider) -> Self {
-        Pipeline { ctx, policy }
+    pub fn new(ctx: &'e SessionContext) -> Self {
+        Pipeline { ctx }
     }
 
     /// Returns the session the stages read from, for the tiers that run after one: name
@@ -103,57 +104,79 @@ impl Admitted {
 
 /// Why a statement was refused.
 ///
-/// Carried rather than rendered, so a consumer can log the classification and print the sentence
-/// from the one table that mints it.
+/// Carried rather than rendered, so a consumer can log the classification and a surface can print
+/// the sentence from the one table [`message`](Reason::message) mints it in — including the
+/// stage-level refusals, which would otherwise each carry a string of their own.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Refused {
+pub enum Reason {
+    /// The input does not parse, or the session's dialect is unknown. The parser's own words.
+    Parse(String),
+    /// More than one statement where the caller takes one.
+    Batch,
+    /// Nothing to judge.
+    Empty,
+    /// A bare name more than one connected database holds, named with every candidate.
+    Unresolved(String),
     /// The statement itself is at fault, and no capability makes it well-formed.
     Grammar(Fault),
     /// This caller may not perform this form.
     Policy { form: Form, code: DenyCode },
     /// The policy provider could not decide — an unreachable decision point, expired credentials.
-    /// Not a pass: the statement is refused and the provider's own words are surfaced.
+    /// A fault rather than a decision: the statement is refused and the provider's words surfaced.
     Undecided(String),
 }
 
-impl Refused {
+impl Reason {
     /// Returns the sentence the user reads.
     ///
-    /// One table per refusal family, and both are the engine's: a policy provider answers in codes
-    /// precisely so it cannot reword this.
+    /// **The one table.** A policy provider answers in codes precisely so it cannot reword this.
     pub fn message(&self) -> String {
         match self {
-            Refused::Grammar(fault) => fault.message(),
-            Refused::Policy { form, code } => denied(*form, *code),
-            Refused::Undecided(why) => why.clone(),
+            Reason::Parse(why) | Reason::Unresolved(why) | Reason::Undecided(why) => why.clone(),
+            Reason::Batch => "Run executes one statement at a time".into(),
+            Reason::Empty => "Nothing to run".into(),
+            Reason::Grammar(fault) => fault.message(),
+            Reason::Policy { form, code } => denied(*form, *code),
         }
+    }
+
+    /// Whether this is a policy provider that could not answer, rather than an answer.
+    ///
+    /// The gate reports it as an input it could not judge, where a surface that shows one
+    /// statement at a time simply shows the message.
+    pub fn is_undecided(&self) -> bool {
+        matches!(self, Reason::Undecided(_))
     }
 }
 
-/// A refusal as a surface reads it: the sentence, and where in the buffer to point.
+/// A refusal as a surface reads it: why, and where in the buffer to point.
 ///
 /// `span` is set where the stage that minted the refusal knows a position — the resolution pass,
 /// which can name the identifier it refused. A grammar or policy refusal is about the statement as
 /// a whole, so it carries none and the editor underlines the leading keywords.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
-    pub message: String,
+    pub reason: Reason,
     pub span: Option<Span>,
 }
 
-impl From<Refused> for Refusal {
-    fn from(refused: Refused) -> Self {
-        Refusal {
-            message: refused.message(),
-            span: None,
-        }
+impl Refusal {
+    /// Returns the sentence the user reads.
+    pub fn message(&self) -> String {
+        self.reason.message()
+    }
+}
+
+impl From<Reason> for Refusal {
+    fn from(reason: Reason) -> Self {
+        Refusal { reason, span: None }
     }
 }
 
 impl From<NameRefusal> for Refusal {
     fn from(refusal: NameRefusal) -> Self {
         Refusal {
-            message: refusal.message,
+            reason: Reason::Unresolved(refusal.message),
             span: Some(refusal.span),
         }
     }
@@ -170,7 +193,7 @@ pub struct PolicyRefusal {
     /// squiggle tolerates and a gate must not).
     pub statement: String,
     /// Why it is refused.
-    pub reason: Refused,
+    pub reason: Reason,
 }
 
 impl PolicyRefusal {
@@ -189,23 +212,23 @@ impl PolicyRefusal {
 /// # Errors
 ///
 /// The input does not parse, or the session's configured dialect is unknown.
-pub fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<Parsed>, Refusal> {
-    let state = ctx.state();
+pub fn parse(p: &Pipeline<'_>, sql: &str) -> Result<VecDeque<Parsed>, Refusal> {
+    let state = p.ctx.state();
     let options = state.config_options();
-    let dialect = dialect_from_str(options.sql_parser.dialect).ok_or_else(|| Refusal {
-        message: format!("Unsupported SQL dialect: {}", options.sql_parser.dialect),
-        span: None,
-    })?;
+    let unknown_dialect = || {
+        Reason::Parse(format!(
+            "Unsupported SQL dialect: {}",
+            options.sql_parser.dialect
+        ))
+    };
+    let dialect = dialect_from_str(options.sql_parser.dialect).ok_or_else(unknown_dialect)?;
     DFParserBuilder::new(sql)
         .with_dialect(dialect.as_ref())
         .with_recursion_limit(options.sql_parser.recursion_limit)
         .build()
         .and_then(|mut parser| parser.parse_statements())
         .map(|stmts| stmts.into_iter().map(|stmt| Parsed { stmt }).collect())
-        .map_err(|e| Refusal {
-            message: e.to_string(),
-            span: None,
-        })
+        .map_err(|e| Reason::Parse(e.to_string()).into())
 }
 
 /// Parses `sql` as exactly one statement.
@@ -218,18 +241,12 @@ pub fn parse(ctx: &SessionContext, sql: &str) -> Result<VecDeque<Parsed>, Refusa
 /// # Errors
 ///
 /// As [`parse`], plus an empty buffer and a buffer holding more than one statement.
-pub fn parse_one(ctx: &SessionContext, sql: &str) -> Result<Parsed, Refusal> {
-    let mut statements = parse(ctx, sql)?;
+pub fn parse_one(p: &Pipeline<'_>, sql: &str) -> Result<Parsed, Refusal> {
+    let mut statements = parse(p, sql)?;
     if statements.len() > 1 {
-        return Err(Refusal {
-            message: "Run executes one statement at a time".into(),
-            span: None,
-        });
+        return Err(Reason::Batch.into());
     }
-    statements.pop_front().ok_or_else(|| Refusal {
-        message: "Nothing to run".into(),
-        span: None,
-    })
+    statements.pop_front().ok_or_else(|| Reason::Empty.into())
 }
 
 /// Parses one statement off an already-taken session state, keeping DataFusion's own error.
@@ -255,9 +272,9 @@ pub(crate) fn parse_range(
 ///
 /// A bare name more than one connected database holds, one entry per name. All of them, because
 /// the diagnostics pass squiggles each; a caller judging one statement takes the first.
-pub fn qualify(ctx: &SessionContext, parsed: Parsed) -> Result<Qualified, Vec<Refusal>> {
+pub fn qualify(p: &Pipeline<'_>, parsed: Parsed) -> Result<Qualified, Vec<Refusal>> {
     let Parsed { mut stmt } = parsed;
-    let refusals = resolve_names(ctx, &mut stmt);
+    let refusals = resolve_names(p.ctx, &mut stmt);
     match refusals.is_empty() {
         true => Ok(Qualified { stmt }),
         false => Err(refusals.into_iter().map(Refusal::from).collect()),
@@ -276,18 +293,18 @@ pub fn qualify(ctx: &SessionContext, parsed: Parsed) -> Result<Qualified, Vec<Re
 /// A form the engine has no arm for, a form `who` may not perform, a fault the statement carries,
 /// or a policy provider that could not decide.
 pub async fn classify(
-    p: &Pipeline<'_>,
+    policy: &dyn PolicyProvider,
     who: &Principal,
     stmt: Qualified,
-) -> Result<Admitted, Refused> {
-    let Classified { form, fault } = classify_stmt(&stmt).map_err(Refused::Grammar)?;
-    match p.policy.admit(who, form.family()).await {
-        Err(why) => return Err(Refused::Undecided(why)),
-        Ok(Admit::Deny(code)) => return Err(Refused::Policy { form, code }),
+) -> Result<Admitted, Reason> {
+    let Classified { form, fault } = classify_stmt(&stmt).map_err(Reason::Grammar)?;
+    match policy.admit(who, form.family()).await {
+        Err(why) => return Err(Reason::Undecided(why)),
+        Ok(Admit::Deny(code)) => return Err(Reason::Policy { form, code }),
         Ok(Admit::Allow) => {}
     }
     if let Some(fault) = fault {
-        return Err(Refused::Grammar(fault));
+        return Err(Reason::Grammar(fault));
     }
     Ok(match form {
         Form::Read | Form::Execute => Admitted::Query {
@@ -313,10 +330,17 @@ pub async fn classify(
 ///     parsed
 /// }
 /// ```
-pub async fn accept(p: &Pipeline<'_>, sql: &str, who: &Principal) -> Result<Admitted, Refusal> {
-    let parsed = parse_one(p.ctx, sql)?;
-    let qualified = qualify(p.ctx, parsed).map_err(first)?;
-    classify(p, who, qualified).await.map_err(Refusal::from)
+pub async fn accept(
+    p: &Pipeline<'_>,
+    sql: &str,
+    policy: &dyn PolicyProvider,
+    who: &Principal,
+) -> Result<Admitted, Refusal> {
+    let parsed = parse_one(p, sql)?;
+    let qualified = qualify(p, parsed).map_err(first)?;
+    classify(policy, who, qualified)
+        .await
+        .map_err(Refusal::from)
 }
 
 /// Returns every statement in `sql` that `who` may not perform.
@@ -326,28 +350,33 @@ pub async fn accept(p: &Pipeline<'_>, sql: &str, who: &Principal) -> Result<Admi
 ///
 /// # Errors
 ///
-/// The input could not be judged: it does not parse, the dialect is unknown, or a bare name is
-/// ambiguous. The gate fails closed on all three — unjudgeable input is never a policy pass, and
-/// one broken statement never silently approves its neighbours.
+/// The input could not be judged: it does not parse, the dialect is unknown, a bare name is
+/// ambiguous, or the policy provider could not answer. The gate fails closed on all four —
+/// unjudgeable input is never a policy pass, and one broken statement never silently approves its
+/// neighbours. A provider outage is an `Err` rather than a refusal, so a caller can tell "you may
+/// not" from "nobody could say".
 pub async fn policy_verdicts(
     p: &Pipeline<'_>,
+    policy: &dyn PolicyProvider,
     who: &Principal,
     sql: &str,
 ) -> Result<Vec<PolicyRefusal>, String> {
     let mut refusals = Vec::new();
-    for (index, parsed) in parse(p.ctx, sql)
-        .map_err(|r| r.message)?
+    for (index, parsed) in parse(p, sql)
+        .map_err(|r| r.message())?
         .into_iter()
         .enumerate()
     {
-        let qualified = qualify(p.ctx, parsed).map_err(|r| first(r).message)?;
+        let qualified = qualify(p, parsed).map_err(|r| first(r).message())?;
         let statement = qualified.statement().to_string();
-        if let Err(reason) = classify(p, who, qualified).await {
-            refusals.push(PolicyRefusal {
+        match classify(policy, who, qualified).await {
+            Ok(_) => {}
+            Err(reason) if reason.is_undecided() => return Err(reason.message()),
+            Err(reason) => refusals.push(PolicyRefusal {
                 index,
                 statement,
                 reason,
-            });
+            }),
         }
     }
     Ok(refusals)
@@ -361,10 +390,11 @@ pub async fn policy_verdicts(
 /// they need is the resolution, because a resolved statement cannot be rendered back to text
 /// without losing the buffer the user wrote.
 pub(crate) fn resolved_one(ctx: &SessionContext, sql: &str) -> Result<DFStatement, String> {
-    let parsed = parse_one(ctx, sql).map_err(|r| r.message)?;
-    qualify(ctx, parsed)
+    let p = Pipeline::new(ctx);
+    let parsed = parse_one(&p, sql).map_err(|r| r.message())?;
+    qualify(&p, parsed)
         .map(Qualified::into_statement)
-        .map_err(|refusals| first(refusals).message)
+        .map_err(|refusals| first(refusals).message())
 }
 
 /// The first of a stage's refusals — what a caller judging one statement reports.
@@ -416,14 +446,14 @@ mod tests {
         sql: &str,
     ) -> Result<Admitted, Refusal> {
         let policy = provider();
-        let pipeline = Pipeline::new(ctx, &policy);
-        block_on(accept(&pipeline, sql, &Principal::new(capability)))
+        let pipeline = Pipeline::new(ctx);
+        block_on(accept(&pipeline, sql, &policy, &Principal::new(capability)))
     }
 
     /// The refusal `sql` came back with for `capability`, or a panic naming what it did instead.
     fn refusal(ctx: &SessionContext, capability: Capability, sql: &str) -> String {
         match admitted(ctx, capability, sql) {
-            Err(refusal) => refusal.message,
+            Err(refusal) => refusal.message(),
             Ok(_) => panic!("'{sql}' was admitted"),
         }
     }
@@ -615,10 +645,11 @@ mod tests {
     fn a_multi_statement_input_is_judged_per_statement() {
         let ctx = ctx();
         let policy = provider();
-        let pipeline = Pipeline::new(&ctx, &policy);
+        let pipeline = Pipeline::new(&ctx);
         let who = Principal::new(Capability::read_only());
         let out = block_on(policy_verdicts(
             &pipeline,
+            &policy,
             &who,
             "SELECT 1; INSERT INTO t VALUES (1, 'a'); DROP VIEW v",
         ))
@@ -627,7 +658,7 @@ mod tests {
         assert_eq!(out[0].index, 1);
         assert_eq!(
             out[0].reason,
-            Refused::Policy {
+            Reason::Policy {
                 form: Form::Statement(StmtKind::Insert),
                 code: DenyCode::NotGranted
             }
@@ -640,7 +671,7 @@ mod tests {
         assert_eq!(out[1].index, 2);
         assert_eq!(
             out[1].reason,
-            Refused::Policy {
+            Reason::Policy {
                 form: Form::Statement(StmtKind::DropView),
                 code: DenyCode::NotGranted
             }
@@ -651,7 +682,7 @@ mod tests {
     fn a_full_capability_gets_no_verdict() {
         let ctx = ctx();
         let policy = provider();
-        let pipeline = Pipeline::new(&ctx, &policy);
+        let pipeline = Pipeline::new(&ctx);
         let who = Principal::new(Capability::full());
         for sql in [
             "SELECT * FROM t",
@@ -662,7 +693,7 @@ mod tests {
             "INSERT INTO t VALUES (1, 'a')",
         ] {
             assert!(
-                block_on(policy_verdicts(&pipeline, &who, sql))
+                block_on(policy_verdicts(&pipeline, &policy, &who, sql))
                     .expect("parses")
                     .is_empty(),
                 "{sql}"
@@ -676,7 +707,7 @@ mod tests {
     fn the_gate_fails_closed_on_input_it_cannot_judge() {
         let ctx = ctx();
         let policy = provider();
-        let pipeline = Pipeline::new(&ctx, &policy);
+        let pipeline = Pipeline::new(&ctx);
         let who = Principal::new(Capability::read_only());
         for sql in [
             "SELEC * FRM t",
@@ -684,7 +715,7 @@ mod tests {
             "INSERT INTO t VALUES (1, 'a'); SELECT 'oops",
         ] {
             assert!(
-                block_on(policy_verdicts(&pipeline, &who, sql)).is_err(),
+                block_on(policy_verdicts(&pipeline, &policy, &who, sql)).is_err(),
                 "{sql}"
             );
         }
@@ -697,10 +728,11 @@ mod tests {
     fn a_refusal_behind_multibyte_text_still_lands() {
         let ctx = ctx();
         let policy = provider();
-        let pipeline = Pipeline::new(&ctx, &policy);
+        let pipeline = Pipeline::new(&ctx);
         let who = Principal::new(Capability::read_only());
         let out = block_on(policy_verdicts(
             &pipeline,
+            &policy,
             &who,
             "SELECT 'caféé'; INSERT INTO t VALUES (1, 'a')",
         ))
@@ -721,14 +753,51 @@ mod tests {
         assert_eq!(refusal(&ctx, Capability::full(), "   "), "Nothing to run");
     }
 
-    /// A policy provider that cannot decide refuses the statement in its own words — never a
-    /// pass.
+    /// A provider that cannot decide is a fault, not a decision: the gate reports it as input it
+    /// could not judge, so a caller can tell "you may not" from "nobody could say".
     #[test]
-    fn an_undecided_policy_refuses_the_statement() {
+    fn an_undecided_policy_is_an_error_and_not_a_refusal() {
+        let unreachable = Reason::Undecided("the policy service is unreachable".into());
+        assert!(unreachable.is_undecided());
+        assert_eq!(unreachable.message(), "the policy service is unreachable");
+        assert!(!Reason::Grammar(Fault::Unsupported).is_undecided());
+
+        let ctx = ctx();
+        let pipeline = Pipeline::new(&ctx);
+        let who = Principal::new(Capability::read_only());
         assert_eq!(
-            Refused::Undecided("the policy service is unreachable".into()).message(),
-            "the policy service is unreachable"
+            block_on(policy_verdicts(
+                &pipeline,
+                &Undecided,
+                &who,
+                "SELECT 1; INSERT INTO t VALUES (1, 'a')"
+            )),
+            Err("the policy service is unreachable".to_string()),
+            "not an Ok list of refusals, which would read as a policy answer"
         );
+    }
+
+    /// A provider that cannot decide, ever.
+    struct Undecided;
+
+    #[async_trait::async_trait]
+    impl PolicyProvider for Undecided {
+        async fn admit(
+            &self,
+            _: &Principal,
+            _: crate::policy::GrantFamily,
+        ) -> Result<Admit, String> {
+            Err("the policy service is unreachable".into())
+        }
+
+        async fn permit(
+            &self,
+            _: &Principal,
+            _: crate::policy::GrantFamily,
+            _: &crate::policy::TargetFacts,
+        ) -> Result<Admit, String> {
+            Err("the policy service is unreachable".into())
+        }
     }
 
     /// **One answerer at the classification tier**, asserted by reading the source — because the

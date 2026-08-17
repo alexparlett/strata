@@ -23,17 +23,26 @@ flowchart TD
 
 ## 1. The shape of a Run
 
-`statements::accept` (`engine/statements/pipeline.rs`) is **the one composition site**: it parses
-the buffer with the engine's own dialect and takes exactly one statement from it — an empty buffer
-is `Nothing to run`, a multi-statement buffer is `Run executes one statement at a time` — resolves
-its bare reads, and classifies the result for the caller asking. `Engine::run` spends the answer
-(§2).
+`statements::accept` (`engine/statements/pipeline.rs`) composes the three stages for one
+statement: it parses the buffer with the engine's own dialect and takes exactly one statement from
+it — an empty buffer is `Nothing to run`, a multi-statement buffer is `Run executes one statement
+at a time` — resolves its bare reads, and classifies the result for the caller asking.
+`Engine::run` spends the answer (§2).
 
 **The three stages are typed, and the order is unforgeable.** `parse` mints a `Parsed`, `qualify`
 mints a `Qualified` from one, and `classify` takes only a `Qualified`; both have private fields and
 no constructor, so qualify-before-classify is a property of the types rather than a call discipline
 (a `compile_fail` doctest on `accept` pins it). That matters because the resolution can *change* a
 classification.
+
+**`accept` is not the only composition, and the claim that matters is narrower.** The agent's gate
+runs the stages over a whole buffer, the diagnostics pass runs them per statement *range* so it can
+span each, and `resolved_one` runs the first two for a caller already inside an admitted arm. What
+there is exactly one of is the **classifier** — every surface asks `classify_stmt` what a statement
+is, and a source-reading test pins that it has one definition site. The parse stage has two mints
+(`parse` over a buffer, `parse_range` over one range keeping DataFusion's own error for the span);
+they cannot disagree about what parses, because `SessionState::sql_to_statement` builds the parser
+with the same dialect resolution and the same `recursion_limit`.
 
 **Between the parse and the classification, the statement's bare reads resolve** (`sql::qualify`,
 DB-09): a name the workspace does not hold and exactly one connected database does is rewritten to
@@ -178,7 +187,17 @@ any locality?); `permit` is **fine** and runs at the arm, once the target is res
 sites land with the Target axis in EA-14, and until then the coarse phase carries the whole refusal
 set, which the presets make equivalent. The engine **fails closed** under a provider that answers
 the two inconsistently: the arm asks last and its answer stands, so an inconsistency can delay a
-refusal and never grant one.
+refusal and never grant one. A provider that cannot answer at all is a **fault**, not a decision:
+the statement is refused, and the agent gate reports it as input it could not judge rather than as
+a policy answer.
+
+**Which entries ask.** `Engine::run`, `Engine::validate` and `Engine::policy_verdicts` — the three
+that classify a statement. `Engine::query` and `Engine::explain` are handed a statement to read and
+are limited to reading by the read path's own `SQLOptions`; they do not consult the provider, and
+neither do `export`, `chart` or `profile`, which read a settled snapshot. Both agent hosts read
+through `Engine::query`, so a read-only ceiling binds their `policy_verdicts` gate rather than
+their dispatch. Widening the ask is EA-09's, with the group handles that give a call somewhere to
+carry a caller.
 
 **Deny codes, never prose.** The provider says *why* in a `DenyCode`; the engine mints every
 sentence from one table keyed on the `Form`, which is what keeps the agent surface's wording pinned
@@ -194,7 +213,11 @@ a scope.
 Two presets carry the app: `Capability::full()` is the editor and `Capability::read_only()` is the
 agent. **A caller's capability narrows the provider's and never widens it**, which is what lets one
 engine serve a full editor and a read-only agent while an engine built read-only — the headless
-host's — stays read-only whatever a caller asks for. `EngineBuilder::with_policy` is the one slot;
+host's — stays read-only whatever a caller asks for. The ceiling and the caller are asked
+*separately* rather than merged into one capability: a `RemoteScope` has no lossless intersection,
+since `Kind("postgres")` and `Connection("postgres://acme/orders")` can denote the same connection
+while being different selectors, so merging the selector sets would refuse a connection both
+operands reach. `EngineBuilder::with_policy` is the one slot;
 unset it is `CapabilityPolicyProvider::new(Capability::full())`, so an engine nobody restricted
 refuses nothing and restriction is explicit data.
 
@@ -217,7 +240,7 @@ not something the parsed statement says, and the arm refuses a workspace target 
   with, and `Engine::policy_verdicts` stays the agent-facing wrapper. Parity is a test of a table
   (`statements::pipeline`'s matrix, over the two presets), not of two functions kept in step.
 - **Fail closed, default deny.** Parse failure is `Err` ("could not judge"); a policy provider that
-  cannot decide is `Refused::Undecided`, refused with its own words rather than read as a pass; the
+  cannot decide is `Reason::Undecided`, refused with its own words rather than read as a pass; the
   sqlparser wildcard lands `Fault::Unsupported`; the DFParser match is wildcard-free, so a new
   DataFusion statement variant is a compile error rather than a statement that slips through, and
   so is `kind_family`, so a new kind cannot silently inherit somebody else's policy.

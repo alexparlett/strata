@@ -36,7 +36,7 @@ use datafusion::common::{DataFusionError, SchemaError, TableReference};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::parser::ParserError;
 
-use crate::policy::{Capability, Principal};
+use crate::policy::{Capability, PolicyProvider, Principal};
 use crate::sql::lex::{
     byte_span, is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
 };
@@ -90,7 +90,12 @@ const CLAUSE_KEYWORDS: &[&str] = &[
 /// Validate `sql` against the live session and return **all** diagnostics, byte-spanned
 /// where the fault is localizable. Read-only over the context: statements are parsed and
 /// planned, never executed (DDL only takes effect when its plan is driven).
-pub async fn validate(p: &Pipeline<'_>, functions: &FunctionCatalog, sql: &str) -> Vec<Diagnostic> {
+pub async fn validate(
+    p: &Pipeline<'_>,
+    policy: &dyn PolicyProvider,
+    functions: &FunctionCatalog,
+    sql: &str,
+) -> Vec<Diagnostic> {
     let ctx = p.context();
     let mut out = Vec::new();
     if sql.trim().is_empty() {
@@ -133,7 +138,7 @@ pub async fn validate(p: &Pipeline<'_>, functions: &FunctionCatalog, sql: &str) 
                 continue;
             }
         };
-        let qualified = match qualify(ctx, parsed) {
+        let qualified = match qualify(p, parsed) {
             Ok(qualified) => qualified,
             Err(refusals) => {
                 for refusal in refusals {
@@ -141,12 +146,12 @@ pub async fn validate(p: &Pipeline<'_>, functions: &FunctionCatalog, sql: &str) 
                         .span
                         .and_then(|span| byte_span(slice, stmt_range.start, span))
                         .unwrap_or_else(|| leading_keywords_span(&toks, &stmt_range));
-                    out.push(diag(Severity::Error, refusal.message, span, sql));
+                    out.push(diag(Severity::Error, refusal.message(), span, sql));
                 }
                 continue;
             }
         };
-        let admitted = match classify(p, &who, qualified).await {
+        let admitted = match classify(policy, &who, qualified).await {
             Ok(admitted) => admitted,
             Err(refused) => {
                 out.push(diag(
@@ -662,7 +667,8 @@ mod tests {
     fn check(ctx: &SessionContext, sql: &str) -> Vec<Diagnostic> {
         let policy = policy();
         block_on(validate(
-            &Pipeline::new(ctx, &policy),
+            &Pipeline::new(ctx),
+            &policy,
             &FunctionCatalog::default(),
             sql,
         ))
@@ -1096,7 +1102,7 @@ mod tests {
     fn the_gate_and_the_editor_refuse_with_the_same_words() {
         let ctx = ctx();
         let policy = policy();
-        let pipeline = Pipeline::new(&ctx, &policy);
+        let pipeline = Pipeline::new(&ctx);
         let agent = Principal::new(Capability::read_only());
         for sql in [
             "CREATE DATABASE other",
@@ -1105,7 +1111,8 @@ mod tests {
             "TRUNCATE TABLE t",
             "MERGE INTO t USING u ON t.id = u.id WHEN MATCHED THEN DELETE",
         ] {
-            let verdicts = block_on(policy_verdicts(&pipeline, &agent, sql)).expect("parses");
+            let verdicts =
+                block_on(policy_verdicts(&pipeline, &policy, &agent, sql)).expect("parses");
             assert_eq!(verdicts.len(), 1, "{sql}");
             assert_eq!(verdicts[0].message(), check(&ctx, sql)[0].message, "{sql}");
         }

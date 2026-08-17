@@ -1232,7 +1232,7 @@ mod tests {
     use std::fs;
     use std::{env, process};
 
-    use strata_engine::{DenyCode, Form, Refused, StmtKind};
+    use strata_engine::{DenyCode, Form, Reason, StmtKind};
     use strata_engine::{RunTag, TableSpec, WsId, CANCELLED};
     use strata_model::SourceFormat;
 
@@ -2042,7 +2042,7 @@ mod tests {
         };
         assert_eq!(
             e.to_string(),
-            Refused::Policy {
+            Reason::Policy {
                 form: Form::Statement(StmtKind::CreateTable),
                 code: DenyCode::NotGranted,
             }

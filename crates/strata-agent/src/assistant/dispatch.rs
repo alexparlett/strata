@@ -372,7 +372,7 @@ mod tests {
     use std::{env, fs, process};
 
     use serde_json::json;
-    use strata_engine::{DenyCode, Form, Refused, StmtKind};
+    use strata_engine::{DenyCode, Form, Reason, StmtKind};
     use strata_engine::{TableSpec, CANCELLED};
     use strata_model::SourceFormat;
 
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(ran.facts.sql.as_deref(), Some(sql));
         assert_eq!(
             ran.answer,
-            Refused::Policy {
+            Reason::Policy {
                 form: Form::Statement(StmtKind::CreateTable),
                 code: DenyCode::NotGranted,
             }

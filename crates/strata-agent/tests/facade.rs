@@ -19,7 +19,7 @@ use strata_agent::wire::{
 };
 use strata_agent::{AgentError, AgentIdentity, CatalogEntry, Described, RegState, StrataTools};
 use strata_engine::TableSpec;
-use strata_engine::{DenyCode, Form, Refused, StmtKind};
+use strata_engine::{DenyCode, Form, Reason, StmtKind};
 use strata_model::SourceFormat;
 
 /// A project whose engine really holds a `people` table of five rows, plus the catalog rows
@@ -216,7 +216,7 @@ async fn a_blocked_statement_is_refused_in_the_editors_own_words() {
     assert!(matches!(refused, AgentError::Policy(_)), "{refused:?}");
     assert_eq!(
         refused.to_string(),
-        Refused::Policy {
+        Reason::Policy {
             form: Form::Statement(StmtKind::CreateTable),
             code: DenyCode::NotGranted,
         }

@@ -4,10 +4,15 @@
 //! refining the remote half. Two presets carry the app — [`Capability::full`] for an editor,
 //! [`Capability::read_only`] for an agent — and everything else is composed from them.
 //!
-//! [`CapabilityPolicyProvider`]'s own capability is a **ceiling**: every answer is about the
-//! caller's capability intersected with it, so an engine built read-only stays read-only whatever
-//! a caller asks for, while an engine built full is exactly as permissive as its callers ask to
-//! be. That is what lets one engine serve a full editor and a read-only agent at once.
+//! [`CapabilityPolicyProvider`]'s own capability is a **ceiling**: it asks the ceiling and the
+//! caller and allows only what both allow, so an engine built read-only stays read-only whatever a
+//! caller asks for, while an engine built full is exactly as permissive as its callers ask to be.
+//! That is what lets one engine serve a full editor and a read-only agent at once.
+//!
+//! Both are asked separately rather than merged into one capability, because a [`RemoteScope`] has
+//! no lossless merge: `Kind("postgres")` and `Connection("postgres://acme/orders")` can denote the
+//! same connection while being different selectors, so intersecting the selector sets would refuse
+//! a connection both operands reach.
 
 use std::collections::BTreeSet;
 
@@ -107,11 +112,6 @@ impl Grants {
     pub fn holds(self, grant: Grant) -> bool {
         self.0 & grant.bit() != 0
     }
-
-    /// Returns the grants both sets hold.
-    pub fn intersect(self, other: Grants) -> Self {
-        Grants(self.0 & other.0)
-    }
 }
 
 /// Which database connections a capability's remote grants reach.
@@ -134,17 +134,6 @@ impl RemoteScope {
                 RemoteSel::Kind(kind) => facts.kind.as_deref() == Some(kind.as_str()),
                 RemoteSel::Connection(url) => facts.connection.as_deref() == Some(url.as_str()),
             }),
-        }
-    }
-
-    /// The connections both scopes reach.
-    fn intersect(&self, other: &RemoteScope) -> RemoteScope {
-        match (self, other) {
-            (RemoteScope::All, other) => other.clone(),
-            (mine, RemoteScope::All) => mine.clone(),
-            (RemoteScope::Only(a), RemoteScope::Only(b)) => {
-                RemoteScope::Only(a.intersection(b).cloned().collect())
-            }
         }
     }
 }
@@ -206,23 +195,13 @@ impl Capability {
         self
     }
 
-    /// Returns what both capabilities allow.
-    ///
-    /// Never a union: a caller cannot widen what the embedder built.
-    pub fn intersect(&self, other: &Capability) -> Capability {
-        Capability {
-            grants: self.grants.intersect(other.grants),
-            remote: self.remote.intersect(&other.remote),
-        }
-    }
-
     /// Returns whether this capability holds `grant`.
     pub fn holds(&self, grant: Grant) -> bool {
         self.grants.holds(grant)
     }
 
     /// The coarse answer: may this capability perform `family` at any locality? Derived from the
-    /// fine check rather than tabulated beside it, so the two cannot disagree.
+    /// grant table rather than tabulated beside the fine check, so the two cannot disagree.
     fn admits(&self, family: GrantFamily) -> bool {
         [Locality::Local, Locality::Remote]
             .into_iter()
@@ -276,16 +255,17 @@ impl CapabilityPolicyProvider {
         CapabilityPolicyProvider { ceiling }
     }
 
-    /// What the caller actually gets: its own ask, narrowed by this provider's ceiling.
-    fn effective(&self, who: &Principal) -> Capability {
-        self.ceiling.intersect(who.capability())
+    /// The two capabilities every answer is the conjunction of: this provider's ceiling, then the
+    /// caller's own ask.
+    fn both<'a>(&'a self, who: &'a Principal) -> [&'a Capability; 2] {
+        [&self.ceiling, who.capability()]
     }
 }
 
 #[async_trait]
 impl PolicyProvider for CapabilityPolicyProvider {
     async fn admit(&self, who: &Principal, family: GrantFamily) -> Result<Admit, String> {
-        Ok(match self.effective(who).admits(family) {
+        Ok(match self.both(who).iter().all(|c| c.admits(family)) {
             true => Admit::Allow,
             false => Admit::Deny(DenyCode::NotGranted),
         })
@@ -297,10 +277,12 @@ impl PolicyProvider for CapabilityPolicyProvider {
         family: GrantFamily,
         target: &TargetFacts,
     ) -> Result<Admit, String> {
-        Ok(match self.effective(who).permits(family, target) {
-            Ok(()) => Admit::Allow,
-            Err(code) => Admit::Deny(code),
-        })
+        for capability in self.both(who) {
+            if let Err(code) = capability.permits(family, target) {
+                return Ok(Admit::Deny(code));
+            }
+        }
+        Ok(Admit::Allow)
     }
 }
 
@@ -483,6 +465,48 @@ mod tests {
                 &TargetFacts::remote("postgres", "postgres://acme/warehouse")
             )),
             Ok(Admit::Deny(DenyCode::OutOfScope))
+        );
+    }
+
+    /// **Two selectors can name the same connection**, so the ceiling and the caller are asked
+    /// separately rather than merged. A `RemoteScope` has no lossless intersection: merging
+    /// `Kind("postgres")` with `Connection("postgres://acme/orders")` by selector equality yields
+    /// the empty set, and would refuse the one connection both operands reach.
+    #[test]
+    fn a_kind_ceiling_and_a_connection_ask_still_reach_the_connection_both_allow() {
+        let provider = CapabilityPolicyProvider::new(
+            Capability::full().remote_only([RemoteSel::Kind("postgres".into())]),
+        );
+        let who = Principal::new(
+            Capability::full()
+                .remote_only([RemoteSel::Connection("postgres://acme/orders".into())]),
+        );
+        assert_eq!(
+            block_on(provider.permit(
+                &who,
+                GrantFamily::Write,
+                &TargetFacts::remote("postgres", "postgres://acme/orders")
+            )),
+            Ok(Admit::Allow),
+            "the ceiling reaches it by kind and the caller by url, so both allow it"
+        );
+        assert_eq!(
+            block_on(provider.permit(
+                &who,
+                GrantFamily::Write,
+                &TargetFacts::remote("postgres", "postgres://acme/warehouse")
+            )),
+            Ok(Admit::Deny(DenyCode::OutOfScope)),
+            "and the caller's own narrowing still bites"
+        );
+        assert_eq!(
+            block_on(provider.permit(
+                &who,
+                GrantFamily::Write,
+                &TargetFacts::remote("mysql", "mysql://acme/orders")
+            )),
+            Ok(Admit::Deny(DenyCode::OutOfScope)),
+            "as does the ceiling's"
         );
     }
 

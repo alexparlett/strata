@@ -78,7 +78,7 @@ pub use policy::{
 };
 pub use query::{purge_snapshot_root, ReadPolicy};
 /// What a statement is, and why one was refused.
-pub use statements::{Fault, Form, PolicyRefusal, Refused, StmtKind};
+pub use statements::{Fault, Form, PolicyRefusal, Reason, StmtKind};
 
 pub use builder::EngineBuilder;
 pub use udf_package::UdfPackage;
@@ -362,9 +362,15 @@ pub struct Engine {
     session: SessionScope,
     /// Where a secret this engine needs comes from ([`EngineBuilder::with_secrets`]).
     secrets: Arc<dyn SecretProvider>,
-    /// Who may perform what ([`EngineBuilder::with_policy`]) — asked once per statement, in front
-    /// of every dispatch. The default allows everything, so an engine nobody restricted refuses
-    /// nothing; restriction is explicit data.
+    /// Who may perform what ([`EngineBuilder::with_policy`]).
+    ///
+    /// Asked by the three entries that classify a statement — [`run`](Engine::run),
+    /// [`validate`](Engine::validate) and [`policy_verdicts`](Engine::policy_verdicts) — and by
+    /// nothing else. The read entries ([`query`](Engine::query), [`explain`](Engine::explain))
+    /// take a statement rather than a capability and are limited to reading by the read path's
+    /// own `SQLOptions`, not by this; the same is true of `export`, `chart` and `profile`, which
+    /// read a settled snapshot. Widening the ask to those is EA-09's, with the group handles that
+    /// give a call somewhere to carry a caller.
     policy: Arc<dyn PolicyProvider>,
 }
 
@@ -661,8 +667,8 @@ impl Engine {
         let functions = self.functions.catalog();
         self.rt()
             .spawn(async move {
-                let pipeline = Pipeline::new(&ctx, policy.as_ref());
-                sql::validate(&pipeline, &functions, &sql).await
+                let pipeline = Pipeline::new(&ctx);
+                sql::validate(&pipeline, policy.as_ref(), &functions, &sql).await
             })
             .await
             .unwrap_or_default()
@@ -683,9 +689,9 @@ impl Engine {
         let policy = self.policy.clone();
         self.rt()
             .spawn(async move {
-                let pipeline = Pipeline::new(&ctx, policy.as_ref());
+                let pipeline = Pipeline::new(&ctx);
                 let who = Principal::new(Capability::read_only());
-                statements::pipeline::policy_verdicts(&pipeline, &who, &sql).await
+                statements::pipeline::policy_verdicts(&pipeline, policy.as_ref(), &who, &sql).await
             })
             .await
             .map_err(|e| format!("policy task failed: {e}"))?
@@ -745,9 +751,11 @@ impl Engine {
             let sql = sql.clone();
             self.rt()
                 .spawn(async move {
-                    let pipeline = Pipeline::new(&ctx, policy.as_ref());
+                    let pipeline = Pipeline::new(&ctx);
                     let who = Principal::new(Capability::full()).in_session(ws);
-                    accept(&pipeline, &sql, &who).await.map_err(|r| r.message)
+                    accept(&pipeline, &sql, policy.as_ref(), &who)
+                        .await
+                        .map_err(|r| r.message())
                 })
                 .await
                 .map_err(|e| format!("policy task failed: {e}"))??

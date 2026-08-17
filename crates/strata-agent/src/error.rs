@@ -124,7 +124,7 @@ impl IntoCallToolResult for AgentError {
 mod tests {
     use std::path::PathBuf;
 
-    use strata_engine::{DenyCode, Form, Refused, StmtKind};
+    use strata_engine::{DenyCode, Form, Reason, StmtKind};
 
     use super::*;
 
@@ -132,7 +132,7 @@ mod tests {
         PolicyRefusal {
             index,
             statement: String::new(),
-            reason: Refused::Policy {
+            reason: Reason::Policy {
                 form: Form::Statement(kind),
                 code: DenyCode::NotGranted,
             },

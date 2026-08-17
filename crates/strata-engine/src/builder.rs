@@ -107,12 +107,16 @@ impl EngineBuilder {
 
     /// Sets who may perform what, defaults to `CapabilityPolicyProvider::new(Capability::full())`
     ///
-    /// The engine asks the provider once per statement, before it classifies one. The default
-    /// refuses nothing, so restriction is something an embedder says rather than something it has
-    /// to switch off: pass `CapabilityPolicyProvider::new(Capability::read_only())` for an engine
-    /// that may only read, or your own [`PolicyProvider`] to decide against a policy service.
+    /// The default refuses nothing, so restriction is something an embedder says rather than
+    /// something it has to switch off: pass `CapabilityPolicyProvider::new(Capability::read_only())`
+    /// for an engine whose statements may only read, or your own [`PolicyProvider`] to decide
+    /// against a policy service. A caller's own capability narrows this one and never widens it,
+    /// so this is a ceiling.
     ///
-    /// A caller's own capability narrows this one and never widens it, so this is a ceiling.
+    /// Asked by [`Engine::run`], [`Engine::validate`] and [`Engine::policy_verdicts`] — the
+    /// entries that classify a statement. [`Engine::query`] and [`Engine::explain`] are handed a
+    /// statement to read and are limited to reading by the read path's own `SQLOptions`; they do
+    /// not consult this.
     pub fn with_policy(mut self, policy: impl PolicyProvider) -> Self {
         self.policy = Arc::new(policy);
         self

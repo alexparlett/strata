@@ -100,10 +100,11 @@ impl HeadlessHost {
     /// [`settled`](Self::settled) does not list one — a refused connection surfaces as the `failed`
     /// rows of the tables that needed it.
     ///
-    /// **The engine itself is built read-only**, not merely served read-only. Nothing this host
-    /// exposes was ever allowed to write, but a ceiling is a different claim from a discipline:
-    /// this process has no editor and no user to ask, so the capability every caller is narrowed
-    /// against says so once, where a future tool cannot forget to.
+    /// The engine is built with a read-only policy ceiling, which is what
+    /// [`StrataTools::run`]'s gate is narrowed against: this process has no editor and no user to
+    /// ask, so the capability is stated once rather than per tool. It is a ceiling and not the
+    /// whole fence — [`run`](Host::run) reads through `Engine::query`, whose limit is the read
+    /// path's own `SQLOptions`.
     pub async fn open(root: PathBuf) -> Result<HeadlessHost, String> {
         if !exists_at(&root) {
             return Err(format!(

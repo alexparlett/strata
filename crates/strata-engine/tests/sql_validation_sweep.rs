@@ -164,7 +164,7 @@ fn function_catalog(ctx: &SessionContext) -> FunctionCatalog {
 
 async fn run(ctx: &SessionContext, sql: &str) -> Vec<Diagnostic> {
     let policy = CapabilityPolicyProvider::new(Capability::full());
-    validate(&Pipeline::new(ctx, &policy), &function_catalog(ctx), sql).await
+    validate(&Pipeline::new(ctx), &policy, &function_catalog(ctx), sql).await
 }
 
 /// Whether the engine itself accepts `sql` — the same parse→plan→analyze chain
