@@ -19,10 +19,11 @@
 //! function of its inputs and a row still holds no state that identifies it.
 
 use freya::prelude::*;
-use strata_engine::db::{SchemaListingView, SchemaVisibility};
+use strata_engine::sources::{SchemaListingView, SchemaVisibility};
 use strata_engine::sql::qualified;
 use strata_engine::{Engine, RemoteRelation};
-use strata_model::{CatalogKind, ColOwner, Provider, ProviderId, RemoteRef};
+use strata_model::ConnectionDef;
+use strata_model::{CatalogKind, ColOwner, ProviderId, RemoteRef};
 
 use super::columns::flatten_cols;
 use super::matches;
@@ -74,7 +75,7 @@ pub fn walk_connections(
 ) {
     for row in &project.connections {
         match row.def.provider.id() {
-            ProviderId::Postgres => database(engine, row, needle, open, columns, out),
+            ProviderId::Source => database(engine, row, needle, open, columns, out),
             _ => store(project, row, needle, open, &mut out.nodes),
         }
     }
@@ -99,16 +100,12 @@ fn database(
     out: &mut Walked,
 ) {
     let def = &row.def;
-    let path = format!("conn/{}", def.url());
+    let path = format!("conn/{}", def.named());
     let waiting = matches!(row.reg, Reg::Loading);
     let problem = row.reg.error().map(str::to_owned);
     let connected = row.reg.ready().is_some();
     let filtering = !needle.is_empty();
-    let catalog = match &def.provider {
-        Provider::Postgres(pg) => Some(pg.catalog.trim()).filter(|c| !c.is_empty()),
-        _ => None,
-    }
-    .map(str::to_owned);
+    let catalog = def.provider.source().map(|_| def.named());
 
     let listing = (connected && (open.is_open(&path) || filtering))
         .then(|| engine.db_listing(def))
@@ -129,6 +126,7 @@ fn database(
         connected,
         NodeKind::Connection(Connection {
             def: def.clone(),
+            badge: badge(engine, def),
             catalog,
             waiting,
             problem,
@@ -162,7 +160,7 @@ fn database(
             let relations: Vec<&_> = schema
                 .relations
                 .iter()
-                .filter(|r| r.is_view() == views)
+                .filter(|r| r.view == views)
                 .filter(|r| matches(&r.name, needle))
                 .collect();
             let group_open = open.shows(&group_path, filtering && !relations.is_empty());
@@ -305,6 +303,22 @@ fn shown_schemas(
     }
 }
 
+/// The short word `def`'s row wears — its kind's own, from the registry that answers for it.
+///
+/// A kind no source is registered for falls back to the kind itself, which is what the row can
+/// honestly say about a connection this build cannot serve.
+fn badge(engine: &Engine, def: &ConnectionDef) -> String {
+    let Some(source) = def.provider.source() else {
+        return def.provider.id().label().to_string();
+    };
+    engine
+        .source_registrants()
+        .into_iter()
+        .find(|info| info.kind == source.kind.trim())
+        .map(|info| info.badge.to_string())
+        .unwrap_or_else(|| source.kind.trim().to_string())
+}
+
 /// Does this schema, or anything in it, survive the filter?
 fn survives(schema: &SchemaListingView, needle: &str) -> bool {
     matches(&schema.name, needle) || schema.relations.iter().any(|r| matches(&r.name, needle))
@@ -317,7 +331,7 @@ fn survives(schema: &SchemaListingView, needle: &str) -> bool {
 /// every link name of every closed bucket and dropping them all.
 fn store(project: &ProjectState, row: &ConnRow, needle: &str, open: &Open, out: &mut Vec<Node>) {
     let def = &row.def;
-    let url = def.url();
+    let url = def.named();
     let path = format!("conn/{url}");
     let filtering = !needle.is_empty();
     let any = project
@@ -336,6 +350,7 @@ fn store(project: &ProjectState, row: &ConnRow, needle: &str, open: &Open, out: 
         any,
         NodeKind::Connection(Connection {
             def: def.clone(),
+            badge: def.provider.id().label().to_string(),
             catalog: None,
             waiting: matches!(row.reg, Reg::Loading),
             problem: row.reg.error().map(str::to_owned),
@@ -362,7 +377,7 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
     let mut measured = cx.measured;
     let actions = cx.connections;
 
-    let (url, provider) = (connection.def.url(), connection.def.provider.id());
+    let (url, provider) = (connection.def.named(), connection.def.provider.id());
     let address = connection.def.address.clone();
     let mark = connection.catalog.clone();
     let mark_slot = mark
@@ -393,7 +408,7 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
             })
             .trailing(actions_button(build_menu))
             .maybe_child(folds.badge.then(|| {
-                Badge::tag(connection.def.provider.to_string(), cx.theme.provider_color)
+                Badge::tag(connection.badge.clone(), cx.theme.provider_color)
                     .outlined()
                     .height(16.)
                     .into_element()

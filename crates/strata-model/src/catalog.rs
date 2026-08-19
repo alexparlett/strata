@@ -7,6 +7,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+use crate::connection::mint_name;
+
 /// What a pending removal targets — drives the confirm dialog's wording and the
 /// engine command sent on confirm.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -396,13 +398,12 @@ pub struct TableDef {
     /// The reader and its options — see [`SourceFormat`].
     #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
-    /// **Which object store [`sources`](Self::sources) are read from**, as the
-    /// [`ConnectionDef::url`](crate::ConnectionDef::url) that identifies it — `s3://acme-lake`.
-    /// `None` is the local disk.
+    /// **Which connection [`sources`](Self::sources) are read through**, by its
+    /// [`name`](crate::ConnectionDef::name) — `acme_lake`. `None` is the local disk.
     ///
     /// A *reference*, not a copy: the bucket, its provider and its credentials belong to the
-    /// connection. The URL rather than the bucket for the reason the registry keys on it —
-    /// `s3://lake` and `gs://lake` are two stores over one bucket name.
+    /// connection. The name rather than the address, because a name is what the user renames and
+    /// what every other surface addresses a connection by.
     ///
     /// The **one** field that says a table is remote: a source is bucket-relative exactly when this
     /// is `Some`, and `strata_core::project::resolve_source` is the single place that composes the
@@ -582,4 +583,70 @@ pub struct SavedQuery {
     pub name: String,
     pub sql: String,
     pub meta: String,
+}
+
+impl TableDef {
+    /// Upgrade a def that points at its connection by URL or by identity.
+    ///
+    /// A table names the connection it reads through the way everything else does now — by its
+    /// **name** — where it used to name the URL the engine registered a store under. Both older
+    /// spellings carry the address, and a name is minted from an address, so one pass maps them
+    /// forward; anything else is left alone, which fails visibly at registration rather than
+    /// silently reading as a local path.
+    pub fn migrated(mut self) -> Self {
+        self.connection = self.connection.map(|named| match named.contains("://") {
+            true => mint_name(&named),
+            false => match named.split_once(':') {
+                Some((kind, address)) if !kind.is_empty() && !address.is_empty() => {
+                    mint_name(address)
+                }
+                _ => named,
+            },
+        });
+        self
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// **A table keeps pointing at its connection across both renamings.** The reference was a
+    /// URL, then an identity, and is a name now — all three carry the address, and a name is what
+    /// an address mints.
+    #[test]
+    fn a_tables_connection_reference_migrates_to_a_name() {
+        let pointing = |at: Option<&str>| {
+            TableDef {
+                name: "events".into(),
+                format: SourceFormat::Parquet,
+                connection: at.map(str::to_string),
+                sources: vec!["events/*.parquet".into()],
+                partition_cols: Vec::new(),
+                origin: TableOrigin::default(),
+            }
+            .migrated()
+            .connection
+        };
+        for written in ["s3://acme-lake", "s3:acme-lake", "acme_lake"] {
+            assert_eq!(
+                pointing(Some(written)).as_deref(),
+                Some("acme_lake"),
+                "{written}"
+            );
+        }
+        assert_eq!(
+            pointing(Some("https://files.example.com")).as_deref(),
+            Some("files_example_com")
+        );
+        assert_eq!(
+            pointing(Some("postgres:db.internal:5432/analytics")).as_deref(),
+            Some("analytics")
+        );
+        assert_eq!(
+            pointing(None),
+            None,
+            "a local table points at nothing and keeps pointing at nothing"
+        );
+    }
 }

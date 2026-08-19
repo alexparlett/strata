@@ -219,7 +219,7 @@ impl ScanWork {
 fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
     match scope {
         ScanScope::All => ScanWork {
-            connections: p.connections.iter().map(|c| c.def.url()).collect(),
+            connections: p.connections.iter().map(|c| c.def.named()).collect(),
             tables: p.tables.iter().map(|t| t.def.name.clone()).collect(),
             views: p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect()),
         },
@@ -451,7 +451,7 @@ async fn register_defs(
                 Some(
                     p.connections
                         .iter()
-                        .find(|c| c.def.url() == url)?
+                        .find(|c| c.def.named() == url)?
                         .def
                         .clone(),
                 )

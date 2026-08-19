@@ -10,11 +10,12 @@ use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::prelude::SessionContext;
 use tokio::runtime::Builder as RuntimeBuilder;
 
-use crate::db::Databases;
 use crate::functions::Functions;
 use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::query::claim_snapshot_dir;
 use crate::secrets::{KeystoreSecrets, SecretProvider};
+use crate::sources::source::{DataSource, SourceKind, Sources};
+use crate::sources::Live;
 use crate::udf_package::UdfPackage;
 use crate::{
     build_context, query, runtime_subset, Connections, Engine, InternalTables, SessionScope,
@@ -50,18 +51,26 @@ pub struct EngineBuilder {
     udfs: Vec<Arc<dyn UdfPackage>>,
     memory_pool: Option<Arc<dyn MemoryPool>>,
     policy: Arc<dyn PolicyProvider>,
+    sources: Sources,
 }
 
+/// **The shipped backends are registered here, through the same public call an embedder makes.**
+/// Each rides its own cargo feature, so an engine built with none of them has no backend at all —
+/// which is what makes the registry the only path in.
 impl Default for EngineBuilder {
     fn default() -> Self {
-        Self {
+        let builder = Self {
             config: BTreeMap::new(),
             data_dir: None,
             secrets: Arc::new(KeystoreSecrets),
             udfs: vec![Arc::new(crate::udfs::StrataFunctions)],
             memory_pool: None,
             policy: Arc::new(CapabilityPolicyProvider::new(Capability::full())),
-        }
+            sources: Sources::default(),
+        };
+        #[cfg(feature = "postgres")]
+        let builder = builder.with_source(crate::sources::postgres::Pg);
+        builder
     }
 }
 
@@ -122,6 +131,18 @@ impl EngineBuilder {
         self
     }
 
+    /// Adds a data source this engine can connect to
+    ///
+    /// May be called more than once, and a source registered under a name another already holds
+    /// replaces it — which is how an embedder substitutes their own for a shipped one. A
+    /// connection def reaches its source by [`SourceKind::NAME`], so what is registered here is
+    /// what a def's kind may say; a kind nothing answers to settles as a failed row naming the
+    /// fix rather than a fault.
+    pub fn with_source<S: DataSource + SourceKind>(mut self, source: S) -> Self {
+        self.sources.insert(source);
+        self
+    }
+
     /// Sets the memory pool DataFusion allocates from
     ///
     /// Takes precedence over `datafusion.runtime.memory_limit`, which otherwise builds one.
@@ -171,7 +192,8 @@ impl EngineBuilder {
             data_root: Mutex::new(self.data_dir),
             internal: InternalTables::default(),
             connections: Connections::default(),
-            databases: Databases::default(),
+            live: Live::default(),
+            sources: self.sources,
             session: SessionScope::default(),
             secrets: self.secrets,
             policy: self.policy,
@@ -193,9 +215,10 @@ mod tests {
     use std::any::Any;
     use std::fmt;
 
+    use crate::secrets::SecretRequest;
     use datafusion::error::Result as DFResult;
     use datafusion::execution::memory_pool::{MemoryLimit, MemoryReservation, UnboundedMemoryPool};
-    use strata_core::secret::{Secret, SecretRef};
+    use strata_core::secret::Secret;
 
     use super::*;
     use crate::secrets::MemSecrets;
@@ -240,8 +263,12 @@ mod tests {
         (pool.as_ref() as &dyn Any).is::<NamedPool>()
     }
 
-    fn key() -> SecretRef {
-        SecretRef::derived("pg-password", "postgres://acme/orders")
+    fn ask() -> SecretRequest {
+        SecretRequest {
+            family: "postgres-password".into(),
+            url: "postgres://acme:5432/orders".into(),
+            env: &[],
+        }
     }
 
     /// A package reaches the engine the builder built. What a package may *contain*, and the rules
@@ -274,16 +301,16 @@ mod tests {
     }
 
     /// The provider the builder was given is the one the engine reads through — the slug
-    /// `db::SecretPassword` resolves a connection's password with.
+    /// a backend resolves a connection's password with.
     #[test]
     fn secrets_given_to_the_builder_are_the_ones_the_engine_reads() {
         let engine = Engine::builder()
-            .with_secrets(MemSecrets::new().with(key(), Secret::new("hunter2").unwrap()))
+            .with_secrets(MemSecrets::new().with(ask().key(), Secret::new("hunter2").unwrap()))
             .build();
         assert_eq!(
             engine
                 .secrets
-                .secret(&key())
+                .secret(&ask())
                 .unwrap()
                 .map(|s| s.expose().to_string()),
             Some("hunter2".to_string())

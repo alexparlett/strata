@@ -26,10 +26,12 @@
 
 use freya::prelude::*;
 use strata_arrow::client::ClientKey;
-use strata_model::{PgPassword, PgSslMode, ProviderId};
+use strata_engine::sources::postgres::settings::{verifies, SSL_MODES};
+use strata_model::ProviderId;
 
 use crate::apps::connection::model::{GcsAuthId, S3AuthId};
 use crate::apps::connection::{ConnectionCtx, PasswordRow};
+use crate::apps::project::contexts::EngineCtx;
 use crate::components::divider::Divider;
 use crate::components::form::{
     form_theme, Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP,
@@ -96,7 +98,7 @@ impl Component for Fields {
         let mut form = Form::new()
             .child(ProviderPicker { key: DiffKey::None }.key(format!("provider·{scope}")));
         form = match provider {
-            ProviderId::Postgres => form
+            ProviderId::Source => form
                 .child(PgUrl { key: DiffKey::None }.key(format!("url·{scope}")))
                 .child(PgDatabase { key: DiffKey::None }.key(format!("database·{scope}")))
                 .child(CatalogName { key: DiffKey::None }.key(format!("catalog·{scope}")))
@@ -130,9 +132,11 @@ impl Component for Fields {
 /// **PROVIDER** — explicit, never inferred from a typed URL scheme (spec §1). The one control
 /// that decides which of the rows below exist.
 ///
-/// [`ProviderId::ALL`], because this is the picker that constant is for. The narrower question —
-/// which connection a set of *files* reads through — belongs to the Configure window's LOCATION
-/// pill, which is what [`ProviderId::OBJECT_STORES`] answers.
+/// [`ProviderId::ALL`] for the object stores, and one segment per **registered source** — which
+/// is the engine's answer, not this crate's, so a source an embedder registered is offered on the
+/// same terms as a shipped one. The narrower question — which connection a set of *files* reads
+/// through — belongs to the Configure window's LOCATION pill, which is what
+/// [`ProviderId::OBJECT_STORES`] answers.
 #[derive(PartialEq)]
 struct ProviderPicker {
     key: DiffKey,
@@ -151,7 +155,11 @@ impl Component for ProviderPicker {
 
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
-        let current = ctx.draft.read().provider;
+        let engine = use_consume::<EngineCtx>();
+        let (current, kind) = {
+            let draft = ctx.draft.read();
+            (draft.provider, draft.pg.kind.clone())
+        };
 
         let mut pill = SegmentedToggle::new().form();
         for id in ProviderId::ALL {
@@ -160,6 +168,17 @@ impl Component for ProviderPicker {
                     .selected(id == current)
                     .on_press(move |_| ctx.edit(move |draft| draft.provider = id)),
             );
+        }
+        for source in engine.source_registrants() {
+            let picked = current == ProviderId::Source && kind == source.kind;
+            pill = pill.child(ToggleSegment::text(source.badge).selected(picked).on_press(
+                move |_| {
+                    ctx.edit(move |draft| {
+                        draft.provider = ProviderId::Source;
+                        draft.pg.kind = source.kind.to_string();
+                    });
+                },
+            ));
         }
         Row::new("PROVIDER").child(pill)
     }
@@ -201,7 +220,7 @@ impl Component for Authority {
                     _ => None,
                 },
                 match draft.provider {
-                    ProviderId::Http => "https://aserver:8484",
+                    ProviderId::Http => "aserver",
                     _ => "my-bucket",
                 },
             )
@@ -343,12 +362,12 @@ impl Component for CatalogName {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
         let text = use_state({
-            let initial = ctx.draft.peek().pg.catalog.clone();
+            let initial = ctx.draft.peek().pg.name.clone();
             move || initial
         });
         use_side_effect(move || {
             let catalog = text.read().clone();
-            ctx.edit(move |draft| draft.pg.catalog = catalog);
+            ctx.edit(move |draft| draft.pg.name = catalog);
         });
 
         Row::new("CATALOG")
@@ -448,7 +467,7 @@ impl Component for PasswordField {
             }
             let expected = *ctx.password_expected.read();
             let now = match typed {
-                true => PgPassword::Keystore,
+                true => true,
                 false => expected,
             };
             ctx.edit(move |draft| draft.pg.password = now);
@@ -524,9 +543,9 @@ impl Component for PasswordField {
                                         let mut removed = ctx.password_removed;
                                         let mut text = text;
                                         text.set(String::new());
-                                        expected.set(PgPassword::None);
+                                        expected.set(false);
                                         removed.set(true);
-                                        ctx.edit(|draft| draft.pg.password = PgPassword::None);
+                                        ctx.edit(|draft| draft.pg.password = false);
                                     })
                                     .child(Control::new("This connection uses no password"))
                             })),
@@ -556,15 +575,17 @@ impl Component for Ssl {
 
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
-        let mode = ctx.draft.read().pg.sslmode;
+        let mode = ctx.draft.read().pg.sslmode.clone();
 
-        let options: Vec<Element> = PgSslMode::ALL
-            .into_iter()
+        let options: Vec<Element> = SSL_MODES
+            .iter()
             .map(|option| {
                 MenuItem::new()
-                    .selected(option == mode)
-                    .on_press(move |_| ctx.edit(move |draft| draft.pg.sslmode = option))
-                    .child(MonoValue::new(option.as_str()))
+                    .selected(*option == mode)
+                    .on_press(move |_| {
+                        ctx.edit(move |draft| draft.pg.sslmode = (*option).to_string());
+                    })
+                    .child(MonoValue::new(*option))
                     .into()
             })
             .collect();
@@ -581,7 +602,7 @@ impl Component for Ssl {
                             .children(options),
                     ),
             )
-            .maybe_child(mode.verifies().then(|| qualifier(RootCertificate)))
+            .maybe_child(verifies(&mode).then(|| qualifier(RootCertificate)))
     }
 }
 

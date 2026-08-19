@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
-use strata_model::{ConnectionDef, HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef};
+use strata_model::{
+    mint_free_name, ConnectionDef, HistoryEntry, SavedQuery, SessionSnapshot, TableDef, ViewDef,
+};
 use uuid::Uuid;
 
 use crate::util::{
@@ -128,11 +130,13 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut defs: ProjectDefs = from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    defs.connections = defs
-        .connections
-        .into_iter()
-        .map(ConnectionDef::migrated)
-        .collect();
+    defs.connections = named(
+        defs.connections
+            .into_iter()
+            .map(ConnectionDef::migrated)
+            .collect(),
+    );
+    defs.tables = defs.tables.into_iter().map(TableDef::migrated).collect();
     defs.connections
         .sort_by(|a, b| name_ord(&a.address, &b.address));
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
@@ -140,6 +144,29 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     defs.saved_queries
         .sort_by(|a, b| name_ord(&a.name, &b.name));
     Ok(defs)
+}
+
+/// Give every connection a name, keeping the ones that have one.
+///
+/// A def written before names had a field is called what its address mints, and two of those over
+/// one address are numbered apart — because a name is what the project's rows, a table's reference
+/// and the keystore slot are all keyed by, and two rows answering to one name are one row.
+fn named(connections: Vec<ConnectionDef>) -> Vec<ConnectionDef> {
+    let mut taken: Vec<String> = connections
+        .iter()
+        .filter(|conn| !conn.name.trim().is_empty())
+        .map(|conn| conn.name.trim().to_string())
+        .collect();
+    connections
+        .into_iter()
+        .map(|mut conn| {
+            if conn.name.trim().is_empty() {
+                conn.name = mint_free_name(&conn.address, &taken);
+                taken.push(conn.name.clone());
+            }
+            conn
+        })
+        .collect()
 }
 
 /// Write the defs into `root`'s `.strata/` dir, creating it and tidying it
@@ -688,8 +715,12 @@ mod tests {
         .unwrap();
 
         let defs = load_defs(&root.0).unwrap();
-        let urls: Vec<String> = defs.connections.iter().map(ConnectionDef::url).collect();
-        assert_eq!(urls, ["s3://acme-lake", "https://example.com:8080"]);
+        let urls: Vec<String> = defs
+            .connections
+            .iter()
+            .map(ConnectionDef::identity)
+            .collect();
+        assert_eq!(urls, ["s3:acme-lake", "http:https://example.com:8080"]);
         for conn in &defs.connections {
             assert!(conn.provider.check_address(&conn.address).is_ok());
         }

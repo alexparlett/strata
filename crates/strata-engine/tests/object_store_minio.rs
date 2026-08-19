@@ -198,6 +198,7 @@ fn ambient() {
 fn connection(endpoint: &str, auth: S3Auth) -> ConnectionDef {
     ConnectionDef {
         address: BUCKET.into(),
+        name: String::new(),
         provider: Provider::S3(S3Store {
             region: REGION.into(),
             auth,
@@ -227,6 +228,7 @@ fn client_options() -> BTreeMap<String, String> {
 fn http_connection(endpoint: &str) -> ConnectionDef {
     ConnectionDef {
         address: endpoint.into(),
+        name: String::new(),
         provider: Provider::Http,
         client_config: client_options(),
     }
@@ -400,7 +402,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     assert_eq!(output.total, 3, "every seeded row came back");
 
     let found = engine
-        .detect_partitions(vec![format!("s3://{BUCKET}/{HIVE_PREFIX}")])
+        .detect_partitions(None, None, vec![format!("s3://{BUCKET}/{HIVE_PREFIX}")])
         .await;
     assert_eq!(
         found,
@@ -540,7 +542,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    engine.disconnect(&connection(&endpoint, S3Auth::Ambient).url());
+    engine.disconnect(&connection(&endpoint, S3Auth::Ambient).identity());
     let forgotten = TableSpec {
         name: "forgotten".into(),
         ..table()

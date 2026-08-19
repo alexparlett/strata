@@ -87,12 +87,50 @@ fn settle(
     connect::settle(
         ctx,
         prepared.map(|(url, store)| Registration::ObjectStore(url, store)),
-        || {
-            if let Ok(url) = ObjectStoreUrl::parse(conn.url()) {
-                let _ = ctx.deregister_object_store(url.as_ref());
-            }
-        },
+        || disconnect(ctx, &conn.identity()),
     )
+}
+
+/// The URL a connection's store is **registered under** — the scheme DataFusion resolves a remote
+/// path by, over the connection's address.
+///
+/// Composed here rather than carried on the def, because a scheme is this layer's rendering and
+/// nothing outside it: what a connection *is* is its [`identity`](ConnectionDef::identity), and
+/// two of the three kinds here do not even spell their scheme the way they are named (`gcs` is
+/// registered as `gs`). `None` for an identity no object store answers to, which every source
+/// connection is.
+fn registration_url(identity: &str) -> Option<ObjectStoreUrl> {
+    ObjectStoreUrl::parse(store_prefix(identity)?).ok()
+}
+
+/// The `scheme://authority` a connection's remote paths hang off — [`registration_url`] as the
+/// string a source path is composed onto.
+///
+/// `None` for an identity no object store answers to, which every source connection is: a table
+/// reads files, and a connection that holds relations has none to read.
+pub fn store_prefix(identity: &str) -> Option<String> {
+    let (kind, address) = identity.split_once(':')?;
+    match kind {
+        "s3" => Some(format!("s3://{address}")),
+        "gcs" => Some(format!("gs://{address}")),
+        "http" => Some(address.to_string()),
+        _ => None,
+    }
+}
+
+/// [`store_prefix`] backwards: the connection a location's `scheme://authority` names.
+///
+/// For the one caller that arrives with a written URL rather than with a connection — a typed
+/// `CREATE EXTERNAL TABLE … LOCATION 's3://acme-lake/events/'`, which has to be matched against
+/// the project's own connections.
+pub fn store_identity(url: &str) -> Option<String> {
+    let (scheme, authority) = url.split_once("://")?;
+    match scheme.to_ascii_lowercase().as_str() {
+        "s3" => Some(format!("s3:{authority}")),
+        "gs" => Some(format!("gcs:{authority}")),
+        "http" | "https" => Some(format!("http:{url}")),
+        _ => None,
+    }
 }
 
 /// Everything a connection can be judged on **without asking its bucket**: the provider's naming
@@ -105,9 +143,9 @@ fn settle(
 async fn prepare(conn: &ConnectionDef) -> Result<(ObjectStoreUrl, Arc<dyn ObjectStore>), String> {
     conn.provider.check_address(&conn.address)?;
     check_client_config(&conn.client_config)?;
-    let url = ObjectStoreUrl::parse(conn.url()).map_err(|e| {
+    let url = registration_url(&conn.identity()).ok_or_else(|| {
         format!(
-            "'{}' is not a bucket Strata can register: {e}",
+            "'{}' is not a bucket Strata can register.",
             conn.address.trim()
         )
     })?;
@@ -185,7 +223,7 @@ fn wrong_region(conn: &ConnectionDef) -> String {
             conn.address.trim(),
             s3.region.trim()
         ),
-        _ => format!("'{}' did not answer.", conn.url()),
+        _ => format!("'{}' did not answer.", conn.identity()),
     }
 }
 
@@ -194,14 +232,14 @@ fn wrong_region(conn: &ConnectionDef) -> String {
 ///
 /// [`connect`] is additive by contract and only ever sees the def it is given, so nothing
 /// else can take a store back out: without this, a forgotten bucket stays queryable until the
-/// window is re-opened. `url` is the connection's [`ConnectionDef::url`] — the key it went in
-/// under, and the only key the registry answers to.
+/// window is re-opened. `identity` is the connection's [`identity`](ConnectionDef::identity), from
+/// which the key it went in under is composed the same way it was composed to register.
 ///
-/// Silent about both ways it can do nothing, because neither is a fault: a URL that does not
-/// parse never registered anything, and a key with no store behind it is the ordinary case
-/// for a connection that was refused.
-pub fn disconnect(ctx: &SessionContext, url: &str) {
-    if let Ok(url) = ObjectStoreUrl::parse(url) {
+/// Silent about both ways it can do nothing, because neither is a fault: an identity no object
+/// store answers to never registered anything, and a key with no store behind it is the ordinary
+/// case for a connection that was refused.
+pub fn disconnect(ctx: &SessionContext, identity: &str) {
+    if let Some(url) = registration_url(identity) {
         let _ = ctx.deregister_object_store(url.as_ref());
     }
 }
@@ -292,7 +330,7 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-                .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.identity()))
         }
         Provider::Gcs(gcs) => {
             let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
@@ -313,12 +351,12 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-                .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.identity()))
         }
         Provider::Http => {
             let insecure = conn.address.trim().starts_with("http://");
             let mut builder = HttpBuilder::new()
-                .with_url(conn.url())
+                .with_url(conn.identity())
                 .with_config(ClientConfigKey::AllowHttp, insecure.to_string());
             for (key, value) in client_options(conn) {
                 builder = builder.with_config(key, value);
@@ -326,11 +364,11 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-                .map_err(|e| format!("Cannot reach '{}': {e}", conn.url()))
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.identity()))
         }
-        Provider::Postgres(_) => Err(format!(
-            "'{}' is a database connection, not an object store.",
-            conn.url()
+        Provider::Source(_) => Err(format!(
+            "'{}' is a data source, not an object store.",
+            conn.identity()
         )),
     }
 }
@@ -458,6 +496,7 @@ mod tests {
     fn s3(bucket: &str, store: S3Store) -> ConnectionDef {
         ConnectionDef {
             address: bucket.into(),
+            name: String::new(),
             provider: Provider::S3(store),
             client_config: Default::default(),
         }
@@ -504,6 +543,7 @@ mod tests {
             ),
             ConnectionDef {
                 address: "public-lake".into(),
+                name: String::new(),
                 provider: Provider::Gcs(GcsStore {
                     auth: GcsAuth::Anonymous,
                 }),
@@ -511,12 +551,16 @@ mod tests {
             },
             ConnectionDef {
                 address: "http://aserver:8484".into(),
+                name: String::new(),
                 provider: Provider::Http,
                 client_config: Default::default(),
             },
         ] {
             connect_unprobed(&ctx, &conn).await.expect("registers");
-            let source = format!("{}/data/x.parquet", conn.url());
+            let source = format!(
+                "{}/data/x.parquet",
+                store_prefix(&conn.identity()).expect("an object store's own prefix")
+            );
             assert!(reaches(&ctx, &source), "{source}");
         }
         assert!(!reaches(&ctx, "s3://other-lake/x.parquet"));
@@ -686,6 +730,7 @@ mod tests {
             (
                 ConnectionDef {
                     address: "lake".into(),
+                    name: String::new(),
                     provider: Provider::Gcs(GcsStore {
                         auth: GcsAuth::ServiceAccount {
                             path: String::new(),
@@ -698,6 +743,7 @@ mod tests {
             (
                 ConnectionDef {
                     address: "   ".into(),
+                    name: String::new(),
                     provider: Provider::Http,
                     client_config: Default::default(),
                 },
@@ -706,6 +752,7 @@ mod tests {
             (
                 ConnectionDef {
                     address: "aserver:8484".into(),
+                    name: String::new(),
                     provider: Provider::Http,
                     client_config: Default::default(),
                 },
@@ -820,6 +867,7 @@ mod tests {
             (
                 ConnectionDef {
                     address: "https://aserver:8484/fake".into(),
+                    name: String::new(),
                     provider: Provider::Http,
                     client_config: Default::default(),
                 },
@@ -828,6 +876,7 @@ mod tests {
             (
                 ConnectionDef {
                     address: "acme-lake/data".into(),
+                    name: String::new(),
                     provider: Provider::S3(S3Store {
                         region: "eu-west-2".into(),
                         ..Default::default()

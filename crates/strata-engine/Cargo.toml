@@ -5,6 +5,14 @@ edition = "2021"
 description = "Strata's DataFusion boundary: the direct-call async `Engine` facade, the statement router, snapshots, export, profiling, the SQL language service and the project registration pass. The only crate that touches DataFusion."
 license = "MIT"
 
+[features]
+default = ["postgres"]
+postgres = [
+    "dep:datafusion-table-providers-common",
+    "dep:datafusion-table-providers-postgres",
+    "dep:secrecy",
+]
+
 [dependencies]
 strata-core = { path = "../strata-core" }
 strata-model = { path = "../strata-model" }
@@ -12,9 +20,9 @@ strata-arrow = { path = "../strata-arrow" }
 datafusion = "54"
 datafusion-functions-json = "0.54"
 datafusion-federation = { version = "0.5.5", features = ["sql"] }
-datafusion-table-providers-postgres = "0.13"
-datafusion-table-providers-common = "0.13"
-secrecy = "0.10"
+datafusion-table-providers-postgres = { version = "0.13", optional = true }
+datafusion-table-providers-common = { version = "0.13", optional = true }
+secrecy = { version = "0.10", optional = true }
 object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"

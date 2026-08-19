@@ -202,7 +202,7 @@ fn missing_connection(
         .read()
         .connections
         .iter()
-        .any(|c| c.def.url() == url);
+        .any(|c| c.def.named() == url);
     (!known).then(|| {
         format!("'{url}' is not a connection in this project. Choose one, or add it back.")
     })

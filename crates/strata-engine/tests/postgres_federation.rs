@@ -22,7 +22,7 @@
 //! phases, container held for the duration: a second `#[tokio::test]` would race this one for the
 //! single cloud worker.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 use std::sync::Once;
@@ -34,16 +34,17 @@ use keyring_core::mock;
 use strata_arrow::column_info;
 use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
-use strata_core::secret::{Secret, SecretRef};
-use strata_engine::db::{SchemaVisibility, PG_PASSWORD};
+
 use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::{register_project, table_spec, RegOutcome};
+use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
+use strata_engine::sources::{put_secret, SchemaVisibility};
 use strata_engine::{
     sql, stopped_on_purpose, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
 use strata_model::{
-    Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, StatKey,
-    TableDef, TableOrigin, ViewDef,
+    Cell, ConnectionDef, CsvRead, Provider, SourceDef, SourceFormat, StatKey, TableDef,
+    TableOrigin, ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -143,12 +144,14 @@ async fn seed(port: u16) {
 fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
     ConnectionDef {
         address: format!("127.0.0.1:{port}/{DATABASE}"),
-        provider: Provider::Postgres(PgStore {
-            catalog: catalog.into(),
-            user: USER.into(),
-            sslmode: PgSslMode::Disable,
-            sslrootcert: String::new(),
-            password: PgPassword::Keystore,
+        name: catalog.into(),
+        provider: Provider::Source(SourceDef {
+            kind: "postgres".into(),
+            config: BTreeMap::from([
+                ("user".to_string(), USER.to_string()),
+                ("sslmode".to_string(), "disable".to_string()),
+            ]),
+            secrets: BTreeSet::from([PASSWORD_KEY.to_string()]),
             schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
             read_only: true,
         }),
@@ -160,8 +163,8 @@ fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
 /// re-connect with this is exactly the user turning the toggle off.
 fn writable(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
     let mut def = connection(port, catalog, schemas);
-    if let Provider::Postgres(pg) = &mut def.provider {
-        pg.read_only = false;
+    if let Provider::Source(source) = &mut def.provider {
+        source.read_only = false;
     }
     def
 }
@@ -178,11 +181,7 @@ fn mocked_keystore() {
 /// File `value` under the slot `conn` derives, exactly as the connection editor will — the
 /// def stores no reference, so this is the only place the id exists.
 fn store_password(conn: &ConnectionDef, value: &str) {
-    let key = SecretRef::derived(PG_PASSWORD, &conn.url());
-    match Secret::new(value) {
-        Some(secret) => key.put(&secret).expect("store the password"),
-        None => key.delete().expect("clear the password"),
-    }
+    put_secret(conn, PASSWORD_KEY, value).expect("this machine's keystore answers");
 }
 
 /// Run `sql` and hand back its first page as text, row by row.
@@ -229,7 +228,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .await
         .expect_err("no password is stored for it");
     assert!(
-        why.contains("No password is stored on this machine") && why.contains(&missing.url()),
+        why.contains("No password is stored on this machine") && why.contains(&missing.identity()),
         "the refusal names the machine and the connection: {why}"
     );
 
@@ -342,13 +341,13 @@ async fn enumeration(engine: &Engine, port: u16) {
             .map(|schema| schema
                 .relations
                 .iter()
-                .map(|r| (r.name.as_str(), r.relkind.as_str()))
+                .map(|r| (r.name.as_str(), r.view))
                 .collect::<Vec<_>>()),
         Some(vec![
-            ("big_orders", "v"),
-            ("customers", "r"),
-            ("events", "r"),
-            ("orders", "r")
+            ("big_orders", true),
+            ("customers", false),
+            ("events", false),
+            ("orders", false)
         ]),
         "a remote view is listed as one, which pg_tables could not have said"
     );
@@ -967,7 +966,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "the name it was registered under before must stop resolving"
     );
 
-    engine.disconnect(&renamed.url());
+    engine.disconnect(&renamed.identity());
     assert!(
         engine
             .query(
@@ -1397,7 +1396,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
             .is_some_and(|schema| schema
                 .relations
                 .iter()
-                .any(|r| r.name == "barrier_view" && r.is_view())),
+                .any(|r| r.name == "barrier_view" && r.view)),
         "the tree sees the view, as a view, with no manual refresh"
     );
     assert!(

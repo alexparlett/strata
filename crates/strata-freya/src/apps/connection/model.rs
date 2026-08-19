@@ -19,8 +19,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_arrow::client::{check_client_config, client_key, ClientKey, CLIENT_KEYS};
+use strata_engine::sources::postgres::settings::{check_user, PASSWORD};
+use strata_engine::sources::postgres::Pg;
+use strata_engine::SourceKind;
 use strata_model::{
-    ConnectionDef, GcsAuth, GcsStore, PgPassword, PgStore, Provider, ProviderId, S3Auth, S3Store,
+    check_catalog, mint_name, ConnectionDef, GcsAuth, GcsStore, Provider, ProviderId, S3Auth,
+    S3Store, SourceDef,
 };
 
 /// What this window is editing: a new connection, or an existing one by
@@ -141,16 +145,16 @@ pub enum PasswordRow {
 impl PasswordRow {
     /// What the def expects with the box empty, whether anything is typed, whether a removal is
     /// pending, and what the keystore said.
-    pub fn of(expected: PgPassword, typed: bool, removed: bool, probe: &PasswordProbe) -> Self {
+    pub fn of(expected: bool, typed: bool, removed: bool, probe: &PasswordProbe) -> Self {
         if typed {
             return Self::Typed;
         }
         match expected {
-            PgPassword::None => Self::Unused {
+            false => Self::Unused {
                 forgetting: removed,
             },
-            PgPassword::Keystore if removed => Self::Removing,
-            PgPassword::Keystore => match probe {
+            true if removed => Self::Removing,
+            true => match probe {
                 PasswordProbe::Asking => Self::Asking,
                 PasswordProbe::Stored => Self::Stored,
                 PasswordProbe::Absent => Self::Missing,
@@ -160,7 +164,7 @@ impl PasswordRow {
     }
 
     /// The line under the box, each arm about **this machine** — the half a committed def cannot
-    /// state. A marker echoing `PgPassword::Keystore` would read "a password is stored" on a
+    /// state. A marker echoing the def's own expectation would read "a password is stored" on a
     /// machine that has never held one.
     pub fn note(&self) -> String {
         match self {
@@ -212,15 +216,14 @@ pub struct ConnectionDraft {
     pub allow_http: bool,
     pub gcs_auth: GcsAuthId,
     pub sa_path: String,
-    /// A database connection's settings, edited in place by the Postgres rows. Held whole where
-    /// the S3 and GCS fields are held flat, because it carries no mode-plus-reference pair for a
-    /// trip through the picker to lose. [`password`](PgStore::password) is the one field no
-    /// control writes directly — [`ConnectionCtx`](super::ConnectionCtx)'s slots derive it.
+    /// A `PostgreSQL` connection's settings, edited in place by its rows. Held whole where the S3
+    /// and GCS fields are held flat, because it carries no mode-plus-reference pair for a trip
+    /// through the picker to lose. [`password`](PgDraft::password) is the one field no control
+    /// writes directly — [`ConnectionCtx`](super::ConnectionCtx)'s slots derive it.
     ///
-    /// Not cloned into the def: [`def`](Self::def) rebuilds it field by field with no `..`, so
-    /// its text is trimmed like every other field here and a field added to `PgStore` has to be
-    /// answered rather than silently carried untrimmed.
-    pub pg: PgStore,
+    /// Not cloned into the def: [`def`](Self::def) rebuilds it field by field with no `..`, so its
+    /// text is trimmed like every other field here.
+    pub pg: PgDraft,
     /// The connection's client options, **as rows** — see [`ConfigRows`].
     pub client_config: ConfigRows,
 }
@@ -246,8 +249,92 @@ impl Default for ConnectionDraft {
             allow_http: false,
             gcs_auth: GcsAuthId::Ambient,
             sa_path: String::new(),
-            pg: PgStore::default(),
+            pg: PgDraft::default(),
             client_config: ConfigRows::default(),
+        }
+    }
+}
+
+/// A `PostgreSQL` connection's settings as the form edits them, and the def they read and write.
+///
+/// The typed shape the rows were built for, over the flat def they now live in: the keys are
+/// [`settings`](strata_engine::sources::postgres::settings)' own, so the form and the source agree
+/// about them by construction. A generic renderer over a source's declared keys is what replaces
+/// this dress.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PgDraft {
+    /// Which registered source serves this connection — the kind the picker chose.
+    pub kind: String,
+    pub name: String,
+    pub user: String,
+    /// libpq's own word, one of [`SSL_MODES`](strata_engine::sources::postgres::settings::SSL_MODES).
+    pub sslmode: String,
+    pub sslrootcert: String,
+    /// Whether this machine's keystore is expected to hold a password. No control writes it
+    /// directly — the window's own slots derive it.
+    pub password: bool,
+    pub schemas: Vec<String>,
+    pub read_only: bool,
+}
+
+impl Default for PgDraft {
+    fn default() -> Self {
+        Self {
+            kind: Pg::NAME.to_string(),
+            name: String::new(),
+            user: String::new(),
+            sslmode: "prefer".to_string(),
+            sslrootcert: String::new(),
+            password: false,
+            schemas: vec!["public".to_string()],
+            read_only: true,
+        }
+    }
+}
+
+impl PgDraft {
+    /// What `def` says, with the source's own defaults for what it does not.
+    pub fn of(conn: &ConnectionDef, def: &SourceDef) -> Self {
+        let value = |key: &str| def.config.get(key).cloned().unwrap_or_default();
+        let kind = def.kind.trim().to_string();
+        let sslmode = match value("sslmode") {
+            mode if mode.is_empty() => "prefer".to_string(),
+            mode => mode,
+        };
+        Self {
+            kind,
+            name: conn.named(),
+            user: value("user"),
+            sslmode,
+            sslrootcert: value("sslrootcert"),
+            password: def.secrets.contains(PASSWORD),
+            schemas: def.schemas.clone(),
+            read_only: def.read_only,
+        }
+    }
+
+    /// The def these rows describe — every value trimmed here, so nothing reaches the file with a
+    /// stray space and a blank optional is absent rather than empty.
+    pub fn def(&self) -> SourceDef {
+        let mut config = BTreeMap::new();
+        for (key, value) in [
+            ("user", self.user.trim()),
+            ("sslmode", self.sslmode.trim()),
+            ("sslrootcert", self.sslrootcert.trim()),
+        ] {
+            if !value.is_empty() {
+                config.insert(key.to_string(), value.to_string());
+            }
+        }
+        SourceDef {
+            kind: self.kind.trim().to_string(),
+            config,
+            secrets: match self.password {
+                true => BTreeSet::from([PASSWORD.to_string()]),
+                false => BTreeSet::new(),
+            },
+            schemas: self.schemas.clone(),
+            read_only: self.read_only,
         }
     }
 }
@@ -460,7 +547,7 @@ impl ConnectionDraft {
                 }
             },
             Provider::Http => {}
-            Provider::Postgres(pg) => draft.pg = pg.clone(),
+            Provider::Source(source) => draft.pg = PgDraft::of(def, source),
         }
         draft
     }
@@ -540,14 +627,14 @@ impl ConnectionDraft {
 
     pub fn address_label(&self) -> &'static str {
         match self.provider {
-            ProviderId::Http | ProviderId::Postgres => "URL",
+            ProviderId::Http | ProviderId::Source => "URL",
             _ => "BUCKET",
         }
     }
 
     pub fn address_noun(&self) -> &'static str {
         match self.provider {
-            ProviderId::Http | ProviderId::Postgres => "URL",
+            ProviderId::Http | ProviderId::Source => "URL",
             _ => "bucket",
         }
     }
@@ -556,6 +643,7 @@ impl ConnectionDraft {
     pub fn def(&self) -> ConnectionDef {
         ConnectionDef {
             address: self.address.trim().to_string(),
+            name: self.named(),
             client_config: self.client_config.to_map(),
             provider: match self.provider {
                 ProviderId::S3 => Provider::S3(S3Store {
@@ -580,16 +668,17 @@ impl ConnectionDraft {
                     },
                 }),
                 ProviderId::Http => Provider::Http,
-                ProviderId::Postgres => Provider::Postgres(PgStore {
-                    catalog: self.pg.catalog.trim().to_string(),
-                    user: self.pg.user.trim().to_string(),
-                    sslmode: self.pg.sslmode,
-                    sslrootcert: self.pg.sslrootcert.trim().to_string(),
-                    password: self.pg.password,
-                    schemas: self.pg.schemas.clone(),
-                    read_only: self.pg.read_only,
-                }),
+                ProviderId::Source => Provider::Source(self.pg.def()),
             },
+        }
+    }
+
+    /// What this connection is called: the box for a source, and the address's own mint for an
+    /// object store, which has no box until its form is drawn from a declaration too.
+    pub fn named(&self) -> String {
+        match self.provider {
+            ProviderId::Source => self.pg.name.trim().to_string(),
+            _ => mint_name(self.address.trim()),
         }
     }
 
@@ -633,11 +722,11 @@ impl ConnectionDraft {
                 }
             }
             ProviderId::Http => {}
-            ProviderId::Postgres => {
-                if let Err(why) = self.pg.check_catalog() {
+            ProviderId::Source => {
+                if let Err(why) = check_catalog(&self.pg.name) {
                     return Some(why);
                 }
-                if let Err(why) = self.pg.check_user() {
+                if let Err(why) = check_user(&self.pg.user) {
                     return Some(why);
                 }
             }
@@ -674,7 +763,7 @@ impl ConnectionDraft {
                 "HTTP(S) sources are always read anonymously. There are no credentials and no \
                  region to configure."
             }
-            ProviderId::Postgres => {
+            ProviderId::Source => {
                 "The password is kept in this machine's keystore and read per connection. The \
                  project file keeps only the server, database, user, catalog name and SSL mode, \
                  so a colleague opening this project enters their own password once."
@@ -719,6 +808,7 @@ mod tests {
         for def in [
             ConnectionDef {
                 address: "acme-lake".into(),
+                name: "acme_lake".into(),
                 provider: Provider::S3(S3Store {
                     region: "eu-west-2".into(),
                     auth: S3Auth::Profile {
@@ -731,6 +821,7 @@ mod tests {
             },
             ConnectionDef {
                 address: "lake".into(),
+                name: "lake".into(),
                 provider: Provider::Gcs(GcsStore {
                     auth: GcsAuth::ServiceAccount {
                         path: "/keys/reader.json".into(),
@@ -740,29 +831,36 @@ mod tests {
             },
             ConnectionDef {
                 address: "https://example.com:8080".into(),
+                name: "example_com".into(),
                 provider: Provider::Http,
                 client_config: Default::default(),
             },
             ConnectionDef {
                 address: "http://aserver:8484".into(),
+                name: "aserver".into(),
                 provider: Provider::Http,
                 client_config: Default::default(),
             },
             ConnectionDef {
                 address: "db.internal:5432/analytics".into(),
-                provider: Provider::Postgres(PgStore {
-                    catalog: "warehouse".into(),
-                    user: "reader".into(),
-                    sslmode: strata_model::PgSslMode::VerifyFull,
-                    sslrootcert: "/certs/rds.pem".into(),
-                    password: PgPassword::Keystore,
-                    schemas: vec!["public".into(), "analytics".into()],
-                    read_only: false,
-                }),
+                name: "analytics".into(),
+                provider: Provider::Source(
+                    PgDraft {
+                        kind: Pg::NAME.to_string(),
+                        name: "warehouse".into(),
+                        user: "reader".into(),
+                        sslmode: "verify-full".into(),
+                        sslrootcert: "/certs/rds.pem".into(),
+                        password: true,
+                        schemas: vec!["public".into(), "analytics".into()],
+                        read_only: false,
+                    }
+                    .def(),
+                ),
                 client_config: Default::default(),
             },
         ] {
-            assert_eq!(ConnectionDraft::of(&def).def(), def, "{}", def.url());
+            assert_eq!(ConnectionDraft::of(&def).def(), def, "{}", def.named());
         }
     }
 
@@ -773,15 +871,20 @@ mod tests {
     fn a_database_def_opens_on_the_database_arm() {
         let def = ConnectionDef {
             address: "db.internal:5432/analytics".into(),
-            provider: Provider::Postgres(PgStore {
-                catalog: "warehouse".into(),
-                user: "reader".into(),
-                ..Default::default()
-            }),
+            name: "analytics".into(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: "warehouse".into(),
+                    user: "reader".into(),
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         };
         let draft = ConnectionDraft::of(&def);
-        assert_eq!(draft.provider, ProviderId::Postgres);
+        assert_eq!(draft.provider, ProviderId::Source);
         assert_eq!(draft.address_label(), "URL");
         assert_eq!(draft.blocker(), None);
     }
@@ -792,10 +895,11 @@ mod tests {
     #[test]
     fn a_database_draft_is_refused_on_the_engines_terms() {
         let good = ConnectionDraft {
-            provider: ProviderId::Postgres,
+            provider: ProviderId::Source,
             address: "db.internal:5432/analytics".into(),
-            pg: PgStore {
-                catalog: "warehouse".into(),
+            pg: PgDraft {
+                kind: Pg::NAME.to_string(),
+                name: "warehouse".into(),
                 user: "reader".into(),
                 ..Default::default()
             },
@@ -805,14 +909,17 @@ mod tests {
 
         let mut portless = good.clone();
         portless.address = "db.internal/analytics".into();
-        assert!(portless.blocker().unwrap().contains("needs a port"));
+        assert!(
+            refused(&portless).unwrap().contains("needs a port"),
+            "the address is the kind's own rule, asked of the registry"
+        );
 
         let mut nameless = good.clone();
-        nameless.pg.catalog = String::new();
+        nameless.pg.name = String::new();
         assert!(nameless.blocker().unwrap().contains("no catalog name"));
 
         let mut reserved = good.clone();
-        reserved.pg.catalog = "STRATA".into();
+        reserved.pg.name = "STRATA".into();
         assert!(reserved
             .blocker()
             .unwrap()
@@ -827,7 +934,7 @@ mod tests {
         assert!(spaced.blocker().unwrap().contains("spaces"));
 
         let mut certless = good;
-        certless.pg.sslmode = strata_model::PgSslMode::VerifyFull;
+        certless.pg.sslmode = "verify-full".into();
         assert_eq!(
             certless.blocker(),
             None,
@@ -841,14 +948,15 @@ mod tests {
     #[test]
     fn a_database_defs_text_is_trimmed() {
         let draft = ConnectionDraft {
-            provider: ProviderId::Postgres,
+            provider: ProviderId::Source,
             address: "  db.internal:5432/analytics  ".into(),
-            pg: PgStore {
-                catalog: " warehouse ".into(),
+            pg: PgDraft {
+                kind: Pg::NAME.to_string(),
+                name: " warehouse ".into(),
                 user: " reader ".into(),
-                sslmode: strata_model::PgSslMode::VerifyFull,
+                sslmode: "verify-full".into(),
                 sslrootcert: " /certs/rds.pem ".into(),
-                password: PgPassword::Keystore,
+                password: true,
                 schemas: vec!["public".into()],
                 read_only: false,
             },
@@ -856,15 +964,18 @@ mod tests {
         };
         let def = draft.def();
         assert_eq!(def.address, "db.internal:5432/analytics");
-        let Provider::Postgres(pg) = &def.provider else {
+        let Provider::Source(pg) = &def.provider else {
             panic!("a database def");
         };
-        assert_eq!(pg.catalog, "warehouse");
-        assert_eq!(pg.user, "reader");
-        assert_eq!(pg.sslrootcert, "/certs/rds.pem");
-        assert_eq!(pg.password, PgPassword::Keystore, "carried, never trimmed");
+        assert_eq!(def.named(), "warehouse");
+        assert_eq!(pg.config.get("user").map(String::as_str), Some("reader"));
+        assert_eq!(
+            pg.config.get("sslrootcert").map(String::as_str),
+            Some("/certs/rds.pem")
+        );
+        assert!(pg.secrets.contains(PASSWORD), "carried, never trimmed");
         assert!(!pg.read_only, "and so is the write opt-in");
-        assert_eq!(def.url(), "postgres://reader@db.internal:5432/analytics");
+        assert_eq!(def.named(), "warehouse");
     }
 
     /// **URL and DATABASE are two boxes over one stored address**, so the def keeps
@@ -873,9 +984,10 @@ mod tests {
     #[test]
     fn the_two_database_boxes_split_and_recompose_one_address() {
         let mut draft = ConnectionDraft {
-            provider: ProviderId::Postgres,
-            pg: PgStore {
-                catalog: "pg".into(),
+            provider: ProviderId::Source,
+            pg: PgDraft {
+                kind: Pg::NAME.to_string(),
+                name: "pg".into(),
                 user: "reader".into(),
                 ..Default::default()
             },
@@ -887,10 +999,11 @@ mod tests {
             draft.address, "db.internal:5432",
             "no database, no separator"
         );
-        assert!(draft.blocker().unwrap().contains("needs a database"));
+        assert!(refused(&draft).unwrap().contains("needs a database"));
 
         draft.set_pg_database("analytics".into());
         assert_eq!(draft.address, "db.internal:5432/analytics");
+        assert_eq!(refused(&draft), None);
         assert_eq!(draft.blocker(), None);
 
         assert_eq!(draft.pg_server(), "db.internal:5432");
@@ -926,7 +1039,8 @@ mod tests {
 
         let stored = ConnectionDraft::of(&ConnectionDef {
             address: "db:5432/analytics".into(),
-            provider: Provider::Postgres(PgStore::default()),
+            name: "analytics".into(),
+            provider: Provider::Source(PgDraft::default().def()),
             client_config: Default::default(),
         });
         assert_eq!(
@@ -937,14 +1051,28 @@ mod tests {
         assert_eq!(stored.pg_database(), "analytics");
     }
 
+    /// What the draft's **kind** makes of its address — the rule the source owns, which the
+    /// editor reaches through the registry rather than restating. The footer chains this beside
+    /// the draft's own blocker; here it is asked directly, of an engine with the shipped sources
+    /// registered.
+    fn refused(draft: &ConnectionDraft) -> Option<String> {
+        let def = draft.def();
+        let kind = def.provider.source()?.kind.clone();
+        strata_engine::Engine::builder()
+            .build()
+            .check_source_address(&kind, &def.address)
+            .err()
+    }
+
     /// **A pasted `postgres://` URL loses its scheme like every other non-HTTP address**: the
-    /// picker states the scheme and `url()` puts it back.
+    /// kind states the scheme, and the identity puts it back.
     #[test]
     fn a_database_address_loses_a_pasted_scheme() {
         let mut draft = ConnectionDraft {
-            provider: ProviderId::Postgres,
-            pg: PgStore {
-                catalog: "pg".into(),
+            provider: ProviderId::Source,
+            pg: PgDraft {
+                kind: Pg::NAME.to_string(),
+                name: "pg".into(),
                 user: "reader".into(),
                 ..Default::default()
             },
@@ -953,8 +1081,8 @@ mod tests {
         draft.set_address("postgres://db.internal:5432/analytics".into());
         assert_eq!(draft.address, "db.internal:5432/analytics");
         assert_eq!(
-            draft.def().url(),
-            "postgres://reader@db.internal:5432/analytics"
+            draft.def().identity(),
+            "postgres:db.internal:5432/analytics"
         );
     }
 
@@ -970,41 +1098,27 @@ mod tests {
             |expected, typed, removed, probe: &P| PasswordRow::of(expected, typed, removed, probe);
 
         assert_eq!(
-            row(PgPassword::None, false, false, &P::Absent),
+            row(false, false, false, &P::Absent),
             PasswordRow::Unused { forgetting: false }
         );
+        assert_eq!(row(true, false, false, &P::Stored), PasswordRow::Stored);
         assert_eq!(
-            row(PgPassword::Keystore, false, false, &P::Stored),
-            PasswordRow::Stored
-        );
-        assert_eq!(
-            row(PgPassword::Keystore, false, false, &P::Absent),
+            row(true, false, false, &P::Absent),
             PasswordRow::Missing,
             "expected, and this machine has none"
         );
+        assert_eq!(row(true, false, false, &P::Asking), PasswordRow::Asking);
         assert_eq!(
-            row(PgPassword::Keystore, false, false, &P::Asking),
-            PasswordRow::Asking
-        );
-        assert_eq!(
-            row(
-                PgPassword::Keystore,
-                false,
-                false,
-                &P::Refused("locked".into())
-            ),
+            row(true, false, false, &P::Refused("locked".into())),
             PasswordRow::Refused("locked".into())
         );
 
         assert_eq!(
-            row(PgPassword::Keystore, true, false, &P::Stored),
+            row(true, true, false, &P::Stored),
             PasswordRow::Typed,
             "what is being typed outranks what is stored, in every state"
         );
-        assert_eq!(
-            row(PgPassword::None, true, true, &P::Absent),
-            PasswordRow::Typed
-        );
+        assert_eq!(row(false, true, true, &P::Absent), PasswordRow::Typed);
     }
 
     /// **The two clearing gestures are not the same gesture.** *Remove from this machine* leaves
@@ -1012,7 +1126,7 @@ mod tests {
     /// password* edits the shared def.
     #[test]
     fn removing_a_password_locally_is_not_declaring_the_connection_has_none() {
-        let removing = PasswordRow::of(PgPassword::Keystore, false, true, &PasswordProbe::Stored);
+        let removing = PasswordRow::of(true, false, true, &PasswordProbe::Stored);
         assert_eq!(removing, PasswordRow::Removing);
         assert!(
             removing.note().contains("other machines keep theirs"),
@@ -1020,7 +1134,7 @@ mod tests {
             removing.note()
         );
 
-        let unused = PasswordRow::of(PgPassword::None, false, true, &PasswordProbe::Stored);
+        let unused = PasswordRow::of(false, false, true, &PasswordProbe::Stored);
         assert_eq!(unused, PasswordRow::Unused { forgetting: true });
         assert!(
             unused.note().contains("without a password"),
@@ -1076,7 +1190,11 @@ mod tests {
         for typed in ["http://aserver:8484", "https://aserver:8484"] {
             draft.set_address(typed.into());
             assert_eq!(draft.address, typed, "kept verbatim");
-            assert_eq!(draft.def().url(), typed, "and registered as itself");
+            assert_eq!(
+                draft.def().identity(),
+                format!("http:{typed}"),
+                "and registered as itself"
+            );
             assert_eq!(draft.blocker(), None, "{typed}");
         }
 
@@ -1309,6 +1427,7 @@ mod tests {
     fn stored_client_options_come_back_as_rows() {
         let def = ConnectionDef {
             address: "acme-lake".into(),
+            name: "acme_lake".into(),
             provider: Provider::S3(S3Store {
                 region: "eu-west-2".into(),
                 ..Default::default()

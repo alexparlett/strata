@@ -316,7 +316,7 @@ impl ConfigureDraft {
         let provider = def
             .connection
             .as_deref()
-            .and_then(|url| connections.iter().find(|c| c.url() == url))
+            .and_then(|url| connections.iter().find(|c| c.named() == url))
             .map(|c| c.provider.id())
             .filter(|id| id.is_object_store())
             .unwrap_or(ProviderId::S3);
@@ -576,32 +576,35 @@ impl ConfigureDraft {
         let serves = self
             .connection
             .as_deref()
-            .and_then(|url| connections.iter().find(|c| c.url() == url))
+            .and_then(|url| connections.iter().find(|c| c.named() == url))
             .is_some_and(|c| c.provider.id() == provider);
         if !serves {
             self.connection = first_connection(connections, provider);
         }
     }
 
-    /// The non-editable prefix the source box wears — the chosen bucket, with the separator the
-    /// path is written after. Absent on the local disk, and while nothing is chosen.
-    pub fn bucket_prefix(&self) -> Option<String> {
-        self.store().map(|url| format!("{url}/"))
-    }
-
-    /// The paths as the **engine** will see them: composed onto the chosen connection's bucket,
-    /// or resolved against the project folder where a def's sources are stored project-relative.
-    /// One call either way ([`resolve_source`]), because the draft is the only thing that knows
-    /// which of the two it is.
+    /// The paths as **this machine** sees them: resolved against the project folder, where a
+    /// def's sources are stored project-relative.
     ///
     /// Anything that asks the filesystem a question about a source has to ask about this, not
     /// about the stored string — `is_dir` on a relative path answers about the process's working
-    /// directory, which is not the project's. (A remote path answers `false` to every such
-    /// question, which is correct: a bucket has no directories to stat.)
+    /// directory, which is not the project's.
+    ///
+    /// A **remote** source comes back as it is stored. What address it resolves to is composed
+    /// where the store is registered, so a draft that answered would be keeping a second copy of
+    /// the registry's answer; and every filesystem question a remote path is asked answers
+    /// `false` regardless, which is correct — a bucket has no directories to stat.
     pub fn resolved_sources(&self, root: &Path) -> Vec<String> {
+        let root = match self.remote() {
+            true => None,
+            false => Some(root),
+        };
         self.nonblank_sources()
             .iter()
-            .map(|p| resolve_source(root, self.store(), p))
+            .map(|p| match root {
+                Some(root) => resolve_source(root, None, p),
+                None => p.clone(),
+            })
             .collect()
     }
 
@@ -1032,7 +1035,7 @@ pub fn connections_for(connections: &[ConnectionDef], provider: ProviderId) -> V
     connections
         .iter()
         .filter(|c| c.provider.id() == provider)
-        .map(ConnectionDef::url)
+        .map(ConnectionDef::named)
         .collect()
 }
 
@@ -1109,11 +1112,13 @@ mod tests {
             .into_iter()
             .map(|address| ConnectionDef {
                 address: address.into(),
+                name: address.replace('-', "_"),
                 provider: Provider::S3(S3Store::default()),
                 client_config: Default::default(),
             })
             .chain(std::iter::once(ConnectionDef {
                 address: "warehouse".into(),
+                name: "warehouse".into(),
                 provider: Provider::Gcs(GcsStore::default()),
                 client_config: Default::default(),
             }))
@@ -1506,17 +1511,13 @@ mod tests {
         draft.set_path(0, "events/2024/**/*.parquet".into());
 
         let def = draft.def(root);
-        assert_eq!(def.connection.as_deref(), Some("s3://acme-lake"));
+        assert_eq!(def.connection.as_deref(), Some("acme_lake"));
         assert_eq!(def.sources, ["events/2024/**/*.parquet"]);
         assert_eq!(
             draft.resolved_sources(root),
-            ["s3://acme-lake/events/2024/**/*.parquet"],
-            "and that is the address the engine is handed"
-        );
-        assert_eq!(
-            draft.bucket_prefix().as_deref(),
-            Some("s3://acme-lake/"),
-            "the box wears the bucket it is written against"
+            ["events/2024/**/*.parquet"],
+            "a remote source stays as it is stored — what it resolves to is composed where the \
+             store is registered"
         );
     }
 
@@ -1531,7 +1532,7 @@ mod tests {
         };
         draft.set_location(Where::Remote, &connections());
 
-        assert_eq!(draft.connection.as_deref(), Some("s3://acme-lake"));
+        assert_eq!(draft.connection.as_deref(), Some("acme_lake"));
         assert_eq!(
             draft.path_count(),
             1,
@@ -1564,15 +1565,15 @@ mod tests {
         let connections = connections();
         let mut draft = csv_draft();
         draft.set_location(Where::Remote, &connections);
-        assert_eq!(draft.connection.as_deref(), Some("s3://acme-lake"));
+        assert_eq!(draft.connection.as_deref(), Some("acme_lake"));
 
         draft.set_provider(ProviderId::Gcs, &connections);
-        assert_eq!(draft.connection.as_deref(), Some("gs://warehouse"));
+        assert_eq!(draft.connection.as_deref(), Some("warehouse"));
 
         draft.set_provider(ProviderId::S3, &connections);
-        draft.connection = Some("s3://cold-store".into());
+        draft.connection = Some("cold_store".into());
         draft.set_provider(ProviderId::S3, &connections);
-        assert_eq!(draft.connection.as_deref(), Some("s3://cold-store"));
+        assert_eq!(draft.connection.as_deref(), Some("cold_store"));
 
         draft.set_provider(ProviderId::Http, &connections);
         assert_eq!(draft.connection, None);
@@ -1592,7 +1593,7 @@ mod tests {
 
         assert_eq!(
             draft.connection.as_deref(),
-            Some("s3://acme-lake"),
+            Some("acme_lake"),
             "coming back must not have to pick it again"
         );
         assert_eq!(draft.store(), None, "but the table reads from disk");
@@ -1606,7 +1607,7 @@ mod tests {
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::Parquet,
-            connection: Some("gs://warehouse".into()),
+            connection: Some("warehouse".into()),
             sources: vec!["events/".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
@@ -1614,7 +1615,7 @@ mod tests {
         let draft = ConfigureDraft::of(&def, &connections());
         assert!(draft.remote());
         assert_eq!(draft.provider, ProviderId::Gcs);
-        assert_eq!(draft.connection.as_deref(), Some("gs://warehouse"));
+        assert_eq!(draft.connection.as_deref(), Some("warehouse"));
         assert_eq!(draft.def(Path::new("/project")), def);
     }
 
@@ -1644,11 +1645,11 @@ mod tests {
         let connections = connections();
         assert_eq!(
             connections_for(&connections, ProviderId::S3),
-            ["s3://acme-lake", "s3://cold-store"]
+            ["acme_lake", "cold_store"]
         );
         assert_eq!(
             connections_for(&connections, ProviderId::Gcs),
-            ["gs://warehouse"]
+            ["warehouse"]
         );
         assert!(connections_for(&connections, ProviderId::Http).is_empty());
     }

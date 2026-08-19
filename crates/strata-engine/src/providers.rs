@@ -24,8 +24,9 @@
 //!   snapshot **by name**, so none notices. The prefix is [`is_snapshot_name`], beside the function
 //!   that mints the names, so the hiding rule and the naming rule cannot drift.
 //!
-//! That filter is **this** provider's, and a database connection's
-//! ([`db::DbSchemaProvider`](super::db)) deliberately has none: the namespace is the workspace
+//! That filter is **this** provider's, and a source connection's
+//! ([`SourceSchemaProvider`](super::sources::providers::SourceSchemaProvider)) deliberately has
+//! none: the namespace is the workspace
 //! catalog's, so a remote relation a server happens to call `__snap_x` is an ordinary table — the
 //! same scoping [`is_snapshot_ref`](super::query::is_snapshot_ref) applies to the refusal, off
 //! [`in_workspace`].
@@ -33,7 +34,8 @@
 //! Everything else delegates to the map verbatim, `MemorySchemaProvider`'s duplicate-name error
 //! included, so every existing reader keeps working with no call-site changes.
 
-use std::collections::BTreeMap;
+use std::any::Any;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use async_trait::async_trait;
@@ -43,6 +45,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 
 use super::query::is_snapshot_name;
+use super::sources::providers::SourceCatalogProvider;
 use super::{fold_ident, CATALOG, SCHEMA};
 
 /// Whether `name` addresses **the workspace catalog's one schema** — the three spellings of
@@ -147,6 +150,19 @@ impl CatalogProviderList for StrataCatalogList {
     }
 }
 
+/// The namespaces `catalog` shows, or `None` — the workspace's own catalog, or a test's
+/// stand-in — which a caller reads as "no scoping to apply".
+///
+/// The downcast is DataFusion's own pattern for a custom provider ([`deregister_catalog`] is the
+/// other one). It lives here rather than beside the type it downcasts to because its caller is
+/// the name resolver, and [`sql`](crate::sql) and [`sources`](crate::sources) are peers that may
+/// not reach into each other — where "what does DataFusion's catalog list answer" is exactly this
+/// module's question.
+pub(crate) fn shown_schemas(catalog: &dyn CatalogProvider) -> Option<BTreeSet<String>> {
+    let source: &SourceCatalogProvider = (catalog as &dyn Any).downcast_ref()?;
+    Some(source.shown())
+}
+
 /// Remove the catalog registered under `name` from `ctx` — [`StrataCatalogList::deregister`]
 /// reached through the session, which is all a caller holds.
 ///
@@ -159,37 +175,27 @@ pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn Ca
     list.downcast_ref::<StrataCatalogList>()?.deregister(name)
 }
 
-/// Register a catalog shaped the way a **database connection's** is — one schema, some
-/// relations — so a test can ask what the app does about a name inside one without a server.
+/// Register a catalog shaped the way a live source's is — one namespace, some relations — so a
+/// test can ask what the app does about a name inside one without a server.
 ///
-/// A `MemoryCatalogProvider` stands in exactly, because every rule under test reads the **catalog
-/// list** and nothing more: each asks whether a catalog of that name is registered and then works
-/// off the resolved reference. What `db::DbCatalogProvider` adds on top is what the *integration*
-/// test exercises against a real server, and nothing here can stand in for that.
-///
-/// Two columns rather than one, so a test can join a remote relation to a workspace table on
-/// `id` and still have something to project.
+/// The providers are the real pair a connection registers, over a source that speaks no SQL, so
+/// what these tests drive is the thing itself rather than a stand-in for it. The connect is
+/// skipped because their subject is the **catalog list**: each asks whether a catalog of that
+/// name is registered and then works off the resolved reference.
 #[cfg(test)]
-pub(crate) fn fake_database(ctx: &SessionContext, catalog: &str, relations: &[&str]) {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
-    use datafusion::datasource::empty::EmptyTable;
+pub(crate) fn fake_source(ctx: &SessionContext, catalog: &str, relations: &[&str]) {
+    use crate::sources::fake::Rows;
+    use crate::sources::providers::SourceCatalogProvider;
 
-    let schema = Arc::new(MemorySchemaProvider::new());
-    for relation in relations {
-        let arrow = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("total", DataType::Int64, true),
-        ]));
-        schema
-            .register_table((*relation).to_string(), Arc::new(EmptyTable::new(arrow)))
-            .expect("fake relation");
-    }
-    let provider = Arc::new(MemoryCatalogProvider::new());
-    provider
-        .register_schema(SCHEMA, schema)
-        .expect("fake schema");
-    ctx.register_catalog(catalog, provider);
+    let (handle, listing) = Rows::catalog(relations);
+    let provider = SourceCatalogProvider::new(
+        catalog.to_string(),
+        format!("test-doc://{catalog}-fixture"),
+        handle,
+        &listing,
+        Arc::new(RwLock::new(["public".to_string()].into_iter().collect())),
+    );
+    ctx.register_catalog(catalog, Arc::new(provider));
 }
 
 /// Strata's catalog: exactly one schema, [`SCHEMA`], for the whole life of the engine.

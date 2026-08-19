@@ -52,7 +52,7 @@
 
 #[cfg(test)]
 mod interaction;
-mod model;
+pub mod model;
 mod views;
 
 use freya::prelude::*;
@@ -60,9 +60,9 @@ use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
-use strata_core::secret::SecretRef;
-use strata_engine::db::PG_PASSWORD;
-use strata_model::{PgPassword, ProviderId};
+use strata_engine::sources::postgres::settings::PASSWORD;
+use strata_engine::sources::secret_slot;
+use strata_model::ProviderId;
 
 use crate::apps::connection::views::{use_watch_connection, ConnectionBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
@@ -164,7 +164,7 @@ pub struct ConnectionCtx {
     /// **What the def expects with the box empty**, which is why `pg.password` cannot also be the
     /// seed: clearing the box has to put back what the def said, and a value the box overwrites
     /// has forgotten it. A stray keystroke would otherwise commit an expectation nothing holds.
-    pub password_expected: State<PgPassword>,
+    pub password_expected: State<bool>,
     /// A pending delete of this machine's entry, from either press that abandons it. Separate
     /// from [`password_expected`](Self::password_expected) because that is where the two presses
     /// part: a removal leaves the expectation standing, so other machines keep their own.
@@ -307,7 +307,7 @@ impl App for ConnectionApp {
                         .peek()
                         .connections
                         .iter()
-                        .find(|c| c.def.url() == url)
+                        .find(|c| c.def.named() == url)
                         .map(|row| ConnectionDraft::of(&row.def))
                         .unwrap_or_else(|| {
                             panic!("edit '{url}': no such connection in this project")
@@ -341,14 +341,14 @@ impl App for ConnectionApp {
         use_hook(move || {
             let expects = {
                 let draft = ctx.draft.peek();
-                (draft.provider == ProviderId::Postgres
-                    && draft.pg.password == PgPassword::Keystore)
-                    .then(|| draft.def().url())
+                (draft.provider == ProviderId::Source && draft.pg.password)
+                    .then(|| secret_slot(&draft.def(), PASSWORD, &[]))
+                    .flatten()
             };
-            let Some(url) = expects else { return };
+            let Some(slot) = expects else { return };
             let mut probe = ctx.password_probe;
             spawn(async move {
-                let read = offload(move || SecretRef::derived(PG_PASSWORD, &url).get()).await;
+                let read = offload(move || slot.key().get()).await;
                 probe.set(match read {
                     Some(Ok(Some(_))) => PasswordProbe::Stored,
                     Some(Ok(None)) => PasswordProbe::Absent,

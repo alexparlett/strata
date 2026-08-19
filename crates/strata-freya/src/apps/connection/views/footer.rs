@@ -4,7 +4,7 @@
 //! committed until Save.
 //!
 //! A database connection has a fifth step, and it comes **first**: whatever this machine's
-//! keystore owes the password ([`password_ops`]). A def claiming `PgPassword::Keystore` over a
+//! keystore owes the password ([`password_ops`]). A def that expects one over a
 //! keystore that refused the write is a connection nothing can log in with.
 //!
 //! 1. writes the def onto the shared project store — removing the row it is **moving from**
@@ -28,8 +28,9 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_core::secret::{migrate_derived, Secret, SecretError, SecretRef};
-use strata_engine::db::password_ref;
+
+use strata_engine::sources::postgres::settings::PASSWORD;
+use strata_engine::sources::{forget_secrets, migrate_secrets, put_secret};
 use strata_model::{check_catalog_name, ConnectionDef, Provider};
 
 use crate::apps::connection::{ConnectionCtx, ConnectionTarget, Status};
@@ -74,6 +75,7 @@ impl Component for Footer {
             ctx.draft
                 .read()
                 .blocker()
+                .or_else(|| address_refusal(ctx, &engine))
                 .or_else(|| url_clash(ctx, project))
                 .or_else(|| catalog_clash(ctx, project)),
             scanning,
@@ -143,8 +145,20 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
 ///
 /// Matched case-**sensitively**, like every other connection lookup: a URL is not a SQL
 /// identifier, and the object-store registry matches it verbatim.
+/// The blocker the draft cannot see: whether the **kind** accepts this address.
+///
+/// What an address means is the source's own rule, so it is asked of the registry rather than
+/// re-stated here — the same reason the two clash checks below are the store's question rather
+/// than the draft's. A kind nothing is registered for says so, which is the honest answer for a
+/// def naming a source this build does not have.
+fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
+    let def = ctx.draft.read().def();
+    let kind = def.provider.source()?.kind.clone();
+    engine.check_source_address(&kind, &def.address).err()
+}
+
 fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
-    let url = ctx.draft.read().def().url();
+    let url = ctx.draft.read().def().named();
     if ctx.target.read().editing() == Some(url.as_str()) {
         return None;
     }
@@ -152,7 +166,7 @@ fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) 
         .peek()
         .connections
         .iter()
-        .any(|c| c.def.url() == url)
+        .any(|c| c.def.named() == url)
         .then(|| format!("'{url}' is already a connection in this project."))
 }
 
@@ -179,22 +193,26 @@ fn catalog_clash(
         .peek()
         .connections
         .iter()
-        .filter(|c| editing.as_deref() != Some(c.def.url().as_str()))
+        .filter(|c| editing.as_deref() != Some(c.def.named().as_str()))
         .map(|c| c.def.clone())
         .collect();
     check_catalog_name(&existing, &def).err()
 }
 
-/// One thing Save owes this machine's keystore. A list rather than a verdict because the *order*
-/// is the content of the answer: a migration has to reach the new slot before a put lands on it.
-#[derive(Clone, PartialEq, Debug)]
+/// What Save owes this machine's keystore, as one call the engine performs.
+///
+/// A plan rather than a verdict because the *order* is the content of the answer: a rename has to
+/// reach the new slots before a put lands on one. Where a slot is and what a rename does to it are
+/// the engine's — this says only which of the three things happened to the box.
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum PasswordOp {
-    /// The identity moved, so the derived reference moved with it.
-    Migrate(SecretRef, SecretRef),
-    Put(SecretRef, Secret),
+    /// The connection was renamed, so its secrets move with it.
+    Rename,
+    /// A password was typed.
+    Put(String),
     /// *Remove from this machine*, the "uses no password" edit, or a connection that is no longer
-    /// a database — in which case nothing would ever name the entry again.
-    Delete(SecretRef),
+    /// a source — in which case nothing would ever name the entry again.
+    Forget,
 }
 
 /// Plan a save of `next` over `previous`, the def as this window opened it.
@@ -207,37 +225,45 @@ fn password_ops(
     typed: &str,
     removed: bool,
 ) -> Vec<PasswordOp> {
-    let was = previous.filter(|def| matches!(def.provider, Provider::Postgres(_)));
+    let was = previous.filter(|def| matches!(def.provider, Provider::Source(_)));
+    let expects = next
+        .provider
+        .source()
+        .is_some_and(|source| source.secrets.contains(PASSWORD));
     let mut ops = Vec::new();
 
-    let Some(slot) = password_ref(next) else {
-        ops.extend(was.and_then(password_ref).map(PasswordOp::Delete));
+    if !expects {
+        ops.extend(was.map(|_| PasswordOp::Forget));
         return ops;
-    };
-
-    if let Some(old) = was
-        .filter(|def| def.url() != next.url())
-        .and_then(password_ref)
-    {
-        ops.push(PasswordOp::Migrate(old, slot.clone()));
     }
-    match Secret::new(typed) {
-        Some(secret) => ops.push(PasswordOp::Put(slot, secret)),
-        None if removed => ops.push(PasswordOp::Delete(slot)),
-        None => {}
+    if was.is_some_and(|def| def.named() != next.named()) {
+        ops.push(PasswordOp::Rename);
+    }
+    match typed.trim().is_empty() {
+        false => ops.push(PasswordOp::Put(typed.trim().to_string())),
+        true if removed => ops.push(PasswordOp::Forget),
+        true => {}
     }
     ops
 }
 
-/// Carry out `ops` in order, stopping at the first refusal. Blocking, so it runs on a worker; a
+/// Carry `ops` out in order, stopping at the first refusal. Blocking, so it runs on a worker; a
 /// keystore that refuses is reported and the save does not happen, never answered by writing the
 /// password somewhere else.
-fn run_password_ops(ops: &[PasswordOp]) -> Result<(), SecretError> {
+fn run_password_ops(
+    ops: &[PasswordOp],
+    previous: Option<&ConnectionDef>,
+    next: &ConnectionDef,
+) -> Result<(), String> {
     for op in ops {
         match op {
-            PasswordOp::Migrate(from, to) => migrate_derived(from, to)?,
-            PasswordOp::Put(slot, secret) => slot.put(secret)?,
-            PasswordOp::Delete(slot) => slot.delete()?,
+            PasswordOp::Rename => {
+                if let Some(was) = previous {
+                    migrate_secrets(was, next)?;
+                }
+            }
+            PasswordOp::Put(typed) => put_secret(next, PASSWORD, typed)?,
+            PasswordOp::Forget => forget_secrets(previous.unwrap_or(next))?,
         }
     }
     Ok(())
@@ -273,7 +299,7 @@ fn save(
             .peek()
             .connections
             .iter()
-            .find(|c| c.def.url() == url)
+            .find(|c| c.def.named() == url)
             .map(|row| row.def.clone())
     });
     let ops = password_ops(
@@ -289,7 +315,7 @@ fn save(
 
     ctx.status.set(Status::Storing);
     spawn(async move {
-        let landed = offload(move || run_password_ops(&ops)).await;
+        let landed = offload(move || run_password_ops(&ops, previous.as_ref(), &def)).await;
         match landed {
             Some(Ok(())) => commit(ctx, project, rescan, engine, report),
             Some(Err(why)) => ctx.status.set(Status::Failed(format!(
@@ -318,7 +344,7 @@ fn commit(
     report: ReportCtx,
 ) {
     let def = ctx.draft.peek().def();
-    let url = def.url();
+    let url = def.named();
     let moved_from = ctx
         .target
         .peek()
@@ -362,25 +388,47 @@ fn commit(
 
 #[cfg(test)]
 mod tests {
-    use strata_model::{PgPassword, PgStore, S3Store};
+    use crate::apps::connection::model::PgDraft;
+    use strata_engine::sources::postgres::Pg;
+    use strata_engine::SourceKind;
+    use strata_model::S3Store;
 
     use super::*;
 
-    fn pg(address: &str, user: &str) -> ConnectionDef {
+    fn named(name: &str, address: &str, user: &str) -> ConnectionDef {
         ConnectionDef {
             address: address.into(),
-            provider: Provider::Postgres(PgStore {
-                catalog: "warehouse".into(),
-                user: user.into(),
-                password: PgPassword::Keystore,
-                ..Default::default()
-            }),
+            name: name.into(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: name.into(),
+                    user: user.into(),
+                    password: true,
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         }
     }
 
-    fn slot(def: &ConnectionDef) -> SecretRef {
-        password_ref(def).expect("a database def owns a keystore slot")
+    fn pg(address: &str, user: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: address.into(),
+            name: "warehouse".into(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: "warehouse".into(),
+                    user: user.into(),
+                    password: true,
+                    ..Default::default()
+                }
+                .def(),
+            ),
+            client_config: Default::default(),
+        }
     }
 
     /// **Nothing typed, nothing moved, nothing pressed is no keystore call at all**, so an
@@ -397,39 +445,34 @@ mod tests {
 
         let s3 = ConnectionDef {
             address: "acme-lake".into(),
+            name: "acme_lake".into(),
             provider: Provider::S3(S3Store::default()),
             client_config: Default::default(),
         };
         assert_eq!(password_ops(Some(&s3), &s3, "hunter2", true), []);
     }
 
-    /// **An identity move migrates the entry, and the migration comes before the put.** The
-    /// reference is derived from the URL, so an edit to the address or the user moves the slot;
-    /// run the other way round, a save that moved the identity *and* typed a new password would
-    /// carry the old one over it.
+    /// **A rename moves the entry, and the move comes before the put.** The slot is derived from
+    /// the connection's name, so renaming one moves it; run the other way round, a save that
+    /// renamed *and* typed a new password would carry the old one over it.
     #[test]
-    fn a_moved_identity_migrates_before_anything_lands_on_the_new_slot() {
-        let old = pg("db:5432/analytics", "reader");
-        let new = pg("db:5432/analytics", "writer");
+    fn a_rename_moves_the_entry_before_anything_lands_on_the_new_slot() {
+        let old = named("warehouse", "db:5432/analytics", "reader");
+        let new = named("depot", "db:5432/analytics", "reader");
         assert_eq!(
             password_ops(Some(&old), &new, "", false),
-            [PasswordOp::Migrate(slot(&old), slot(&new))]
+            [PasswordOp::Rename]
         );
-
-        let ops = password_ops(Some(&old), &new, "hunter2", false);
         assert_eq!(
-            ops,
-            [
-                PasswordOp::Migrate(slot(&old), slot(&new)),
-                PasswordOp::Put(slot(&new), Secret::new("hunter2").unwrap()),
-            ]
+            password_ops(Some(&old), &new, "hunter2", false),
+            [PasswordOp::Rename, PasswordOp::Put("hunter2".into())]
         );
 
         let moved_address = pg("db:5433/analytics", "reader");
         assert_eq!(
             password_ops(Some(&old), &moved_address, "", false),
-            [PasswordOp::Migrate(slot(&old), slot(&moved_address))],
-            "the address is the other half of the identity"
+            [],
+            "the address moved and the name did not, so the slot did not move"
         );
     }
 
@@ -440,50 +483,55 @@ mod tests {
         let def = pg("db:5432/analytics", "reader");
         assert_eq!(
             password_ops(Some(&def), &def, " hunter2 ", false),
-            [PasswordOp::Put(slot(&def), Secret::new("hunter2").unwrap())]
+            [PasswordOp::Put("hunter2".into())]
         );
         assert_eq!(
             password_ops(Some(&def), &def, "hunter2", true),
-            [PasswordOp::Put(slot(&def), Secret::new("hunter2").unwrap())],
+            [PasswordOp::Put("hunter2".into())],
             "typing over a pending removal is the password you meant"
         );
     }
 
     /// **Every way of abandoning a password deletes this machine's entry**, including switching
-    /// the provider away from the database arm — which drops `PgPassword` from the def entirely,
+    /// the provider away from the source arm — which drops the expectation from the def entirely,
     /// so nothing would ever name that slot again.
     #[test]
     fn an_abandoned_password_is_deleted_from_this_machine() {
         let def = pg("db:5432/analytics", "reader");
         assert_eq!(
             password_ops(Some(&def), &def, "", true),
-            [PasswordOp::Delete(slot(&def))],
+            [PasswordOp::Forget],
             "remove from this machine"
         );
 
         let unused = ConnectionDef {
-            provider: Provider::Postgres(PgStore {
-                catalog: "warehouse".into(),
-                user: "reader".into(),
-                password: PgPassword::None,
-                ..Default::default()
-            }),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: "warehouse".into(),
+                    user: "reader".into(),
+                    password: false,
+                    ..Default::default()
+                }
+                .def(),
+            ),
             ..def.clone()
         };
         assert_eq!(
             password_ops(Some(&def), &unused, "", true),
-            [PasswordOp::Delete(slot(&def))],
-            "this connection uses no password — the same slot, since the identity did not move"
+            [PasswordOp::Forget],
+            "this connection uses no password"
         );
 
         let s3 = ConnectionDef {
             address: "acme-lake".into(),
+            name: "acme_lake".into(),
             provider: Provider::S3(S3Store::default()),
             client_config: Default::default(),
         };
         assert_eq!(
             password_ops(Some(&def), &s3, "", false),
-            [PasswordOp::Delete(slot(&def))],
+            [PasswordOp::Forget],
             "and the slot deleted is the one the old def named, not the new URL's"
         );
     }

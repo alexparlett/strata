@@ -30,8 +30,8 @@ use datafusion::sql::TableReference;
 use strata_arrow::column_info;
 
 use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
-use crate::db::Databases;
 use crate::query::is_snapshot_name;
+use crate::sources::Live;
 use crate::statements::pipeline::resolved_one;
 use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, quote_ident};
@@ -113,7 +113,7 @@ pub async fn drop(ctx: &SessionContext, name: &str) -> Result<(), String> {
 pub async fn create_statement(
     ctx: &SessionContext,
     stmt: DFStatement,
-    databases: &Databases,
+    sources: &Live,
     source: &str,
 ) -> Result<StatementOutcome, String> {
     let DFStatement::Statement(s) = &stmt else {
@@ -123,7 +123,7 @@ pub async fn create_statement(
         return Err(not_a_view(StmtKind::CreateView));
     };
     if let Some(at) = remote::target(ctx, StmtKind::CreateView, &stmt) {
-        return remote::create_view(ctx, databases, &at, view.materialized, &stmt, source).await;
+        return remote::create_view(ctx, sources, &at, view.materialized, &stmt, source).await;
     }
     let (name, sql) = definition(ctx, view)?;
 
@@ -168,11 +168,11 @@ pub async fn create_statement(
 pub async fn drop_statement(
     ctx: &SessionContext,
     stmt: DFStatement,
-    databases: &Databases,
+    sources: &Live,
     source: &str,
 ) -> Result<StatementOutcome, String> {
     if let Some(at) = remote::target(ctx, StmtKind::DropView, &stmt) {
-        return remote::drop_relation(ctx, databases, &at, true, &stmt, source).await;
+        return remote::drop_relation(ctx, sources, &at, true, &stmt, source).await;
     }
     let plan = ctx
         .state()

@@ -9,7 +9,7 @@
 //! time is the same five rows with four more dialogs.
 //!
 //! **An object-store table is one path, in the same list.** On a connection the section is singular
-//! throughout — `SOURCE PATH`, no toolbar, one row wearing the bucket as a non-editable prefix —
+//! throughout — `SOURCE PATH`, no toolbar —
 //! because an object store has no file dialog and its paths are text. Still this list one row long
 //! rather than a second control: the row is where the two-way sync with the draft lives, and what
 //! actually goes is the toolbar and the empty state.
@@ -26,7 +26,7 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{EMPTY_TABLE_HEIGHT, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
-use crate::components::typography::{MonoValue, Prose};
+use crate::components::typography::Prose;
 use crate::components::window::window_theme;
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
@@ -40,10 +40,6 @@ const CELL_INSET: f32 = SP_4;
 const STACK_GAP: f32 = SP_3;
 /// The browse dropdown's width — enough for its two labels without the card hugging them.
 const MENU_WIDTH: f32 = 180.;
-/// The most of a source row the **bucket prefix** may take before it ellipsizes. Half, so the
-/// path always keeps at least half the box it is typed into however long the connection's URL is.
-const PREFIX_MAX_PERCENT: f32 = 50.;
-
 /// What each shape of path resolves to — the canvas's ⓘ, verbatim in substance.
 const RESOLUTION_HINT: &str = "Each path resolves to one or more data files in the format chosen \
                                above, combined into this table. A file is one file; a folder is \
@@ -264,12 +260,11 @@ impl Component for PathList {
     fn render(&self) -> impl IntoElement {
         let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
-        let (count, selected, prefix, remote) = {
+        let (count, selected, remote) = {
             let draft = ctx.draft.read();
             (
                 draft.path_count(),
                 draft.clamp_selection(*ctx.selected_path.read()),
-                draft.bucket_prefix(),
                 draft.remote(),
             )
         };
@@ -293,7 +288,6 @@ impl Component for PathList {
                 PathRow {
                     index,
                     selected: index == selected,
-                    prefix: prefix.clone(),
                     remote,
                     key: DiffKey::None,
                 }
@@ -320,9 +314,7 @@ struct PathRow {
     /// The bucket this row's path is written against, or `None` on the local disk *and* while no
     /// connection is chosen — the list's answer, carried as a prop rather than read here (see
     /// [`PathList`]).
-    prefix: Option<String>,
-    /// Whether LOCATION is on Remote. Not `prefix.is_some()`: a remote row with no connection
-    /// picked yet has no prefix to wear and is still the row that has no Browse button behind it.
+    /// Whether LOCATION is on Remote — the row that has no Browse button behind it.
     remote: bool,
     key: DiffKey,
 }
@@ -378,8 +370,7 @@ impl Component for PathRow {
             false => Color::TRANSPARENT,
         };
 
-        let form = form_theme();
-        let prefix = self.prefix.clone();
+        let _form = form_theme();
         let remote = self.remote;
 
         TableRow::new()
@@ -400,13 +391,6 @@ impl Component for PathRow {
                             .horizontal()
                             .content(Content::Flex)
                             .cross_align(Alignment::Center)
-                            .maybe_child(prefix.map(|prefix| {
-                                MonoValue::new(prefix)
-                                    .color(form.hint_color)
-                                    .max_width(Size::percent(PREFIX_MAX_PERCENT))
-                                    .max_lines(1)
-                                    .text_overflow(TextOverflow::Ellipsis)
-                            }))
                             .child(
                                 ValueField::new(text)
                                     .bare()

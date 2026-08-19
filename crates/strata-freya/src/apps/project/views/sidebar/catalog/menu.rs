@@ -598,7 +598,7 @@ pub fn connection_menu(actions: &ConnectionActions, url: String, provider: Provi
                 })
                 .child(menu_row(IconName::Pencil, "Edit connection")),
         )
-        .maybe_child((provider == ProviderId::Postgres).then(|| {
+        .maybe_child((provider == ProviderId::Source).then(|| {
             let url = url.clone();
             MenuButton::new()
                 .on_press(move |_| {

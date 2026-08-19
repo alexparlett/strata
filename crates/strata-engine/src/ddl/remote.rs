@@ -21,13 +21,16 @@ use datafusion::sql::sqlparser::tokenizer::Location;
 use datafusion::sql::TableReference;
 
 use crate::catalog::remote_dependents;
-use crate::db::{self, Databases, RemoteTarget};
 use crate::providers::in_workspace;
+use crate::sources::{execute_text, relist_at, server_ident, writable, Live};
 use crate::statements::StmtKind;
 use crate::{fold_ident, CATALOG, SCHEMA};
 use strata_core::util::plural;
 
-use super::{left_invalid, read_only, remote_named, remote_target, StatementOutcome, StoreEffect};
+use super::{
+    left_invalid, read_only, remote_named, remote_target, RemoteTarget, StatementOutcome,
+    StoreEffect,
+};
 
 /// The relation `kind` addresses, when it is one inside a database connection and the statement
 /// is therefore dispatched rather than planned — the one answer every arm and the editor read, so
@@ -68,18 +71,18 @@ pub(crate) fn dispatched(ctx: &SessionContext, kind: StmtKind, stmt: &DFStatemen
 /// body check would have stopped.
 async fn dispatch(
     ctx: &SessionContext,
-    databases: &Databases,
+    sources: &Live,
     at: &RemoteTarget,
     stmt: &DFStatement,
     source: &str,
 ) -> Result<u64, String> {
-    if !db::writable(databases, &at.catalog) {
+    if !writable(sources, &at.catalog) {
         return Err(read_only(at));
     }
     let named = Named::of(stmt);
     named.check(ctx, &at.catalog)?;
-    let sql = splice(source, &named.names, &at.catalog)?;
-    db::execute(databases, &at.catalog, &sql).await
+    let sql = splice(source, &named.names, &at.catalog, sources)?;
+    execute_text(sources, &at.catalog, &sql).await
 }
 
 /// [`dispatch`], plus the re-enumeration a statement that changed what the server holds owes: it
@@ -87,14 +90,14 @@ async fn dispatch(
 /// that is gone.
 async fn changed(
     ctx: &SessionContext,
-    databases: &Databases,
+    sources: &Live,
     at: &RemoteTarget,
     stmt: &DFStatement,
     source: &str,
     message: String,
 ) -> Result<StatementOutcome, String> {
-    dispatch(ctx, databases, at, stmt, source).await?;
-    db::relist_at(databases, &at.catalog).await;
+    dispatch(ctx, sources, at, stmt, source).await?;
+    relist_at(sources, &at.catalog).await;
     Ok(StatementOutcome {
         message,
         count: None,
@@ -106,7 +109,7 @@ async fn changed(
 /// accepts `MATERIALIZED`, the workspace having no such concept.
 pub(super) async fn create_view(
     ctx: &SessionContext,
-    databases: &Databases,
+    sources: &Live,
     at: &RemoteTarget,
     materialized: bool,
     stmt: &DFStatement,
@@ -121,14 +124,14 @@ pub(super) async fn create_view(
         at.server_address(),
         at.catalog
     );
-    changed(ctx, databases, at, stmt, source, message).await
+    changed(ctx, sources, at, stmt, source, message).await
 }
 
 /// A **column-list** `CREATE TABLE` inside a database connection, whose types are the server's own
 /// vocabulary (`jsonb`, `serial`) and only the server's to judge.
 pub(super) async fn create_table(
     ctx: &SessionContext,
-    databases: &Databases,
+    sources: &Live,
     at: &RemoteTarget,
     stmt: &DFStatement,
     source: &str,
@@ -138,7 +141,7 @@ pub(super) async fn create_table(
         at.server_address(),
         at.catalog
     );
-    changed(ctx, databases, at, stmt, source, message).await
+    changed(ctx, sources, at, stmt, source, message).await
 }
 
 /// `DROP TABLE` / `DROP VIEW` inside a database connection, naming the workspace views left
@@ -146,7 +149,7 @@ pub(super) async fn create_table(
 /// only what the connection last told us and `IF EXISTS` travelling in the statement.
 pub(super) async fn drop_relation(
     ctx: &SessionContext,
-    databases: &Databases,
+    sources: &Live,
     at: &RemoteTarget,
     view: bool,
     stmt: &DFStatement,
@@ -163,7 +166,7 @@ pub(super) async fn drop_relation(
         at.catalog,
         left_invalid(&dependents)
     );
-    changed(ctx, databases, at, stmt, source, message).await
+    changed(ctx, sources, at, stmt, source, message).await
 }
 
 /// `UPDATE` and `DELETE`, remote-only, reporting the **server's** own affected-row count and no
@@ -172,7 +175,7 @@ pub(super) async fn drop_relation(
 pub(super) async fn dml(
     ctx: &SessionContext,
     kind: StmtKind,
-    databases: &Databases,
+    sources: &Live,
     stmt: &DFStatement,
     source: &str,
 ) -> Result<StatementOutcome, String> {
@@ -180,7 +183,7 @@ pub(super) async fn dml(
     let Some(at) = target(ctx, kind, stmt) else {
         return Err(workspace_dml(kind));
     };
-    let rows = dispatch(ctx, databases, &at, stmt, source).await?;
+    let rows = dispatch(ctx, sources, &at, stmt, source).await?;
     let verb = match kind {
         StmtKind::Delete => "Deleted",
         _ => "Updated",
@@ -401,7 +404,12 @@ fn not_qualified(name: &ObjectName, catalog: &str) -> String {
 /// has no three-part bytes to cut — its parts share the token's one span — so the whole token
 /// becomes the server's spelling of `schema.relation`, quoted unconditionally as every identifier
 /// Strata composes is.
-fn splice(source: &str, names: &[ObjectName], catalog: &str) -> Result<String, String> {
+fn splice(
+    source: &str,
+    names: &[ObjectName],
+    catalog: &str,
+    sources: &Live,
+) -> Result<String, String> {
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     for name in names {
         let Some([owner, schema, table]) = parts(name) else {
@@ -422,8 +430,8 @@ fn splice(source: &str, names: &[ObjectName], catalog: &str) -> Result<String, S
                 at_owner,
                 format!(
                     "{}.{}",
-                    db::server_ident(&schema.value),
-                    db::server_ident(&table.value)
+                    server_ident(sources, catalog, &schema.value),
+                    server_ident(sources, catalog, &table.value)
                 ),
             ));
             continue;
@@ -510,7 +518,7 @@ mod tests {
     use crate::builder::test_context;
     use crate::fold_ident;
     use crate::policy::{Capability, CapabilityPolicyProvider};
-    use crate::providers::fake_database;
+    use crate::providers::fake_source;
     use crate::statements::pipeline::{resolved_one, Pipeline};
 
     use super::*;
@@ -525,8 +533,8 @@ mod tests {
             )),
         )
         .expect("workspace table");
-        fake_database(&ctx, "pg", &["orders", "customers"]);
-        fake_database(&ctx, "warehouse", &["shipments"]);
+        fake_source(&ctx, "pg", &["orders", "customers"]);
+        fake_source(&ctx, "warehouse", &["shipments"]);
         ctx
     }
 
@@ -536,7 +544,7 @@ mod tests {
         let stmt = resolved_one(&ctx, sql)?;
         let named = Named::of(&stmt);
         named.check(&ctx, "pg")?;
-        splice(sql, &named.names, "pg")
+        splice(sql, &named.names, "pg", &Live::default())
     }
 
     /// **Byte-identical outside the removed qualifiers**, which is the whole claim of splicing
@@ -799,7 +807,7 @@ mod tests {
         assert_eq!(at.address(), "pg.public.\"Orders\"");
 
         let ctx = session();
-        fake_database(&ctx, "quoted", &["Orders"]);
+        fake_source(&ctx, "quoted", &["Orders"]);
         crate::ddl::create_view(&ctx, "reader", "SELECT id FROM quoted.public.\"Orders\"")
             .await
             .expect("a workspace view over the remote relation");

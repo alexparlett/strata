@@ -27,6 +27,7 @@ use std::path::Path;
 use futures::stream::{self, StreamExt};
 use strata_model::{ConnectionDef, TableDef};
 
+use crate::store::store_prefix;
 use crate::{Engine, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
@@ -50,7 +51,7 @@ pub enum RegOutcome {
     /// answer itself.
     Connection {
         /// The connection's identity: [`ConnectionDef::url`], **not** its bucket. The bucket
-        /// alone is not unique — `s3://lake` and `gs://lake` are two connections and two
+        /// alone is not unique — `s3:lake` and `gcs:lake` are two connections and two
         /// registry keys — so a caller folding these answers onto rows by bucket would land
         /// both on whichever it found first and leave the other unanswered forever.
         url: String,
@@ -76,12 +77,16 @@ pub enum RegOutcome {
 /// [`register_pass`]'s first phase), so `s3://acme-lake/events/` is a `ListingTableUrl` the
 /// session can already resolve.
 pub fn table_spec(root: &Path, def: &TableDef) -> TableSpec {
+    let prefix = def
+        .connection
+        .as_deref()
+        .map(|identity| store_prefix(identity).unwrap_or_else(|| identity.to_string()));
     TableSpec {
         name: def.name.clone(),
         paths: def
             .sources
             .iter()
-            .map(|s| resolve_source(root, def.connection.as_deref(), s))
+            .map(|s| resolve_source(root, prefix.as_deref(), s))
             .collect(),
         format: def.format.clone(),
         partitions: def.partition_cols.clone(),
@@ -158,7 +163,7 @@ pub async fn register_pass(
     mut settled: impl FnMut(RegOutcome),
 ) {
     for conn in connections {
-        let url = conn.url();
+        let url = conn.identity();
         let result = engine.connect(conn).await;
         settled(RegOutcome::Connection { url, result });
     }
@@ -472,6 +477,7 @@ mod tests {
             connections: vec![
                 ConnectionDef {
                     address: "lake".into(),
+                    name: String::new(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
@@ -480,6 +486,7 @@ mod tests {
                 },
                 ConnectionDef {
                     address: "lake".into(),
+                    name: String::new(),
                     provider: Provider::Gcs(GcsStore {
                         auth: GcsAuth::ServiceAccount {
                             path: String::new(),
@@ -489,6 +496,7 @@ mod tests {
                 },
                 ConnectionDef {
                     address: "no-region".into(),
+                    name: String::new(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
@@ -505,9 +513,9 @@ mod tests {
         assert_eq!(
             names(&out),
             vec![
-                ("s3://lake", false),
-                ("gs://lake", false),
-                ("s3://no-region", false),
+                ("s3:lake", false),
+                ("gcs:lake", false),
+                ("s3:no-region", false),
                 ("local", true)
             ],
             "{out:?}"
@@ -527,7 +535,7 @@ mod tests {
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::from_name("parquet"),
-            connection: Some("s3://acme-lake".into()),
+            connection: Some("s3:acme-lake".into()),
             sources: vec!["events/2024/**/*.parquet".into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,

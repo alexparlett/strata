@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::apps::connection::model::PgDraft;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
@@ -16,11 +17,13 @@ use freya_testing::TestingRunner;
 use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
+use strata_engine::sources::postgres::Pg;
+use strata_engine::SourceKind;
 use strata_engine::{TableMeta, ViewMeta};
 use strata_model::{
-    CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, PgStore, Provider,
-    ProviderId, RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef,
-    TableOrigin, ViewDef,
+    CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, Provider, ProviderId,
+    RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef, TableOrigin,
+    ViewDef,
 };
 use uuid::Uuid;
 
@@ -1741,6 +1744,7 @@ mod connections {
     pub fn s3(bucket: &str) -> ConnectionDef {
         ConnectionDef {
             address: bucket.into(),
+            name: String::new(),
             provider: Provider::S3(S3Store {
                 region: "eu-west-2".into(),
                 auth: S3Auth::Ambient,
@@ -1753,12 +1757,17 @@ mod connections {
     fn postgres(database: &str) -> ConnectionDef {
         ConnectionDef {
             address: format!("db.internal:5432/{database}"),
-            provider: Provider::Postgres(PgStore {
-                catalog: database.into(),
-                user: "reader".into(),
-                schemas: vec!["public".into()],
-                ..Default::default()
-            }),
+            name: String::new(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: database.into(),
+                    user: "reader".into(),
+                    schemas: vec!["public".into()],
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         }
     }
@@ -1780,12 +1789,12 @@ mod connections {
     fn project() -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
-            tables: vec![over("events", "s3://lake")],
+            tables: vec![over("events", "lake")],
             connections: vec![s3("lake"), postgres("analytics")],
             ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-connections"));
-        p.connection_registered("s3://lake");
+        p.connection_registered("lake");
         p.table_registered(
             "events",
             TableMeta {
@@ -1890,7 +1899,7 @@ mod connections {
         store
             .write_channel(ProjChan::Connections)
             .connection_failed(
-                "s3://lake",
+                "lake",
                 "Received redirect without LOCATION, this normally indicates an incorrectly \
              configured region"
                     .into(),
@@ -1938,7 +1947,7 @@ mod connections {
         assert_eq!(
             *h.drop_target.peek(),
             Some(DropTarget::Connection {
-                url: "s3://lake".into(),
+                url: "lake".into(),
                 provider: ProviderId::S3
             })
         );
@@ -1948,8 +1957,8 @@ mod connections {
         assert_eq!(
             *h.drop_target.peek(),
             Some(DropTarget::Connection {
-                url: "postgres://reader@db.internal:5432/analytics".into(),
-                provider: ProviderId::Postgres
+                url: "analytics".into(),
+                provider: ProviderId::Source
             })
         );
     }
@@ -1964,7 +1973,7 @@ mod connections {
 
         assert_eq!(
             *h.editor.peek(),
-            Some(ConnectionTarget::Edit("s3://lake".into()))
+            Some(ConnectionTarget::Edit("lake".into()))
         );
     }
 
@@ -1988,7 +1997,7 @@ mod connections {
 
         assert_eq!(
             *h.schemas.peek(),
-            Some("postgres://reader@db.internal:5432/analytics".into()),
+            Some("analytics".into()),
             "the picker is asked for by the connection's URL"
         );
     }
@@ -2285,7 +2294,7 @@ mod virtualization {
                 .map(|i| table(&format!("t{i:04}"), vec![]))
                 .collect();
             let mut last = table("zz_last", vec![]);
-            last.connection = Some("s3://lake".into());
+            last.connection = Some("lake".into());
             tables.push(last);
             let defs = ProjectDefs {
                 name: "test".into(),
@@ -2294,7 +2303,7 @@ mod virtualization {
                 ..Default::default()
             };
             let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-jump"));
-            p.connection_registered("s3://lake");
+            p.connection_registered("lake");
             p
         }
 

@@ -16,7 +16,11 @@ use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ConnectionDef, PgPassword, PgSslMode, PgStore, Provider, ProviderId, S3Store};
+use strata_engine::sources::postgres::Pg;
+use strata_engine::SourceKind;
+use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
+
+use super::model::PgDraft;
 
 use super::views::{ConnectionBody, Footer, OPTION_KEY_WIDTH};
 use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, PasswordProbe, Status};
@@ -37,6 +41,7 @@ fn project(root: &Path) -> ProjectState {
         name: "test".into(),
         connections: vec![ConnectionDef {
             address: "old-lake".into(),
+            name: "old_lake".into(),
             provider: Provider::S3(S3Store {
                 region: "eu-west-2".into(),
                 ..Default::default()
@@ -265,18 +270,18 @@ fn saving_writes_the_def_and_waits_for_the_pass() {
         .peek()
         .connections
         .iter()
-        .map(|c| c.def.url())
+        .map(|c| c.def.named())
         .collect();
-    assert_eq!(urls, ["acme-lake", "old-lake"].map(|b| format!("s3://{b}")));
+    assert_eq!(urls, ["acme_lake", "old_lake"]);
     assert_eq!(
         *ctx.status.peek(),
-        Status::Connecting("s3://acme-lake".into()),
+        Status::Connecting("acme_lake".into()),
         "the window is waiting on its own row, not claiming it connected"
     );
     assert_eq!(rescan.peek().seq, 1, "one pass asked for");
     assert_eq!(
         *ctx.target.peek(),
-        ConnectionTarget::Edit("s3://acme-lake".into())
+        ConnectionTarget::Edit("acme_lake".into())
     );
 }
 
@@ -289,11 +294,8 @@ fn an_edit_that_moves_the_bucket_leaves_no_row_behind() {
         region: "eu-west-2".into(),
         ..Default::default()
     };
-    let (mut runner, (_, project, _)) = runner(
-        "moved",
-        ConnectionTarget::Edit("s3://old-lake".into()),
-        draft,
-    );
+    let (mut runner, (_, project, _)) =
+        runner("moved", ConnectionTarget::Edit("old_lake".into()), draft);
     settle(&mut runner);
 
     click_lowest(&mut runner, "Save");
@@ -302,9 +304,9 @@ fn an_edit_that_moves_the_bucket_leaves_no_row_behind() {
         .peek()
         .connections
         .iter()
-        .map(|c| c.def.url())
+        .map(|c| c.def.named())
         .collect();
-    assert_eq!(urls, ["s3://new-lake"], "the old URL's row is gone");
+    assert_eq!(urls, ["new_lake"], "the old URL's row is gone");
 }
 
 /// **The client-options header stands at the split it declares, empty or not.**
@@ -431,7 +433,7 @@ fn a_database_has_the_database_rows_and_none_of_the_object_stores() {
     settle(&mut runner);
 
     click_lowest(&mut runner, "PG");
-    assert_eq!(ctx.draft.peek().provider, ProviderId::Postgres);
+    assert_eq!(ctx.draft.peek().provider, ProviderId::Source);
 
     for row in ["URL", "DATABASE", "CATALOG", "USER", "PASSWORD", "SSL MODE"] {
         assert!(shows(&runner, row), "{row}: {:?}", texts(&runner));
@@ -450,7 +452,7 @@ fn a_database_has_the_database_rows_and_none_of_the_object_stores() {
         "'prefer' does not verify, so there is nothing for a certificate to do"
     );
 
-    ctx.edit(|draft| draft.pg.sslmode = PgSslMode::VerifyFull);
+    ctx.edit(|draft| draft.pg.sslmode = "verify-full".to_string());
     settle(&mut runner);
     assert!(shows(&runner, "ROOT CERTIFICATE"), "{:?}", texts(&runner));
 
@@ -465,9 +467,9 @@ fn a_database_has_the_database_rows_and_none_of_the_object_stores() {
 #[test]
 fn a_database_draft_is_blocked_and_explained_beside_the_button() {
     let draft = ConnectionDraft {
-        provider: ProviderId::Postgres,
+        provider: ProviderId::Source,
         address: "db.internal:5432/analytics".into(),
-        pg: PgStore {
+        pg: PgDraft {
             user: "reader".into(),
             ..Default::default()
         },
@@ -490,26 +492,30 @@ fn a_database_draft_is_blocked_and_explained_beside_the_button() {
         let mut p = project.write_channel(ProjChan::Connections);
         p.upsert_connection(ConnectionDef {
             address: "other:5432/sales".into(),
-            provider: Provider::Postgres(PgStore {
-                catalog: "warehouse".into(),
-                user: "reader".into(),
-                ..Default::default()
-            }),
+            name: "warehouse".into(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: "warehouse".into(),
+                    user: "reader".into(),
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         });
     }
-    ctx.edit(|draft| draft.pg.catalog = "WAREHOUSE".into());
+    ctx.edit(|draft| draft.pg.name = "WAREHOUSE".into());
     settle(&mut runner);
 
     let said = texts(&runner);
     assert!(
         said.iter()
-            .any(|t| t.contains("is already the catalog name")
-                && t.contains("postgres://reader@other:5432/sales")),
+            .any(|t| t.contains("is already the catalog name") && t.contains("sales")),
         "a folded clash against another connection: {said:?}"
     );
 
-    ctx.edit(|draft| draft.pg.catalog = "pg".into());
+    ctx.edit(|draft| draft.pg.name = "pg".into());
     settle(&mut runner);
     click_lowest(&mut runner, "Save");
     assert_eq!(rescan.peek().seq, 1, "and it saves once the name is free");
@@ -525,16 +531,17 @@ fn a_database_draft_is_blocked_and_explained_beside_the_button() {
 #[test]
 fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
     let draft = ConnectionDraft {
-        provider: ProviderId::Postgres,
+        provider: ProviderId::Source,
         address: "db.internal:5432/analytics".into(),
-        pg: PgStore {
-            catalog: "pg".into(),
+        pg: PgDraft {
+            kind: Pg::NAME.to_string(),
+            name: "pg".into(),
             user: "reader".into(),
             ..Default::default()
         },
         ..Default::default()
     };
-    let stored = "postgres://reader@db.internal:5432/analytics";
+    let stored = "analytics";
     let (mut runner, (ctx, mut project, _)) = runner(
         "pg-self-clash",
         ConnectionTarget::Edit(stored.into()),
@@ -544,11 +551,16 @@ fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
         let mut p = project.write_channel(ProjChan::Connections);
         p.upsert_connection(ConnectionDef {
             address: "db.internal:5432/analytics".into(),
-            provider: Provider::Postgres(PgStore {
-                catalog: "pg".into(),
-                user: "reader".into(),
-                ..Default::default()
-            }),
+            name: "analytics".into(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: "pg".into(),
+                    user: "reader".into(),
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         });
     }
@@ -560,9 +572,9 @@ fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
     settle(&mut runner);
 
     assert_eq!(
-        ctx.draft.peek().def().url(),
-        "postgres://writer@db.internal:5432/analytics",
-        "the identity moved, so the stored row no longer matches it"
+        ctx.draft.peek().def().identity(),
+        "postgres:db.internal:5432/analytics",
+        "the address is unchanged, so the clash is the name's question and not the address's"
     );
     let said = texts(&runner);
     assert!(
@@ -580,10 +592,11 @@ fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
 #[test]
 fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine() {
     let draft = ConnectionDraft {
-        provider: ProviderId::Postgres,
+        provider: ProviderId::Source,
         address: "db.internal:5432/analytics".into(),
-        pg: PgStore {
-            catalog: "pg".into(),
+        pg: PgDraft {
+            kind: Pg::NAME.to_string(),
+            name: "pg".into(),
             user: "reader".into(),
             ..Default::default()
         },
@@ -592,7 +605,7 @@ fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine(
     let (mut runner, (ctx, ..)) = runner("pg-password", ConnectionTarget::New, draft);
     settle(&mut runner);
 
-    assert_eq!(ctx.draft.peek().pg.password, PgPassword::None);
+    assert!(!ctx.draft.peek().pg.password);
     assert!(
         shows(&runner, "This connection signs in without a password."),
         "{:?}",
@@ -602,9 +615,8 @@ fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine(
     let mut typed = ctx.password;
     typed.set("hunter2".into());
     settle(&mut runner);
-    assert_eq!(
+    assert!(
         ctx.draft.peek().pg.password,
-        PgPassword::Keystore,
         "typing one is what makes the def expect one"
     );
     assert!(shows(
@@ -614,9 +626,8 @@ fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine(
 
     typed.set(String::new());
     settle(&mut runner);
-    assert_eq!(
-        ctx.draft.peek().pg.password,
-        PgPassword::None,
+    assert!(
+        !ctx.draft.peek().pg.password,
         "and clearing the box puts back what the def said, rather than leaving a committed \
          expectation nothing holds"
     );
@@ -628,19 +639,20 @@ fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine(
 #[test]
 fn removing_a_password_from_this_machine_is_not_declaring_the_connection_has_none() {
     let draft = ConnectionDraft {
-        provider: ProviderId::Postgres,
+        provider: ProviderId::Source,
         address: "db.internal:5432/analytics".into(),
-        pg: PgStore {
-            catalog: "pg".into(),
+        pg: PgDraft {
+            kind: Pg::NAME.to_string(),
+            name: "pg".into(),
             user: "reader".into(),
-            password: PgPassword::Keystore,
+            password: true,
             ..Default::default()
         },
         ..Default::default()
     };
     let (mut runner, (ctx, ..)) = runner(
         "pg-forget",
-        ConnectionTarget::Edit("postgres://reader@db.internal:5432/analytics".into()),
+        ConnectionTarget::Edit("analytics".into()),
         draft,
     );
     let mut probe = ctx.password_probe;
@@ -657,17 +669,15 @@ fn removing_a_password_from_this_machine_is_not_declaring_the_connection_has_non
     );
 
     click_lowest(&mut runner, "Remove from this machine");
-    assert_eq!(
+    assert!(
         ctx.draft.peek().pg.password,
-        PgPassword::Keystore,
         "the connection still expects one, so other machines keep theirs"
     );
     assert!(*ctx.password_removed.peek());
 
     click_lowest(&mut runner, "This connection uses no password");
-    assert_eq!(
-        ctx.draft.peek().pg.password,
-        PgPassword::None,
+    assert!(
+        !ctx.draft.peek().pg.password,
         "this one is a def edit, and it is the only one that is"
     );
     assert!(
@@ -676,17 +686,18 @@ fn removing_a_password_from_this_machine_is_not_declaring_the_connection_has_non
     );
 }
 
-/// **This machine's answer is not the def's**: a committed `PgPassword::Keystore` says a password
+/// **This machine's answer is not the def's**: a def that expects a password says one
 /// is expected, not that this machine holds one.
 #[test]
 fn the_password_row_says_what_this_machine_holds() {
     let draft = ConnectionDraft {
-        provider: ProviderId::Postgres,
+        provider: ProviderId::Source,
         address: "db.internal:5432/analytics".into(),
-        pg: PgStore {
-            catalog: "pg".into(),
+        pg: PgDraft {
+            kind: Pg::NAME.to_string(),
+            name: "pg".into(),
             user: "reader".into(),
-            password: PgPassword::Keystore,
+            password: true,
             ..Default::default()
         },
         ..Default::default()
@@ -728,7 +739,7 @@ fn a_url_another_connection_holds_blocks_the_save() {
     assert!(
         shows(
             &runner,
-            "'s3://old-lake' is already a connection in this project."
+            "'old_lake' is already a connection in this project."
         ),
         "{:?}",
         texts(&runner)
