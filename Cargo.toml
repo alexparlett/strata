@@ -35,7 +35,7 @@ torin = { git = "https://github.com/alexparlett/freya", branch = "main" }
 # *same* arrow or a `RecordBatch` built on one side is a different type on the other. DataFusion
 # 54 is on arrow 58; moving either without the other forks that type identity, so this line and
 # the engine's `datafusion` line move together. See docs/ARCHITECTURE.md.
-arrow = "58"
+arrow = "59"
 
 # Workspace lint policy, inherited by every member (`[lints] workspace = true`). The base is
 # `clippy::all` plus a hand-picked readability/complexity set — deliberately NOT the whole
