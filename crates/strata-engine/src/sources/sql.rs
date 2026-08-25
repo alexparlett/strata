@@ -27,13 +27,14 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
-    AstAnalyzer, LogicalOptimizer, RemoteTableRef, SQLExecutor, SQLFederationProvider,
-    SQLTableSource,
+    AstAnalyzer, LogicalOptimizer, RemoteTableRef, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{default_optimizer_rules, FederatedTableProviderAdaptor};
 use futures::TryStreamExt;
 
 use crate::sources::source::{Located, SourceCatalog};
+
+pub use datafusion_federation::sql::SQLExecutor;
 
 /// The name `datafusion-federation` gives its rule, which is how it is found in the list.
 const FEDERATION_RULE: &str = "federation_optimizer_rule";

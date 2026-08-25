@@ -19,7 +19,6 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::unparser::dialect::{DefaultDialect, Dialect};
-use datafusion_federation::sql::SQLExecutor;
 use futures::TryStreamExt;
 
 use strata_model::{ConnectionDef, Provider, SourceDef};
@@ -28,7 +27,7 @@ use super::source::{
     ConnectionKey, DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind,
     SourceMode, Sourced,
 };
-use super::sql::{federated, SqlSpec};
+use super::sql::{federated, SQLExecutor, SqlSpec};
 use crate::secrets::SecretProvider;
 
 /// The two columns every fake relation has, so a test can join one to a workspace table on `id`

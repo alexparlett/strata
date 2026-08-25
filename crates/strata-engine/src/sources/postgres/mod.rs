@@ -45,7 +45,7 @@ use crate::sources::source::{
     ConnectionKey, DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind,
     SourceMode, Sourced,
 };
-use crate::sources::sql::{federated, SqlSpec};
+use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
 
 /// The `PostgreSQL` data source.
 ///
@@ -157,7 +157,7 @@ impl SourceCatalog for PgCatalog {
             self,
             SqlSpec {
                 dialect,
-                executor: Arc::clone(&table) as Arc<dyn datafusion_federation::sql::SQLExecutor>,
+                executor: Arc::clone(&table) as Arc<dyn SQLExecutor>,
                 provider: table,
                 analyzer: Some(Arc::new(move || {
                     let connection = connection.clone();

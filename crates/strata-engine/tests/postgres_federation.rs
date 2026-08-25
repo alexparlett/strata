@@ -21,6 +21,16 @@
 //! **Deliberately not `#[ignore]`d**, for the reason the MinIO test is not. One test, sequential
 //! phases, container held for the duration: a second `#[tokio::test]` would race this one for the
 //! single cloud worker.
+//!
+//! **This is the SQL ring's conformance run.** Everything it drives past the fixture is the
+//! generic path — connect, enumerate, resolve, federate, write, dispatch — reached through
+//! `DataSource` and the registry, so a source of your own registered under its own kind is
+//! exercised by the same phases: point the fixture at your server and change the kind the def
+//! names.
+//!
+//! Gated on the `postgres` feature, because the source it drives rides that feature: an engine
+//! built without it has no `PostgreSQL` in its tree, and neither does this.
+#![cfg(feature = "postgres")]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;

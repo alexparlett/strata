@@ -264,3 +264,104 @@ fn the_arrow_vocabulary_is_matched_by_whole_segment_and_only_through_the_engine(
     ));
     assert!(!names_arrow_vocabulary("use strata_arrow::config::key_def"));
 }
+
+/// The crates a **source's own driver** brings in — what nothing outside that source's module may
+/// name.
+///
+/// The point of a source being a registrant is that its dependency tree is its own: a file
+/// elsewhere naming one of these has reached past the trait, and the cargo feature that gates the
+/// module would stop gating anything.
+const DRIVER_CRATES: &[&str] = &[
+    "bb8",
+    "datafusion_table_providers_common",
+    "datafusion_table_providers_postgres",
+    "tokio_postgres",
+];
+
+/// The federation crate, whose assembly types belong to [`sources::sql`](crate::sources::sql)
+/// alone.
+///
+/// A source composes that assembly in one call or writes its own provider; either way it never
+/// touches `SQLExecutor`, `SQLFederationProvider` or the adaptor directly. `build_context` is the
+/// one exception, and it names the rule list rather than the assembly.
+const FEDERATION_CRATE: &str = "datafusion_federation";
+
+/// Does this declaration name a crate in `crates`?
+fn names_crate(declaration: &str, crates: &[&str]) -> bool {
+    declaration
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|segment| !segment.is_empty())
+        .nth(1)
+        .is_some_and(|head| crates.contains(&head))
+}
+
+/// Every engine file whose `use` declarations break `rule`, by the name of the thing it reached.
+fn offenders(allowed: &[&str], rule: impl Fn(&str) -> bool) -> Vec<String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for file in rust_files(&src) {
+        let relative = file.strip_prefix(&src).unwrap_or(&file).to_string_lossy();
+        if allowed.iter().any(|ok| relative.starts_with(ok)) {
+            continue;
+        }
+        let source = fs::read_to_string(&file).expect("readable");
+        for declaration in use_declarations(&source) {
+            if rule(&declaration) {
+                found.push(format!("{relative}: {declaration}"));
+            }
+        }
+    }
+    found
+}
+
+/// A source's driver is named inside that source's module and nowhere else.
+#[test]
+fn a_sources_driver_stays_inside_that_source() {
+    let offences = offenders(&["sources/postgres"], |declaration| {
+        names_crate(declaration, DRIVER_CRATES)
+    });
+    assert!(
+        offences.is_empty(),
+        "a source's own driver is its module's, reached through `DataSource` from anywhere \
+         else:\n{}",
+        offences.join("\n")
+    );
+}
+
+/// The federation assembly is `sources/sql.rs`'s, and a source composes it rather than building
+/// one.
+#[test]
+fn the_federation_assembly_stays_in_the_sql_module() {
+    let offences = offenders(&["sources/sql.rs", "lib.rs"], |declaration| {
+        names_crate(declaration, &[FEDERATION_CRATE])
+    });
+    assert!(
+        offences.is_empty(),
+        "the federation stack is assembled in one place, and composed through `SqlSpec` \
+         elsewhere:\n{}",
+        offences.join("\n")
+    );
+}
+
+#[test]
+fn a_crate_is_matched_by_its_own_segment() {
+    assert!(names_crate(
+        "use tokio_postgres::Client",
+        &["tokio_postgres"]
+    ));
+    assert!(names_crate(
+        "use datafusion_federation::sql::SQLExecutor",
+        &["datafusion_federation"]
+    ));
+    assert!(
+        !names_crate(
+            "use datafusion::sql::TableReference",
+            &["datafusion_federation"]
+        ),
+        "the segment is whole, so DataFusion itself is not the federation crate"
+    );
+    assert!(!names_crate(
+        "use crate::sources::sql::federated",
+        &["tokio_postgres"]
+    ));
+}

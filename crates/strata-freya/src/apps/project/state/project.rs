@@ -1022,29 +1022,51 @@ impl ProjectState {
         self.tables.insert(at.min(self.tables.len()), row);
     }
 
-    /// Insert-or-replace a connection def (the editor's Save, W7 · 03), at its address-sorted
-    /// slot. Resets the row to `Loading`, like every other upsert here — the connection has to
-    /// be registered again before the row may claim anything.
+    /// Insert-or-replace a connection def (the editor's Save), at its address-sorted slot. Resets
+    /// the row to `Loading`, like every other upsert here — the connection has to be registered
+    /// again before the row may claim anything.
     ///
-    /// **Matched on [`ConnectionDef::url`], inserted by `address`**, and the two being different
-    /// keys is the whole of what this method has to get right. The list is sorted by address and
-    /// identified by URL, so `s3://lake` and `gs://lake` are neighbours in the sort and two
-    /// different connections: replacing on the address would let saving a `gs://lake` silently
-    /// take out the `s3://lake` it sorts beside, deregistering nothing and leaving a live store
-    /// with no def. Matched case-**sensitively** for [`remove_connection`]'s reason — a URL is
-    /// not a SQL identifier and the object-store registry matches it verbatim.
+    /// **Matched on the name, inserted by `address`**, and the two being different keys is the
+    /// whole of what this method has to get right. The list is sorted by address and identified by
+    /// name, so two connections over one bucket are neighbours in the sort and two different
+    /// rows: replacing on the address would let saving one silently take out the other,
+    /// deregistering nothing and leaving a live store with no def.
     ///
-    /// It does **not** deregister anything. An edit that moves the address or the provider
-    /// changes `url()`, and the store the old URL registered survives this write untouched;
-    /// dropping it is `Engine::disconnect`, owed by the gesture that knows both URLs (the
-    /// editor's Save — `engine::store::connect` only ever sees the def it is given).
+    /// It does **not** deregister anything. An edit that moves the address or the kind changes
+    /// what the connection registered under, and that store survives this write untouched;
+    /// dropping it is `Engine::disconnect`, owed by the gesture that knows both names.
     pub fn upsert_connection(&mut self, def: ConnectionDef) {
-        let url = def.named();
-        self.connections.retain(|c| c.def.named() != url);
+        let name = def.named();
+        self.connections.retain(|c| c.def.named() != name);
         let at = self
             .connections
             .partition_point(|c| name_ord(&c.def.address, &def.address).is_lt());
         self.connections.insert(at, ConnRow::new(def));
+    }
+
+    /// Save a connection that was **renamed**: the row moves, and every table reading through it
+    /// moves with it.
+    ///
+    /// A table names the connection it reads through, so a rename that left those references
+    /// behind would point them at a connection the project no longer has — the tables would fail
+    /// to register with "no suitable object store", naming a connection the user can see is
+    /// there under its new name.
+    ///
+    /// **In one settle**, and here rather than in the window that pressed Save: what a rename
+    /// costs is a property of how a connection is referenced, and a surface that had to remember
+    /// to fix the references would be one that could forget.
+    pub fn rename_connection(&mut self, from: &str, def: ConnectionDef) {
+        let to = def.named();
+        self.remove_connection(from);
+        self.upsert_connection(def);
+        if from == to {
+            return;
+        }
+        for table in &mut self.tables {
+            if table.def.connection.as_deref() == Some(from) {
+                table.def.connection = Some(to.clone());
+            }
+        }
     }
 
     /// Edit a connection's def **in place**, keeping the row's `Reg` — the schemas picker's
@@ -1908,6 +1930,53 @@ mod tests {
     /// Saving over `lake2` must leave `lake` exactly where it was. Replacing on the address
     /// instead (the sort's key, and the tempting one) takes out a connection the user never
     /// touched, deregisters nothing, and leaves a live object store with no def behind it.
+    /// **A rename takes the tables with it.** A table names the connection it reads through, so
+    /// the references move in the same settle — left behind, they would point at a connection the
+    /// project no longer has while the user can see it under its new name.
+    #[test]
+    fn a_rename_moves_the_tables_that_read_through_it() {
+        let mut p = two_stores_one_bucket();
+        p.upsert_table(TableDef {
+            connection: Some("lake".into()),
+            ..table_def("events")
+        });
+        p.upsert_table(TableDef {
+            connection: Some("lake2".into()),
+            ..table_def("shipments")
+        });
+        p.upsert_table(table_def("local"));
+
+        let renamed = ConnectionDef {
+            name: "depot".into(),
+            ..p.connections
+                .iter()
+                .find(|c| c.def.named() == "lake")
+                .expect("the S3 connection")
+                .def
+                .clone()
+        };
+        p.rename_connection("lake", renamed);
+
+        let over = |table: &str| {
+            p.tables
+                .iter()
+                .find(|t| t.def.name == table)
+                .and_then(|t| t.def.connection.clone())
+        };
+        assert_eq!(over("events").as_deref(), Some("depot"), "it moved with it");
+        assert_eq!(
+            over("shipments").as_deref(),
+            Some("lake2"),
+            "and the other connection's tables did not"
+        );
+        assert_eq!(over("local"), None, "nor did a local one gain a connection");
+        assert!(
+            p.connections.iter().any(|c| c.def.named() == "depot")
+                && !p.connections.iter().any(|c| c.def.named() == "lake"),
+            "the row itself moved"
+        );
+    }
+
     #[test]
     fn upsert_connection_replaces_the_name_and_sorts_the_address() {
         let mut p = two_stores_one_bucket();

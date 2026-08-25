@@ -354,10 +354,10 @@ fn commit(
 
     let landed = {
         let mut p = project.write_channel(ProjChan::Connections);
-        if let Some(old) = &moved_from {
-            p.remove_connection(old);
+        match &moved_from {
+            Some(old) => p.rename_connection(old, def),
+            None => p.upsert_connection(def),
         }
-        p.upsert_connection(def);
         persisted_defs(&p, report)
     };
     if !landed {

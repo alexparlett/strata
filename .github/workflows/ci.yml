@@ -164,6 +164,18 @@ jobs:
             --skip a_table_over_a_connection_reads_through_the_object_store \
             --skip a_database_connection_registers_a_federated_catalog
 
+      # The engine with **no data sources compiled in** — the proof that a shipped source
+      # reaches the engine only through the public registration an embedder calls, and that
+      # its whole dependency tree rides its cargo feature. A private path from the engine
+      # into a source's module would fail here and nowhere else, because every other build
+      # in this workflow has the default features on.
+      #
+      # It is also the minimal publication unit: what an embedder gets before choosing any
+      # source. `--all-targets`, so the inline tests are held to it too, and last because it
+      # is the cheapest step to re-run and the least likely to be what a PR broke.
+      - name: cargo check (no sources)
+        run: cargo check -p strata-engine --no-default-features --all-targets --locked
+
   # The two container tests - the connections one (W7, MinIO) and the database one
   # (DB-02, PostgreSQL) - drive real servers, so this job, and only this job, carries the
   # cloud agent and the repo-wide queue. Behind the same gate as `test`: a skipped job
