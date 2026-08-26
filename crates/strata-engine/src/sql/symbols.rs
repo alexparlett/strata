@@ -3,7 +3,7 @@
 //! (from the engine, F5). Cheap to build on the UI thread each analysis pass.
 //!
 //! The store's `TableOrigin` is the **internal-set authority for the offer**
-//! ([`TableSym::internal`]); `Engine::is_internal` stays the dispatch gate — the
+//! ([`TableSym::internal`]); `Catalog::is_internal` stays the dispatch gate — the
 //! same fact, read from the store because the snapshot is store-built (the store
 //! *is* the catalog), never a second engine enumeration.
 
@@ -54,7 +54,7 @@ impl TableSym {
 
 /// One statement `PREPARE` left in the session (ED-08) — what `EXECUTE` and `DEALLOCATE` name.
 ///
-/// Session-scoped and engine-side: it comes off `Engine::prepared`, the mirror of DataFusion's
+/// Session-scoped and engine-side: it comes off `Lang::prepared`, the mirror of DataFusion's
 /// own `prepared_plans` (which is `pub(crate)`), and the parameter types are already rendered in
 /// the `short_type` vocabulary a column's dtype uses — so the language service never depends on
 /// DataFusion's types, exactly as [`FunctionSym`](super::FunctionSym) does not.
@@ -83,7 +83,7 @@ impl PreparedSym {
 /// def — so it is offered whether or not the connection is live, exactly as the tree draws a
 /// collapsed database node it has never reached. The [`schemas`](Self::schemas) are the
 /// connect-time enumeration, scoped by the def's enabled set
-/// ([`Engine::source_listing`](crate::Engine::source_listing), the one visibility source), so a
+/// ([`Sources::listing`](crate::Sources::listing), the one visibility source), so a
 /// connection that has not answered offers its name and nothing under it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DatabaseSym {

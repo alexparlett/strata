@@ -42,6 +42,7 @@ async fn serve(tag: &str) -> (AgentServer, String) {
     let project = MockProject::new("sales", &root);
     project
         .engine
+        .catalog()
         .register(TableSpec {
             name: "people".into(),
             paths: vec![root.join("people.csv").display().to_string()],

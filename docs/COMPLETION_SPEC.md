@@ -189,7 +189,7 @@ the rank pipeline, `tests.rs` = the suite):
 | `SetOption` operand, value (`set_key`) | the key's kind vocabulary: `Bool` ⇒ `true`/`false`, `Enum` ⇒ its options, else nothing — verbatim lowercase, no trailing space |
 | `DropTable` operand | tables and **not** views (`DROP VIEW` is the other statement) |
 | `DropView` operand | views only, for the mirror reason |
-| `Insert` operand | at the target: tables with `internal: true` only — the same answer `Engine::is_internal` gives dispatch, read from the store; in the column list: the target's own columns (see the column-list rule below), offered only when the target is one an INSERT may reach |
+| `Insert` operand | at the target: tables with `internal: true` only — the same answer `Catalog::is_internal` gives dispatch, read from the store; in the column list: the target's own columns (see the column-list rule below), offered only when the target is one an INSERT may reach |
 | `Copy` operand, in `PARTITIONED BY (…)` | the source's columns — the catalog's for a named table, the scraped projection for a `COPY (SELECT …)` source (the column-list rule below) |
 | `CreateExternal` operand (`STORED AS \|`) | `STORED_AS_FORMATS` as keyword items |
 | `DropFunction` operand | function syms with `created: true` — bare-name insert, detail `session function` |
@@ -217,10 +217,10 @@ registration, so there is no relation to resolve while typing — see §10.)
 
 **The qualified offer** (DB-06) — the three remote segments above come off
 `Catalog::databases`, one `DatabaseSym` per database connection, built by
-`Engine::database_syms` and carried on the snapshot like everything else. Its two
+`Sources::database_syms` and carried on the snapshot like everything else. Its two
 halves come from two places on purpose: the **catalog name** is the connection's own
 def, so a connection that has never answered still offers the name a query has to say,
-while the **schemas and relations** are `Engine::source_listing`'s scoped-and-tagged
+while the **schemas and relations** are `Sources::listing`'s scoped-and-tagged
 answer — the one visibility source the tree and the schema picker read, so a
 non-enabled schema is absent from the offer without anything here re-deriving what
 "enabled" means. (Absent, not refused: a typed query naming one still resolves and
@@ -230,7 +230,7 @@ where that is said. A catalog name ranks at the secondary tier at relation-targe
 positions, behind everything that can stand alone: accepting it leaves a name that
 needs a `.` after it, which is what its `database` detail says.
 
-**Nothing in this reaches the network.** `source_listing` is the connect-time enumeration
+**Nothing in this reaches the network.** `Sources::listing` is the connect-time enumeration
 held beside the pool, so the snapshot carries plain data and §1's "synchronous by
 construction" is untouched. A listing changes only at connect and disconnect, both of
 which bump the catalog epoch the snapshot is rebuilt on — so there is no warming step

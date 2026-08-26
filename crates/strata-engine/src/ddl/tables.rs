@@ -5,7 +5,7 @@
 //!
 //! `DROP TABLE` works on **both** origins and is the one place a table is dropped: the catalog
 //! pane's confirm and a typed statement reach [`drop_table`] through
-//! [`Engine::drop_table`](crate::Engine::drop_table) and
+//! [`Catalog::drop_table`](crate::Catalog::drop_table) and
 //! [`drop_statement`] respectively. Two gestures, one implementation — because the thing that
 //! differs between them is a question asked of the user, not what the drop does, and an internal
 //! table's data directory has to go on both or it is silent data left on disk.
@@ -640,13 +640,13 @@ async fn spool(
 /// rename — an error, and a **cancel**.
 ///
 /// The cancel is why this is a guard rather than an `if published.is_err()`: a CTAS is registered
-/// as the workspace's in-flight call, so `Engine::cancel` and a re-press both abort the task, and
+/// as the workspace's in-flight call, so `Workspace::cancel` and a re-press both abort the task, and
 /// an aborted task's future is *dropped* at its next await — no error path runs. Without this,
 /// every cancelled CTAS would leave its partial spool behind, and
 /// [`sweep_stale_temp_dirs`](strata_core::util::sweep_stale_temp_dirs) deliberately never touches this
 /// process's own directories, so nothing would clear them for the life of the window. Cancelling
 /// a large CTAS twice is enough to notice. The snapshot writer has the same rule from the other
-/// side (`Engine::query` retires again once its handle reports cancelled).
+/// side (`Workspace::query` retires again once its handle reports cancelled).
 struct Staging {
     dir: PathBuf,
     armed: bool,
@@ -818,7 +818,7 @@ mod tests {
     /// Run one statement and take its report — anything else is a test that asked the wrong
     /// question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.run(WsId(1), RunTag(1), sql.into(), 10).await? {
+        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -828,7 +828,8 @@ mod tests {
     /// a created table has to be readable the way any other table is.
     async fn read(eng: &Engine, sql: &str) -> Vec<Vec<String>> {
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(2), RunTag(2), sql.into(), 100)
+            .ws(WsId(2))
+            .run(RunTag(2), sql.into(), 100)
             .await
             .expect("query")
         else {
@@ -873,7 +874,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["n", "w"]
         );
-        assert!(eng.is_internal("daily"), "a write statement may target it");
+        assert!(
+            eng.catalog().is_internal("daily"),
+            "a write statement may target it"
+        );
 
         assert_eq!(
             read(&eng, "SELECT w FROM daily ORDER BY n").await,
@@ -951,7 +955,8 @@ mod tests {
             .expect("created");
         assert_eq!(fresh.message, "Table 'brand_new' created, 1 row");
 
-        eng.create_view("v".into(), "SELECT 1 AS n".into())
+        eng.catalog()
+            .create_view("v".into(), "SELECT 1 AS n".into())
             .await
             .expect("view");
         assert_eq!(
@@ -1067,6 +1072,7 @@ mod tests {
         );
 
         let probed = eng
+            .lang()
             .column_type("TIMESTAMP WITH TIME ZONE".into())
             .await
             .expect("planned");
@@ -1097,15 +1103,16 @@ mod tests {
             reserved
         );
         assert_eq!(
-            eng.register(TableSpec {
-                name: "__snap_1".into(),
-                paths: vec![root.display().to_string()],
-                format: SourceFormat::Arrow,
-                partitions: Vec::new(),
-                internal: true,
-            })
-            .await
-            .expect_err("refused"),
+            eng.catalog()
+                .register(TableSpec {
+                    name: "__snap_1".into(),
+                    paths: vec![root.display().to_string()],
+                    format: SourceFormat::Arrow,
+                    partitions: Vec::new(),
+                    internal: true,
+                })
+                .await
+                .expect_err("refused"),
             reserved
         );
         let _ = fs::remove_dir_all(&root);
@@ -1174,6 +1181,7 @@ mod tests {
 
         let cold = Engine::builder().build();
         let error = cold
+            .catalog()
             .register(table_spec(&root, &def, &Connections::default()))
             .await
             .expect_err("no data");
@@ -1326,15 +1334,16 @@ mod tests {
     /// flag on the registration, so the cheapest honest one is a real directory of real files
     /// registered a second time under another name.
     async fn external(eng: &Engine, name: &str, dir: &Path) {
-        eng.register(TableSpec {
-            name: name.into(),
-            paths: vec![dir_path(dir)],
-            format: SourceFormat::Arrow,
-            partitions: Vec::new(),
-            internal: false,
-        })
-        .await
-        .expect("registered");
+        eng.catalog()
+            .register(TableSpec {
+                name: name.into(),
+                paths: vec![dir_path(dir)],
+                format: SourceFormat::Arrow,
+                partitions: Vec::new(),
+                internal: false,
+            })
+            .await
+            .expect("registered");
     }
 
     /// **The whole shape, end to end.** A table is created, inserted into twice — each
@@ -1397,7 +1406,10 @@ mod tests {
             "{:?}",
             entries(&tables_dir(&root))
         );
-        assert!(!eng.is_internal("t"), "and it is no longer a write target");
+        assert!(
+            !eng.catalog().is_internal("t"),
+            "and it is no longer a write target"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1443,7 +1455,7 @@ mod tests {
             vec![vec!["1"]],
             "the table the drop said it could not drop is still there"
         );
-        assert!(eng.is_internal("t"), "…and still a write target");
+        assert!(eng.catalog().is_internal("t"), "…and still a write target");
         assert!(tables.join("t").exists(), "…with its data where it was");
         let _ = fs::remove_dir_all(&root);
     }
@@ -1489,7 +1501,7 @@ mod tests {
     /// which is why every path that *re-registers* a table re-creates the views over it. An `INSERT` replaces no provider, and could not invalidate one if it did: the sink
     /// schema-checks before it writes, so the shape a view captured is the shape still there, and
     /// the provider re-LISTs per scan (this engine runs no `ListFilesCache`) so it finds the new
-    /// file on its own. Hence [`Engine::table_meta`] rather than a re-registration — this pins
+    /// file on its own. Hence [`Catalog::table_meta`] rather than a re-registration — this pins
     /// both halves: the view is right without being touched, and the row count is right without
     /// the table being rebuilt.
     #[tokio::test]
@@ -1499,7 +1511,8 @@ mod tests {
         statement(&eng, "CREATE TABLE t AS SELECT * FROM (VALUES (1)) AS v(n)")
             .await
             .expect("created");
-        eng.create_view("reader".into(), "SELECT n FROM t".into())
+        eng.catalog()
+            .create_view("reader".into(), "SELECT n FROM t".into())
             .await
             .expect("view");
         assert_eq!(read(&eng, "SELECT n FROM reader").await, vec![vec!["1"]]);
@@ -1514,7 +1527,11 @@ mod tests {
             "the view sees the appended row through the provider it captured"
         );
         assert_eq!(
-            eng.table_meta("t".into()).await.expect("meta").rows,
+            eng.catalog()
+                .table_meta("t".into())
+                .await
+                .expect("meta")
+                .rows,
             Some(2),
             "and the row count is re-read without re-registering the table"
         );
@@ -1620,7 +1637,8 @@ mod tests {
         .await
         .expect("created");
         external(&eng, "theirs", &tables_dir(&root).join("owned")).await;
-        eng.create_view("v".into(), "SELECT n FROM owned".into())
+        eng.catalog()
+            .create_view("v".into(), "SELECT n FROM owned".into())
             .await
             .expect("view");
 
@@ -1687,10 +1705,12 @@ mod tests {
         .expect("created");
         let files = tables_dir(&root).join("owned");
         external(&eng, "theirs", &files).await;
-        eng.create_view("direct".into(), "SELECT n FROM theirs".into())
+        eng.catalog()
+            .create_view("direct".into(), "SELECT n FROM theirs".into())
             .await
             .expect("view");
-        eng.create_view("nested".into(), "SELECT n FROM direct".into())
+        eng.catalog()
+            .create_view("nested".into(), "SELECT n FROM direct".into())
             .await
             .expect("view");
 
@@ -1723,7 +1743,8 @@ mod tests {
     async fn a_drop_resolves_its_target_before_it_touches_anything() {
         let root = scratch("drop-names");
         let eng = engine(&root, BTreeMap::new());
-        eng.create_view("v".into(), "SELECT 1 AS n".into())
+        eng.catalog()
+            .create_view("v".into(), "SELECT 1 AS n".into())
             .await
             .expect("view");
 
@@ -1767,6 +1788,7 @@ mod tests {
 
         let typed = statement(&eng, "DROP TABLE typed").await.expect("dropped");
         let pressed = eng
+            .catalog()
             .drop_table("pressed".into(), true)
             .await
             .expect("dropped");
@@ -1779,9 +1801,13 @@ mod tests {
             entries(&tables_dir(&root))
         );
         for name in ["typed", "pressed"] {
-            assert!(!eng.is_internal(name), "{name} is no longer a write target");
             assert!(
-                eng.run(WsId(3), RunTag(3), format!("SELECT n FROM {name}"), 10)
+                !eng.catalog().is_internal(name),
+                "{name} is no longer a write target"
+            );
+            assert!(
+                eng.ws(WsId(3))
+                    .run(RunTag(3), format!("SELECT n FROM {name}"), 10)
                     .await
                     .is_err(),
                 "{name} still resolves"

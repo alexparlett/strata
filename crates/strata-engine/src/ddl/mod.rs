@@ -1,7 +1,7 @@
 //! Statement **execution** — what the pipeline admits as a statement rather than a query
 //! (`docs/STATEMENTS_SPEC.md` §4 + §7).
 //!
-//! [`Engine::run`](crate::Engine::run) classifies once, in front of dispatch; a
+//! [`Workspace::run`](crate::Workspace::run) classifies once, in front of dispatch; a
 //! statement the editor implements itself lands here as its [`StmtKind`], and comes back as a
 //! [`StatementReport`] — what to say, how many rows it moved, and the [`StoreEffect`] the app
 //! folds into `ProjectState`. Nothing here returns rows and nothing here touches the snapshot
@@ -16,7 +16,7 @@
 //! architecture the direct-call facade deleted.
 //!
 //! **Every arm is one call into a funnel that already exists.** Typed `CREATE VIEW` runs
-//! [`views::create`] — the body [`Engine::create_view`](crate::Engine::create_view) runs
+//! [`views::create`] — the body [`Catalog::create_view`](crate::Catalog::create_view) runs
 //! for ⌘S; typed `CREATE EXTERNAL TABLE` and a CTAS's spooled output are both
 //! `catalog::register_external`. Every kind has a real arm, so the `match` below is exhaustive on
 //! `StmtKind` with no stub refusal in it.
@@ -152,7 +152,7 @@ pub enum StoreEffect {
 pub type DataRoot = Option<PathBuf>;
 
 /// What an intercepted statement can reach **of the engine**, gathered once in
-/// [`Engine::run`](crate::Engine::run).
+/// [`Workspace::run`](crate::Workspace::run).
 ///
 /// Every member is a copy — a handle where the state is shared, a clone where it is a value — for
 /// one reason: the arms run inside the task `Engine::bookkeep` spawned, and that task must not
@@ -243,7 +243,7 @@ pub async fn execute(
 ///
 /// Through `table_provider`, not `table`: the latter builds a `DataFrame`, which for a view means
 /// planning its whole body just to ask whether the name is taken. Addressed as a **bare, folded**
-/// reference for the reason [`Engine::create_view`](crate::Engine::create_view) gives —
+/// reference for the reason [`Catalog::create_view`](crate::Catalog::create_view) gives —
 /// `impl Into<TableReference> for &str` parses, and a name that needed quoting does not survive a
 /// parse, so it would be looked up under a name nothing ever registered.
 pub(super) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableType> {
@@ -491,7 +491,7 @@ mod tests {
     }
 
     async fn run(eng: &Engine, sql: &str) -> Result<RunOutcome, String> {
-        eng.run(WsId(1), RunTag(1), sql.into(), 10).await
+        eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await
     }
 
     /// The refusal `sql` came back with, or a failure naming what it did instead.
@@ -523,7 +523,7 @@ mod tests {
     ///
     /// The `INSERT` takes its source from the target's own columns, so the target's *schema*
     /// cannot be what refuses it: this is about the connection and nothing else. And the refusal
-    /// is reached **before** `Engine::is_internal`, which is not a question to ask about a
+    /// is reached **before** `Catalog::is_internal`, which is not a question to ask about a
     /// relation whose data Strata could never own.
     ///
     /// The last five are the statements the **server** would have run, so the gate is the same one

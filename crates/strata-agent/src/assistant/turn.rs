@@ -867,7 +867,7 @@ mod tests {
         let root = env::temp_dir().join(format!("strata_turn_functions_{}", process::id()));
         let _ = fs::create_dir_all(&root);
         let project = MockProject::new("sales", &root);
-        let listed = functions_result(project.engine.functions().as_ref(), None);
+        let listed = functions_result(project.engine.lang().functions().as_ref(), None);
         let encoded = to_string(&listed).unwrap();
         assert!(
             encoded.len() <= MAX_TOOL_RESULT,

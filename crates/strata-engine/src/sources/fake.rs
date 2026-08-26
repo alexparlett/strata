@@ -417,13 +417,14 @@ mod tests {
             .with_source(TestDoc::holding("docs", &["orders", "events"]))
             .build();
         engine
+            .sources()
             .connect(fake_def::<TestDoc>("docs", "docs"))
             .await
             .expect("the fixture connects");
 
         let rows = engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(1),
                 "SELECT id FROM docs.public.orders ORDER BY 1".into(),
                 10,
@@ -448,13 +449,14 @@ mod tests {
             .with_source(TestSql::holding("server", &["orders"]))
             .build();
         engine
+            .sources()
             .connect(fake_def::<TestSql>("sales", "server"))
             .await
             .expect("the fixture connects");
 
         let plan = engine
+            .ws(WsId(1))
             .explain(
-                WsId(1),
                 RunTag(1),
                 "SELECT id FROM sales.public.orders WHERE id = 1".into(),
             )
@@ -483,6 +485,7 @@ mod tests {
         let engine = Engine::builder().with_source(source).build();
         for (catalog, address) in [("north", "north"), ("south", "south")] {
             engine
+                .sources()
                 .connect(fake_def::<TestSql>(catalog, address))
                 .await
                 .expect("both connect");
@@ -491,11 +494,11 @@ mod tests {
         let contexts: Vec<String> = ["north", "south"]
             .iter()
             .map(|catalog| {
-                let plan = futures::executor::block_on(engine.explain(
-                    WsId(1),
-                    RunTag(1),
-                    format!("SELECT id FROM {catalog}.public.orders"),
-                ))
+                let plan = futures::executor::block_on(
+                    engine
+                        .ws(WsId(1))
+                        .explain(RunTag(1), format!("SELECT id FROM {catalog}.public.orders")),
+                )
                 .expect("a plan")
                 .physical_text;
                 plan.lines()
@@ -520,6 +523,7 @@ mod tests {
     async fn an_unregistered_kind_fails_the_connection_and_names_the_fix() {
         let engine = Engine::builder().build();
         let why = engine
+            .sources()
             .connect(fake_def::<TestDoc>("docs", "docs"))
             .await
             .expect_err("nothing serves 'test-doc'");
@@ -537,7 +541,8 @@ mod tests {
             .with_source(TestDoc::holding("docs", &["orders"]))
             .build();
         let doc = engine
-            .source_registrants()
+            .sources()
+            .registrants()
             .into_iter()
             .find(|info| info.kind == TestDoc::NAME)
             .expect("the registered source is offered");
@@ -546,7 +551,7 @@ mod tests {
         assert_eq!(doc.mode, SourceMode::Catalog);
         assert_eq!(doc.keys, DOC_KEYS, "the form draws the source's own keys");
         assert_eq!(
-            engine.check_source_address(TestDoc::NAME, ""),
+            engine.sources().check_address(TestDoc::NAME, ""),
             Err("This connection has no address.".into()),
             "the default address rule is reached through the registry"
         );

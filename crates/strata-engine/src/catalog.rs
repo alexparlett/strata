@@ -50,7 +50,7 @@ pub struct TableSpec {
     /// downstream can be true. A failure to list the files reads differently (`.strata/tables`
     /// is gitignored, so "no source at that path" is the wrong story in a fresh clone — see
     /// [`no_files_error`]), and the engine records which providers a write statement may target
-    /// ([`Engine::is_internal`](super::Engine::is_internal)).
+    /// ([`Catalog::is_internal`](super::Catalog::is_internal)).
     pub internal: bool,
 }
 
@@ -937,7 +937,7 @@ async fn readers(
 
 /// Profile `name` — one full scan, every column at once (see [`crate::profile`]).
 ///
-/// Spawned onto the engine's own runtime by [`Engine::profile`](super::Engine::profile), which
+/// Spawned onto the engine's own runtime by [`Catalog::profile`](super::Catalog::profile), which
 /// owns the abort handle: blocking is fine in here, since this is *meant* to be the expensive
 /// thing the user opted into, and the UI stays live either way.
 ///
@@ -1071,7 +1071,7 @@ mod tests {
 
     use super::*;
 
-    /// Every `raw` below is a **measured** string: what `Engine::register` actually
+    /// Every `raw` below is a **measured** string: what `Catalog::register` actually
     /// returned for that source on DataFusion 54. They are the point of these tests — the
     /// mapping keys off engine wording, so if an upgrade rewords a failure the arm stops
     /// matching and the message silently reverts to pass-through. A test holding the old
@@ -1224,7 +1224,7 @@ mod tests {
     /// `a_field_with_conflicting_types_is_named_as_a_schema_conflict`: rather than asserting the
     /// wording of an error, assert that the case producing it registers.
     /// (`engine::tests::a_polymorphic_json_field_registers_as_text_and_queries` is the end-to-end
-    /// version, through `Engine::register` and a real `SELECT`.)
+    /// version, through `Catalog::register` and a real `SELECT`.)
     #[test]
     fn a_field_with_conflicting_types_is_read_rather_than_refused() {
         use serde_json::json;

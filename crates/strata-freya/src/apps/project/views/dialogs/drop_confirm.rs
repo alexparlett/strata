@@ -437,7 +437,7 @@ fn alive(catalog: Catalog, report: ReportCtx) -> bool {
 /// cannot, because `CREATE OR REPLACE VIEW` has already succeeded on the engine. The Problems
 /// drawer's `Project` scope carries the other half either way.
 ///
-/// **A Forget bumps the catalog epoch**, because `Engine::disconnect` takes a catalog off the
+/// **A Forget bumps the catalog epoch**, because `Sources::disconnect` takes a catalog off the
 /// session — the discrete catalog mutation [`catalog_settled`] exists for. Without it a query
 /// naming the forgotten database keeps whatever verdict it last had, and completion goes on
 /// offering names nothing resolves.
@@ -466,7 +466,7 @@ fn drop_row(
             let engine = engine.clone();
             let name = name.clone();
             spawn_forever(async move {
-                let outcome = engine.drop_table(name.clone(), true).await;
+                let outcome = engine.catalog().drop_table(name.clone(), true).await;
                 if let Err(e) = &outcome {
                     tracing::error!("drop table '{name}': {e}");
                 }
@@ -502,7 +502,7 @@ fn drop_row(
             let engine = engine.clone();
             let name = name.clone();
             spawn_forever(async move {
-                let outcome = engine.drop_view(name.clone()).await;
+                let outcome = engine.catalog().drop_view(name.clone()).await;
                 if let Err(e) = &outcome {
                     tracing::error!("drop view '{name}': {e}");
                 }
@@ -532,7 +532,7 @@ fn drop_row(
             if !landed {
                 return;
             }
-            engine.disconnect(name);
+            engine.sources().disconnect(name);
             catalog_settled(catalog);
         }
         DropTarget::Query { id, .. } => {
@@ -1443,9 +1443,9 @@ mod tests {
 
     /// **Confirming an internal table's drop deletes its data** — the half of ED-05's parity
     /// only this surface can show, the other half (that the typed statement and
-    /// `Engine::drop_table` leave the same state) being pinned in `strata-engine`.
+    /// `Catalog::drop_table` leave the same state) being pinned in `strata-engine`.
     ///
-    /// Before ED-05 this arm called `Engine::deregister`, which forgets the provider and nothing
+    /// Before ED-05 this arm called `Catalog::deregister`, which forgets the provider and nothing
     /// else. On an internal table that orphans `.strata/tables/<slug>/` forever: no def points at
     /// it and the `.strata` housekeeping only sweeps `.tmp-` directories.
     ///
@@ -1459,8 +1459,7 @@ mod tests {
         project_io::save_defs(&root, &ProjectDefs::default()).expect("scaffolded");
         let engine = EngineCtx::default();
         engine.set_data_dir(&root);
-        block_on(engine.run(
-            WsId(9),
+        block_on(engine.ws(WsId(9)).run(
             RunTag(9),
             "CREATE TABLE daily AS SELECT 1 AS n".into(),
             10,

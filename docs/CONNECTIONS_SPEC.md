@@ -27,7 +27,7 @@ Two rules shape everything below:
 
 Three object stores — **S3**, **GCS**, **HTTP** (`ProviderId::ALL`) — plus one arm for every
 **registered source**, `Provider::Source(SourceDef)`. Which sources exist is the engine's answer,
-not the model's: `Engine::source_registrants()` lists what is registered, and the editor's picker,
+not the model's: `Sources::registrants()` lists what is registered, and the editor's picker,
 a catalog row's badge and a connection form all read that one list, so a source an embedder
 registered is offered on the same terms as a shipped one. The provider is an **explicit picker**,
 never inferred from a typed URL scheme.
@@ -77,7 +77,7 @@ The def stores the **address**, and what a scheme would have said is the kind's:
   origins, so the scheme is part of the address and only the person typing knows which their
   server speaks.
 - **A source** — whatever its kind says an address is (`host:port/database` for `PostgreSQL`),
-  judged by that kind's own rule through `Engine::check_source_address`. The model holds no copy
+  judged by that kind's own rule through `Sources::check_address`. The model holds no copy
   of it.
 
 Defs persist in the committed `.strata/project.json` (`ProjectDefs::connections`), beside the
@@ -264,7 +264,7 @@ provider (a control that cannot mean anything for the chosen provider is not shi
    New and Edit alike — a second surface for the same list is two controls that can disagree.
 4. **AUTHENTICATION** (S3 and GCS only) — the mode pill plus whatever it refers to. The S3
    profile is picked from a `Select` over the machine's own configuration
-   (`Engine::aws_profiles` reads the section headers of `~/.aws/config` and `~/.aws/credentials`
+   (`Sources::aws_profiles` reads the section headers of `~/.aws/config` and `~/.aws/credentials`
    — names only, nothing from a profile's body).
 5. **REGION** and **ENDPOINT** (S3 only). A new connection opens with a **blank** region —
    `us-east-1` is the placeholder, never the value, because a seeded `us-east-1` is exactly the
@@ -317,7 +317,7 @@ Top level is **data sources**:
   expansion to columns, and the TABLES `+` still opens Configure on a new table;
 - one node per **database connection**, opening onto its enabled schemas, then Tables and Views
   groups split by the listing's own `relkind`, then its relations. All of it is
-  `Engine::source_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
+  `Sources::listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
   the network — so collapse and re-open cost nothing and ↻, which re-connects, is the refresh. A
   schema the def enables and the server does not have renders as its own failed node naming that
   fact. A relation **opens onto its columns** (DB-07), and it is the one node in the tree whose
@@ -340,7 +340,7 @@ what a tooltip holds and naming Problems for the rest), and a trailing **⋮** m
 right-click): **Edit**, **Schemas…** on a database, **Forget**. Pressing the row opens it; its
 actions are the menu.
 
-**Schemas…** is a picker over the same `source_listing` answer, so the tree, the picker and
+**Schemas…** is a picker over the same `Sources::listing` answer, so the tree, the picker and
 completion cannot disagree about what a connection shows. Its write is display-only, so it edits
 the def **in place** (`ProjectState::update_connection_def`) and keeps the row's registration —
 going through `upsert_connection` would leave a `Reg::Loading` that only a whole-catalog re-scan
@@ -447,7 +447,8 @@ a ↻ without either being noticed specially.
 The editor offers a database's names as you type them (DB-06): a connection's **catalog name** at
 any relation-target position, its **enabled schemas** after `catalog.`, and its **relations** after
 `catalog.schema.`. The catalog name comes from the def, so a connection that has never answered
-still offers the name a query has to say; the schemas and relations come from `source_listing`, the
+still offers the name a query has to say; the schemas and relations come from `Sources::listing`,
+the
 same scoped-and-tagged answer the tree and the Schemas… picker read. A non-enabled schema is
 absent from the offer and still resolves if typed — visibility, not policy. Nothing on the
 completion path touches the network. The full rules, including where it deliberately stops (a
@@ -549,7 +550,7 @@ regardless — the providers are lazy, so that costs nothing — which means a q
 that is not enabled still resolves and runs. What it *does* bound, since DB-09, is where an
 **unqualified** name is looked for (see *Unqualified names* above): a schema you switched off
 neither captures a bare name nor collides with one in a schema you left on.
-`Engine::source_listing` is the one read every surface shares, and it answers **scoped and tagged**
+`Sources::listing` is the one read every surface shares, and it answers **scoped and tagged**
 (`Live | EnabledButMissing | NotEnabled`), so nothing re-derives visibility. It reads the
 connect-time enumeration, which is why a ↻ *is* the refresh.
 
@@ -739,7 +740,7 @@ schema switched off cannot capture a bare name, and — the case that made this 
 collide with a relation in a schema you left on. Without the scoping, `sessions` in a hidden
 `analytics` refuses a query about the `sessions` the tree is showing, naming a schema the user
 cannot see. The set is one live cell shared between the connection and its catalog provider
-(`db::Shown`), written by `connect` and by the Schemas… picker through `Engine::show_schemas` —
+(`db::Shown`), written by `connect` and by the Schemas… picker through `Sources::show_schemas` —
 the picker does not reconnect, so a copy taken at connect would be stale by the time it was read.
 
 What a bare name means can still change — creating a workspace `orders` takes the name back, and
@@ -766,7 +767,7 @@ Composing the two halves is the **engine's**: `register::table_spec` turns the n
 address that connection's store is registered under and hands
 `strata_core::project::resolve_source` the result, so a bucket-relative source can never be
 silently resolved against the local disk — and no surface keeps a second copy of the scheme. The
-same rule is why `Engine::detect_partitions` takes a connection name and def-relative paths rather
+same rule is why `Catalog::detect_partitions` takes a connection name and def-relative paths rather
 than composed ones.
 
 In the Configure window, **LOCATION** is an explicit Local / Remote toggle — never inferred from
@@ -809,7 +810,8 @@ carries a *status*, which comes from a probe rather than from a sentence. Refusi
 what keeps DataFusion's "No suitable object store found" off a table row, which is the whole point
 of registering connections first.
 
-Membership is `Engine::connections`: the URLs `connect` was handed, noted **whatever the outcome**
+Membership is the engine's `Connections` set: the URLs `connect` was handed, noted **whatever the
+outcome**
 and removed by `disconnect`. A connection whose region is blank or whose SSO session expired is
 still one the user may point a table at — the fix comes afterwards — so asking DataFusion's
 object-store registry instead would have answered *no* for exactly the rows the user is on their

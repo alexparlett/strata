@@ -15,7 +15,7 @@
 //!    silent;
 //! 3. drops the object store the old URL registered, the one call the scan driver cannot make:
 //!    `engine::store::connect` only ever sees the def it is given, so nothing else would ever
-//!    take that store back out (`Engine::disconnect` — the same call Forget makes);
+//!    take that store back out (`Sources::disconnect` — the same call Forget makes);
 //! 4. asks the project window's one scan driver for a whole-catalog pass, and leaves this window
 //!    watching its row ([`super::use_watch_connection`]).
 //!
@@ -145,7 +145,7 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
 fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
     let def = ctx.draft.read().def();
     let kind = def.provider.source()?.kind.clone();
-    engine.check_source_address(&kind, &def.address).err()
+    engine.sources().check_address(&kind, &def.address).err()
 }
 
 /// The blocker the draft cannot see: a name another connection already holds.
@@ -375,7 +375,7 @@ fn commit(
     }
 
     if let Some(old) = &moved_from {
-        engine.disconnect(old);
+        engine.sources().disconnect(old);
         log_event(
             report.log,
             LogLevel::Info,

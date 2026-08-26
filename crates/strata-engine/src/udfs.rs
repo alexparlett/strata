@@ -885,6 +885,7 @@ mod tests {
 
         let engine = Engine::builder().build();
         engine
+            .catalog()
             .register(TableSpec {
                 name: "t".into(),
                 paths: vec![path.to_string_lossy().into_owned()],
@@ -899,7 +900,8 @@ mod tests {
 
     async fn run(engine: &Engine, sql: &str) -> QueryOutput {
         engine
-            .query(WsId(1), RunTag(1), sql.into(), 50)
+            .ws(WsId(1))
+            .query(RunTag(1), sql.into(), 50)
             .await
             .unwrap_or_else(|e| panic!("{sql}\n{e}"))
             .0
@@ -907,7 +909,8 @@ mod tests {
 
     async fn fails(engine: &Engine, sql: &str) -> String {
         engine
-            .query(WsId(1), RunTag(1), sql.into(), 50)
+            .ws(WsId(1))
+            .query(RunTag(1), sql.into(), 50)
             .await
             .err()
             .unwrap_or_else(|| panic!("{sql} was expected to fail"))
@@ -1286,7 +1289,7 @@ mod tests {
     #[test]
     fn the_built_ins_are_in_the_function_catalog() {
         let engine = Engine::builder().build();
-        let catalog = engine.functions();
+        let catalog = engine.lang().functions();
         for name in [
             "struct_keys",
             "struct_entries",

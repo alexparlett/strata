@@ -17,7 +17,8 @@ use strata_model::TabId;
 
 /// A window's engine handle for context — an `Arc` over the shared [`Engine`], cheap to
 /// `Clone`, provided once via `use_provide_context`. Derefs to the engine, so callers
-/// use the facade directly (`engine.query(…)`, `engine.fetch_page(…)`).
+/// use the facade's group handles directly (`engine.ws(tab).query(…)`,
+/// `engine.snapshot(id).page(…)`).
 #[derive(Clone)]
 pub struct EngineCtx {
     eng: Arc<Engine>,
@@ -38,8 +39,8 @@ impl EngineCtx {
     }
 
     /// The engine itself, for a holder that is **not** on the render thread — the agent
-    /// server's data plane (`crate::agent`), which calls `fetch_page` / `validate` /
-    /// `functions` from its own runtime while the UI is busy.
+    /// server's data plane (`crate::agent`), which reads a snapshot's pages and calls
+    /// `validate` / `functions` from its own runtime while the UI is busy.
     ///
     /// Handing out the `Arc` rather than the [`EngineCtx`] is the point: `EngineCtx` is this
     /// window's *UI* handle, and everything it adds over the facade (`cleanup`, `captured`)
@@ -58,7 +59,7 @@ impl EngineCtx {
     /// its snapshot. Driven by the window root's side effect diffing the session's open
     /// tabs, so every close path funnels through one place.
     pub fn cleanup(&self, tab: TabId) {
-        self.eng.cleanup_ws(tab.into());
+        self.eng.ws(tab.into()).cleanup();
     }
 }
 

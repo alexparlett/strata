@@ -21,7 +21,8 @@ const BIG: &str = "SELECT i, md5(i::text) AS h FROM generate_series(1, 3000000) 
 
 async fn snapshot(eng: &Engine, sql: &str) -> SnapshotId {
     let (out, _) = eng
-        .query(WsId(1), RunTag(1), sql.into(), 10)
+        .ws(WsId(1))
+        .query(RunTag(1), sql.into(), 10)
         .await
         .expect("run");
     out.snapshot.expect("snapshot")
@@ -41,11 +42,13 @@ async fn pages_over_the_split_threshold_are_stable_and_in_result_order() {
     let page_size = 100usize;
     for page in [1usize, 2, 15_000, 30_000] {
         let (first, _) = eng
-            .fetch_page(snap, page, page_size, None)
+            .snapshot(snap)
+            .page(page, page_size, None)
             .await
             .expect("page");
         let (again, _) = eng
-            .fetch_page(snap, page, page_size, None)
+            .snapshot(snap)
+            .page(page, page_size, None)
             .await
             .expect("page again");
         let a = ints(&first, 0);
@@ -71,15 +74,18 @@ async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
 
     let sort = Some(("k".to_string(), true));
     let (one, _) = eng
-        .fetch_page(snap, 1, 100, sort.clone())
+        .snapshot(snap)
+        .page(1, 100, sort.clone())
         .await
         .expect("sorted page 1");
     let (two, _) = eng
-        .fetch_page(snap, 2, 100, sort.clone())
+        .snapshot(snap)
+        .page(2, 100, sort.clone())
         .await
         .expect("sorted page 2");
     let (two_again, _) = eng
-        .fetch_page(snap, 2, 100, sort)
+        .snapshot(snap)
+        .page(2, 100, sort)
         .await
         .expect("sorted page 2 again");
     assert_eq!(ints(&two, 1), ints(&two_again, 1), "re-reads agree");
@@ -101,8 +107,8 @@ async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
 async fn an_unordered_query_pages_the_order_the_spool_froze() {
     let eng = Engine::builder().build();
     let (out, _) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT i, md5(i::text) AS h FROM generate_series(1, 3000000) t(i)".into(),
             100,
@@ -112,16 +118,17 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
     let snap = out.snapshot.expect("snapshot");
 
     let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
-    let (fetched, _) = eng.fetch_page(snap, 1, 100, None).await.expect("page 1");
+    let (fetched, _) = eng.snapshot(snap).page(1, 100, None).await.expect("page 1");
     let read: Vec<String> = fetched.iter().map(|r| r[0].text.clone()).collect();
     assert_eq!(
         read, spooled,
         "fetch_page's page 1 is the page the run delivered"
     );
 
-    let (p2a, _) = eng.fetch_page(snap, 2, 100, None).await.expect("page 2");
+    let (p2a, _) = eng.snapshot(snap).page(2, 100, None).await.expect("page 2");
     let (p2b, _) = eng
-        .fetch_page(snap, 2, 100, None)
+        .snapshot(snap)
+        .page(2, 100, None)
         .await
         .expect("page 2 again");
     assert_eq!(ints(&p2a, 0), ints(&p2b, 0), "re-reads agree");
@@ -137,8 +144,8 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
 async fn the_ordinal_is_bookkeeping_and_never_leaks() {
     let eng = Engine::builder().build();
     let (out, page1) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT i, i * 2 AS d FROM generate_series(1, 5) t(i)".into(),
             10,
@@ -151,7 +158,7 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
     assert_eq!(names, vec!["i", "d"], "the result schema is the user's");
     assert_eq!(page1.schema().fields().len(), 2, "page 1 batch too");
 
-    let (_, batch) = eng.fetch_page(snap, 1, 10, None).await.expect("page");
+    let (_, batch) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
     let schema = batch.schema();
     let fetched: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(fetched, vec!["i", "d"], "a fetched page projects it away");
@@ -160,9 +167,8 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
     let path = dir.join("out.csv").to_string_lossy().into_owned();
-    eng.export(
-        snap,
-        ExportSpec {
+    eng.snapshot(snap)
+        .export(ExportSpec {
             path: path.clone(),
             format: Format::Csv(Csv {
                 header: true,
@@ -176,10 +182,9 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
             scope: Scope::All,
             sort: None,
             partition: Partition::default(),
-        },
-    )
-    .await
-    .expect("export");
+        })
+        .await
+        .expect("export");
     let written = std::fs::read_to_string(&path).expect("exported file");
     let header = written.lines().next().expect("header");
     assert_eq!(
@@ -195,8 +200,8 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
 async fn a_user_column_named_like_the_ordinal_survives() {
     let eng = Engine::builder().build();
     let (out, _) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT i * 10 AS __strata_ord FROM generate_series(1, 3) t(i)".into(),
             10,
@@ -206,7 +211,7 @@ async fn a_user_column_named_like_the_ordinal_survives() {
     let snap = out.snapshot.expect("snapshot");
     assert_eq!(out.columns[0].name, "__strata_ord");
 
-    let (rows, batch) = eng.fetch_page(snap, 1, 10, None).await.expect("page");
+    let (rows, batch) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
     assert_eq!(batch.schema().fields().len(), 1, "only the user's column");
     assert_eq!(
         ints(&rows, 0),
@@ -235,9 +240,14 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
     .await;
 
     for page in [1usize, 15_000] {
-        let (first, _) = eng.fetch_page(snap, page, 100, None).await.expect("page");
+        let (first, _) = eng
+            .snapshot(snap)
+            .page(page, 100, None)
+            .await
+            .expect("page");
         let (again, _) = eng
-            .fetch_page(snap, page, 100, None)
+            .snapshot(snap)
+            .page(page, 100, None)
             .await
             .expect("page again");
         let i = ints(&first, 0);
@@ -259,8 +269,8 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
 async fn an_unordered_partitioned_window_stays_row_consistent() {
     let eng = Engine::builder().build();
     let (out, _) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT i, md5(i::text) AS h, \
                     row_number() OVER (PARTITION BY i % 4 ORDER BY i) AS rn \
@@ -273,14 +283,19 @@ async fn an_unordered_partitioned_window_stays_row_consistent() {
     let snap = out.snapshot.expect("snapshot");
 
     let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
-    let (fetched, _) = eng.fetch_page(snap, 1, 100, None).await.expect("page 1");
+    let (fetched, _) = eng.snapshot(snap).page(1, 100, None).await.expect("page 1");
     let read: Vec<String> = fetched.iter().map(|r| r[0].text.clone()).collect();
     assert_eq!(read, spooled, "page 1 is the page the run delivered");
 
     for page in [1usize, 20_000] {
-        let (rows, _) = eng.fetch_page(snap, page, 100, None).await.expect("page");
+        let (rows, _) = eng
+            .snapshot(snap)
+            .page(page, 100, None)
+            .await
+            .expect("page");
         let (again, _) = eng
-            .fetch_page(snap, page, 100, None)
+            .snapshot(snap)
+            .page(page, 100, None)
             .await
             .expect("page again");
         assert_eq!(ints(&rows, 0), ints(&again, 0), "page {page} stable");
@@ -304,7 +319,7 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
     )
     .await;
 
-    let (rows, batch) = eng.fetch_page(snap, 2, 100, None).await.expect("page 2");
+    let (rows, batch) = eng.snapshot(snap).page(2, 100, None).await.expect("page 2");
     let schema = batch.schema();
     let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
@@ -331,12 +346,13 @@ async fn explain_runs_and_pages_without_an_ordinal() {
     let eng = Engine::builder().build();
     for sql in ["EXPLAIN SELECT 1", "EXPLAIN ANALYZE SELECT 1"] {
         let (out, _) = eng
-            .query(WsId(1), RunTag(1), sql.into(), 10)
+            .ws(WsId(1))
+            .query(RunTag(1), sql.into(), 10)
             .await
             .unwrap_or_else(|e| panic!("{sql} must run: {e}"));
         assert!(out.total > 0, "{sql} returns plan rows");
         let snap = out.snapshot.expect("plan rows materialize");
-        let (rows, batch) = eng.fetch_page(snap, 1, 10, None).await.expect("page");
+        let (rows, batch) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
         assert!(!rows.is_empty());
         let schema = batch.schema();
         assert!(
@@ -353,8 +369,8 @@ async fn explain_runs_and_pages_without_an_ordinal() {
 async fn duplicate_named_columns_still_read() {
     let eng = Engine::builder().build();
     let (out, _) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT a.i, b.i FROM generate_series(1, 3) AS a(i) \
              JOIN generate_series(1, 3) AS b(i) ON a.i = b.i"
@@ -372,7 +388,8 @@ async fn duplicate_named_columns_still_read() {
     );
     let snap = out.snapshot.expect("snapshot");
     let (rows, _) = eng
-        .fetch_page(snap, 1, 10, None)
+        .snapshot(snap)
+        .page(1, 10, None)
         .await
         .expect("a duplicate-named result must stay readable");
     assert_eq!(rows.len(), 3);
@@ -385,8 +402,8 @@ async fn duplicate_named_columns_still_read() {
 async fn a_partitioned_export_never_writes_the_ordinal() {
     let eng = Engine::builder().build();
     let (out, _) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT i % 2 AS p, i FROM generate_series(1, 10) t(i)".into(),
             10,
@@ -398,9 +415,8 @@ async fn a_partitioned_export_never_writes_the_ordinal() {
     let dir = std::env::temp_dir().join(format!("strata_ord_part_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
-    eng.export(
-        snap,
-        ExportSpec {
+    eng.snapshot(snap)
+        .export(ExportSpec {
             path: dir.to_string_lossy().into_owned(),
             format: Format::Csv(Csv {
                 header: true,
@@ -417,10 +433,9 @@ async fn a_partitioned_export_never_writes_the_ordinal() {
                 columns: vec!["p".into()],
                 keep_columns: false,
             },
-        },
-    )
-    .await
-    .expect("partitioned export");
+        })
+        .await
+        .expect("partitioned export");
 
     let mut files = 0;
     let mut stack = vec![dir.clone()];

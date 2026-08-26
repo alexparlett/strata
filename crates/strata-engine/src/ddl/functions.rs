@@ -629,7 +629,7 @@ mod tests {
 
     /// Run one statement and take its report — anything else is a test asking the wrong question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.run(WsId(1), RunTag(1), sql.into(), 10).await? {
+        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -638,7 +638,8 @@ mod tests {
     /// The values a query returns, as text.
     async fn read(eng: &Engine, sql: &str) -> Vec<Vec<String>> {
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(2), RunTag(2), sql.into(), 100)
+            .ws(WsId(2))
+            .run(RunTag(2), sql.into(), 100)
             .await
             .unwrap_or_else(|e| panic!("{sql}: {e}"))
         else {
@@ -654,7 +655,7 @@ mod tests {
     /// The error a Run fails with. `RunOutcome` carries a `RecordBatch` and derives no `Debug`,
     /// so the success arm is named rather than unwrapped.
     async fn run_err(eng: &Engine, sql: &str) -> String {
-        match eng.run(WsId(3), RunTag(3), sql.into(), 10).await {
+        match eng.ws(WsId(3)).run(RunTag(3), sql.into(), 10).await {
             Err(e) => e,
             Ok(_) => panic!("{sql} succeeded"),
         }
@@ -663,7 +664,13 @@ mod tests {
     /// What completion offers for `prefix`, through the language service's own snapshot of the
     /// engine — which is the thing the editor rebuilds on a catalog epoch, not the registry.
     fn offered(eng: &Engine, prefix: &str) -> Vec<(String, String)> {
-        let catalog = Catalog::build([], [], eng.functions(), eng.prepared(), "generic".into());
+        let catalog = Catalog::build(
+            [],
+            [],
+            eng.lang().functions(),
+            eng.lang().prepared(),
+            "generic".into(),
+        );
         complete(prefix, prefix.len(), &catalog, false)
             .into_iter()
             .filter(|c| c.kind == CompletionKind::Function)
@@ -714,7 +721,13 @@ mod tests {
         );
 
         let dropped = |eng: &Engine| {
-            let catalog = Catalog::build([], [], eng.functions(), eng.prepared(), "generic".into());
+            let catalog = Catalog::build(
+                [],
+                [],
+                eng.lang().functions(),
+                eng.lang().prepared(),
+                "generic".into(),
+            );
             complete("DROP FUNCTION ", 14, &catalog, false)
                 .into_iter()
                 .map(|c| c.label)
@@ -986,7 +999,7 @@ mod tests {
 
     /// **A created function is known to the diagnostics pass too, not only to completion.**
     /// Those are two different readers of the swap: completion resolves against the language
-    /// service's `Catalog` snapshot, while `Engine::validate` dry-plans against the live
+    /// service's `Catalog` snapshot, while `Lang::validate` dry-plans against the live
     /// `SessionContext` and takes the catalog by handle for its lexical lints. A squiggle left
     /// under a call the very same buffer can Run is the disagreement the epoch bump exists to
     /// prevent, and it is worth pinning from this end because the app-side wiring
@@ -996,7 +1009,7 @@ mod tests {
         let eng = Engine::builder().build();
         let sql = "SELECT add_one(41)";
         assert!(
-            !eng.validate(sql.into()).await.is_empty(),
+            !eng.lang().validate(sql.into()).await.is_empty(),
             "unknown before it is created"
         );
 
@@ -1007,7 +1020,7 @@ mod tests {
         .await
         .expect("created");
         assert_eq!(
-            eng.validate(sql.into()).await,
+            eng.lang().validate(sql.into()).await,
             vec![],
             "and clean the moment it is"
         );
@@ -1016,7 +1029,7 @@ mod tests {
             .await
             .expect("dropped");
         assert!(
-            !eng.validate(sql.into()).await.is_empty(),
+            !eng.lang().validate(sql.into()).await.is_empty(),
             "unknown again once it is gone"
         );
     }
@@ -1120,7 +1133,7 @@ mod tests {
     #[tokio::test]
     async fn a_restart_clears_created_functions_and_leaves_the_built_ins_alone() {
         let eng = Engine::builder().build();
-        let built_in = eng.functions();
+        let built_in = eng.lang().functions();
         statement(
             &eng,
             "CREATE FUNCTION add_one(x BIGINT) RETURNS BIGINT RETURN x + 1",
@@ -1128,7 +1141,7 @@ mod tests {
         .await
         .expect("created");
         assert_eq!(
-            eng.functions().scalar.len(),
+            eng.lang().functions().scalar.len(),
             built_in.scalar.len() + 1,
             "the created function, and nothing else, joined the pool"
         );
@@ -1136,7 +1149,7 @@ mod tests {
             .await
             .expect("dropped");
         assert_eq!(
-            eng.functions(),
+            eng.lang().functions(),
             built_in,
             "and the drop puts the catalog back exactly as it was"
         );
@@ -1152,7 +1165,7 @@ mod tests {
             .await
             .contains("Invalid function 'add_one'"));
         assert_eq!(
-            restarted.functions(),
+            restarted.lang().functions(),
             built_in,
             "a fresh engine is the built-in set again"
         );

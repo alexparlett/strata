@@ -173,7 +173,7 @@ struct LiveSource {
     def: ConnectionDef,
     /// The latest enumeration — the connect-time one until a statement that changed what the
     /// source holds re-runs it ([`relist`](Live::relist)). Read by
-    /// [`Engine::source_listing`](super::Engine::source_listing) rather than asking the source again.
+    /// [`Sources::listing`](super::Sources::listing) rather than asking the source again.
     listing: Arc<Listing>,
     /// The namespaces this connection **shows**, shared with the catalog provider — see [`Shown`].
     shown: Shown,
@@ -205,7 +205,7 @@ fn shown_of(source: &SourceDef) -> BTreeSet<String> {
 /// The live source connections this engine holds — the [`Connections`](super::Connections)
 /// shape, for the same reasons.
 ///
-/// A handle rather than a plain field because [`Engine::connect`](super::Engine::connect) spawns its work onto the
+/// A handle rather than a plain field because [`Sources::connect`](super::Sources::connect) spawns its work onto the
 /// engine runtime and that task must not hold the engine itself (the engine's `Drop` is what
 /// aborts it). It holds pools, so it must not outlive the runtime they ride: the engine's own
 /// field is the last strong reference, and the runtime is shut down after it in `Drop`.
@@ -226,7 +226,7 @@ impl Live {
     }
 
     /// The catalog name and the enumeration a connection registered, or `None` if it is not
-    /// live — what [`Engine::source_listing`](super::Engine::source_listing) reads.
+    /// live — what [`Sources::listing`](super::Sources::listing) reads.
     fn listing(&self, name: &str) -> Option<(String, Arc<Listing>)> {
         let held = self.0.lock().unwrap();
         let live = held.get(name)?;
@@ -262,7 +262,7 @@ impl Live {
     /// Record a fresh enumeration for the connection called `name` — the half of a refresh the
     /// *map* owns, where
     /// [`SourceCatalogProvider::adopt`](providers::SourceCatalogProvider) is the half the catalog
-    /// owns. Both, because [`Engine::source_listing`](super::Engine::source_listing) reads this one and a
+    /// owns. Both, because [`Sources::listing`](super::Sources::listing) reads this one and a
     /// query resolves through the other.
     fn relist(&self, name: &str, listing: Arc<Listing>) {
         if let Some(live) = self.0.lock().unwrap().get_mut(name) {
@@ -304,7 +304,7 @@ impl Live {
     /// share an identity and differ only by name ([`check_catalog_name`] lets them), so nothing
     /// the engine can see tells a renamed connection from a second one to the same server.
     /// Retiring the old name is therefore the renaming gesture's own call to
-    /// [`Engine::disconnect`](super::Engine::disconnect), which is what the connection editor's
+    /// [`Sources::disconnect`](super::Sources::disconnect), which is what the connection editor's
     /// Save does.
     fn put(&self, name: String, live: LiveSource) {
         self.0.lock().unwrap().insert(name, live);
@@ -340,7 +340,7 @@ pub struct SchemaListingView {
 }
 
 /// One relation inside a source's catalog, as a surface outside the engine sees it —
-/// [`Engine::describe_remote`](super::Engine::describe_remote)'s answer.
+/// [`Sources::describe_remote`](super::Sources::describe_remote)'s answer.
 ///
 /// Deliberately not a [`TableMeta`](super::TableMeta): that is what a *registration* learned
 /// about a def, and a remote relation has no def, no sources and no free row count. What it has
@@ -372,7 +372,7 @@ pub enum SchemaVisibility {
 }
 
 /// Connect what `conn` describes through the source its kind names, and register what connecting
-/// yielded on `ctx` — the source arm of `Engine::connect`.
+/// yielded on `ctx` — the source arm of `Sources::connect`.
 ///
 /// **Connecting is the probe**, all-or-nothing exactly as `store::connect` is: a source answers
 /// `Ok` only for something it actually reached, so there is no separate `reachable` step here.
@@ -384,7 +384,7 @@ pub enum SchemaVisibility {
 /// under that name, catalog included. A *rename* arrives as a new name and leaves the old one
 /// registered, because nothing here can tell it from a second connection to the same server —
 /// [`check_catalog_name`] lets two defs share an identity and differ only by name. Retiring the
-/// old catalog is the renaming gesture's own [`Engine::disconnect`](super::Engine::disconnect),
+/// old catalog is the renaming gesture's own [`Sources::disconnect`](super::Sources::disconnect),
 /// which the connection editor's Save makes; it is **not** redundant with anything here, and
 /// dropping it would leave the old catalog resolving for the life of the window.
 pub(crate) async fn connect(
@@ -498,7 +498,7 @@ pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
 
 /// What a surface sees of one live source: the catalog it is addressed by, and its namespaces
 /// scoped against the def's own [`SourceDef::schemas`] — see
-/// [`Engine::source_listing`](super::Engine::source_listing).
+/// [`Sources::listing`](super::Sources::listing).
 pub(crate) fn listing(
     sources: &Live,
     conn: &ConnectionDef,
@@ -630,7 +630,7 @@ pub(crate) async fn create_table_as(
 /// error, and a **cancel**.
 ///
 /// The cancel is why this is a guard rather than an `if filled.is_err()`: a CTAS is registered as
-/// the workspace's in-flight call, so `Engine::cancel` and a re-press both abort the task, and an
+/// the workspace's in-flight call, so `Workspace::cancel` and a re-press both abort the task, and an
 /// aborted task's future is *dropped* at its next await — no error path runs. Without this, every
 /// cancelled remote CTAS would leave an empty relation on the source under the name the user
 /// chose, and the retry would then refuse it as already existing. `ddl::tables::Staging` is the
@@ -709,7 +709,7 @@ pub(crate) async fn relist_at(sources: &Live, catalog: &str) {
 }
 
 /// Re-enumerate `live` and hand the result to both halves that hold one — the map that
-/// [`Engine::source_listing`](super::Engine::source_listing) reads, and the catalog a query resolves
+/// [`Sources::listing`](super::Sources::listing) reads, and the catalog a query resolves
 /// through.
 async fn relist(live: &Connected, sources: &Live) {
     match live.source.enumerate().await {

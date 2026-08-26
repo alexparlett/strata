@@ -1,5 +1,5 @@
 //! The chart bounds the read and the control offering it have to share. The chart read itself is
-//! the engine's (`strata_engine::Engine::chart`); what lives here is the number both sides state.
+//! the engine's (`strata_engine::SnapshotReads::chart`); what lives here is the number both sides state.
 
 /// The most bins a request may ask for. A histogram is a *picture* of a distribution, and
 /// past a couple of hundred bars there are more bins than the canvas has columns of pixels.

@@ -71,7 +71,7 @@ pub fn press_query(mut session: Radio<SessionState, Chan>, id: TabId, mode: Quer
 /// Not the Run *button*: it wears Cancel while a run is in flight, so there is nothing there to
 /// gate, and it presses [`press_query`] directly.
 pub fn run_query(engine: &EngineCtx, session: Radio<SessionState, Chan>, id: TabId) {
-    if engine.is_running(id.into()) {
+    if engine.ws(id.into()).is_running() {
         return;
     }
     press_query(session, id, QueryMode::Run);
@@ -123,7 +123,7 @@ pub fn open_sql(mut session: Radio<SessionState, Chan>, sql: &str) -> TabId {
 ///
 /// **And the cancel is where a cancel gets logged** (P3-13), not the settle: dropping the
 /// trigger unmounts the press's keeper in the same pass, so the entry's `Err("cancelled")`
-/// lands with nobody subscribed (the keeper's own doc says as much). `Engine::cancel` answers
+/// lands with nobody subscribed (the keeper's own doc says as much). `Workspace::cancel` answers
 /// with the elapsed time *iff* it really aborted something, which is both the guard against
 /// logging a cancel that hit nothing and the one real fact the event can carry.
 pub fn cancel_run(
@@ -133,7 +133,7 @@ pub fn cancel_run(
     id: TabId,
     run: RunId,
 ) {
-    if let Some(elapsed) = engine.cancel(id.into(), run.into()) {
+    if let Some(elapsed) = engine.ws(id.into()).cancel(run.into()) {
         log_event(
             log,
             LogLevel::Warning,
@@ -267,7 +267,7 @@ fn save_view(
         Origin::View(name.clone()),
     );
     spawn(async move {
-        match engine.create_view(name.clone(), sql).await {
+        match engine.catalog().create_view(name.clone(), sql).await {
             Ok(meta) => {
                 if persisted {
                     log_event(report.log, LogLevel::Ok, format!("Saved view '{name}'"));

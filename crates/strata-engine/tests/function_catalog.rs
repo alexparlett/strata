@@ -10,7 +10,7 @@ use strata_engine::sql::FunctionCatalog;
 use strata_engine::Engine;
 
 fn functions() -> Arc<FunctionCatalog> {
-    Engine::builder().build().functions()
+    Engine::builder().build().lang().functions()
 }
 
 #[test]

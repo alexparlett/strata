@@ -23,14 +23,14 @@
 //! mounted — so a derivation from the UI went false the moment the user switched tabs on a
 //! running query, and both the window close and a background tab's ⌘W skipped the confirm
 //! with the engine still executing. The engine owns both answers now
-//! ([`Engine::watch_inflight`](strata_engine::Engine::watch_inflight) for the window,
-//! [`Engine::is_running`](strata_engine::Engine::is_running) per tab). `confirm` and
+//! ([`Work::flag`](strata_engine::Work::flag) for the window,
+//! [`Workspace::is_running`](strata_engine::Workspace::is_running) per tab). `confirm` and
 //! `last` are still mirrored from reactive state by the root's `use_side_effect`s.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use freya::prelude::*;
 use freya::radio::Radio;
@@ -45,19 +45,50 @@ use strata_model::TabId;
 
 use crate::apps::project::state::{Chan, SessionState};
 
-/// Shared with the winit `on_close` hook, which only reads it. `running` is written by the
-/// engine; `confirm` (← the `confirm_close_running` setting) and `last` (← the app-global
-/// window registry) are mirrored from reactive state by the window root's side effects.
+/// Shared with the winit `on_close` hook, which only reads it. `running` is the mounted
+/// engine's own flag; `confirm` (← the `confirm_close_running` setting) and `last` (← the
+/// app-global window registry) are mirrored from reactive state by the window root's side
+/// effects.
 pub struct CloseGuard {
-    /// Whether this window's engine has *any* run or explain executing — written by the
-    /// engine itself, inside every lifecycle mutation. An `Arc` because the engine holds
-    /// the very same flag: the window hands it over once, at engine creation.
-    pub running: Arc<AtomicBool>,
+    /// Whether this window's engine has *any* run or explain executing — the engine's own
+    /// [`Work::flag`](strata_engine::Work::flag), written by the engine inside every lifecycle
+    /// mutation and taken here by [`watch`](Self::watch) when a project mounts one.
+    ///
+    /// A `Mutex` over the handle rather than one flag handed to every engine, because the
+    /// **window outlives any one engine**: a re-root and an engine restart each mount a new
+    /// one, whose flag is a different `Arc`. Re-pointed at most a handful of times in a
+    /// window's life, and read on the close hook's own thread.
+    running: Mutex<Arc<AtomicBool>>,
     /// Mirrors the `confirm_close_running` setting (the window root's side effect).
     pub confirm: AtomicBool,
     /// Whether this is the app's last window — if so its close has to put the launcher up
     /// first (see [`Veto::Launcher`]).
     pub last: AtomicBool,
+}
+
+impl CloseGuard {
+    /// A window's guard as it starts: no engine yet, so nothing is running; `confirm` seeded
+    /// from the `confirm_close_running` setting and `last` from the window registry, both kept
+    /// in step afterwards by the window root's side effects.
+    pub fn new(confirm: bool, last: bool) -> Self {
+        Self {
+            running: Mutex::new(Arc::new(AtomicBool::new(false))),
+            confirm: AtomicBool::new(confirm),
+            last: AtomicBool::new(last),
+        }
+    }
+
+    /// Whether the mounted engine has work in flight — the question every close path asks
+    /// first. `false` for a window with no engine yet, and for one whose engine has gone.
+    pub fn running(&self) -> bool {
+        self.running.lock().unwrap().load(Ordering::Relaxed)
+    }
+
+    /// Point this window at the engine it has just mounted. Called once per engine, from the
+    /// hook that creates it.
+    pub fn watch(&self, flag: Arc<AtomicBool>) {
+        *self.running.lock().unwrap() = flag;
+    }
 }
 
 /// Why the `on_close` hook declined a close, and so what the UI has to do about it.
@@ -118,16 +149,10 @@ pub fn close_bridge(
     impl FnMut(RendererContext, WindowId) -> CloseDecision + Send + 'static,
 ) {
     let (tx, rx) = unbounded();
-    let guard = Arc::new(CloseGuard {
-        running: Arc::new(AtomicBool::new(false)),
-        confirm: AtomicBool::new(confirm_seed),
-        last: AtomicBool::new(false),
-    });
+    let guard = Arc::new(CloseGuard::new(confirm_seed, false));
     let hook_guard = guard.clone();
     let hook = move |_ctx: RendererContext<'_>, _id: WindowId| {
-        let veto = if hook_guard.running.load(Ordering::Relaxed)
-            && hook_guard.confirm.load(Ordering::Relaxed)
-        {
+        let veto = if hook_guard.running() && hook_guard.confirm.load(Ordering::Relaxed) {
             Some(Veto::Confirm)
         } else if hook_guard.last.load(Ordering::Relaxed) && !platform::is_quitting() {
             Some(Veto::Launcher)
@@ -230,7 +255,7 @@ pub fn close_project(
     platform: Platform,
     app: AppCtx,
 ) {
-    if guard.running.load(Ordering::Relaxed) && config.peek().settings.confirm_close_running {
+    if guard.running() && config.peek().settings.confirm_close_running {
         confirm.set(Some(CloseTarget::Window));
     } else {
         spawn_forever(close_this_window(platform, app));
@@ -254,7 +279,7 @@ pub struct TabCloser {
 impl TabCloser {
     /// Close `id` — via the confirm when its query is in flight and the pref is on.
     pub fn close(&self, mut radio: Radio<SessionState, Chan>, config: ConfigStation, id: TabId) {
-        let in_flight = self.engine.peek().is_running(id.into());
+        let in_flight = self.engine.peek().ws(id.into()).is_running();
         if in_flight && config.peek().settings.confirm_close_running {
             let mut confirm = self.confirm;
             confirm.set(Some(CloseTarget::Tab(id)));

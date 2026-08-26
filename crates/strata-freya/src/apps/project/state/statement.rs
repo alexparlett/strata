@@ -3,7 +3,7 @@
 //!
 //! An intercepted statement returns a `StoreEffect` rather than leaving its change somewhere to
 //! be discovered: the catalog is the `ProjectState` store, never a query, so the engine's answer
-//! is *applied* here exactly as `save_view` applies `Engine::create_view`'s — store upsert on the
+//! is *applied* here exactly as `save_view` applies `Catalog::create_view`'s — store upsert on the
 //! matching [`ProjChan`] → the def written through the persist funnel at its mutation point →
 //! `catalog_settled`, so every tab's diagnostics re-derive against the catalog the engine now
 //! holds → the event log.
@@ -19,7 +19,7 @@
 //! never a second observer of one settle.
 //!
 //! **A surface that dispatches its own run folds through the same body**, not a copy of it: the
-//! empty-table panel (IT-01) composes a `CREATE TABLE`, calls `Engine::run` from a press and
+//! empty-table panel (IT-01) composes a `CREATE TABLE`, calls `Workspace::run` from a press and
 //! hands the report to [`settle`] through [`use_settle`]. A gesture that ran a statement and
 //! stopped there would have created a table the catalog never learns about.
 //!
@@ -59,7 +59,7 @@ pub struct Settle {
 /// Gather the fold's handles from the window's stores and context.
 ///
 /// For a surface that has a [`StatementReport`] in hand with **no query behind it** — the
-/// empty-table panel (IT-01) dispatches `Engine::run` from a press rather than from a
+/// empty-table panel (IT-01) dispatches `Workspace::run` from a press rather than from a
 /// `QuerySpec`, and then has exactly the same fold to perform. It reaches [`settle`] through
 /// this; [`use_statement_settle`] stays the query-driven wrapper over the same body, and there
 /// is deliberately no second `apply`, persist path or epoch bump.
@@ -188,7 +188,7 @@ fn mutated(to: Settle, chan: ProjChan, write: impl FnOnce(&mut ProjectState)) ->
 /// comes back on a task.
 ///
 /// Driven over a **real** engine and a real project folder, because that round trip is the whole
-/// deliverable: every link either side of it is unit-tested (`Engine::table_meta` in
+/// deliverable: every link either side of it is unit-tested (`Catalog::table_meta` in
 /// `strata-engine`, `ProjectState::table_reread` next door), and what nothing else covers is that
 /// the arm dispatches at all and its spawned task lands.
 #[cfg(test)]
@@ -235,7 +235,7 @@ mod tests {
 
     /// Run one statement on `engine` and take its report.
     fn statement(engine: &EngineCtx, sql: &str) -> StatementReport {
-        match block_on(engine.run(WsId(1), RunTag(1), sql.into(), 10)).expect("ran") {
+        match block_on(engine.ws(WsId(1)).run(RunTag(1), sql.into(), 10)).expect("ran") {
             RunOutcome::Statement(report) => report,
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }

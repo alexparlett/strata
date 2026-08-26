@@ -43,7 +43,7 @@
 //! **An edit that moves the address, the provider or a database's user moves the connection's
 //! identity**, and what the old URL registered survives it: `engine::store::connect` only ever
 //! sees the def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the
-//! same `Engine::disconnect` call Forget makes — and for a database that move takes the keystore
+//! same `Sources::disconnect` call Forget makes — and for a database that move takes the keystore
 //! entry with it, since the reference is derived from the URL.
 //!
 //! **Closing discards the draft, deliberately without asking** — nothing is written until Save,
@@ -146,7 +146,7 @@ pub struct ConnectionCtx {
     pub target: State<ConnectionTarget>,
     pub status: State<Status>,
     /// The AWS profile names this machine defines — the **Named profile** picker's options,
-    /// read once at mount (`Engine::aws_profiles`). `None` until that read answers, which is
+    /// read once at mount (`Sources::aws_profiles`). `None` until that read answers, which is
     /// what lets the picker say "looking" rather than "you have none".
     pub profiles: State<Option<Vec<String>>>,
     /// Which client-option row the table's toolbar acts on.
@@ -332,7 +332,7 @@ impl App for ConnectionApp {
             move || {
                 let mut profiles = ctx.profiles;
                 spawn(async move {
-                    let found = engine.aws_profiles().await;
+                    let found = engine.sources().aws_profiles().await;
                     profiles.set(Some(found));
                 });
             }

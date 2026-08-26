@@ -119,12 +119,8 @@ impl QueryCapability for RunQuery {
         let engine = &self.0;
         match spec.mode {
             QueryMode::Run => engine
-                .run(
-                    spec.tab.into(),
-                    spec.run.into(),
-                    spec.sql.clone(),
-                    spec.page_size,
-                )
+                .ws(spec.tab.into())
+                .run(spec.run.into(), spec.sql.clone(), spec.page_size)
                 .await
                 .map(|outcome| match outcome {
                     RunOutcome::Rows(output, batch) => {
@@ -133,11 +129,8 @@ impl QueryCapability for RunQuery {
                     RunOutcome::Statement(report) => QueryOutcome::Statement(report),
                 }),
             QueryMode::Explain { analyze } => engine
-                .explain(
-                    spec.tab.into(),
-                    spec.run.into(),
-                    as_explain(&spec.sql, analyze),
-                )
+                .ws(spec.tab.into())
+                .explain(spec.run.into(), as_explain(&spec.sql, analyze))
                 .await
                 .map(QueryOutcome::Plan),
         }
@@ -185,7 +178,8 @@ impl QueryCapability for FetchSnapshotPage {
 
     async fn run(&self, spec: &PageSpec) -> Result<SnapshotPage, String> {
         self.0
-            .fetch_page(spec.snapshot, spec.page, spec.page_size, spec.sort.clone())
+            .snapshot(spec.snapshot)
+            .page(spec.page, spec.page_size, spec.sort.clone())
             .await
             .map(|(rows, batch)| SnapshotPage { rows, batch })
     }

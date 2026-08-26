@@ -262,11 +262,13 @@ impl Host for MockHost {
         let run = RunTag(self.runs.fetch_add(1, Ordering::Relaxed) as u128);
         let settled = match mode {
             RunMode::Run => engine
-                .query(ws, run, sql, page_size)
+                .ws(ws)
+                .query(run, sql, page_size)
                 .await
                 .map(|(output, _)| Settled::Rows(output)),
             RunMode::Explain => engine
-                .explain(ws, run, as_explain(&sql, false))
+                .ws(ws)
+                .explain(run, as_explain(&sql, false))
                 .await
                 .map(Settled::Plan),
         };

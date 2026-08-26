@@ -4,7 +4,7 @@
 //! answer it *here*. In the app (AA-03) the control-plane methods travel a channel to the
 //! project window and are answered by its Radio state; headless (AA-05) they hit a plain
 //! [`Engine`] and the defs the registration pass was replayed over. Both hand back the same
-//! `Arc<Engine>` for the data plane, which is why `fetch_page` / `validate` / `functions`
+//! `Arc<Engine>` for the data plane, which is why a snapshot's `page` / `validate` / `functions`
 //! never queue behind UI work.
 //!
 //! Two shapes here earn their oddness:
@@ -334,7 +334,7 @@ pub trait Host: Send + Sync + 'static {
     fn default_page_size(&self) -> usize;
 
     /// The **data plane**: the engine serving `project`. Reads that are engine-scoped and
-    /// side-effect free (`fetch_page`, `validate`, `functions`) go straight to it.
+    /// side-effect free (a snapshot's `page`, `validate`, `functions`) go straight to it.
     fn engine(
         &self,
         project: &Path,

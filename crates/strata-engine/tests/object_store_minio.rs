@@ -330,8 +330,8 @@ async fn typed_registration(engine: &Engine, project: &Path) {
     engine.set_data_dir(project);
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(10),
             format!(
                 "CREATE EXTERNAL TABLE typed STORED AS CSV LOCATION 's3://{BUCKET}/data/' \
@@ -356,7 +356,8 @@ async fn typed_registration(engine: &Engine, project: &Path) {
     assert_eq!(columns, ["id", "region"], "the schema came off the objects");
 
     let (output, _) = engine
-        .query(WsId(1), RunTag(11), "SELECT * FROM typed".into(), 50)
+        .ws(WsId(1))
+        .query(RunTag(11), "SELECT * FROM typed".into(), 50)
         .await
         .expect("query the typed table");
     assert_eq!(output.total, 3, "and it reads through the same store");
@@ -393,25 +394,26 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     ambient();
 
     let engine = Engine::builder().build();
-    engine
+    let (ws, catalog, sources) = (engine.ws(WsId(1)), engine.catalog(), engine.sources());
+    sources
         .connect(connection(&endpoint, S3Auth::Ambient))
         .await
         .expect("the connection registers its object store");
 
-    let meta = engine
+    let meta = catalog
         .register(table(&endpoint))
         .await
         .expect("the table registers over the bucket");
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(columns, ["id", "region"], "the schema came off the object");
 
-    let (output, _) = engine
-        .query(WsId(1), RunTag(1), "SELECT * FROM regions".into(), 50)
+    let (output, _) = ws
+        .query(RunTag(1), "SELECT * FROM regions".into(), 50)
         .await
         .expect("query the remote table");
     assert_eq!(output.total, 3, "every seeded row came back");
 
-    let found = engine
+    let found = catalog
         .detect_partitions(None, None, vec![format!("s3://{BUCKET}/{HIVE_PREFIX}")])
         .await;
     assert_eq!(
@@ -420,7 +422,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the levels were listed through the object store, outermost first"
     );
 
-    let meta = engine
+    let meta = catalog
         .register(hive_table(&endpoint))
         .await
         .expect("the partitioned table registers over the bucket");
@@ -440,9 +442,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the file's columns, then the folder tree's — as the types the def asked for"
     );
 
-    let (output, _) = engine
+    let (output, _) = ws
         .query(
-            WsId(1),
             RunTag(2),
             "SELECT year, month, tally FROM tallies ORDER BY year, tally".into(),
             50,
@@ -464,9 +465,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "every partition's rows came back carrying its folder's values"
     );
 
-    let (pruned, _) = engine
+    let (pruned, _) = ws
         .query(
-            WsId(1),
             RunTag(3),
             "SELECT tally FROM tallies WHERE year = 2025".into(),
             50,
@@ -481,7 +481,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         paths: vec![format!("s3://{BUCKET}/{HIVE_UNKEYED_PREFIX}")],
         ..hive_table(&endpoint)
     };
-    let refused = engine
+    let refused = catalog
         .register(unkeyed)
         .await
         .expect_err("an unkeyed level matches no partition column");
@@ -499,7 +499,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         paths: vec![format!("s3://{BUCKET}/nothing/")],
         ..hive_table(&endpoint)
     };
-    let refused = engine
+    let refused = catalog
         .register(empty)
         .await
         .expect_err("a prefix with nothing under it");
@@ -518,25 +518,25 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         paths: vec!["s3://not-connected/data/".into()],
         ..table(&endpoint)
     };
-    let refused = engine.register(orphan).await.expect_err("no object store");
+    let refused = catalog.register(orphan).await.expect_err("no object store");
     assert!(
         refused.to_lowercase().contains("object store"),
         "the failure names the missing store: {refused}"
     );
 
-    engine
+    sources
         .connect(http_connection(&endpoint))
         .await
         .expect("the HTTP connection registers its object store");
-    let meta = engine
+    let meta = catalog
         .register(http_table(&endpoint))
         .await
         .expect("the table registers over the HTTP origin");
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(columns, ["id", "region"], "the schema came off the object");
 
-    let (output, _) = engine
-        .query(WsId(1), RunTag(4), "SELECT * FROM regions_http".into(), 50)
+    let (output, _) = ws
+        .query(RunTag(4), "SELECT * FROM regions_http".into(), 50)
         .await
         .expect("query the remote table");
     assert_eq!(output.total, 3, "every seeded row came back over HTTP");
@@ -546,18 +546,18 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         paths: vec!["http://127.0.0.1:1/lake/x.csv".into()],
         ..http_table(&endpoint)
     };
-    let refused = engine.register(orphan).await.expect_err("no object store");
+    let refused = catalog.register(orphan).await.expect_err("no object store");
     assert!(
         refused.to_lowercase().contains("object store"),
         "the failure names the missing store: {refused}"
     );
 
-    engine.disconnect(&connection(&endpoint, S3Auth::Ambient).named());
+    sources.disconnect(&connection(&endpoint, S3Auth::Ambient).named());
     let forgotten = TableSpec {
         name: "forgotten".into(),
         ..table(&endpoint)
     };
-    let refused = engine
+    let refused = catalog
         .register(forgotten)
         .await
         .expect_err("the store is gone");
@@ -571,10 +571,12 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
 
     let engine = Engine::builder().build();
     engine
+        .sources()
         .connect(connection(&endpoint, S3Auth::Ambient))
         .await
         .expect("a 403 is an authorization answer, not a description fault");
     let refused = engine
+        .catalog()
         .register(table(&endpoint))
         .await
         .expect_err("MinIO rejects the signature");

@@ -121,6 +121,7 @@ fn toggle(ctx: ConfigureCtx, engine: EngineCtx, root: &std::path::Path) {
     }
     spawn(async move {
         let found = engine
+            .catalog()
             .detect_partitions(connection, Some(root), paths)
             .await;
         ctx.edit(move |draft| {

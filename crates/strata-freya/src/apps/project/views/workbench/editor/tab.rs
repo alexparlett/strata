@@ -101,11 +101,15 @@ impl Component for EditorTab {
                             v.reg.ready().map(|i| i.columns.as_slice()).unwrap_or(&[]),
                         )
                     }),
-                    engine.functions(),
-                    engine.prepared(),
+                    engine.lang().functions(),
+                    engine.lang().prepared(),
                     dialect,
                 )
-                .with_databases(engine.database_syms(p.connections.iter().map(|c| &c.def)));
+                .with_databases(
+                    engine
+                        .sources()
+                        .database_syms(p.connections.iter().map(|c| &c.def)),
+                );
             });
         }
         let on_completions = move |req: CompletionRequest| {

@@ -149,7 +149,7 @@ fn run_export(mut ctx: ExportCtx, engine: EngineCtx, log: LogCtx, platform: Plat
         };
 
         ctx.status.set(Status::Writing);
-        match engine.export(target.snapshot, spec).await {
+        match engine.snapshot(target.snapshot).export(spec).await {
             Ok((path, rows)) => {
                 log_event(
                     log,

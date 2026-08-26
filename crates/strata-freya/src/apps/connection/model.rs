@@ -1060,7 +1060,8 @@ mod tests {
         let kind = def.provider.source()?.kind.clone();
         strata_engine::Engine::builder()
             .build()
-            .check_source_address(&kind, &def.address)
+            .sources()
+            .check_address(&kind, &def.address)
             .err()
     }
 

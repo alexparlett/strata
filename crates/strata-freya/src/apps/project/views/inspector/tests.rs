@@ -190,7 +190,7 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
             });
             r.provide_root_context(|| {
                 let engine = EngineCtx::default();
-                block_on(engine.register(TableSpec {
+                block_on(engine.catalog().register(TableSpec {
                     name: SCAN_TABLE.into(),
                     paths: vec![SCAN_FIXTURE.into()],
                     format: SourceFormat::from_name("csv"),

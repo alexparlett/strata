@@ -1,4 +1,4 @@
-//! `Engine::chart` against a **real snapshot** (Rz2 acceptance): the renderer-first shapes,
+//! `SnapshotReads::chart` against a **real snapshot** (Rz2 acceptance): the renderer-first shapes,
 //! driven straight through the facade the way a freya-query capability calls it — a Run
 //! spools the result to an Arrow IPC file, and every chart is a projected, ordinal-ordered
 //! read of *that*, never of the source.
@@ -19,7 +19,8 @@ const SQL: &str = "SELECT column1 AS region, column2 AS amount, column3 AS qty \
 
 async fn snapshot(eng: &Engine) -> SnapshotId {
     let (output, _) = eng
-        .query(WsId(1), RunTag(1), SQL.into(), 10)
+        .ws(WsId(1))
+        .query(RunTag(1), SQL.into(), 10)
         .await
         .expect("run");
     output
@@ -44,7 +45,8 @@ async fn the_chart_draws_the_result_in_its_own_order() {
     let snap = snapshot(&eng).await;
 
     let data = eng
-        .chart(snap, rows_q(Some("region"), &["amount"], None))
+        .snapshot(snap)
+        .chart(rows_q(Some("region"), &["amount"], None))
         .await
         .expect("chart");
     let ChartData::Table { axis, series } = data else {
@@ -58,7 +60,7 @@ async fn the_chart_draws_the_result_in_its_own_order() {
     assert_eq!(series[0].name, "amount");
     assert_eq!(series[0].values, vec![Some(30.0), Some(20.0), Some(10.0)]);
 
-    let (rows, _) = eng.fetch_page(snap, 1, 10, None).await.expect("page");
+    let (rows, _) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
     let grid: Vec<&str> = rows.iter().map(|r| r[0].text.as_str()).collect();
     assert_eq!(grid, vec!["eu", "us", "ap"], "chart and grid agree");
 }
@@ -70,7 +72,8 @@ async fn several_ys_split_into_series_over_a_real_snapshot() {
     let snap = snapshot(&eng).await;
 
     let data = eng
-        .chart(snap, rows_q(Some("region"), &["amount", "qty"], None))
+        .snapshot(snap)
+        .chart(rows_q(Some("region"), &["amount", "qty"], None))
         .await
         .expect("chart");
     let ChartData::Table { series, .. } = data else {
@@ -87,8 +90,8 @@ async fn several_ys_split_into_series_over_a_real_snapshot() {
 async fn a_series_column_pivots_over_a_real_snapshot() {
     let eng = Engine::builder().build();
     let (out, _) = eng
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(1),
             "SELECT column1 AS m, column2 AS region, column3 AS v \
              FROM (VALUES ('jan', 'eu', 1.0), ('jan', 'us', 2.0), ('feb', 'eu', 3.0)) AS t"
@@ -100,7 +103,8 @@ async fn a_series_column_pivots_over_a_real_snapshot() {
     let snap = out.snapshot.expect("snapshot");
 
     let data = eng
-        .chart(snap, rows_q(Some("m"), &["v"], Some("region")))
+        .snapshot(snap)
+        .chart(rows_q(Some("m"), &["v"], Some("region")))
         .await
         .expect("chart");
     let ChartData::Table { axis, series } = data else {
@@ -120,14 +124,12 @@ async fn scatter_returns_points_and_refuses_over_cap() {
     let snap = snapshot(&eng).await;
 
     let data = eng
-        .chart(
-            snap,
-            ChartQuery::Raw {
-                x: "qty".into(),
-                y: "amount".into(),
-                cap: 6_000,
-            },
-        )
+        .snapshot(snap)
+        .chart(ChartQuery::Raw {
+            x: "qty".into(),
+            y: "amount".into(),
+            cap: 6_000,
+        })
         .await
         .expect("chart");
     let ChartData::Points(mut points) = data else {
@@ -144,14 +146,12 @@ async fn scatter_returns_points_and_refuses_over_cap() {
     );
 
     let data = eng
-        .chart(
-            snap,
-            ChartQuery::Raw {
-                x: "qty".into(),
-                y: "amount".into(),
-                cap: 2,
-            },
-        )
+        .snapshot(snap)
+        .chart(ChartQuery::Raw {
+            x: "qty".into(),
+            y: "amount".into(),
+            cap: 2,
+        })
         .await
         .expect("chart");
     assert_eq!(
@@ -170,13 +170,11 @@ async fn a_histogram_bins_the_snapshot() {
     let snap = snapshot(&eng).await;
 
     let data = eng
-        .chart(
-            snap,
-            ChartQuery::Histogram {
-                col: "amount".into(),
-                bins: Some(2),
-            },
-        )
+        .snapshot(snap)
+        .chart(ChartQuery::Histogram {
+            col: "amount".into(),
+            bins: Some(2),
+        })
         .await
         .expect("chart");
     let ChartData::Bins(bins) = data else {
@@ -196,7 +194,8 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     let snap = snapshot(&eng).await;
 
     let fit = eng
-        .trend(snap, "qty".into(), "amount".into())
+        .snapshot(snap)
+        .trend("qty".into(), "amount".into())
         .await
         .expect("trend")
         .expect("three clean pairs fit a line");
@@ -206,30 +205,36 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     assert_eq!(fit.n, 3);
 
     let (out, _) = eng
-        .query(WsId(2), RunTag(1), "SELECT 1.0 AS x, 2.0 AS y".into(), 10)
+        .ws(WsId(2))
+        .query(RunTag(1), "SELECT 1.0 AS x, 2.0 AS y".into(), 10)
         .await
         .expect("run");
     let one = out.snapshot.expect("snapshot");
     assert_eq!(
-        eng.trend(one, "x".into(), "y".into()).await.expect("trend"),
+        eng.snapshot(one)
+            .trend("x".into(), "y".into())
+            .await
+            .expect("trend"),
         None
     );
 }
 
 /// A chart of a retired snapshot fails like any other read of one — the caller tells that
-/// from a real fault by asking `Engine::snapshot_live`, never by matching prose.
+/// from a real fault by asking `SnapshotReads::live`, never by matching prose.
 #[tokio::test]
 async fn charting_a_retired_snapshot_fails_like_any_other_read() {
     let eng = Engine::builder().build();
     let snap = snapshot(&eng).await;
     let _ = eng
-        .query(WsId(1), RunTag(2), "SELECT 1 AS n".into(), 10)
+        .ws(WsId(1))
+        .query(RunTag(2), "SELECT 1 AS n".into(), 10)
         .await
         .expect("re-run");
-    assert!(!eng.snapshot_live(snap));
+    assert!(!eng.snapshot(snap).live());
 
     let err = eng
-        .chart(snap, rows_q(Some("region"), &["amount"], None))
+        .snapshot(snap)
+        .chart(rows_q(Some("region"), &["amount"], None))
         .await
         .expect_err("a retired snapshot has nothing to chart");
     assert!(!err.is_empty());

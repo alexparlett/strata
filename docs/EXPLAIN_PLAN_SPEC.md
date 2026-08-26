@@ -28,7 +28,7 @@ The editor toolbar has two presses next to Run — **Explain plan** and **Explai
 into a fresh-nonce `QuerySpec` on the tab's request slot. The results pane subscribes that press
 (`RunQuery` in `query/run_query.rs`); its Explain arm rewrites the SQL with
 `plan::as_explain(sql, analyze)` — strip any leading `EXPLAIN [ANALYZE] [VERBOSE]`, prepend the
-requested prefix — and calls `Engine::explain`. The buffer itself is untouched; the rewrite
+requested prefix — and calls `Workspace::explain`. The buffer itself is untouched; the rewrite
 applies to the press's snapshot at dispatch.
 
 The settled outcome is `QueryOutcome::Plan(QueryPlan)` — a third outcome beside `Rows` and
@@ -38,10 +38,10 @@ The results pane renders it as `ExplainPlan`, and the status bar summarises the 
 
 Two engine facts (see `docs/SNAPSHOT_SPEC.md` §4):
 
-- **An explain materializes no snapshot.** `Engine::explain` supersedes the workspace's in-flight
+- **An explain materializes no snapshot.** `Workspace::explain` supersedes the workspace's in-flight
   run (mutually exclusive, like a re-run) but leaves the tab's settled snapshot alone — the
   previous result grid is still there behind the plan.
-- **Cancel works the same as for a run** — the press's nonce, `Engine::cancel`, settles
+- **Cancel works the same as for a run** — the press's nonce, `Workspace::cancel`, settles
   `Err("cancelled")`.
 
 A statement *typed* as `EXPLAIN SELECT …` and dispatched through Run is classified `Query` by the
@@ -52,7 +52,7 @@ result table. The structured plan view is only built by the two toolbar presses.
 sequenceDiagram
     participant T as Editor toolbar
     participant Q as RunQuery (freya-query)
-    participant E as Engine::explain
+    participant E as Workspace::explain
     participant V as ExplainPlan view
     T->>Q: press_query(QueryMode::Explain { analyze })
     Q->>E: as_explain(sql, analyze)
@@ -141,7 +141,8 @@ unit, so their label is DataFusion's own display string; everything else is form
 
 ### The walk (`engine/explain.rs`)
 
-`run_explain` is handed the **parsed, resolved** statement (`Engine::explain` → `sql::parse_one`,
+`run_explain` is handed the **parsed, resolved** statement (`Workspace::explain` →
+`sql::parse_one`,
 so an EXPLAIN's bare names reach the same relations a Run's do — DB-09) and plans it under
 `SQLOptions` with DML/DDL/statements disallowed (`query::plan_statement`), unwraps
 the `LogicalPlan::Explain` / `Analyze` wrapper to the inner plan, walks it into `logical`, then

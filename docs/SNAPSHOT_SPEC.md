@@ -95,9 +95,9 @@ Retirement (deregister the table + delete the file) happens at exactly these poi
 | Trigger | What retires |
 |---|---|
 | **New Run for the ws** (dispatch time) | the ws's previous snapshot + any in-flight run's partial |
-| **`cancel(ws, tag)`** | the aborted run's partial file; the previous snapshot is already gone (retire-on-dispatch) |
+| **`ws(id).cancel(tag)`** | the aborted run's partial file; the previous snapshot is already gone (retire-on-dispatch) |
 | **Run fails** | the failed run's partial file (cleaned by the run itself) |
-| **`cleanup_ws(ws)`** (tab close) | the ws's current snapshot + any in-flight partial |
+| **`ws(id).cleanup()`** (tab close) | the ws's current snapshot + any in-flight partial |
 | **engine drop** (window close) | the engine's whole `e_{pid}_{engine_id}` directory + its `.lock` sibling |
 | **last `SnapshotPin` released** | a snapshot whose retire arrived while it was pinned (see below) |
 | **process start** | `purge_snapshot_root()` — every *dead* engine's leftovers (§2: lock-gated, live directories spared) |
@@ -110,7 +110,7 @@ are unaffected (§6), and the pane is in its Running / Error state anyway. A run
 leaks, and only the latest dispatch may publish workspace state.
 
 **Pins defer a retire, never skip it.** Retire-on-dispatch is right for the grid, whose pages
-follow the tab, and wrong for any reader that outlives one press. `Engine::pin_snapshot(id)`
+follow the tab, and wrong for any reader that outlives one press. `Engine::snapshot(id).pin()`
 returns a `SnapshotPin` (RAII — dropping it releases): while at least one pin is out, a retire of
 that snapshot is recorded in `deferred` instead of executed, and lands when the last pin drops.
 Pins are counted, so two holders are independent.
@@ -119,7 +119,7 @@ The export window is the canonical holder and the reason this exists: it is open
 result*, the user may go back and re-run the query while it sits there, and it must still write
 the rows that were on screen when they asked. Without a pin a re-run deregisters the table
 mid-`COPY` — a truncated file under the user's chosen name — or, more quietly, makes a later
-Export report no results at all when there are plainly some on screen. `Engine::export` also
+Export report no results at all when there are plainly some on screen. `snapshot(id).export` also
 brackets its own call with a pin, so the facade is correct for a caller with no window.
 
 Two retires deliberately **bypass** the deferral, because nothing can be holding their subject: a
@@ -143,26 +143,35 @@ executor-agnostic, so Freya's non-Tokio UI executor awaits engine calls like any
 channels, no event stream, and no request ids *crossing the boundary* — the caller awaits its own
 call's return value (the engine's private dispatch id, below, is bookkeeping the UI never sees).
 
+Every call is reached through a **group handle** naming the thing it is about — `ws(id)` for a
+workspace, `snapshot(id)` for a result — so the identity is stated once and a new read has an
+obvious home (`crates/strata-engine/src/facade/`):
+
 ```rust
 // The editor's entry point: classify the statement, then run a query (delegating to
 // `query` byte-for-byte), execute an intercepted statement, or refuse it — the
 // statement router, docs/STATEMENTS_SPEC.md.
-async fn run(ws: WsId, tag: RunTag, sql, page_size) -> Result<RunOutcome, String>
+async fn Workspace::run(tag: RunTag, sql, page_size) -> Result<RunOutcome, String>
 
 // Run's Query arm: execute once → spool a fresh snapshot → page 1 + handle back.
-async fn query(ws: WsId, tag: RunTag, sql, page_size) -> Result<(QueryOutput, RecordBatch), String>
+async fn Workspace::query(tag: RunTag, sql, page_size) -> Result<(QueryOutput, RecordBatch), String>
 
 // Read: bounded LIMIT/OFFSET (+ optional whole-snapshot ORDER BY) over one snapshot.
-async fn fetch_page(snapshot, page, page_size, sort: Option<(String, bool)>)
+async fn SnapshotReads::page(page, page_size, sort: Option<(String, bool)>)
     -> Result<(Vec<Vec<Cell>>, RecordBatch), String>
 
 // Explain: parsed plan tree, no snapshot.
-async fn explain(ws: WsId, tag: RunTag, sql) -> Result<QueryPlan, String>
+async fn Workspace::explain(tag: RunTag, sql) -> Result<QueryPlan, String>
 
 // Lifecycle: cancel is scoped to the run `tag`, so a stale cancel can't abort a
-// just-started newer run; cleanup_ws is the tab-close hook; Drop clears everything.
-fn cancel(ws, tag) -> Option<elapsed_ms> · fn cleanup_ws(ws) · impl Drop
+// just-started newer run; cleanup is the tab-close hook; Drop clears everything.
+fn Workspace::cancel(tag) -> Option<elapsed_ms> · fn Workspace::cleanup() · impl Drop
 ```
+
+So a page read of a workspace's result reads `engine.ws(tab).query(…)` then
+`engine.snapshot(id).page(…)`. The grouping is **total** — every public method is on one handle
+or in the short root set beside them (`builder`, `id`, `set_data_dir`, the config trio) — and a
+test in `facade/mod.rs` fails when a new method escapes it.
 
 `RunTag` is the UI's per-press nonce (§6) passed down; `WsId` is wide enough (`u128`) to carry
 each frontend's native tab id.
@@ -181,11 +190,11 @@ replaces nothing the tag can do.)
 `sort` stays a read-time parameter (an `ORDER BY` over the whole snapshot before the page
 window), never a rewrite of the snapshot. An **unsorted** read is `ORDER BY` the row
 ordinal (§9) — a bare `LIMIT/OFFSET` over the registered table has **no** inherent order, and
-above the scan-split threshold it is measured-nondeterministic. **Export** is `Engine::export`
-over `export::run_export`, streaming from one snapshot. The facade grows one method per
-feature, always as a read of the immutable snapshot (a filter, should one ever land, is a
-`WHERE` in the read key — never a rewrite); the logic lives in the engine's submodules as plain
-async functions.
+above the scan-split threshold it is measured-nondeterministic. **Export** is
+`snapshot(id).export` over `export::run_export`, streaming from one snapshot. The facade grows
+one method per feature, always as a **new read on `SnapshotReads`** (a filter, should one ever
+land, is a `WHERE` in the read key — never a rewrite); the logic lives in the engine's
+submodules as plain async functions.
 
 ## 6. The UI layer (freya-query)
 
@@ -270,7 +279,7 @@ A thin per-window context wrapper — `Arc<Engine>` with `Deref`, plus the only 
 EngineCtx { eng: Arc<Engine> }          // Deref → Engine: call the facade directly
 impl From<TabId> for WsId               // the tab IS the workspace (Uuid → u128)
 EngineCtx::captured() -> Captured<EngineCtx>   // capability field, invisible to cache identity
-EngineCtx::cleanup(tab)                 // → engine.cleanup_ws — the tab-close hook for §4
+EngineCtx::cleanup(tab)                 // → engine.ws(tab).cleanup() — the tab-close hook for §4
 ```
 
 Tab-close cleanup is one funnel: a `use_side_effect` in the window root diffs the session's open
@@ -296,12 +305,12 @@ Two shapes were considered and rejected, and the reasons still constrain the des
 snapshot is registered as an Arrow *File* table, and DataFusion range-splits such a file across
 `target_partitions` once it passes `datafusion.optimizer.repartition_file_min_size` (10 MB
 default). Any read without an `ORDER BY` then sits above a `CoalescePartitionsExec`, whose own
-contract is that output order is arbitrary. Measured on stock config, `fetch_page` with no sort:
+contract is that output order is arbitrary. Measured on stock config, a page read with no sort:
 
 | Snapshot | Behaviour |
 |---|---|
 | 3M rows (`i`, `md5` text) | **Unstable**: the same page re-read returns different rows — page 1 came back starting at row 1,843,201 on one read and row 101 on another |
-| 200k rows (`i`, `md5` text — the file already crosses 10 MB) | Stable but **wrong**: every read starts the stream at row 57,345, so pages 2+ (served by `fetch_page`) disagree with page 1 (served from the spool, in true order) — rows duplicated and missing as the user pages |
+| 200k rows (`i`, `md5` text — the file already crosses 10 MB) | Stable but **wrong**: every read starts the stream at row 57,345, so pages 2+ (served by `snapshot(id).page`) disagree with page 1 (served from the spool, in true order) — rows duplicated and missing as the user pages |
 | 200k rows, narrow (`i` only, under 10 MB) | Perfect file order — which is why this never showed up in tests |
 
 Each read is a *contiguous* run of the file (within-page order survives); it is the stream's
@@ -363,7 +372,8 @@ whole-snapshot export streams into its `COPY` instead of buffering the result fi
 
 The discipline the column demands — every reader accounts for it:
 
-- **Unsorted reads** (`fetch_page`, the chart's `Rows`): `ORDER BY __strata_ord`, then project
+- **Unsorted reads** (`snapshot(id).page`, the chart's `Rows`): `ORDER BY __strata_ord`, then
+  project
   it away. (Scatter's `Raw` and the histogram deliberately read unordered — `ChartData::Points`
   is documented orderless, a scatter draws marks, and a histogram's bins are order-free.)
 - **Sorted reads**: the user's `ORDER BY` gets the ordinal appended as the **tie-break**, making

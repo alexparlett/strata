@@ -2,7 +2,7 @@
 
 What the Export window offers per format, and the `COPY … TO` it produces. The window opens from
 the results toolbar on the run that is on screen, and it **pins that snapshot**
-(`Engine::pin_snapshot`) for its whole life — so a re-run in the tab behind cannot retire or
+(`SnapshotReads::pin`) for its whole life — so a re-run in the tab behind cannot retire or
 truncate the table under a running `COPY`, and an export is always an export of what was on
 screen.
 

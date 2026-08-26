@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use datafusion::execution::memory_pool::MemoryPool;
 #[cfg(test)]
@@ -30,9 +30,9 @@ static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 ///
 /// Beyond the builder, embedding the engine takes few calls:
 /// [`register_pass`](crate::register::register_pass) to load a project's catalog,
-/// [`Engine::run`] and [`Engine::explain`] to execute a statement, [`Engine::fetch_page`],
-/// [`Engine::export_result`] and [`Engine::snapshot_live`] to read a result, and
-/// [`Engine::policy_verdicts`] to check what a caller may run.
+/// [`Workspace::run`](crate::Workspace::run) and [`Workspace::explain`](crate::Workspace::explain) to execute a statement, [`SnapshotReads::page`](crate::SnapshotReads::page),
+/// [`SnapshotReads::export_to`](crate::SnapshotReads::export_to) and [`SnapshotReads::live`](crate::SnapshotReads::live) to read a result, and
+/// [`Lang::policy_verdicts`](crate::Lang::policy_verdicts) to check what a caller may run.
 ///
 /// # Example
 ///
@@ -122,8 +122,8 @@ impl EngineBuilder {
     /// against a policy service. A caller's own capability narrows this one and never widens it,
     /// so this is a ceiling.
     ///
-    /// Asked by [`Engine::run`], [`Engine::validate`] and [`Engine::policy_verdicts`] — the
-    /// entries that classify a statement. [`Engine::query`] and [`Engine::explain`] are handed a
+    /// Asked by [`Workspace::run`](crate::Workspace::run), [`Lang::validate`](crate::Lang::validate) and [`Lang::policy_verdicts`](crate::Lang::policy_verdicts) — the
+    /// entries that classify a statement. [`Workspace::query`](crate::Workspace::query) and [`Workspace::explain`](crate::Workspace::explain) are handed a
     /// statement to read and are limited to reading by the read path's own `SQLOptions`; they do
     /// not consult this.
     pub fn with_policy(mut self, policy: impl PolicyProvider) -> Self {
@@ -187,7 +187,7 @@ impl EngineBuilder {
             dispatch_seq: AtomicU64::new(1),
             _snapshot_lock: snapshot_lock,
             lifecycle: Mutex::default(),
-            inflight_flag: OnceLock::new(),
+            inflight_flag: Arc::new(AtomicBool::new(false)),
             functions,
             data_root: Mutex::new(self.data_dir),
             internal: InternalTables::default(),
@@ -278,7 +278,7 @@ mod tests {
         let engine = Engine::builder()
             .with_udfs(OnePackage("embedder_answer"))
             .build();
-        assert!(engine.functions().contains("embedder_answer"));
+        assert!(engine.lang().functions().contains("embedder_answer"));
     }
 
     /// The defaults build the engine the app has always built.
@@ -292,7 +292,7 @@ mod tests {
         let engine = Engine::builder().build();
         assert!(!engine.restart_owed());
         assert_eq!(engine.overrides(), BTreeMap::new());
-        assert!(engine.functions().contains("struct_get"));
+        assert!(engine.lang().functions().contains("struct_get"));
         assert_eq!(*engine.data_root.lock().unwrap(), None);
         assert!(
             !pool_is_ours(&engine),

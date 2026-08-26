@@ -271,33 +271,33 @@ enum Whose {
 /// "no run at all": a run outlives the tab or query session that owned it whenever a re-root or
 /// a restart replaces the subtree while it is still settling (`close::use_engineless_close`), and
 /// inferring background work from the absence of a *claimed* run would describe that query as a
-/// file being written. [`Engine::has_background_work`] is the only thing that can tell the two
+/// file being written. [`Work::background`] is the only thing that can tell the two
 /// apart, which is what it is for.
 ///
-/// [`Engine::has_background_work`]: strata_engine::Engine::has_background_work
+/// [`Work::background`]: strata_engine::Work::background
 fn whose_work(engine: &EngineCtx, session: &SessionState, agents: &Agents) -> Whose {
     if session
         .tabs
         .keys()
-        .any(|tab| engine.is_running((*tab).into()))
+        .any(|tab| engine.ws((*tab).into()).is_running())
     {
         return Whose::Queries;
     }
     if agents
         .sessions_of(false)
         .into_iter()
-        .any(|s| engine.is_running(s.into()))
+        .any(|s| engine.ws(s.into()).is_running())
     {
         return Whose::Agent;
     }
     if agents
         .sessions_of(true)
         .into_iter()
-        .any(|s| engine.is_running(s.into()))
+        .any(|s| engine.ws(s.into()).is_running())
     {
         return Whose::Assistant;
     }
-    match engine.has_background_work() {
+    match engine.work().background() {
         true => Whose::Background,
         false => Whose::Queries,
     }

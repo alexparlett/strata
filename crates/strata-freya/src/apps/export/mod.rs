@@ -6,7 +6,8 @@
 //! carries that run's facts ([`ExportTarget`]) as launch values: the snapshot handle, its
 //! schema, its row count, the grid's active sort, and the page in hand for the preview. That is
 //! sound precisely because a snapshot is immutable — and the window **pins** it
-//! ([`EngineCtx::pin_snapshot`]) for its whole life, so a re-run in the tab behind can't retire
+//! ([`SnapshotReads::pin`](strata_engine::SnapshotReads::pin)) for its whole life, so a re-run
+//! in the tab behind can't retire
 //! the table out from under it. Without that pin a re-run either truncates a running `COPY` or
 //! makes a later Export report no results when there are plainly some on screen
 //! (`docs/SNAPSHOT_SPEC.md` §4).
@@ -256,7 +257,7 @@ impl App for ExportApp {
 
         let snapshot = self.target.snapshot;
         let engine = self.engine.clone();
-        use_hook(move || SnapshotHold(Rc::new(engine.pin_snapshot(snapshot))));
+        use_hook(move || SnapshotHold(Rc::new(engine.snapshot(snapshot).pin())));
 
         let ctx = use_provide_context({
             let target = self.target.clone();

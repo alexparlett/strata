@@ -12,7 +12,7 @@
 //! assert nothing. The fixture is seeded over raw `tokio-postgres`, a lower layer than the pool and
 //! factory under test.
 //!
-//! **It drives `Engine::connect`, the real entry point, password and all**, because the keystore
+//! **It drives `Sources::connect`, the real entry point, password and all**, because the keystore
 //! bridge (`SecretRef::derived` → `KeystorePassword` → one read per pool connection) is the
 //! genuinely new machinery. What it substitutes is the *keystore*, not the bridge:
 //! `keyring_core::mock` is this binary's store, so no real Keychain is touched — that round trip
@@ -197,7 +197,8 @@ fn store_password(conn: &ConnectionDef, value: &str) {
 /// Run `sql` and hand back its first page as text, row by row.
 async fn rows(engine: &Engine, tag: u128, sql: &str) -> Vec<Vec<String>> {
     let (output, _) = engine
-        .query(WsId(1), RunTag(tag), sql.to_string(), 200)
+        .ws(WsId(1))
+        .query(RunTag(tag), sql.to_string(), 200)
         .await
         .unwrap_or_else(|e| panic!("run '{sql}': {e}"));
     output
@@ -209,13 +210,14 @@ async fn rows(engine: &Engine, tag: u128, sql: &str) -> Vec<Vec<String>> {
 
 /// Both plan texts, for the pushdown assertions.
 ///
-/// `Engine::explain`, **not** a `SELECT`-shaped `EXPLAIN` through [`rows`]: a result cell is
+/// `Workspace::explain`, **not** a `SELECT`-shaped `EXPLAIN` through [`rows`]: a result cell is
 /// clipped to `DISPLAY_CHARS` for the grid, so a deep physical plan loses its tail — which is
 /// exactly where `VirtualExecutionPlan` sits. This is the same unclipped read the plan view
 /// makes.
 async fn explain(engine: &Engine, tag: u128, sql: &str) -> String {
     let plan = engine
-        .explain(WsId(1), RunTag(tag), sql.to_string())
+        .ws(WsId(1))
+        .explain(RunTag(tag), sql.to_string())
         .await
         .unwrap_or_else(|e| panic!("explain '{sql}': {e}"));
     format!("{}\n{}", plan.logical_text, plan.physical_text)
@@ -234,6 +236,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let missing = connection(port, "no_password", &["public"]);
     store_password(&missing, "");
     let why = engine
+        .sources()
         .connect(missing.clone())
         .await
         .expect_err("no password is stored for it");
@@ -251,6 +254,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let elsewhere = connection(closed, "elsewhere", &["public"]);
     store_password(&elsewhere, PASSWORD);
     let why = engine
+        .sources()
         .connect(elsewhere)
         .await
         .expect_err("nothing is listening there");
@@ -262,6 +266,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let wrong_password = connection(port, "wrong_password", &["public"]);
     store_password(&wrong_password, "not-it");
     let why = engine
+        .sources()
         .connect(wrong_password)
         .await
         .expect_err("the password is wrong");
@@ -270,17 +275,19 @@ async fn a_database_connection_registers_a_federated_catalog() {
     let reserved = connection(port, "strata", &["public"]);
     store_password(&reserved, PASSWORD);
     let why = engine
+        .sources()
         .connect(reserved)
         .await
         .expect_err("'strata' is the workspace's own catalog");
     assert!(why.contains("strata"), "{why}");
 
     assert!(
-        engine.source_listing(&conn).is_none(),
+        engine.sources().listing(&conn).is_none(),
         "a refused connection registers nothing"
     );
 
     engine
+        .sources()
         .connect(conn.clone())
         .await
         .expect("the connection registers its catalog");
@@ -330,7 +337,8 @@ async fn enumeration(engine: &Engine, port: u16) {
     );
 
     let (catalog, listing) = engine
-        .source_listing(&connection(port, CATALOG, &["public", "warehouse"]))
+        .sources()
+        .listing(&connection(port, CATALOG, &["public", "warehouse"]))
         .expect("a live database has a listing");
     assert_eq!(catalog, CATALOG);
     assert_eq!(
@@ -377,14 +385,14 @@ async fn enumeration(engine: &Engine, port: u16) {
 /// — a phase of the test above.
 ///
 /// The offer is unit-tested against a hand-built listing next door; what only a server can settle
-/// is that the two halves agree — that the names `Engine::database_syms` carries are the names
+/// is that the two halves agree — that the names `Sources::database_syms` carries are the names
 /// the catalog actually resolves, rendered the way [`sql::qualified`] renders them. Which is also
 /// the tree gestures' half: they wrap this same address in `SELECT *` / `CREATE VIEW`.
 ///
 /// The offers are compared **sorted**, because what only a server can pin is *which* names the
 /// offer holds; their ranking is `complete/tests.rs`'s and needs no server.
 async fn qualified_offer(engine: &Engine, conn: &ConnectionDef) {
-    let catalog = sql::Catalog::default().with_databases(engine.database_syms([conn]));
+    let catalog = sql::Catalog::default().with_databases(engine.sources().database_syms([conn]));
     let offer = |sql: &str| {
         let mut labels = sql::complete(sql, sql.len(), &catalog, false)
             .into_iter()
@@ -574,6 +582,7 @@ async fn profiling(engine: &Engine) {
     );
 
     let profile = engine
+        .catalog()
         .profile(name.clone())
         .await
         .expect("the remote profile runs on the server");
@@ -661,12 +670,8 @@ async fn unsplit_expression_set_fails_on_the_server(engine: &Engine, name: &str)
     );
 
     let why = engine
-        .query(
-            WsId(1),
-            RunTag(52),
-            sql.trim_end_matches(';').to_string(),
-            200,
-        )
+        .ws(WsId(1))
+        .query(RunTag(52), sql.trim_end_matches(';').to_string(), 200)
         .await
         .expect_err("the workspace set must not survive a trip to PostgreSQL");
     assert!(
@@ -685,6 +690,7 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
     fs::create_dir_all(dir).expect("a fixture folder");
     fs::write(dir.join("tiers.csv"), "customer,tier\n10,gold\n20,silver\n").expect("the fixture");
     engine
+        .catalog()
         .register(table_spec(
             dir,
             &TableDef {
@@ -731,14 +737,14 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
 async fn exotic_types_and_refusals(engine: &Engine) {
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(20),
                 format!(
                     "SELECT id, row_number() OVER () FROM \
                      (SELECT id FROM {CATALOG}.public.orders)"
                 ),
-                200,
+                200
             )
             .await
             .is_err(),
@@ -775,14 +781,14 @@ async fn exotic_types_and_refusals(engine: &Engine) {
     );
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(12),
                 format!(
                     "SELECT id IN (SELECT customer FROM {CATALOG}.public.orders) FROM \
                      {CATALOG}.public.customers"
                 ),
-                200,
+                200
             )
             .await
             .is_err(),
@@ -790,8 +796,8 @@ async fn exotic_types_and_refusals(engine: &Engine) {
     );
 
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(13),
             format!("INSERT INTO {CATALOG}.public.orders VALUES (4, 30, 1, '{{}}')"),
             200,
@@ -875,8 +881,8 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     );
 
     let Err(why) = engine
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(54),
             format!("SELECT payload -> 'type' FROM {CATALOG}.public.events"),
             200,
@@ -893,8 +899,8 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     );
 
     let Err(why) = engine
+        .ws(WsId(1))
         .query(
-            WsId(1),
             RunTag(55),
             format!(
                 "SELECT id FROM {CATALOG}.public.events WHERE json_get_str(payload, 'type') \
@@ -922,6 +928,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     )
     .expect("the fixture");
     engine
+        .catalog()
         .register(table_spec(
             dir,
             &TableDef {
@@ -961,7 +968,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
 /// rename is a new key rather than a displacement, and it cannot be otherwise: two connections
 /// may share an identity and differ only by name, so nothing the engine can see tells a renamed
 /// connection from a second one to the same server. Retiring the old catalog is therefore the
-/// renaming gesture's own `Engine::disconnect`, which is what the connection editor's Save makes.
+/// renaming gesture's own `Sources::disconnect`, which is what the connection editor's Save makes.
 ///
 /// The rename goes through [`migrate_secrets`] rather than storing a second password, because
 /// that is what a rename *is* now: the keystore slot is derived from the connection's name, so
@@ -973,6 +980,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
     let renamed = connection(port, "warehouse", &["public"]);
     migrate_secrets(&was, &renamed).expect("this machine's keystore answers");
     engine
+        .sources()
         .connect(renamed.clone())
         .await
         .expect("the same connection under a new catalog name");
@@ -982,11 +990,11 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
     );
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(15),
                 format!("SELECT id FROM {CATALOG}.public.orders"),
-                200,
+                200
             )
             .await
             .is_ok(),
@@ -994,35 +1002,35 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
          an identity, so nothing the engine sees tells a rename from a second connection"
     );
 
-    engine.disconnect(&was.named());
+    engine.sources().disconnect(&was.named());
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(16),
                 format!("SELECT id FROM {CATALOG}.public.orders"),
-                200,
+                200
             )
             .await
             .is_err(),
         "and retiring it is the renaming gesture's own call, which is what Save makes"
     );
 
-    engine.disconnect(&renamed.named());
+    engine.sources().disconnect(&renamed.named());
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(17),
                 "SELECT id FROM warehouse.public.orders".to_string(),
-                200,
+                200
             )
             .await
             .is_err(),
         "a forgotten connection's catalog must stop resolving"
     );
     assert!(
-        engine.source_listing(&renamed).is_none(),
+        engine.sources().listing(&renamed).is_none(),
         "…and it is no longer a live database"
     );
 }
@@ -1048,7 +1056,7 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
             "CREATE EXTERNAL TABLE {CATALOG}.public.mine STORED AS PARQUET LOCATION 'x.parquet'"
         ),
     ] {
-        let Err(why) = engine.run(WsId(1), RunTag(21), sql.clone(), 200).await else {
+        let Err(why) = engine.ws(WsId(1)).run(RunTag(21), sql.clone(), 200).await else {
             panic!("'{sql}' was not refused");
         };
         assert!(
@@ -1061,7 +1069,7 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         format!("INSERT INTO {CATALOG}.public.orders VALUES (9, 9, 9, NULL)"),
         format!("CREATE TABLE {CATALOG}.public.mine AS SELECT 1 AS id"),
     ] {
-        let Err(why) = engine.run(WsId(1), RunTag(25), sql.clone(), 200).await else {
+        let Err(why) = engine.ws(WsId(1)).run(RunTag(25), sql.clone(), 200).await else {
             panic!("'{sql}' was not refused");
         };
         assert!(
@@ -1081,20 +1089,16 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
     );
 
     let Err(why) = engine
-        .run(
-            WsId(1),
-            RunTag(23),
-            "SELECT * FROM __snap_1".to_string(),
-            200,
-        )
+        .ws(WsId(1))
+        .run(RunTag(23), "SELECT * FROM __snap_1".to_string(), 200)
         .await
     else {
         panic!("the workspace's snapshot namespace is reserved");
     };
     assert!(why.contains("__snap_"), "{why}");
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(24),
             format!("SELECT * FROM {CATALOG}.public.__snap_1"),
             200,
@@ -1127,12 +1131,8 @@ async fn unqualified_names(engine: &Engine, port: u16) {
     );
     assert!(
         engine
-            .run(
-                WsId(1),
-                RunTag(42),
-                "SELECT * FROM sessions".to_string(),
-                200,
-            )
+            .ws(WsId(1))
+            .run(RunTag(42), "SELECT * FROM sessions".to_string(), 200)
             .await
             .is_err(),
         "a schema the connection does not show must not capture a bare name"
@@ -1148,29 +1148,29 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         "…and writing it in full still resolves, which is the half that scoping never bounded"
     );
 
-    engine.show_schemas(&connection(port, CATALOG, &["public", "analytics"]));
+    engine
+        .sources()
+        .show_schemas(&connection(port, CATALOG, &["public", "analytics"]));
     assert_eq!(
         rows(engine, 44, "SELECT count(*) FROM sessions").await,
         vec![vec!["2".to_string()]],
         "showing the schema is what puts it in reach of a bare name"
     );
-    engine.show_schemas(&connection(port, CATALOG, &["public"]));
+    engine
+        .sources()
+        .show_schemas(&connection(port, CATALOG, &["public"]));
     assert!(
         engine
-            .run(
-                WsId(1),
-                RunTag(45),
-                "SELECT * FROM sessions".to_string(),
-                200,
-            )
+            .ws(WsId(1))
+            .run(RunTag(45), "SELECT * FROM sessions".to_string(), 200)
             .await
             .is_err(),
         "and hiding it again takes it back out"
     );
 
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(43),
             "INSERT INTO customers VALUES (30, 'x')".to_string(),
             200,
@@ -1185,8 +1185,8 @@ async fn unqualified_names(engine: &Engine, port: u16) {
     );
 
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(44),
             "CREATE VIEW remote_orders AS SELECT id, total FROM orders".to_string(),
             200,
@@ -1194,8 +1194,8 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         .await
         .expect("the view is created over the resolved name");
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(45),
             "CREATE TABLE orders AS SELECT 1 AS id, 1 AS total".to_string(),
             200,
@@ -1219,7 +1219,8 @@ async fn unqualified_names(engine: &Engine, port: u16) {
     );
 
     let Ok(RunOutcome::Statement(report)) = engine
-        .run(WsId(1), RunTag(48), "DROP TABLE orders".to_string(), 200)
+        .ws(WsId(1))
+        .run(RunTag(48), "DROP TABLE orders".to_string(), 200)
         .await
     else {
         panic!("the workspace table drops");
@@ -1230,12 +1231,8 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         report.message
     );
     engine
-        .run(
-            WsId(1),
-            RunTag(49),
-            "DROP VIEW remote_orders".to_string(),
-            200,
-        )
+        .ws(WsId(1))
+        .run(RunTag(49), "DROP VIEW remote_orders".to_string(), 200)
         .await
         .expect("the view drops");
 
@@ -1265,10 +1262,15 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
         .batch_execute("CREATE TABLE analytics.orders (id INT PRIMARY KEY);")
         .await
         .expect("a second relation of the same name");
-    engine.connect(conn.clone()).await.expect("re-enumerates");
+    engine
+        .sources()
+        .connect(conn.clone())
+        .await
+        .expect("re-enumerates");
 
     let Err(why) = engine
-        .run(WsId(1), RunTag(50), "SELECT * FROM orders".to_string(), 200)
+        .ws(WsId(1))
+        .run(RunTag(50), "SELECT * FROM orders".to_string(), 200)
         .await
     else {
         panic!("two relations of that name and one of them was picked");
@@ -1290,7 +1292,9 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
         "and qualifying it is the fix the message asks for"
     );
 
-    engine.show_schemas(&connection(port, CATALOG, &["public"]));
+    engine
+        .sources()
+        .show_schemas(&connection(port, CATALOG, &["public"]));
     assert_eq!(
         rows(engine, 52, "SELECT count(*) FROM orders").await,
         vec![vec!["3".to_string()]],
@@ -1302,6 +1306,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
         .await
         .expect("put the fixture back");
     engine
+        .sources()
         .connect(connection(port, CATALOG, &["public"]))
         .await
         .expect("re-enumerates");
@@ -1315,13 +1320,14 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
 async fn remote_writes(engine: &Engine, port: u16) {
     let conn = writable(port, CATALOG, &["public"]);
     engine
+        .sources()
         .connect(conn.clone())
         .await
         .expect("the same connection, opted in to writes");
 
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(60),
             "CREATE TABLE loaders AS SELECT * FROM (VALUES (10, 'gold'), (20, 'silver')) \
              AS t(customer, tier)"
@@ -1332,8 +1338,8 @@ async fn remote_writes(engine: &Engine, port: u16) {
         .expect("a workspace table to join across");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(61),
             format!(
                 "CREATE TABLE {CATALOG}.public.loaded AS SELECT t.tier, o.total \
@@ -1351,7 +1357,8 @@ async fn remote_writes(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let (_, listing) = engine
-        .source_listing(&conn)
+        .sources()
+        .listing(&conn)
         .expect("a live database has a listing");
     assert!(
         listing
@@ -1378,16 +1385,18 @@ async fn remote_writes(engine: &Engine, port: u16) {
     agent_stays_read_only(engine).await;
 
     engine
-        .run(WsId(1), RunTag(78), "DROP TABLE loaders".to_string(), 200)
+        .ws(WsId(1))
+        .run(RunTag(78), "DROP TABLE loaders".to_string(), 200)
         .await
         .expect("put the workspace back");
     engine
+        .sources()
         .connect(connection(port, CATALOG, &["public"]))
         .await
         .expect("and the connection back to read-only");
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(79),
             format!("INSERT INTO {CATALOG}.public.loaded VALUES ('after', 1)"),
             200,
@@ -1407,13 +1416,14 @@ async fn remote_writes(engine: &Engine, port: u16) {
 async fn remote_statements(engine: &Engine, port: u16) {
     let conn = writable(port, CATALOG, &["public"]);
     engine
+        .sources()
         .connect(conn.clone())
         .await
         .expect("opted in to writes");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(90),
             format!(
                 "CREATE VIEW {CATALOG}.public.barrier_view WITH (security_barrier = true) AS \
@@ -1430,7 +1440,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
     assert_eq!(report.count, None);
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
-    let (_, listing) = engine.source_listing(&conn).expect("a live listing");
+    let (_, listing) = engine.sources().listing(&conn).expect("a live listing");
     assert!(
         listing
             .iter()
@@ -1461,12 +1471,13 @@ async fn remote_statements(engine: &Engine, port: u16) {
     remote_statements_stay_refused_to_an_agent(engine).await;
 
     engine
+        .sources()
         .connect(connection(port, CATALOG, &["public"]))
         .await
         .expect("the connection back to read-only");
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(99),
             format!("DROP VIEW {CATALOG}.public.barrier_view"),
             200,
@@ -1503,8 +1514,8 @@ async fn clause_fidelity_survives_dispatch(port: u16) {
 /// anything reached the connection.
 async fn server_typed_columns(engine: &Engine) {
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(92),
             format!(
                 "CREATE TABLE {CATALOG}.public.typed (id INT, payload jsonb, made timestamptz)"
@@ -1519,6 +1530,7 @@ async fn server_typed_columns(engine: &Engine) {
     assert_eq!(report.message, "Table 'public.typed' created on 'pg'");
 
     let described = engine
+        .sources()
         .describe_remote(format!("{CATALOG}.public.typed"))
         .await
         .expect("the new relation describes")
@@ -1548,14 +1560,15 @@ async fn remote_dml_reports_the_servers_count(engine: &Engine) {
         ),
     ] {
         engine
-            .run(WsId(1), RunTag(tag), sql.clone(), 200)
+            .ws(WsId(1))
+            .run(RunTag(tag), sql.clone(), 200)
             .await
             .unwrap_or_else(|e| panic!("'{sql}': {e}"));
     }
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(95),
             format!("UPDATE {CATALOG}.public.typed SET id = 0 WHERE id > 5"),
             200,
@@ -1570,8 +1583,8 @@ async fn remote_dml_reports_the_servers_count(engine: &Engine) {
     assert_eq!(report.effect, None, "rows are not relations");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(96),
             format!("DELETE FROM {CATALOG}.public.typed WHERE id = 0"),
             200,
@@ -1599,8 +1612,8 @@ async fn remote_dml_reports_the_servers_count(engine: &Engine) {
 /// the same verb works one qualifier away.
 async fn workspace_dml_says_where_it_works(engine: &Engine) {
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(100),
             "CREATE TABLE local_rows AS SELECT 1 AS n".to_string(),
             200,
@@ -1611,7 +1624,11 @@ async fn workspace_dml_says_where_it_works(engine: &Engine) {
         "UPDATE local_rows SET n = 2",
         "DELETE FROM local_rows WHERE n = 1",
     ] {
-        let Err(why) = engine.run(WsId(1), RunTag(101), sql.to_string(), 200).await else {
+        let Err(why) = engine
+            .ws(WsId(1))
+            .run(RunTag(101), sql.to_string(), 200)
+            .await
+        else {
             panic!("'{sql}' is not something a workspace table can take");
         };
         assert!(
@@ -1620,12 +1637,8 @@ async fn workspace_dml_says_where_it_works(engine: &Engine) {
         );
     }
     engine
-        .run(
-            WsId(1),
-            RunTag(102),
-            "DROP TABLE local_rows".to_string(),
-            200,
-        )
+        .ws(WsId(1))
+        .run(RunTag(102), "DROP TABLE local_rows".to_string(), 200)
         .await
         .expect("put the workspace back");
 }
@@ -1635,6 +1648,7 @@ async fn workspace_dml_says_where_it_works(engine: &Engine) {
 /// reconciliation's sentence rather than rows.
 async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
     engine
+        .catalog()
         .create_view(
             "over_typed".to_string(),
             format!("SELECT id FROM {CATALOG}.public.typed"),
@@ -1643,8 +1657,8 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
         .expect("a workspace view over the remote table");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(103),
             format!("DROP TABLE {CATALOG}.public.typed"),
             200,
@@ -1661,7 +1675,7 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let conn = writable(port, CATALOG, &["public"]);
-    let (_, listing) = engine.source_listing(&conn).expect("a live listing");
+    let (_, listing) = engine.sources().listing(&conn).expect("a live listing");
     assert!(
         listing
             .iter()
@@ -1671,17 +1685,18 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
     );
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(104),
                 format!("SELECT id FROM {CATALOG}.public.typed"),
-                200,
+                200
             )
             .await
             .is_err(),
         "and the cached provider went with it, so nothing answers for the relation"
     );
     engine
+        .catalog()
         .drop_view("over_typed".to_string())
         .await
         .expect("put the workspace back");
@@ -1703,7 +1718,7 @@ async fn remote_bodies_stay_inside_the_connection(engine: &Engine) {
             "public.orders",
         ),
     ] {
-        let Err(why) = engine.run(WsId(1), RunTag(105), sql.clone(), 200).await else {
+        let Err(why) = engine.ws(WsId(1)).run(RunTag(105), sql.clone(), 200).await else {
             panic!("'{sql}' reaches outside the connection");
         };
         assert!(why.contains(named), "'{sql}': {why}");
@@ -1719,6 +1734,7 @@ async fn remote_statements_stay_refused_to_an_agent(engine: &Engine) {
         format!("DELETE FROM {CATALOG}.public.orders"),
     ] {
         let refusals = engine
+            .lang()
             .policy_verdicts(sql.clone())
             .await
             .unwrap_or_else(|e| panic!("'{sql}': {e}"));
@@ -1771,7 +1787,8 @@ async fn inserts_land(engine: &Engine) {
         (66, "INSERT INTO loaded VALUES ('bare', 9)".to_string(), 1),
     ] {
         let RunOutcome::Statement(report) = engine
-            .run(WsId(1), RunTag(tag), sql.clone(), 200)
+            .ws(WsId(1))
+            .run(RunTag(tag), sql.clone(), 200)
             .await
             .unwrap_or_else(|e| panic!("'{sql}': {e}"))
         else {
@@ -1800,8 +1817,8 @@ async fn inserts_land(engine: &Engine) {
     );
 
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(68),
             format!("INSERT OVERWRITE INTO {CATALOG}.public.loaded VALUES ('x', 1)"),
             200,
@@ -1818,8 +1835,8 @@ async fn inserts_land(engine: &Engine) {
 /// would drop a server table.
 async fn ctas_name_semantics(engine: &Engine) {
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(69),
             format!("CREATE TABLE {CATALOG}.public.loaded AS SELECT 1 AS n"),
             200,
@@ -1831,8 +1848,8 @@ async fn ctas_name_semantics(engine: &Engine) {
     assert_eq!(why, "Table 'pg.public.loaded' already exists");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(70),
             format!("CREATE TABLE IF NOT EXISTS {CATALOG}.public.loaded AS SELECT 1 AS n"),
             200,
@@ -1846,8 +1863,8 @@ async fn ctas_name_semantics(engine: &Engine) {
     assert_eq!(report.effect, None, "and nothing changed");
 
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(71),
             format!("CREATE OR REPLACE TABLE {CATALOG}.public.loaded AS SELECT 1 AS n"),
             200,
@@ -1859,8 +1876,8 @@ async fn ctas_name_semantics(engine: &Engine) {
     assert!(why.contains("Drop it on the server first"), "{why}");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(74),
             format!("CREATE OR REPLACE TABLE {CATALOG}.public.replaceable AS SELECT 1 AS n"),
             200,
@@ -1885,8 +1902,8 @@ async fn ctas_name_semantics(engine: &Engine) {
 /// literal would have been folded away at planning, before anything was created.
 async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     let Err(why) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(72),
             format!(
                 "CREATE TABLE {CATALOG}.public.doomed AS \
@@ -1900,7 +1917,7 @@ async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     };
     assert!(!why.contains("already exists"), "{why}");
 
-    let (_, listing) = engine.source_listing(conn).expect("still live");
+    let (_, listing) = engine.sources().listing(conn).expect("still live");
     assert!(
         listing
             .iter()
@@ -1910,11 +1927,11 @@ async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     );
     assert!(
         engine
+            .ws(WsId(1))
             .query(
-                WsId(1),
                 RunTag(73),
                 format!("SELECT n FROM {CATALOG}.public.doomed"),
-                200,
+                200
             )
             .await
             .is_err(),
@@ -1945,8 +1962,7 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
         }
     });
 
-    let running = engine.run(
-        WsId(9),
+    let running = engine.ws(WsId(9)).run(
         RunTag(80),
         format!(
             "CREATE TABLE {CATALOG}.public.abandoned AS \
@@ -1963,7 +1979,7 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        engine.cancel(WsId(9), RunTag(80))
+        engine.ws(WsId(9)).cancel(RunTag(80))
     };
     let (settled, cancelled) = tokio::join!(running, cancelling);
     assert!(
@@ -2006,8 +2022,8 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
 /// derived table whose outer references still carry the scan's qualifier.
 async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(90),
             format!(
                 "CREATE TABLE local_customers AS SELECT id AS customer_id, name AS customer_name \
@@ -2019,8 +2035,8 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
         .expect("an empty internal table carrying the remote relation's types");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(91),
             format!("INSERT INTO local_customers SELECT id, name FROM {CATALOG}.public.customers"),
             200,
@@ -2051,8 +2067,8 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
     );
 
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(93),
             format!(
                 "CREATE TABLE local_spanning AS SELECT t.tier, o.total FROM tiers t \
@@ -2064,8 +2080,8 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
         .expect("a table for the cross-source half");
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(94),
             format!(
                 "INSERT INTO local_spanning SELECT t.tier, o.total FROM tiers t \
@@ -2086,8 +2102,8 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
     );
 
     let RunOutcome::Statement(report) = engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(96),
             format!("CREATE TABLE local_orders AS SELECT id, total FROM {CATALOG}.public.orders"),
             200,
@@ -2101,8 +2117,8 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
 
     let out = dir.join("remote_copy.parquet");
     engine
+        .ws(WsId(1))
         .run(
-            WsId(1),
             RunTag(97),
             format!(
                 "COPY (SELECT id FROM {CATALOG}.public.orders) TO '{}'",
@@ -2120,7 +2136,8 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
         "DROP TABLE local_orders",
     ] {
         engine
-            .run(WsId(1), RunTag(98), sql.to_string(), 200)
+            .ws(WsId(1))
+            .run(RunTag(98), sql.to_string(), 200)
             .await
             .unwrap_or_else(|e| panic!("'{sql}': {e}"));
     }
@@ -2147,6 +2164,7 @@ async fn agent_stays_read_only(engine: &Engine) {
         format!("CREATE TABLE {CATALOG}.public.agent_made AS SELECT 1 AS n"),
     ] {
         let refusals = engine
+            .lang()
             .policy_verdicts(sql.clone())
             .await
             .unwrap_or_else(|e| panic!("'{sql}': {e}"));
@@ -2219,7 +2237,8 @@ async fn cross_source_views(port: u16, dir: &Path) {
     );
 
     let Ok(dropped) = engine
-        .run(WsId(1), RunTag(30), "DROP TABLE tiers".to_string(), 200)
+        .ws(WsId(1))
+        .run(RunTag(30), "DROP TABLE tiers".to_string(), 200)
         .await
     else {
         panic!("the workspace table drops");

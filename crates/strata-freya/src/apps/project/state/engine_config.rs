@@ -20,7 +20,6 @@
 //! own. Declining leaves the engine as it was and the restart still owed, so the next config
 //! write offers it again ([`Engine::restart_owed`]).
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use freya::prelude::*;
@@ -74,7 +73,7 @@ pub fn use_engine_config(engine: &EngineCtx, confirm: State<Option<CloseTarget>>
         if !engine.set_config(overrides) {
             return;
         }
-        let running = guard.running.load(Ordering::Relaxed);
+        let running = guard.running();
         if !(running && station.peek().settings.confirm_close_running) {
             restart.restart();
             return;

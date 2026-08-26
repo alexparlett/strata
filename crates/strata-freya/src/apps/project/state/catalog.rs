@@ -97,7 +97,7 @@ pub fn use_remote_scans() -> RemoteScans {
 /// questions its two readers ask: *can I use it right now*, and *has it changed since I last
 /// looked*.
 ///
-/// `Scanning` is not merely "busy". `Engine::register` **deregisters before it re-infers**, so
+/// `Scanning` is not merely "busy". `Catalog::register` **deregisters before it re-infers**, so
 /// mid-pass `table_exist` is false for every table being rebuilt — a validation pass then would
 /// report "not found" for tables sitting right there. So this is a **gate**: while it is
 /// `Scanning`, nothing validates, and nothing false is ever produced rather than produced and

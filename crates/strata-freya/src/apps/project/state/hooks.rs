@@ -301,7 +301,7 @@ pub fn refresh_table_rows(
     name: String,
 ) {
     spawn_forever(async move {
-        let meta = engine.table_meta(name.clone()).await;
+        let meta = engine.catalog().table_meta(name.clone()).await;
         if !project.is_alive() {
             return;
         }
@@ -319,7 +319,7 @@ pub fn refresh_table_rows(
 /// [`CatalogRescan`] counter; the driver in [`use_init_project`] runs the pass.
 ///
 /// **Re-scan is re-registration**, from the defs, not a walk of what the engine happens to
-/// hold. `Engine::register` deregisters and rebuilds each table from a re-`infer_schema`d
+/// hold. `Catalog::register` deregisters and rebuilds each table from a re-`infer_schema`d
 /// config (see `catalog::register_external`), which is the same re-infer a walk of the live
 /// providers would do — and, because the def is the input, it *also* retries a table whose
 /// first registration failed. That is the case the button most needs to serve: the user fixes

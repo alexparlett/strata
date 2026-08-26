@@ -219,6 +219,7 @@ async fn project(tag: &str) -> (Arc<Engine>, StrataTools<MockHost>) {
     let project = MockProject::new("sales", &root);
     let engine = Arc::clone(&project.engine);
     engine
+        .catalog()
         .register(TableSpec {
             name: "people".into(),
             paths: vec![root.join("people.csv").display().to_string()],
@@ -639,7 +640,7 @@ async fn a_cancel_mid_run_leaves_no_run_in_flight() {
     while let Some(event) = running.next().await {
         if matches!(event, TurnEvent::ToolCall { .. }) {
             let deadline = Instant::now() + Duration::from_secs(10);
-            while !engine.is_running(ws) {
+            while !engine.ws(ws).is_running() {
                 assert!(
                     Instant::now() < deadline,
                     "the run never reached the engine"
@@ -654,7 +655,7 @@ async fn a_cancel_mid_run_leaves_no_run_in_flight() {
     assert_eq!(rest.last(), Some(&TurnEvent::Settled(Settle::Cancelled)));
     assert_eq!(running.settle().await, Settle::Cancelled);
     assert!(
-        !engine.is_running(ws),
+        !engine.ws(ws).is_running(),
         "a cancelled turn must not leave a run on the engine"
     );
     assert_eq!(stub.requests(), 1);
@@ -953,7 +954,7 @@ async fn a_cancel_retires_the_card_it_opened() {
         seen.push(event);
         if opened {
             let deadline = Instant::now() + Duration::from_secs(10);
-            while !engine.is_running(ws) {
+            while !engine.ws(ws).is_running() {
                 assert!(
                     Instant::now() < deadline,
                     "the run never reached the engine"

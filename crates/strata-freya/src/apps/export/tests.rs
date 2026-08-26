@@ -7,7 +7,7 @@
 //! partition toggle that doesn't gate.
 //!
 //! So each test here drives the real path a press of Export takes — [`ExportDraft`] →
-//! [`ExportDraft::spec`] → [`Engine::export`] → a file in a temp directory → read back and
+//! [`ExportDraft::spec`] → [`SnapshotReads::export`] → a file in a temp directory → read back and
 //! asserted. The only thing stubbed is the file dialog, which contributes the path.
 //!
 //! `block_on` stands in for the UI executor: the engine's `JoinHandle`s are executor-agnostic,
@@ -55,7 +55,7 @@ fn col(name: &str, dtype: DataType) -> ColumnInfo {
 /// Run `SQL` and build the [`ExportTarget`] the results pane would hand the window — the real
 /// snapshot, the real schema and row count, the real page-1 rows.
 fn open_on_a_result(engine: &Engine, sort: Option<(String, bool)>) -> ExportTarget {
-    let (output, _) = block_on(engine.query(WsId(1), RunTag(1), SQL.into(), 100)).expect("run");
+    let (output, _) = block_on(engine.ws(WsId(1)).query(RunTag(1), SQL.into(), 100)).expect("run");
     ExportTarget {
         snapshot: output.snapshot.expect("a non-empty result snapshots"),
         columns: output.columns.clone(),
@@ -73,7 +73,7 @@ fn export_to(engine: &Engine, draft: &ExportDraft, target: &ExportTarget, path: 
     let spec = draft
         .spec(target, path.to_string_lossy().into_owned())
         .expect("the draft builds a spec");
-    let (_, rows) = block_on(engine.export(target.snapshot, spec)).expect("export");
+    let (_, rows) = block_on(engine.snapshot(target.snapshot).export(spec)).expect("export");
     rows
 }
 
@@ -434,7 +434,8 @@ fn partitioning_on_a_column_with_nulls_is_refused() {
     let spec = draft
         .spec(&target, out.to_string_lossy().into_owned())
         .expect("the draft itself is fine");
-    let err = block_on(engine.export(target.snapshot, spec)).expect_err("region has a NULL");
+    let err =
+        block_on(engine.snapshot(target.snapshot).export(spec)).expect_err("region has a NULL");
     assert!(err.contains("Can't partition by 'region'"), "{err}");
     assert!(!out.exists(), "nothing written");
 
@@ -489,10 +490,9 @@ fn a_rerun_behind_the_window_does_not_change_what_it_writes() {
     let engine = Engine::builder().build();
     let target = open_on_a_result(&engine, None);
 
-    let pin = engine.pin_snapshot(target.snapshot);
+    let pin = engine.snapshot(target.snapshot).pin();
 
-    block_on(engine.query(
-        WsId(1),
+    block_on(engine.ws(WsId(1)).query(
         RunTag(2),
         "SELECT 99 AS id, 'later' AS name, 'zzz' AS region".into(),
         100,
@@ -561,7 +561,8 @@ fn exporting_a_snapshot_that_is_gone_writes_nothing_and_says_why() {
     let spec = ExportDraft::default()
         .spec(&target, out.to_string_lossy().into_owned())
         .expect("the draft is fine; the snapshot is not");
-    let err = block_on(engine.export(target.snapshot, spec)).expect_err("no such snapshot");
+    let err =
+        block_on(engine.snapshot(target.snapshot).export(spec)).expect_err("no such snapshot");
     assert!(err.contains("No results to export"), "{err}");
     assert!(!out.exists(), "nothing was created");
 

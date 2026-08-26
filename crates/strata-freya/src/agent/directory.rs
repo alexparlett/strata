@@ -87,7 +87,7 @@ pub struct AgentDirectory {
     page_size: AtomicUsize,
     next: AtomicU64,
     /// Nonces for the runs this directory dispatches. Engine-side lifecycle keys on its own
-    /// dispatch id rather than on this (see `Engine::query`), so all a tag has to be is
+    /// dispatch id rather than on this (see `Workspace::query`), so all a tag has to be is
     /// distinct from its neighbours' — which is also what makes an agent's `cancel` and a
     /// user's read the same way.
     runs: AtomicU64,
@@ -305,11 +305,13 @@ impl Host for AgentDirectory {
         };
         let settled = match mode {
             RunMode::Run => engine
-                .query(ws, tag, sql, page_size)
+                .ws(ws)
+                .query(tag, sql, page_size)
                 .await
                 .map(|(output, _)| Settled::Rows(output)),
             RunMode::Explain => engine
-                .explain(ws, tag, as_explain(&sql, false))
+                .ws(ws)
+                .explain(tag, as_explain(&sql, false))
                 .await
                 .map(Settled::Plan),
         };

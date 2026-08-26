@@ -355,7 +355,7 @@ pub enum QueryOutcome {
     Statement(StatementReport),     // an intercepted statement — no rows, no handle
 }
 RunQuery : QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = String>
-// dispatches Engine::run — the statement router decides Rows vs Statement
+// dispatches Workspace::run — the statement router decides Rows vs Statement
 
 pub struct PageSpec {
     pub snapshot: SnapshotId,
@@ -448,7 +448,7 @@ unmounts and remounts mid-run from re-executing the press. The mirror stays for 
 > (`upsert_view` / `remove_table` / …) on the matching `ProjChan`, and subscribers re-render —
 > nothing refetches. A typed statement's effect arrives the same way, as a `StoreEffect` the
 > keeper folds (`state/statement.rs`). Functions **are** a snapshot the engine hands over
-> (`Engine::functions`).
+> (`Lang::functions`).
 
 ### 6b. Catalog **profiling** — the same shape, one tier down
 
@@ -483,7 +483,7 @@ use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place 
   row's spinner — because the whole `Query` (stale/clean times included) is the cache identity:
   two spellings would be two entries, i.e. one table scanned twice. They mount their
   subscription only when a request exists, so nothing dispatches a scan nobody asked for.
-- Engine side: `Engine::profile` / `cancel_profile`, tracked per entry in
+- Engine side: `Catalog::profile` / `cancel_profile`, tracked per entry in
   `Lifecycle::profiles`, superseded by dispatch, aborted by `register` / `create_view` /
   `drop_view` / `deregister`, and counted by the **window**-close confirm but not the per-tab
   `is_running` probe.
@@ -501,15 +501,19 @@ event stream, no request ids, no router object — the Dioxus-era `Command`/`Eve
 retired and removed with the Dioxus app.
 
 ```rust
-// strata-core — the facade (lifecycle bookkeeping lives HERE, framework-free, unit-tested):
-async fn run(ws: WsId, tag: RunTag, sql, page_size) -> Result<RunOutcome, String>   // the statement router
-async fn query(ws: WsId, tag: RunTag, sql, page_size) -> Result<(QueryOutput, RecordBatch), String>
-async fn fetch_page(snapshot, page, page_size, sort) -> Result<(Vec<Vec<Cell>>, RecordBatch), String>
-async fn explain(ws: WsId, tag: RunTag, sql) -> Result<QueryPlan, String>
-async fn validate(sql) -> Vec<Diagnostic>            // the §9 dry-plan
-async fn chart(...) / profile(name)                  // §6 step 4 / §6b
-fn cancel(ws, tag) -> Option<elapsed_ms>  ·  fn cleanup_ws(ws)  ·  fn is_running(ws)
-fn pin_snapshot(snapshot) -> SnapshotPin  ·  fn snapshot_live(snapshot)  ·  impl Drop
+// strata-engine — the facade, reached through six borrowed GROUP HANDLES naming what the
+// call is about (lifecycle bookkeeping lives HERE, framework-free, unit-tested):
+engine.ws(ws)          // run(tag, sql, page_size) -> RunOutcome  — the statement router
+                       // query(tag, sql, page_size) · explain(tag, sql)
+                       // cancel(tag) -> Option<elapsed_ms> · cleanup() · is_running()
+engine.snapshot(id)    // page(page, page_size, sort) · chart(q) · trend(x, y)
+                       // export(spec) · export_to(path, format) · pin() -> SnapshotPin · live()
+engine.catalog()       // register · deregister · table_meta · create_view · drop_view
+                       // drop_table · is_internal · profile(name) · cancel_profile
+engine.sources()       // connect · disconnect · listing · show_schemas · database_syms · …
+engine.lang()          // validate(sql) -> Vec<Diagnostic> (the §9 dry-plan) · functions · …
+engine.work()          // flag() -> Arc<AtomicBool> (T2) · background()
+// Root: builder() · id() · set_data_dir() · set_config() · restart_owed() · overrides() · Drop
 
 // apps/project/contexts/engine_ctx.rs — the thin per-window wrapper:
 #[derive(Clone)]
@@ -518,11 +522,12 @@ impl From<TabId> for WsId { … }             // the tab IS the workspace (Uuid 
 impl EngineCtx {
     pub fn new(overrides: BTreeMap<String, String>) -> Self;  // launch config (W2)
     pub fn captured(&self) -> Captured<EngineCtx>;   // capability field, cache-invisible
-    pub fn cleanup(&self, tab: TabId);               // → engine.cleanup_ws(tab.into())
+    pub fn cleanup(&self, tab: TabId);               // → engine.ws(tab.into()).cleanup()
     pub fn arc(&self) -> Arc<Engine>;                // for off-render-thread holders (agent server)
 }
-// Nothing else: every engine method takes `&self`, so `pin_snapshot`, `export`, `chart` and
-// `trend` are reached through `Deref` rather than forwarded.
+// Nothing else: every engine method takes `&self` and the group handles borrow, so
+// `snapshot(id).pin()`, `.export()`, `.chart()` and `.trend()` are reached through `Deref`
+// rather than forwarded.
 ```
 
 Tab-close cleanup is one funnel in the window root — a `use_side_effect` diffs the session's
@@ -610,13 +615,13 @@ originated, so the user sees them in place. Both happen; not either/or.
 | Origin | In the log | Also shown inline |
 |--------|-----------|-------------------|
 | Query execution | yes — recorded by the tab's **request keeper** when the press settles (`use_run_logging`), which is mounted for the press's whole life, so a backgrounded tab's failure is recorded too | that tab's **results pane**, from `RunQuery::Err` — banner, code frame, caret, hint; auto-clears on re-run. **Not Problems**: a failure belongs to a run, not to the text, and the only ways to put it in a cross-tab view are a copy on the store that outlives the run it describes, or one freya-query subscription per tab in the drawer *and* in the rail badge |
-| A **cancel** | yes — recorded by `cancel_run`, at the cancel, because clearing the tab's trigger unmounts the keeper in the same pass and the `Err("cancelled")` settle lands unsubscribed. `Engine::cancel` returns the elapsed time iff it really aborted something, so a cancel that hit nothing records nothing | nothing: the body simply returns to its empty state. A cancel is a `Warning` in the log and is never a problem |
+| A **cancel** | yes — recorded by `cancel_run`, at the cancel, because clearing the tab's trigger unmounts the keeper in the same pass and the `Err("cancelled")` settle lands unsubscribed. `Workspace::cancel` returns the elapsed time iff it really aborted something, so a cancel that hit nothing records nothing | nothing: the body simply returns to its empty state. A cancel is a `Warning` in the log and is never a problem |
 | An intercepted **statement** | yes — by the fold that applied its `StoreEffect` (`state/statement.rs`), because only the fold knows whether the def reached `project.json` | the results pane renders the report's sentence; a failed row says so in its own words |
 | Registration via configure form | yes | the form's submit error; the answer lands on the row via `ProjectState::table_registered` / `table_failed` (§6's catalog note — no cache to invalidate) |
 | Registration at load, at a ↻ re-scan, or at a row Refresh | yes — one event per def per pass, on either arm (`state/hooks.rs`); no synthesized "N tables re-scanned" summary, which would re-derive facts already in the list | a per-source marker on the sidebar catalog item |
 
 SQL validation is the exception — derived per tab from the editor text and the catalog, and not
-logged. It is an **engine dry-plan** (`Engine::validate`), not a client-side memo:
+logged. It is an **engine dry-plan** (`Lang::validate`), not a client-side memo:
 lexical lints + statement policy + parse/resolve/analyze against the live session, never
 executing. Purely advisory — Run is never gated on it.
 
@@ -635,7 +640,7 @@ active tab only. A settled pass writes squiggle decorations into the tab's own
 Three fixed subscriptions make that one hook rather than a component per tab: `Chan::Text` (the
 synthetic fan-in every `Chan::Tab(_)` write derives, so one subscription watches any tab's
 buffer), `Chan::Tabs`, and the catalog. The catalog is a **gate**, not just an input:
-`Engine::register` deregisters before it re-infers, so while a scan is in flight nothing
+`Catalog::register` deregisters before it re-infers, so while a scan is in flight nothing
 validates and no false "not found" is ever produced. Releasing into a new epoch is what
 re-derives every tab against the catalog the pass just built — how a problem fixed in Table
 Config clears without the user opening the tab. The drain is serial (the engine has two workers
