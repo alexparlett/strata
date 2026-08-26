@@ -24,7 +24,8 @@
 //! The remote arm's columns come from the same `use_remote_schemas` the tree reads, on the one
 //! relation this panel is looking at — never dispatched at all while the selection is a workspace
 //! column, which is every other moment. It is that hook and not the query entry, for the reason
-//! stated there: the entry re-keys on every catalog epoch, and reading it directly would replace a
+//! stated there: the entry re-keys on every catalog generation, and reading it directly would
+//! replace a
 //! panel showing settled scan numbers with "Loading…" because an unrelated view was saved.
 //!
 //! ## What is deliberately not here
@@ -141,12 +142,12 @@ impl Component for Inspector {
         let remote_scans = use_remote_scans();
 
         let engine = use_consume::<EngineCtx>();
-        let epoch = use_catalog().read().epoch();
+        let generation = use_catalog().read().generation();
         let relation = match selected.as_ref().map(|c| &c.owner) {
             Some(ColOwner::Remote(relation)) => Some(relation.clone()),
             _ => None,
         };
-        let described = use_remote_schemas(&engine, relation.iter().cloned().collect(), epoch);
+        let described = use_remote_schemas(&engine, relation.iter().cloned().collect(), generation);
 
         let inspected = selected.as_ref().map(|col| match &col.owner {
             ColOwner::Entry { kind, name } => {

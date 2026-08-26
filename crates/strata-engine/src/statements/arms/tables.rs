@@ -816,7 +816,7 @@ mod tests {
     use std::{env, process};
 
     use crate::builder::test_context;
-    use crate::register::{register_project, table_spec, RegOutcome};
+    use crate::register::{table_spec, CatalogSpec, RegOutcome};
     use crate::statements::Fault;
     use crate::{Connections, Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
@@ -1173,7 +1173,9 @@ mod tests {
         let cold = Engine::builder().build();
         let defs = load_defs(&root).unwrap();
         let mut out = Vec::new();
-        register_project(&cold, &root, &defs, |o| out.push(o)).await;
+        cold.catalog()
+            .sync(CatalogSpec::of_project(&root, &defs), |o| out.push(o))
+            .await;
 
         match &out[..] {
             [RegOutcome::Table {

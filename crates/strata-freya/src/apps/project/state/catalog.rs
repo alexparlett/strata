@@ -17,9 +17,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use freya::prelude::{consume_context, use_provide_context, use_side_effect, State, WritableUtils};
 use freya::radio::use_radio;
+use strata_engine::CatalogGen;
 use strata_model::{ColRef, RemoteRef};
 
 use super::{ProjChan, ProjectState, Reg};
+use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::ScanId;
 
 /// The selected column, or `None` when nothing is inspected. `State` is `Copy`, so consumers hold
@@ -105,32 +107,37 @@ pub fn use_remote_scans() -> RemoteScans {
 /// builds the new provider aside and swaps it in, so a name never stops resolving. (The sidebar
 /// header reads the same value to spin and disable its ↻.)
 ///
-/// `Settled(epoch)` carries a counter bumped once per completed pass and once per discrete
-/// catalog mutation ([`catalog_settled`]). It is what makes a tab's verdict stale when the user
-/// fixes a source path: an **epoch, not a fingerprint over the rows**, because registration
-/// lands row by row — a fingerprint would change N times during one scan and queue N × M dry
-/// plans, where the epoch is silent mid-pass for free, having nothing to bump until the pass
-/// finishes.
+/// `Settled` carries the **engine's own** [`CatalogGen`], read rather than counted here. Every
+/// registry write the engine makes moves it and nothing else does, so a pass that changed nothing
+/// leaves every tab's verdict standing, and a change made by another path — a typed statement, a
+/// Forget — stales tabs exactly as a pass does.
+///
+/// It is a generation, **not a fingerprint over the rows**, because registration lands row by
+/// row: a fingerprint would change N times during one scan and queue N × M dry plans.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CatalogState {
+    /// The mount value: **no pass has run at all**, so there is nothing to resolve names against
+    /// yet. Distinct from `Settled(CatalogGen::default())`, which is a project whose pass
+    /// completed and registered nothing — an empty project resolves names perfectly well, it just
+    /// resolves none of them.
+    Cold,
     Scanning,
-    Settled(u64),
+    Settled(CatalogGen),
 }
 
 impl CatalogState {
-    /// The epoch to validate against, or `None` when there is nothing to resolve names against
-    /// yet — either a pass is in flight, or **no pass has completed at all**.
+    /// The generation to validate against, or `None` when there is nothing to resolve names
+    /// against yet — either a pass is in flight, or none has run.
     ///
-    /// `Settled(0)` is the seed, and it means "registration hasn't run". It has to be a settled
-    /// value rather than `Scanning`, because [`claim_scan`] claims *from* settled: seeding
-    /// `Scanning` deadlocks the window's one scan driver at mount and leaves every catalog row
-    /// in `Reg::Loading` forever. So the open-time race is closed by the **epoch**, not by the
-    /// initial state — and by value rather than by which side effect happens to run first.
-    pub fn epoch(self) -> Option<u64> {
+    /// [`Cold`](Self::Cold) has to be a *claimable* state rather than `Scanning`: [`claim_scan`]
+    /// claims from anything but `Scanning`, and seeding `Scanning` would deadlock the window's one
+    /// scan driver at mount and leave every catalog row in `Reg::Loading` forever. So the
+    /// open-time race is closed by this answer, not by the initial state — and by value rather
+    /// than by which side effect happens to run first.
+    pub fn generation(self) -> Option<CatalogGen> {
         match self {
-            CatalogState::Scanning => None,
-            CatalogState::Settled(0) => None,
-            CatalogState::Settled(epoch) => Some(epoch),
+            CatalogState::Cold | CatalogState::Scanning => None,
+            CatalogState::Settled(generation) => Some(generation),
         }
     }
 
@@ -146,23 +153,26 @@ pub type Catalog = State<CatalogState>;
 /// Provide this window's catalog state. Called by `use_init_project`, which owns the scan driver
 /// that claims it.
 ///
-/// Starts at `Settled(0)` — **settled**, so the project-open pass can claim it, and **epoch 0**,
-/// so nothing validates until that pass has actually completed. See [`CatalogState::epoch`].
+/// Starts [`Cold`](CatalogState::Cold) — claimable, so the project-open pass can take it, and
+/// unresolvable, so nothing validates until that pass has actually completed.
 pub fn use_init_catalog() -> Catalog {
-    use_provide_context(|| State::create(CatalogState::Settled(0)))
+    use_provide_context(|| State::create(CatalogState::Cold))
 }
 
 /// A catalog mutation that is **not** a scan has landed on the engine — a `CREATE OR REPLACE
-/// VIEW` from ⌘S, a drop's deregister. Bump the epoch so every tab's verdict is re-derived
-/// against what the engine now holds.
+/// VIEW` from ⌘S, a drop's deregister, a typed statement's effect. Adopt the generation the
+/// engine is at now, so every tab's verdict is re-derived against what it holds.
 ///
-/// A no-op while `Scanning`: the pass in flight will bump on its way out, and bumping twice
-/// would only re-validate everything twice.
-pub fn catalog_settled(mut catalog: Catalog) {
-    let CatalogState::Settled(epoch) = *catalog.peek() else {
+/// The number is *read*, never incremented: the engine minted it when the write landed, and a
+/// gesture that turned out to change nothing leaves it where it was.
+///
+/// A no-op while `Scanning`: the pass in flight adopts on its way out, and adopting twice would
+/// only re-validate everything twice.
+pub fn catalog_settled(mut catalog: Catalog, engine: &EngineCtx) {
+    if catalog.peek().is_scanning() {
         return;
-    };
-    catalog.set(CatalogState::Settled(epoch + 1));
+    }
+    catalog.set(CatalogState::Settled(engine.catalog().generation()));
 }
 
 /// A **request** for a re-scan — the sidebar's ↻ bumps the count, and the window root's scan
@@ -187,8 +197,8 @@ pub struct ScanRequest {
     pub scope: ScanScope,
 }
 
-/// What a scan covers. The pass itself is the same either way — re-register from the defs — so
-/// this only decides the **work list**, which is also the set of rows that drop to `Loading`.
+/// What a scan covers, which is also what decides the engine call it makes
+/// (`state::hooks::ScanWork`) and the set of rows that drop to `Loading`.
 #[derive(Clone, PartialEq, Eq, Default, Debug)]
 pub enum ScanScope {
     /// Every def in the catalog: project open, and the sidebar's ↻.
@@ -218,29 +228,43 @@ pub fn use_init_catalog_rescan() -> CatalogRescan {
     use_provide_context(|| State::create(ScanRequest::default()))
 }
 
-/// Claim the flag for a scan: `Some(guard)` when this caller won it, `None` when a pass already
-/// holds it. The flag stays set for exactly as long as the returned [`ScanGuard`] lives.
+/// Claim the catalog for a scan: `Some(guard)` when this caller won it, `None` when a pass
+/// already holds it. It stays [`Scanning`](CatalogState::Scanning) for exactly as long as the
+/// returned [`ScanGuard`] lives.
+///
+/// **A UI concurrency claim, not a correctness mechanism.** What it buys is one pass per window
+/// (two concurrent ones would re-register the same defs and fight over every row) and the
+/// Scanning affordance the sidebar header spins on. What it does *not* decide is what a name
+/// resolves to: that is the engine's, which builds each provider aside and swaps it in, and mints
+/// the generation the release below adopts.
 ///
 /// Test-and-set in **one** synchronous step, deliberately: the executor is cooperative and
 /// single-threaded, so nothing can interleave between the peek and the set — whereas checking
-/// here and setting inside the spawned pass leaves the flag clear across a poll boundary, and
+/// here and setting inside the spawned pass leaves the claim open across a poll boundary, and
 /// two dispatches both pass the check and scan the same catalog concurrently.
-pub fn claim_scan(mut catalog: Catalog) -> Option<ScanGuard> {
-    let CatalogState::Settled(epoch) = *catalog.peek() else {
+pub fn claim_scan(mut catalog: Catalog, engine: &EngineCtx) -> Option<ScanGuard> {
+    if catalog.peek().is_scanning() {
         return None;
-    };
+    }
     catalog.set(CatalogState::Scanning);
-    Some(ScanGuard { catalog, epoch })
+    Some(ScanGuard {
+        catalog,
+        engine: engine.clone(),
+    })
 }
 
 /// Holds the [`Catalog`] in [`CatalogState::Scanning`] for as long as it is alive, and releases
-/// it into the next epoch on `Drop` — whether the
-/// pass it belongs to *finished* or was *cancelled*.
+/// it onto the generation the engine is at — whether the pass it belongs to *finished* or was
+/// *cancelled*.
 ///
-/// That distinction is the whole point. A `set(false)` after the pass's last `.await` never runs
-/// when Freya drops the task (a scope unmounting, or the window closing), and the flag would then
-/// latch `true` for the rest of the window's life: ↻ disabled forever, every catalog row stranded
-/// in `Reg::Loading`. Same bug, same shape and same reasoning as freya-query's own `RunningGuard`.
+/// That distinction is the whole point. A write after the pass's last `.await` never runs when
+/// Freya drops the task (a scope unmounting, or the window closing), and the claim would then
+/// latch for the rest of the window's life: ↻ disabled forever, every catalog row stranded in
+/// `Reg::Loading`. Same bug, same shape and same reasoning as freya-query's own `RunningGuard`.
+///
+/// The generation is **read at the release**, not carried from the claim, which is what makes a
+/// cancelled pass honest: whatever it managed to register before it was dropped is what the
+/// engine is holding, and whatever it did not is not stale — it never happened.
 ///
 /// The guard is moved *into* the scan future, so the release is tied to that future's storage
 /// rather than to its completion. Freya drops a scope's tasks before it drops the scope's state
@@ -248,13 +272,15 @@ pub fn claim_scan(mut catalog: Catalog) -> Option<ScanGuard> {
 /// always lands on a live signal.
 pub struct ScanGuard {
     catalog: Catalog,
-    /// The epoch this pass claimed at; releasing lands on the next one.
-    epoch: u64,
+    /// Read for its generation on release. The `EngineCtx` is an `Arc`, which is also what keeps
+    /// this engine alive long enough to answer.
+    engine: EngineCtx,
 }
 
 impl Drop for ScanGuard {
     fn drop(&mut self) {
-        self.catalog.set(CatalogState::Settled(self.epoch + 1));
+        self.catalog
+            .set(CatalogState::Settled(self.engine.catalog().generation()));
     }
 }
 
@@ -268,32 +294,37 @@ pub fn use_catalog_rescan() -> CatalogRescan {
     consume_context::<CatalogRescan>()
 }
 
+/// The claim's own behavior, which is **the affordance and nothing else**: who may start a pass,
+/// and that the Scanning state always ends. What a name resolves to, and when a verdict goes
+/// stale, are the engine's generation, tested where it is minted (`strata_engine::generation`).
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A signal without a component around it — `create_global` is the one constructor that
     /// needs no scope, which is what lets the claim be tested as the plain state machine it is.
-    fn catalog() -> Catalog {
-        State::create_global(CatalogState::Settled(1))
+    fn catalog(state: CatalogState) -> Catalog {
+        State::create_global(state)
     }
 
-    /// **The seed must be claimable.** `Settled(0)` is what the window mounts with, and the
-    /// project-open registration pass claims *from* settled — seeding `Scanning` instead
+    /// **The mount value must be claimable.** [`CatalogState::Cold`] is what the window mounts
+    /// with, and the project-open registration pass claims from it — seeding `Scanning` instead
     /// deadlocks the window's one scan driver at mount and strands every catalog row in
-    /// `Reg::Loading` for the life of the window. Nothing validates at epoch 0 either, so the
+    /// `Reg::Loading` for the life of the window. Nothing validates against it either, so the
     /// open-time race is closed without breaking the claim.
     #[test]
-    fn the_seed_is_claimable_but_nothing_validates_against_it() {
-        let catalog = State::create_global(CatalogState::Settled(0));
+    fn the_mount_value_is_claimable_but_nothing_validates_against_it() {
+        let engine = EngineCtx::default();
+        let catalog = catalog(CatalogState::Cold);
 
-        assert!(catalog.peek().epoch().is_none(), "no pass has run yet");
-        let guard = claim_scan(catalog).expect("the project-open pass must be able to claim");
+        assert!(catalog.peek().generation().is_none(), "no pass has run yet");
+        let guard =
+            claim_scan(catalog, &engine).expect("the project-open pass must be able to claim");
         drop(guard);
         assert_eq!(
-            catalog.peek().epoch(),
-            Some(1),
-            "…and now there is a catalog"
+            catalog.peek().generation(),
+            Some(engine.catalog().generation()),
+            "…and now the window is looking at the catalog the engine holds"
         );
     }
 
@@ -301,56 +332,83 @@ mod tests {
     /// header reads says a scan is running.
     #[test]
     fn one_claim_at_a_time() {
-        let catalog = catalog();
-        let guard = claim_scan(catalog).expect("the first claim wins");
+        let engine = EngineCtx::default();
+        let catalog = catalog(CatalogState::Settled(engine.catalog().generation()));
+        let guard = claim_scan(catalog, &engine).expect("the first claim wins");
         assert!(catalog.peek().is_scanning(), "the header sees a scan");
-        assert!(catalog.peek().epoch().is_none(), "and nothing validates");
-        assert!(claim_scan(catalog).is_none(), "a second claim can't get in");
+        assert!(
+            catalog.peek().generation().is_none(),
+            "and nothing validates"
+        );
+        assert!(
+            claim_scan(catalog, &engine).is_none(),
+            "a second claim can't get in"
+        );
 
         drop(guard);
 
-        assert_eq!(catalog.peek().epoch(), Some(2), "released one epoch on");
-        assert!(claim_scan(catalog).is_some(), "the next scan can claim it");
+        assert!(!catalog.peek().is_scanning(), "released");
+        assert!(
+            claim_scan(catalog, &engine).is_some(),
+            "the next scan can claim it"
+        );
     }
 
-    /// A pass releases into a **new** epoch, which is what makes every tab's verdict stale and
-    /// so re-derived against the catalog the pass just built. Without the bump, fixing a source
-    /// path would leave "table not found" on screen until the user typed.
+    /// A pass releases onto **the engine's** generation, which is what makes every tab's verdict
+    /// stale exactly when the catalog moved and not otherwise. Without adopting it, fixing a
+    /// source path would leave "table not found" on screen until the user typed.
     #[test]
-    fn each_pass_releases_into_a_new_epoch() {
-        let catalog = catalog();
-        for expected in 2..=4 {
-            drop(claim_scan(catalog).expect("claim"));
-            assert_eq!(catalog.peek().epoch(), Some(expected));
-        }
-    }
+    fn a_pass_releases_onto_the_generation_the_engine_reached() {
+        let engine = EngineCtx::default();
+        let catalog = catalog(CatalogState::Cold);
+        let guard = claim_scan(catalog, &engine).expect("claim");
+        engine.catalog().deregister("nothing_of_the_sort");
 
-    /// A discrete catalog mutation — ⌘S creating a view, a drop deregistering a table — bumps
-    /// too, because validation resolves against the *engine*, not the defs. It is a no-op
-    /// mid-pass: the pass in flight bumps on its way out, and bumping twice would re-validate
-    /// everything twice.
-    #[test]
-    fn a_settled_mutation_bumps_but_a_scanning_one_does_not() {
-        let catalog = catalog();
-        catalog_settled(catalog);
-        assert_eq!(catalog.peek().epoch(), Some(2));
-
-        let guard = claim_scan(catalog).expect("claim");
-        catalog_settled(catalog);
-        assert!(catalog.peek().is_scanning(), "still gated, still no epoch");
         drop(guard);
-        assert_eq!(catalog.peek().epoch(), Some(3), "one bump, from the pass");
+
+        assert_eq!(
+            catalog.peek().generation(),
+            Some(engine.catalog().generation()),
+            "the window is at the number the engine minted, not one it counted"
+        );
+    }
+
+    /// A discrete catalog mutation — ⌘S creating a view, a drop deregistering a table — adopts
+    /// the engine's generation too, because validation resolves against the *engine*, not the
+    /// defs. It is a no-op mid-pass: the pass in flight adopts on its way out, and adopting twice
+    /// would re-validate everything twice.
+    #[test]
+    fn a_settled_mutation_adopts_but_a_scanning_one_does_not() {
+        let engine = EngineCtx::default();
+        let catalog = catalog(CatalogState::Cold);
+
+        engine.catalog().deregister("nothing_of_the_sort");
+        catalog_settled(catalog, &engine);
+        let after = engine.catalog().generation();
+        assert_eq!(catalog.peek().generation(), Some(after));
+
+        let guard = claim_scan(catalog, &engine).expect("claim");
+        engine.catalog().deregister("nor_this");
+        catalog_settled(catalog, &engine);
+        assert!(catalog.peek().is_scanning(), "still gated, still no answer");
+        drop(guard);
+        assert_eq!(
+            catalog.peek().generation(),
+            Some(engine.catalog().generation()),
+            "one adoption, from the pass"
+        );
     }
 
     /// **The D8 regression.** A pass that is *cancelled* rather than finished must still release
-    /// the flag. Freya cancels a task by dropping its future, so the guard the future owns is
-    /// dropped without the pass's body ever reaching its end — which is exactly what a
-    /// `set(false)` written at the end of the pass would miss, latching ↻ disabled and every
-    /// catalog row in `Reg::Loading` for the window's whole life.
+    /// the claim. Freya cancels a task by dropping its future, so the guard the future owns is
+    /// dropped without the pass's body ever reaching its end — which is exactly what a write at
+    /// the end of the pass would miss, latching ↻ disabled and every catalog row in `Reg::Loading`
+    /// for the window's whole life.
     #[test]
     fn a_cancelled_pass_still_releases_the_claim() {
-        let scan = catalog();
-        let guard = claim_scan(scan).expect("the first claim wins");
+        let engine = EngineCtx::default();
+        let scan = catalog(CatalogState::Cold);
+        let guard = claim_scan(scan, &engine).expect("the first claim wins");
         let pass = async move {
             let _scan = guard;
             std::future::pending::<()>().await;
@@ -358,11 +416,10 @@ mod tests {
 
         drop(pass);
 
-        assert_eq!(
-            scan.peek().epoch(),
-            Some(2),
-            "the claim is released by the drop, into the next epoch"
+        assert!(
+            !scan.peek().is_scanning(),
+            "the claim is released by the drop"
         );
-        assert!(claim_scan(scan).is_some(), "…so ↻ works again");
+        assert!(claim_scan(scan, &engine).is_some(), "…so ↻ works again");
     }
 }

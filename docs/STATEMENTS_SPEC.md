@@ -18,7 +18,7 @@ flowchart TD
     CLS -- "Refusal" --> ERR2["Err(refusal.message)\nbefore DataFusion can plan"]
     Q --> ROWS["RunOutcome::Rows\nresults grid, snapshot, pages"]
     DDL --> REP["RunOutcome::Statement(report)"]
-    REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog epoch →\nhistory + event log"]
+    REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog generation →\nhistory + event log"]
 ```
 
 ## 1. The shape of a Run
@@ -128,7 +128,7 @@ pub struct StatementReport {
 the def *and* what registration learned, so the sidebar row lands `Reg::Ready` directly. The last
 three persist nothing — functions and prepared statements are session-scoped (§8), and a remote
 relation has no store row at all — and are still effects for the reason an effect exists: a name
-that did not resolve a moment ago now does, so the catalog epoch has to move with it.
+that did not resolve a moment ago now does, so the catalog generation has to move with it.
 
 **The direct catalog gestures answer the same shape.** The pane's table drop and view drop reach
 an arm's body without a statement to classify (`Catalog::drop_table` / `Catalog::drop_view`), and
@@ -715,7 +715,7 @@ arm, for the reason `TableRemoved` gives: the statement runs in a task that cann
 lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Catalog::create_view` /
 `drop_view`, which never produce an effect.
 
-Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
+Replay needs no code of its own: a typed view is a `ViewDef`, and the view phase's fixed-point
 rounds order a chain from cold exactly as they do a saved one.
 
 **A cross-source view** — one over a file table joined to `pg.public.orders` — is an ordinary view
@@ -972,7 +972,7 @@ run exactly once at engine construction into an immutable field — true of the 
 statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
 that changed the registry **and by nothing else**, so the built-in set still costs one walk;
 `Lang::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
-whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapshot is memoized on.
+whose settle moves the catalog generation, which is what every tab's `Catalog` snapshot is memoized on.
 
 **Which surfaces that actually reaches** — three, and it is worth naming them rather than saying
 "the language service", because they read the swap by two different routes:
@@ -1228,7 +1228,7 @@ persist funnel → `catalog_settled` epoch bump (diagnostics revalidate; other t
 name) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
 rows") — no grid, no snapshot.
 
-At next open — zero new code: `load_defs` → the scan driver → `register_pass` → `table_spec`
+At next open — zero new code: `load_defs` → the scan driver → `catalog().sync` → `table_spec`
 resolves the project-relative source against the root → `register_external` re-registers over the
 same files. The headless host replays identically.
 

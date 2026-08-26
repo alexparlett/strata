@@ -18,7 +18,7 @@
 //!
 //! | | re-derivable? | who writes it | surface |
 //! |---|---|---|---|
-//! | A diagnostic | yes — buffer revision + catalog epoch | one driver, `state::diagnostics` | Queries |
+//! | A diagnostic | yes — buffer revision + catalog generation | one driver, `state::diagnostics` | Queries |
 //! | A registration failure | yes — `Reg::Failed` on the row | the scan pass | Project |
 //! | A write fault | **no** — it describes a write that already happened | its observer, `persisted` | Project |
 //! | An event | no, and it is already finished | its observer | *Events, not here* |

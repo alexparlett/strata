@@ -326,7 +326,7 @@ Top level is **data sources**:
   reason it did not. Selecting a column points the inspector at it exactly as a workspace column
   does. Because the walk that builds the tree is synchronous — and is the only place the tree's
   shape is decided — it *returns* the relations it drew open and the **pane** holds the one
-  subscription for their columns, keyed by those relations and the catalog epoch; a row cannot
+  subscription for their columns, keyed by those relations and the catalog generation; a row cannot
   hold it, since a virtualized row's scope is a slot. What a relation row *does* is
   [below](#gestures-on-a-remote-relation);
 - one node per **object-store connection**, opening onto the workspace defs that read through it
@@ -457,7 +457,7 @@ remote relation's columns), are `docs/COMPLETION_SPEC.md` §2, §4 and §10.
 ## Registration order
 
 Connections are the **first phase** of the project registration pass
-(`strata_engine::register::register_pass`): every connection registers before any table, because a
+(`strata_engine::register::sync`): every connection registers before any table, because a
 table's source path cannot resolve to an object store that is not registered yet — an ordering
 bug there would look exactly like a broken table — and because a view over `pg.public.orders`
 cannot plan before that catalog exists. A whole-catalog ↻ re-connects everything; a
@@ -649,7 +649,7 @@ table when the future is dropped, which is `arms::tables::Staging`'s rule for th
 Whether the relation already exists is asked **inside the create's own transaction** rather than
 by a round trip before it, because `CreateTableBuilder` hardcodes `IF NOT EXISTS`: a relation that
 appeared in between would be silently adopted and then dropped by the rollback. The successful
-CTAS carries `StoreEffect::RemoteRelationsChanged`, whose only job is the catalog epoch: a remote
+CTAS carries `StoreEffect::RemoteRelationsChanged`, whose only job is the catalog generation: a remote
 relation has no store row, and the tree, completion and every tab's diagnostics already key on the
 epoch, so the new table shows with no manual ↻.
 

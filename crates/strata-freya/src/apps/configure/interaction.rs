@@ -85,7 +85,7 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
         (620., 900.).into(),
         move |r| {
             r.provide_root_context(EngineCtx::default);
-            r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+            r.provide_root_context(|| State::create(CatalogState::Cold));
             r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));

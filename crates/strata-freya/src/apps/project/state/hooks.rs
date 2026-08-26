@@ -16,9 +16,9 @@ use freya::prelude::{
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
-use strata_engine::register::{register_pass, table_spec, RegOutcome};
+use strata_engine::register::{table_spec, CatalogSpec, RegOutcome};
 use strata_engine::{Connections, TableSpec};
-use strata_model::{ConnectionDef, SessionSnapshot, WindowGeom};
+use strata_model::{SessionSnapshot, ViewDef, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::state::ConfigStation;
@@ -162,47 +162,42 @@ pub fn use_init_project(
     });
     use_side_effect(move || {
         let request = rescan.read().clone();
-        let Some(guard) = claim_scan(catalog) else {
+        let Some(guard) = claim_scan(catalog, &engine) else {
             return;
         };
         let work = plan_scan(&station.peek(), &request.scope);
         if request.seq > 0 {
-            reset_rows(station, &request.scope, &work.views);
+            reset_rows(station, &work);
         }
         spawn(scan_catalog(engine.clone(), station, log, guard, work));
     });
     station
 }
 
-/// What one scan will re-register, by def name — connections, then tables, then views **in
-/// dependency order**, which is also the order the pass settles them in.
+/// What one scan will do to the engine, and which call it makes.
 ///
-/// A struct and not the three `Vec<String>`s it holds: they are the same type, they travel
-/// together through the driver and the fold, and positional arguments would let two of them
-/// swap with nothing to notice.
-struct ScanWork {
-    /// connection names — how the project addresses one, and what the engine registers
-    /// under. Not buckets: `s3://lake` and `gs://lake` are two connections sharing one.
-    connections: Vec<String>,
-    tables: Vec<String>,
-    views: Vec<String>,
-}
-
-impl ScanWork {
-    /// Nothing to do — the row a scoped request named went between the request and the
-    /// driver serving it.
-    fn none() -> Self {
-        Self {
-            connections: Vec::new(),
-            tables: Vec::new(),
-            views: Vec::new(),
-        }
-    }
+/// `Catalog` is the whole project, so it goes through `catalog().sync`, which reconciles: what
+/// the spec does not name is deregistered. `Table` is a work list of one row plus the views over
+/// it, which the same call would read as "the project is now one table" — so it registers that
+/// table and re-creates those views directly.
+enum ScanWork {
+    /// Every def in the project — project open and the sidebar's ↻.
+    Catalog(CatalogSpec),
+    /// One table, plus the views a refresh of it would otherwise leave reading the provider it
+    /// replaced (P3-06's row Refresh), in dependency order.
+    Table {
+        spec: TableSpec,
+        views: Vec<ViewDef>,
+    },
+    /// Nothing to do — the row a scoped request named went between the request and the driver
+    /// serving it.
+    Nothing,
 }
 
 /// A scan's work list. Read before any row is reset (see the driver).
 ///
-/// The two scopes differ only in reach. `All` is every def. `Table` is the one row plus
+/// `All` is the whole catalog the store holds, which is also what repairs any drift: anything the
+/// engine holds that the store no longer names comes out. `Table` is the one row plus
 /// [`ProjectState::views_to_refresh`] — the views that read it (transitively) and every view
 /// currently failing, because re-registering a table does not re-plan the views above it: their
 /// plans captured the old provider by `Arc` and would go on scanning the files the pass just
@@ -217,23 +212,42 @@ impl ScanWork {
 /// Takes the state rather than the station, because it only reads it — and because that is what
 /// lets the name reconciliation below be pinned by a test that needs no window.
 fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
+    let known = Connections::of(
+        &p.connections
+            .iter()
+            .map(|c| c.def.clone())
+            .collect::<Vec<_>>(),
+    );
     match scope {
-        ScanScope::All => ScanWork {
-            connections: p.connections.iter().map(|c| c.def.named()).collect(),
-            tables: p.tables.iter().map(|t| t.def.name.clone()).collect(),
-            views: p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect()),
-        },
+        ScanScope::All => ScanWork::Catalog(CatalogSpec {
+            connections: p.connections.iter().map(|c| c.def.clone()).collect(),
+            tables: p
+                .tables
+                .iter()
+                .map(|t| table_spec(&p.root, &t.def, &known))
+                .collect(),
+            views: p
+                .refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect())
+                .into_iter()
+                .filter_map(|name| p.views.iter().find(|v| v.def.name == name))
+                .map(|v| v.def.clone())
+                .collect(),
+        }),
         ScanScope::Table(name) => match p
             .tables
             .iter()
             .find(|t| ProjectState::same_name(&t.def.name, name))
         {
-            Some(row) => ScanWork {
-                connections: Vec::new(),
-                tables: vec![row.def.name.clone()],
-                views: p.views_to_refresh(&row.def.name),
+            Some(row) => ScanWork::Table {
+                spec: table_spec(&p.root, &row.def, &known),
+                views: p
+                    .views_to_refresh(&row.def.name)
+                    .into_iter()
+                    .filter_map(|name| p.views.iter().find(|v| v.def.name == name))
+                    .map(|v| v.def.clone())
+                    .collect(),
             },
-            None => ScanWork::none(),
+            None => ScanWork::Nothing,
         },
     }
 }
@@ -241,28 +255,27 @@ fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
 /// Drop the rows this pass will re-answer back to `Loading` — and only those. A row Refresh
 /// leaves the rest of the catalog wearing the verdicts it already has, which is the whole
 /// difference between asking about one table and re-scanning the project.
-fn reset_rows(
-    mut station: RadioStation<ProjectState, ProjChan>,
-    scope: &ScanScope,
-    views: &[String],
-) {
-    match scope {
-        ScanScope::All => {
+fn reset_rows(mut station: RadioStation<ProjectState, ProjChan>, work: &ScanWork) {
+    match work {
+        ScanWork::Catalog(_) => {
             station
                 .write_channel(ProjChan::Connections)
                 .reload_connections();
             station.write_channel(ProjChan::Tables).reload_tables();
             station.write_channel(ProjChan::Views).reload_views();
         }
-        ScanScope::Table(name) => {
-            station.write_channel(ProjChan::Tables).reload_table(name);
+        ScanWork::Table { spec, views } => {
+            station
+                .write_channel(ProjChan::Tables)
+                .reload_table(&spec.name);
             if !views.is_empty() {
                 let mut p = station.write_channel(ProjChan::Views);
                 for view in views {
-                    p.reload_view(view);
+                    p.reload_view(&view.name);
                 }
             }
         }
+        ScanWork::Nothing => {}
     }
 }
 
@@ -282,8 +295,9 @@ pub fn refresh_table(rescan: CatalogRescan, name: String) {
 /// `Arc`. An append cannot make a view stale — the sink schema-checks before it writes, and the old
 /// provider re-LISTs per scan anyway — so going through the pass would break the views and repair
 /// them for nothing, re-infer a schema that could not have moved, and flash every affected row
-/// through `Loading`. So: ask the engine what the row says now, and land it. No epoch bump either,
-/// because the count moved rather than what any name resolves to.
+/// through `Loading`. So: ask the engine what the row says now, and land it. The catalog
+/// generation does not move either, because the count changed rather than what any name resolves
+/// to.
 ///
 /// `spawn_forever`, for [`drop_confirm`]'s reason: the answer belongs to the window's store, and
 /// the tab whose statement asked for it may be closed before it arrives.
@@ -318,8 +332,9 @@ pub fn refresh_table_rows(
 /// schema from its def, then re-create every view over what that found. Bumps the window's
 /// [`CatalogRescan`] counter; the driver in [`use_init_project`] runs the pass.
 ///
-/// **Re-scan is re-registration**, from the defs, not a walk of what the engine happens to
-/// hold. `Catalog::register` deregisters and rebuilds each table from a re-`infer_schema`d
+/// **Re-scan is re-registration**, from the store's rows, not a walk of what the engine happens
+/// to hold — and it **reconciles**, so a table the project no longer defines comes out with it.
+/// `Catalog::register` deregisters and rebuilds each table from a re-`infer_schema`d
 /// config (see `catalog::register_external`), which is the same re-infer a walk of the live
 /// providers would do — and, because the def is the input, it *also* retries a table whose
 /// first registration failed. That is the case the button most needs to serve: the user fixes
@@ -341,13 +356,12 @@ pub fn refresh_catalog(rescan: CatalogRescan) {
     request_scan(rescan, ScanScope::All);
 }
 
-/// One catalog scan over `tables` + `views` — the project-open pass, every ↻ and every row
-/// Refresh are the same pass at different widths, so none of them can run while another is in
-/// flight.
+/// One catalog scan — the project-open pass, every ↻ and every row Refresh, whatever engine call
+/// their [`ScanWork`] names. None of them can run while another is in flight.
 ///
 /// The [`ScanGuard`] is **owned by this future** and never touched: that is the release
-/// mechanism. Settling drops it, and so does cancelling — a `set(false)` written after the
-/// `.await` would only run on the first of those.
+/// mechanism. Settling drops it, and so does cancelling — a write after the `.await` would only
+/// run on the first of those.
 async fn scan_catalog(
     engine: EngineCtx,
     station: RadioStation<ProjectState, ProjChan>,
@@ -415,165 +429,135 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
     }
 }
 
-/// Register the named defs on the engine and fold what it answered into the store. One
-/// pass, shared by project open, the sidebar's ↻ re-scan ([`refresh_catalog`]) and a
-/// row's Refresh ([`refresh_table`]) — a re-scan *is* a re-registration, so there is one
-/// implementation of "make the engine match the defs", not several that can drift. The
-/// three differ only in the work list they hand in. The engine-facing half — connections
-/// first, then tables, then views by fixed-point rounds — is `strata-engine`'s
-/// [`register_pass`] (AA-01, so a headless host runs the same sequence); this keeps what is
-/// genuinely the store's: `Reg<T>` rows and log entries, folded per outcome as each settles.
+/// Perform one scan's [`ScanWork`] and fold what the engine answered into the store.
 ///
-/// `views` is taken **in order**, which the caller has already sorted so a view is
-/// re-created after everything it reads ([`ProjectState::refresh_order`]). That ordering
-/// is only knowable once the views have answered at least once; at project open none of
-/// them have, which is what the pass's fixed-point retry is for.
+/// Shared by project open, the sidebar's ↻ ([`refresh_catalog`]) and a row's Refresh
+/// ([`refresh_table`]); which engine call each makes is [`ScanWork`]'s. Either way this keeps
+/// only what is genuinely the store's: `Reg<T>` rows and log entries, folded per outcome as each
+/// settles ([`settle_reg`]).
 ///
 /// Every answer the engine gives is also **recorded in the event log** (P3-13) — one event per def,
 /// on either arm, for every width of pass. Not a synthesized "re-scanned N tables" summary: the
 /// per-def answers are the facts the pass observed, and a count derived from them would be a second
 /// derivation of the same thing. A pass whose work list is empty (a table dropped between the
 /// request and the driver) records nothing, because nothing happened.
-///
-/// A name with no def is skipped — the row went while the pass was being planned.
-///
-/// [`RegOutcome::Removed`] arrives only from `Catalog::sync`, which reconciles a *whole* catalog
-/// and takes out what its spec does not name; this pass is additive and its work list is often a
-/// single row. Its arm records the fact its observer saw, which is what the log owes for any
-/// answer the engine gives.
 async fn register_defs(
     engine: EngineCtx,
     mut station: RadioStation<ProjectState, ProjChan>,
     log: LogCtx,
     work: ScanWork,
 ) {
-    let (connections, tables, views) = {
-        let p = station.peek();
-        let root = p.root.clone();
-        let connections: Vec<ConnectionDef> = work
-            .connections
-            .into_iter()
-            .filter_map(|name| {
-                Some(
-                    p.connections
-                        .iter()
-                        .find(|c| c.def.named() == name)?
-                        .def
-                        .clone(),
-                )
-            })
-            .collect();
-        let known = Connections::of(
-            &p.connections
-                .iter()
-                .map(|c| c.def.clone())
-                .collect::<Vec<_>>(),
-        );
-        let tables: Vec<TableSpec> = work
-            .tables
-            .into_iter()
-            .filter_map(|name| {
-                let def = &p.tables.iter().find(|t| t.def.name == name)?.def;
-                Some(table_spec(&root, def, &known))
-            })
-            .collect();
-        let views: Vec<(String, String)> = work
-            .views
-            .into_iter()
-            .filter_map(|name| {
-                let sql = p.views.iter().find(|v| v.def.name == name)?.def.sql.clone();
-                Some((name, sql))
-            })
-            .collect();
-        (connections, tables, views)
-    };
+    match work {
+        ScanWork::Catalog(spec) => {
+            engine
+                .catalog()
+                .sync(spec, |outcome| settle_reg(&mut station, log, outcome))
+                .await;
+        }
+        ScanWork::Table { spec, views } => {
+            let name = spec.name.clone();
+            let result = engine.catalog().register(spec).await;
+            settle_reg(&mut station, log, RegOutcome::Table { name, result });
+            engine
+                .catalog()
+                .create_views(views, |outcome| settle_reg(&mut station, log, outcome))
+                .await;
+        }
+        ScanWork::Nothing => {}
+    }
+}
 
-    register_pass(
-        &engine,
-        connections,
-        tables,
-        views,
-        |outcome| match outcome {
-            RegOutcome::Connection { name, result } => match result {
-                Ok(()) => {
-                    log_event(log, LogLevel::Ok, format!("Connected '{name}'"));
-                    station
-                        .write_channel(ProjChan::Connections)
-                        .connection_registered(&name);
-                }
-                Err(e) => {
-                    tracing::error!("connect '{name}' failed: {e}");
-                    log_event(
-                        log,
-                        LogLevel::Error,
-                        format!("Connection '{name}' failed: {e}"),
-                    );
-                    station
-                        .write_channel(ProjChan::Connections)
-                        .connection_failed(&name, e);
-                }
-            },
-            RegOutcome::Table { name, result } => match result {
-                Ok(meta) => {
-                    log_event(
-                        log,
-                        LogLevel::Ok,
-                        format!(
-                            "Registered table '{name}' · {}{}",
-                            plural(meta.columns.len(), "column"),
-                            meta.rows
-                                .map(|rows| format!(" · {} rows", fmt_int(rows)))
-                                .unwrap_or_default()
-                        ),
-                    );
-                    station
-                        .write_channel(ProjChan::Tables)
-                        .table_registered(&name, meta);
-                }
-                Err(e) => {
-                    tracing::error!("register table '{name}' failed: {e}");
-                    log_event(
-                        log,
-                        LogLevel::Error,
-                        format!("Table '{name}' failed to register: {e}"),
-                    );
-                    station
-                        .write_channel(ProjChan::Tables)
-                        .table_failed(&name, e);
-                }
-            },
-            RegOutcome::View { name, result } => match result {
-                Ok(meta) => {
-                    log_event(
-                        log,
-                        LogLevel::Ok,
-                        format!(
-                            "Registered view '{name}' · {}",
-                            plural(meta.columns.len(), "column")
-                        ),
-                    );
-                    station
-                        .write_channel(ProjChan::Views)
-                        .view_registered(&name, meta);
-                }
-                Err(e) => {
-                    tracing::error!("create view '{name}' failed: {e}");
-                    log_event(
-                        log,
-                        LogLevel::Error,
-                        format!("View '{name}' failed to register: {e}"),
-                    );
-                    station.write_channel(ProjChan::Views).view_failed(&name, e);
-                }
-            },
-            RegOutcome::Removed { name, kind } => log_event(
-                log,
-                LogLevel::Info,
-                format!("Removed {kind} '{name}', which the project no longer defines"),
-            ),
+/// Fold one def's answer onto its catalog row and into the event log — the store half of every
+/// registration gesture, so the two calls above cannot answer a row differently.
+///
+/// [`RegOutcome::Removed`] arrives only from `Catalog::sync`, and only for something the *engine*
+/// holds that the project's own defs no longer name — the spec is built from the store rows, so
+/// there is no row left to fold onto. It is drift being repaired, and what it owes is the record
+/// its observer saw.
+fn settle_reg(
+    station: &mut RadioStation<ProjectState, ProjChan>,
+    log: LogCtx,
+    outcome: RegOutcome,
+) {
+    match outcome {
+        RegOutcome::Connection { name, result } => match result {
+            Ok(()) => {
+                log_event(log, LogLevel::Ok, format!("Connected '{name}'"));
+                station
+                    .write_channel(ProjChan::Connections)
+                    .connection_registered(&name);
+            }
+            Err(e) => {
+                tracing::error!("connect '{name}' failed: {e}");
+                log_event(
+                    log,
+                    LogLevel::Error,
+                    format!("Connection '{name}' failed: {e}"),
+                );
+                station
+                    .write_channel(ProjChan::Connections)
+                    .connection_failed(&name, e);
+            }
         },
-    )
-    .await;
+        RegOutcome::Table { name, result } => match result {
+            Ok(meta) => {
+                log_event(
+                    log,
+                    LogLevel::Ok,
+                    format!(
+                        "Registered table '{name}' · {}{}",
+                        plural(meta.columns.len(), "column"),
+                        meta.rows
+                            .map(|rows| format!(" · {} rows", fmt_int(rows)))
+                            .unwrap_or_default()
+                    ),
+                );
+                station
+                    .write_channel(ProjChan::Tables)
+                    .table_registered(&name, meta);
+            }
+            Err(e) => {
+                tracing::error!("register table '{name}' failed: {e}");
+                log_event(
+                    log,
+                    LogLevel::Error,
+                    format!("Table '{name}' failed to register: {e}"),
+                );
+                station
+                    .write_channel(ProjChan::Tables)
+                    .table_failed(&name, e);
+            }
+        },
+        RegOutcome::View { name, result } => match result {
+            Ok(meta) => {
+                log_event(
+                    log,
+                    LogLevel::Ok,
+                    format!(
+                        "Registered view '{name}' · {}",
+                        plural(meta.columns.len(), "column")
+                    ),
+                );
+                station
+                    .write_channel(ProjChan::Views)
+                    .view_registered(&name, meta);
+            }
+            Err(e) => {
+                tracing::error!("create view '{name}' failed: {e}");
+                log_event(
+                    log,
+                    LogLevel::Error,
+                    format!("View '{name}' failed to register: {e}"),
+                );
+                station.write_channel(ProjChan::Views).view_failed(&name, e);
+            }
+        },
+        RegOutcome::Removed { name, kind } => log_event(
+            log,
+            LogLevel::Info,
+            format!("Removed {kind} '{name}', which the project no longer defines"),
+        ),
+    }
 }
 
 /// Initialise this window's query-history satellite: load `.strata/history.jsonl` and
@@ -702,10 +686,13 @@ mod tests {
     use std::env;
     use std::process;
 
-    use strata_engine::TableMeta;
+    use freya::radio::RadioStation;
+    use futures::executor::block_on;
+    use strata_engine::{RunTag, TableMeta, WsId};
     use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     use super::*;
+    use crate::apps::project::state::Log;
 
     /// A scratch project folder with a `.strata/`, unique per test (they run in threads of
     /// one process, so the pid alone wouldn't separate them).
@@ -931,18 +918,96 @@ mod tests {
             },
         );
 
-        let work = plan_scan(&p, &ScanScope::Table("mytable".into()));
-
+        let ScanWork::Table { spec, .. } = plan_scan(&p, &ScanScope::Table("mytable".into()))
+        else {
+            panic!("the folded request must find the row");
+        };
         assert_eq!(
-            work.tables,
-            vec!["MyTable".to_string()],
+            spec.name, "MyTable",
             "the folded request found the row, and the pass carries the def's name"
         );
         assert!(
-            plan_scan(&p, &ScanScope::Table("gone".into()))
-                .tables
-                .is_empty(),
-            "a name with no row at all is still an empty pass"
+            matches!(
+                plan_scan(&p, &ScanScope::Table("gone".into())),
+                ScanWork::Nothing
+            ),
+            "a name with no row at all is nothing to do"
         );
+    }
+
+    /// **A shrunk project leaves no ghost table.** The scan driver's whole-catalog work list is
+    /// the store's own rows handed to `catalog().sync`, which reconciles — so a table the project
+    /// no longer defines stops resolving, and the fold records that it did.
+    ///
+    /// Driven through `plan_scan` + `register_defs` over a real engine, because the store cannot
+    /// see it: a driver that registered its work list additively would pass every store assertion
+    /// and still leave `gone` answering queries for the rest of the window's life.
+    #[test]
+    fn a_pass_over_a_shrunk_project_takes_the_ghost_out() {
+        let root = scratch("shrunk");
+        fs::write(root.join("t.csv"), "id\n1\n").unwrap();
+        let engine = EngineCtx::default();
+        engine.set_data_dir(&root);
+        let log: LogCtx = State::create_global(Log::default());
+        let station =
+            RadioStation::<ProjectState, ProjChan>::create_global(ProjectState::from_defs(
+                ProjectDefs {
+                    tables: vec![csv("kept"), csv("gone")],
+                    ..Default::default()
+                },
+                root.clone(),
+            ));
+
+        let scan = |station: RadioStation<ProjectState, ProjChan>| {
+            let work = plan_scan(&station.peek(), &ScanScope::All);
+            block_on(register_defs(engine.clone(), station, log, work));
+        };
+        let resolves = |name: &str, tag: u128| {
+            block_on(
+                engine
+                    .ws(WsId(1))
+                    .query(RunTag(tag), format!("SELECT id FROM {name}"), 1),
+            )
+            .is_ok()
+        };
+
+        scan(station);
+        assert!(
+            resolves("kept", 1) && resolves("gone", 2),
+            "both registered"
+        );
+
+        let mut writer = station;
+        writer.write_channel(ProjChan::Tables).remove_table("gone");
+        scan(station);
+
+        assert!(
+            resolves("kept", 3),
+            "what the project still names still answers"
+        );
+        assert!(
+            !resolves("gone", 4),
+            "and what it no longer names stopped resolving"
+        );
+        assert!(
+            log.peek()
+                .events()
+                .any(|e| e.message.contains("Removed table 'gone'")),
+            "the fold recorded the removal its observer saw"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A CSV table def over a project-relative source, for the pass tests above.
+    fn csv(name: &str) -> TableDef {
+        TableDef {
+            name: name.into(),
+            format: SourceFormat::from_name("csv"),
+            connection: None,
+            sources: vec!["t.csv".into()],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::External,
+        }
     }
 }

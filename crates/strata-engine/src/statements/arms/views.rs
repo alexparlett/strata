@@ -296,7 +296,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use crate::register::{register_project, RegOutcome};
+    use crate::register::{CatalogSpec, RegOutcome};
     use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
@@ -644,7 +644,7 @@ mod tests {
 
     /// **Replay is the ordinary pass.** The defs a typed view chain produces go into
     /// `project.json` and a cold engine registers them back with no code of its own — the view
-    /// over a view included, which only works because `register_pass`'s fixed point creates what
+    /// over a view included, which only works because the view phase's fixed point creates what
     /// it can each round. Nothing here is view-DDL-specific, which is the claim: a typed view is
     /// a `ViewDef` and nothing else.
     #[tokio::test]
@@ -675,7 +675,9 @@ mod tests {
 
         let cold = Engine::builder().build();
         let mut out = Vec::new();
-        register_project(&cold, &root, &defs, |o| out.push(o)).await;
+        cold.catalog()
+            .sync(CatalogSpec::of_project(&root, &defs), |o| out.push(o))
+            .await;
 
         let failed: Vec<&RegOutcome> = out
             .iter()

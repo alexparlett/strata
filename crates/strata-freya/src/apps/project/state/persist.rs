@@ -100,7 +100,7 @@ impl ProjectFile {
 ///
 /// It is a **third kind** of state, which is worth naming because the two it sits between are
 /// already rules of their own. A diagnostic is a *reconciliation*: a pure function of the buffer
-/// revision and the catalog epoch, so one driver re-derives it and no entry point needs
+/// revision and the catalog generation, so one driver re-derives it and no entry point needs
 /// enumerating. An event is *observed*: it cannot be re-derived at all, because it describes
 /// something already finished. A write failure is a **remembered condition** — it takes "clears
 /// when it stops holding" from the first and "an observer has to record it" from the second, and

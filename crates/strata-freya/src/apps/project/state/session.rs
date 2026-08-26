@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::mem;
 
 use strata_code_editor::prelude::{CodeEditorData, EditorLanguage, Rope};
+use strata_engine::CatalogGen;
 use strata_model::{
     expanded_drawer_h, ChartConfig, Diagnostic, DrawerTab, Layout, Origin, ProblemsTab,
     ResultsView, RightPane, SessionSnapshot, SidebarPane, TabId, TabSnapshot,
@@ -23,8 +24,8 @@ use uuid::Uuid;
 use crate::apps::project::query::QuerySpec;
 
 /// What a tab's diagnostics **describe**: the buffer revision they were computed from, and the
-/// catalog epoch they were resolved against. Those are validation's only two inputs, so a stamp
-/// that no longer matches the tab is the whole definition of "needs another pass".
+/// catalog generation they were resolved against. Those are validation's only two inputs, so a
+/// stamp that no longer matches the tab is the whole definition of "needs another pass".
 ///
 /// This is what lets the driver stop enumerating entry points. A tab restored at project open,
 /// reopened with ⇧⌘T, opened from a saved query or a view, duplicated, or left behind by a pass
@@ -32,7 +33,9 @@ use crate::apps::project::query::QuerySpec;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Stamp {
     pub revision: u64,
-    pub epoch: u64,
+    /// The engine's own [`CatalogGen`], adopted by the window — see
+    /// [`CatalogState`](super::CatalogState).
+    pub generation: CatalogGen,
 }
 
 /// One query tab. Owns its editing buffer exactly like Valin's `EditorTab`, and its own
@@ -246,14 +249,14 @@ impl SessionState {
     /// This is the reason the driver needs no list of entry points. A restored tab has no stamp;
     /// a reopened one carries a stamp from before its close; a duplicated one copied text but no
     /// stamp; an edited one moved its revision; and every tab goes stale at once when the
-    /// catalog epoch moves. All of them are just "the stamp does not match".
-    pub fn stale_tabs(&self, epoch: u64) -> Vec<TabId> {
+    /// catalog generation moves. All of them are just "the stamp does not match".
+    pub fn stale_tabs(&self, generation: CatalogGen) -> Vec<TabId> {
         let stale = |id: &TabId| {
             self.tabs.get(id).is_some_and(|t| {
                 t.validated
                     != Some(Stamp {
                         revision: t.editor.revision(),
-                        epoch,
+                        generation,
                     })
             })
         };
@@ -1113,6 +1116,7 @@ mod tests {
         assert!(SessionState::from_snapshot(SessionSnapshot::default()).is_none());
     }
 
+    use strata_engine::Engine;
     use strata_model::Severity;
 
     fn problem(message: &str) -> Diagnostic {
@@ -1132,9 +1136,35 @@ mod tests {
     }
 
     /// Stamp a tab as validated against the world it currently holds.
-    fn mark(s: &mut SessionState, id: TabId, epoch: u64, rows: Vec<Diagnostic>) {
+    fn mark(s: &mut SessionState, id: TabId, generation: CatalogGen, rows: Vec<Diagnostic>) {
         let revision = s.tabs[&id].editor.revision();
-        s.set_diagnostics(id, Stamp { revision, epoch }, rows);
+        s.set_diagnostics(
+            id,
+            Stamp {
+                revision,
+                generation,
+            },
+            rows,
+        );
+    }
+
+    /// The generation to stamp with when *which* one is irrelevant — the tests about which tabs a
+    /// verdict covers, rather than about staleness. [`generations`] is for the ones that need two
+    /// that differ.
+    fn any() -> CatalogGen {
+        CatalogGen::default()
+    }
+
+    /// Two catalog generations that differ, minted by the one thing that mints them.
+    ///
+    /// [`CatalogGen`] is opaque on purpose — nothing outside the engine can fabricate one, which
+    /// is what stops a window claiming the catalog moved when it did not. A test that needs two
+    /// therefore asks an engine for two, moving it in between.
+    fn generations() -> (CatalogGen, CatalogGen) {
+        let engine = Engine::builder().build();
+        let first = engine.catalog().generation();
+        engine.catalog().deregister("a name this engine never held");
+        (first, engine.catalog().generation())
     }
 
     /// The driver's whole work list. Every way a tab can come to need a pass reduces to one
@@ -1144,22 +1174,27 @@ mod tests {
         let mut s = SessionState::default();
         let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
         let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
+        let (now, moved) = generations();
 
-        assert_eq!(s.stale_tabs(1).len(), 2, "unvalidated tabs are stale");
+        assert_eq!(s.stale_tabs(now).len(), 2, "unvalidated tabs are stale");
 
-        mark(&mut s, a, 1, vec![]);
-        mark(&mut s, b, 1, vec![]);
+        mark(&mut s, a, now, vec![]);
+        mark(&mut s, b, now, vec![]);
         assert!(
-            s.stale_tabs(1).is_empty(),
+            s.stale_tabs(now).is_empty(),
             "both describe the world as it is"
         );
 
         s.tabs.get_mut(&a).unwrap().editor.set_text("SELECT 3");
-        assert_eq!(s.stale_tabs(1), vec![a], "a moved its text, b did not");
+        assert_eq!(s.stale_tabs(now), vec![a], "a moved its text, b did not");
 
-        mark(&mut s, a, 1, vec![]);
-        let stale = s.stale_tabs(2);
-        assert_eq!(stale.len(), 2, "a catalog epoch bump stales everything");
+        mark(&mut s, a, now, vec![]);
+        let stale = s.stale_tabs(moved);
+        assert_eq!(
+            stale.len(),
+            2,
+            "a moved catalog generation stales everything"
+        );
     }
 
     /// The active tab runs first — it is the one being looked at — and the rest follow strip
@@ -1172,7 +1207,7 @@ mod tests {
         let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
         s.switch(b);
 
-        assert_eq!(s.stale_tabs(1), vec![b, a, c]);
+        assert_eq!(s.stale_tabs(any()), vec![b, a, c]);
     }
 
     /// A settled pass stamps and replaces together, so a tab can never carry rows that describe
@@ -1181,18 +1216,19 @@ mod tests {
     fn set_diagnostics_stamps_and_replaces_together() {
         let mut s = SessionState::default();
         let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
+        let (_, generation) = generations();
 
         mark(
             &mut s,
             a,
-            3,
+            generation,
             vec![problem("Table or view 'nope' not found")],
         );
         let t = &s.tabs[&a];
         assert_eq!(t.diagnostics.len(), 1);
-        assert_eq!(t.validated.unwrap().epoch, 3);
+        assert_eq!(t.validated.unwrap().generation, generation);
 
-        mark(&mut s, a, 3, vec![]);
+        mark(&mut s, a, generation, vec![]);
         assert!(s.tabs[&a].diagnostics.is_empty());
         assert!(s.tabs[&a].validated.is_some(), "clean, not unchecked");
 
@@ -1201,7 +1237,7 @@ mod tests {
             gone,
             Stamp {
                 revision: 0,
-                epoch: 3,
+                generation,
             },
             vec![problem("x")],
         );
@@ -1217,15 +1253,15 @@ mod tests {
         let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
         let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
 
-        mark(&mut s, a, 1, vec![problem("bad a")]);
-        mark(&mut s, b, 1, vec![]);
+        mark(&mut s, a, any(), vec![problem("bad a")]);
+        mark(&mut s, b, any(), vec![]);
 
         let groups = s.problem_groups();
         assert_eq!(groups.len(), 1, "only the tab with something to report");
         assert_eq!(groups[0].tab, a);
         assert_eq!(groups[0].rows.len(), 1);
 
-        mark(&mut s, c, 1, vec![problem("bad c")]);
+        mark(&mut s, c, any(), vec![problem("bad c")]);
         assert_eq!(
             s.problem_groups().iter().map(|g| g.tab).collect::<Vec<_>>(),
             vec![a, c]
@@ -1238,7 +1274,7 @@ mod tests {
     fn a_group_carries_the_tabs_current_name() {
         let mut s = SessionState::default();
         let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
-        mark(&mut s, a, 1, vec![problem("bad")]);
+        mark(&mut s, a, any(), vec![problem("bad")]);
 
         s.rename(a, "orders_daily".into());
         assert_eq!(s.problem_groups()[0].name, "orders_daily");
@@ -1253,8 +1289,8 @@ mod tests {
         let b = s.open_named("b", "SELECT 2".into(), Origin::Scratch);
         let c = s.open_named("c", "SELECT 3".into(), Origin::Scratch);
 
-        mark(&mut s, a, 1, vec![problem("e1"), warning("w1")]);
-        mark(&mut s, b, 1, vec![problem("e2")]);
+        mark(&mut s, a, any(), vec![problem("e1"), warning("w1")]);
+        mark(&mut s, b, any(), vec![problem("e2")]);
         s.tabs.get_mut(&c).unwrap().diagnostics = vec![problem("never validated")];
 
         assert_eq!(s.error_count(), 2, "two errors; the warning doesn't count");
@@ -1267,7 +1303,7 @@ mod tests {
     fn closing_drops_the_verdict_so_reopen_starts_unchecked() {
         let mut s = SessionState::default();
         let a = s.open_named("a", "SELECT 1".into(), Origin::Scratch);
-        mark(&mut s, a, 1, vec![problem("bad")]);
+        mark(&mut s, a, any(), vec![problem("bad")]);
 
         s.close_one(a);
         s.reopen_last();
@@ -1278,6 +1314,10 @@ mod tests {
             t.validated.is_none(),
             "and it reads as unchecked, not clean"
         );
-        assert_eq!(s.stale_tabs(1), vec![a], "so the driver re-validates it");
+        assert_eq!(
+            s.stale_tabs(any()),
+            vec![a],
+            "so the driver re-validates it"
+        );
     }
 }

@@ -51,9 +51,10 @@
 //!
 //! **What the walk is handed is *accumulated*, not the query's current value**, and that is the
 //! difference between a working tree and a flickering one. The key is the whole open set plus the
-//! catalog epoch, and freya-query starts a changed key at `Pending` with no carried value — so
+//! catalog generation, and freya-query starts a changed key at `Pending` with no carried value — so
 //! reading the entry directly would blank *every* already-drawn relation back to its loading note
-//! whenever any other relation was opened, or whenever any unrelated catalog pass moved the epoch.
+//! whenever any other relation was opened, or whenever any unrelated catalog pass moved that
+//! number.
 //! Merging each settled answer into a map the pane keeps is the same rule the inspector's
 //! STATISTICS zone holds (`views/inspector/column.rs`): **never show less than a moment ago.** The
 //! map only grows, bounded by the relations opened in this window's life, and a relation the
@@ -295,8 +296,8 @@ impl Component for Catalog {
         drop(connections.read());
 
         let wanted = use_state(Vec::new);
-        let epoch = use_catalog().read().epoch();
-        let described = use_remote_schemas(&engine, wanted.read().clone(), epoch);
+        let generation = use_catalog().read().generation();
+        let described = use_remote_schemas(&engine, wanted.read().clone(), generation);
 
         let Walked {
             nodes,

@@ -301,7 +301,7 @@ mod tests {
             (PANEL_WIDTH, 700.).into(),
             move |r| {
                 r.provide_root_context(EngineCtx::default);
-                r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+                r.provide_root_context(|| State::create(CatalogState::Cold));
                 let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
                 r.provide_root_context(|| ConfigStation::create(AppConfig::default()));

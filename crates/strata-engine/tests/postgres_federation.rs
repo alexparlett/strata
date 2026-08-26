@@ -46,7 +46,7 @@ use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
 
 use strata_engine::profile::{aggregates, profile_sql};
-use strata_engine::register::{register_project, table_spec, RegOutcome};
+use strata_engine::register::{table_spec, CatalogSpec, RegOutcome};
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
 use strata_engine::sources::{migrate_secrets, put_secret, SchemaVisibility};
 use strata_engine::{
@@ -2270,7 +2270,10 @@ async fn cross_source_views(port: u16, dir: &Path) {
 /// One whole-project registration pass, collected.
 async fn replay(engine: &Engine, root: &Path, defs: &ProjectDefs) -> Vec<RegOutcome> {
     let mut out = Vec::new();
-    register_project(engine, root, defs, |o| out.push(o)).await;
+    engine
+        .catalog()
+        .sync(CatalogSpec::of_project(root, defs), |o| out.push(o))
+        .await;
     out
 }
 

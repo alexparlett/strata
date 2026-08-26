@@ -30,7 +30,7 @@ static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Every setting has a default, so `Engine::builder().build()` is a complete engine.
 ///
 /// Beyond the builder, embedding the engine takes few calls:
-/// [`register_pass`](crate::register::register_pass) to load a project's catalog,
+/// [`Catalog::sync`](crate::Catalog::sync) to load a project's catalog,
 /// [`Workspace::run`](crate::Workspace::run) and [`Workspace::explain`](crate::Workspace::explain) to execute a statement, [`SnapshotReads::page`](crate::SnapshotReads::page),
 /// [`SnapshotReads::export_to`](crate::SnapshotReads::export_to) and [`SnapshotReads::live`](crate::SnapshotReads::live) to read a result, and
 /// [`Lang::policy_verdicts`](crate::Lang::policy_verdicts) to check what a caller may run.

@@ -3,8 +3,9 @@
 //! `strata mcp <project>` serves MCP over **stdio** — the transport for a locally-spawned
 //! server, where the client owns the process, so there is no port to bind and no token to
 //! present: process ownership *is* the auth. Behind it sits a plain [`Engine`] with the
-//! project's registration pass replayed over it ([`register_project`]), and the same
-//! [`StrataTools`] the in-app server routes to. One vocabulary, two deployments.
+//! project's registration pass replayed over it
+//! ([`Catalog::sync`](strata_engine::Catalog::sync)), and the same [`StrataTools`] the in-app
+//! server routes to. One vocabulary, two deployments.
 //!
 //! What makes this a *second host* rather than a second implementation:
 //!
@@ -34,7 +35,7 @@ use rmcp::ServiceExt;
 use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
-use strata_engine::register::{register_project, RegOutcome};
+use strata_engine::register::{CatalogSpec, RegOutcome};
 use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
@@ -85,8 +86,8 @@ pub struct HeadlessHost {
 }
 
 impl HeadlessHost {
-    /// Open `root`: load its defs, build a plain engine, and replay the registration pass
-    /// over it.
+    /// Open `root`: load its defs, build a plain engine, and reconcile it against them
+    /// ([`Catalog::sync`](strata_engine::Catalog::sync), over the spec the defs describe).
     ///
     /// The pass runs to completion **before** anything is served, so nothing this host serves
     /// can see a half-registered catalog — and there is no second pass to race it.
@@ -117,7 +118,10 @@ impl HeadlessHost {
             .with_policy(CapabilityPolicyProvider::new(Capability::read_only()))
             .build();
         let mut outcomes = Vec::new();
-        register_project(&engine, &root, &defs, |o| outcomes.push(o)).await;
+        engine
+            .catalog()
+            .sync(CatalogSpec::of_project(&root, &defs), |o| outcomes.push(o))
+            .await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))
     }
 

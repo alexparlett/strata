@@ -273,7 +273,8 @@ fn save(
 ///
 /// One visible statement on a **minted** `WsId` — a tab's would abort whatever that tab is
 /// running — and its report handed to the window's one fold, which is what puts the row in the
-/// store, the def in `project.json`, the epoch bump behind every tab's diagnostics and the entry
+/// store, the def in `project.json`, the catalog generation behind every tab's diagnostics and
+/// the entry
 /// in the log. Registering a def here instead would be a second way to make a table, and the
 /// spool that gives it its data has no def to be written from.
 ///
