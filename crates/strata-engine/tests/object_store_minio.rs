@@ -349,10 +349,7 @@ async fn typed_registration(engine: &Engine, project: &Path) {
     };
     assert_eq!(
         (def.connection.as_deref(), def.sources.as_slice()),
-        (
-            Some(format!("s3://{BUCKET}").as_str()),
-            &["data/".to_string()][..]
-        ),
+        (Some(LAKE), &["data/".to_string()][..]),
         "the LOCATION split into the connection it names and a source relative to its bucket"
     );
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();

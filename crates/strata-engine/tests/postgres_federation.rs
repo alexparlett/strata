@@ -48,7 +48,7 @@ use strata_core::project::ProjectDefs;
 use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::{register_project, table_spec, RegOutcome};
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
-use strata_engine::sources::{put_secret, SchemaVisibility};
+use strata_engine::sources::{migrate_secrets, put_secret, SchemaVisibility};
 use strata_engine::{
     sql, stopped_on_purpose, Connections, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
@@ -954,9 +954,24 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     );
 }
 
-/// **A reconnect replaces, and a disconnect stops resolving** — a phase of the test above.
+/// **A reconnect replaces, a rename does not, and a disconnect stops resolving** — a phase of the
+/// test above.
+///
+/// The middle one is the one worth pinning. `Live` is keyed by the connection's **name**, so a
+/// rename is a new key rather than a displacement, and it cannot be otherwise: two connections
+/// may share an identity and differ only by name, so nothing the engine can see tells a renamed
+/// connection from a second one to the same server. Retiring the old catalog is therefore the
+/// renaming gesture's own `Engine::disconnect`, which is what the connection editor's Save makes.
+///
+/// The rename goes through [`migrate_secrets`] rather than storing a second password, because
+/// that is what a rename *is* now: the keystore slot is derived from the connection's name, so
+/// moving the name moves the entry, and a rename that skipped this funnel would leave the
+/// connection unable to log in. Last phase of the test, so the old name's empty slot is nobody's
+/// problem afterwards.
 async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
+    let was = connection(port, CATALOG, &["public"]);
     let renamed = connection(port, "warehouse", &["public"]);
+    migrate_secrets(&was, &renamed).expect("this machine's keystore answers");
     engine
         .connect(renamed.clone())
         .await
@@ -974,8 +989,23 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
                 200,
             )
             .await
+            .is_ok(),
+        "the old name is still registered until something retires it: two connections may share \
+         an identity, so nothing the engine sees tells a rename from a second connection"
+    );
+
+    engine.disconnect(&was.named());
+    assert!(
+        engine
+            .query(
+                WsId(1),
+                RunTag(16),
+                format!("SELECT id FROM {CATALOG}.public.orders"),
+                200,
+            )
+            .await
             .is_err(),
-        "the name it was registered under before must stop resolving"
+        "and retiring it is the renaming gesture's own call, which is what Save makes"
     );
 
     engine.disconnect(&renamed.named());
@@ -983,7 +1013,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         engine
             .query(
                 WsId(1),
-                RunTag(16),
+                RunTag(17),
                 "SELECT id FROM warehouse.public.orders".to_string(),
                 200,
             )

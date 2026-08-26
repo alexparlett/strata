@@ -295,10 +295,18 @@ impl Live {
         }
     }
 
-    /// Record `live` under `name`, handing back whatever it displaced — which is the only thing
-    /// that still knows the catalog name a renamed connection went in under. See [`connect`].
-    fn put(&self, name: String, live: LiveSource) -> Option<LiveSource> {
-        self.0.lock().unwrap().insert(name, live)
+    /// Record `live` under `name`, replacing whatever that name held.
+    ///
+    /// A **re-connect** displaces its own previous row, and the catalog it registered is that same
+    /// name, so `settle` re-registering under it is the whole of the replacement. A **rename** is
+    /// not a displacement here — the new name is a new key — and it cannot be: two connections may
+    /// share an identity and differ only by name ([`check_catalog_name`] lets them), so nothing
+    /// the engine can see tells a renamed connection from a second one to the same server.
+    /// Retiring the old name is therefore the renaming gesture's own call to
+    /// [`Engine::disconnect`](super::Engine::disconnect), which is what the connection editor's
+    /// Save does.
+    fn put(&self, name: String, live: LiveSource) {
+        self.0.lock().unwrap().insert(name, live);
     }
 }
 
@@ -383,29 +391,18 @@ pub(crate) async fn connect(
 ) -> Result<(), String> {
     let named = conn.named();
     let registration = match prepare(sources, live, conn, secrets).await {
-        Ok(Prepared::Store(registration)) => Ok((registration, None)),
+        Ok(Prepared::Store(registration)) => Ok(registration),
         Ok(Prepared::Catalog {
             name,
             provider,
             row,
         }) => {
-            let displaced = live.put(named.clone(), row);
-            Ok((
-                Registration::Catalog(name.clone(), provider),
-                displaced.filter(|old| old.catalog != name),
-            ))
+            live.put(named.clone(), row);
+            Ok(Registration::Catalog(name, provider))
         }
         Err(why) => Err(why),
     };
-    let (registration, displaced) = match registration {
-        Ok((registration, displaced)) => (Ok(registration), displaced),
-        Err(why) => (Err(why), None),
-    };
-    let settled = connect::settle(ctx, registration, || take_back(ctx, live, &named));
-    if let Some(old) = displaced {
-        deregister_catalog(ctx, &old.catalog);
-    }
-    settled
+    connect::settle(ctx, registration, || take_back(ctx, live, &named))
 }
 
 /// Remove whatever the connection called `name` last registered, under the catalog name it
