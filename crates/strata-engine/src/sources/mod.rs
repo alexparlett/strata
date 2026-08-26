@@ -154,8 +154,9 @@ pub fn migrate_secrets(was: &ConnectionDef, now: &ConnectionDef) -> Result<(), S
 /// What one connection put on the session, and what it takes to tear it down.
 ///
 /// Held by **name** on [`Live`], which is what a Forget is given and what a table def points at.
-/// It carries the catalog it registered under separately, so a connection renamed while its
-/// address stayed put takes the *old* catalog back out of the session.
+/// The catalog it registered under is recorded rather than re-derived, so a teardown deregisters
+/// what this row actually put on the session — the two agree today, a source's catalog being its
+/// connection's name, and a teardown that re-derived one would be trusting that to stay true.
 struct LiveSource {
     catalog: String,
     /// The connected source. Held for its `Drop`, and read: a write statement resolves its target
@@ -379,9 +380,13 @@ pub enum SchemaVisibility {
 /// **A kind nothing is registered for is an ordinary failure**, not a parse error and not a
 /// panic: the sentence names the fix and settles onto the connection's `Reg` row like any other.
 ///
-/// **Re-connecting replaces.** A URL this map already holds has its catalog deregistered first,
-/// so a def whose *catalog name* moved while its URL did not — the editor's rename — is handled
-/// here by construction rather than by the editor remembering to say so.
+/// **Re-connecting replaces, and renaming does not.** A name this map already holds is replaced
+/// under that name, catalog included. A *rename* arrives as a new name and leaves the old one
+/// registered, because nothing here can tell it from a second connection to the same server —
+/// [`check_catalog_name`] lets two defs share an identity and differ only by name. Retiring the
+/// old catalog is the renaming gesture's own [`Engine::disconnect`](super::Engine::disconnect),
+/// which the connection editor's Save makes; it is **not** redundant with anything here, and
+/// dropping it would leave the old catalog resolving for the life of the window.
 pub(crate) async fn connect(
     ctx: &SessionContext,
     sources: &Sources,
