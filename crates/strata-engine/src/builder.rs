@@ -11,6 +11,7 @@ use datafusion::prelude::SessionContext;
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::functions::Functions;
+use crate::generation::GenClock;
 use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::query::claim_snapshot_dir;
 use crate::secrets::{KeystoreSecrets, SecretProvider};
@@ -192,6 +193,7 @@ impl EngineBuilder {
             data_root: Mutex::new(self.data_dir),
             internal: InternalTables::default(),
             connections: Connections::default(),
+            generation: GenClock::default(),
             live: Live::default(),
             sources: self.sources,
             session: SessionScope::default(),

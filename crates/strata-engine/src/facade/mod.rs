@@ -119,6 +119,8 @@ mod tests {
             "Catalog",
             include_str!("catalog.rs"),
             &[
+                "sync",
+                "generation",
                 "register",
                 "deregister",
                 "table_meta",

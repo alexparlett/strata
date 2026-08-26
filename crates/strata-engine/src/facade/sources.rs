@@ -43,6 +43,10 @@ impl Sources<'_> {
     /// the credential chain does not answer for, a server that refused the user, a password this
     /// machine does not have, a kind nothing is registered for. See `store::connect` and
     /// [`sources::connect`].
+    ///
+    /// Moves the [`generation`](crate::Catalog::generation) on either arm: a refused connect
+    /// takes back whatever this connection last registered, so a three-part name that resolved
+    /// no longer does.
     pub async fn connect(self, conn: ConnectionDef) -> Result<(), String> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
@@ -64,6 +68,7 @@ impl Sources<'_> {
         if engine.connections.resolve(&name).is_none() {
             self.disconnect(&name);
         }
+        engine.generation.bump();
         settled
     }
 
@@ -85,6 +90,7 @@ impl Sources<'_> {
         }
         engine.connections.forget(name);
         sources::disconnect(&engine.ctx, &engine.live, name);
+        engine.generation.bump();
     }
 
     /// What a live connection to a source registered: the catalog it is addressed by, and its
@@ -107,8 +113,12 @@ impl Sources<'_> {
     ///
     /// An unqualified name searches what a connection shows, so the session has to
     /// learn the new set as the picker commits it. A no-op for a connection that is not live.
+    ///
+    /// Moves the [`generation`](crate::Catalog::generation): what a bare name resolves to has
+    /// changed.
     pub fn show_schemas(self, conn: &ConnectionDef) {
         self.engine.live.show(conn);
+        self.engine.generation.bump();
     }
 
     /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database

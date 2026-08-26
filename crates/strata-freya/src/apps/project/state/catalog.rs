@@ -97,11 +97,13 @@ pub fn use_remote_scans() -> RemoteScans {
 /// questions its two readers ask: *can I use it right now*, and *has it changed since I last
 /// looked*.
 ///
-/// `Scanning` is not merely "busy". `Catalog::register` **deregisters before it re-infers**, so
-/// mid-pass `table_exist` is false for every table being rebuilt — a validation pass then would
-/// report "not found" for tables sitting right there. So this is a **gate**: while it is
-/// `Scanning`, nothing validates, and nothing false is ever produced rather than produced and
-/// retracted. (The sidebar header reads the same value to spin and disable its ↻.)
+/// `Scanning` is not merely "busy". A pass applies the catalog **row by row**, so mid-pass it is
+/// a real half-applied state — a def that has not registered yet is genuinely not found, and one
+/// the pass is about to take out is still there. So this is a **gate**: while it is `Scanning`,
+/// nothing validates, and no verdict about a state that never persists is produced rather than
+/// produced and retracted. A table being *rebuilt* is not one of those states: `Catalog::register`
+/// builds the new provider aside and swaps it in, so a name never stops resolving. (The sidebar
+/// header reads the same value to spin and disable its ↻.)
 ///
 /// `Settled(epoch)` carries a counter bumped once per completed pass and once per discrete
 /// catalog mutation ([`catalog_settled`]). It is what makes a tab's verdict stale when the user

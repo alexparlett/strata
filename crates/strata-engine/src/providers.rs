@@ -17,6 +17,9 @@
 //!   `CatalogProviderList` has `register_catalog` and no counterpart. Forgetting a database
 //!   connection has to make its catalog stop resolving, or a removed source stays queryable until
 //!   the window is re-opened.
+//! * **Replaceability** — [`StrataSchemaProvider::replace`] is the other operation the traits do
+//!   not have. `register_table` refuses a name that is already there, so a re-registration needs
+//!   a swap; held under the map's own lock it has no window where the name resolves to nothing.
 //! * **Visibility** — [`StrataSchemaProvider::table_names`] drops the `__snap_`-prefixed snapshots
 //!   while `table()` still resolves them. Every `information_schema` view and `SHOW` form
 //!   enumerates through `table_names()`, so one filter hides the spool from all of them, and
@@ -257,6 +260,46 @@ impl StrataSchemaProvider {
     fn write(&self) -> RwLockWriteGuard<'_, Tables> {
         self.tables.write().unwrap()
     }
+
+    /// Puts `table` under `name`, replacing whatever was there, and returns what it displaced.
+    ///
+    /// The operation `SchemaProvider` does not have: `register_table` refuses a name that already
+    /// exists, so a re-registration would otherwise have to deregister first and leave the name
+    /// resolving to nothing while the new provider is built. The map's lock is held across this
+    /// write, so a concurrent [`table`](Self::table) sees the old provider or the new one.
+    pub fn replace(
+        &self,
+        name: &str,
+        table: Arc<dyn TableProvider>,
+    ) -> Option<Arc<dyn TableProvider>> {
+        self.write().insert(fold_ident(name), table)
+    }
+}
+
+/// Swaps `table` into the **workspace** catalog under `name` — [`StrataSchemaProvider::replace`]
+/// reached through the session, which is all a caller holds.
+///
+/// The downcast is DataFusion's own pattern for a custom provider, as [`deregister_catalog`] is,
+/// and cannot miss on an engine this crate built: [`build_context`](super::build_context)
+/// installs [`StrataCatalogProvider`] before anything can replace it. Reported rather than
+/// unwrapped, so a session assembled elsewhere gets a sentence instead of a panic.
+///
+/// # Errors
+///
+/// The workspace catalog is not this crate's.
+pub(crate) fn replace_table(
+    ctx: &SessionContext,
+    name: &str,
+    table: Arc<dyn TableProvider>,
+) -> Result<Option<Arc<dyn TableProvider>>, String> {
+    let schema = ctx
+        .catalog(CATALOG)
+        .and_then(|catalog| catalog.schema(SCHEMA))
+        .ok_or_else(|| format!("This session has no '{CATALOG}.{SCHEMA}' to register into"))?;
+    let workspace: &StrataSchemaProvider = (schema.as_ref() as &dyn Any)
+        .downcast_ref()
+        .ok_or_else(|| format!("'{CATALOG}.{SCHEMA}' is not Strata's own schema"))?;
+    Ok(workspace.replace(name, table))
 }
 
 #[async_trait]
@@ -304,6 +347,7 @@ mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::MemTable;
     use datafusion::prelude::SessionContext;
 
     use super::*;
@@ -469,6 +513,43 @@ mod tests {
         assert_eq!(
             ctx.catalog(CATALOG).expect("our catalog").schema_names(),
             vec![SCHEMA.to_string()]
+        );
+    }
+
+    /// A swap has no gap in it — the name resolves to the old provider, then to the new one, and
+    /// to nothing in between — which is the property the registration path leans on.
+    #[tokio::test]
+    async fn replacing_a_table_never_leaves_the_name_unresolved() {
+        let ctx = test_context(&BTreeMap::new());
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))]).expect("batch");
+        ctx.register_batch("Events", batch).expect("table");
+
+        let wider = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, true),
+        ]));
+        let replacement = Arc::new(MemTable::try_new(Arc::clone(&wider), vec![vec![]]).unwrap());
+
+        let displaced = replace_table(&ctx, "events", replacement).expect("the workspace schema");
+
+        assert!(
+            displaced.is_some(),
+            "the swap answered with what it took out"
+        );
+        assert_eq!(
+            ctx.table("events").await.expect("still resolves").schema().fields().len(),
+            2,
+            "and the name resolves to the new provider — keyed case-insensitively, so 'Events'              was replaced rather than shadowed"
+        );
+        assert_eq!(
+            ctx.catalog(CATALOG)
+                .and_then(|c| c.schema(SCHEMA))
+                .expect("the workspace schema")
+                .table_names(),
+            vec!["events".to_string()],
+            "one entry, not two"
         );
     }
 

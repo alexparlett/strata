@@ -42,6 +42,7 @@ mod explain;
 pub mod export;
 mod facade;
 mod functions;
+mod generation;
 pub mod json_poly;
 pub mod policy;
 pub mod profile;
@@ -59,6 +60,7 @@ mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use facade::{Catalog, Lang, SnapshotReads, Sources, Work, Workspace};
+pub use generation::CatalogGen;
 pub use policy::{
     Admit, Capability, CapabilityPolicyProvider, DenyCode, Grant, GrantFamily, Grants, Locality,
     PolicyProvider, Principal, RemoteScope, RemoteSel, TargetFacts,
@@ -126,6 +128,7 @@ use tokio::runtime::Runtime;
 use tokio::task::AbortHandle;
 
 use functions::Functions;
+use generation::GenClock;
 use providers::{StrataCatalogList, StrataCatalogProvider};
 use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat};
 use sources::source::Sources as SourceRegistry;
@@ -463,6 +466,8 @@ pub struct Engine {
     internal: InternalTables,
     /// Which connections this engine has been told about — see [`Connections`].
     connections: Connections,
+    /// What generation of the catalog this engine is at — see [`CatalogGen`].
+    generation: GenClock,
     /// The source connections that are **live**: their handles and the catalogs they registered
     /// — see [`Live`]. A field on the engine rather than something a task holds, because a pool
     /// owns its driver tasks and the engine's `Drop` has to be what ends them.
@@ -597,6 +602,21 @@ impl Connections {
             held.note(&def.named(), &def.identity());
         }
         held
+    }
+
+    /// Every connection this engine has been told about, as `(name, identity)` — what
+    /// [`sync`](crate::register::sync) diffs a desired set against.
+    ///
+    /// Both halves, because a def whose bucket or provider was edited keeps its name and changes
+    /// the URL its object store went in under: a diff by name alone leaves that URL registered
+    /// with nothing addressing it.
+    pub(crate) fn held(&self) -> Vec<(String, String)> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, identity)| (name.clone(), identity.clone()))
+            .collect()
     }
 
     fn note(&self, name: &str, identity: &str) {
@@ -757,26 +777,36 @@ impl Engine {
     /// Exhaustive on [`StoreEffect`] with no wildcard, for the reason [`statements::arms::execute`] is
     /// exhaustive on `StmtKind`: an effect a later task adds must be a compile error here rather
     /// than something the engine silently declines to learn from.
+    ///
+    /// Where a statement moves the [`CatalogGen`], on every arm but
+    /// [`RescanTable`](StoreEffect::RescanTable): re-reading a row's counts cannot change what
+    /// any name resolves to, since the sink schema-checks before it writes.
     fn settle_effect(&self, effect: Option<&StoreEffect>) {
         let Some(effect) = effect else { return };
         match effect {
             StoreEffect::TableUpserted { def, .. } => {
                 self.note_origin(&def.name, def.origin.is_internal());
+                self.generation.bump();
             }
             StoreEffect::TableRemoved { name, .. } => {
                 self.catalog().cancel_profile(name);
                 self.note_origin(name, false);
+                self.generation.bump();
             }
             StoreEffect::ViewUpserted { def, .. } => {
                 self.catalog().cancel_profile(&def.name);
+                self.generation.bump();
             }
             StoreEffect::ViewRemoved { name } => {
                 self.catalog().cancel_profile(name);
+                self.generation.bump();
             }
-            StoreEffect::RescanTable { .. }
-            | StoreEffect::FunctionsChanged
+            StoreEffect::FunctionsChanged
             | StoreEffect::PreparedChanged
-            | StoreEffect::RemoteRelationsChanged => {}
+            | StoreEffect::RemoteRelationsChanged => {
+                self.generation.bump();
+            }
+            StoreEffect::RescanTable { .. } => {}
         }
     }
 

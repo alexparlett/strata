@@ -22,11 +22,13 @@
 //!
 //! ## The catalog is a gate, not just an input
 //!
-//! `Catalog::register` **deregisters before it re-infers**, so mid-scan `table_exist` is false
-//! for every table being rebuilt. A pass then would report "not found" for tables sitting right
-//! there. So while the catalog is `Scanning` nothing validates: no false
-//! diagnostic is ever *produced*, rather than produced and retracted, and the squiggles already
-//! on screen simply stay put rather than blanking. When the pass releases into a new epoch every
+//! A pass applies the catalog **row by row**, so mid-scan it is a real half-applied state: a def
+//! that has not registered yet is genuinely not found, and one the pass is about to remove is
+//! still there. So while the catalog is `Scanning` nothing validates: no diagnostic about a state
+//! that never persists is *produced*, rather than produced and retracted, and the squiggles
+//! already on screen simply stay put rather than blanking. A table being *rebuilt* is not one of
+//! those states: `Catalog::register` builds the new provider aside and swaps it in, so a name
+//! never stops resolving. When the pass releases into a new epoch every
 //! tab goes stale at once and is re-derived against the catalog it just built — which is how a
 //! problem the user fixed in Table Config clears without them opening the tab.
 
