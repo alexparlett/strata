@@ -329,10 +329,11 @@ pub fn refresh_table_rows(
 /// A no-op while a scan is already running: the button is disabled for the duration, and the
 /// driver's claim guards the rest.
 ///
-/// A re-scan that *fails* leaves the table deregistered (`register_external` deregisters before
-/// it infers), which is load-time semantics and the honest outcome: the files really are
-/// unreadable now, the row says `Failed`, and any view over it fails its own re-create rather
-/// than quietly answering from the provider that no longer matches the disk.
+/// A re-scan that *fails* leaves the table deregistered (`register_external` takes the old
+/// provider out when it cannot build a new one), which is load-time semantics and the honest
+/// outcome: the files really are unreadable now, the row says `Failed`, and any view over it
+/// fails its own re-create rather than quietly answering from the provider that no longer
+/// matches the disk.
 ///
 /// Only the inferred *schema* is refreshed. File sets, row counts and partition values are
 /// already live: we run no `ListFilesCache`, so DataFusion re-`LIST`s per scan.
@@ -435,6 +436,11 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 /// request and the driver) records nothing, because nothing happened.
 ///
 /// A name with no def is skipped — the row went while the pass was being planned.
+///
+/// [`RegOutcome::Removed`] arrives only from `Catalog::sync`, which reconciles a *whole* catalog
+/// and takes out what its spec does not name; this pass is additive and its work list is often a
+/// single row. Its arm records the fact its observer saw, which is what the log owes for any
+/// answer the engine gives.
 async fn register_defs(
     engine: EngineCtx,
     mut station: RadioStation<ProjectState, ProjChan>,
@@ -560,6 +566,11 @@ async fn register_defs(
                     station.write_channel(ProjChan::Views).view_failed(&name, e);
                 }
             },
+            RegOutcome::Removed { name, kind } => log_event(
+                log,
+                LogLevel::Info,
+                format!("Removed {kind} '{name}', which the project no longer defines"),
+            ),
         },
     )
     .await;

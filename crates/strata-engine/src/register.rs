@@ -5,30 +5,31 @@
 //! to fold into; the app's hook consumes [`register_pass`] and keeps only what is
 //! genuinely the store's (`Reg<T>` rows, epochs, log entries).
 //!
-//! Three things stay the caller's, each named because the headless replayer is the caller this
-//! module was cut for:
+//! **[`sync`] is the contract**: hand it the catalog you want and it makes the engine match,
+//! removals included. [`register_pass`] is the additive half underneath it — it registers and
+//! re-creates and deregisters nothing — so a host replaying a defs file that may have shrunk
+//! wants [`sync`], which diffs the engine's own registries and reports each removal as
+//! [`RegOutcome::Removed`].
 //!
-//! - **Loading the defs** ([`load_defs`](strata_core::project::load_defs)) and acting on the outcomes.
-//!   The pass reports outcomes, never introspects DataFusion, and nothing refetches.
-//! - **Removal.** The pass is additive: it registers and re-creates, and never deregisters an
-//!   engine object whose def is gone. A host replaying a defs file that may have shrunk must diff
-//!   the names it registered and deregister the difference first, or a removed table stays
-//!   silently queryable. A **connection** is the same case through [`Sources::disconnect`](crate::Sources::disconnect), which
-//!   an edit moving a connection's bucket or provider owes too, since that changes the `url()` the
-//!   store went in under.
-//! - **The registration window.** [`Catalog::register`](crate::Catalog::register) deregisters before it re-infers, so for the
-//!   duration of a pass every table being rebuilt is absent from the catalog. The app gates
-//!   validation behind its scan claim; a host serving `validate`, `policy_verdicts` or queries
-//!   concurrently must hold them off the same way, or it answers a false, transient "not found"
-//!   for a table sitting right there.
+//! Loading the defs ([`load_defs`](strata_core::project::load_defs)) and acting on the outcomes
+//! stay the caller's. The pass reports outcomes, never introspects DataFusion, and nothing
+//! refetches.
+//!
+//! A pass is safe to run against an engine that is being read. `catalog::register_external`
+//! builds each new provider aside and swaps it in under the schema map's own lock, so a
+//! `validate`, a `policy_verdicts` or a query landing mid-pass sees the old provider or the new
+//! one and never a transient "not found".
 
+use std::collections::BTreeSet;
+use std::fmt;
 use std::path::Path;
 
 use futures::stream::{self, StreamExt};
-use strata_model::{ConnectionDef, TableDef};
+use strata_model::{ConnectionDef, TableDef, ViewDef};
 
+use crate::catalog::registered;
 use crate::store::store_prefix;
-use crate::{Connections, Engine, TableMeta, TableSpec, ViewMeta};
+use crate::{fold_ident, CatalogGen, Connections, Engine, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
 /// How many tables register at once ([`register_pass`]'s table phase).
@@ -66,6 +67,54 @@ pub enum RegOutcome {
         name: String,
         result: Result<ViewMeta, String>,
     },
+    /// [`sync`] took an entry out because the desired catalog no longer names it.
+    ///
+    /// No `Result`: a removal is a map write against a registry this engine owns. The kind is
+    /// carried because the def a host would have looked the name up by is the thing that is gone.
+    Removed { name: String, kind: RegKind },
+}
+
+/// Which of the three registries an entry belongs to — see [`RegOutcome::Removed`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegKind {
+    Connection,
+    Table,
+    View,
+}
+
+impl fmt::Display for RegKind {
+    /// Lower case, so it reads inside a sentence rather than as a label.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RegKind::Connection => "connection",
+            RegKind::Table => "table",
+            RegKind::View => "view",
+        })
+    }
+}
+
+/// The catalog a host wants the engine to hold — [`sync`]'s one argument.
+///
+/// **The whole of it, never a work list**: [`sync`] takes out what this does not name. A caller
+/// with a narrower gesture registers that entry directly
+/// ([`Catalog::register`](crate::Catalog::register)).
+///
+/// The fields are the three phases in the order they run ([`register_pass`]). `views` is taken
+/// **in order**, which [`view_order`] sorts so a view is re-created after everything it reads.
+#[derive(Clone, Debug, Default)]
+pub struct CatalogSpec {
+    pub connections: Vec<ConnectionDef>,
+    pub tables: Vec<TableSpec>,
+    pub views: Vec<ViewDef>,
+}
+
+/// What one [`sync`] settled at.
+///
+/// Per-def facts are not here: they arrive through `settled` as the engine answers them, so a
+/// host's row flips when its own answer is known rather than when the pass ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassReport {
+    pub generation: CatalogGen,
 }
 
 /// The engine-facing projection of one table def: sources resolved through [`resolve_source`] —
@@ -220,6 +269,107 @@ pub async fn register_pass(
     }
 }
 
+/// Makes `engine` hold exactly the catalog `desired` describes, handing `settled` what it
+/// answered for each entry.
+///
+/// Two phases. The **difference comes out first**: every table, view and connection the engine
+/// holds that `desired` does not name is deregistered and reported as [`RegOutcome::Removed`].
+/// Then [`register_pass`] registers what `desired` does name. That order is load-bearing — a
+/// connection whose URL moved (below) is deregistered by name, so registering first would take
+/// back the registration the pass had just made.
+///
+/// **Removal is deregistration.** An internal table's data stays on disk; destroying a table's
+/// files is [`Catalog::drop_table`](crate::Catalog::drop_table)'s.
+///
+/// The diff is against the engine's own registries rather than a list the caller kept: the
+/// workspace catalog for tables and views, and [`Connections`] for connections — **membership,
+/// not liveness**, so a def the engine refused is still removed and still reported, which is
+/// what a host holding a row for it needs. A live result snapshot is out of reach, being absent
+/// from what the catalog enumerates and nameable by no def.
+///
+/// **A connection is diffed by `(name, url)`, and only a dropped name is reported.** A name
+/// `desired` keeps whose identity moved — the bucket edited, the provider changed — is
+/// deregistered silently, since its store went in under the old URL; the pass re-connects it and
+/// its [`Connection`](RegOutcome::Connection) outcome answers its row.
+pub async fn sync(
+    engine: &Engine,
+    desired: CatalogSpec,
+    mut settled: impl FnMut(RegOutcome),
+) -> PassReport {
+    remove_absent(engine, &desired, &mut settled).await;
+    let views = desired
+        .views
+        .into_iter()
+        .map(|def| (def.name, def.sql))
+        .collect();
+    register_pass(
+        engine,
+        desired.connections,
+        desired.tables,
+        views,
+        &mut settled,
+    )
+    .await;
+    PassReport {
+        generation: engine.catalog().generation(),
+    }
+}
+
+/// Takes out everything the engine holds that `desired` does not name — [`sync`]'s first phase,
+/// which carries the reasoning.
+///
+/// Views, then tables, then connections: the reverse of the order they register in, so a view is
+/// gone before the table it reads and a table before the store it reads through.
+async fn remove_absent(
+    engine: &Engine,
+    desired: &CatalogSpec,
+    settled: &mut impl FnMut(RegOutcome),
+) {
+    let wanted_views: BTreeSet<String> =
+        desired.views.iter().map(|v| fold_ident(&v.name)).collect();
+    let wanted_tables: BTreeSet<String> =
+        desired.tables.iter().map(|t| fold_ident(&t.name)).collect();
+    let held = registered(&engine.ctx).await;
+    let absent: Vec<(String, RegKind)> = held
+        .into_iter()
+        .filter_map(|(name, is_view)| {
+            let (kind, wanted) = match is_view {
+                true => (RegKind::View, &wanted_views),
+                false => (RegKind::Table, &wanted_tables),
+            };
+            (!wanted.contains(&fold_ident(&name))).then_some((name, kind))
+        })
+        .collect();
+    for (name, kind) in absent
+        .iter()
+        .filter(|(_, kind)| *kind == RegKind::View)
+        .chain(absent.iter().filter(|(_, kind)| *kind == RegKind::Table))
+    {
+        engine.catalog().deregister(name);
+        settled(RegOutcome::Removed {
+            name: name.clone(),
+            kind: *kind,
+        });
+    }
+    for (name, identity) in engine.connections.held() {
+        match desired
+            .connections
+            .iter()
+            .find(|def| def.named().eq_ignore_ascii_case(&name))
+        {
+            None => {
+                engine.sources().disconnect(&name);
+                settled(RegOutcome::Removed {
+                    name,
+                    kind: RegKind::Connection,
+                });
+            }
+            Some(def) if def.identity() != identity => engine.sources().disconnect(&name),
+            Some(_) => {}
+        }
+    }
+}
+
 /// The whole-project pass **from cold**: every connection, table and view in `defs`,
 /// sources resolved against `root`, views in defs order — right for an engine that holds
 /// none of them yet, where the fixed-point retry finds the dependency order by creating
@@ -297,13 +447,16 @@ mod tests {
         out
     }
 
-    /// Each outcome as `(name, did it settle Ok)`, in the order the pass answered.
+    /// Each outcome as `(name, did it settle Ok)`, in the order the pass answered — a removal
+    /// has nothing that could have failed and reads as `false`, which the tests that use this
+    /// helper never see (they assert on removals by kind instead).
     fn names(out: &[RegOutcome]) -> Vec<(&str, bool)> {
         out.iter()
             .map(|o| match o {
                 RegOutcome::Connection { name, result } => (name.as_str(), result.is_ok()),
                 RegOutcome::Table { name, result } => (name.as_str(), result.is_ok()),
                 RegOutcome::View { name, result } => (name.as_str(), result.is_ok()),
+                RegOutcome::Removed { name, .. } => (name.as_str(), false),
             })
             .collect()
     }
@@ -587,6 +740,181 @@ mod tests {
         assert_eq!(
             table_spec(Path::new("/proj"), &local, &Connections::default()).paths,
             ["/proj/events/2024/**/*.parquet"]
+        );
+    }
+
+    /// A [`CatalogSpec`] over a scratch root — the named tables all read the same CSV.
+    fn desired(root: &Path, tables: &[&str], views: &[(&str, &str)]) -> CatalogSpec {
+        CatalogSpec {
+            connections: Vec::new(),
+            tables: tables
+                .iter()
+                .map(|name| table_spec(root, &table(name, "t.csv"), &Connections::default()))
+                .collect(),
+            views: views
+                .iter()
+                .map(|(name, sql)| ViewDef {
+                    name: (*name).into(),
+                    sql: (*sql).into(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether `name` resolves in `engine`'s workspace catalog right now.
+    async fn resolves(engine: &Engine, name: &str) -> bool {
+        engine.ctx.table(name).await.is_ok()
+    }
+
+    /// What the spec does not name comes out, what it names is registered, and each removal is
+    /// reported.
+    ///
+    /// Both kinds and both directions in one test because they are one rule: a host folding
+    /// outcomes learns of a removal the same way it learns of everything else.
+    #[tokio::test]
+    async fn sync_takes_out_what_the_spec_no_longer_names() {
+        let root = scratch("sync_removals");
+        fs::write(root.join("t.csv"), "id,name\n1,a\n").unwrap();
+        let engine = Engine::builder().build();
+
+        let mut first = Vec::new();
+        engine
+            .catalog()
+            .sync(
+                desired(
+                    &root,
+                    &["kept", "dropped"],
+                    &[
+                        ("v_kept", "SELECT id FROM kept"),
+                        ("v_gone", "SELECT 1 AS n"),
+                    ],
+                ),
+                |o| first.push(o),
+            )
+            .await;
+        let mut settled = names(&first);
+        settled.sort_unstable();
+        assert_eq!(
+            settled,
+            vec![
+                ("dropped", true),
+                ("kept", true),
+                ("v_gone", true),
+                ("v_kept", true)
+            ],
+            "the first pass is an ordinary registration: {first:?}"
+        );
+
+        let mut second = Vec::new();
+        engine
+            .catalog()
+            .sync(
+                desired(&root, &["kept"], &[("v_kept", "SELECT id FROM kept")]),
+                |o| second.push(o),
+            )
+            .await;
+
+        let removed: Vec<(&str, RegKind)> = second
+            .iter()
+            .filter_map(|o| match o {
+                RegOutcome::Removed { name, kind } => Some((name.as_str(), *kind)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            vec![("v_gone", RegKind::View), ("dropped", RegKind::Table)],
+            "the view goes before the table, and each says which listing it came out of: {second:?}"
+        );
+        assert!(!resolves(&engine, "dropped").await);
+        assert!(!resolves(&engine, "v_gone").await);
+        assert!(
+            resolves(&engine, "kept").await && resolves(&engine, "v_kept").await,
+            "and what the spec still names is registered, not swept and rebuilt"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A connection the spec has dropped is taken out and reported; one whose identity moved
+    /// under a name it kept is taken out silently and re-connected by the pass.
+    ///
+    /// Every def here is refused before a socket opens (a blank region), for
+    /// `connections_settle_first_and_each_under_its_own_name`'s reason: the subject is the diff,
+    /// and a connection carries its name into an outcome whether it reached anything or not.
+    #[tokio::test]
+    async fn a_connection_is_diffed_by_name_and_url() {
+        let engine = Engine::builder().build();
+        let at = |name: &str, address: &str| ConnectionDef {
+            address: address.into(),
+            name: name.into(),
+            provider: Provider::S3(S3Store {
+                auth: S3Auth::Anonymous,
+                ..Default::default()
+            }),
+            client_config: BTreeMap::new(),
+        };
+
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![at("lake", "first"), at("spare", "second")],
+                    ..Default::default()
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(engine.connections.held().len(), 2);
+
+        let mut out = Vec::new();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![at("lake", "moved")],
+                    ..Default::default()
+                },
+                |o| out.push(o),
+            )
+            .await;
+
+        let removed: Vec<(&str, RegKind)> = out
+            .iter()
+            .filter_map(|o| match o {
+                RegOutcome::Removed { name, kind } => Some((name.as_str(), *kind)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            vec![("spare", RegKind::Connection)],
+            "only the name the spec dropped is a removal: {out:?}"
+        );
+        assert_eq!(
+            engine.connections.held(),
+            vec![("lake".to_string(), at("lake", "moved").identity())],
+            "and the one that moved is held under its new identity, not both"
+        );
+    }
+
+    /// A live result snapshot is out of a reconciliation's reach: no def can name one, and a
+    /// sweep that took it would retire whatever another tab is paging through.
+    #[tokio::test]
+    async fn sync_never_sweeps_a_result_snapshot() {
+        let engine = Engine::builder().build();
+        engine
+            .ws(crate::WsId(1))
+            .query(crate::RunTag(1), "SELECT 1 AS n".into(), 10)
+            .await
+            .expect("run");
+        let snapshot = crate::query::snapshot_name(strata_model::SnapshotId(1));
+
+        engine.catalog().sync(CatalogSpec::default(), |_| {}).await;
+
+        assert!(
+            resolves(&engine, snapshot.as_str()).await,
+            "the pass swept a snapshot the spec could not possibly have named"
         );
     }
 

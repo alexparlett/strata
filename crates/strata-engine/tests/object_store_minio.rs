@@ -33,6 +33,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
@@ -363,6 +364,96 @@ async fn typed_registration(engine: &Engine, project: &Path) {
     assert_eq!(output.total, 3, "and it reads through the same store");
 }
 
+/// **A query racing a re-registration is never told the table is missing** — a *phase* of the
+/// test below, over the same bucket and the same ambient credentials, for the reason every other
+/// phase is one.
+///
+/// A bucket is what makes it observable. `register_external` builds the new provider aside and
+/// swaps it in under the schema map's own lock, and the span that swap has to cover is the
+/// listing and the header read — real round trips here, where a local file re-registers faster
+/// than a racing query can be dispatched.
+///
+/// The loop is bounded rather than timed: the assertion is that *every* read it got in answered,
+/// so one read is a weak version of it and a hundred a strong one. Nothing here asserts the race
+/// was won, so neither can flake.
+///
+/// The second half is the other side of the contract: a re-registration that fails must leave
+/// nothing behind, or a row the catalog calls broken sits over a provider still serving the
+/// schema those files no longer have.
+async fn registration_race(engine: &Engine, endpoint: &str) {
+    const READS: usize = 100;
+    let raced = || TableSpec {
+        name: "raced".into(),
+        ..table(endpoint)
+    };
+    engine
+        .catalog()
+        .register(raced())
+        .await
+        .expect("the table registers over the bucket");
+
+    let done = AtomicBool::new(false);
+    let (registered, reads) = tokio::join!(
+        async {
+            let outcome = engine.catalog().register(raced()).await;
+            done.store(true, AtomicOrdering::Release);
+            outcome
+        },
+        async {
+            let mut answered = Vec::new();
+            while !done.load(AtomicOrdering::Acquire) && answered.len() < READS {
+                answered.push(
+                    engine
+                        .ws(WsId(9))
+                        .query(
+                            RunTag(100 + answered.len() as u128),
+                            "SELECT count(*) FROM raced".into(),
+                            10,
+                        )
+                        .await
+                        .map(|(output, _)| output.rows[0][0].text.clone()),
+                );
+            }
+            answered
+        }
+    );
+    registered.expect("the re-registration reads the same objects");
+    let refused: Vec<&String> = reads.iter().filter_map(|r| r.as_ref().err()).collect();
+    assert!(
+        refused.is_empty(),
+        "{} of {} reads racing the re-registration were refused: {refused:?}",
+        refused.len(),
+        reads.len()
+    );
+    assert!(
+        reads.iter().all(|r| r.as_deref() == Ok("3")),
+        "every read saw the three seeded rows, old provider or new: {reads:?}"
+    );
+
+    let broken = TableSpec {
+        paths: vec![format!("s3://{BUCKET}/nothing-here/")],
+        ..raced()
+    };
+    let failed = engine
+        .catalog()
+        .register(broken)
+        .await
+        .expect_err("nothing is under that prefix");
+    assert_eq!(
+        failed,
+        format!("No files matched 's3://{BUCKET}/nothing-here/'.")
+    );
+    let gone = engine
+        .ws(WsId(9))
+        .query(RunTag(200), "SELECT count(*) FROM raced".into(), 10)
+        .await
+        .expect_err("a failed re-registration leaves no provider");
+    assert!(
+        gone.contains("raced"),
+        "the refusal names the table that is no longer registered: {gone}"
+    );
+}
+
 /// **The whole chain, against a server that verifies signatures.**
 ///
 /// Connection → registered store → schema inference over a real listing → a query that returns
@@ -508,6 +599,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         format!("No files matched 's3://{BUCKET}/nothing/'."),
         "the store settled that there is nothing there, so the partition columns are not blamed"
     );
+
+    registration_race(&engine, &endpoint).await;
 
     let project = env::temp_dir().join(format!("strata_typed_external_{}", process::id()));
     let _ = fs::remove_dir_all(&project);

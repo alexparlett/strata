@@ -88,9 +88,8 @@ impl HeadlessHost {
     /// Open `root`: load its defs, build a plain engine, and replay the registration pass
     /// over it.
     ///
-    /// The pass runs to completion **before** anything is served, which is what lets this host
-    /// ignore the registration window `strata_engine::register` warns about: there is no second pass
-    /// to race here.
+    /// The pass runs to completion **before** anything is served, so nothing this host serves
+    /// can see a half-registered catalog — and there is no second pass to race it.
     ///
     /// `Err` only for a project that cannot be read. A *def* the engine refused is not an error: it
     /// is a `failed` catalog row, exactly as in the app.
@@ -450,6 +449,9 @@ mod tests {
     use strata_core::project::save_defs;
     use strata_model::{SourceFormat, TableDef, TableOrigin, ViewDef};
 
+    use strata_engine::register::{table_spec, CatalogSpec, RegKind};
+    use strata_engine::Connections;
+
     use crate::host::AgentIdentity;
 
     use super::*;
@@ -540,6 +542,97 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A defs file that shrank leaves no ghost: what the spec stops naming stops resolving.
+    ///
+    /// Driven through the host rather than only the engine because that is where a client would
+    /// notice — a table nothing defines must not still answer a query. Note what is *not*
+    /// removed: `gone` never registered, so there is nothing to take out and no outcome for it.
+    #[tokio::test]
+    async fn a_replay_over_a_shrunk_catalog_leaves_no_ghost() {
+        let (root, host) = project("shrunk").await;
+        let (before, _) = host
+            .engine
+            .ws(WsId(1))
+            .query(RunTag(1), "SELECT id FROM adults".into(), 10)
+            .await
+            .expect("the view the first pass created");
+        assert_eq!(before.total, 3);
+
+        let mut outcomes = Vec::new();
+        host.engine
+            .catalog()
+            .sync(CatalogSpec::default(), |o| outcomes.push(o))
+            .await;
+
+        let removed: Vec<(&str, RegKind)> = outcomes
+            .iter()
+            .filter_map(|o| match o {
+                RegOutcome::Removed { name, kind } => Some((name.as_str(), *kind)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            vec![("adults", RegKind::View), ("people", RegKind::Table)],
+            "the view goes before the table it reads, and the def that never registered is not \
+             a removal: {outcomes:?}"
+        );
+
+        let refused = host
+            .engine
+            .ws(WsId(1))
+            .query(RunTag(2), "SELECT id FROM people".into(), 10)
+            .await
+            .expect_err("a table no def names is not queryable");
+        assert!(refused.contains("people"), "{refused}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The other half of the same contract: what the spec does name is registered, so one call
+    /// is the whole replay.
+    #[tokio::test]
+    async fn a_replay_registers_what_the_spec_still_names() {
+        let (root, host) = project("replay").await;
+        let defs = load_defs(&root).expect("defs");
+        let known = Connections::of(&defs.connections);
+        let desired = CatalogSpec {
+            connections: defs.connections.clone(),
+            tables: defs
+                .tables
+                .iter()
+                .filter(|def| def.name == "people")
+                .map(|def| table_spec(&root, def, &known))
+                .collect(),
+            views: Vec::new(),
+        };
+
+        let mut outcomes = Vec::new();
+        let report = host
+            .engine
+            .catalog()
+            .sync(desired, |o| outcomes.push(o))
+            .await;
+
+        assert!(
+            outcomes.iter().any(|o| matches!(
+                o,
+                RegOutcome::Table { name, result: Ok(_) } if name == "people"
+            )),
+            "{outcomes:?}"
+        );
+        assert_eq!(report.generation, host.engine.catalog().generation());
+        let (output, _) = host
+            .engine
+            .ws(WsId(1))
+            .query(RunTag(1), "SELECT id FROM people".into(), 10)
+            .await
+            .expect("the table the replay re-registered");
+        assert_eq!(output.total, 3);
+
         let _ = fs::remove_dir_all(&root);
     }
 

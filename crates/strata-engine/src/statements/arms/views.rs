@@ -683,6 +683,7 @@ mod tests {
                 RegOutcome::Table { result, .. } => result.is_err(),
                 RegOutcome::View { result, .. } => result.is_err(),
                 RegOutcome::Connection { result, .. } => result.is_err(),
+                RegOutcome::Removed { .. } => false,
             })
             .collect();
         assert!(failed.is_empty(), "{failed:?}");

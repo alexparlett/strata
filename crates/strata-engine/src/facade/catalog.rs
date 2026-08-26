@@ -7,11 +7,13 @@ use std::time::Instant;
 use strata_core::project::resolve_source;
 
 use crate::catalog::{self, TableMeta, TableSpec, ViewMeta};
+use crate::register::{self, CatalogSpec, PassReport, RegOutcome};
 use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
-    fold_ident, profile, store, BackgroundGuard, Engine, ProfileRun, CANCELLED, SUPERSEDED_SCAN,
+    fold_ident, profile, store, BackgroundGuard, CatalogGen, Engine, ProfileRun, CANCELLED,
+    SUPERSEDED_SCAN,
 };
 
 /// This engine's workspace catalog, from [`Engine::catalog`].
@@ -25,6 +27,24 @@ pub struct Catalog<'a> {
 }
 
 impl Catalog<'_> {
+    /// Makes this engine hold exactly the catalog `desired` describes, handing `settled` what it
+    /// answered per entry.
+    ///
+    /// `desired` is the entire catalog, never a work list: what it does not name is taken out and
+    /// reported. See [`register::sync`](crate::register::sync) for the rest of the contract.
+    pub async fn sync(self, desired: CatalogSpec, settled: impl FnMut(RegOutcome)) -> PassReport {
+        register::sync(self.engine, desired, settled).await
+    }
+
+    /// Which generation of this catalog names currently resolve against.
+    ///
+    /// Every registry write the engine makes moves it, and nothing else does; a consumer keeps
+    /// the number it derived an answer against and re-derives when this stops matching it.
+    /// One atomic load, so a render pass may ask it.
+    pub fn generation(self) -> CatalogGen {
+        self.engine.generation.current()
+    }
+
     /// (Re)register one external table from its spec, returning its inferred schema +
     /// free row count.
     ///
@@ -32,6 +52,12 @@ impl Catalog<'_> {
     /// whatever is on disk *now*, so a scan in flight is computing numbers about files the
     /// register is replacing. Done here rather than left to the caller because it is engine
     /// truth, so every path that re-registers gets it, including ones written later.
+    ///
+    /// The name resolves to the provider it already had until the new one is built and swapped
+    /// in, so nothing observes it as absent.
+    ///
+    /// Moves the [`generation`](Self::generation) on either arm: a failed registration takes the
+    /// old provider out, so a name that resolved no longer does.
     pub async fn register(self, spec: TableSpec) -> Result<TableMeta, String> {
         self.cancel_profile(&spec.name);
         let ctx = self.engine.ctx.clone();
@@ -43,21 +69,24 @@ impl Catalog<'_> {
             .await
             .map_err(|e| format!("register task failed: {e}"))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
+        self.engine.generation.bump();
         meta
     }
 
-    /// Drop a registered table.
+    /// Drops a registered table. Its data is untouched; deleting an internal table's files is
+    /// [`drop_table`](Self::drop_table)'s.
     pub fn deregister(self, table: &str) {
         self.cancel_profile(table);
         let _ = self.engine.ctx.deregister_table(table);
         self.engine.note_origin(table, false);
+        self.engine.generation.bump();
     }
 
     /// What `name`'s row says **now** — its columns and free row count — read from the files
     /// without re-registering the table.
     ///
     /// The answer an `INSERT` needs, and the reason it is not [`register`](Self::register):
-    /// re-registering deregisters the provider and builds a fresh one, and **that** is what
+    /// re-registering builds a fresh provider and swaps it in, and **that** is what
     /// leaves every view above it holding a stale `Arc`. Views survive it only
     /// because the caller then re-creates them. An append cannot make them stale — the sink
     /// schema-checks before it writes, so the shape a view captured is the shape that is still
@@ -110,14 +139,20 @@ impl Catalog<'_> {
     /// what it reads — **the ⌘S gesture's entry into [`arms::create_view`]**, which a
     /// typed `CREATE VIEW` enters through [`Workspace::run`](crate::Workspace::run) instead.
     /// `CREATE OR REPLACE`: redefinition is the ⌘S-on-a-view path.
+    ///
+    /// Moves the [`generation`](Self::generation) on either arm: a failed `CREATE OR REPLACE`
+    /// leaves the name resolving to a definition the caller has just been told is wrong.
     pub async fn create_view(self, name: String, sql: String) -> Result<ViewMeta, String> {
         self.cancel_profile(&name);
         let ctx = self.engine.ctx.clone();
-        self.engine
+        let created = self
+            .engine
             .rt()
             .spawn(async move { arms::create_view(&ctx, &name, &sql).await })
             .await
-            .map_err(|e| format!("create view task failed: {e}"))?
+            .map_err(|e| format!("create view task failed: {e}"))?;
+        self.engine.generation.bump();
+        created
     }
 
     /// Drop the SQL view `name` (idempotent — `IF EXISTS`) — the catalog pane's entry into

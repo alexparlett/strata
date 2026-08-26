@@ -8,6 +8,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::stats::Precision;
 use datafusion::common::ScalarValue;
+use datafusion::datasource::TableProvider;
+use datafusion::logical_expr::TableType;
 use datafusion::prelude::*;
 use datafusion::sql::TableReference;
 
@@ -18,7 +20,7 @@ use strata_model::{ColumnInfo, CsvRead, FileCompression, JsonShape, SourceFormat
 use crate::arrow_stats::StrataArrowFormat;
 use crate::json_poly::PolyJsonFormat;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
-use crate::providers::in_workspace;
+use crate::providers::{in_workspace, replace_table};
 use crate::query::is_snapshot_name;
 use crate::sql::qualified;
 use crate::statements::Fault;
@@ -73,12 +75,17 @@ pub struct ViewMeta {
 /// Register (or **re**-register) one external table from its spec, returning its
 /// inferred schema + free metadata.
 ///
-/// This is also the catalog **re-scan** step: it deregisters whatever is
-/// registered under `spec.name` and builds a *fresh* `ListingTable` from a
+/// This is also the catalog **re-scan** step: it builds a *fresh* `ListingTable` from a
 /// re-`infer_schema`d config, because re-registering the same provider wouldn't re-infer
 /// anything. The spec is the source of truth on every pass — paths, format and partition
 /// columns come from the project's def, so a re-scan also picks up a def that changed and
 /// retries a table whose first registration failed.
+///
+/// **Built aside, then swapped in**: the name resolves to the provider it already had for the
+/// whole of the inference and changes to the new one in one step under the schema map's lock, so
+/// a query, a `validate` or a completion may run against a catalog mid-pass. A failure takes the
+/// old provider out — the files really are unreadable now, and a `Failed` row must never shadow
+/// a provider still answering for it.
 ///
 /// Only the *inferred schema* is frozen at registration; file sets, row counts and
 /// partition values are already live, because DataFusion re-`LIST`s per scan and this engine
@@ -90,15 +97,26 @@ pub async fn register_external(
     ctx: &SessionContext,
     spec: &TableSpec,
 ) -> Result<TableMeta, String> {
-    use datafusion::datasource::file_format::parquet::ParquetFormat;
-    use datafusion::datasource::file_format::FileFormat;
-    use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-
     if is_snapshot_name(&spec.name) {
         return Err(Fault::ReservedName.message());
     }
+    let built = build_listing(ctx, spec).await;
+    swap_in(ctx, &spec.name, built)?;
+    table_meta(ctx, spec.name.as_str()).await
+}
 
-    let _ = ctx.deregister_table(spec.name.as_str());
+/// Builds the provider `spec` describes, registering nothing.
+///
+/// The half of a registration that costs — a URL per source, a reader per format, and an
+/// `infer_schema` that lists the store — kept out of the registry write so it runs while the
+/// name being replaced still answers.
+async fn build_listing(
+    ctx: &SessionContext,
+    spec: &TableSpec,
+) -> Result<Arc<dyn TableProvider>, String> {
+    use datafusion::datasource::file_format::parquet::ParquetFormat;
+    use datafusion::datasource::file_format::FileFormat;
+    use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 
     let mut urls = Vec::new();
     for p in source_paths(spec) {
@@ -150,13 +168,52 @@ pub async fn register_external(
     let table = ListingTable::try_new(config)
         .map_err(|e| register_error(spec, ext, &e.to_string(), None))?
         .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache());
-    ctx.register_table(spec.name.as_str(), Arc::new(table))
-        .map_err(|e| {
-            tracing::error!("Failed to register table: {}", e);
-            register_error(spec, ext, &e.to_string(), None)
-        })?;
+    Ok(Arc::new(table))
+}
 
-    table_meta(ctx, spec.name.as_str()).await
+/// Puts `built` in the catalog under `name`, or takes the old one out and reports why it could
+/// not be built. Never both, never neither.
+///
+/// The registration contract `connect`'s module docs carry, over the table registry: a caller
+/// that registers on `Ok` and merely returns on `Err` leaves a stale `ListingTable` serving a
+/// schema the files no longer have, under a row that reads `Failed`.
+///
+/// The `Ok` arm is a swap rather than a `register_table`, which refuses a name already in the
+/// map. [`replace_table`] holds the map's own lock across it, so a concurrent read sees the old
+/// provider or the new one and never neither.
+fn swap_in(
+    ctx: &SessionContext,
+    name: &str,
+    built: Result<Arc<dyn TableProvider>, String>,
+) -> Result<(), String> {
+    match built {
+        Ok(table) => replace_table(ctx, name, table).map(|_| ()),
+        Err(why) => {
+            let _ = ctx.deregister_table(name);
+            Err(why)
+        }
+    }
+}
+
+/// What the workspace catalog holds, as `(name, is it a view)` — what
+/// [`sync`](crate::register::sync) diffs a desired set against.
+///
+/// Read through `table_names`, so the result spool is not in it: a `__snap_` entry is a snapshot
+/// some tab is still paging, and no def names one. The kind comes from `table_type`, a map read
+/// for this schema.
+pub(crate) async fn registered(ctx: &SessionContext) -> Vec<(String, bool)> {
+    let Some(schema) = ctx
+        .catalog(CATALOG)
+        .and_then(|catalog| catalog.schema(SCHEMA))
+    else {
+        return Vec::new();
+    };
+    let mut held = Vec::new();
+    for name in schema.table_names() {
+        let view = matches!(schema.table_type(&name).await, Ok(Some(TableType::View)));
+        held.push((name, view));
+    }
+    held
 }
 
 /// How many levels down the listing below will look.

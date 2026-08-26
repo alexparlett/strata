@@ -639,9 +639,9 @@ active tab only. A settled pass writes squiggle decorations into the tab's own
 
 Three fixed subscriptions make that one hook rather than a component per tab: `Chan::Text` (the
 synthetic fan-in every `Chan::Tab(_)` write derives, so one subscription watches any tab's
-buffer), `Chan::Tabs`, and the catalog. The catalog is a **gate**, not just an input:
-`Catalog::register` deregisters before it re-infers, so while a scan is in flight nothing
-validates and no false "not found" is ever produced. Releasing into a new epoch is what
+buffer), `Chan::Tabs`, and the catalog. The catalog is a **gate**, not just an input: a pass
+applies row by row, so while a scan is in flight nothing validates and no verdict about a
+half-applied catalog is ever produced. Releasing into a new epoch is what
 re-derives every tab against the catalog the pass just built — how a problem fixed in Table
 Config clears without the user opening the tab. The drain is serial (the engine has two workers
 and the user's own press comes first), debounced on the active tab, and holds a further beat
