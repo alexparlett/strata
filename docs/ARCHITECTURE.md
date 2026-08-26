@@ -239,6 +239,20 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
   pass connects connections first, then tables, then views to a fixed point. Failures land on
   the def's row, visible with their reason. [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md),
   [IMPORT_OPTIONS.md](IMPORT_OPTIONS.md).
+
+  The pass is one call, `catalog().sync(desired, settled)`, and it **reconciles**: the spec is the
+  whole catalog, so what the engine holds that the spec no longer names is deregistered and
+  reported. There is no additive whole-catalog call beside it — a defs file that shrank would
+  otherwise leave a ghost table answering for the rest of the session. Both hosts make the same
+  call: the app's scan driver over the store's rows, and the headless host over the defs it loaded.
+  Narrower gestures are their own calls (`register` for one table, `create_views` for a set), and a
+  row Refresh is deliberately one of those — a work list handed to the reconciliation would read as
+  "the project is now one table".
+
+  Each pass leaves the engine at a **catalog generation** (`catalog().generation()`), a number the
+  engine mints on every registry write and on nothing else. The window adopts it rather than
+  counting its own: it is what a tab's diagnostics are stamped against and what the remote-columns
+  cache is keyed by, so a gesture that changed nothing re-derives nothing.
 - **Databases** — a PostgreSQL connection registers a DataFusion **catalog** instead of an object
   store, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
   and a same-source subplan is pushed back to the server as one statement

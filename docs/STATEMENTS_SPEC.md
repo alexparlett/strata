@@ -18,7 +18,7 @@ flowchart TD
     CLS -- "Refusal" --> ERR2["Err(refusal.message)\nbefore DataFusion can plan"]
     Q --> ROWS["RunOutcome::Rows\nresults grid, snapshot, pages"]
     DDL --> REP["RunOutcome::Statement(report)"]
-    REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog epoch →\nhistory + event log"]
+    REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog generation →\nhistory + event log"]
 ```
 
 ## 1. The shape of a Run
@@ -128,7 +128,7 @@ pub struct StatementReport {
 the def *and* what registration learned, so the sidebar row lands `Reg::Ready` directly. The last
 three persist nothing — functions and prepared statements are session-scoped (§8), and a remote
 relation has no store row at all — and are still effects for the reason an effect exists: a name
-that did not resolve a moment ago now does, so the catalog epoch has to move with it.
+that did not resolve a moment ago now does, so the catalog generation has to move with it.
 
 **The direct catalog gestures answer the same shape.** The pane's table drop and view drop reach
 an arm's body without a statement to classify (`Catalog::drop_table` / `Catalog::drop_view`), and
@@ -139,7 +139,8 @@ the crate's public surface: a surface that folds one gesture's answer folds the 
 **The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
 tab's request keeper so a statement run in a background tab still lands: store upsert on the
 matching `ProjChan` → `persisted_defs` writes `project.json` through the persist funnel →
-`catalog_settled` bumps the epoch (every tab's diagnostics re-derive) → the event log. The log
+`catalog_settled` adopts the engine's catalog generation (every tab's diagnostics re-derive) →
+the event log. The log
 entry is recorded by the fold, not by the run-logging hook, because only the fold knows whether
 the def actually reached disk — a success row logged over a failed write would promise a table the
 next open loses.
@@ -615,7 +616,8 @@ re-registering it**. Re-registering replaces the provider, and that is what stra
 view captured (D10/D11) — the only reason a table Refresh re-creates the views above it. An append
 cannot change the shape a view captured (the sink schema-checks first) and the provider re-LISTs
 per scan anyway, so the fold is `refresh_table_rows` → `Catalog::table_meta` →
-`ProjectState::table_reread`: no re-inference, no view churn, no epoch bump, no `Loading` flash.
+`ProjectState::table_reread`: no re-inference, no view churn, no move in the catalog generation,
+no `Loading` flash.
 The count is still read from the footers, never added up from what the statement claimed.
 
 **`DROP TABLE` works on both origins, and is the one place a table is dropped.** The catalog
@@ -715,7 +717,7 @@ arm, for the reason `TableRemoved` gives: the statement runs in a task that cann
 lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Catalog::create_view` /
 `drop_view`, which never produce an effect.
 
-Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
+Replay needs no code of its own: a typed view is a `ViewDef`, and the view phase's fixed-point
 rounds order a chain from cold exactly as they do a saved one.
 
 **A cross-source view** — one over a file table joined to `pg.public.orders` — is an ordinary view
@@ -972,14 +974,14 @@ run exactly once at engine construction into an immutable field — true of the 
 statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
 that changed the registry **and by nothing else**, so the built-in set still costs one walk;
 `Lang::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
-whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapshot is memoized on.
+whose settle moves the catalog generation, which is what every tab's `Catalog` snapshot is memoized on.
 
 **Which surfaces that actually reaches** — three, and it is worth naming them rather than saying
 "the language service", because they read the swap by two different routes:
 
 | Surface | Reads | Shows |
 |---|---|---|
-| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
+| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the catalog generation | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
 | diagnostics | `Lang::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
 | `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
 
@@ -1224,11 +1226,12 @@ query to `.strata/tables/<slug>/` → registers via `register_external`
 
 At settle: store upsert on `ProjChan::Tables` (the sidebar shows the row immediately,
 `Reg::Ready(meta)`) → `persisted_defs` rewrites `.strata/project.json` atomically through the
-persist funnel → `catalog_settled` epoch bump (diagnostics revalidate; other tabs resolve the new
+persist funnel → `catalog_settled` adopts the engine's catalog generation (diagnostics revalidate;
+other tabs resolve the new
 name) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
 rows") — no grid, no snapshot.
 
-At next open — zero new code: `load_defs` → the scan driver → `register_pass` → `table_spec`
+At next open — zero new code: `load_defs` → the scan driver → `catalog().sync` → `table_spec`
 resolves the project-relative source against the root → `register_external` re-registers over the
 same files. The headless host replays identically.
 

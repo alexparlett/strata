@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use strata_core::project::resolve_source;
+use strata_model::ViewDef;
 
 use crate::catalog::{self, TableMeta, TableSpec, ViewMeta};
 use crate::register::{self, CatalogSpec, PassReport, RegOutcome};
@@ -75,6 +76,8 @@ impl Catalog<'_> {
 
     /// Drops a registered table. Its data is untouched; deleting an internal table's files is
     /// [`drop_table`](Self::drop_table)'s.
+    ///
+    /// Moves the [`generation`](Self::generation) whether or not `table` was registered.
     pub fn deregister(self, table: &str) {
         self.cancel_profile(table);
         let _ = self.engine.ctx.deregister_table(table);
@@ -153,6 +156,17 @@ impl Catalog<'_> {
             .map_err(|e| format!("create view task failed: {e}"))?;
         self.engine.generation.bump();
         created
+    }
+
+    /// Creates (or redefines) each of `views`, handing `settled` each one's final answer.
+    ///
+    /// Rounds repeat until one makes no progress, so a view whose dependency is created earlier
+    /// in the same call succeeds on a later round and the rest settle with the errors they last
+    /// produced. Where the views may already exist, hand them in dependency order: every
+    /// `CREATE OR REPLACE` then succeeds on the first round, and an outer view inlines the
+    /// definition this call is replacing.
+    pub async fn create_views(self, views: Vec<ViewDef>, settled: impl FnMut(RegOutcome)) {
+        register::create_views(self.engine, views, settled).await;
     }
 
     /// Drop the SQL view `name` (idempotent — `IF EXISTS`) — the catalog pane's entry into

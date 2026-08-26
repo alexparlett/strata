@@ -285,7 +285,7 @@ fn runner_shaped(
                 RadioStation::<ProjectState, ProjChan>::create(project())
             });
             r.provide_root_context(EngineCtx::default);
-            r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+            r.provide_root_context(|| State::create(CatalogState::Cold));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             let drop_target = r.provide_root_context(|| State::create(None::<DropTarget>));

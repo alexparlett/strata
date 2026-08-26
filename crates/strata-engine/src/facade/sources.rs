@@ -31,7 +31,7 @@ impl Sources<'_> {
     /// **Before any table that reads it.** DataFusion resolves no remote scheme on its own:
     /// without this, a source path under `s3://acme-lake` fails its registration with "No
     /// suitable object store found" no matter how well-formed the def is. That ordering is
-    /// [`register_pass`](crate::register::register_pass)'s, so every replay of a project gets
+    /// [`Catalog::sync`](crate::Catalog::sync)'s, so every replay of a project gets
     /// it — and a database connection needs exactly the same phase for a different reason, since
     /// a view over `pg.public.orders` cannot be created before the catalog exists.
     ///

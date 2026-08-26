@@ -1,24 +1,21 @@
-//! The **project registration pass** (AA-01) — one implementation of "register the
-//! defs on the engine": connect each connection, register each table, then create each
-//! view, and report what the engine answered per def. Extracted from the Freya app's
-//! project-open hook so a headless host (AA-05) can run the same sequence with no store
-//! to fold into; the app's hook consumes [`register_pass`] and keeps only what is
-//! genuinely the store's (`Reg<T>` rows, epochs, log entries).
+//! The project registration pass: connect each connection, register each table, then create each
+//! view, and report what the engine answered for each def.
 //!
-//! **[`sync`] is the contract**: hand it the catalog you want and it makes the engine match,
-//! removals included. [`register_pass`] is the additive half underneath it — it registers and
-//! re-creates and deregisters nothing — so a host replaying a defs file that may have shrunk
-//! wants [`sync`], which diffs the engine's own registries and reports each removal as
-//! [`RegOutcome::Removed`].
+//! [`sync`] is the contract. Hand it the catalog you want and it makes the engine match: what the
+//! spec does not name is deregistered and reported as [`RegOutcome::Removed`], and what it names
+//! is registered. It takes the whole catalog, never a work list.
+//!
+//! Narrower gestures are the facade's own — [`Catalog::register`](crate::Catalog::register) for
+//! one table, [`Catalog::create_view`](crate::Catalog::create_view) for one view, and
+//! [`Catalog::create_views`](crate::Catalog::create_views) for a set of them.
 //!
 //! Loading the defs ([`load_defs`](strata_core::project::load_defs)) and acting on the outcomes
 //! stay the caller's. The pass reports outcomes, never introspects DataFusion, and nothing
 //! refetches.
 //!
-//! A pass is safe to run against an engine that is being read. `catalog::register_external`
-//! builds each new provider aside and swaps it in under the schema map's own lock, so a
-//! `validate`, a `policy_verdicts` or a query landing mid-pass sees the old provider or the new
-//! one and never a transient "not found".
+//! A pass is safe to run against an engine that is being read: each new provider is built aside
+//! and swapped in under the schema map's own lock, so a query landing mid-pass sees the old
+//! provider or the new one and never a transient "not found".
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -32,7 +29,7 @@ use crate::store::store_prefix;
 use crate::{fold_ident, CatalogGen, Connections, Engine, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
-/// How many tables register at once ([`register_pass`]'s table phase).
+/// How many tables register at once ([`sync`]'s table phase).
 ///
 /// A ceiling on *this* pass's fan-out, not a parallelism target: a single registration already
 /// fetches `datafusion.execution.meta_fetch_concurrency` (32 by default) file footers in
@@ -99,13 +96,35 @@ impl fmt::Display for RegKind {
 /// with a narrower gesture registers that entry directly
 /// ([`Catalog::register`](crate::Catalog::register)).
 ///
-/// The fields are the three phases in the order they run ([`register_pass`]). `views` is taken
-/// **in order**, which [`view_order`] sorts so a view is re-created after everything it reads.
+/// The fields are the three phases in the order they run. `views` is taken **in order**, which
+/// [`view_order`] sorts so a view is re-created after everything it reads.
 #[derive(Clone, Debug, Default)]
 pub struct CatalogSpec {
     pub connections: Vec<ConnectionDef>,
     pub tables: Vec<TableSpec>,
     pub views: Vec<ViewDef>,
+}
+
+impl CatalogSpec {
+    /// The catalog a project's defs describe, with sources resolved against `root`.
+    ///
+    /// Views come out in defs order, which suits an engine that holds none of them: [`sync`]'s
+    /// retry finds the dependency order by creating what it can. Replaying onto an engine that
+    /// already holds them, sort with [`view_order`] first, or an outer view inlines the
+    /// definition the pass is replacing.
+    pub fn of_project(root: &Path, defs: &ProjectDefs) -> CatalogSpec {
+        let connections = defs.connections.clone();
+        let known = Connections::of(&connections);
+        CatalogSpec {
+            tables: defs
+                .tables
+                .iter()
+                .map(|def| table_spec(root, def, &known))
+                .collect(),
+            views: defs.views.clone(),
+            connections,
+        }
+    }
 }
 
 /// What one [`sync`] settled at.
@@ -120,7 +139,7 @@ pub struct PassReport {
 /// The engine-facing projection of one table def: sources resolved through [`resolve_source`] —
 /// composed onto the store its connection registered under where it names one, and otherwise
 /// joined onto the project folder — with everything else carried as stored. One copy of the
-/// mapping, shared by the app's catalog passes and [`register_project`].
+/// mapping, shared by the app's catalog passes and [`CatalogSpec::of_project`].
 ///
 /// **A table names its connection, and only a registry can say what that connection is.** The def
 /// carries a name, the store is registered under `scheme://address`, and nothing about the first
@@ -131,7 +150,7 @@ pub struct PassReport {
 ///
 /// A remote path needs **nothing** of the engine beyond this: the connection's object store is
 /// already registered under that same URL by the time any table registers (connections are
-/// [`register_pass`]'s first phase), so `s3://acme-lake/events/` is a `ListingTableUrl` the
+/// the pass's first phase), so `s3://acme-lake/events/` is a `ListingTableUrl` the
 /// session can already resolve.
 pub fn table_spec(root: &Path, def: &TableDef, connections: &Connections) -> TableSpec {
     let prefix = def
@@ -166,7 +185,8 @@ pub fn table_spec(root: &Path, def: &TableDef, connections: &Connections) -> Tab
 /// `ViewInfo::view_deps`; for a replayer, the previous pass's `ViewMeta::aliases`
 /// filtered to view names. Names compare case-insensitively (the engine folds unquoted
 /// identifiers). A view with no known deps sorts wherever it falls — from cold that is
-/// every view, which is why [`register_pass`] keeps its fixed-point retry as well. A
+/// every view, which is why [`Catalog::create_views`](crate::Catalog::create_views) keeps its
+/// fixed-point retry as well. A
 /// cycle is impossible (a view can't read itself, and DataFusion refuses mutual
 /// recursion), but a residue is appended rather than dropped: a surprise can cost
 /// ordering, never a re-create.
@@ -191,18 +211,14 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 }
 
 /// Connect `connections`, register `tables`, then create `views` on `engine`, handing
-/// `settled` what it answered for each. **Ordering is the contract**: connections first
+/// `settled` what it answered for each — [`sync`]'s additive half, and reachable only through
+/// it: registering without reconciling leaves rows the defs no longer name.
+///
+/// **Ordering is the contract**: connections first
 /// (a table's source path cannot resolve to an object store that isn't registered, and a
 /// view over `pg.public.orders` cannot plan before that catalog exists — see
 /// [`Sources::connect`](crate::Sources::connect)); then tables (a view's SQL reads tables), **concurrently and in no
-/// particular order** ([`TABLE_CONCURRENCY`]); then views by fixed-point rounds — DataFusion
-/// requires a view's dependencies to exist when its `CREATE VIEW` plans, so from cold,
-/// each round creates what it can and a view whose dependency landed last round
-/// succeeds this round. A round without progress means the remainder are genuinely
-/// broken (bad SQL or a missing table) and their errors are their outcomes. Against an
-/// engine that **already holds these views**, the retry cannot order anything (every
-/// `CREATE OR REPLACE` succeeds round one) — hand `views` in dependency order
-/// ([`view_order`]) or an outer view inlines a stale inner plan.
+/// particular order** ([`TABLE_CONCURRENCY`]); then views, through [`create_views`].
 ///
 /// Connections need no ordering among themselves and are not retried: each registers one bucket or
 /// one catalog and reads nothing the pass provides. What a failure *costs* differs by kind — an
@@ -212,12 +228,12 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 ///
 /// `settled` is called with each outcome as the engine answers it, so the app folds catalog rows
 /// and log entries per answer rather than after the whole pass. A failed entry never aborts the
-/// pass, and a view retried across rounds settles **once**, on its final answer.
-pub async fn register_pass(
+/// pass.
+async fn register_pass(
     engine: &Engine,
     connections: Vec<ConnectionDef>,
     tables: Vec<TableSpec>,
-    views: Vec<(String, String)>,
+    views: Vec<ViewDef>,
     mut settled: impl FnMut(RegOutcome),
 ) {
     for conn in connections {
@@ -239,33 +255,52 @@ pub async fn register_pass(
         settled(outcome);
     }
 
+    create_views(engine, views, settled).await;
+}
+
+/// Create `views` on `engine` in the order given, retrying until a round makes no progress, and
+/// hand `settled` each view's final answer — once, on whatever it last produced.
+///
+/// The fixed point is what makes a chain work from cold: DataFusion requires a view's
+/// dependencies to exist when its `CREATE VIEW` plans, so each round creates what it can and a
+/// view whose dependency landed last round succeeds this round. A round without progress means
+/// the remainder are broken (bad SQL, or a missing table) and their errors are their outcomes.
+///
+/// The retry cannot order views the engine **already holds** — every `CREATE OR REPLACE` succeeds
+/// on round one — so those must arrive in dependency order ([`view_order`]) or an outer view
+/// inlines the definition being replaced.
+pub(crate) async fn create_views(
+    engine: &Engine,
+    views: Vec<ViewDef>,
+    mut settled: impl FnMut(RegOutcome),
+) {
     let mut pending = views;
     while !pending.is_empty() {
         let before = pending.len();
         let mut failed = Vec::new();
-        for (name, sql) in pending {
+        for def in pending {
             match engine
                 .catalog()
-                .create_view(name.clone(), sql.clone())
+                .create_view(def.name.clone(), def.sql.clone())
                 .await
             {
                 Ok(meta) => settled(RegOutcome::View {
-                    name,
+                    name: def.name,
                     result: Ok(meta),
                 }),
-                Err(e) => failed.push((name, sql, e)),
+                Err(e) => failed.push((def, e)),
             }
         }
         if failed.len() == before {
-            for (name, _, e) in failed {
+            for (def, e) in failed {
                 settled(RegOutcome::View {
-                    name,
+                    name: def.name,
                     result: Err(e),
                 });
             }
             break;
         }
-        pending = failed.into_iter().map(|(n, s, _)| (n, s)).collect();
+        pending = failed.into_iter().map(|(def, _)| def).collect();
     }
 }
 
@@ -274,7 +309,7 @@ pub async fn register_pass(
 ///
 /// Two phases. The **difference comes out first**: every table, view and connection the engine
 /// holds that `desired` does not name is deregistered and reported as [`RegOutcome::Removed`].
-/// Then [`register_pass`] registers what `desired` does name. That order is load-bearing — a
+/// Then the additive half registers what `desired` does name. That order is load-bearing — a
 /// connection whose URL moved (below) is deregistered by name, so registering first would take
 /// back the registration the pass had just made.
 ///
@@ -297,16 +332,11 @@ pub async fn sync(
     mut settled: impl FnMut(RegOutcome),
 ) -> PassReport {
     remove_absent(engine, &desired, &mut settled).await;
-    let views = desired
-        .views
-        .into_iter()
-        .map(|def| (def.name, def.sql))
-        .collect();
     register_pass(
         engine,
         desired.connections,
         desired.tables,
-        views,
+        desired.views,
         &mut settled,
     )
     .await;
@@ -370,35 +400,6 @@ async fn remove_absent(
     }
 }
 
-/// The whole-project pass **from cold**: every connection, table and view in `defs`,
-/// sources resolved against `root`, views in defs order — right for an engine that holds
-/// none of them yet, where the fixed-point retry finds the dependency order by creating
-/// what it can. It is *not* the re-run: against an engine that already holds these
-/// views (the second pass of a long-lived host), defs order silently inlines stale
-/// plans — order the views with [`view_order`] over the previous pass's answers and
-/// call [`register_pass`], which is exactly what the app does
-/// (`ProjectState::refresh_order`).
-pub async fn register_project(
-    engine: &Engine,
-    root: &Path,
-    defs: &ProjectDefs,
-    settled: impl FnMut(RegOutcome),
-) {
-    let connections = defs.connections.clone();
-    let known = Connections::of(&connections);
-    let tables = defs
-        .tables
-        .iter()
-        .map(|def| table_spec(root, def, &known))
-        .collect();
-    let views = defs
-        .views
-        .iter()
-        .map(|v| (v.name.clone(), v.sql.clone()))
-        .collect();
-    register_pass(engine, connections, tables, views, settled).await;
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -414,7 +415,7 @@ mod tests {
 
     /// A scratch project folder of our own, per test.
     fn scratch(tag: &str) -> PathBuf {
-        let d = env::temp_dir().join(format!("strata_register_pass_{}_{tag}", process::id()));
+        let d = env::temp_dir().join(format!("strata_register_{}_{tag}", process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -440,10 +441,16 @@ mod tests {
         }
     }
 
+    /// One pass over `defs` on a fresh engine, through the call a host makes. Nothing is
+    /// registered yet, so the reconciliation has nothing to take out and what these tests read is
+    /// the additive half.
     async fn run(root: &Path, defs: &ProjectDefs) -> Vec<RegOutcome> {
         let engine = Engine::builder().build();
         let mut out = Vec::new();
-        register_project(&engine, root, defs, |o| out.push(o)).await;
+        engine
+            .catalog()
+            .sync(CatalogSpec::of_project(root, defs), |o| out.push(o))
+            .await;
         out
     }
 

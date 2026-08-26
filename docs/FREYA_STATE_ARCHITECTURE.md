@@ -134,8 +134,8 @@ pub struct QueryTab {
 }
 
 /// What a tab's diagnostics describe: the buffer revision they were computed from and the
-/// catalog epoch they were resolved against — validation's only two inputs (§9).
-pub struct Stamp { pub revision: u64, pub epoch: u64 }
+/// catalog generation they were resolved against — validation's only two inputs (§9).
+pub struct Stamp { pub revision: u64, pub generation: CatalogGen }
 ```
 
 `TabId` is a `Uuid` newtype (`strata_model`, `Copy, Eq, Hash, Ord`) — real identity, no
@@ -627,7 +627,7 @@ executing. Purely advisory — Run is never gated on it.
 
 **One driver, for every tab** (`state/diagnostics.rs::use_diagnostics`, mounted once in the
 window root). Each tab carries `validated: Option<Stamp>` — the buffer revision its diagnostics
-were computed from and the catalog epoch they were resolved against — so
+were computed from and the catalog generation they were resolved against — so
 `SessionState::stale_tabs` is the whole work list and there is no set of entry points to keep
 true: a tab restored at project open, reopened, opened from a saved query or a view,
 duplicated, edited, or left behind by a pass a tab switch cancelled are all "the stamp does not
@@ -641,9 +641,11 @@ Three fixed subscriptions make that one hook rather than a component per tab: `C
 synthetic fan-in every `Chan::Tab(_)` write derives, so one subscription watches any tab's
 buffer), `Chan::Tabs`, and the catalog. The catalog is a **gate**, not just an input: a pass
 applies row by row, so while a scan is in flight nothing validates and no verdict about a
-half-applied catalog is ever produced. Releasing into a new epoch is what
-re-derives every tab against the catalog the pass just built — how a problem fixed in Table
-Config clears without the user opening the tab. The drain is serial (the engine has two workers
+half-applied catalog is ever produced. Releasing onto a catalog generation the engine has moved is
+what re-derives every tab against the catalog the pass just built — how a problem fixed in Table
+Config clears without the user opening the tab. The number is the **engine's**
+(`catalog().generation()`), adopted rather than counted here, so a pass that changed nothing
+re-derives nothing and a change made by a typed statement stales tabs exactly as a scan does. The drain is serial (the engine has two workers
 and the user's own press comes first), debounced on the active tab, and holds a further beat
 before *introducing* new problems mid-typing.
 

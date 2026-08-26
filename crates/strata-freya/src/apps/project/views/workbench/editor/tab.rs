@@ -79,12 +79,12 @@ impl Component for EditorTab {
         }
         let engine = use_consume::<EngineCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let epoch = use_catalog();
+        let generation = use_catalog();
         let mut catalog = use_state(sql::Catalog::default);
         {
             use_side_effect(move || {
                 let p = project.read();
-                let _ = epoch.read();
+                let _ = generation.read();
                 let dialect =
                     effective(&settings.read().settings.engine, DIALECT_KEY).unwrap_or_default();
                 *catalog.write() = sql::Catalog::build(

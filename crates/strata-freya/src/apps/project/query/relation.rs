@@ -23,20 +23,20 @@
 //! `Sources::describe_remote` answers from the provider the connection caches per relation, so
 //! every read after the first is local.
 //!
-//! ## Why the catalog epoch is in the key
+//! ## Why the catalog generation is in the key
 //!
 //! A relation's columns are what the server had when we asked. Nothing on our side observes a
 //! server-side `ALTER TABLE`, so the bound on that staleness is the same one the rest of the tree
-//! carries: a ↻ re-connects, which builds new providers and bumps the catalog epoch. Keying on the
-//! epoch is what makes the refresh reach these columns too — without it a settled entry would
-//! outlive the connection that answered it.
+//! carries: a ↻ re-connects, which builds new providers and moves the engine's catalog generation.
+//! Keying on that number is what makes the refresh reach these columns too — without it a settled
+//! entry would outlive the connection that answered it.
 
 use freya::prelude::{use_side_effect, use_state};
 use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, UseQuery};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use strata_engine::sql::qualified;
-use strata_engine::RemoteRelation;
+use strata_engine::{CatalogGen, RemoteRelation};
 use strata_model::RemoteRef;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -60,9 +60,9 @@ pub type RemoteSchemas = BTreeMap<RemoteRef, Result<RemoteRelation, String>>;
 pub struct ColumnsSpec {
     /// Sorted, so the same set is the same key however it was assembled.
     pub relations: Vec<RemoteRef>,
-    /// The catalog epoch these columns are true as of — see the module docs. `None` while a
+    /// The catalog generation these columns are true as of — see the module docs. `None` while a
     /// registration pass is in flight, which is its own key and its own (never dispatched) entry.
-    pub epoch: Option<u64>,
+    pub generation: Option<CatalogGen>,
 }
 
 /// The introspection capability. The engine handle rides as [`Captured`] — invisible to cache
@@ -116,8 +116,9 @@ fn gone(relation: &RemoteRef) -> String {
 ///
 /// **One place, because the whole [`Query`] is the cache key.** `stale_time(MAX)` because the key
 /// already carries everything that can make the answer untrue: a different relation set is a
-/// different key, and a re-connect is a different epoch. `clean_time` is left at its default, so
-/// entries for epochs and sets nobody is watching any more are swept — a re-read of a swept entry
+/// different key, and a re-connect is a different generation. `clean_time` is left at its
+/// default, so entries for generations and sets nobody is watching any more are swept — a re-read
+/// of a swept entry
 /// is one hop onto the engine runtime and no network, since the provider it reads is cached for
 /// the life of the connection.
 ///
@@ -130,14 +131,17 @@ fn gone(relation: &RemoteRef) -> String {
 pub fn use_remote_columns(
     engine: &EngineCtx,
     mut relations: Vec<RemoteRef>,
-    epoch: Option<u64>,
+    generation: Option<CatalogGen>,
 ) -> UseQuery<RemoteColumns> {
     relations.sort();
     relations.dedup();
-    let enabled = !relations.is_empty() && epoch.is_some();
+    let enabled = !relations.is_empty() && generation.is_some();
     use_query(
         Query::new(
-            ColumnsSpec { relations, epoch },
+            ColumnsSpec {
+                relations,
+                generation,
+            },
             RemoteColumns(engine.captured()),
         )
         .enable(enabled)
@@ -149,10 +153,10 @@ pub fn use_remote_columns(
 /// entry's value.
 ///
 /// **The accumulation is the point, and it is why no surface reads the entry directly.** The key
-/// carries the relation set *and* the catalog epoch, and freya-query starts a changed key at
+/// carries the relation set *and* the catalog generation, and freya-query starts a changed key at
 /// `Pending` with no carried value — so reading the entry would blank every already-described
 /// relation whenever any *other* relation was opened, or whenever any unrelated catalog pass moved
-/// the epoch. Merging each settled answer into a map the caller keeps is the rule the inspector's
+/// the generation. Merging each settled answer into a map the caller keeps is the rule the inspector's
 /// STATISTICS zone already holds: **never show less than a moment ago.** A relation the server has
 /// since dropped is corrected by the `Err` its next answer merges over the old one, and the map
 /// only grows, bounded by the relations looked at in this window's life.
@@ -162,9 +166,9 @@ pub fn use_remote_columns(
 pub fn use_remote_schemas(
     engine: &EngineCtx,
     relations: Vec<RemoteRef>,
-    epoch: Option<u64>,
+    generation: Option<CatalogGen>,
 ) -> RemoteSchemas {
-    let columns = use_remote_columns(engine, relations, epoch);
+    let columns = use_remote_columns(engine, relations, generation);
     let described = use_state(RemoteSchemas::new);
     use_side_effect(move || {
         let fresh = match &*columns.read().state() {
@@ -184,6 +188,8 @@ pub fn use_remote_schemas(
 
 #[cfg(test)]
 mod tests {
+    use strata_engine::Engine;
+
     use super::*;
 
     fn relation(name: &str) -> RemoteRef {
@@ -194,29 +200,37 @@ mod tests {
         }
     }
 
-    /// **The epoch is what bounds the staleness.** The same relations at a new epoch are a new
-    /// entry, so a ↻ — which re-connects, rebuilds every provider and bumps the epoch — re-reads
-    /// these columns instead of serving what the connection answered before it.
+    /// **The generation is what bounds the staleness.** The same relations at a moved generation
+    /// are a new entry, so a ↻ — which re-connects, rebuilds every provider and moves the engine's
+    /// number — re-reads these columns instead of serving what the connection answered before it.
+    ///
+    /// Both come from an engine because nothing else can mint one — opacity is what stops a
+    /// window claiming a catalog moved when it did not.
     #[test]
     fn a_re_connect_is_a_different_key() {
+        let engine = Engine::builder().build();
         let relations = vec![relation("orders")];
+        let asked_at = engine.catalog().generation();
         let before = ColumnsSpec {
             relations: relations.clone(),
-            epoch: Some(4),
+            generation: Some(asked_at),
         };
         assert_eq!(
             before,
             ColumnsSpec {
                 relations: relations.clone(),
-                epoch: Some(4)
+                generation: Some(asked_at)
             },
             "the same question is the same key — a remount reads the cache"
         );
+
+        engine.catalog().deregister("a name this engine never held");
+
         assert_ne!(
             before,
             ColumnsSpec {
                 relations,
-                epoch: Some(5)
+                generation: Some(engine.catalog().generation())
             }
         );
     }

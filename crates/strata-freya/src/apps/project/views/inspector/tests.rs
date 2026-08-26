@@ -19,7 +19,7 @@ use futures::executor::block_on;
 use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::{TableMeta, TableSpec, ViewMeta};
+use strata_engine::{CatalogGen, TableMeta, TableSpec, ViewMeta};
 use strata_model::{
     ColRef, ColumnInfo, RemoteRef, SourceFormat, Stat, StatKey, TableDef, TableOrigin, ViewDef,
 };
@@ -201,7 +201,7 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
                 engine
             });
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
-            r.provide_root_context(|| State::create(CatalogState::Settled(1)));
+            r.provide_root_context(|| State::create(CatalogState::Settled(CatalogGen::default())));
             r.provide_root_context(|| State::create(BTreeMap::<RemoteRef, ScanId>::new()));
             (selection, project, session, profile_target)
         },

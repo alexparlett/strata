@@ -9,8 +9,9 @@
 //! It is **not** display only, and has not been since DB-09: an unqualified name searches the
 //! schemas a connection shows, so this press moves what `orders` means. Two things follow, and
 //! both are Apply's ([`apply`]) — the session is told
-//! ([`Sources::show_schemas`](strata_engine::Sources::show_schemas)), and the **catalog epoch** is
-//! bumped, because diagnostics are a reconciliation against that epoch and completion's snapshot
+//! ([`Sources::show_schemas`](strata_engine::Sources::show_schemas)), and the **catalog
+//! generation** the window holds is re-read, because diagnostics are a reconciliation against that
+//! number and completion's snapshot
 //! is keyed on it. Without the bump the tree redraws while every open tab keeps the verdict it
 //! had, and the popup goes on offering names that have stopped resolving.
 //!
@@ -88,12 +89,12 @@ fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer
     (offers, true)
 }
 
-/// Write `schemas` onto the connection's def, tell the session, persist, and bump the catalog
-/// epoch — the whole of what Apply does.
+/// Write `schemas` onto the connection's def, tell the session, persist, and adopt the engine's
+/// catalog generation — the whole of what Apply does.
 ///
 /// Both of the last two are because this press moves what an unqualified name resolves to: the
 /// session learns the new set without a reconnect (`Sources::show_schemas`), and the surfaces that
-/// answer about names re-derive on the epoch and nothing else — every tab's diagnostics through
+/// answer about names re-derive on that number and nothing else — every tab's diagnostics through
 /// `stale_tabs`, and the completion snapshot through its key. The discrete catalog mutation
 /// [`catalog_settled`] exists for, exactly as a Forget is.
 fn apply(
@@ -117,7 +118,7 @@ fn apply(
         }
         persisted_defs(&p, report);
     }
-    catalog_settled(catalog);
+    catalog_settled(catalog, engine);
 }
 
 /// Mounted at the window root beside the other dialogs, on the same terms: while open, its key
@@ -274,7 +275,7 @@ impl Component for SchemasPicker {
 mod tests {
     use std::path::PathBuf;
     use strata_engine::sources::postgres::Pg;
-    use strata_engine::SourceKind;
+    use strata_engine::{CatalogGen, SourceKind};
 
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
@@ -320,6 +321,7 @@ mod tests {
         SchemasRequest,
         RadioStation<ProjectState, ProjChan>,
         Catalog,
+        EngineCtx,
     );
 
     fn runner() -> (TestingRunner, Handles) {
@@ -329,8 +331,10 @@ mod tests {
             app,
             (900., 700.).into(),
             move |r| {
-                r.provide_root_context(EngineCtx::default);
-                let catalog = r.provide_root_context(|| State::create(CatalogState::Settled(7)));
+                let engine = r.provide_root_context(EngineCtx::default);
+                let catalog = r.provide_root_context(|| {
+                    State::create(CatalogState::Settled(CatalogGen::default()))
+                });
                 let target = r.provide_root_context(|| State::create(None::<String>));
                 let project = r.provide_root_context(|| {
                     let defs = ProjectDefs {
@@ -345,7 +349,7 @@ mod tests {
                 });
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));
-                (target, project, catalog)
+                (target, project, catalog, engine)
             },
             1.,
         )
@@ -375,11 +379,11 @@ mod tests {
         runner.sync_and_update();
     }
 
-    /// **Applying bumps the catalog epoch** (DB-09) — without it the tree redraws while every
-    /// open tab keeps squiggling against the schemas that were shown a moment ago.
+    /// **Applying moves the catalog generation** (DB-09) — without it the tree redraws while
+    /// every open tab keeps squiggling against the schemas that were shown a moment ago.
     #[test]
-    fn applying_a_schema_change_bumps_the_catalog_epoch() {
-        let (mut runner, (mut target, project, catalog)) = runner();
+    fn applying_a_schema_change_moves_the_catalog_generation() {
+        let (mut runner, (mut target, project, catalog, engine)) = runner();
         runner.sync_and_update();
         target.set(Some(connection().named()));
         runner.sync_and_update();
@@ -400,9 +404,14 @@ mod tests {
             "the def keeps only the schemas still ticked"
         );
         assert_eq!(
-            catalog.peek().epoch(),
-            Some(8),
-            "and the epoch moved, so the surfaces that answer about names re-derive"
+            catalog.peek().generation(),
+            Some(engine.catalog().generation()),
+            "the window is at the number the engine minted"
+        );
+        assert_ne!(
+            catalog.peek().generation(),
+            Some(CatalogGen::default()),
+            "and it moved, so the surfaces that answer about names re-derive"
         );
     }
 }

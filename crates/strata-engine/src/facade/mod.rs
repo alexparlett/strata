@@ -126,6 +126,7 @@ mod tests {
                 "table_meta",
                 "detect_partitions",
                 "create_view",
+                "create_views",
                 "drop_view",
                 "drop_table",
                 "is_internal",

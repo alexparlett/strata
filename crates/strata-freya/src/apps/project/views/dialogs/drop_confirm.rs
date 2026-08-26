@@ -437,7 +437,7 @@ fn alive(catalog: Catalog, report: ReportCtx) -> bool {
 /// cannot, because `CREATE OR REPLACE VIEW` has already succeeded on the engine. The Problems
 /// drawer's `Project` scope carries the other half either way.
 ///
-/// **A Forget bumps the catalog epoch**, because `Sources::disconnect` takes a catalog off the
+/// **A Forget moves the catalog generation**, because `Sources::disconnect` takes a catalog off the
 /// session — the discrete catalog mutation [`catalog_settled`] exists for. Without it a query
 /// naming the forgotten database keeps whatever verdict it last had, and completion goes on
 /// offering names nothing resolves.
@@ -480,7 +480,7 @@ fn drop_row(
                         format!("The engine could not finish dropping table '{name}': {e}"),
                     );
                 }
-                catalog_settled(catalog);
+                catalog_settled(catalog, &engine);
             });
         }
         DropTarget::View(name) => {
@@ -516,7 +516,7 @@ fn drop_row(
                         format!("The engine kept view '{name}' until the next re-scan: {e}"),
                     );
                 }
-                catalog_settled(catalog);
+                catalog_settled(catalog, &engine);
             });
         }
         DropTarget::Connection { name, .. } => {
@@ -533,7 +533,7 @@ fn drop_row(
                 return;
             }
             engine.sources().disconnect(name);
-            catalog_settled(catalog);
+            catalog_settled(catalog, engine);
         }
         DropTarget::Query { id, .. } => {
             let landed = {
@@ -741,7 +741,7 @@ mod tests {
             (900., 700.).into(),
             move |r| {
                 r.provide_root_context(EngineCtx::default);
-                r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+                r.provide_root_context(|| State::create(CatalogState::Cold));
                 let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                 let session = r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
@@ -1475,7 +1475,7 @@ mod tests {
                 (900., 700.).into(),
                 move |r| {
                     r.provide_root_context(|| engine.clone());
-                    r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+                    r.provide_root_context(|| State::create(CatalogState::Cold));
                     let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                     let session = r.provide_root_context(|| {
                         RadioStation::<SessionState, Chan>::create(SessionState::default())

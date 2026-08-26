@@ -635,7 +635,7 @@ mod tests {
 
     use strata_model::{ConnectionDef, Provider, S3Auth, S3Store};
 
-    use crate::register::register_project;
+    use crate::register::CatalogSpec;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
@@ -768,7 +768,9 @@ mod tests {
         };
         let cold = Engine::builder().build();
         let mut outcomes = Vec::new();
-        register_project(&cold, &root, &defs, |o| outcomes.push(o)).await;
+        cold.catalog()
+            .sync(CatalogSpec::of_project(&root, &defs), |o| outcomes.push(o))
+            .await;
         assert_eq!(outcomes.len(), 1);
         assert_eq!(read(&cold, "SELECT count(*) FROM t").await, [["3"]]);
         let _ = fs::remove_dir_all(&root);

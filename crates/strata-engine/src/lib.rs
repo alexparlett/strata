@@ -401,8 +401,8 @@ struct Lifecycle {
 /// and everything else on this facade is a surface built for one:
 ///
 /// - [`Engine::builder`], which is where every decision an embedder may make is made;
-/// - [`register_pass`](register::register_pass) over its own defs, or
-///   [`Catalog::register`] / [`Catalog::create_view`] one at a time;
+/// - [`Catalog::sync`] over its own defs ([`CatalogSpec::of_project`](register::CatalogSpec::of_project)
+///   builds the spec), or [`Catalog::register`] / [`Catalog::create_view`] one at a time;
 /// - [`Workspace::run`] (or [`Workspace::explain`]) to perform a statement;
 /// - [`SnapshotReads::page`], [`SnapshotReads::export_to`] and [`SnapshotReads::live`] to read
 ///   what one settled;
@@ -538,7 +538,7 @@ impl InternalTables {
 /// have answered *no* for exactly those, in a sentence — "not a connection in this project" — that
 /// would then be false.
 ///
-/// Rebuilt by the pass, like the origin set: `register_pass`'s first phase calls `connect` for
+/// Rebuilt by the pass, like the origin set: the registration pass's first phase calls `connect` for
 /// every def, and [`Sources::disconnect`] — the Forget gesture and the edit that moves a
 /// connection's URL — is the one removal.
 #[derive(Clone, Debug, Default)]

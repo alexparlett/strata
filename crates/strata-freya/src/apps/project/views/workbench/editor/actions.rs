@@ -286,7 +286,7 @@ fn save_view(
                 project.write_channel(ProjChan::Views).view_failed(&name, e);
             }
         }
-        catalog_settled(catalog);
+        catalog_settled(catalog, &engine);
     });
 }
 

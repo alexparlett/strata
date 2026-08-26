@@ -28,9 +28,10 @@
 //! that never persists is *produced*, rather than produced and retracted, and the squiggles
 //! already on screen simply stay put rather than blanking. A table being *rebuilt* is not one of
 //! those states: `Catalog::register` builds the new provider aside and swaps it in, so a name
-//! never stops resolving. When the pass releases into a new epoch every
-//! tab goes stale at once and is re-derived against the catalog it just built — which is how a
-//! problem the user fixed in Table Config clears without them opening the tab.
+//! never stops resolving. When the pass releases onto a catalog generation the engine has moved,
+//! every tab goes stale at once and is re-derived against the catalog it just built — which is how
+//! a problem the user fixed in Table Config clears without them opening the tab. A pass that
+//! changed nothing moves nothing, so nothing re-derives.
 
 use std::time::Duration;
 
@@ -38,6 +39,7 @@ use async_io::Timer;
 use freya::prelude::{spawn, use_consume, use_side_effect, use_state, State, WritableUtils};
 use freya::radio::{use_radio, ChannelSelection, Radio};
 use strata_code_editor::prelude::DecorationSeverity;
+use strata_engine::CatalogGen;
 use strata_model::{Diagnostic, Severity, TabId};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -81,10 +83,10 @@ pub fn use_diagnostics() {
 
     use_side_effect(move || {
         let (_, _) = (session.read(), strip.read());
-        let Some(epoch) = catalog.read().epoch() else {
+        let Some(generation) = catalog.read().generation() else {
             return;
         };
-        if *draining.peek() || session.read().stale_tabs(epoch).is_empty() {
+        if *draining.peek() || session.read().stale_tabs(generation).is_empty() {
             return;
         }
 
@@ -94,14 +96,14 @@ pub fn use_diagnostics() {
         spawn(async move {
             let _guard = Draining(draining);
             loop {
-                let Some(epoch) = catalog.peek().epoch() else {
+                let Some(generation) = catalog.peek().generation() else {
                     break;
                 };
-                let Some(id) = session.read().stale_tabs(epoch).into_iter().next() else {
+                let Some(id) = session.read().stale_tabs(generation).into_iter().next() else {
                     break;
                 };
                 settle(session, id).await;
-                pass(session, catalog, &engine, id, epoch).await;
+                pass(session, catalog, &engine, id, generation).await;
             }
         });
     });
@@ -156,7 +158,7 @@ async fn pass(
     catalog: Catalog,
     engine: &EngineCtx,
     id: TabId,
-    epoch: u64,
+    generation: CatalogGen,
 ) {
     let Some((sql, revision, previous, shown)) = session.read().tabs.get(&id).map(|t| {
         (
@@ -181,7 +183,7 @@ async fn pass(
         .tabs
         .get(&id)
         .is_none_or(|t| t.editor.revision() != revision);
-    if moved_on || catalog.peek().epoch() != Some(epoch) {
+    if moved_on || catalog.peek().generation() != Some(generation) {
         return;
     }
 
@@ -197,7 +199,10 @@ async fn pass(
     });
     session.write_channel(Chan::Diagnostics).set_diagnostics(
         id,
-        Stamp { revision, epoch },
+        Stamp {
+            revision,
+            generation,
+        },
         diagnostics,
     );
 }
@@ -228,6 +233,8 @@ fn severity(severity: Severity) -> DecorationSeverity {
 
 #[cfg(test)]
 mod tests {
+    use strata_engine::Engine;
+
     use super::*;
 
     /// Typing is the only thing the surface hold protects against, and only when the pass would
@@ -236,7 +243,7 @@ mod tests {
     fn the_surface_hold_is_for_typing_that_introduces_problems() {
         let was = Some(Stamp {
             revision: 7,
-            epoch: 3,
+            generation: Engine::builder().build().catalog().generation(),
         });
 
         assert_eq!(
@@ -252,7 +259,7 @@ mod tests {
         assert_eq!(
             hold(was, 7, true),
             None,
-            "same text, new catalog epoch: not half-written, so no hold"
+            "same text, moved catalog generation: not half-written, so no hold"
         );
         assert_eq!(
             hold(None, 7, true),

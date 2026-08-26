@@ -170,7 +170,8 @@ async fn prepare(conn: &ConnectionDef) -> Result<(ObjectStoreUrl, Arc<dyn Object
 ///
 /// **It refuses exactly one thing: a bucket that is not in the region it was given.** That is the
 /// fault no local check can see, and "may I list the root" is a far stronger demand than Strata
-/// makes — `connect` is `register_pass`'s first phase, so there is no table prefix to probe with. A
+/// makes — `connect` is the registration pass's first phase, so there is no table prefix to probe
+/// with. A
 /// prefix-scoped `s3:ListBucket` and a `GetObject`-only public bucket both answer 403 at the root
 /// while working perfectly, so refusing either would take a working project's every table down.
 /// Rejected credentials therefore still fail at the first table, exactly as before this probe.

@@ -5,11 +5,11 @@
 //! be discovered: the catalog is the `ProjectState` store, never a query, so the engine's answer
 //! is *applied* here exactly as `save_view` applies `Catalog::create_view`'s — store upsert on the
 //! matching [`ProjChan`] → the def written through the persist funnel at its mutation point →
-//! `catalog_settled`, so every tab's diagnostics re-derive against the catalog the engine now
-//! holds → the event log.
+//! `catalog_settled`, which adopts the generation the engine is now at, so every tab's diagnostics
+//! re-derive against the catalog it now holds → the event log.
 //!
 //! **One fold for every effect**, not one per capability. Each later ED task adds a `StoreEffect`
-//! arm and nothing else: no new persist path, no new epoch bump, no second place that knows a
+//! arm and nothing else: no new persist path, no second adoption site, no second place that knows a
 //! table row is written on `ProjChan::Tables`.
 //!
 //! Driven from the tab's request keeper (`views::keeper`) beside history and the log, and for the
@@ -62,7 +62,7 @@ pub struct Settle {
 /// empty-table panel (IT-01) dispatches `Workspace::run` from a press rather than from a
 /// `QuerySpec`, and then has exactly the same fold to perform. It reaches [`settle`] through
 /// this; [`use_statement_settle`] stays the query-driven wrapper over the same body, and there
-/// is deliberately no second `apply`, persist path or epoch bump.
+/// is deliberately no second `apply`, persist path or generation adoption.
 pub fn use_settle() -> Settle {
     Settle {
         project: use_radio_station::<ProjectState, ProjChan>(),
@@ -128,13 +128,13 @@ pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool 
 /// faults funnel.
 ///
 /// The def-mutating arms name a channel and a mutation and nothing else: persisting at the
-/// mutation point and bumping the catalog epoch are [`mutated`]'s, held **once** rather than
+/// mutation point and adopting the catalog generation are [`mutated`]'s, held **once** rather than
 /// spelled out per arm. That is the difference between an invariant and four copies of it — an
 /// arm added by a later ED task cannot forget either half, because it never writes either half.
 fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
     match effect {
         StoreEffect::TableUpserted { def, meta } => {
-            let landed = mutated(to, ProjChan::Tables, |p| {
+            let landed = mutated(to, engine, ProjChan::Tables, |p| {
                 p.upsert_table(def.clone());
                 p.table_registered(&def.name, meta.clone());
             });
@@ -143,14 +143,14 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
             }
             landed
         }
-        StoreEffect::TableRemoved { name, .. } => mutated(to, ProjChan::Tables, |p| {
+        StoreEffect::TableRemoved { name, .. } => mutated(to, engine, ProjChan::Tables, |p| {
             p.remove_table(name);
         }),
-        StoreEffect::ViewUpserted { def, meta } => mutated(to, ProjChan::Views, |p| {
+        StoreEffect::ViewUpserted { def, meta } => mutated(to, engine, ProjChan::Views, |p| {
             p.upsert_view(def.clone());
             p.view_registered(&def.name, meta.clone());
         }),
-        StoreEffect::ViewRemoved { name } => mutated(to, ProjChan::Views, |p| {
+        StoreEffect::ViewRemoved { name } => mutated(to, engine, ProjChan::Views, |p| {
             p.remove_view(name);
         }),
         StoreEffect::RescanTable { name } => {
@@ -160,26 +160,33 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
         StoreEffect::FunctionsChanged
         | StoreEffect::PreparedChanged
         | StoreEffect::RemoteRelationsChanged => {
-            catalog_settled(to.catalog);
+            catalog_settled(to.catalog, engine);
             true
         }
     }
 }
 
 /// One def mutation, whole: take the guard on `chan`, apply `write`, persist at the mutation
-/// point, and bump the catalog epoch. Answers whether the defs actually reached `project.json`.
+/// point, and adopt the engine's catalog generation. Answers whether the defs actually reached
+/// `project.json`.
 ///
-/// The epoch is bumped on **either** arm, deliberately — validation resolves against the engine,
-/// not the project file, so a mutation whose write failed has moved what every tab's diagnostics
-/// should say just as much as one whose write landed (`save_view` settled the same point).
-fn mutated(to: Settle, chan: ProjChan, write: impl FnOnce(&mut ProjectState)) -> bool {
+/// The generation is adopted on **either** arm, deliberately — validation resolves against the
+/// engine, not the project file, so a mutation whose write failed has moved what every tab's
+/// diagnostics should say just as much as one whose write landed (`save_view` settled the same
+/// point).
+fn mutated(
+    to: Settle,
+    engine: &EngineCtx,
+    chan: ProjChan,
+    write: impl FnOnce(&mut ProjectState),
+) -> bool {
     let mut project = to.project;
     let persisted = {
         let mut p = project.write_channel(chan);
         write(&mut p);
         persisted_defs(&p, to.report)
     };
-    catalog_settled(to.catalog);
+    catalog_settled(to.catalog, engine);
     persisted
 }
 
@@ -283,7 +290,7 @@ mod tests {
                 (400., 300.).into(),
                 move |r| {
                     r.provide_root_context(|| engine.clone());
-                    r.provide_root_context(|| State::create(CatalogState::Settled(0)));
+                    r.provide_root_context(|| State::create(CatalogState::Cold));
                     r.provide_root_context(|| State::create(ScanRequest::default()));
                     r.provide_root_context(|| State::create(Log::default()));
                     r.provide_root_context(|| State::create(PersistFaults::default()));

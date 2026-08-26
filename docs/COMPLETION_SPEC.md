@@ -14,7 +14,7 @@ completion detail is the surviving surface.
    from the project catalog. Nothing SQL-shaped is hand-listed except *relevance policy*
    (which no grammar encodes) — and those live in named, documented tables (§3).
 2. **Synchronous by construction.** The provider is a pure in-process function called
-   inside the key handler, same frame as the edit. No debounce, no spawn, no epoch guards —
+   inside the key handler, same frame as the edit. No debounce, no spawn, no generation guards —
    stale results, flicker, and popup lag are *impossible*, not defended against. (§7 for
    the perf model that keeps this honest at scale; §9 for the escalation path if it ever
    stops being true.)
@@ -233,7 +233,7 @@ needs a `.` after it, which is what its `database` detail says.
 **Nothing in this reaches the network.** `Sources::listing` is the connect-time enumeration
 held beside the pool, so the snapshot carries plain data and §1's "synchronous by
 construction" is untouched. A listing changes only at connect and disconnect, both of
-which bump the catalog epoch the snapshot is rebuilt on — so there is no warming step
+which move the catalog generation the snapshot is rebuilt on — so there is no warming step
 and no interior-swappable handle here (the earlier plan assumed a lazily-listed
 catalog; DB-02 enumerates a database in one round trip at connect).
 
@@ -343,10 +343,10 @@ gate — an explicit ask deserves the full vocabulary; nothing else widens.
 
 Performance model, sized against a 100-tables × 1000-columns catalog:
 
-- **The Catalog snapshot is memoized** (tab.rs): rebuilt only when the catalog epoch
+- **The Catalog snapshot is memoized** (tab.rs): rebuilt only when the catalog generation
   moves (registration lands, view saved, a connection forgotten) — never per keystroke.
   The provider peeks it. The remote listings ride it too (§4), so a database's names
-  cost one clone per epoch and nothing per keystroke.
+  cost one clone per generation and nothing per keystroke.
 - **A candidate is matched before it is built** (`ranking::Pool`). Every pool used to be
   materialized whole and filtered afterwards, so a keystroke built 1600-2700 `Completion`s
   — three or four string allocations each — however few the partial could match, and the
