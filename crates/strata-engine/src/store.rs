@@ -491,7 +491,63 @@ mod tests {
     use std::thread;
 
     use datafusion::datasource::listing::ListingTableUrl;
-    use strata_model::{GcsStore, S3Store};
+    use strata_model::{GcsStore, S3Store, SourceDef};
+
+    /// **What a connection's paths hang off, per provider** — and the one arm where the identity
+    /// is not a bucket with a scheme bolted on.
+    ///
+    /// An S3 or GCS address is a bare bucket, so its identity reads as `kind:bucket` and the
+    /// prefix puts the provider's own scheme in front. An HTTP address is a **whole origin**, so
+    /// its identity is a scheme in front of a URL that already has one — and the prefix has to
+    /// take the address back out rather than compose anything. Handing the identity itself to a
+    /// store builder produced `http:https://files.example.com`, which is the shape this pins.
+    ///
+    /// A source holds relations rather than files, so it has no prefix at all: `None` here is
+    /// what makes `table_spec` compose nothing remote for one.
+    #[test]
+    fn a_connections_store_prefix_is_what_its_paths_hang_off() {
+        let prefix = |conn: &ConnectionDef| store_prefix(&conn.identity());
+        assert_eq!(
+            prefix(&s3("acme-lake", S3Store::default())).as_deref(),
+            Some("s3://acme-lake")
+        );
+        assert_eq!(
+            prefix(&ConnectionDef {
+                address: "acme-lake".into(),
+                name: String::new(),
+                provider: Provider::Gcs(GcsStore::default()),
+                client_config: Default::default(),
+            })
+            .as_deref(),
+            Some("gs://acme-lake")
+        );
+        for origin in ["https://files.example.com", "http://127.0.0.1:9000"] {
+            assert_eq!(
+                prefix(&ConnectionDef {
+                    address: origin.into(),
+                    name: String::new(),
+                    provider: Provider::Http,
+                    client_config: Default::default(),
+                })
+                .as_deref(),
+                Some(origin),
+                "an HTTP address is already a URL, and the prefix is that URL"
+            );
+        }
+        assert_eq!(
+            prefix(&ConnectionDef {
+                address: "db:5432/analytics".into(),
+                name: String::new(),
+                provider: Provider::Source(SourceDef {
+                    kind: "postgres".into(),
+                    ..Default::default()
+                }),
+                client_config: Default::default(),
+            }),
+            None,
+            "a source holds relations, so no path composes onto it"
+        );
+    }
 
     fn s3(bucket: &str, store: S3Store) -> ConnectionDef {
         ConnectionDef {
