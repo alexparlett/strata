@@ -20,18 +20,20 @@
 //! spinner over a change that touched no engine state. The store's def-in-place write
 //! ([`ProjectState::update_connection_def`]) keeps the row's verdict, which is still true.
 //!
-//! The offer is [`Sources::listing`](strata_engine::Sources::listing)'s **scoped and tagged** answer and nothing derived beside
-//! it, so this picker, the tree and completion cannot disagree about what a connection shows. A
-//! connection that is not live has no enumeration to offer: the picker then lists the def's own
-//! schemas with the connection's failure named, rather than an unexplained empty list.
+//! The offer is [`Sources::listing`](strata_engine::Sources::listing)'s **scoped and tagged**
+//! answer and nothing derived beside it, so this picker, the tree and completion cannot disagree
+//! about what a connection shows — and this is the one surface that sees a schema the connection
+//! does *not* show, taking one back being what it is for. A connection that is not live has no
+//! enumeration to offer: the picker then lists the def's own schemas with the connection's failure
+//! named, rather than an unexplained empty list.
 
 use freya::components::ScrollView;
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
 use std::collections::BTreeSet;
 
-use strata_engine::sources::SchemaVisibility;
-use strata_model::{ConnectionDef, Provider, SourceDef};
+use strata_engine::sources::{SchemaVisibility, SourceDetail};
+use strata_model::{Provider, SourceDef};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
@@ -61,13 +63,18 @@ struct Offer {
     missing: bool,
 }
 
-/// What the picker offers for `def`, and the failure to name if there is one.
+/// What the picker offers for the connection called `name`, and whether the offer came from the
+/// connection itself.
 ///
-/// Live: the connection's own tagged enumeration. Not live: the def's `schemas`, so the user can
-/// still take one off a connection that is refusing to connect *because* of it.
-fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer>, bool) {
-    let Some((_, schemas)) = engine.sources().listing(def) else {
-        let offers = pg
+/// Live: the connection's own tagged enumeration, off the one snapshot every surface reads —
+/// **including the schemas it does not show**, which is what this dialog is for and what no other
+/// surface may draw. Not live: the def's `schemas`, so the user can still take one off a
+/// connection that is refusing to connect *because* of it.
+fn offers(engine: &EngineCtx, name: &str, source: &SourceDef) -> (Vec<Offer>, bool) {
+    let listing = engine.sources().listing();
+    let live = listing.source(name).filter(|source| source.live);
+    let Some(SourceDetail::Catalog { schemas, .. }) = live.map(|source| &source.detail) else {
+        let offers = source
             .schemas
             .iter()
             .map(|name| Offer {
@@ -79,9 +86,9 @@ fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer
         return (offers, false);
     };
     let offers = schemas
-        .into_iter()
+        .iter()
         .map(|schema| Offer {
-            name: schema.name,
+            name: schema.name.clone(),
             enabled: schema.visibility != SchemaVisibility::NotEnabled,
             missing: schema.visibility == SchemaVisibility::EnabledButMissing,
         })
@@ -109,13 +116,11 @@ fn apply(
     {
         let mut p = project.write_channel(ProjChan::Connections);
         p.update_connection_def(url, |def| {
-            if let Provider::Source(pg) = &mut def.provider {
-                pg.schemas = schemas;
+            if let Provider::Source(source) = &mut def.provider {
+                source.schemas.clone_from(&schemas);
             }
         });
-        if let Some(row) = p.connections.iter().find(|c| c.def.named() == url) {
-            engine.sources().show_schemas(&row.def);
-        }
+        engine.sources().show_schemas(url, &schemas);
         persisted_defs(&p, report);
     }
     catalog_settled(catalog, engine);
@@ -155,13 +160,13 @@ impl Component for SchemasPicker {
             seeded.set_if_modified(None);
             return rect().into_element();
         };
-        let Some((def, pg)) = radio
+        let Some(source) = radio
             .read()
             .connections
             .iter()
             .find(|c| c.def.named() == url)
             .and_then(|c| match &c.def.provider {
-                Provider::Source(pg) => Some((c.def.clone(), pg.clone())),
+                Provider::Source(source) => Some(source.clone()),
                 _ => None,
             })
         else {
@@ -169,7 +174,7 @@ impl Component for SchemasPicker {
             return rect().into_element();
         };
 
-        let (offers, live) = offers(&engine, &def, &pg);
+        let (offers, live) = offers(&engine, &url, &source);
         if seeded.peek().as_deref() != Some(url.as_str()) {
             seeded.set(Some(url.clone()));
             draft.set(
@@ -281,6 +286,7 @@ mod tests {
     use freya_testing::TestingRunner;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
+    use strata_model::ConnectionDef;
 
     use super::*;
     use crate::apps::connection::model::PgDraft;

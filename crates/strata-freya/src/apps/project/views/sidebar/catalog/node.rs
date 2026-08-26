@@ -13,15 +13,14 @@
 use std::collections::HashSet;
 
 use freya::components::Disclosure;
-use strata_engine::Engine;
-use strata_model::{CatalogKind, ColOwner, ConnectionDef, RemoteRef};
+use strata_model::{CatalogKind, ColOwner, ProviderId, RemoteRef};
 use uuid::Uuid;
 
 use super::columns::ColRow;
 use super::connection::walk_connections;
 use super::workspace::{walk_workspace, Group};
 use crate::apps::project::query::{RemoteSchemas, ScanId};
-use crate::apps::project::state::ProjectState;
+use crate::apps::project::state::{ProjectState, SourceNode};
 
 /// One visible row of the tree.
 #[derive(Clone, PartialEq)]
@@ -224,22 +223,42 @@ pub struct Remote {
     pub view: bool,
 }
 
-/// A connection of either kind, resolved.
+/// A connection of either kind, as its **row** draws it.
+///
+/// What the row needs and no more: the def it was resolved from is not carried, because a
+/// virtualized tree clones every visible row on every walk and the row draws four of its fields.
+/// Everything else a gesture on it needs is reached by the connection's **name**, which is the
+/// handle.
 #[derive(Clone, PartialEq)]
 pub struct Connection {
-    pub def: ConnectionDef,
+    pub name: String,
+    /// Where it points, in its provider's own terms — the row's title.
+    pub address: String,
+    /// Which provider serves it: the menu's Schemas… item, and the editor a press opens.
+    pub provider: ProviderId,
     /// The short word this row wears — the **registered source's** own badge, or the object
-    /// store's provider label.
-    ///
-    /// Carried on the node rather than derived where the row paints: what a kind is called is the
-    /// registry's answer, and a virtualized row asking per frame would be asking it once per
-    /// visible row per paint.
+    /// store's provider label, taken from the snapshot rather than derived where the row paints.
     pub badge: String,
-    /// The catalog a **database** is addressed by, taken from the def rather than from a listing a
+    /// The catalog a **source** is addressed by, from the def rather than from a listing a
     /// collapsed row has not fetched. `None` on an object store, which has none.
     pub catalog: Option<String>,
     pub waiting: bool,
     pub problem: Option<String>,
+}
+
+impl Connection {
+    /// The row's share of a [`SourceNode`], with the catalog its arm of the walk resolved.
+    pub fn of(node: &SourceNode, catalog: Option<String>) -> Self {
+        Self {
+            name: node.name.clone(),
+            address: node.address.clone(),
+            provider: node.provider,
+            badge: node.badge.clone(),
+            catalog,
+            waiting: node.waiting,
+            problem: node.problem.clone(),
+        }
+    }
 }
 
 /// The expansion set, as the walk reads it.
@@ -284,13 +303,13 @@ pub struct Walked {
 
 /// Walk the tree.
 ///
-/// `needle` is **already lowercased** — see [`matches`](super::matches). `columns` is an *input*
-/// like the listing and the expansion set: the pane subscribes to the columns of whatever the last
-/// walk reported open and hands the accumulated answer back here, so this stays a plain function
-/// and never awaits.
+/// `needle` is **already lowercased** — see [`matches`](super::matches). `sources` and `columns`
+/// are *inputs* like the expansion set: the pane joins the connections once against the engine's
+/// snapshot and subscribes to the columns of whatever the last walk reported open, then hands
+/// both back here — so this stays a plain function, never awaits, and reaches no engine.
 pub fn walk(
     project: &ProjectState,
-    engine: &Engine,
+    sources: &[SourceNode],
     needle: &str,
     open: &HashSet<String>,
     columns: &RemoteSchemas,
@@ -298,6 +317,6 @@ pub fn walk(
     let open = Open(open);
     let mut out = Walked::default();
     walk_workspace(project, needle, &open, &mut out.nodes);
-    walk_connections(project, engine, needle, &open, columns, &mut out);
+    walk_connections(sources, needle, &open, columns, &mut out);
     out
 }

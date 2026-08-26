@@ -245,6 +245,16 @@ pub fn disconnect(ctx: &SessionContext, identity: &str) {
     }
 }
 
+/// Whether an object store answers for `identity` on this session right now — the store half of
+/// [`SourcesSnapshot`](crate::sources::SourcesSnapshot)'s `live`.
+///
+/// Asked of the registry rather than remembered beside the def, because the registry is what a
+/// scan resolves through: a connection is live exactly while a path under it can be read. `false`
+/// for an identity no object store answers to, which every source connection is.
+pub(crate) fn registered(ctx: &SessionContext, identity: &str) -> bool {
+    registration_url(identity).is_some_and(|url| ctx.runtime_env().object_store(&url).is_ok())
+}
+
 /// Every profile named in this machine's own AWS configuration, sorted — what the connection
 /// editor's **Named profile** picker offers (W7 · 03, spec §6).
 ///

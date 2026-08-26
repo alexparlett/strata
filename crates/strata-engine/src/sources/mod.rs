@@ -46,13 +46,14 @@ use datafusion::prelude::*;
 use strata_model::{check_catalog_name, ColumnInfo, ConnectionDef, SourceDef};
 
 use self::providers::SourceCatalogProvider;
-use self::source::{Listing, Relation, SourceCatalog, Sourced, Sources};
+use self::source::{Listing, Relation, SourceCatalog, SourceInfo, Sourced, Sources};
 use super::connect::{self, Registration};
 use super::fold_ident;
 use super::providers::deregister_catalog;
 use super::secrets::{SecretProvider, SecretRequest};
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
+use crate::{store, CatalogGen};
 use strata_core::secret::{migrate_derived, Secret, SecretRef};
 
 /// The keystore slot one of `conn`'s secrets lives in — **the one place the derivation is
@@ -225,12 +226,11 @@ impl Live {
             .collect()
     }
 
-    /// The catalog name and the enumeration a connection registered, or `None` if it is not
-    /// live — what [`Sources::listing`](super::Sources::listing) reads.
-    fn listing(&self, name: &str) -> Option<(String, Arc<Listing>)> {
+    /// The enumeration a connection registered, or `None` if it is not live — what
+    /// [`snapshot`] reads, and what tells it a connection is live at all.
+    fn listing(&self, name: &str) -> Option<Arc<Listing>> {
         let held = self.0.lock().unwrap();
-        let live = held.get(name)?;
-        Some((live.catalog.clone(), Arc::clone(&live.listing)))
+        Some(Arc::clone(&held.get(name)?.listing))
     }
 
     /// Forget the connection called `name`, handing back the catalog name it had registered.
@@ -367,6 +367,149 @@ pub struct RemoteRelation {
     /// and answers for free.
     pub view: bool,
     pub columns: Vec<ColumnInfo>,
+}
+
+/// **Every connection this engine holds, as one value** — see
+/// [`Sources::listing`](super::Sources::listing).
+///
+/// One read rather than a call per connection, because the surfaces that disagreed were the ones
+/// stitching several: the tree asked the listing per def and the registry per row, completion
+/// asked a third time, and each of them could be looking at a different moment. A snapshot is one
+/// moment, stamped with the [`generation`](Self::generation) it was taken at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourcesSnapshot {
+    /// The catalog generation this was read at — what a consumer keys a derived answer on, so a
+    /// re-connect, a Forget or a schema-visibility edit re-derives it. See [`CatalogGen`].
+    pub generation: CatalogGen,
+    /// Every connection, in name order.
+    ///
+    /// The **workspace is not among them**: it is the project's own catalog rather than a
+    /// connection, its identity is [`WORKSPACE_CATALOG`](strata_model::WORKSPACE_CATALOG), and
+    /// what is in it is the host's store to answer.
+    pub sources: Vec<SourceListing>,
+    /// Every source this engine *can* serve a connection with — the same list
+    /// [`Sources::registrants`](super::Sources::registrants) answers, carried here so the one
+    /// read is a complete answer.
+    ///
+    /// It is what lets a surface badge a connection this engine has not been told about: a
+    /// project's rows exist before its open pass has connected any of them, and a badge is a fact
+    /// about the **kind** rather than about the connection.
+    pub registrants: Vec<SourceInfo>,
+}
+
+/// One connection, as every surface outside the engine sees it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceListing {
+    /// The connection's own name — **the handle**, and the only one the front end speaks.
+    pub name: String,
+    /// Whether this connection is **registered on the session right now** — its store answers
+    /// for paths, or its catalog resolves names.
+    ///
+    /// Not the connection's `Reg` row, which is the host's: a row says what the last pass
+    /// settled, and this says what the session holds.
+    pub live: bool,
+    pub detail: SourceDetail,
+}
+
+/// What a connection registered, and what it can say about itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourceDetail {
+    /// An **object store**. It has nothing to enumerate — a bucket cannot say what its tables
+    /// are, which is why what it holds is answered by the table defs read through it, and those
+    /// are the host's rows.
+    Store,
+    /// A **catalog of relations**, which the source named itself.
+    Catalog {
+        /// The catalog its relations are addressed by — the connection's name, from the def, so
+        /// a connection that has never answered still says what a query would have to write.
+        catalog: String,
+        /// Its namespaces, scoped and tagged against the def's own
+        /// [`SourceDef::schemas`]. Empty for a connection that is not live: there is no
+        /// enumeration to scope.
+        schemas: Vec<SchemaListingView>,
+    },
+}
+
+impl SourcesSnapshot {
+    /// The catalogs **live** connections registered — what an agent is told the databases are
+    /// called, and what a three-part name resolves through right now.
+    ///
+    /// Live, where [`Sources::database_syms`](super::Sources::database_syms) is not, and the
+    /// difference is what each answer is for: completion offers the name a query would have to
+    /// write whether or not the connection is up, while a listing that says a database is there
+    /// is saying it can be reached into.
+    pub fn catalog_names(&self) -> Vec<String> {
+        self.sources
+            .iter()
+            .filter(|source| source.live)
+            .filter_map(|source| match &source.detail {
+                SourceDetail::Catalog { catalog, .. } => Some(catalog.clone()),
+                SourceDetail::Store => None,
+            })
+            .collect()
+    }
+
+    /// One connection by name, or `None` for a name this engine has not been told about — what a
+    /// surface about a single connection reads, rather than filtering the list itself.
+    pub fn source(&self, name: &str) -> Option<&SourceListing> {
+        self.sources.iter().find(|source| source.name == name)
+    }
+
+    /// The short word a connection served by `kind` wears — the registered kind's own
+    /// [`BADGE`](source::SourceKind::BADGE).
+    ///
+    /// A kind nothing is registered for wears the kind itself, which is what a row can honestly
+    /// say about a connection this build cannot serve. Asked of the **kind**, not of a
+    /// connection, so a project's row can be badged before anything has connected it.
+    pub fn badge(&self, kind: &str) -> String {
+        let kind = kind.trim();
+        self.registrants
+            .iter()
+            .find(|info| info.kind == kind)
+            .map(|info| info.badge.to_string())
+            .unwrap_or_else(|| kind.to_string())
+    }
+}
+
+/// Read every connection this engine has been told about into one [`SourcesSnapshot`].
+///
+/// Synchronous and free: every answer here is already held — the defs by
+/// [`Connections`](crate::Connections), the enumeration beside the pool, the badge in the
+/// registry, and liveness by the two registries a connection can be on. Asking the *source*
+/// anything is what a ↻ does.
+pub(crate) fn snapshot(
+    ctx: &SessionContext,
+    registrants: &Sources,
+    live: &Live,
+    defs: &[ConnectionDef],
+    generation: CatalogGen,
+) -> SourcesSnapshot {
+    let sources = defs
+        .iter()
+        .map(|def| {
+            let name = def.named();
+            match def.provider.source() {
+                Some(source) => SourceListing {
+                    live: live.listing(&name).is_some(),
+                    detail: SourceDetail::Catalog {
+                        catalog: name.clone(),
+                        schemas: listing(live, def, source).unwrap_or_default(),
+                    },
+                    name,
+                },
+                None => SourceListing {
+                    live: store::registered(ctx, &def.identity()),
+                    detail: SourceDetail::Store,
+                    name,
+                },
+            }
+        })
+        .collect();
+    SourcesSnapshot {
+        generation,
+        sources,
+        registrants: registrants.registrants(),
+    }
 }
 
 /// Whether a namespace is one the connection shows, and whether the source has it.
@@ -507,15 +650,15 @@ pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
     take_back(ctx, sources, name);
 }
 
-/// What a surface sees of one live source: the catalog it is addressed by, and its namespaces
-/// scoped against the def's own [`SourceDef::schemas`] — see
-/// [`Sources::listing`](super::Sources::listing).
-pub(crate) fn listing(
+/// One live source's namespaces, scoped and tagged against the def's own
+/// [`SourceDef::schemas`] — the [`SourceDetail::Catalog`] half of a [`snapshot`], and `None` for
+/// a connection that holds no live catalog.
+fn listing(
     sources: &Live,
     conn: &ConnectionDef,
     source: &SourceDef,
-) -> Option<(String, Vec<SchemaListingView>)> {
-    let (catalog, listing) = sources.listing(&conn.named())?;
+) -> Option<Vec<SchemaListingView>> {
+    let listing = sources.listing(&conn.named())?;
     let enabled: BTreeSet<String> = shown_of(source);
     let mut views: Vec<SchemaListingView> = listing
         .schemas()
@@ -549,7 +692,7 @@ pub(crate) fn listing(
             }),
     );
     views.sort_by(|a, b| a.name.cmp(&b.name));
-    Some((catalog, views))
+    Some(views)
 }
 
 /// Whether the connection registered as `catalog` accepts writes — the inverse of
@@ -774,4 +917,146 @@ async fn relation_provider(
     ctx.table_provider(at.recorded().clone())
         .await
         .map_err(|e| e.to_string())
+}
+
+/// **What one snapshot says**, driven through a real engine: the four questions every surface
+/// used to ask separately, asked once and answered together.
+#[cfg(test)]
+mod snapshot_tests {
+    use std::collections::BTreeMap;
+
+    use strata_model::{Provider, S3Auth, S3Store};
+
+    use super::fake::{fake_def, TestDoc};
+    use super::source::SourceKind;
+    use super::*;
+    use crate::Engine;
+
+    /// A bucket connection whose credentials nothing here can resolve — it registers no store,
+    /// which is exactly the state `live` has to be able to say.
+    fn bucket(name: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: "acme-lake".into(),
+            name: name.into(),
+            provider: Provider::S3(S3Store {
+                region: String::new(),
+                auth: S3Auth::Ambient,
+                ..Default::default()
+            }),
+            client_config: BTreeMap::new(),
+        }
+    }
+
+    /// The snapshot is **membership**: a connection the engine was told about is listed whether
+    /// or not it went in, in name order, each carrying what it registers and its kind's own
+    /// badge.
+    #[tokio::test]
+    async fn every_connection_told_about_is_listed_live_or_not() {
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await;
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("void", "nowhere"))
+            .await;
+        let _ = engine.sources().connect(bucket("lake")).await;
+
+        let snapshot = engine.sources().listing();
+        let names: Vec<&str> = snapshot.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["lake", "sales", "void"], "in name order");
+
+        let sales = &snapshot.sources[1];
+        assert!(sales.live, "it connected");
+        assert_eq!(
+            snapshot.badge(TestDoc::NAME),
+            TestDoc::BADGE,
+            "its kind's own word, asked of the kind"
+        );
+        let SourceDetail::Catalog { catalog, schemas } = &sales.detail else {
+            panic!("a source registers a catalog");
+        };
+        assert_eq!(catalog, "sales", "addressed by its own name");
+        assert_eq!(schemas.len(), 1, "the one schema it enumerated");
+        assert_eq!(schemas[0].visibility, SchemaVisibility::Live);
+
+        let void = &snapshot.sources[2];
+        assert!(!void.live, "it was refused");
+        let SourceDetail::Catalog { catalog, schemas } = &void.detail else {
+            panic!("a refused source is still a source");
+        };
+        assert_eq!(catalog, "void", "and still says what a query would write");
+        assert!(schemas.is_empty(), "with nothing enumerated behind it");
+
+        assert_eq!(snapshot.sources[0].detail, SourceDetail::Store);
+        assert!(!snapshot.sources[0].live, "no credentials, no store");
+    }
+
+    /// **The two name reads are not the same question.** Completion offers the catalog of a
+    /// connection that has never answered, because that is the name a query has to write;
+    /// the listing of databases an agent is handed is what can be reached into now.
+    #[tokio::test]
+    async fn completion_offers_what_a_query_writes_and_the_agent_is_told_what_answers() {
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await;
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("void", "nowhere"))
+            .await;
+        let _ = engine.sources().connect(bucket("lake")).await;
+
+        let syms = engine.sources().database_syms();
+        let offered: Vec<&str> = syms.iter().map(|sym| sym.name.as_str()).collect();
+        assert_eq!(offered, ["sales", "void"], "both catalogs, no bucket");
+        assert_eq!(
+            engine.sources().listing().catalog_names(),
+            ["sales".to_string()],
+            "only the one that answered"
+        );
+
+        let sales = syms
+            .iter()
+            .find(|sym| sym.name == "sales")
+            .expect("the live catalog");
+        assert_eq!(sales.schemas.len(), 1);
+        assert_eq!(sales.schemas[0].relations.len(), 1, "its one relation");
+    }
+
+    /// The picker's Apply writes the session **and** the def this engine retained, so the next
+    /// read scopes by what was just chosen rather than by what the def said at connect.
+    #[tokio::test]
+    async fn showing_a_different_set_of_schemas_moves_the_next_listing() {
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await
+            .expect("connect");
+
+        engine.sources().show_schemas("sales", &[]);
+
+        let snapshot = engine.sources().listing();
+        let SourceDetail::Catalog { schemas, .. } = &snapshot.sources[0].detail else {
+            panic!("a source registers a catalog");
+        };
+        assert_eq!(
+            schemas.iter().map(|s| s.visibility).collect::<Vec<_>>(),
+            [SchemaVisibility::NotEnabled],
+            "the schema is still there, and no longer shown"
+        );
+        assert!(
+            engine.sources().database_syms()[0].schemas.is_empty(),
+            "so completion stops offering its names"
+        );
+    }
 }

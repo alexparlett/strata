@@ -333,15 +333,23 @@ Top level is **data sources**:
   as **links** — pressing one opens the def's ancestors and brings its own row into view, rather
   than offering a second editable copy of it.
 
-Every connection node carries a **provider badge** (`Provider::to_string()` — `S3` / `GCS` /
-`HTTP` / `PG`), its address, a **status glyph** (nothing when connected, a spinner once the wait
+The two halves are **joined once, before the walk** (`state::sources::assemble`): the project's
+connection rows, the engine's one snapshot and the workspace defs that read through each bucket
+become a `SourceNode` per connection, and the walk below it only decides shape. That is what keeps
+the walk a plain function of its inputs — it reaches no engine at all — where it used to make a
+listing call and a registry call per row on every filter keystroke, each answering as of its own
+moment.
+
+Every connection node carries a **provider badge** (the registered kind's own, from the snapshot —
+`S3` / `GCS` / `HTTP` / `PG`), its address, a **status glyph** (nothing when connected, a spinner once the wait
 outlasts the progress hold, or a warning triangle carrying the engine's own refusal, clipped to
 what a tooltip holds and naming Problems for the rest), and a trailing **⋮** menu (also
 right-click): **Edit**, **Schemas…** on a database, **Forget**. Pressing the row opens it; its
 actions are the menu.
 
 **Schemas…** is a picker over the same `Sources::listing` answer, so the tree, the picker and
-completion cannot disagree about what a connection shows. Its write is display-only, so it edits
+completion cannot disagree about what a connection shows — and it is the one surface that sees a
+schema the connection does *not* show, taking one back being what it is for. Its write is display-only, so it edits
 the def **in place** (`ProjectState::update_connection_def`) and keeps the row's registration —
 going through `upsert_connection` would leave a `Reg::Loading` that only a whole-catalog re-scan
 could answer. A connection that is not live has no enumeration to offer: the picker then lists
@@ -447,9 +455,8 @@ a ↻ without either being noticed specially.
 The editor offers a database's names as you type them (DB-06): a connection's **catalog name** at
 any relation-target position, its **enabled schemas** after `catalog.`, and its **relations** after
 `catalog.schema.`. The catalog name comes from the def, so a connection that has never answered
-still offers the name a query has to say; the schemas and relations come from `Sources::listing`,
-the
-same scoped-and-tagged answer the tree and the Schemas… picker read. A non-enabled schema is
+still offers the name a query has to say; the schemas and relations come from the same
+`Sources::listing` snapshot — the scoped-and-tagged answer the tree and the Schemas… picker read. A non-enabled schema is
 absent from the offer and still resolves if typed — visibility, not policy. Nothing on the
 completion path touches the network. The full rules, including where it deliberately stops (a
 remote relation's columns), are `docs/COMPLETION_SPEC.md` §2, §4 and §10.
@@ -553,6 +560,18 @@ neither captures a bare name nor collides with one in a schema you left on.
 `Sources::listing` is the one read every surface shares, and it answers **scoped and tagged**
 (`Live | EnabledButMissing | NotEnabled`), so nothing re-derives visibility. It reads the
 connect-time enumeration, which is why a ↻ *is* the refresh.
+
+**It is one read of everything, not a read per connection** (EA-18). `listing()` takes no argument
+and answers a `SourcesSnapshot { generation, sources }` covering every connection the engine has
+been told about — live or not, so a refused one still has a row to hang its failure on — each
+carrying its kind's badge, whether it is registered right now, and what it registered: an object
+store, or a catalog with its scoped schemas. The tree, the Schemas… picker, completion's
+`database_syms` and the agent's `list_tables` all read that one value, so no two of them can be
+answering as of different moments, and none of them asks the registry a second question to badge a
+row. The two name reads it derives are deliberately different questions: `database_syms` offers
+the catalog of a connection that has never answered, because that is the name a query would have
+to write, while `catalog_names` — what an agent is told the databases are — lists only what can be
+reached into now.
 
 **What is pushed down, so nobody re-measures it.** A single-table filter, projection and `LIMIT`
 push down even without federation (the scan unparses them; anything unsupported falls back and
@@ -810,12 +829,13 @@ carries a *status*, which comes from a probe rather than from a sentence. Refusi
 what keeps DataFusion's "No suitable object store found" off a table row, which is the whole point
 of registering connections first.
 
-Membership is the engine's `Connections` set: the URLs `connect` was handed, noted **whatever the
-outcome**
-and removed by `disconnect`. A connection whose region is blank or whose SSO session expired is
-still one the user may point a table at — the fix comes afterwards — so asking DataFusion's
-object-store registry instead would have answered *no* for exactly the rows the user is on their
-way to repair.
+Membership is the engine's `Connections` map: the **defs** `connect` was handed, keyed by name and
+noted **whatever the outcome**, removed by `disconnect`. A connection whose region is blank or
+whose SSO session expired is still one the user may point a table at — the fix comes afterwards —
+so asking DataFusion's object-store registry instead would have answered *no* for exactly the rows
+the user is on their way to repair. The def rather than the identity alone, because the same map
+is what `Sources::listing` walks: an engine that has been told about a connection can say what
+kind serves it and what it registers without asking a host for its rows back.
 
 The lookup **resolves** rather than merely tests: it falls back to a case-insensitive match,
 because `Url::parse` lower-cases a scheme and a host on the way into the registry (so

@@ -19,6 +19,7 @@ mod log;
 mod persist;
 mod project;
 mod session;
+mod sources;
 mod statement;
 
 /// The window's half of agent access: the ask/notice driver (AA-03, re-pointed by AA-03b),
@@ -75,12 +76,13 @@ pub use persist::ProjectFile;
 pub use persist::{
     persisted_defs, use_init_faults, use_report, FaultsCtx, PersistFaults, ReportCtx,
 };
-pub use project::{ConnRow, FaultKind, ProjChan, ProjectState, Reg};
-/// The remaining catalog rows. A test that builds a store **inline** names these, which is what
-/// this codebase asks for instead of bending a signature to be testable (the command palette's index
-/// is tested exactly this way); [`ConnRow`] is above because the data-sources tree's walk reads a
-/// connection's registration off the row it is already iterating rather than looking it up again.
+pub use project::{FaultKind, ProjChan, ProjectState, Reg};
+/// The catalog rows themselves. A test that builds a store **inline** names these, which is what
+/// this codebase asks for instead of bending a signature to be testable (the command palette's
+/// index is tested exactly this way). A connection's row is not among them: nothing outside the
+/// store reads one directly any more, the data-sources tree having moved onto [`SourceNode`].
 #[cfg(test)]
 pub use project::{TableRow, ViewInfo, ViewRow};
 pub use session::{ProblemGroup, QueryTab, SessionState, Stamp};
+pub use sources::{assemble, SourceContents, SourceNode};
 pub use statement::{settle, use_settle, use_statement_settle, Settle};

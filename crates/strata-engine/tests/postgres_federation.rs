@@ -48,7 +48,9 @@ use strata_core::project::ProjectDefs;
 use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::{table_spec, CatalogSpec, RegOutcome};
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
-use strata_engine::sources::{migrate_secrets, put_secret, SchemaVisibility};
+use strata_engine::sources::{
+    migrate_secrets, put_secret, SchemaListingView, SchemaVisibility, SourceDetail,
+};
 use strata_engine::{
     sql, stopped_on_purpose, Connections, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
@@ -282,7 +284,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     assert!(why.contains("strata"), "{why}");
 
     assert!(
-        engine.sources().listing(&conn).is_none(),
+        !live(&engine, &conn),
         "a refused connection registers nothing"
     );
 
@@ -292,8 +294,8 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .await
         .expect("the connection registers its catalog");
 
-    enumeration(&engine, port).await;
-    qualified_offer(&engine, &conn).await;
+    enumeration(&engine).await;
+    qualified_offer(&engine).await;
     pushdown(&engine).await;
     profiling(&engine).await;
     let fixtures = env::temp_dir().join(format!("strata-pg-{}", process::id()));
@@ -313,7 +315,11 @@ async fn a_database_connection_registers_a_federated_catalog() {
 
 /// **What the catalog says it holds** — a *phase*, called in sequence, not a test of its own
 /// (a second `#[tokio::test]` would race this one for the single container worker).
-async fn enumeration(engine: &Engine, port: u16) {
+///
+/// The tagging half asks for a schema the server does not have, which is a change to what the
+/// connection **shows** rather than a def handed to a read — the listing is the session's now, so
+/// the phase puts the shown set back before the phases after it run.
+async fn enumeration(engine: &Engine) {
     let names = rows(
         engine,
         1,
@@ -336,11 +342,10 @@ async fn enumeration(engine: &Engine, port: u16) {
         "every schema the role can see, and every relation in them"
     );
 
-    let (catalog, listing) = engine
+    engine
         .sources()
-        .listing(&connection(port, CATALOG, &["public", "warehouse"]))
-        .expect("a live database has a listing");
-    assert_eq!(catalog, CATALOG);
+        .show_schemas(CATALOG, &["public".to_string(), "warehouse".to_string()]);
+    let listing = schemas_of(engine, CATALOG);
     assert_eq!(
         listing
             .iter()
@@ -369,6 +374,9 @@ async fn enumeration(engine: &Engine, port: u16) {
         ]),
         "a remote view is listed as one, which pg_tables could not have said"
     );
+    engine
+        .sources()
+        .show_schemas(CATALOG, &["public".to_string()]);
 
     assert_eq!(
         rows(
@@ -381,6 +389,32 @@ async fn enumeration(engine: &Engine, port: u16) {
     );
 }
 
+/// Is `conn` a connection this engine holds live right now? — the snapshot's own answer, which
+/// is what replaced the per-def listing call.
+fn live(engine: &Engine, conn: &ConnectionDef) -> bool {
+    engine
+        .sources()
+        .listing()
+        .source(&conn.named())
+        .is_some_and(|source| source.live)
+}
+
+/// What the connection called `name` shows, scoped and tagged — the one read every surface makes.
+///
+/// Panics if this engine holds no catalog connection under that name, which every caller here has
+/// just registered.
+fn schemas_of(engine: &Engine, name: &str) -> Vec<SchemaListingView> {
+    match engine
+        .sources()
+        .listing()
+        .source(name)
+        .map(|source| source.detail.clone())
+    {
+        Some(SourceDetail::Catalog { schemas, .. }) => schemas,
+        other => panic!("'{name}' is not a live database: {other:?}"),
+    }
+}
+
 /// **What completion offers for this connection, and that the name it hands over runs** (DB-06)
 /// — a phase of the test above.
 ///
@@ -391,8 +425,8 @@ async fn enumeration(engine: &Engine, port: u16) {
 ///
 /// The offers are compared **sorted**, because what only a server can pin is *which* names the
 /// offer holds; their ranking is `complete/tests.rs`'s and needs no server.
-async fn qualified_offer(engine: &Engine, conn: &ConnectionDef) {
-    let catalog = sql::Catalog::default().with_databases(engine.sources().database_syms([conn]));
+async fn qualified_offer(engine: &Engine) {
+    let catalog = sql::Catalog::default().with_databases(engine.sources().database_syms());
     let offer = |sql: &str| {
         let mut labels = sql::complete(sql, sql.len(), &catalog, false)
             .into_iter()
@@ -1030,7 +1064,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "a forgotten connection's catalog must stop resolving"
     );
     assert!(
-        engine.sources().listing(&renamed).is_none(),
+        !live(engine, &renamed),
         "…and it is no longer a live database"
     );
 }
@@ -1150,7 +1184,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
 
     engine
         .sources()
-        .show_schemas(&connection(port, CATALOG, &["public", "analytics"]));
+        .show_schemas(CATALOG, &["public".to_string(), "analytics".to_string()]);
     assert_eq!(
         rows(engine, 44, "SELECT count(*) FROM sessions").await,
         vec![vec!["2".to_string()]],
@@ -1158,7 +1192,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
     );
     engine
         .sources()
-        .show_schemas(&connection(port, CATALOG, &["public"]));
+        .show_schemas(CATALOG, &["public".to_string()]);
     assert!(
         engine
             .ws(WsId(1))
@@ -1294,7 +1328,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
 
     engine
         .sources()
-        .show_schemas(&connection(port, CATALOG, &["public"]));
+        .show_schemas(CATALOG, &["public".to_string()]);
     assert_eq!(
         rows(engine, 52, "SELECT count(*) FROM orders").await,
         vec![vec!["3".to_string()]],
@@ -1356,10 +1390,7 @@ async fn remote_writes(engine: &Engine, port: u16) {
     assert_eq!(report.count, Some(3));
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
-    let (_, listing) = engine
-        .sources()
-        .listing(&conn)
-        .expect("a live database has a listing");
+    let listing = schemas_of(engine, &conn.named());
     assert!(
         listing
             .iter()
@@ -1440,7 +1471,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
     assert_eq!(report.count, None);
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
-    let (_, listing) = engine.sources().listing(&conn).expect("a live listing");
+    let listing = schemas_of(engine, &conn.named());
     assert!(
         listing
             .iter()
@@ -1675,7 +1706,7 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let conn = writable(port, CATALOG, &["public"]);
-    let (_, listing) = engine.sources().listing(&conn).expect("a live listing");
+    let listing = schemas_of(engine, &conn.named());
     assert!(
         listing
             .iter()
@@ -1917,7 +1948,7 @@ async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     };
     assert!(!why.contains("already exists"), "{why}");
 
-    let (_, listing) = engine.sources().listing(conn).expect("still live");
+    let listing = schemas_of(engine, &conn.named());
     assert!(
         listing
             .iter()

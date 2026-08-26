@@ -523,26 +523,33 @@ impl InternalTables {
     }
 }
 
-/// The connection **URLs** this engine has been told about — the same shape as
-/// [`InternalTables`], for the same reasons and with the same limits.
+/// The connections this engine has been told about — **the last def handed to
+/// [`Sources::connect`] for each name**, keyed by that name.
 ///
-/// It holds URLs and nothing else, and answers exactly one engine-side question: **may a typed
-/// `CREATE EXTERNAL TABLE` name this bucket**. Everything else about a connection — its provider,
-/// its region, where its credentials come from, whether its row is green — is the store's, and
-/// this is deliberately not a second copy of any of it.
+/// It answers two engine-side questions from the one map: may a typed `CREATE EXTERNAL TABLE`
+/// name this bucket, and what does this engine hold a connection *for* — which is what
+/// [`Sources::listing`] reads to answer every surface at once. Holding the def rather than the
+/// identity alone is what makes the second question answerable without asking the host for its
+/// rows back: an engine that has been told about a connection can say what kind serves it and
+/// what it registers, whether or not it is live.
 ///
-/// **Membership, not connectivity.** [`Sources::connect`] notes the URL whether the store went in
-/// or not, because a connection that cannot resolve a credential today is still a connection this
-/// project has: the def a statement writes is durable and the fix (`aws sso login`, a region typed
-/// into the editor, ↻) happens afterwards. Asking DataFusion's object-store registry instead would
-/// have answered *no* for exactly those, in a sentence — "not a connection in this project" — that
-/// would then be false.
+/// It is still **not a second copy of the catalog**. What a connection's row says — its `Reg`
+/// verdict, whether it is waiting, the sentence a failure left — is the host's, and nothing here
+/// records it.
+///
+/// **Membership, not connectivity.** [`Sources::connect`] notes the def whether what it describes
+/// went in or not, because a connection that cannot resolve a credential today is still a
+/// connection this project has: the def a statement writes is durable and the fix (`aws sso
+/// login`, a region typed into the editor, ↻) happens afterwards. Asking DataFusion's object-store
+/// registry instead would have answered *no* for exactly those, in a sentence — "not a connection
+/// in this project" — that would then be false. (What the *session* holds right now is a different
+/// question, and [`Sources::listing`] answers it as `live`.)
 ///
 /// Rebuilt by the pass, like the origin set: the registration pass's first phase calls `connect` for
 /// every def, and [`Sources::disconnect`] — the Forget gesture and the edit that moves a
-/// connection's URL — is the one removal.
+/// connection's identity — is the one removal.
 #[derive(Clone, Debug, Default)]
-pub struct Connections(Arc<Mutex<BTreeMap<String, String>>>);
+pub struct Connections(Arc<Mutex<BTreeMap<String, ConnectionDef>>>);
 
 impl Connections {
     /// The connection `name` addresses, **in the connection's own spelling** — `None` when this
@@ -568,12 +575,28 @@ impl Connections {
     /// What the connection called `name` **is** — the `(kind, address)` pair, for the one thing
     /// that still needs it: composing the URL its object store is registered under.
     fn identity(&self, name: &str) -> Option<String> {
+        self.def(name).map(|def| def.identity())
+    }
+
+    /// The def this engine was last handed for the connection called `name`, matched the way
+    /// [`resolve`](Self::resolve) matches.
+    fn def(&self, name: &str) -> Option<ConnectionDef> {
         let held = self.0.lock().unwrap();
         held.get(name).cloned().or_else(|| {
             held.iter()
                 .find(|(held, _)| held.eq_ignore_ascii_case(name))
-                .map(|(_, identity)| identity.clone())
+                .map(|(_, def)| def.clone())
         })
+    }
+
+    /// Every connection this engine has been told about, in name order — what
+    /// [`Sources::listing`] walks.
+    ///
+    /// **Membership, not liveness**, exactly as the rest of this type is: a connection whose
+    /// credentials this machine cannot resolve today is still one the project has, and the
+    /// listing says so by answering `live: false` rather than by leaving it out.
+    fn all(&self) -> Vec<ConnectionDef> {
+        self.0.lock().unwrap().values().cloned().collect()
     }
 
     /// The connection whose `(kind, address)` is `identity` — for the one caller that arrives
@@ -584,7 +607,7 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, held)| held.eq_ignore_ascii_case(identity))
+            .find(|(_, held)| held.identity().eq_ignore_ascii_case(identity))
             .map(|(name, _)| name.clone())
     }
 
@@ -599,7 +622,7 @@ impl Connections {
     pub fn of(defs: &[ConnectionDef]) -> Self {
         let held = Self::default();
         for def in defs {
-            held.note(&def.named(), &def.identity());
+            held.note(def);
         }
         held
     }
@@ -615,15 +638,12 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, identity)| (name.clone(), identity.clone()))
+            .map(|(name, def)| (name.clone(), def.identity()))
             .collect()
     }
 
-    fn note(&self, name: &str, identity: &str) {
-        self.0
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), identity.to_string());
+    fn note(&self, def: &ConnectionDef) {
+        self.0.lock().unwrap().insert(def.named(), def.clone());
     }
 
     fn forget(&self, name: &str) {
@@ -3228,17 +3248,29 @@ mod read_options_tests {
 mod remote_catalog_tests {
     use super::*;
     use crate::providers::fake_source;
+    use crate::sources::fake::{fake_def, TestDoc};
 
+    /// **The workspace is not a database, by construction.** The catalogs an agent is told about
+    /// are the *connections* this engine holds, so the project's own catalog cannot appear among
+    /// them however it is registered — and neither can a bucket, which holds files.
     #[tokio::test]
     async fn the_workspace_catalog_is_not_a_database() {
-        let engine = Engine::builder().build();
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
         assert!(
-            engine.sources().catalogs().is_empty(),
-            "a project with no database connection has no database catalogs"
+            engine.sources().listing().catalog_names().is_empty(),
+            "a project with no connection has no database catalogs"
         );
-        fake_source(&engine.ctx, "Sales", &["orders"]);
+
+        engine
+            .sources()
+            .connect(fake_def::<TestDoc>("Sales", "fixture"))
+            .await
+            .expect("the source registers its catalog");
+
         assert_eq!(
-            engine.sources().catalogs(),
+            engine.sources().listing().catalog_names(),
             vec!["Sales".to_string()],
             "in the spelling it was registered under, and without the workspace's own"
         );

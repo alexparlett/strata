@@ -742,7 +742,7 @@ impl ProjectState {
         self.connections
             .iter()
             .find(|c| c.def.named() == name)
-            .and_then(|c| c.def.provider.source().map(|_| c.def.named()))
+            .and_then(|c| c.def.catalog())
     }
 
     /// The views that read through the database connection registered as `catalog` — its

@@ -93,6 +93,17 @@ impl ConnectionDef {
         }
     }
 
+    /// The catalog this connection registers, or `None` for one that registers an object store.
+    ///
+    /// A source's relations are addressed through a catalog and that catalog **is** the
+    /// connection's name ([`named`](Self::named)) — one field, so the tree's mark, the Forget
+    /// confirm, the remote scans a window keeps and the names completion offers cannot spell it
+    /// differently. Asked of the def rather than of a live engine on purpose: a connection that
+    /// has never answered still has to say what a query would have to write.
+    pub fn catalog(&self) -> Option<String> {
+        self.provider.source().map(|_| self.named())
+    }
+
     /// Upgrade a def written before an HTTP address carried its own scheme.
     ///
     /// `serde(alias = "bucket")` migrates the field *name*; this migrates the **value**. The older

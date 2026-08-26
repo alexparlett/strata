@@ -695,7 +695,7 @@ impl<H: Host> StrataTools<H> {
         let entries = self.host.catalog(&project.root).await?;
         Ok(tables_result(
             entries,
-            engine.sources().catalogs(),
+            engine.sources().listing().catalog_names(),
             params.matching.as_deref(),
             params.page,
         ))

@@ -5,11 +5,11 @@ use std::sync::Arc;
 use datafusion::common::TableReference;
 use datafusion::logical_expr::TableType;
 use strata_arrow::column_info;
-use strata_model::ConnectionDef;
+use strata_model::{ConnectionDef, Provider};
 
 use crate::catalog;
 use crate::sources::source::SourceInfo;
-use crate::sources::{self, RemoteRelation, SchemaListingView, SchemaVisibility};
+use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
 use crate::{fold_ident, store, Engine, CATALOG};
 
@@ -51,7 +51,7 @@ impl Sources<'_> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
         let name = conn.named();
-        engine.connections.note(&name, &conn.identity());
+        engine.connections.note(&conn);
         let live = engine.live.clone();
         let registrants = engine.sources.clone();
         let secrets = Arc::clone(&engine.secrets);
@@ -93,63 +93,90 @@ impl Sources<'_> {
         engine.generation.bump();
     }
 
-    /// What a live connection to a source registered: the catalog it is addressed by, and its
-    /// schemas **scoped and tagged** against the def's own [`SourceDef::schemas`](strata_model::SourceDef::schemas) — `None` for a
-    /// connection that holds no live catalog.
+    /// **Every connection this engine holds**, as one value — see [`SourcesSnapshot`].
     ///
-    /// The one read the data-sources tree, the schema picker and completion share, so no
-    /// consumer re-derives visibility from the def. It reads the connect-time enumeration
-    /// rather than asking the server, which is what makes it free to call: a ↻ re-runs the
-    /// registration pass, and *that* is the refresh.
+    /// The one read the data-sources tree, the schema picker, completion and the agent's catalog
+    /// answers share, so no two of them can be looking at different moments and no consumer
+    /// re-derives schema visibility from a def. It reads the connect-time enumeration rather than
+    /// asking any source, which is what makes it free to call: a ↻ re-runs the registration pass,
+    /// and *that* is the refresh.
+    ///
+    /// Every connection is listed, live or not — membership, in the same sense
+    /// [`Connections`](crate::Connections) is — because a connection whose credentials this
+    /// machine cannot resolve today is still one the project has, and a surface that dropped it
+    /// would have nothing to hang the failure on.
     ///
     /// Synchronous and not on the runtime, because there is no I/O in it.
-    pub fn listing(self, conn: &ConnectionDef) -> Option<(String, Vec<SchemaListingView>)> {
-        let source = conn.provider.source()?;
-        sources::listing(&self.engine.live, conn, source)
+    pub fn listing(self) -> SourcesSnapshot {
+        let engine = self.engine;
+        sources::snapshot(
+            &engine.ctx,
+            &engine.sources,
+            &engine.live,
+            &engine.connections.all(),
+            engine.generation.current(),
+        )
     }
 
-    /// Tell the session which schemas `conn` now **shows** — the Schemas… picker's engine half,
-    /// which writes the def without reconnecting.
+    /// Tell the session which schemas the connection called `name` now **shows** — the Schemas…
+    /// picker's engine half, which writes the session without reconnecting.
     ///
-    /// An unqualified name searches what a connection shows, so the session has to
-    /// learn the new set as the picker commits it. A no-op for a connection that is not live.
+    /// An unqualified name searches what a connection shows, so the session has to learn the new
+    /// set as the picker commits it. A **no-op, generation included**, for a name this engine
+    /// holds nothing for and for one that registers an object store: a bucket has no namespaces
+    /// to show, so nothing about what a name resolves to has moved and re-validating every open
+    /// tab would be a lie about it.
+    ///
+    /// Addressed by **name and the set**, rather than by a def: the picker has just written the
+    /// def the host holds, and handing that back would let two spellings of one connection's
+    /// schemas exist for as long as it took to be told. The engine's own retained def is updated
+    /// with it, so [`listing`](Self::listing) answers the new scoping on the next read.
     ///
     /// Moves the [`generation`](crate::Catalog::generation): what a bare name resolves to has
     /// changed.
-    pub fn show_schemas(self, conn: &ConnectionDef) {
-        self.engine.live.show(conn);
-        self.engine.generation.bump();
+    pub fn show_schemas(self, name: &str, schemas: &[String]) {
+        let engine = self.engine;
+        let Some(mut def) = engine.connections.def(name) else {
+            return;
+        };
+        let Provider::Source(source) = &mut def.provider else {
+            return;
+        };
+        source.schemas = schemas.to_vec();
+        engine.connections.note(&def);
+        engine.live.show(&def);
+        engine.generation.bump();
     }
 
-    /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
-    /// connection, its schemas and relations from [`listing`](Self::listing).
+    /// The **qualified names completion may offer** — one [`DatabaseSym`] per connection that
+    /// registers a catalog, its schemas and relations off [`listing`](Self::listing), so the
+    /// popup and the tree cannot disagree about which remote names exist.
     ///
-    /// Built here rather than in the editor because both halves are read the way the rest of the
-    /// engine reads them: the catalog name off the def, so a connection that has never answered
-    /// still offers the name a query has to say, and the schemas off the connect-time
-    /// enumeration, already scoped. Only a `Live` schema is offered — one the def enables and the
-    /// server does not have is a name that cannot resolve, and the tree already says so on its
-    /// own row; a schema the connection does not show arrives here empty
-    /// ([`SchemaListingView::relations`]), so this walk clones what it offers rather than the
-    /// whole database.
+    /// Derived here rather than on the snapshot because `sources` and `sql` are peers inside this
+    /// crate and neither imports the other; the facade is where both are already in scope.
+    ///
+    /// **Every catalog, live or not**: the name comes from the def, so a connection that has
+    /// never answered still offers the name a query has to say. Only a
+    /// [`Live`](SchemaVisibility::Live) schema is offered under it — one the def enables and the
+    /// source does not have is a name that cannot resolve, and the tree already says so on its own
+    /// row; a schema the connection does not show arrives with no relations, so this walk clones
+    /// what it offers rather than the whole database.
     ///
     /// Free and synchronous, like the listing it reads: it is what lets the completion snapshot
     /// carry remote names without the popup ever reaching the network.
-    pub fn database_syms<'a>(
-        self,
-        defs: impl IntoIterator<Item = &'a ConnectionDef>,
-    ) -> Vec<DatabaseSym> {
-        defs.into_iter()
-            .filter_map(|def| {
-                def.provider.source()?;
-                let name = def.named();
-                if name.is_empty() {
-                    return None;
+    pub fn database_syms(self) -> Vec<DatabaseSym> {
+        self.listing()
+            .sources
+            .into_iter()
+            .filter_map(|source| match source.detail {
+                SourceDetail::Catalog { catalog, schemas } if !catalog.is_empty() => {
+                    Some((catalog, schemas))
                 }
-                let schemas = self
-                    .listing(def)
-                    .map(|(_, schemas)| schemas)
-                    .unwrap_or_default()
+                _ => None,
+            })
+            .map(|(name, schemas)| DatabaseSym {
+                name,
+                schemas: schemas
                     .into_iter()
                     .filter(|s| s.visibility == SchemaVisibility::Live)
                     .map(|s| SchemaSym {
@@ -163,8 +190,7 @@ impl Sources<'_> {
                             })
                             .collect(),
                     })
-                    .collect();
-                Some(DatabaseSym { name, schemas })
+                    .collect(),
             })
             .collect()
     }
@@ -190,21 +216,6 @@ impl Sources<'_> {
     /// The address's own refusal, or the sentence saying nothing is registered for `kind`.
     pub fn check_address(self, kind: &str, address: &str) -> Result<(), String> {
         self.engine.sources.check_address(kind, address)
-    }
-
-    /// The catalogs data-source connections have registered, in the spelling they were registered
-    /// under — the workspace's own excluded, since it is not one.
-    ///
-    /// Membership, not liveness, in the same sense `connections` is: a catalog is on the list
-    /// exactly while its connection is live, which is also exactly while a three-part name can
-    /// resolve through it. Synchronous and free — the list is a map this session holds.
-    pub fn catalogs(self) -> Vec<String> {
-        self.engine
-            .ctx
-            .catalog_names()
-            .into_iter()
-            .filter(|name| fold_ident(name) != CATALOG)
-            .collect()
     }
 
     /// One relation inside a database connection's catalog, from what the session already

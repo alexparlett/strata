@@ -86,7 +86,7 @@ fn connected_catalogs(project: &ProjectState) -> BTreeSet<String> {
         .connections
         .iter()
         .filter(|row| matches!(row.reg, Reg::Ready(())))
-        .filter_map(|row| row.def.provider.source().map(|_| row.def.named()))
+        .filter_map(|row| row.def.catalog())
         .collect()
 }
 

@@ -893,8 +893,12 @@ mod tests {
     /// end-to-end version is `tests/object_store_minio.rs`.
     #[test]
     fn a_location_over_a_connection_splits_into_the_url_and_a_bucket_relative_source() {
-        let connections = Connections::default();
-        connections.note("acme_lake", "s3:acme-lake");
+        let connections = Connections::of(&[ConnectionDef {
+            address: "acme-lake".into(),
+            name: "acme_lake".into(),
+            provider: Provider::S3(S3Store::default()),
+            client_config: Default::default(),
+        }]);
         let root = Path::new("/proj");
 
         assert_eq!(

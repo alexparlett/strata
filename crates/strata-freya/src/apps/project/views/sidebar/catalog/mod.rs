@@ -32,13 +32,25 @@
 //! connect-time enumeration held beside the pool rather than the network. A ↻ re-connects, and
 //! *that* is the refresh.
 //!
+//! **The two are joined once, before the walk** ([`assemble`]) — so every connection row is drawn
+//! from the same moment, where a listing call per row per walk was one moment per row. It is a
+//! `use_side_effect_value` rather than a line in the render, and that is what keeps the join off
+//! the keystroke path: a schema's relation list is the *server's* and can be enormous, and this
+//! re-runs only when one of the three things it reads moves — `Tables`, `Connections`, the catalog
+//! epoch. **Value**, not a plain effect writing a slot: it computes once at mount, so there is no
+//! pass where the pane has a project full of connections and nothing to draw for them. The walk it
+//! feeds reaches no engine at all, which is what makes it the plain function of its inputs it is
+//! supposed to be.
+//!
 //! ## Subscriptions
 //!
 //! **The pane root subscribes to every section the walk reads** — `Meta` for the project's name,
-//! then `Tables`, `Views`, `Queries` and `Connections`. That is what virtualizing costs: one
-//! registration landing re-walks the tree, where the nested pane woke the one group it belonged to.
-//! The list is exhaustive on purpose, because a walk input nothing subscribes to is a row that goes
-//! stale until something unrelated happens to wake the pane.
+//! then `Tables`, `Views` and `Queries`. That is what virtualizing costs: one registration landing
+//! re-walks the tree, where the nested pane woke the one group it belonged to. The list is
+//! exhaustive on purpose, because a walk input nothing subscribes to is a row that goes stale until
+//! something unrelated happens to wake the pane. `Connections` is subscribed by the **join** rather
+//! than here, beside the catalog epoch and `Tables`, because those three are exactly what the join
+//! reads — and a write to any of them has to re-run it, not merely redraw what it last produced.
 //!
 //! ## The one subscription that is not free
 //!
@@ -100,7 +112,7 @@ use self::view::TreeRow;
 use self::workspace::seeded_paths;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::use_remote_schemas;
-use crate::apps::project::state::{use_catalog, ProjChan, ProjectState};
+use crate::apps::project::state::{assemble, use_catalog, ProjChan, ProjectState};
 use crate::components::metrics::{SP_3, SP_4};
 use crate::keymap::on_command;
 use crate::state::use_config_station;
@@ -293,11 +305,17 @@ impl Component for Catalog {
         drop(meta.read());
         drop(views.read());
         drop(queries.read());
-        drop(connections.read());
 
         let wanted = use_state(Vec::new);
-        let generation = use_catalog().read().generation();
+        let catalog = use_catalog();
+        let generation = catalog.read().generation();
         let described = use_remote_schemas(&engine, wanted.read().clone(), generation);
+
+        let sources = use_side_effect_value(move || {
+            drop(catalog.read());
+            drop(connections.read());
+            assemble(&tables.read(), &engine.sources().listing())
+        });
 
         let Walked {
             nodes,
@@ -305,7 +323,7 @@ impl Component for Catalog {
         } = {
             let project = tables.read();
             let expanded = open.read();
-            walk(&project, &engine, &needle, &expanded, &described)
+            walk(&project, &sources.read(), &needle, &expanded, &described)
         };
         use_side_effect_with_deps(&open_relations, move |relations| {
             let mut wanted = wanted;
