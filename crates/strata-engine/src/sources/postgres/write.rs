@@ -24,8 +24,8 @@ use datafusion_table_providers_postgres::arrow_sql_gen::statement_ext::CreateTab
 use datafusion_table_providers_postgres::pool::PostgresConnectionPool;
 use datafusion_table_providers_postgres::Postgres;
 
-use crate::ddl::RemoteTarget;
 use crate::sources::source::SourceCatalog;
+use crate::statements::Remote;
 
 use super::PgCatalog;
 
@@ -40,11 +40,11 @@ SELECT EXISTS ( \
 
 /// `at` as the **server** addresses it: `"schema"."table"`, both parts quoted through the source's
 /// own [`server_ident`](SourceCatalog::server_ident).
-fn server_relation(catalog: &PgCatalog, at: &RemoteTarget) -> String {
+fn server_relation(catalog: &PgCatalog, at: &Remote) -> String {
     format!(
         "{}.{}",
-        catalog.server_ident(&at.schema),
-        catalog.server_ident(&at.table)
+        catalog.server_ident(at.schema()),
+        catalog.server_ident(at.table())
     )
 }
 
@@ -53,7 +53,7 @@ fn server_relation(catalog: &PgCatalog, at: &RemoteTarget) -> String {
 /// over `schema`.
 pub(super) fn target(
     pool: &Arc<PostgresConnectionPool>,
-    at: &RemoteTarget,
+    at: &Remote,
     schema: SchemaRef,
 ) -> Postgres {
     Postgres::new(
@@ -85,20 +85,20 @@ pub(super) fn target(
 /// to the pool inside an aborted transaction.
 pub(super) async fn create(
     catalog: &PgCatalog,
-    at: &RemoteTarget,
+    at: &Remote,
     schema: SchemaRef,
 ) -> Result<bool, String> {
     let pool = &catalog.pool;
     let mut statements = vec![format!(
         "SET LOCAL search_path TO {}",
-        catalog.server_ident(&at.schema)
+        catalog.server_ident(at.schema())
     )];
-    statements.extend(CreateTableBuilder::new(schema, &at.table).build_postgres());
+    statements.extend(CreateTableBuilder::new(schema, at.table()).build_postgres());
 
     let mut conn = pool.connect_direct().await.map_err(|e| refused(at, &e))?;
     let tx = conn.conn.transaction().await.map_err(|e| refused(at, &e))?;
     let held: bool = tx
-        .query_one(RELATION_EXISTS, &[&at.schema, &at.table])
+        .query_one(RELATION_EXISTS, &[&at.schema(), &at.table()])
         .await
         .map_err(|e| refused(at, &e))?
         .get(0);
@@ -117,7 +117,7 @@ pub(super) async fn create(
 ///
 /// Only ever reached for a relation [`create`] reported making, which is what makes an
 /// unconditional drop safe.
-pub(super) async fn discard(catalog: &PgCatalog, at: &RemoteTarget) -> Result<(), String> {
+pub(super) async fn discard(catalog: &PgCatalog, at: &Remote) -> Result<(), String> {
     let sql = format!("DROP TABLE IF EXISTS {}", server_relation(catalog, at));
     match catalog.pool.connect_direct().await {
         Ok(conn) => conn
@@ -130,7 +130,7 @@ pub(super) async fn discard(catalog: &PgCatalog, at: &RemoteTarget) -> Result<()
 }
 
 /// A round trip that did not happen, named by the relation it was about.
-fn refused(at: &RemoteTarget, e: &impl std::fmt::Display) -> String {
+fn refused(at: &Remote, e: &impl std::fmt::Display) -> String {
     format!("Cannot write to '{}': {e}", at.address())
 }
 

@@ -38,7 +38,6 @@ mod catalog;
 mod chart;
 /// The all-or-nothing contract a connection registers under, shared by [`store`] and [`sources`].
 mod connect;
-mod ddl;
 mod explain;
 pub mod export;
 mod facade;
@@ -59,10 +58,6 @@ pub mod udf_package;
 mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
-pub use ddl::RemoteTarget;
-pub use ddl::{
-    drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
-};
 pub use facade::{Catalog, Lang, SnapshotReads, Sources, Work, Workspace};
 pub use policy::{
     Admit, Capability, CapabilityPolicyProvider, DenyCode, Grant, GrantFamily, Grants, Locality,
@@ -74,7 +69,11 @@ pub use sources::source::{
     Sourced,
 };
 pub use sources::RemoteRelation;
-pub use statements::{Fault, Form, PolicyRefusal, Reason, StmtKind};
+pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
+pub use statements::{
+    Fault, Form, Mechanism, PolicyRefusal, Reason, Remote, StatementReport, StmtKind, StoreEffect,
+    Target,
+};
 
 pub use builder::EngineBuilder;
 pub use udf_package::UdfPackage;
@@ -126,12 +125,12 @@ use datafusion_federation::FederatedQueryPlanner;
 use tokio::runtime::Runtime;
 use tokio::task::AbortHandle;
 
-use ddl::StrataFunctionFactory;
 use functions::Functions;
 use providers::{StrataCatalogList, StrataCatalogProvider};
 use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat};
 use sources::source::Sources as SourceRegistry;
 use sources::Live;
+use statements::arms::StrataFunctionFactory;
 use strata_model::{ConnectionDef, QueryOutput, SnapshotId, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
@@ -755,7 +754,7 @@ impl Engine {
     /// registered a table says so in its effect, and that is where the origin comes from — never
     /// by asking DataFusion, which does not know. Held once rather than at each producer, so the
     /// catalog-surface drop and the typed one cannot leave the engine in two different states.
-    /// Exhaustive on [`StoreEffect`] with no wildcard, for the reason [`ddl::execute`] is
+    /// Exhaustive on [`StoreEffect`] with no wildcard, for the reason [`statements::arms::execute`] is
     /// exhaustive on `StmtKind`: an effect a later task adds must be a compile error here rather
     /// than something the engine silently declines to learn from.
     fn settle_effect(&self, effect: Option<&StoreEffect>) {
@@ -1320,7 +1319,7 @@ const SCHEMA: &str = "public";
 
 /// Re-initialise the UDFs that read `ConfigOptions` **when they were registered**, after a write
 /// to a live session's options. Call from every path that moves an option: a Settings Apply
-/// ([`Engine::set_config`]) and a typed `SET` / `RESET` (`ddl::session`).
+/// ([`Engine::set_config`]) and a typed `SET` / `RESET` (`statements::arms::session`).
 ///
 /// Writing `ConfigOptions` is not the whole of applying a setting, and the gap is silent rather
 /// than loud. `NowFunc` captures `execution.time_zone` in `new_with_config` and bakes it into the

@@ -3,7 +3,7 @@
 //!
 //! DataFusion's provider traits are resolution and enumeration interfaces: `register_table` is sync
 //! and carries no caller identity, so nothing here could spool a CTAS result or authorize a `DROP`.
-//! Lifecycle lives in [`ddl`](super::ddl), in front of `ctx.sql`. What the traits *can* do is fix
+//! Lifecycle lives in [`statements::arms`](super::statements::arms), in front of `ctx.sql`. What the traits *can* do is fix
 //! the namespace's shape and decide what enumerating it returns — this module's two jobs:
 //!
 //! * **Identity** — the workspace catalog has one schema, tables keyed by [`fold_ident`].
@@ -53,7 +53,7 @@ use super::{fold_ident, CATALOG, SCHEMA};
 ///
 /// One predicate rather than the test written per caller, because two rules turn on it and must not
 /// drift: what an intercepted statement may create, drop or write
-/// ([`ddl::bare_name`](super::ddl::bare_name)), and what the `__snap_` namespace covers
+/// ([`resolve_target`](super::statements::resolve_target)), and what the `__snap_` namespace covers
 /// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session holds
 /// more than one catalog, so "is this name ours" is a real question.
 ///

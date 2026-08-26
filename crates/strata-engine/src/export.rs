@@ -13,7 +13,7 @@
 //! showing, so what lands on disk is what was on screen.
 //!
 //! **The gates an export answers to live here, and the statements reach them.** Three surfaces
-//! write a result to a path — the Export window, a typed `COPY … TO` (`ddl::copy`), and the
+//! write a result to a path — the Export window, a typed `COPY … TO` (`statements::arms::copy`), and the
 //! agent's `export_result` (QE-05) — and none of them may land in storage Strata owns. So
 //! [`refuse_owned_target`], [`partition_columns_are_bare_words`] and [`partition_null_refusal`]
 //! are all this module's, called by whichever surface reaches them, rather than each having its
@@ -462,7 +462,7 @@ fn quote_literal(raw: &str) -> String {
 
 /// Why a partition column containing NULLs is refused, in the one wording both surfaces use.
 ///
-/// Shared with the typed `COPY` arm (`ddl::copy`), which reaches the same conclusion by a
+/// Shared with the typed `COPY` arm (`statements::arms::copy`), which reaches the same conclusion by a
 /// different route — a pre-flight count over the statement's own source, since a typed COPY has
 /// no snapshot behind it and therefore none of the write pass's free counts. Two mechanisms, one
 /// sentence: the fact the user is told is the same fact, and a second phrasing of it would read
@@ -523,8 +523,9 @@ fn partition_columns_have_no_nulls(
 /// Its own sync function rather than an inline check, because the resolved dialect is not `Send`
 /// and [`run_export`] is spawned onto the engine runtime.
 ///
-/// **Shared with the two typed statements that carry a `PARTITIONED BY`** — `ddl::copy`, which
-/// asks it of the very strings `CopyToStatement::partitioned_by` holds, and `ddl::external`,
+/// **Shared with the two typed statements that carry a `PARTITIONED BY`** — `statements::arms::copy`, which
+/// asks it of the very strings `CopyToStatement::partitioned_by` holds, and
+/// `statements::arms::external`,
 /// whose `CreateExternalTable::table_partition_cols` are built the same way. Both are
 /// `Ident::to_string()`'s output, so a quoted `PARTITIONED BY ("order date")` arrives here *with
 /// its quotes* — which for a COPY is a name that matches no field, and for a registration is a
@@ -576,7 +577,7 @@ fn is_bare_word(dialect: &dyn Dialect, name: &str) -> bool {
 /// folder compare equal to the path the fence was built from.
 ///
 /// `subject` is what the sentence is about, because two surfaces reach this and the user reads a
-/// refusal as being about the thing they did: `COPY` for the typed statement (`ddl::copy`),
+/// refusal as being about the thing they did: `COPY` for the typed statement (`statements::arms::copy`),
 /// `Export` for [`check_destination`]'s caller. Only the subject differs — the rule, the roots and
 /// the reason are one copy.
 pub(super) fn refuse_owned_target(
@@ -760,7 +761,7 @@ pub(super) fn check_destination(path: &str, root: Option<&Path>) -> Result<(), S
 
 /// `COPY … TO` returns a single `UInt64` "count" column with the rows written.
 ///
-/// Shared with `ddl::tables`, whose CTAS spool is a `COPY` too: the row count in its report and
+/// Shared with `statements::arms::tables`, whose CTAS spool is a `COPY` too: the row count in its report and
 /// the one in an export's are the same fact read out of the same shape.
 pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
     use datafusion::arrow::array::UInt64Array;

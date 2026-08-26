@@ -40,10 +40,12 @@ use datafusion::sql::parser::Statement as DFStatement;
 use crate::export::{
     copy_row_count, partition_columns_are_bare_words, partition_null_refusal, refuse_owned_target,
 };
+use crate::policy::Principal;
+use crate::statements::ctx::StmtCtx;
+use crate::statements::pipeline::Qualified;
+use crate::statements::report::StatementOutcome;
 use crate::statements::StmtKind;
 use strata_core::util::plural;
-
-use super::{DataRoot, StatementOutcome};
 
 /// Write a typed `COPY … TO`'s source to disk and report the rows it wrote.
 ///
@@ -54,11 +56,13 @@ use super::{DataRoot, StatementOutcome};
 /// already keeps. Driving the plan *is* `ctx.sql` minus the re-parse: `execute_logical_plan`
 /// special-cases `Ddl` and `Statement` and hands everything else, `Copy` included, to exactly this.
 pub async fn copy_to(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    root: &DataRoot,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    let DFStatement::CopyTo(copy) = &stmt else {
+    let ctx = &cx.ctx;
+    let root = &cx.root;
+    let DFStatement::CopyTo(copy) = &**stmt else {
         return Err(format!(
             "{} did not parse as a copy",
             StmtKind::Copy.label()
@@ -68,7 +72,7 @@ pub async fn copy_to(
 
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Copy(copying) = &plan else {

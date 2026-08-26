@@ -73,12 +73,48 @@ impl Deref for Qualified {
     }
 }
 
+/// Proof that [`classify`] ran.
+///
+/// A variant's fields cannot be private, so [`Admitted`] would otherwise be constructible around
+/// any [`Qualified`] — classification, and with it the policy check, skippable by hand. One field
+/// only this module can mint closes that: holding an `Admitted` *means* classify ran, and the
+/// order is the types end to end — parse, qualify, classify, dispatch, with no trust step.
+///
+/// Matching sites keep their ergonomics with `..`.
+#[derive(Clone, Copy, Debug)]
+pub struct Proof(());
+
 /// An accepted statement, and how the engine will run it.
+///
+/// # Example
+///
+/// Only [`classify`] mints one, so admission cannot be asserted from outside the pipeline:
+///
+/// ```compile_fail,E0603
+/// use strata_engine::statements::pipeline::{Admitted, Proof, Qualified};
+/// use strata_engine::ReadPolicy;
+///
+/// fn forge(stmt: Qualified) -> Admitted {
+///     Admitted::Query {
+///         stmt,
+///         policy: ReadPolicy::default(),
+///         proof: Proof(()),
+///     }
+/// }
+/// ```
 pub enum Admitted {
     /// The snapshot pipeline, carrying the [`ReadPolicy`] the statement is planned under.
-    Query { stmt: Qualified, policy: ReadPolicy },
+    Query {
+        stmt: Qualified,
+        policy: ReadPolicy,
+        proof: Proof,
+    },
     /// The engine implements it as `kind`; the store folds the outcome.
-    Statement { kind: StmtKind, stmt: Qualified },
+    Statement {
+        kind: StmtKind,
+        stmt: Qualified,
+        proof: Proof,
+    },
 }
 
 impl Admitted {
@@ -292,8 +328,13 @@ pub async fn classify(
         Form::Read | Form::Execute => Admitted::Query {
             policy: read_policy(&stmt),
             stmt,
+            proof: Proof(()),
         },
-        Form::Statement(kind) => Admitted::Statement { kind, stmt },
+        Form::Statement(kind) => Admitted::Statement {
+            kind,
+            stmt,
+            proof: Proof(()),
+        },
     })
 }
 

@@ -40,52 +40,72 @@ use datafusion::datasource::DefaultTableSource;
 use datafusion::logical_expr::dml::{DmlStatement, InsertOp, WriteOp};
 use datafusion::logical_expr::{CreateMemoryTable, DdlStatement, LogicalPlan, TableType};
 use datafusion::prelude::{SQLOptions, SessionContext};
-use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
 use crate::export::copy_row_count;
+use crate::policy::Principal;
 use crate::query::ipc_write_options;
 use crate::sink::append_rows;
 use crate::sources::{create_table_as, insert_into, writable, Live};
+use crate::statements::ctx::{DataRoot, StmtCtx};
+use crate::statements::pipeline::Qualified;
+use crate::statements::report::{StatementOutcome, StoreEffect};
+use crate::statements::target::{elsewhere, read_only, resolve_target, Remote, Target};
 use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, InternalTables};
 use strata_core::project::{internal_source, tables_dir};
 use strata_core::util::{plural, temp_dir_name};
 use strata_model::{SourceFormat, TableDef, TableOrigin};
 
-use super::{
-    bare_name, existing, left_invalid, read_only, remote, remote_target, DataRoot, RemoteTarget,
-    StatementOutcome, StoreEffect,
-};
+use super::{existing, left_invalid, remote};
 
-/// What [`bare_name`] calls the objects these statements create.
+/// What [`elsewhere`] calls the objects these statements create.
 const WHAT: &str = "Tables";
 
-/// Create an internal table from a `CREATE TABLE` / `CREATE TABLE … AS SELECT`.
+/// A **column-list** `CREATE TABLE` — an internal table, or the server's own.
 ///
-/// One function for both kinds because DataFusion plans them into one node: a declared column
-/// list with no query becomes an `EmptyRelation` carrying that schema, and the spool below then
-/// writes it as a schema-carrying, zero-row Arrow file. The router still names them apart
-/// (`StmtKind`) because the *report* says different things, and because a kind that classifies is
-/// a kind some later task may implement differently.
-///
-/// A column-list create inside a database connection is the one branch taken **before** planning,
-/// its types being the server's vocabulary: asking DataFusion to plan it in order to find its
-/// target would refuse `jsonb` before anything looked.
-pub async fn create(
-    ctx: &SessionContext,
-    kind: StmtKind,
-    stmt: DFStatement,
-    root: DataRoot,
-    sources: &Live,
-    source: &str,
+/// The remote branch is the one taken **before** planning, its types being the server's
+/// vocabulary: asking DataFusion to plan `CREATE TABLE pg.public.t (payload jsonb)` in order to
+/// find its target would refuse it before anything looked. Everything else is [`create`], which
+/// both kinds share because DataFusion plans them into one node — a declared column list with no
+/// query becomes an `EmptyRelation` carrying that schema, and the spool writes it as a
+/// schema-carrying, zero-row Arrow file.
+pub async fn create_table(
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    if let Some(at) = remote::target(ctx, kind, &stmt) {
-        return remote::create_table(ctx, sources, &at, &stmt, source).await;
+    if let Some(at) = remote::target(&cx.ctx, StmtKind::CreateTable, stmt) {
+        cx.require_target(who, StmtKind::CreateTable, &Target::Remote(at.clone()))
+            .await?;
+        return remote::create_table(cx, &at, stmt).await;
     }
+    create(cx, who, stmt, StmtKind::CreateTable).await
+}
+
+/// `CREATE TABLE … AS SELECT` — [`create`], with no pre-plan branch: a CTAS's input is an
+/// ordinary query, so a remote target is planned into the source's own sink
+/// ([`Mechanism::PlanIntoSink`](crate::statements::Mechanism::PlanIntoSink)) rather than
+/// dispatched as text, and the target is resolved off the plan below.
+pub async fn create_as(
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
+) -> Result<StatementOutcome, String> {
+    create(cx, who, stmt, StmtKind::Ctas).await
+}
+
+/// The body both creates share, past the column-list statement's pre-plan branch.
+async fn create(
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
+    kind: StmtKind,
+) -> Result<StatementOutcome, String> {
+    let ctx = &cx.ctx;
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(create)) = plan else {
@@ -113,11 +133,16 @@ pub async fn create(
         seen.push(folded);
     }
 
-    if let Some(at) = remote_target(ctx, &name) {
-        return materialize(ctx, &at, sources, &input, if_not_exists, or_replace).await;
-    }
-    let name = bare_name(ctx, &name, WHAT)?;
-    let Some(root) = root else {
+    let target = resolve_target(ctx, &name);
+    cx.require_target(who, kind, &target).await?;
+    let name = match target {
+        Target::Remote(at) => {
+            return materialize(ctx, &at, &cx.sources, &input, if_not_exists, or_replace).await
+        }
+        Target::Nowhere { .. } => return Err(elsewhere(WHAT)),
+        Target::Workspace { name } => name,
+    };
+    let Some(root) = cx.root.clone() else {
         return Err(format!(
             "{} needs a project folder to store the table's data",
             kind.label()
@@ -198,14 +223,14 @@ pub async fn create(
 /// name it simply creates, exactly as the local arm does.
 async fn materialize(
     ctx: &SessionContext,
-    at: &RemoteTarget,
+    at: &Remote,
     sources: &Live,
     input: &Arc<LogicalPlan>,
     if_not_exists: bool,
     or_replace: bool,
 ) -> Result<StatementOutcome, String> {
     let address = at.address();
-    if !writable(sources, &at.catalog) {
+    if !writable(sources, &at.connection) {
         return Err(read_only(at));
     }
 
@@ -365,14 +390,14 @@ const INSERT_EXTERNAL: &str =
 /// that can is built by [`insert_into`], used once and dropped, so no plan ever sees it and
 /// pushdown on every read is untouched.
 pub async fn insert(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    internal: &InternalTables,
-    sources: &Live,
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
+    let ctx = &cx.ctx;
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Dml(dml) = &plan else {
@@ -385,25 +410,29 @@ pub async fn insert(
         return Err(Fault::InsertOverwrite.message());
     }
 
-    if let Some(at) = remote_target(ctx, &dml.table_name) {
-        if !writable(sources, &at.catalog) {
-            return Err(read_only(&at));
+    let target = resolve_target(ctx, &dml.table_name);
+    cx.require_target(who, StmtKind::Insert, &target).await?;
+    let name = match &target {
+        Target::Remote(at) => {
+            if !writable(&cx.sources, &at.connection) {
+                return Err(read_only(at));
+            }
+            verify_insert(&plan)?;
+            let rows = insert_into(ctx, &cx.sources, at, &dml.input).await?;
+            return Ok(StatementOutcome {
+                message: format!(
+                    "Inserted {} into '{}'",
+                    plural(rows as usize, "row"),
+                    at.address()
+                ),
+                count: Some(rows),
+                effect: None,
+            });
         }
-        verify_insert(&plan)?;
-        let rows = insert_into(ctx, sources, &at, &dml.input).await?;
-        return Ok(StatementOutcome {
-            message: format!(
-                "Inserted {} into '{}'",
-                plural(rows as usize, "row"),
-                at.address()
-            ),
-            count: Some(rows),
-            effect: None,
-        });
-    }
-
-    let name = bare_name(ctx, &dml.table_name, WHAT)?;
-    if !internal.contains(&name) {
+        Target::Nowhere { .. } => return Err(elsewhere(WHAT)),
+        Target::Workspace { name } => name.clone(),
+    };
+    if !cx.internal.contains(&name) {
         return Err(INSERT_EXTERNAL.into());
     }
     verify_insert(&plan)?;
@@ -444,19 +473,19 @@ fn verify_insert(plan: &LogicalPlan) -> Result<(), String> {
 /// The table a typed `DROP TABLE` names, dropped — the statement half of [`drop_table`], or
 /// [`remote::drop_relation`]'s dispatch for a name inside a database connection.
 pub async fn drop_statement(
-    ctx: &SessionContext,
-    root: &DataRoot,
-    internal: &InternalTables,
-    stmt: DFStatement,
-    sources: &Live,
-    source: &str,
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    if let Some(at) = remote::target(ctx, StmtKind::DropTable, &stmt) {
-        return remote::drop_relation(ctx, sources, &at, false, &stmt, source).await;
+    let ctx = &cx.ctx;
+    if let Some(at) = remote::target(ctx, StmtKind::DropTable, stmt) {
+        cx.require_target(who, StmtKind::DropTable, &Target::Remote(at.clone()))
+            .await?;
+        return remote::drop_relation(cx, &at, false, stmt).await;
     }
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Ddl(DdlStatement::DropTable(drop)) = plan else {
@@ -465,14 +494,10 @@ pub async fn drop_statement(
             StmtKind::DropTable.label()
         ));
     };
-    drop_table(
-        ctx,
-        root,
-        internal,
-        &bare_name(ctx, &drop.name, WHAT)?,
-        drop.if_exists,
-    )
-    .await
+    let target = resolve_target(ctx, &drop.name);
+    cx.require_target(who, StmtKind::DropTable, &target).await?;
+    let name = target.workspace(WHAT)?;
+    drop_table(ctx, &cx.root, &cx.internal, &name, drop.if_exists).await
 }
 
 /// Drop the registered table `name`: deregister the provider, delete the data **if the data is

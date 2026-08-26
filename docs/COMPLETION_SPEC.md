@@ -165,11 +165,11 @@ Two kinds, deliberately distinguished:
     so statement phrases must not enter it.
   - `JOIN_LEADINS` — join modifiers after which `JOIN` itself is next.
   - Statement vocabularies owned by the modules whose dispatch they mirror:
-    `ddl::external`'s `STORED_AS_FORMATS` (each entry must parse through
+    `arms::external`'s `STORED_AS_FORMATS` (each entry must parse through
     `read_format`, held by its own test) and its `CSV_OPTION_KEYS` /
     `JSON_OPTION_KEYS` tables (`{key, kind, what, set}` — the table **is**
     `apply`'s arm set, so the offer and the arm cannot drift); `config::ENGINE_KEYS`
-    filtered through `ddl::session::refuse_reserved_key` for the `SET` key pool.
+    filtered through `arms::session::refuse_reserved_key` for the `SET` key pool.
 
 ## 4. Pools and ranking
 

@@ -46,7 +46,6 @@ use datafusion::logical_expr::{
     DropFunction, Expr, LogicalPlan, OperateFunctionArg, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{
     visit_expressions_mut, CreateFunction as SqlCreateFunction,
@@ -54,11 +53,12 @@ use datafusion::sql::sqlparser::ast::{
     Ident, Statement as SqlStatement, Value,
 };
 
-use crate::functions::Functions;
+use crate::policy::Principal;
+use crate::statements::ctx::StmtCtx;
+use crate::statements::pipeline::Qualified;
+use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::StmtKind;
 use crate::{fold_ident, registered_function};
-
-use super::{StatementOutcome, StoreEffect};
 
 /// DataFusion's seam for `CREATE FUNCTION`, installed on every engine (`build_context`).
 ///
@@ -93,11 +93,12 @@ impl FunctionFactory for StrataFunctionFactory {
 /// argument types are resolved; it is the factory's own judgement, run here so its refusal reaches
 /// the user as a plain sentence rather than wrapped in a planner error.
 pub async fn create(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    functions: &Functions,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    let DFStatement::Statement(mut s) = stmt else {
+    let (ctx, functions) = (&cx.ctx, &cx.functions);
+    let DFStatement::Statement(mut s) = (**stmt).clone() else {
         return Err(not_a_function(StmtKind::CreateFunction));
     };
     let SqlStatement::CreateFunction(function) = s.as_mut() else {
@@ -160,12 +161,13 @@ pub async fn create(
 /// [`fold_ident`]'s answer — the same folding [`create`] registered under, or `DROP FUNCTION
 /// AddOne` would fail to find the function `CREATE FUNCTION AddOne` made.
 pub async fn drop(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    functions: &Functions,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
+    let (ctx, functions) = (&cx.ctx, &cx.functions);
     {
-        let DFStatement::Statement(s) = &stmt else {
+        let DFStatement::Statement(s) = &**stmt else {
             return Err(not_a_function(StmtKind::DropFunction));
         };
         let SqlStatement::DropFunction(dropping) = s.as_ref() else {
@@ -175,7 +177,7 @@ pub async fn drop(
     }
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Ddl(DdlStatement::DropFunction(dropping)) = plan else {

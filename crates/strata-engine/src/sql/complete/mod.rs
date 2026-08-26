@@ -15,7 +15,6 @@ use std::ops::Range;
 
 use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
 
-use crate::ddl::{option_keys_for, refuse_reserved_key, OptionKind, STORED_AS_FORMATS};
 use crate::fold_ident;
 use crate::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
@@ -27,6 +26,9 @@ use crate::sql::lex::{
 };
 use crate::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym, TableSym};
 use crate::sql::FunctionSym;
+use crate::statements::arms::{
+    option_keys_for, refuse_reserved_key, OptionKind, STORED_AS_FORMATS,
+};
 use strata_arrow::config::{key_def, Kind as KeyKind, ENGINE_KEYS};
 use strata_model::Kind;
 

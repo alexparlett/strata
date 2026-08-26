@@ -19,6 +19,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::unparser::dialect::{DefaultDialect, Dialect};
+use datafusion::sql::TableReference;
 use futures::TryStreamExt;
 
 use strata_model::{ConnectionDef, Provider, SourceDef};
@@ -335,9 +336,9 @@ impl SQLExecutor for MemExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ddl::RemoteTarget;
     use crate::secrets::MemSecrets;
     use crate::sources::source::{unsupported, Sources};
+    use crate::statements::Remote;
     use crate::{Engine, RunTag, WsId};
 
     fn secrets() -> Arc<dyn SecretProvider> {
@@ -363,10 +364,9 @@ mod tests {
             !listing.schemas().is_empty(),
             "'{kind}' enumerated nothing to read"
         );
-        let at = RemoteTarget {
-            catalog: "fixture".into(),
-            schema: "public".into(),
-            table: "orders".into(),
+        let at = Remote {
+            connection: "fixture".into(),
+            reference: TableReference::full("fixture", "public", "orders"),
         };
         if let Err(why) = catalog.execute_text("SELECT 1").await {
             assert_eq!(

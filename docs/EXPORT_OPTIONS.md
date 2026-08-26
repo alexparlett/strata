@@ -186,7 +186,7 @@ that cheap and reliable:
   entry is not zero nulls; it is a count we cannot vouch for, and that declines too.
 
 **The typed `COPY` reaches the same refusal by a different route.** A statement the user types has
-no snapshot behind it, so `ddl::copy` counts over the statement's planned input before dispatching
+no snapshot behind it, so `arms::copy` counts over the statement's planned input before dispatching
 it — one extra scan per partitioned typed COPY, same exact-zero rule, and the same sentence from
 `export::partition_null_refusal`, so the two surfaces state one fact once
 (`STATEMENTS_SPEC.md` §6.4).

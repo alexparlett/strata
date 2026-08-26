@@ -30,7 +30,7 @@
 //! `UPDATE orders` and `DELETE FROM orders` all reach the relation `SELECT * FROM orders` reads.
 //! Three things make that safe with no second gate here: a connection is **read-only by default**
 //! and the user opted this one in, an ambiguous name still refuses by name so a write never picks
-//! between two servers, and the arm is reached with a qualified name — so `ddl::remote_target`
+//! between two servers, and the arm is reached with a qualified name — so `statements::resolve_target`
 //! answers identically whether or not the qualifier was typed.
 //!
 //! **A create target is never resolved**, permanently, and it is the one carve-out.
@@ -335,7 +335,7 @@ impl Pass<'_> {
     /// position: the target addresses a relation that already exists, and the
     /// `SET`/`WHERE`/`FROM`/`USING` clauses are ordinary reads. `MySQL`'s multi-table
     /// `Delete::tables` carries no `visit_relation` annotation and is left bare here, which
-    /// `ddl::remote`'s body check reads explicitly.
+    /// `statements::arms::remote`'s body check reads explicitly.
     fn relations<N: Visit + VisitMut>(&mut self, node: &mut N) {
         let mut held = HeldBack::default();
         let _ = Visit::visit(node, &mut held);

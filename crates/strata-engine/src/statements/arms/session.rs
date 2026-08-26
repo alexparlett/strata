@@ -33,16 +33,17 @@ use std::sync::{Arc, Mutex};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::config::ConfigField;
 use datafusion::logical_expr::{LogicalPlan, Statement};
-use datafusion::prelude::{SQLOptions, SessionContext};
-use datafusion::sql::parser::Statement as DFStatement;
+use datafusion::prelude::SQLOptions;
 
 use crate::catalog::short_type;
+use crate::policy::Principal;
 use crate::refresh_config_dependent_udfs;
 use crate::sql::PreparedSym;
+use crate::statements::ctx::StmtCtx;
+use crate::statements::pipeline::Qualified;
+use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::StmtKind;
 use strata_arrow::config::{effective, is_display_key, is_owned_key, is_restart_key, DIALECT_KEY};
-
-use super::{StatementOutcome, StoreEffect};
 
 /// The engine state a **session statement** moves: the `SET` overlay and the prepared-statement
 /// mirror.
@@ -90,13 +91,14 @@ impl SessionScope {
 
 /// `SET key = value` — apply it to the live session and record it in the overlay.
 pub async fn set(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    scope: &SessionScope,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
+    let (ctx, scope) = (&cx.ctx, &cx.scope);
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Statement(Statement::SetVariable(set)) = plan else {
@@ -137,14 +139,14 @@ pub async fn set(
 /// `ConfigOptions::reset`, which is the correct answer for exactly the keys where DataFusion's
 /// default *is* the baseline.
 pub async fn reset(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    scope: &SessionScope,
-    baseline: &BTreeMap<String, String>,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
+    let (ctx, scope, baseline) = (&cx.ctx, &cx.scope, &cx.baseline);
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Statement(Statement::ResetVariable(reset)) = plan else {
@@ -222,13 +224,14 @@ const DIALECT: &str = "The SQL dialect is set in Settings";
 
 /// `PREPARE name [(types)] AS <query>` — dispatched natively, mirrored for completion.
 pub async fn prepare(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    scope: &SessionScope,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
+    let (ctx, scope) = (&cx.ctx, &cx.scope);
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Statement(Statement::Prepare(prepare)) = &plan else {
@@ -262,13 +265,14 @@ pub async fn prepare(
 
 /// `DEALLOCATE name` — dispatched natively, mirrored.
 pub async fn deallocate(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    scope: &SessionScope,
+    cx: &StmtCtx,
+    _who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
+    let (ctx, scope) = (&cx.ctx, &cx.scope);
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Statement(Statement::Deallocate(deallocate)) = &plan else {
