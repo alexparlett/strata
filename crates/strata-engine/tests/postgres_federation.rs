@@ -238,7 +238,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .await
         .expect_err("no password is stored for it");
     assert!(
-        why.contains("No password is stored on this machine") && why.contains(&missing.identity()),
+        why.contains("No password is stored on this machine") && why.contains(&missing.named()),
         "the refusal names the machine and the connection: {why}"
     );
 

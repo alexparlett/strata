@@ -75,13 +75,13 @@ impl DataSource for Pg {
         let source = def
             .provider
             .source()
-            .ok_or_else(|| format!("'{}' is not a PostgreSQL connection.", def.identity()))?;
+            .ok_or_else(|| format!("'{}' is not a PostgreSQL connection.", def.named()))?;
         let settings = PgSettings::read(&source.config)?;
         let passwords = match source.secrets.contains(PASSWORD) {
             false => None,
             true => {
                 let request = secret_slot(def, PASSWORD, PASSWORD_ENV)
-                    .ok_or_else(|| format!("'{}' is not a data source.", def.identity()))?;
+                    .ok_or_else(|| format!("'{}' is not a data source.", def.named()))?;
                 Some(Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>)
             }
         };
@@ -317,7 +317,7 @@ fn refused(conn: &ConnectionDef, settings: &PgSettings, e: pool::Error) -> Strin
             settings.user
         ),
         pool::Error::PasswordProviderError { source } => source.to_string(),
-        other => format!("Cannot connect to '{}': {other}", conn.identity()),
+        other => format!("Cannot connect to '{}': {other}", conn.named()),
     }
 }
 

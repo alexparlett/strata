@@ -331,13 +331,12 @@ fn survives(schema: &SchemaListingView, needle: &str) -> bool {
 /// every link name of every closed bucket and dropping them all.
 fn store(project: &ProjectState, row: &ConnRow, needle: &str, open: &Open, out: &mut Vec<Node>) {
     let def = &row.def;
-    let url = def.named();
-    let path = format!("conn/{url}");
+    let name = def.named();
+    let path = format!("conn/{name}");
     let filtering = !needle.is_empty();
-    let any = project
-        .tables
-        .iter()
-        .any(|t| t.def.connection.as_deref() == Some(url.as_str()) && matches(&t.def.name, needle));
+    let any = project.tables.iter().any(|t| {
+        t.def.connection.as_deref() == Some(name.as_str()) && matches(&t.def.name, needle)
+    });
     if filtering && !matches(&def.address, needle) && !any {
         return;
     }
@@ -359,7 +358,7 @@ fn store(project: &ProjectState, row: &ConnRow, needle: &str, open: &Open, out: 
     if shown {
         out.extend(
             project
-                .tables_over(&url)
+                .tables_over(&name)
                 .into_iter()
                 .filter(|name| matches(name, needle))
                 .map(|name| Node::leaf(1, NodeKind::Link { name })),
@@ -377,7 +376,7 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
     let mut measured = cx.measured;
     let actions = cx.connections;
 
-    let (url, provider) = (connection.def.named(), connection.def.provider.id());
+    let (name, provider) = (connection.def.named(), connection.def.provider.id());
     let address = connection.def.address.clone();
     let mark = connection.catalog.clone();
     let mark_slot = mark
@@ -390,7 +389,7 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
         mark_slot,
     );
 
-    let build_menu = move || connection_menu(&actions, url.clone(), provider);
+    let build_menu = move || connection_menu(&actions, name.clone(), provider);
     let menu_for_row = build_menu.clone();
     let (open, path) = (at.open, at.path.clone());
     let toggle = move |_: Event<PressEventData>| tree.toggle(&path, open);

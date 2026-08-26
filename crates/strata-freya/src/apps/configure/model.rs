@@ -316,7 +316,7 @@ impl ConfigureDraft {
         let provider = def
             .connection
             .as_deref()
-            .and_then(|url| connections.iter().find(|c| c.named() == url))
+            .and_then(|name| connections.iter().find(|c| c.named() == name))
             .map(|c| c.provider.id())
             .filter(|id| id.is_object_store())
             .unwrap_or(ProviderId::S3);
@@ -576,7 +576,7 @@ impl ConfigureDraft {
         let serves = self
             .connection
             .as_deref()
-            .and_then(|url| connections.iter().find(|c| c.named() == url))
+            .and_then(|name| connections.iter().find(|c| c.named() == name))
             .is_some_and(|c| c.provider.id() == provider);
         if !serves {
             self.connection = first_connection(connections, provider);

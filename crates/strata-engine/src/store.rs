@@ -223,7 +223,7 @@ fn wrong_region(conn: &ConnectionDef) -> String {
             conn.address.trim(),
             s3.region.trim()
         ),
-        _ => format!("'{}' did not answer.", conn.identity()),
+        _ => format!("'{}' did not answer.", conn.named()),
     }
 }
 
@@ -330,7 +330,7 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-                .map_err(|e| format!("Cannot reach '{}': {e}", conn.identity()))
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.named()))
         }
         Provider::Gcs(gcs) => {
             let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
@@ -351,12 +351,12 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-                .map_err(|e| format!("Cannot reach '{}': {e}", conn.identity()))
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.named()))
         }
         Provider::Http => {
             let insecure = conn.address.trim().starts_with("http://");
             let mut builder = HttpBuilder::new()
-                .with_url(conn.identity())
+                .with_url(bucket)
                 .with_config(ClientConfigKey::AllowHttp, insecure.to_string());
             for (key, value) in client_options(conn) {
                 builder = builder.with_config(key, value);
@@ -364,11 +364,11 @@ async fn build(conn: &ConnectionDef) -> Result<Arc<dyn ObjectStore>, String> {
             builder
                 .build()
                 .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-                .map_err(|e| format!("Cannot reach '{}': {e}", conn.identity()))
+                .map_err(|e| format!("Cannot reach '{}': {e}", conn.named()))
         }
         Provider::Source(_) => Err(format!(
             "'{}' is a data source, not an object store.",
-            conn.identity()
+            conn.named()
         )),
     }
 }

@@ -488,23 +488,23 @@ async fn register_defs(
         tables,
         views,
         |outcome| match outcome {
-            RegOutcome::Connection { url, result } => match result {
+            RegOutcome::Connection { name, result } => match result {
                 Ok(()) => {
-                    log_event(log, LogLevel::Ok, format!("Connected '{url}'"));
+                    log_event(log, LogLevel::Ok, format!("Connected '{name}'"));
                     station
                         .write_channel(ProjChan::Connections)
-                        .connection_registered(&url);
+                        .connection_registered(&name);
                 }
                 Err(e) => {
-                    tracing::error!("connect '{url}' failed: {e}");
+                    tracing::error!("connect '{name}' failed: {e}");
                     log_event(
                         log,
                         LogLevel::Error,
-                        format!("Connection '{url}' failed: {e}"),
+                        format!("Connection '{name}' failed: {e}"),
                     );
                     station
                         .write_channel(ProjChan::Connections)
-                        .connection_failed(&url, e);
+                        .connection_failed(&name, e);
                 }
             },
             RegOutcome::Table { name, result } => match result {

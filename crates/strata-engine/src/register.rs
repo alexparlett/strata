@@ -53,8 +53,9 @@ pub enum RegOutcome {
         /// The connection's own **name**, **not** its address. An address alone is not unique —
         /// two connections may read one bucket, or reach one server as two roles — so a caller
         /// folding these answers onto rows by address would land both on whichever it found
-        /// first and leave the other unanswered forever.
-        url: String,
+        /// first and leave the other unanswered forever. It is also what every consumer addresses
+        /// a row by, so anything else here settles nothing and the row waits for good.
+        name: String,
         result: Result<(), String>,
     },
     Table {
@@ -171,9 +172,9 @@ pub async fn register_pass(
     mut settled: impl FnMut(RegOutcome),
 ) {
     for conn in connections {
-        let url = conn.identity();
+        let name = conn.named();
         let result = engine.connect(conn).await;
-        settled(RegOutcome::Connection { url, result });
+        settled(RegOutcome::Connection { name, result });
     }
 
     let mut registrations = stream::iter(tables)
@@ -292,11 +293,11 @@ mod tests {
         out
     }
 
-    /// Each outcome as `(identity, did it settle Ok)`, in the order the pass answered.
+    /// Each outcome as `(name, did it settle Ok)`, in the order the pass answered.
     fn names(out: &[RegOutcome]) -> Vec<(&str, bool)> {
         out.iter()
             .map(|o| match o {
-                RegOutcome::Connection { url, result } => (url.as_str(), result.is_ok()),
+                RegOutcome::Connection { name, result } => (name.as_str(), result.is_ok()),
                 RegOutcome::Table { name, result } => (name.as_str(), result.is_ok()),
                 RegOutcome::View { name, result } => (name.as_str(), result.is_ok()),
             })
@@ -465,10 +466,11 @@ mod tests {
     /// Both halves are load-bearing. A source path under a bucket resolves through the object
     /// store registered for it, so a table that registers before its connection fails on a def
     /// that is perfectly correct — an ordering bug that would look exactly like a broken table.
-    /// And a bucket is not unique across providers: the two `lake` defs below are two
-    /// connections and two registry keys, so an outcome carrying only `"lake"` would be
-    /// indistinguishable between them, and a caller folding by it would answer one row twice
-    /// and leave the other waiting forever.
+    /// And an address is not unique across providers: the two `lake` defs below are two
+    /// connections over one bucket, so an outcome carrying only the address would be
+    /// indistinguishable between them, and a caller folding by it would answer one row twice and
+    /// leave the other waiting forever. What tells them apart is the **name**, which is also what
+    /// every consumer looks a row up by — so that is what an outcome carries.
     ///
     /// **Every connection here is one that is refused locally**, and that is deliberate.
     /// `Engine::connect` now asks the bucket whether it answers (`store::reachable`), so a def
@@ -477,17 +479,17 @@ mod tests {
     /// buckets nobody owns, and fail on a plane. Each of the three is refused before any socket
     /// opens (a blank region twice, a blank service-account path once), which costs the test
     /// nothing it was actually asserting: the subject is *order* and *identity*, and an outcome
-    /// carries its URL whether it succeeded or not. `("local", true)` is still what proves the
+    /// carries its name whether it succeeded or not. `("local", true)` is still what proves the
     /// pass carried on to the table phase after three refusals.
     #[tokio::test]
-    async fn connections_settle_first_and_each_under_its_own_url() {
+    async fn connections_settle_first_and_each_under_its_own_name() {
         let root = scratch("connections");
         fs::write(root.join("local.csv"), "id\n1\n").unwrap();
         let defs = ProjectDefs {
             connections: vec![
                 ConnectionDef {
                     address: "lake".into(),
-                    name: String::new(),
+                    name: "lake_s3".into(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
@@ -496,7 +498,7 @@ mod tests {
                 },
                 ConnectionDef {
                     address: "lake".into(),
-                    name: String::new(),
+                    name: "lake_gcs".into(),
                     provider: Provider::Gcs(GcsStore {
                         auth: GcsAuth::ServiceAccount {
                             path: String::new(),
@@ -506,7 +508,7 @@ mod tests {
                 },
                 ConnectionDef {
                     address: "no-region".into(),
-                    name: String::new(),
+                    name: "elsewhere".into(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
@@ -523,9 +525,9 @@ mod tests {
         assert_eq!(
             names(&out),
             vec![
-                ("s3:lake", false),
-                ("gcs:lake", false),
-                ("s3:no-region", false),
+                ("lake_s3", false),
+                ("lake_gcs", false),
+                ("elsewhere", false),
                 ("local", true)
             ],
             "{out:?}"
