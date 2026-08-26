@@ -11,7 +11,7 @@ covers every statement the classifier intercepts.
 
 ```mermaid
 flowchart TD
-    RUN["Engine::run(ws, tag, sql)"] --> CLS{"statements::accept\n(parse → qualify → classify,\nat Capability::full)"}
+    RUN["Workspace::run(ws, tag, sql)"] --> CLS{"statements::accept\n(parse → qualify → classify,\nat Capability::full)"}
     CLS -- "empty buffer / multi-statement /\nan ambiguous bare name" --> ERR1["Err — 'Nothing to run' /\n'Run executes one statement at a time' /\n''orders' is ambiguous: … Qualify it'"]
     CLS -- "Admitted::Query" --> Q["query() byte-for-byte\nthe only arm that touches\nthe snapshot lifecycle"]
     CLS -- "Admitted::Statement(kind)" --> DDL["ddl::execute, under the bookkeep\nbracket explain shares\n(cancel / is_running / close confirm)"]
@@ -27,7 +27,7 @@ flowchart TD
 statement: it parses the buffer with the engine's own dialect and takes exactly one statement from
 it — an empty buffer is `Nothing to run`, a multi-statement buffer is `Run executes one statement
 at a time` — resolves its bare reads, and classifies the result for the caller asking.
-`Engine::run` spends the answer (§2).
+`Workspace::run` spends the answer (§2).
 
 **The three stages are typed, and the order is unforgeable.** `parse` mints a `Parsed`, `qualify`
 mints a `Qualified` from one, and `classify` takes only a `Qualified`; both have private fields and
@@ -80,7 +80,7 @@ folds — §6) or **refused** (§4).
 
 ## 2. Dispatch and outcomes
 
-`Engine::run` (`engine/mod.rs`) routes; nothing else does:
+`Workspace::run` (`engine/mod.rs`) routes; nothing else does:
 
 - **`Admitted::Query`** delegates to `query()`'s body **byte-for-byte** — same supersede, same
   retire-on-dispatch, same pins — carrying only the `ReadPolicy` the classifier answered (§1). It is
@@ -191,11 +191,12 @@ refusal and never grant one. A provider that cannot answer at all is a **fault**
 the statement is refused, and the agent gate reports it as input it could not judge rather than as
 a policy answer.
 
-**Which entries ask.** `Engine::run`, `Engine::validate` and `Engine::policy_verdicts` — the three
-that classify a statement. `Engine::query` and `Engine::explain` are handed a statement to read and
+**Which entries ask.** `Workspace::run`, `Lang::validate` and `Lang::policy_verdicts` — the three
+that classify a statement. `Workspace::query` and `Workspace::explain` are handed a statement to
+read and
 are limited to reading by the read path's own `SQLOptions`; they do not consult the provider, and
 neither do `export`, `chart` or `profile`, which read a settled snapshot. Both agent hosts read
-through `Engine::query`, so a read-only ceiling binds their `policy_verdicts` gate rather than
+through `Workspace::query`, so a read-only ceiling binds their `policy_verdicts` gate rather than
 their dispatch. Widening the ask is EA-09's, with the group handles that give a call somewhere to
 carry a caller.
 
@@ -237,7 +238,7 @@ not something the parsed statement says, and the arm refuses a workspace target 
 - **One classification, two capabilities.** The grammar answers once and the capability is a
   parameter of the policy phase, so there is no second traversal to keep in step. A read-only
   capability never reaches an arm: every non-query refuses with the wording the agent gate shipped
-  with, and `Engine::policy_verdicts` stays the agent-facing wrapper. Parity is a test of a table
+  with, and `Lang::policy_verdicts` stays the agent-facing wrapper. Parity is a test of a table
   (`statements::pipeline`'s matrix, over the two presets), not of two functions kept in step.
 - **Fail closed, default deny.** Parse failure is `Err` ("could not judge"); a policy provider that
   cannot decide is `Reason::Undecided`, refused with its own words rather than read as a pass; the
@@ -282,7 +283,7 @@ The sixteen kinds, and what each answers for a remote-qualified name:
 | Kind | Remote-qualified target |
 |---|---|
 | `Ctas` | **runs** on a writable connection: the server table is created from the input's schema and filled, and a failed fill — or a cancel — drops it again. Read-only refuses by name; `OR REPLACE` is refused where the relation exists, since it would drop a server table, and creates where it does not |
-| `Insert` | **runs** on a writable connection, appending in one transaction — reached **before** `Engine::is_internal`, which is not a question to ask about a relation whose data Strata could never own. Read-only refuses by name; `INSERT OVERWRITE` is refused as it is locally |
+| `Insert` | **runs** on a writable connection, appending in one transaction — reached **before** `Catalog::is_internal`, which is not a question to ask about a relation whose data Strata could never own. Read-only refuses by name; `INSERT OVERWRITE` is refused as it is locally |
 | `CreateTable` (column list) | **runs** on the server, dispatched as text, so its types are the server's own vocabulary (`jsonb`, `serial`) and the server judges them |
 | `CreateView` | **runs** on the server, `MATERIALIZED` included — the one place that clause is accepted, the workspace having no such concept |
 | `DropTable`, `DropView` | **run** on the server. Existence is the server's question (`IF EXISTS` travels in the statement), and the workspace views left reading the relation are named without cascading |
@@ -326,7 +327,8 @@ older build.
 
 *Queries included, and this is a correction.* The fence was once scoped to the **intercepted**
 forms, on the grounds that snapshots are how results are addressed at all. They are — but that
-addressing is `fetch_page`'s, the chart's and the export's, all of which reach a snapshot through
+addressing is `SnapshotReads::page`'s, the chart's and the export's, all of which reach a snapshot
+through
 `ctx.sql` and never pass the pipeline. What a typed `SELECT * FROM __snap_3` bought instead was a
 way to read another tab's retained result with `__strata_ord` showing as an ordinary column, and
 then to send it through the **Export window** — the ordinal reaching a user's file down a route
@@ -468,7 +470,7 @@ Around it, as built:
   profile territory.
 - The catalog row wears an `INTERNAL` badge ("Strata stores this table's data in the project"),
   because origin is what stands between the user and a drop that means two different things.
-- `Engine::is_internal` is an engine-side set of folded names, rebuilt by the same registration
+- `Catalog::is_internal` is an engine-side set of folded names, rebuilt by the same registration
   pass that builds everything else (`note_origin` from every path that registers) — never a second
   catalog. It answers one question: may a write statement target this provider.
 - **Configure is absent** from an internal row's menu — it edits sources, format and partition
@@ -488,11 +490,11 @@ invented name offers nothing) and the `AS |` of a CTAS restarts the query ladder
 
 **A second gesture, no second implementation (IT-01).** The Configure window's LOCATION offers
 a third answer, **Internal**, whose COLUMNS list composes a bare `CREATE TABLE "t" ("a" INT, …)`
-and dispatches it through `Engine::run` on a minted `WsId` — the same classification, the same
+and dispatches it through `Workspace::run` on a minted `WsId` — the same classification, the same
 arm, the same `StoreEffect` folded by the same `settle`. Two things in this file are reached rather than
 copied by it: the constraint / default refusals (`unenforced_clause`) and the duplicate-column
 wording (`duplicate_column`). Its type field is free text, validated per row by
-`Engine::column_type`, which plans `CREATE TABLE __strata_probe (c <typed>)` and executes
+`Lang::column_type`, which plans `CREATE TABLE __strata_probe (c <typed>)` and executes
 nothing — there is no Arrow → SQL inverse to author an offer from, and the same spelling reaches
 different Arrow types under different `execution.time_zone` / `map_string_types_to_utf8view`
 settings, so the panel asks the planner rather than declaring anything.
@@ -502,7 +504,7 @@ settings, so the panel asks the planner rather than declaring anything.
 **`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
 free) and the gate reads what the plan names — first whether it is remote, since DB-10, which
 branches to `db::insert_into` and reports without a store effect; then, for a workspace name, the
-rest of this section. A target outside `Engine::is_internal` is refused
+rest of this section. A target outside `Catalog::is_internal` is refused
 (`ddl::tables::INSERT_EXTERNAL` — a view is the same refusal, neither being a directory a
 `CREATE TABLE` wrote), and any write op that is not `Append` is refused
 (`Fault::InsertOverwrite`; the classifier already catches `INSERT OVERWRITE` off the bare statement,
@@ -523,12 +525,12 @@ The effect is `StoreEffect::RescanTable`, and its fold **re-reads the table's fa
 re-registering it**. Re-registering replaces the provider, and that is what strands the `Arc` a
 view captured (D10/D11) — the only reason a table Refresh re-creates the views above it. An append
 cannot change the shape a view captured (the sink schema-checks first) and the provider re-LISTs
-per scan anyway, so the fold is `refresh_table_rows` → `Engine::table_meta` →
+per scan anyway, so the fold is `refresh_table_rows` → `Catalog::table_meta` →
 `ProjectState::table_reread`: no re-inference, no view churn, no epoch bump, no `Loading` flash.
 The count is still read from the footers, never added up from what the statement claimed.
 
 **`DROP TABLE` works on both origins, and is the one place a table is dropped.** The catalog
-pane's confirm reaches `ddl::tables::drop_table` through `Engine::drop_table` after its store-first
+pane's confirm reaches `ddl::tables::drop_table` through `Catalog::drop_table` after its store-first
 write; a typed statement reaches it through the pipeline. That sharing is the point: a pane that
 merely deregistered would orphan an internal table's data forever, since no def would point at it
 and `tidy_strata_dir` sweeps only `.tmp-…`.
@@ -555,7 +557,7 @@ external one keeps "the source files on disk are not deleted".
 
 Completion (ED-11): `INSERT INTO |` offers only tables built with `internal: true` on the
 `Catalog` snapshot — the store's `TableOrigin` is the internal-set authority for the offer,
-`Engine::is_internal` stays the dispatch gate, one fact read from the store because the store
+`Catalog::is_internal` stays the dispatch gate, one fact read from the store because the store
 built the snapshot. The **column list** offers the target's own columns, and only for a target
 an INSERT may reach — offering columns of a statement dispatch refuses would be dishonest.
 `DROP TABLE |` offers tables and not views, `DROP VIEW |` the reverse (`ddl::tables` names the
@@ -565,7 +567,7 @@ split in its own refusal). VALUES tuples stay silent (the content is the user's 
 ### 6.3 Typed view DDL — `CREATE VIEW` and `DROP VIEW`
 
 **A second gesture into the funnel ⌘S already uses** (`engine/ddl/views.rs`). `views::create` is
-the body `Engine::create_view` spawns for Save-as-view, so a view is indistinguishable by origin:
+the body `Catalog::create_view` spawns for Save-as-view, so a view is indistinguishable by origin:
 one store row, one `project.json` entry, one set of deps, and either gesture edits the row the
 other made. The effect is `StoreEffect::ViewUpserted { def, meta }` — the same pair Save folds.
 
@@ -621,7 +623,7 @@ one that would have to move both surfaces at once.
 
 Profiles are cancelled by `Engine::settle_effect` off the returned effect rather than inside the
 arm, for the reason `TableRemoved` gives: the statement runs in a task that cannot reach the
-lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Engine::create_view` /
+lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Catalog::create_view` /
 `drop_view`, which never produce an effect.
 
 Replay needs no code of its own: a typed view is a `ViewDef`, and `register_pass`'s fixed-point
@@ -786,7 +788,7 @@ fence and the mirror:
   is DataFusion's too.
 
 `EXECUTE`'s widening is `sql::read_policy` (§1) — a `ReadPolicy` carried on the dispatch, never a
-mode the read path offers: `Engine::query` stays the read-only entry, and the widened body is
+mode the read path offers: `Workspace::query` stays the read-only entry, and the widened body is
 private. It unwraps `EXPLAIN`, because `verify_plan` visits the whole tree and would otherwise
 refuse `Explain { Statement(Execute) }` at its child, so a typed `EXPLAIN EXECUTE p` runs and comes
 back as DataFusion's own textual explain rows.
@@ -880,7 +882,7 @@ in the optimizer.
 run exactly once at engine construction into an immutable field — true of the registry until this
 statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
 that changed the registry **and by nothing else**, so the built-in set still costs one walk;
-`Engine::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
+`Lang::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
 whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapshot is memoized on.
 
 **Which surfaces that actually reaches** — three, and it is worth naming them rather than saying
@@ -889,7 +891,7 @@ whose settle bumps the catalog epoch, which is what every tab's `Catalog` snapsh
 | Surface | Reads | Shows |
 |---|---|---|
 | the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
-| diagnostics | `Engine::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
+| diagnostics | `Lang::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
 | `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
 
 There is **no docs panel**: `FunctionSym::doc()` has no caller outside its own unit tests, and
@@ -973,7 +975,8 @@ A statement cannot mint one: a connection carries a provider, a region and where
 come from, none of which a `CREATE EXTERNAL TABLE` says and one of which it must never carry. And
 refusing here is what keeps DataFusion's "No suitable object store found" — the message the
 connections-first phase exists to prevent — off a table row. Membership is
-`Engine::connections`, a set of URLs noted by `connect` **whatever the outcome** and removed by
+the engine's `Connections` set, a set of URLs noted by `connect` **whatever the outcome** and
+removed by
 `disconnect`: the same shape as the internal-name set, and for the same reason it holds names and
 nothing else. Whether a connection resolved a credential today is not whether the project has it,
 and asking DataFusion's object-store registry instead would have answered *no* for exactly the
@@ -1120,7 +1123,8 @@ where that note lives. `CREATE`/`DROP FUNCTION` keep DataFusion's own qualified-
 
 ## 7. A statement, end to end
 
-CTAS, the implemented case. At Run: `Engine::run` classifies → `Intercept(Ctas)` → spool the inner
+CTAS, the implemented case. At Run: `Workspace::run` classifies → `Intercept(Ctas)` → spool the
+inner
 query to `.strata/tables/<slug>/` → register via `register_external`
 (`TableSpec { format: Arrow, internal: true }`) → return `RunOutcome::Statement` carrying
 `StoreEffect::TableUpserted { def, meta }`.

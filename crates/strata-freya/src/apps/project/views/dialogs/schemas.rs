@@ -9,7 +9,7 @@
 //! It is **not** display only, and has not been since DB-09: an unqualified name searches the
 //! schemas a connection shows, so this press moves what `orders` means. Two things follow, and
 //! both are Apply's ([`apply`]) — the session is told
-//! ([`Engine::show_schemas`](strata_engine::Engine::show_schemas)), and the **catalog epoch** is
+//! ([`Sources::show_schemas`](strata_engine::Sources::show_schemas)), and the **catalog epoch** is
 //! bumped, because diagnostics are a reconciliation against that epoch and completion's snapshot
 //! is keyed on it. Without the bump the tree redraws while every open tab keeps the verdict it
 //! had, and the popup goes on offering names that have stopped resolving.
@@ -19,7 +19,7 @@
 //! spinner over a change that touched no engine state. The store's def-in-place write
 //! ([`ProjectState::update_connection_def`]) keeps the row's verdict, which is still true.
 //!
-//! The offer is [`Engine::source_listing`](strata_engine::Engine::source_listing)'s **scoped and tagged** answer and nothing derived beside
+//! The offer is [`Sources::listing`](strata_engine::Sources::listing)'s **scoped and tagged** answer and nothing derived beside
 //! it, so this picker, the tree and completion cannot disagree about what a connection shows. A
 //! connection that is not live has no enumeration to offer: the picker then lists the def's own
 //! schemas with the connection's failure named, rather than an unexplained empty list.
@@ -65,7 +65,7 @@ struct Offer {
 /// Live: the connection's own tagged enumeration. Not live: the def's `schemas`, so the user can
 /// still take one off a connection that is refusing to connect *because* of it.
 fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer>, bool) {
-    let Some((_, schemas)) = engine.source_listing(def) else {
+    let Some((_, schemas)) = engine.sources().listing(def) else {
         let offers = pg
             .schemas
             .iter()
@@ -92,7 +92,7 @@ fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer
 /// epoch — the whole of what Apply does.
 ///
 /// Both of the last two are because this press moves what an unqualified name resolves to: the
-/// session learns the new set without a reconnect (`Engine::show_schemas`), and the surfaces that
+/// session learns the new set without a reconnect (`Sources::show_schemas`), and the surfaces that
 /// answer about names re-derive on the epoch and nothing else — every tab's diagnostics through
 /// `stale_tabs`, and the completion snapshot through its key. The discrete catalog mutation
 /// [`catalog_settled`] exists for, exactly as a Forget is.
@@ -113,7 +113,7 @@ fn apply(
             }
         });
         if let Some(row) = p.connections.iter().find(|c| c.def.named() == url) {
-            engine.show_schemas(&row.def);
+            engine.sources().show_schemas(&row.def);
         }
         persisted_defs(&p, report);
     }

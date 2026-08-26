@@ -3,7 +3,7 @@
 //!
 //! A view is Save's artifact: ⌘S wraps the tab's plain query in `CREATE OR REPLACE VIEW` and
 //! folds the answer into the store. Typed view DDL is the **same funnel entered a second way** —
-//! [`create`] is what [`Engine::create_view`](crate::Engine::create_view) spawns, so a
+//! [`create`] is what [`Catalog::create_view`](crate::Catalog::create_view) spawns, so a
 //! view is indistinguishable by origin: one store row, one `project.json` entry, one set of deps,
 //! and either gesture edits the row the other made.
 //!
@@ -294,7 +294,7 @@ mod tests {
     /// Run one statement and take its report — anything else is a test that asked the wrong
     /// question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.run(WsId(1), RunTag(1), sql.into(), 10).await? {
+        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -303,7 +303,8 @@ mod tests {
     /// The values a query returns, as text — a view has to be readable the way anything else is.
     async fn read(eng: &Engine, sql: &str) -> Vec<Vec<String>> {
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(2), RunTag(2), sql.into(), 100)
+            .ws(WsId(2))
+            .run(RunTag(2), sql.into(), 100)
             .await
             .expect("query")
         else {
@@ -369,6 +370,7 @@ mod tests {
         assert_eq!(read(&eng, "SELECT n FROM v ORDER BY n").await.len(), 2);
 
         let saved = eng
+            .catalog()
             .create_view(def.name.clone(), def.sql.clone())
             .await
             .expect("saved");
@@ -391,7 +393,7 @@ mod tests {
     ///
     /// **The table fence is the point.** DataFusion's own `CREATE OR REPLACE VIEW` over a table
     /// name deregisters the table and registers a view in its place without ever asking what was
-    /// there — so this drives the statement through `Engine::run` and then reads the table back,
+    /// there — so this drives the statement through `Workspace::run` and then reads the table back,
     /// which is the only assertion that would have failed before the fence existed.
     #[tokio::test]
     async fn a_plain_create_points_at_or_replace_and_a_table_name_is_refused() {
@@ -433,7 +435,10 @@ mod tests {
             vec![vec!["1"]],
             "the table DataFusion would have replaced is still a table"
         );
-        assert!(eng.is_internal("sales"), "…and still a write target");
+        assert!(
+            eng.catalog().is_internal("sales"),
+            "…and still a write target"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -467,7 +472,8 @@ mod tests {
             })
         );
         assert!(
-            eng.run(WsId(2), RunTag(2), "SELECT n FROM inner_v".into(), 10)
+            eng.ws(WsId(2))
+                .run(RunTag(2), "SELECT n FROM inner_v".into(), 10)
                 .await
                 .is_err(),
             "the dropped view no longer resolves"

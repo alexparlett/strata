@@ -22,7 +22,7 @@
 //!
 //! ## The catalog is a gate, not just an input
 //!
-//! `Engine::register` **deregisters before it re-infers**, so mid-scan `table_exist` is false
+//! `Catalog::register` **deregisters before it re-infers**, so mid-scan `table_exist` is false
 //! for every table being rebuilt. A pass then would report "not found" for tables sitting right
 //! there. So while the catalog is `Scanning` nothing validates: no false
 //! diagnostic is ever *produced*, rather than produced and retracted, and the squiggles already
@@ -167,7 +167,7 @@ async fn pass(
         return;
     };
 
-    let diagnostics = engine.validate(sql).await;
+    let diagnostics = engine.lang().validate(sql).await;
 
     let introduces_new = diagnostics.iter().any(|d| !shown.contains(d));
     if let Some(wait) = hold(previous, revision, introduces_new) {

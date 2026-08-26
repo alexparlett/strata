@@ -169,7 +169,7 @@ impl Component for ProviderPicker {
                     .on_press(move |_| ctx.edit(move |draft| draft.provider = id)),
             );
         }
-        for source in engine.source_registrants() {
+        for source in engine.sources().registrants() {
             let picked = current == ProviderId::Source && kind == source.kind;
             pill = pill.child(ToggleSegment::text(source.badge).selected(picked).on_press(
                 move |_| {
@@ -754,7 +754,7 @@ fn qualifier(child: impl IntoElement) -> Element {
 /// **AWS PROFILE** — a picker over the profiles this machine's own AWS configuration defines
 /// (spec §6), never a name typed from memory.
 ///
-/// The list is `Engine::aws_profiles`, read once at the window's mount: profile *names*, and
+/// The list is `Sources::aws_profiles`, read once at the window's mount: profile *names*, and
 /// nothing from inside a profile. Three states, and each says a different true thing —
 /// unanswered, none found, and a list — because "no profiles" and "not read yet" look identical
 /// in an empty dropdown and only one of them is worth acting on.

@@ -29,7 +29,11 @@ fn tag(n: u128) -> RunTag {
 async fn run_materializes_a_snapshot_and_pages_read_it() {
     let eng = engine();
 
-    let (output, batch) = eng.query(ws(1), tag(1), SQL.into(), 2).await.expect("run");
+    let (output, batch) = eng
+        .ws(ws(1))
+        .query(tag(1), SQL.into(), 2)
+        .await
+        .expect("run");
     let snapshot = output
         .snapshot
         .expect("a non-empty result materializes a snapshot");
@@ -39,19 +43,29 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
     assert_eq!(output.columns.len(), 3);
     assert_eq!(batch.num_rows(), 2);
 
-    let (rows, _) = eng.fetch_page(snapshot, 2, 2, None).await.expect("page 2");
+    let (rows, _) = eng
+        .snapshot(snapshot)
+        .page(2, 2, None)
+        .await
+        .expect("page 2");
     assert_eq!(rows.len(), 2);
-    let (rows, _) = eng.fetch_page(snapshot, 3, 2, None).await.expect("page 3");
+    let (rows, _) = eng
+        .snapshot(snapshot)
+        .page(3, 2, None)
+        .await
+        .expect("page 3");
     assert_eq!(rows.len(), 1);
 
     let (again, _) = eng
-        .fetch_page(snapshot, 3, 2, None)
+        .snapshot(snapshot)
+        .page(3, 2, None)
         .await
         .expect("page 3 again");
     assert_eq!(rows[0][0].text, again[0][0].text);
 
     let (sorted, _) = eng
-        .fetch_page(snapshot, 1, 2, Some(("column1".into(), false)))
+        .snapshot(snapshot)
+        .page(1, 2, Some(("column1".into(), false)))
         .await
         .expect("sorted page");
     assert_eq!(sorted[0][0].text, "5");
@@ -63,13 +77,15 @@ async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
     let eng = engine();
 
     let (first, _) = eng
-        .query(ws(1), tag(1), SQL.into(), 2)
+        .ws(ws(1))
+        .query(tag(1), SQL.into(), 2)
         .await
         .expect("run 1");
     let old = first.snapshot.unwrap();
 
     let (second, _) = eng
-        .query(ws(1), tag(2), SQL.into(), 2)
+        .ws(ws(1))
+        .query(tag(2), SQL.into(), 2)
         .await
         .expect("run 2");
     let new = second.snapshot.unwrap();
@@ -78,10 +94,12 @@ async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
         old, new,
         "identical SQL still materializes a distinct snapshot"
     );
-    eng.fetch_page(new, 1, 2, None)
+    eng.snapshot(new)
+        .page(1, 2, None)
         .await
         .expect("new snapshot readable");
-    eng.fetch_page(old, 1, 2, None)
+    eng.snapshot(old)
+        .page(1, 2, None)
         .await
         .expect_err("old snapshot is retired on re-run dispatch");
 }
@@ -90,16 +108,26 @@ async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
 async fn workspaces_are_independent_and_cleanup_retires() {
     let eng = engine();
 
-    let (a, _) = eng.query(ws(1), tag(1), SQL.into(), 2).await.expect("ws 1");
-    let (b, _) = eng.query(ws(2), tag(2), SQL.into(), 2).await.expect("ws 2");
+    let (a, _) = eng
+        .ws(ws(1))
+        .query(tag(1), SQL.into(), 2)
+        .await
+        .expect("ws 1");
+    let (b, _) = eng
+        .ws(ws(2))
+        .query(tag(2), SQL.into(), 2)
+        .await
+        .expect("ws 2");
     let (snap_a, snap_b) = (a.snapshot.unwrap(), b.snapshot.unwrap());
     assert_ne!(snap_a, snap_b);
 
-    eng.cleanup_ws(ws(1));
-    eng.fetch_page(snap_a, 1, 2, None)
+    eng.ws(ws(1)).cleanup();
+    eng.snapshot(snap_a)
+        .page(1, 2, None)
         .await
         .expect_err("ws 1 retired");
-    eng.fetch_page(snap_b, 1, 2, None)
+    eng.snapshot(snap_b)
+        .page(1, 2, None)
         .await
         .expect("ws 2 untouched");
 }
@@ -108,7 +136,8 @@ async fn workspaces_are_independent_and_cleanup_retires() {
 async fn an_empty_result_materializes_nothing() {
     let eng = engine();
     let (output, _) = eng
-        .query(ws(1), tag(1), format!("{SQL} WHERE column1 > 100"), 2)
+        .ws(ws(1))
+        .query(tag(1), format!("{SQL} WHERE column1 > 100"), 2)
         .await
         .expect("empty run");
     assert_eq!(output.total, 0);
@@ -122,10 +151,12 @@ async fn an_empty_result_materializes_nothing() {
 #[tokio::test]
 async fn a_failed_run_errors_and_keeps_nothing() {
     let eng = engine();
-    eng.query(ws(1), tag(1), "SELECT * FROM no_such_table".into(), 2)
+    eng.ws(ws(1))
+        .query(tag(1), "SELECT * FROM no_such_table".into(), 2)
         .await
         .expect_err("unknown table fails");
-    eng.query(ws(1), tag(2), "CREATE TABLE t (a INT)".into(), 2)
+    eng.ws(ws(1))
+        .query(tag(2), "CREATE TABLE t (a INT)".into(), 2)
         .await
         .expect_err("DDL is blocked");
 }
@@ -133,9 +164,13 @@ async fn a_failed_run_errors_and_keeps_nothing() {
 #[tokio::test]
 async fn cancel_is_scoped_to_the_dispatched_run() {
     let eng = engine();
-    assert!(eng.cancel(ws(1), tag(99)).is_none());
+    assert!(eng.ws(ws(1)).cancel(tag(99)).is_none());
 
-    let (output, _) = eng.query(ws(1), tag(1), SQL.into(), 2).await.expect("run");
+    let (output, _) = eng
+        .ws(ws(1))
+        .query(tag(1), SQL.into(), 2)
+        .await
+        .expect("run");
     assert!(output.snapshot.is_some());
-    assert!(eng.cancel(ws(1), tag(1)).is_none());
+    assert!(eng.ws(ws(1)).cancel(tag(1)).is_none());
 }

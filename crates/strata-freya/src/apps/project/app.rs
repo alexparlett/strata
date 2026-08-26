@@ -440,12 +440,11 @@ impl Component for ProjectLoaded {
         let config = self.app.config;
         let guard = use_consume::<Arc<CloseGuard>>();
         let engine = use_provide_context({
-            let running = guard.running.clone();
             let overrides = config.peek().settings.engine.clone();
             let root = self.root.clone();
             move || {
                 let engine = EngineCtx::new(overrides);
-                engine.watch_inflight(running);
+                guard.watch(engine.work().flag());
                 engine.set_data_dir(&root);
                 engine
             }

@@ -1032,7 +1032,7 @@ impl ProjectState {
     ///
     /// It does **not** deregister anything. An edit that moves the address or the kind changes
     /// what the connection registered under, and that store survives this write untouched;
-    /// dropping it is `Engine::disconnect`, owed by the gesture that knows both names.
+    /// dropping it is `Sources::disconnect`, owed by the gesture that knows both names.
     pub fn upsert_connection(&mut self, def: ConnectionDef) {
         let name = def.named();
         self.connections.retain(|c| c.def.named() != name);

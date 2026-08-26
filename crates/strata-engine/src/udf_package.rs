@@ -256,7 +256,7 @@ pub(crate) mod tests {
     /// registered.
     fn conforms(package: impl UdfPackage + 'static, expected: &[&str]) {
         let engine = Engine::builder().with_udfs(package).build();
-        let catalog = engine.functions();
+        let catalog = engine.lang().functions();
         for name in expected {
             assert!(catalog.contains(name), "'{name}' should be registered");
         }
@@ -274,7 +274,7 @@ pub(crate) mod tests {
         let engine = Engine::builder()
             .with_udfs(OnePackage("embedder_answer"))
             .build();
-        let catalog = engine.functions();
+        let catalog = engine.lang().functions();
         assert!(catalog.contains("struct_keys"));
         assert!(catalog.contains("embedder_answer"));
     }
@@ -285,7 +285,7 @@ pub(crate) mod tests {
     #[test]
     fn every_kind_of_function_a_package_offers_is_registered() {
         let engine = Engine::builder().with_udfs(EveryKind).build();
-        let catalog = engine.functions();
+        let catalog = engine.lang().functions();
         assert!(catalog.scalar.iter().any(|f| f.name == "kind_scalar"));
         assert!(catalog.aggregate.iter().any(|f| f.name == "kind_aggregate"));
         assert!(catalog.window.iter().any(|f| f.name == "kind_window"));
@@ -305,7 +305,7 @@ pub(crate) mod tests {
             "the later package's function should be the one that resolves"
         );
         assert!(
-            engine.functions().contains("struct_keys"),
+            engine.lang().functions().contains("struct_keys"),
             "and the catalog should still know the name"
         );
     }
@@ -317,7 +317,7 @@ pub(crate) mod tests {
             .with_udfs(Arc::new(OnePackage("shared_answer")))
             .with_udfs(Box::new(OnePackage("boxed_answer")) as Box<dyn UdfPackage>)
             .build();
-        let catalog = engine.functions();
+        let catalog = engine.lang().functions();
         assert!(catalog.contains("shared_answer"));
         assert!(catalog.contains("boxed_answer"));
     }

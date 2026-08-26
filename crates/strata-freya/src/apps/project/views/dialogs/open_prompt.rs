@@ -178,7 +178,7 @@ impl Component for OpenPromptCard {
 mod interaction {
     use freya_testing::{TestingNode, TestingRunner};
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use strata_core::config::AppConfig;
     use strata_core::models::Listings;
@@ -215,11 +215,7 @@ mod interaction {
                 let open = r.provide_root_context(|| OpenCtx {
                     root: State::create(PathBuf::from(HERE)),
                     prompt: State::create(Some(PathBuf::from(THERE))),
-                    guard: State::create(Arc::new(CloseGuard {
-                        running: Arc::new(AtomicBool::new(false)),
-                        confirm: AtomicBool::new(true),
-                        last: AtomicBool::new(false),
-                    })),
+                    guard: State::create(Arc::new(CloseGuard::new(true, false))),
                     confirm: State::create(None),
                     faulted: State::create(false),
                     loaded: State::create(true),
@@ -305,7 +301,7 @@ mod interaction {
     #[test]
     fn this_window_asks_first_while_a_query_is_running() {
         let (mut runner, open) = armed();
-        open.guard.peek().running.store(true, Ordering::Relaxed);
+        open.guard.peek().watch(Arc::new(AtomicBool::new(true)));
         runner.sync_and_update();
 
         runner.click_cursor(label_center(&runner, "This Window"));

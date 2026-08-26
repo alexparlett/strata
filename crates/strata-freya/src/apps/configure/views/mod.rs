@@ -141,7 +141,7 @@ fn use_probes(engine: &EngineCtx, ctx: ConfigureCtx) {
                     continue;
                 }
                 for typed in before {
-                    let answer = engine.column_type(typed.clone()).await;
+                    let answer = engine.lang().column_type(typed.clone()).await;
                     let mut probes = ctx.probes;
                     probes.write().insert(typed, answer);
                 }

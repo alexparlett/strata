@@ -32,7 +32,6 @@
 //! executors.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use freya::prelude::*;
@@ -188,7 +187,7 @@ impl OpenCtx {
     /// being the one destructive action that doesn't — [`CloseTarget::Reroot`] carries the
     /// folder, and answering it calls [`reroot_confirmed`](Self::reroot_confirmed).
     pub fn reroot(self, app: &AppCtx, root: PathBuf) {
-        let running = self.guard.peek().running.load(Ordering::Relaxed);
+        let running = self.guard.peek().running();
         if running && app.config.peek().settings.confirm_close_running {
             let mut confirm = self.confirm;
             confirm.set(Some(CloseTarget::Reroot(root)));

@@ -84,14 +84,14 @@ sequenceDiagram
     participant S as Snapshot store<br/>(Arrow IPC on disk)
 
     U->>Q: QuerySpec { run: fresh nonce, sql, … }
-    Q->>E: engine.run(ws, tag, sql)
+    Q->>E: engine.ws(ws).run(tag, sql)
     Note over E: classify → Query
     E->>S: execute once, spool __snap_{id}<br/>(+ __strata_ord ordinal column)
     E-->>Q: QueryOutput { snapshot, columns, total } + page 1
     Note over Q: settled — cached under the press's nonce
 
     U->>Q: page / sort
-    Q->>E: fetch_page(snapshot, page, sort)
+    Q->>E: engine.snapshot(id).page(page, sort)
     E->>S: bounded read, ORDER BY __strata_ord
     E-->>Q: page rows (cached per key, forever sound)
 ```
@@ -115,12 +115,12 @@ The full read model — identity, the lock-file sweep, pins, the ordinal measure
 ## The statement pipeline
 
 One pipeline sits in front of dispatch — `statements::accept`, three typed stages
-(`Parsed → Qualified → Admitted`) whose order the types enforce — and `Engine::run` spends the
+(`Parsed → Qualified → Admitted`) whose order the types enforce — and `Workspace::run` spends
 answer.
 
 ```mermaid
 flowchart LR
-    RUN["Engine::run<br/>(one statement per press)"] --> C{"accept<br/>parse → qualify → classify"}
+    RUN["Workspace::run<br/>(one statement per press)"] --> C{"accept<br/>parse → qualify → classify"}
     C -->|Query| Q["query()<br/>SELECT · EXPLAIN · SHOW · DESCRIBE<br/>→ snapshot pipeline"]
     C -->|Statement| I["ddl::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
     C -->|Refusal| R["the engine's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]

@@ -4,7 +4,7 @@
 //! at a path the caller names. It is not a hole in the read-only rule — the gate `run`
 //! asks is untouched and refuses the agent's own `COPY` exactly as before — because there is no
 //! data behind it that `read_page` does not already hand over byte for byte. What it *does* need
-//! guarding is the destination, and that fence is `Engine::export_result`'s.
+//! guarding is the destination, and that fence is `SnapshotReads::export_to`'s.
 //!
 //! [`StrataTools`] is the rmcp `ServerHandler`, and it is deliberately transport-free: the
 //! Streamable-HTTP server ([`crate::server`]) serves it, the headless host serves the
@@ -21,9 +21,9 @@
 //!
 //! Three rules are enforced here and nowhere else:
 //!
-//! - **The policy gate runs before dispatch.** `Engine::query` does not enforce the managed-DDL
+//! - **The policy gate runs before dispatch.** `Workspace::query` does not enforce the managed-DDL
 //!   policy — the editor simply never dispatches what validation flagged, and an agent cannot be
-//!   trusted with that discipline. `run` asks `Engine::policy_verdicts` and refuses on any
+//!   trusted with that discipline. `run` asks `Lang::policy_verdicts` and refuses on any
 //!   non-clean answer, an unjudgeable one included: the gate fails closed.
 //! - **A stop is not a fault.** `strata_engine::stopped_on_purpose` is asked once, here.
 //! - **`run` never rewrites SQL.** No injected `LIMIT`; the *response* is bounded by `page_size`
@@ -695,7 +695,7 @@ impl<H: Host> StrataTools<H> {
         let entries = self.host.catalog(&project.root).await?;
         Ok(tables_result(
             entries,
-            engine.source_catalogs(),
+            engine.sources().catalogs(),
             params.matching.as_deref(),
             params.page,
         ))
@@ -723,6 +723,7 @@ impl<H: Host> StrataTools<H> {
             Ok(described) => described,
             Err(AgentError::NotFound(absent)) => {
                 let remote = engine
+                    .sources()
                     .describe_remote(params.name.clone())
                     .await
                     .map_err(AgentError::Query)?;
@@ -747,14 +748,14 @@ impl<H: Host> StrataTools<H> {
     ) -> Result<FunctionsResult, AgentError> {
         let (_, engine) = self.engine(params.project.as_deref()).await?;
         Ok(functions_result(
-            engine.functions().as_ref(),
+            engine.lang().functions().as_ref(),
             params.matching.as_deref(),
         ))
     }
 
     pub async fn validate(&self, params: ValidateParams) -> Result<ValidateResult, AgentError> {
         let (_, engine) = self.engine(params.project.as_deref()).await?;
-        let diagnostics = engine.validate(params.sql).await;
+        let diagnostics = engine.lang().validate(params.sql).await;
         Ok(ValidateResult {
             diagnostics: diagnostics.iter().map(DiagnosticWire::from).collect(),
         })
@@ -845,7 +846,7 @@ impl<H: Host> StrataTools<H> {
             return Err(AgentError::Query("The query is empty.".into()));
         }
 
-        match engine.policy_verdicts(params.sql.clone()).await {
+        match engine.lang().policy_verdicts(params.sql.clone()).await {
             Err(e) => return Err(AgentError::Query(e)),
             Ok(refusals) if !refusals.is_empty() => return Err(AgentError::Policy(refusals)),
             Ok(_) => {}
@@ -919,7 +920,8 @@ impl<H: Host> StrataTools<H> {
 
         let sort = params.sort.map(|s| (s.column, s.ascending));
         match engine
-            .fetch_page(snapshot, page, last.page_size, sort)
+            .snapshot(snapshot)
+            .page(page, last.page_size, sort)
             .await
         {
             Ok((rows, _)) => Ok(PageResult {
@@ -931,7 +933,7 @@ impl<H: Host> StrataTools<H> {
                 page_size: last.page_size,
             }),
             Err(e) => {
-                if engine.snapshot_live(snapshot) {
+                if engine.snapshot(snapshot).live() {
                     Err(AgentError::Query(e))
                 } else {
                     self.forget(agent, &project.root, session);
@@ -952,7 +954,7 @@ impl<H: Host> StrataTools<H> {
     ///
     /// **It is not a loosening of [`run`](Self::run).** A typed `COPY` is still refused the
     /// agent's own `COPY`, the classification is untouched, and this writes nowhere a statement
-    /// could reach anyway: `Engine::export_result`'s fence is the whole of what a caller-named
+    /// could reach anyway: `SnapshotReads::export_to`'s fence is the whole of what a caller-named
     /// path is allowed to be. What made a consent gate pointless is that `read_page` already
     /// hands over every byte — which is why a consent gate was considered and declined.
     ///
@@ -989,11 +991,12 @@ impl<H: Host> StrataTools<H> {
             )));
         };
         match engine
-            .export_result(snapshot, params.path, params.format.into())
+            .snapshot(snapshot)
+            .export_to(params.path, params.format.into())
             .await
         {
             Ok(report) => Ok(ExportResult::from((params.query_session, report))),
-            Err(e) if engine.snapshot_live(snapshot) => Err(AgentError::Query(e)),
+            Err(e) if engine.snapshot(snapshot).live() => Err(AgentError::Query(e)),
             Err(_) => {
                 self.forget(agent, &project.root, session);
                 Err(AgentError::ResultMoved)
@@ -1263,6 +1266,7 @@ mod tests {
         let project = MockProject::new("sales", &root);
         let meta = project
             .engine
+            .catalog()
             .register(TableSpec {
                 name: "people".into(),
                 paths: vec![root.join("people.csv").display().to_string()],
@@ -1842,7 +1846,8 @@ mod tests {
         let ws = WsId::from(QuerySessionId(Uuid::parse_str(&session).unwrap()));
 
         engine
-            .query(ws, RunTag(4242), "SELECT name FROM people".into(), 10)
+            .ws(ws)
+            .query(RunTag(4242), "SELECT name FROM people".into(), 10)
             .await
             .unwrap();
         assert!(
@@ -1965,6 +1970,7 @@ mod tests {
     async fn a_remembered_page_does_not_survive_the_engine_that_made_it() {
         async fn register(engine: &Engine, root: &Path) {
             engine
+                .catalog()
                 .register(TableSpec {
                     name: "people".into(),
                     paths: vec![root.join("people.csv").display().to_string()],
@@ -1993,7 +1999,8 @@ mod tests {
         tools.host.replace_engine(&root, replacement.engine.clone());
         replacement
             .engine
-            .query(WsId(9), RunTag(1), "SELECT name FROM people".into(), 10)
+            .ws(WsId(9))
+            .query(RunTag(1), "SELECT name FROM people".into(), 10)
             .await
             .unwrap();
 
@@ -2172,12 +2179,8 @@ mod tests {
 
         let engine = tools.host.engine(&root).await.unwrap();
         engine
-            .query(
-                WsId(Uuid::parse_str(&session).unwrap().as_u128()),
-                RunTag(999),
-                "SELECT name FROM people".into(),
-                10,
-            )
+            .ws(WsId(Uuid::parse_str(&session).unwrap().as_u128()))
+            .query(RunTag(999), "SELECT name FROM people".into(), 10)
             .await
             .unwrap();
 
@@ -2264,7 +2267,7 @@ mod tests {
 
     /// **Every refusal names its own reason**, because each one has a different recovery: run
     /// something, re-run it, or pick another path. The path rules are the engine's fence
-    /// (`Engine::export_result`); the two session ones are this layer's, and "no result" is the
+    /// (`SnapshotReads::export_to`); the two session ones are this layer's, and "no result" is the
     /// same sentence `read_page` gives for the same condition.
     #[tokio::test]
     async fn export_result_names_the_reason_it_refused() {
@@ -2359,12 +2362,8 @@ mod tests {
 
         let engine = tools.host.engine(&root).await.unwrap();
         engine
-            .query(
-                WsId(Uuid::parse_str(&session).unwrap().as_u128()),
-                RunTag(999),
-                "SELECT name FROM people".into(),
-                10,
-            )
+            .ws(WsId(Uuid::parse_str(&session).unwrap().as_u128()))
+            .query(RunTag(999), "SELECT name FROM people".into(), 10)
             .await
             .unwrap();
 

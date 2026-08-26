@@ -329,7 +329,7 @@ mod tests {
 
     /// Run one statement and take its report — anything else is a test asking the wrong question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.run(WsId(1), RunTag(1), sql.into(), 10).await? {
+        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -338,7 +338,7 @@ mod tests {
     /// The error a Run fails with. `RunOutcome` carries a `RecordBatch` and derives no `Debug`,
     /// so the success arm is named rather than unwrapped.
     async fn run_err(eng: &Engine, sql: &str) -> String {
-        match eng.run(WsId(1), RunTag(9), sql.into(), 10).await {
+        match eng.ws(WsId(1)).run(RunTag(9), sql.into(), 10).await {
             Err(e) => e,
             Ok(_) => panic!("{sql} succeeded"),
         }
@@ -348,7 +348,8 @@ mod tests {
     /// planner reads, not anything this module remembers.
     async fn live(eng: &Engine, key: &str) -> String {
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(2), RunTag(2), format!("SHOW {key}"), 10)
+            .ws(WsId(2))
+            .run(RunTag(2), format!("SHOW {key}"), 10)
             .await
             .expect("show")
         else {
@@ -394,7 +395,8 @@ mod tests {
         /// registered, and so is the only thing that can tell a written option from an applied one.
         async fn zone_of(eng: &Engine) -> String {
             let RunOutcome::Rows(output, _) = eng
-                .run(WsId(3), RunTag(3), "SELECT arrow_typeof(now())".into(), 1)
+                .ws(WsId(3))
+                .run(RunTag(3), "SELECT arrow_typeof(now())".into(), 1)
                 .await
                 .expect("now()")
             else {
@@ -446,7 +448,8 @@ mod tests {
             .expect("prepared");
 
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(1), RunTag(2), "EXPLAIN EXECUTE p(1)".into(), 10)
+            .ws(WsId(1))
+            .run(RunTag(2), "EXPLAIN EXECUTE p(1)".into(), 10)
             .await
             .expect("explained")
         else {
@@ -455,7 +458,8 @@ mod tests {
         assert!(!output.rows.is_empty(), "and it is a real plan");
 
         assert!(eng
-            .explain(WsId(1), RunTag(3), "EXPLAIN EXECUTE p(1)".into())
+            .ws(WsId(1))
+            .explain(RunTag(3), "EXPLAIN EXECUTE p(1)".into())
             .await
             .expect_err("the gesture cannot build a physical plan for a Statement node")
             .contains("Execute"));
@@ -588,7 +592,7 @@ mod tests {
         statement(&eng, "PREPARE p AS SELECT 1")
             .await
             .expect("prepared");
-        assert_eq!(eng.prepared().len(), 1);
+        assert_eq!(eng.lang().prepared().len(), 1);
 
         let restarted = engine(&overrides);
         assert_eq!(
@@ -596,7 +600,7 @@ mod tests {
             "4096",
             "the session value is gone with the engine that held it"
         );
-        assert!(restarted.prepared().is_empty());
+        assert!(restarted.lang().prepared().is_empty());
         assert!(run_err(&restarted, "EXECUTE p")
             .await
             .contains("does not exist"));
@@ -614,7 +618,8 @@ mod tests {
         assert_eq!(report.effect, Some(StoreEffect::PreparedChanged));
 
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(1), RunTag(2), "EXECUTE p(41)".into(), 10)
+            .ws(WsId(1))
+            .run(RunTag(2), "EXECUTE p(41)".into(), 10)
             .await
             .expect("executed")
         else {
@@ -623,7 +628,7 @@ mod tests {
         assert_eq!(output.rows[0][0].text, "42");
         let snap = output.snapshot.expect("a snapshot handle");
         assert!(
-            eng.snapshot_live(snap),
+            eng.snapshot(snap).live(),
             "and it pages like any other result"
         );
     }
@@ -639,7 +644,7 @@ mod tests {
             run_err(&eng, "PREPARE bad AS INSERT INTO t VALUES (1)").await,
             Fault::PrepareNonQuery.message()
         );
-        assert!(eng.prepared().is_empty());
+        assert!(eng.lang().prepared().is_empty());
     }
 
     /// **`DEALLOCATE` is DataFusion's, error included.** A name it does not hold answers in its
@@ -653,7 +658,7 @@ mod tests {
         let report = statement(&eng, "DEALLOCATE p").await.expect("deallocated");
         assert_eq!(report.message, "Deallocated 'p'");
         assert_eq!(report.effect, Some(StoreEffect::PreparedChanged));
-        assert!(eng.prepared().is_empty());
+        assert!(eng.lang().prepared().is_empty());
 
         assert!(run_err(&eng, "EXECUTE p(1)")
             .await
@@ -675,7 +680,7 @@ mod tests {
             .await
             .expect_err("taken")
             .contains("already exists"));
-        assert_eq!(eng.prepared().len(), 1);
+        assert_eq!(eng.lang().prepared().len(), 1);
     }
 
     /// **Completion offers a prepared name where a prepared name is the only thing that fits**,
@@ -687,8 +692,15 @@ mod tests {
         statement(&eng, "PREPARE spend(INT) AS SELECT $1 AS n")
             .await
             .expect("prepared");
-        let catalog =
-            |eng: &Engine| Catalog::build([], [], Arc::default(), eng.prepared(), "generic".into());
+        let catalog = |eng: &Engine| {
+            Catalog::build(
+                [],
+                [],
+                Arc::default(),
+                eng.lang().prepared(),
+                "generic".into(),
+            )
+        };
 
         let cat = catalog(&eng);
         for sql in ["EXECUTE ", "DEALLOCATE ", "DEALLOCATE PREPARE "] {

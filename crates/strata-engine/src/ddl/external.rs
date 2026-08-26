@@ -635,7 +635,7 @@ mod tests {
 
     /// Run one statement and take its report.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.run(WsId(1), RunTag(1), sql.into(), 10).await? {
+        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -644,7 +644,8 @@ mod tests {
     /// The values a query returns, as text.
     async fn read(eng: &Engine, sql: &str) -> Vec<Vec<String>> {
         let RunOutcome::Rows(output, _) = eng
-            .run(WsId(2), RunTag(2), sql.into(), 100)
+            .ws(WsId(2))
+            .run(RunTag(2), sql.into(), 100)
             .await
             .expect("query")
         else {
@@ -939,14 +940,14 @@ mod tests {
             client_config: BTreeMap::new(),
         };
         assert!(
-            eng.connect(conn).await.is_err(),
+            eng.sources().connect(conn).await.is_err(),
             "the def cannot describe a store"
         );
         assert_eq!(
             eng.connections.resolve("acme_lake").as_deref(),
             Some("acme_lake")
         );
-        eng.disconnect("acme_lake");
+        eng.sources().disconnect("acme_lake");
         assert_eq!(eng.connections.resolve("acme_lake"), None);
     }
 

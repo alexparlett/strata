@@ -395,7 +395,7 @@ impl Component for ScannedStatistics {
         let cancel = {
             let target = target.clone();
             move |_| {
-                engine.cancel_profile(&target.sql_name());
+                engine.catalog().cancel_profile(&target.sql_name());
                 actions.clear(&target);
             }
         };

@@ -233,7 +233,7 @@ pub type Probes = BTreeMap<String, Verdict>;
 ///
 /// The type is **text**, not a pick from a list: there is no Arrow → SQL inverse to author an
 /// offer from, so what it means is asked of the planner per row
-/// ([`Engine::column_type`](strata_engine::Engine::column_type)) rather than declared here.
+/// ([`Lang::column_type`](strata_engine::Lang::column_type)) rather than declared here.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ColumnDraft {
     pub name: String,

@@ -85,17 +85,23 @@ async fn fixture_project_registers_and_queries() {
     }
 
     let (output, _) = eng
-        .query(WsId(1), RunTag(1), "SELECT * FROM active_users".into(), 50)
+        .ws(WsId(1))
+        .query(RunTag(1), "SELECT * FROM active_users".into(), 50)
         .await
         .expect("query the view");
     assert!(output.total > 0, "the view yields rows");
 
-    eng.drop_view("active_users".into()).await.expect("drop");
-    eng.drop_view("active_users".into())
+    eng.catalog()
+        .drop_view("active_users".into())
+        .await
+        .expect("drop");
+    eng.catalog()
+        .drop_view("active_users".into())
         .await
         .expect("drop again (IF EXISTS)");
     assert!(
-        eng.query(WsId(1), RunTag(2), "SELECT * FROM active_users".into(), 50)
+        eng.ws(WsId(1))
+            .query(RunTag(2), "SELECT * FROM active_users".into(), 50)
             .await
             .is_err(),
         "a dropped view no longer resolves"

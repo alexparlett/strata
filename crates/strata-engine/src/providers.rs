@@ -410,7 +410,8 @@ mod tests {
     #[tokio::test]
     async fn the_snapshot_a_run_mints_is_hidden_and_still_readable() {
         let eng = Engine::builder().build();
-        eng.query(WsId(1), RunTag(1), "SELECT 1 AS n".into(), 10)
+        eng.ws(WsId(1))
+            .query(RunTag(1), "SELECT 1 AS n".into(), 10)
             .await
             .expect("run");
 

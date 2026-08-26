@@ -116,16 +116,17 @@ resolution validate against them — so an encoding a mark cannot take is **unre
 than reported**: no control ever offers the column. A scatter has no series row; a pie's Y
 replaces instead of accumulating; a histogram shows no X row at all.
 
-## 5. Data: `Engine::chart` over the snapshot
+## 5. Data: `SnapshotReads::chart` over the snapshot
 
-One engine method (`Engine::chart` → `engine/chart.rs::run_chart`), one freya-query capability
-in front of it (`query/chart.rs`), no confirm — a projected, capped read of a local snapshot is
-`fetch_page`-tier work. The call holds the snapshot pin for its own duration (a histogram is two
-passes, and a re-run between them must not retire the table mid-call).
+One engine method (`SnapshotReads::chart` → `engine/chart.rs::run_chart`), one freya-query
+capability in front of it (`query/chart.rs`), no confirm — a projected, capped read of a local
+snapshot is `SnapshotReads::page`-tier work. The call holds the snapshot pin for its own
+duration (a histogram is two passes, and a re-run between them must not retire the table
+mid-call).
 
 ```mermaid
 flowchart LR
-    S[("snapshot (Arrow IPC)")] -->|"projection, ORDER BY __strata_ord, LIMIT cap + 1"| R["Engine::chart"]
+    S[("snapshot (Arrow IPC)")] -->|"projection, ORDER BY __strata_ord, LIMIT cap + 1"| R["SnapshotReads::chart"]
     C["ChartConfig (per tab)"] -->|"resolve + encode (chart/config.rs)"| Q[ChartQuery]
     D["display config (datafusion.format.*)"] --> K
     Q --> K["cache key: snapshot + query + display"]
@@ -424,7 +425,7 @@ shape.
 
 **The scatter trendline is the one sanctioned exception, and it is built** (Chart 11, settled
 in planning 2026-08-07). A dashed least-squares line with an R² label is computed engine-side
-(`Engine::trend`, one `regr_slope`/`regr_intercept`/`regr_r2` aggregation over the snapshot's
+(`SnapshotReads::trend`, one `regr_slope`/`regr_intercept`/`regr_r2` aggregation over the snapshot's
 finite pairs) rather than templated into SQL, because the overlay is a function of the
 **encoding** — which two columns the scatter currently plots — not of the query: templating it
 would rewrite the user's SQL on every encoder gesture, which §6's "config is intent" forbids,

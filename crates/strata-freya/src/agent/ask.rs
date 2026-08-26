@@ -5,8 +5,8 @@
 //! could be built without somewhere to answer is an ask a driver can silently drop, and the
 //! caller's only symptom would be a tool call that never returns.
 //!
-//! Everything a tool can answer **without** UI state is deliberately absent — `fetch_page`,
-//! `validate`, `functions()` and, since AA-03b, the run itself go straight to the window's
+//! Everything a tool can answer **without** UI state is deliberately absent — a snapshot's
+//! `page`, `validate`, `functions()` and, since AA-03b, the run itself go straight to the window's
 //! `Arc<Engine>` from the server's own runtime, so nothing bulk queues behind a repaint. The
 //! directory hands that engine out; this channel is only for the questions a window has to
 //! answer for itself.

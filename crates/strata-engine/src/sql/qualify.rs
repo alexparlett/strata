@@ -564,7 +564,8 @@ mod tests {
     #[tokio::test]
     async fn a_live_snapshot_is_not_resolved_into_a_database() {
         let eng = Engine::builder().build();
-        eng.query(WsId(1), RunTag(1), "SELECT 1 AS n".into(), 10)
+        eng.ws(WsId(1))
+            .query(RunTag(1), "SELECT 1 AS n".into(), 10)
             .await
             .expect("run");
         fake_source(&eng.ctx, "pg", &["__snap_1"]);

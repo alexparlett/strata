@@ -3,7 +3,7 @@
 //!
 //! ## Why this is a query at all
 //!
-//! Everything else the data-sources tree draws under a database is free: `Engine::source_listing` reads
+//! Everything else the data-sources tree draws under a database is free: `Sources::listing` reads
 //! the connect-time enumeration held beside the pool, so schemas and relation names cost nothing.
 //! A relation's **columns** are the exception — DB-02 builds a relation's `TableProvider` lazily
 //! precisely so that connecting to a database with a thousand tables is one round trip rather than
@@ -20,7 +20,7 @@
 //! reaching into a pane it does not belong to.
 //!
 //! That is two entries over one relation, and it costs one extra *call* and no extra work:
-//! `Engine::describe_remote` answers from the provider the connection caches per relation, so
+//! `Sources::describe_remote` answers from the provider the connection caches per relation, so
 //! every read after the first is local.
 //!
 //! ## Why the catalog epoch is in the key
@@ -91,7 +91,7 @@ impl QueryCapability for RemoteColumns {
                 relation.schema.as_str(),
                 relation.relation.as_str(),
             ]);
-            let answer = match self.0.describe_remote(name).await {
+            let answer = match self.0.sources().describe_remote(name).await {
                 Ok(Some(found)) => Ok(found),
                 Ok(None) => Err(gone(relation)),
                 Err(why) => Err(why),

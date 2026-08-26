@@ -74,9 +74,12 @@ IPC snapshot, and every later read — page, sort, chart, export — is a bounde
 snapshot, which is what makes paging stable and caching sound. It is built one way, by
 `Engine::builder()`, which is where an embedder's choices go — config, secrets, SQL functions, the
 memory pool — and every method on the built engine takes `&self`, so a handle reaches all of them
-through `Deref` and no wrapper needs forwarders.
+through `Deref` and no wrapper needs forwarders. Those methods are reached through six borrowed
+**group handles** naming what the call is about — `ws(id)`, `snapshot(id)`, `catalog()`,
+`sources()`, `lang()`, `work()` — plus a short root set for the engine itself; the mapping is
+total, and a test fails when a new public method escapes it.
 
-**One statement pipeline in front of dispatch.** `Engine::run` puts every statement through
+**One statement pipeline in front of dispatch.** `Workspace::run` puts every statement through
 `statements::accept` — parse, resolve its bare names, classify — and spends the answer: run it as a
 query, perform it with a real implementation, or refuse it by name with the reason. The stages are
 typed so their order cannot be got wrong, the grammar and the policy are separate questions, and

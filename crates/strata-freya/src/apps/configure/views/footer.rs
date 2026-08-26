@@ -37,7 +37,7 @@ use crate::components::window::window_theme;
 /// The strip's inset (canvas `padding: var(--sp-4) var(--sp-5)`).
 const FOOTER_PADDING: Gaps = Gaps::new(SP_4, SP_5, SP_4, SP_5);
 
-/// The page size a internal table's `CREATE TABLE` is dispatched with. It belongs to `Engine::run`'s
+/// The page size a internal table's `CREATE TABLE` is dispatched with. It belongs to `Workspace::run`'s
 /// **query** arm; a create classifies as a statement, so the router never reads it.
 const INTERNAL_PAGE_SIZE: usize = 1;
 
@@ -255,7 +255,7 @@ fn save(
     }
 
     if let Some(old) = &renamed_from {
-        engine.deregister(old);
+        engine.catalog().deregister(old);
         log_event(
             report.log,
             LogLevel::Info,
@@ -296,7 +296,7 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
     spawn(async move {
         let ws = WsId(Uuid::new_v4().as_u128());
         let tag = RunTag(Uuid::new_v4().as_u128());
-        match engine.run(ws, tag, sql, INTERNAL_PAGE_SIZE).await {
+        match engine.ws(ws).run(tag, sql, INTERNAL_PAGE_SIZE).await {
             Ok(RunOutcome::Statement(report)) => {
                 if settle(to, &engine, &report) {
                     ctx.status.set(Status::Registering(name));
@@ -309,7 +309,7 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
                 }
             }
             Ok(RunOutcome::Rows(..)) => {
-                engine.cleanup_ws(ws);
+                engine.ws(ws).cleanup();
                 ctx.status
                     .set(Status::Failed("The statement ran as a query.".into()));
             }

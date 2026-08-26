@@ -13,10 +13,10 @@
 //! - **Removal.** The pass is additive: it registers and re-creates, and never deregisters an
 //!   engine object whose def is gone. A host replaying a defs file that may have shrunk must diff
 //!   the names it registered and deregister the difference first, or a removed table stays
-//!   silently queryable. A **connection** is the same case through [`Engine::disconnect`], which
+//!   silently queryable. A **connection** is the same case through [`Sources::disconnect`](crate::Sources::disconnect), which
 //!   an edit moving a connection's bucket or provider owes too, since that changes the `url()` the
 //!   store went in under.
-//! - **The registration window.** [`Engine::register`] deregisters before it re-infers, so for the
+//! - **The registration window.** [`Catalog::register`](crate::Catalog::register) deregisters before it re-infers, so for the
 //!   duration of a pass every table being rebuilt is absent from the catalog. The app gates
 //!   validation behind its scan claim; a host serving `validate`, `policy_verdicts` or queries
 //!   concurrently must hold them off the same way, or it answers a false, transient "not found"
@@ -45,9 +45,9 @@ const TABLE_CONCURRENCY: usize = 8;
 #[derive(Clone, Debug, PartialEq)]
 pub enum RegOutcome {
     /// A connection's object store or database catalog went in, or the connection could not
-    /// describe one ([`Engine::connect`]). Nothing the *store* learns is reported here — an
+    /// describe one ([`Sources::connect`](crate::Sources::connect)). Nothing the *store* learns is reported here — an
     /// object store is registered, not inferred, and a database's enumeration is read back
-    /// through [`Engine::source_listing`] rather than folded onto a row — so the payload is the
+    /// through [`Sources::listing`](crate::Sources::listing) rather than folded onto a row — so the payload is the
     /// answer itself.
     Connection {
         /// The connection's own **name**, **not** its address. An address alone is not unique —
@@ -145,7 +145,7 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// `settled` what it answered for each. **Ordering is the contract**: connections first
 /// (a table's source path cannot resolve to an object store that isn't registered, and a
 /// view over `pg.public.orders` cannot plan before that catalog exists — see
-/// [`Engine::connect`]); then tables (a view's SQL reads tables), **concurrently and in no
+/// [`Sources::connect`](crate::Sources::connect)); then tables (a view's SQL reads tables), **concurrently and in no
 /// particular order** ([`TABLE_CONCURRENCY`]); then views by fixed-point rounds — DataFusion
 /// requires a view's dependencies to exist when its `CREATE VIEW` plans, so from cold,
 /// each round creates what it can and a view whose dependency landed last round
@@ -173,7 +173,7 @@ pub async fn register_pass(
 ) {
     for conn in connections {
         let name = conn.named();
-        let result = engine.connect(conn).await;
+        let result = engine.sources().connect(conn).await;
         settled(RegOutcome::Connection { name, result });
     }
 
@@ -181,7 +181,7 @@ pub async fn register_pass(
         .map(|spec| {
             let name = spec.name.clone();
             async move {
-                let result = engine.register(spec).await;
+                let result = engine.catalog().register(spec).await;
                 RegOutcome::Table { name, result }
             }
         })
@@ -195,7 +195,11 @@ pub async fn register_pass(
         let before = pending.len();
         let mut failed = Vec::new();
         for (name, sql) in pending {
-            match engine.create_view(name.clone(), sql.clone()).await {
+            match engine
+                .catalog()
+                .create_view(name.clone(), sql.clone())
+                .await
+            {
                 Ok(meta) => settled(RegOutcome::View {
                     name,
                     result: Ok(meta),
@@ -473,7 +477,7 @@ mod tests {
     /// every consumer looks a row up by — so that is what an outcome carries.
     ///
     /// **Every connection here is one that is refused locally**, and that is deliberate.
-    /// `Engine::connect` now asks the bucket whether it answers (`store::reachable`), so a def
+    /// `Sources::connect` now asks the bucket whether it answers (`store::reachable`), so a def
     /// that is merely *well-formed* is no longer one this test can settle `Ok` — it would send
     /// this suite to `s3.eu-west-2.amazonaws.com` and `storage.googleapis.com` on every run, for
     /// buckets nobody owns, and fail on a plane. Each of the three is refused before any socket

@@ -103,7 +103,7 @@ impl HeadlessHost {
     /// The engine is built with a read-only policy ceiling, which is what
     /// [`StrataTools::run`]'s gate is narrowed against: this process has no editor and no user to
     /// ask, so the capability is stated once rather than per tool. It is a ceiling and not the
-    /// whole fence — [`run`](Host::run) reads through `Engine::query`, whose limit is the read
+    /// whole fence — [`run`](Host::run) reads through `Workspace::query`, whose limit is the read
     /// path's own `SQLOptions`.
     pub async fn open(root: PathBuf) -> Result<HeadlessHost, String> {
         if !exists_at(&root) {
@@ -230,7 +230,7 @@ impl HeadlessHost {
             done
         };
         if sweep {
-            self.engine.cleanup_ws(session.into());
+            self.engine.ws(session.into()).cleanup();
         }
     }
 }
@@ -287,7 +287,7 @@ impl Host for HeadlessHost {
                 session: s.id,
                 state: match s.ran {
                     false => QuerySessionState::Empty,
-                    true if self.engine.is_running(s.id.into()) => QuerySessionState::Running,
+                    true if self.engine.ws(s.id.into()).is_running() => QuerySessionState::Running,
                     true => QuerySessionState::Settled,
                 },
             })
@@ -335,7 +335,7 @@ impl Host for HeadlessHost {
                 _ => sessions[at].closing = true,
             }
         }
-        self.engine.cleanup_ws(session.into());
+        self.engine.ws(session.into()).cleanup();
         Ok(())
     }
 
@@ -365,12 +365,14 @@ impl Host for HeadlessHost {
         let settled = match mode {
             RunMode::Run => self
                 .engine
-                .query(ws, tag, sql, page_size)
+                .ws(ws)
+                .query(tag, sql, page_size)
                 .await
                 .map(|(output, _)| Settled::Rows(output)),
             RunMode::Explain => self
                 .engine
-                .explain(ws, tag, as_explain(&sql, false))
+                .ws(ws)
+                .explain(tag, as_explain(&sql, false))
                 .await
                 .map(Settled::Plan),
         };
@@ -395,7 +397,7 @@ impl Host for HeadlessHost {
             released
         };
         for session in released {
-            self.engine.cleanup_ws(session.into());
+            self.engine.ws(session.into()).cleanup();
         }
     }
 }

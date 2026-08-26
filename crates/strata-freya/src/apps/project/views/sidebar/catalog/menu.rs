@@ -551,7 +551,7 @@ pub fn open_saved_query(actions: &CatalogActions, id: Uuid) {
 #[derive(Clone, Copy)]
 pub struct ConnectionActions {
     /// The remove-confirm slot provided at the window root. Setting it *is* Forget: the dialog
-    /// owns the store mutation, the persist, the keystore entry and the `Engine::disconnect`
+    /// owns the store mutation, the persist, the keystore entry and the `Sources::disconnect`
     /// behind it.
     drop_target: State<Option<DropTarget>>,
     /// The editor-window request slot, on the same terms: setting it *is* Edit, and

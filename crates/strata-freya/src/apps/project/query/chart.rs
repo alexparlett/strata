@@ -7,7 +7,7 @@
 //!
 //! `(snapshot, query)` is not the whole identity. The axis labels come out of the engine's
 //! **display config** — `datafusion.format.*`, which Settings ▸ Engine ▸ Properties changes on
-//! a live engine with no restart and no new snapshot ([`Engine::chart`]'s own note) — so an
+//! a live engine with no restart and no new snapshot ([`SnapshotReads::chart`]'s own note) — so an
 //! entry keyed on the pair alone would keep serving labels rendered under a format the user
 //! has since changed. [`ChartSpec::display`] carries that subset, which makes the change a
 //! *new entry* rather than a stale one, and keeps `stale_time(MAX)` honest: given a fixed
@@ -19,7 +19,7 @@
 //! polls the tasks queued alongside them, so the driver's `set_config` has landed by the time
 //! this capability runs.
 //!
-//! [`Engine::chart`]: strata_engine::Engine::chart
+//! [`SnapshotReads::chart`]: strata_engine::SnapshotReads::chart
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -64,7 +64,10 @@ impl QueryCapability for FetchChart {
     type Keys = ChartSpec;
 
     async fn run(&self, spec: &ChartSpec) -> Result<ChartData, String> {
-        self.0.chart(spec.snapshot, spec.query.clone()).await
+        self.0
+            .snapshot(spec.snapshot)
+            .chart(spec.query.clone())
+            .await
     }
 }
 
@@ -105,7 +108,8 @@ impl QueryCapability for FetchTrend {
 
     async fn run(&self, spec: &TrendSpec) -> Result<Option<Trend>, String> {
         self.0
-            .trend(spec.snapshot, spec.x.clone(), spec.y.clone())
+            .snapshot(spec.snapshot)
+            .trend(spec.x.clone(), spec.y.clone())
             .await
     }
 }

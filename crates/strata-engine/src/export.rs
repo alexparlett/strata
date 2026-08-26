@@ -49,7 +49,7 @@ pub struct ExportSpec {
 }
 
 /// What one finished export wrote, for a caller with no window to show it in
-/// ([`Engine::export_result`](crate::Engine::export_result)).
+/// ([`SnapshotReads::export_to`](crate::SnapshotReads::export_to)).
 ///
 /// Every figure is read rather than derived: `rows` is the count `COPY` itself returns and
 /// `bytes` is the written file's own size. `bytes` is optional because the size is read back
@@ -101,7 +101,7 @@ impl Format {
 /// reader has to be able to open what was written with nothing said, so the defaults are the
 /// self-describing spellings (a header row, a comma, `"` quotes doubled, no compression). The
 /// Export window's draft starts on the same values and is free to move: it exists to be edited,
-/// while [`crate::Engine::export_result`] offers no options at all and these are what it
+/// while [`crate::SnapshotReads::export_to`] offers no options at all and these are what it
 /// writes.
 impl Default for Csv {
     fn default() -> Csv {
@@ -1081,11 +1081,8 @@ mod tests {
 
         let out = root.join("out.csv");
         let report = eng
-            .export_result(
-                snapshot,
-                out.display().to_string(),
-                Format::Csv(Csv::default()),
-            )
+            .snapshot(snapshot)
+            .export_to(out.display().to_string(), Format::Csv(Csv::default()))
             .await
             .expect("exported");
 
@@ -1107,11 +1104,8 @@ mod tests {
         eng.set_data_dir(&root);
         let snapshot = settled(&eng, "SELECT 1 AS n").await;
         let export = |path: PathBuf| {
-            eng.export_result(
-                snapshot,
-                path.display().to_string(),
-                Format::Csv(Csv::default()),
-            )
+            eng.snapshot(snapshot)
+                .export_to(path.display().to_string(), Format::Csv(Csv::default()))
         };
 
         let sneaky = root.join(".strata/tables/../tables/sales/rows.csv");
@@ -1130,7 +1124,8 @@ mod tests {
     /// The snapshot one run settled, which is what an export reads.
     async fn settled(eng: &Engine, sql: &str) -> SnapshotId {
         let (output, _) = eng
-            .query(WsId(1), RunTag(1), sql.into(), 10)
+            .ws(WsId(1))
+            .query(RunTag(1), sql.into(), 10)
             .await
             .expect("query");
         output.snapshot.expect("a materialized result")

@@ -120,7 +120,7 @@ fn answer(
                 .map(|a| a.name().to_string())
                 .unwrap_or_default();
             for old in evicted {
-                engine.cleanup_ws(old.into());
+                engine.ws(old.into()).cleanup();
             }
             log_event(
                 log,
@@ -139,7 +139,7 @@ fn answer(
                 let _ = reply.send(Err(AgentError::no_such_query_session(session)));
                 return;
             }
-            engine.cleanup_ws(session.into());
+            engine.ws(session.into()).cleanup();
             let _ = reply.send(Ok(()));
         }
         AgentAsk::RunStarting {
@@ -170,7 +170,7 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
         } => {
             let retire = agents.write().run_settled(agent, session, seq, outcome);
             if let Some(session) = retire {
-                engine.cleanup_ws(session.into());
+                engine.ws(session.into()).cleanup();
             }
         }
         AgentNotice::AgentGone(agent) => {
@@ -184,7 +184,7 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
                 .map(|a| (a.name().to_string(), a.in_app));
             let released = agents.write().gone(agent);
             for session in released {
-                engine.cleanup_ws(session.into());
+                engine.ws(session.into()).cleanup();
             }
             log_event(
                 log,
@@ -299,7 +299,7 @@ fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessio
             session: session.id,
             state: match session.runs.is_empty() {
                 true => QuerySessionState::Empty,
-                false if engine.is_running(session.id.into()) => QuerySessionState::Running,
+                false if engine.ws(session.id.into()).is_running() => QuerySessionState::Running,
                 false => QuerySessionState::Settled,
             },
         })

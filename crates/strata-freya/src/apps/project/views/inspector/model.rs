@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(fill_label(0.5), "50%");
     }
 
-    /// A relation as the connection answered for it — the shape `Engine::describe_remote` hands
+    /// A relation as the connection answered for it — the shape `Sources::describe_remote` hands
     /// back, built here so the remote arm is tested with no network and no server.
     fn described(relation: &RemoteRef, view: bool, columns: Vec<ColumnInfo>) -> RemoteRelation {
         RemoteRelation {

@@ -1733,7 +1733,7 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
 /// The connection half of the tree (W7 · DB-05) — what the retired Connections pane's own suite
 /// asserted, re-expressed against the nodes that replaced it.
 ///
-/// A **database** connection can be listed no further than this without a server: `source_listing`
+/// A **database** connection can be listed no further than this without a server: `Sources::listing`
 /// reads the connect-time enumeration, so an unconnected database has no schemas and the node is
 /// a leaf. What its subtree looks like over a real server is
 /// `strata-engine/tests/postgres_federation.rs`, which drives the same scoped-and-tagged answer this
@@ -2360,7 +2360,7 @@ fn the_tree_lays_out_within_its_panel_at_stub_width() {
 /// **The remote-relation gestures** (DB-06) — the statements they compose.
 ///
 /// Unit tests rather than driven ones, and that is a limit of the fixture rather than a choice: a
-/// relation row exists only while `source_listing` answers, and that answer is the connect-time
+/// relation row exists only while `Sources::listing` answers, and that answer is the connect-time
 /// enumeration held beside a live pool, so the rendered pane cannot reach one without a server.
 /// What a real server does with these names is
 /// `strata-engine/tests/postgres_federation.rs`, which runs the same

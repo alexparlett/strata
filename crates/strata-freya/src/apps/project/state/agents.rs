@@ -102,7 +102,7 @@ pub struct QuerySession {
 
 impl QuerySession {
     /// Is **any** run in this session still in flight? The satellite's own record of what the
-    /// driver observed — `Engine::is_running` is the authority a *tool* is answered with
+    /// driver observed — `Workspace::is_running` is the authority a *tool* is answered with
     /// (`state::agent::sessions`), and asking it here would put a second answer beside it.
     ///
     /// Any, not the newest: MCP permits concurrent requests on one connection, so an agent

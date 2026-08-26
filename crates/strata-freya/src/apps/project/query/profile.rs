@@ -66,7 +66,7 @@ pub enum ProfileTarget {
 }
 
 impl ProfileTarget {
-    /// The name handed to [`Engine::profile`](strata_engine::Engine::profile) — a workspace
+    /// The name handed to [`Catalog::profile`](strata_engine::Catalog::profile) — a workspace
     /// entry's own name, or a remote relation's three segments rendered by the case-preserving
     /// renderer, which is the spelling the server resolves.
     ///
@@ -126,7 +126,7 @@ impl QueryCapability for ProfileEntry {
     type Keys = ProfileSpec;
 
     async fn run(&self, spec: &ProfileSpec) -> Result<CatalogProfile, String> {
-        self.0.profile(spec.target.sql_name()).await
+        self.0.catalog().profile(spec.target.sql_name()).await
     }
 }
 
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn a_scan_settles_the_facts_the_source_never_reported() {
         let engine = EngineCtx::default();
-        block_on(engine.register(TableSpec {
+        block_on(engine.catalog().register(TableSpec {
             name: "regions".into(),
             paths: vec![format!(
                 "{}/../strata-engine/tests/fixtures/loadfix/regions.csv",

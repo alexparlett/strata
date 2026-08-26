@@ -38,6 +38,7 @@ async fn project(tag: &str) -> (PathBuf, StrataTools<MockHost>) {
     let project = MockProject::new("sales", &root);
     let meta = project
         .engine
+        .catalog()
         .register(TableSpec {
             name: "people".into(),
             paths: vec![root.join("people.csv").display().to_string()],

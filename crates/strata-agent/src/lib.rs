@@ -11,7 +11,7 @@
 //!   rmcp server  ─┐
 //!   stdio server ─┼─→ StrataTools (the eleven tools) ─→ Host ─┬─→ AA-03: the app's bridge
 //!   chat loop    ─┘        │                               └─→ AA-05: a plain Engine
-//!                          └─ data plane: Arc<Engine> direct (fetch_page / validate /
+//!                          └─ data plane: Arc<Engine> direct (snapshot page / validate /
 //!                             functions), so bulk reads never queue behind UI work
 //! ```
 //!
