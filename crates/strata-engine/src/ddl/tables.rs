@@ -793,7 +793,7 @@ mod tests {
     use crate::builder::test_context;
     use crate::register::{register_project, table_spec, RegOutcome};
     use crate::statements::Fault;
-    use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
+    use crate::{Connections, Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
 
     use super::*;
@@ -1174,7 +1174,7 @@ mod tests {
 
         let cold = Engine::builder().build();
         let error = cold
-            .register(table_spec(&root, &def))
+            .register(table_spec(&root, &def, &Connections::default()))
             .await
             .expect_err("no data");
 

@@ -38,7 +38,7 @@ use std::{env, fs, process};
 
 use strata_core::project::{save_defs, ProjectDefs};
 use strata_engine::register::table_spec;
-use strata_engine::{Engine, RunOutcome, RunTag, StoreEffect, TableSpec, WsId};
+use strata_engine::{Connections, Engine, RunOutcome, RunTag, StoreEffect, TableSpec, WsId};
 use strata_model::{
     ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat, TableDef, TableOrigin,
 };
@@ -48,6 +48,12 @@ use testcontainers_modules::minio::MinIO;
 
 /// The bucket the fixture is seeded into, and the connection's authority.
 const BUCKET: &str = "strata-lake";
+
+/// What the two connections are **called** — the name a table def carries, and what
+/// `table_spec` resolves back to a store prefix. Written down rather than minted, so the
+/// composition under test is driven by the same string a user would have typed.
+const LAKE: &str = "lake";
+const ORIGIN: &str = "origin";
 /// MinIO's own root credentials (`testcontainers_modules::minio` starts it with the image
 /// defaults). The test puts these in the **environment**, which is where an ambient connection
 /// looks — see [`ambient`].
@@ -198,7 +204,7 @@ fn ambient() {
 fn connection(endpoint: &str, auth: S3Auth) -> ConnectionDef {
     ConnectionDef {
         address: BUCKET.into(),
-        name: String::new(),
+        name: LAKE.into(),
         provider: Provider::S3(S3Store {
             region: REGION.into(),
             auth,
@@ -228,7 +234,7 @@ fn client_options() -> BTreeMap<String, String> {
 fn http_connection(endpoint: &str) -> ConnectionDef {
     ConnectionDef {
         address: endpoint.into(),
-        name: String::new(),
+        name: ORIGIN.into(),
         provider: Provider::Http,
         client_config: client_options(),
     }
@@ -242,16 +248,23 @@ fn http_connection(endpoint: &str) -> ConnectionDef {
 /// The trailing `/` is load-bearing: without it `ListingTableUrl` reads the path as a single file
 /// (`engine::catalog::listing_url` only adds one for a local directory, which a bucket prefix is
 /// not).
-fn table() -> TableSpec {
+fn known(endpoint: &str) -> Connections {
+    Connections::of(&[
+        connection(endpoint, S3Auth::Ambient),
+        http_connection(endpoint),
+    ])
+}
+
+fn table(endpoint: &str) -> TableSpec {
     let def = TableDef {
         name: "regions".into(),
         format: SourceFormat::Csv(CsvRead::default()),
-        connection: Some(format!("s3://{BUCKET}")),
+        connection: Some(LAKE.into()),
         sources: vec!["data/".into()],
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
-    table_spec(Path::new("/nowhere"), &def)
+    table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
 /// The **Hive-partitioned** table over that same bucket: one bucket-relative prefix, and the two
@@ -261,11 +274,11 @@ fn table() -> TableSpec {
 /// `Int32`, not the `Utf8` DataFusion infers on its own: the types are the def's, and a value
 /// that came out of a folder name has to arrive as the column the user asked for or the cast
 /// warning that surface shows would be about nothing.
-fn hive_table() -> TableSpec {
+fn hive_table(endpoint: &str) -> TableSpec {
     let def = TableDef {
         name: "tallies".into(),
         format: SourceFormat::Csv(CsvRead::default()),
-        connection: Some(format!("s3://{BUCKET}")),
+        connection: Some(LAKE.into()),
         sources: vec![HIVE_PREFIX.into()],
         partition_cols: vec![
             ("year".into(), "Int32".into()),
@@ -273,7 +286,7 @@ fn hive_table() -> TableSpec {
         ],
         origin: TableOrigin::External,
     };
-    table_spec(Path::new("/nowhere"), &def)
+    table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
 /// The same object over the **HTTP** connection: one file, and deliberately no trailing slash.
@@ -287,12 +300,12 @@ fn http_table(endpoint: &str) -> TableSpec {
     let def = TableDef {
         name: "regions_http".into(),
         format: SourceFormat::Csv(CsvRead::default()),
-        connection: Some(endpoint.to_string()),
+        connection: Some(ORIGIN.into()),
         sources: vec![format!("{BUCKET}/data/regions.csv")],
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
-    table_spec(Path::new("/nowhere"), &def)
+    table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
 /// **A typed `CREATE EXTERNAL TABLE` over the connected bucket** (ED-10) — a *phase* of the test
@@ -389,7 +402,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .expect("the connection registers its object store");
 
     let meta = engine
-        .register(table())
+        .register(table(&endpoint))
         .await
         .expect("the table registers over the bucket");
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
@@ -411,7 +424,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     );
 
     let meta = engine
-        .register(hive_table())
+        .register(hive_table(&endpoint))
         .await
         .expect("the partitioned table registers over the bucket");
     let columns: Vec<(&str, &str)> = meta
@@ -469,7 +482,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let unkeyed = TableSpec {
         name: "flat".into(),
         paths: vec![format!("s3://{BUCKET}/{HIVE_UNKEYED_PREFIX}")],
-        ..hive_table()
+        ..hive_table(&endpoint)
     };
     let refused = engine
         .register(unkeyed)
@@ -487,7 +500,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let empty = TableSpec {
         name: "empty".into(),
         paths: vec![format!("s3://{BUCKET}/nothing/")],
-        ..hive_table()
+        ..hive_table(&endpoint)
     };
     let refused = engine
         .register(empty)
@@ -506,7 +519,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let orphan = TableSpec {
         name: "orphan".into(),
         paths: vec!["s3://not-connected/data/".into()],
-        ..table()
+        ..table(&endpoint)
     };
     let refused = engine.register(orphan).await.expect_err("no object store");
     assert!(
@@ -542,10 +555,10 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    engine.disconnect(&connection(&endpoint, S3Auth::Ambient).identity());
+    engine.disconnect(&connection(&endpoint, S3Auth::Ambient).named());
     let forgotten = TableSpec {
         name: "forgotten".into(),
-        ..table()
+        ..table(&endpoint)
     };
     let refused = engine
         .register(forgotten)
@@ -565,7 +578,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .await
         .expect("a 403 is an authorization answer, not a description fault");
     let refused = engine
-        .register(table())
+        .register(table(&endpoint))
         .await
         .expect_err("MinIO rejects the signature");
     let lower = refused.to_lowercase();

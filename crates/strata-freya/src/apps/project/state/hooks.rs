@@ -17,7 +17,7 @@ use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioSt
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
 use strata_engine::register::{register_pass, table_spec, RegOutcome};
-use strata_engine::TableSpec;
+use strata_engine::{Connections, TableSpec};
 use strata_model::{ConnectionDef, SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -447,22 +447,28 @@ async fn register_defs(
         let connections: Vec<ConnectionDef> = work
             .connections
             .into_iter()
-            .filter_map(|url| {
+            .filter_map(|name| {
                 Some(
                     p.connections
                         .iter()
-                        .find(|c| c.def.named() == url)?
+                        .find(|c| c.def.named() == name)?
                         .def
                         .clone(),
                 )
             })
             .collect();
+        let known = Connections::of(
+            &p.connections
+                .iter()
+                .map(|c| c.def.clone())
+                .collect::<Vec<_>>(),
+        );
         let tables: Vec<TableSpec> = work
             .tables
             .into_iter()
             .filter_map(|name| {
                 let def = &p.tables.iter().find(|t| t.def.name == name)?.def;
-                Some(table_spec(&root, def))
+                Some(table_spec(&root, def, &known))
             })
             .collect();
         let views: Vec<(String, String)> = work

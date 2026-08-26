@@ -141,7 +141,7 @@ pub async fn create(
         partition_cols: partitions,
         origin: TableOrigin::External,
     };
-    let meta = register_external(ctx, &table_spec(root, &def)).await?;
+    let meta = register_external(ctx, &table_spec(root, &def, connections)).await?;
 
     let verb = if replacing { "replaced" } else { "created" };
     Ok(StatementOutcome {

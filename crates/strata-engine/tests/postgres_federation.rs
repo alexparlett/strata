@@ -50,7 +50,7 @@ use strata_engine::register::{register_project, table_spec, RegOutcome};
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
 use strata_engine::sources::{put_secret, SchemaVisibility};
 use strata_engine::{
-    sql, stopped_on_purpose, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
+    sql, stopped_on_purpose, Connections, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
 use strata_model::{
     Cell, ConnectionDef, CsvRead, Provider, SourceDef, SourceFormat, StatKey, TableDef,
@@ -695,6 +695,7 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
+            &Connections::default(),
         ))
         .await
         .expect("a local file table");
@@ -931,6 +932,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
+            &Connections::default(),
         ))
         .await
         .expect("a local table with a JSON text column");
@@ -976,7 +978,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "the name it was registered under before must stop resolving"
     );
 
-    engine.disconnect(&renamed.identity());
+    engine.disconnect(&renamed.named());
     assert!(
         engine
             .query(

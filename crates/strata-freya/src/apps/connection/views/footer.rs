@@ -76,7 +76,7 @@ impl Component for Footer {
                 .read()
                 .blocker()
                 .or_else(|| address_refusal(ctx, &engine))
-                .or_else(|| url_clash(ctx, project))
+                .or_else(|| name_clash(ctx, project))
                 .or_else(|| catalog_clash(ctx, project)),
             scanning,
         );
@@ -136,15 +136,6 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
     })
 }
 
-/// The one blocker the draft cannot see: a URL another connection already holds.
-///
-/// `upsert_connection` replaces on `url()`, so without this an edit that moved a bucket onto an
-/// existing connection's would silently take that connection's def out from under it — the same
-/// hazard the Configure window's name clash guards, one key along. On an edit the connection's
-/// own URL does not clash with itself.
-///
-/// Matched case-**sensitively**, like every other connection lookup: a URL is not a SQL
-/// identifier, and the object-store registry matches it verbatim.
 /// The blocker the draft cannot see: whether the **kind** accepts this address.
 ///
 /// What an address means is the source's own rule, so it is asked of the registry rather than
@@ -157,28 +148,37 @@ fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
     engine.check_source_address(&kind, &def.address).err()
 }
 
-fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
-    let url = ctx.draft.read().def().named();
-    if ctx.target.read().editing() == Some(url.as_str()) {
+/// The blocker the draft cannot see: a name another connection already holds.
+///
+/// `upsert_connection` replaces on the name, so without this an edit that renamed one connection
+/// onto another's would silently take that connection's def out from under it — the same hazard
+/// the Configure window's name clash guards, one section along. On an edit the connection's own
+/// name does not clash with itself.
+///
+/// Matched case-**sensitively**, unlike [`catalog_clash`] below: a connection is addressed by
+/// gesture, and the spelling the user typed is the one every surface shows back.
+fn name_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
+    let name = ctx.draft.read().def().named();
+    if ctx.target.read().editing() == Some(name.as_str()) {
         return None;
     }
     project
         .peek()
         .connections
         .iter()
-        .any(|c| c.def.named() == url)
-        .then(|| format!("'{url}' is already a connection in this project."))
+        .any(|c| c.def.named() == name)
+        .then(|| format!("'{name}' is already a connection in this project."))
 }
 
 /// The other blocker the draft cannot see: a **catalog name** another database connection in this
 /// project already registers under.
 ///
 /// [`check_catalog_name`] rather than a comparison written here, so the field refuses what
-/// registration refuses, in the same words. It folds, unlike [`url_clash`] beside it,
+/// registration refuses, in the same words. It folds, unlike [`name_clash`] beside it,
 /// because a catalog name is a SQL identifier. The set is the project's *stored* defs where the
 /// engine's is what is live — a connection that failed to connect reserves nothing.
 ///
-/// **The row this window opened on is dropped first**, exactly as [`url_clash`] drops it.
+/// **The row this window opened on is dropped first**, exactly as [`name_clash`] drops it.
 /// `check_catalog_name` skips the candidate by comparing URLs, and a database connection's URL
 /// carries its user — so editing the USER, the URL or the DATABASE moves the identity, the stale
 /// row stops matching, and the draft clashes with the connection it is replacing. The footer then
@@ -294,12 +294,12 @@ fn save(
     report: ReportCtx,
 ) {
     let def = ctx.draft.peek().def();
-    let previous = ctx.target.peek().editing().and_then(|url| {
+    let previous = ctx.target.peek().editing().and_then(|name| {
         project
             .peek()
             .connections
             .iter()
-            .find(|c| c.def.named() == url)
+            .find(|c| c.def.named() == name)
             .map(|row| row.def.clone())
     });
     let ops = password_ops(
@@ -344,12 +344,12 @@ fn commit(
     report: ReportCtx,
 ) {
     let def = ctx.draft.peek().def();
-    let url = def.named();
+    let name = def.named();
     let moved_from = ctx
         .target
         .peek()
         .editing()
-        .filter(|old| *old != url)
+        .filter(|old| *old != name)
         .map(str::to_string);
 
     let landed = {
@@ -367,11 +367,11 @@ fn commit(
                 .into(),
         ));
     } else {
-        ctx.status.set(Status::Connecting(url.clone()));
+        ctx.status.set(Status::Connecting(name.clone()));
     }
     {
         let mut target = ctx.target;
-        target.set(ConnectionTarget::Edit(url.clone()));
+        target.set(ConnectionTarget::Edit(name.clone()));
     }
 
     if let Some(old) = &moved_from {
@@ -379,7 +379,7 @@ fn commit(
         log_event(
             report.log,
             LogLevel::Info,
-            format!("Moved connection '{old}' to '{url}'"),
+            format!("Moved connection '{old}' to '{name}'"),
         );
     }
 

@@ -467,6 +467,22 @@ impl Connections {
             .map(|(name, _)| name.clone())
     }
 
+    /// The connections a set of defs describes, for a caller that holds defs rather than a live
+    /// engine.
+    ///
+    /// The registration pass composes its table specs **before** its first phase registers
+    /// anything, so at that moment no engine can answer what a table's connection is; the defs in
+    /// hand are the only thing that can. Building the same type from them rather than reading the
+    /// defs directly is what keeps one lookup rule — including the case-insensitive fallback,
+    /// which a hand-rolled `find` over the defs would quietly drop.
+    pub fn of(defs: &[ConnectionDef]) -> Self {
+        let held = Self::default();
+        for def in defs {
+            held.note(&def.named(), &def.identity());
+        }
+        held
+    }
+
     fn note(&self, name: &str, identity: &str) {
         self.0
             .lock()
