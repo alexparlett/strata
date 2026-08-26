@@ -42,17 +42,17 @@ use datafusion::catalog::{CatalogProvider, TableProvider};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
-use datafusion::sql::TableReference;
 
 use strata_model::{check_catalog_name, ColumnInfo, ConnectionDef, SourceDef};
 
 use self::providers::SourceCatalogProvider;
 use self::source::{Listing, Relation, SourceCatalog, Sourced, Sources};
 use super::connect::{self, Registration};
-use super::ddl::RemoteTarget;
 use super::fold_ident;
 use super::providers::deregister_catalog;
 use super::secrets::{SecretProvider, SecretRequest};
+use crate::policy::{Locality, TargetFacts};
+use crate::statements::Remote;
 use strata_core::secret::{migrate_derived, Secret, SecretRef};
 
 /// The keystore slot one of `conn`'s secrets lives in — **the one place the derivation is
@@ -253,6 +253,12 @@ impl Live {
             .find(|(_, live)| fold_ident(&live.catalog) == folded)?;
         Some(Connected {
             name: name.clone(),
+            kind: live
+                .def
+                .provider
+                .source()
+                .map(|s| s.kind.clone())
+                .unwrap_or_default(),
             source: Arc::clone(&live.source),
             provider: Arc::clone(&live.provider),
             writable: live.def.provider.source().is_some_and(|s| !s.read_only),
@@ -314,8 +320,13 @@ impl Live {
 /// One live source connection, as a statement reaches it — see [`Live::at`].
 struct Connected {
     /// The connection's own name, which is what [`LiveSource`] is keyed by and therefore what a
-    /// refresh has to name to put a new listing back.
+    /// refresh has to name to put a new listing back — and what a
+    /// [`RemoteSel::Connection`](crate::RemoteSel::Connection) selects on, the name being the
+    /// handle.
     name: String,
+    /// Which registered kind serves it — what a
+    /// [`RemoteSel::Kind`](crate::RemoteSel::Kind) selects on.
+    kind: String,
     source: Arc<dyn SourceCatalog>,
     provider: Arc<SourceCatalogProvider>,
     writable: bool,
@@ -545,9 +556,28 @@ pub(crate) fn listing(
 /// [`SourceDef::read_only`], and `false` for a catalog no live source registered.
 ///
 /// The *answer*, never the refusal: what a user is told about a read-only connection is
-/// [`ddl`](crate::ddl)'s, beside every other sentence about a remote target.
+/// [`statements::target`](crate::statements::target)'s, beside every other sentence about a
+/// remote target.
 pub(crate) fn writable(sources: &Live, catalog: &str) -> bool {
     sources.at(catalog).is_some_and(|live| live.writable)
+}
+
+/// What a policy decision may turn on about the connection registered as `catalog` — its backend
+/// kind and the name it is held under.
+///
+/// Empty for a catalog no live source registered, which is the honest answer: a
+/// [`RemoteScope::Only`](crate::RemoteScope::Only) names connections, and a catalog this map has
+/// never heard of is not one of them. Fails closed by construction rather than by a rule anyone
+/// has to remember.
+pub(crate) fn connection_facts(sources: &Live, catalog: &str) -> TargetFacts {
+    match sources.at(catalog) {
+        Some(live) => TargetFacts::remote(live.kind, live.name),
+        None => TargetFacts {
+            locality: Locality::Remote,
+            kind: None,
+            connection: None,
+        },
+    }
 }
 
 /// `name` as a statement the source registered as `catalog` parses may say it — its own rule
@@ -572,10 +602,10 @@ pub(crate) fn server_ident(sources: &Live, catalog: &str, name: &str) -> String 
 pub(crate) async fn insert_into(
     ctx: &SessionContext,
     sources: &Live,
-    at: &RemoteTarget,
+    at: &Remote,
     input: &LogicalPlan,
 ) -> Result<u64, String> {
-    let live = connected(sources, &at.catalog)?;
+    let live = connected(sources, &at.connection)?;
     let provider = relation_provider(ctx, at).await?;
     let schema = provider.schema();
     let writer = live.source.writer(provider, at, schema)?;
@@ -600,10 +630,10 @@ pub(crate) async fn insert_into(
 pub(crate) async fn create_table_as(
     ctx: &SessionContext,
     live_map: &Live,
-    at: &RemoteTarget,
+    at: &Remote,
     input: &LogicalPlan,
 ) -> Result<Option<u64>, String> {
-    let live = connected(live_map, &at.catalog)?;
+    let live = connected(live_map, &at.connection)?;
     let schema = Arc::clone(input.schema().inner());
     if !live.source.create_relation(at, Arc::clone(&schema)).await? {
         return Ok(None);
@@ -633,7 +663,7 @@ pub(crate) async fn create_table_as(
 /// the workspace's in-flight call, so `Workspace::cancel` and a re-press both abort the task, and an
 /// aborted task's future is *dropped* at its next await — no error path runs. Without this, every
 /// cancelled remote CTAS would leave an empty relation on the source under the name the user
-/// chose, and the retry would then refuse it as already existing. `ddl::tables::Staging` is the
+/// chose, and the retry would then refuse it as already existing. `statements::arms::tables::Staging` is the
 /// same guard for the local half, for the same reason.
 ///
 /// The removal is **async**, so it is spawned rather than performed: the future is being dropped
@@ -641,12 +671,12 @@ pub(crate) async fn create_table_as(
 /// local guard's `remove_dir_all` is — a runtime already shutting down may never run it.
 struct Created {
     source: Arc<dyn SourceCatalog>,
-    at: RemoteTarget,
+    at: Remote,
     armed: bool,
 }
 
 impl Created {
-    fn open(live: &Connected, at: RemoteTarget) -> Self {
+    fn open(live: &Connected, at: Remote) -> Self {
         Self {
             source: Arc::clone(&live.source),
             at,
@@ -689,7 +719,7 @@ pub(crate) async fn execute_text(sources: &Live, catalog: &str, text: &str) -> R
 
 /// Take `at` back off the source, logging a cleanup that itself failed rather than reporting it —
 /// the error a user is owed is the fill's, and a sentence about cleanup would replace it.
-async fn discard(source: &Arc<dyn SourceCatalog>, at: &RemoteTarget) {
+async fn discard(source: &Arc<dyn SourceCatalog>, at: &Remote) {
     if let Err(why) = source.drop_relation(at).await {
         tracing::warn!(
             "could not remove '{}' after its CREATE TABLE AS did not settle ({why}); it is empty",
@@ -739,13 +769,9 @@ fn connected(sources: &Live, catalog: &str) -> Result<Connected, String> {
 /// The read provider for one remote relation, resolved the way a query resolves it.
 async fn relation_provider(
     ctx: &SessionContext,
-    at: &RemoteTarget,
+    at: &Remote,
 ) -> Result<Arc<dyn TableProvider>, String> {
-    ctx.table_provider(TableReference::full(
-        at.catalog.clone(),
-        at.schema.clone(),
-        at.table.clone(),
-    ))
-    .await
-    .map_err(|e| e.to_string())
+    ctx.table_provider(at.recorded().clone())
+        .await
+        .map_err(|e| e.to_string())
 }

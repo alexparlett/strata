@@ -122,7 +122,7 @@ answer.
 flowchart LR
     RUN["Workspace::run<br/>(one statement per press)"] --> C{"accept<br/>parse → qualify → classify"}
     C -->|Query| Q["query()<br/>SELECT · EXPLAIN · SHOW · DESCRIBE<br/>→ snapshot pipeline"]
-    C -->|Statement| I["ddl::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
+    C -->|Statement| I["statements::arms::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
     C -->|Refusal| R["the engine's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]
 ```
 
@@ -131,7 +131,15 @@ flowchart LR
   in **codes** rather than prose so the engine mints every sentence from one table. The shipped
   provider is data — a `Capability` of grants over a local/remote axis — and its two presets are
   the app's editor (`full()`) and its agent (`read_only()`). A caller's capability narrows the
-  engine's and never widens it, which is what lets one engine serve both.
+  engine's and never widens it, which is what lets one engine serve both. It is asked twice:
+  coarsely at classification, and again at the arm once `resolve_target` has said whether the name
+  is the workspace's, a live connection's or nowhere — the second derived from that answer, so an
+  arm names neither the grant nor the locality.
+- **Dispatch is one axis and one contract.** `Target` says where a managed name points, `Mechanism`
+  says how a kind reaches one that is not the workspace's (planned into the source's sink,
+  dispatched to the server as text, or refused), and `StmtCtx` is what the engine hands every arm —
+  so all sixteen share the signature `(&StmtCtx, &Principal, &Qualified) -> StatementOutcome` and
+  adding a kind is five compile errors.
 - An interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS spools into
   `.strata/tables/<slug>/` as Arrow IPC and registers through the ordinary external-table path —
   the def it produces is a plain `TableDef` flagged `origin: Internal`, so persist, replay and the

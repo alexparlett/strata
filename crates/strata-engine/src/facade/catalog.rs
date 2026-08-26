@@ -2,11 +2,14 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use strata_core::project::resolve_source;
 
 use crate::catalog::{self, TableMeta, TableSpec, ViewMeta};
-use crate::ddl::{self, StatementOutcome};
+use crate::statements::arms::{self, stamped};
+use crate::statements::report::StatementOutcome;
+use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
     fold_ident, profile, store, BackgroundGuard, Engine, ProfileRun, CANCELLED, SUPERSEDED_SCAN,
 };
@@ -104,7 +107,7 @@ impl Catalog<'_> {
     }
 
     /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
-    /// what it reads — **the ⌘S gesture's entry into [`ddl::create_view`]**, which a
+    /// what it reads — **the ⌘S gesture's entry into [`arms::create_view`]**, which a
     /// typed `CREATE VIEW` enters through [`Workspace::run`](crate::Workspace::run) instead.
     /// `CREATE OR REPLACE`: redefinition is the ⌘S-on-a-view path.
     pub async fn create_view(self, name: String, sql: String) -> Result<ViewMeta, String> {
@@ -112,22 +115,37 @@ impl Catalog<'_> {
         let ctx = self.engine.ctx.clone();
         self.engine
             .rt()
-            .spawn(async move { ddl::create_view(&ctx, &name, &sql).await })
+            .spawn(async move { arms::create_view(&ctx, &name, &sql).await })
             .await
             .map_err(|e| format!("create view task failed: {e}"))?
     }
 
     /// Drop the SQL view `name` (idempotent — `IF EXISTS`) — the catalog pane's entry into
-    /// [`ddl::drop_view`], as a typed `DROP VIEW` reaches it through
+    /// [`arms::drop_view`], as a typed `DROP VIEW` reaches it through
     /// [`Workspace::run`](crate::Workspace::run).
-    pub async fn drop_view(self, name: String) -> Result<(), String> {
+    ///
+    /// Answers a [`StatementReport`] for [`drop_table`](Self::drop_table)'s reason: one answer
+    /// shape, so a surface that folds one gesture's outcome folds the other's. The dependents a
+    /// typed `DROP VIEW` names are the *statement's* — this gesture's confirm has already shown
+    /// them from the store, before anything was destroyed.
+    pub async fn drop_view(self, name: String) -> Result<StatementReport, String> {
         self.cancel_profile(&name);
+        let start = Instant::now();
         let ctx = self.engine.ctx.clone();
+        let dropped = name.clone();
         self.engine
             .rt()
-            .spawn(async move { ddl::drop_view(&ctx, &name).await })
+            .spawn(async move { arms::drop_view(&ctx, &dropped).await })
             .await
-            .map_err(|e| format!("drop view task failed: {e}"))?
+            .map_err(|e| format!("drop view task failed: {e}"))??;
+        let outcome = StatementOutcome {
+            message: format!("View '{name}' dropped"),
+            count: None,
+            effect: Some(StoreEffect::ViewRemoved { name }),
+        };
+        let report = stamped(StmtKind::DropView, start, outcome);
+        self.engine.settle_effect(report.effect.as_ref());
+        Ok(report)
     }
 
     /// Drop the registered table `name` — **the one funnel both surfaces drop through**.
@@ -147,19 +165,21 @@ impl Catalog<'_> {
         self,
         name: String,
         if_exists: bool,
-    ) -> Result<StatementOutcome, String> {
+    ) -> Result<StatementReport, String> {
         let _deleting = BackgroundGuard::new(self.engine);
+        let start = Instant::now();
         let ctx = self.engine.ctx.clone();
         let root = self.engine.data_root.lock().unwrap().clone();
         let internal = self.engine.internal.clone();
         let outcome = self
             .engine
             .rt()
-            .spawn(async move { ddl::drop_table(&ctx, &root, &internal, &name, if_exists).await })
+            .spawn(async move { arms::drop_table(&ctx, &root, &internal, &name, if_exists).await })
             .await
             .map_err(|e| format!("drop table task failed: {e}"))??;
-        self.engine.settle_effect(outcome.effect.as_ref());
-        Ok(outcome)
+        let report = stamped(StmtKind::DropTable, start, outcome);
+        self.engine.settle_effect(report.effect.as_ref());
+        Ok(report)
     }
 
     /// Whether `name` is a table whose data Strata owns — the one question the internal-name set

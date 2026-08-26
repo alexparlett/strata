@@ -17,7 +17,7 @@
 //!    reports **every** unknown table/column with a span (the planner below is fail-fast: one name
 //!    per statement), staying quiet where a mid-edit scope is unknowable. Name faults skip the
 //!    dry-plan.
-//!    A statement bound for a **server** (`ddl::dispatched`) stops there: its types, functions and
+//!    A statement bound for a **server** (`statements::arms::dispatched`) stops there: its types, functions and
 //!    clauses are that server's vocabulary, so judging it here would squiggle a statement Run
 //!    performs.
 //! 4. **Semantic** — the allowed statements are **dry-planned** against the live `SessionContext`,
@@ -163,8 +163,8 @@ pub async fn validate(
                 continue;
             }
         };
-        if let Admitted::Statement { kind, ref stmt } = admitted {
-            if crate::ddl::dispatched(ctx, kind, stmt) {
+        if let Admitted::Statement { kind, ref stmt, .. } = admitted {
+            if crate::statements::arms::dispatched(ctx, kind, stmt) {
                 continue;
             }
         }

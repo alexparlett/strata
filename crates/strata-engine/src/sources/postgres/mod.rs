@@ -38,7 +38,6 @@ use strata_model::ConnectionDef;
 
 use self::settings::{PgSettings, PASSWORD, PASSWORD_ENV};
 use crate::catalog::readable;
-use crate::ddl::RemoteTarget;
 use crate::secrets::{SecretProvider, SecretRequest};
 use crate::sources::secret_slot;
 use crate::sources::source::{
@@ -46,6 +45,7 @@ use crate::sources::source::{
     SourceMode, Sourced,
 };
 use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
+use crate::statements::Remote;
 
 /// The `PostgreSQL` data source.
 ///
@@ -183,7 +183,7 @@ impl SourceCatalog for PgCatalog {
     fn writer(
         &self,
         read: Arc<dyn TableProvider>,
-        at: &RemoteTarget,
+        at: &Remote,
         schema: SchemaRef,
     ) -> Result<Arc<dyn TableProvider>, String> {
         Ok(PostgresTableWriter::create(
@@ -193,11 +193,11 @@ impl SourceCatalog for PgCatalog {
         ))
     }
 
-    async fn create_relation(&self, at: &RemoteTarget, schema: SchemaRef) -> Result<bool, String> {
+    async fn create_relation(&self, at: &Remote, schema: SchemaRef) -> Result<bool, String> {
         write::create(self, at, schema).await
     }
 
-    async fn drop_relation(&self, at: &RemoteTarget) -> Result<(), String> {
+    async fn drop_relation(&self, at: &Remote) -> Result<(), String> {
         write::discard(self, at).await
     }
 

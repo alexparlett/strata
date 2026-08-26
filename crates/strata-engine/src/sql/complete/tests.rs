@@ -786,7 +786,7 @@ fn set_key_completes_and_replaces_the_whole_dotted_chain() {
 
 #[test]
 fn set_key_pool_agrees_bidirectionally_with_the_dispatch_fence() {
-    use crate::ddl::refuse_reserved_key;
+    use crate::statements::arms::refuse_reserved_key;
     use strata_arrow::config::{DIALECT_KEY, ENGINE_KEYS};
     let items = at("SET |");
     for k in ENGINE_KEYS {

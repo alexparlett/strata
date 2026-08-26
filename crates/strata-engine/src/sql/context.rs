@@ -1312,7 +1312,7 @@ pub(crate) fn copy_partition_list(stmt: &[Tok], caret: usize) -> Option<ColumnLi
 /// the identifiers of the first paren group after the `FUNCTION` keyword, each the
 /// first name of its comma-separated item. The `At(CreateFunction, Operand)` pool
 /// offers these because the body may reference **only** its arguments
-/// (`ddl/functions.rs`) — catalog columns and relations there would offer exactly
+/// (`statements/arms/functions.rs`) — catalog columns and relations there would offer exactly
 /// what `Definition::check` refuses.
 pub(crate) fn function_arguments(toks: &[Tok], sql_len: usize, caret: usize) -> Vec<String> {
     let stmt = statement_tokens(toks, sql_len, caret);

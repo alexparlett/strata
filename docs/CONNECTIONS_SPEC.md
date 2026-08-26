@@ -645,7 +645,7 @@ a `SET LOCAL search_path` of exactly the target schema, since the builder render
 name), re-enumerates the database, fills it, and on a failed fill drops the table again and
 re-enumerates — never a schema-only husk under a name the user thinks holds data. **A cancel is
 the other way out**, and it reaches no error path at all: the guard `write::Created` removes the
-table when the future is dropped, which is `ddl::tables::Staging`'s rule for the local half.
+table when the future is dropped, which is `arms::tables::Staging`'s rule for the local half.
 Whether the relation already exists is asked **inside the create's own transaction** rather than
 by a round trip before it, because `CreateTableBuilder` hardcodes `IF NOT EXISTS`: a relation that
 appeared in between would be silently adopted and then dropped by the rollback. The successful
@@ -680,7 +680,7 @@ default-deny. `TRUNCATE` is a `WHERE`-less `DELETE` with nothing new to say, `AL
 surface with its own listing-refresh questions, and the splice generalizes to either if it is ever
 asked for. Registering a table externally over a remote relation is refused for a different
 reason — a database describes its own relations — and that is the one sentence
-`ddl::in_database` still carries.
+`statements::target::in_database` still carries.
 
 ### Unqualified names (DB-09)
 

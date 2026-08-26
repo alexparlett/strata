@@ -25,9 +25,9 @@ use datafusion::catalog::TableProvider;
 use datafusion::sql::TableReference;
 use object_store::ObjectStore;
 
-use crate::ddl::RemoteTarget;
 use crate::fold_ident;
 use crate::secrets::SecretProvider;
+use crate::statements::Remote;
 use strata_model::ConnectionDef;
 
 /// Names a source for the registry, and for the surfaces that offer it.
@@ -392,7 +392,7 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
     fn writer(
         &self,
         _read: Arc<dyn TableProvider>,
-        _at: &RemoteTarget,
+        _at: &Remote,
         _schema: SchemaRef,
     ) -> Result<Arc<dyn TableProvider>, String> {
         Err(unsupported(self.kind(), "be written to"))
@@ -408,11 +408,7 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
     /// # Errors
     ///
     /// The default refuses, naming the kind.
-    async fn create_relation(
-        &self,
-        _at: &RemoteTarget,
-        _schema: SchemaRef,
-    ) -> Result<bool, String> {
+    async fn create_relation(&self, _at: &Remote, _schema: SchemaRef) -> Result<bool, String> {
         Err(unsupported(self.kind(), "have relations created in it"))
     }
 
@@ -424,7 +420,7 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
     /// If the source refused. The caller logs it rather than reporting it: the error a user is
     /// owed is the fill's, and a cleanup that also failed would replace it with a sentence about
     /// cleanup.
-    async fn drop_relation(&self, _at: &RemoteTarget) -> Result<(), String> {
+    async fn drop_relation(&self, _at: &Remote) -> Result<(), String> {
         Err(unsupported(self.kind(), "have relations dropped from it"))
     }
 

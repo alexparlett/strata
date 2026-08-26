@@ -34,7 +34,7 @@ use crate::sql::{FnKind, FunctionCatalog, FunctionSym, VARIADIC};
 /// The two halves move together because they answer one question between them. The catalog is
 /// what the completion row resolves against — the name, and the argument list as its dim detail,
 /// which is where this codebase puts signature help; `created` is what
-/// distinguishes a function this session made from a **built-in**, which `ddl::functions` needs
+/// distinguishes a function this session made from a **built-in**, which `statements::arms::functions` needs
 /// because DataFusion's registry cannot tell them apart and its `DROP FUNCTION` would deregister
 /// either with nothing able to put a built-in back.
 #[derive(Clone, Debug)]

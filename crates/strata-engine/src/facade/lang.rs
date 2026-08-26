@@ -6,9 +6,10 @@ use strata_model::Diagnostic;
 
 use crate::policy::{Capability, Principal};
 use crate::sql::{self, FunctionCatalog, PreparedSym};
+use crate::statements::arms;
 use crate::statements::pipeline::{self, Pipeline};
 use crate::statements::PolicyRefusal;
-use crate::{ddl, Engine};
+use crate::Engine;
 
 /// This engine's language service, from [`Engine::lang`].
 ///
@@ -62,12 +63,12 @@ impl Lang<'_> {
     /// it in; `Err` is the planner's own refusal, verbatim.
     ///
     /// A plan and nothing more, so it is as cheap as a diagnostics pass and has no more effect
-    /// than one — see [`ddl::column_type`] for why the offer cannot be authored instead.
+    /// than one — see [`column_type`](crate::statements::arms::column_type) for why the offer cannot be authored instead.
     pub async fn column_type(self, sql_type: String) -> Result<String, String> {
         let ctx = self.engine.ctx.clone();
         self.engine
             .rt()
-            .spawn(async move { ddl::column_type(&ctx, &sql_type).await })
+            .spawn(async move { arms::column_type(&ctx, &sql_type).await })
             .await
             .map_err(|e| format!("column type task failed: {e}"))?
     }
@@ -75,7 +76,7 @@ impl Lang<'_> {
     /// The registered SQL functions (the editor's language catalog), as they stand.
     ///
     /// By handle rather than by reference, because the set is swappable: a `CREATE FUNCTION`
-    /// replaces it wholesale (`ddl::functions`), so a caller that held a borrow would be holding
+    /// replaces it wholesale (`statements::arms::functions`), so a caller that held a borrow would be holding
     /// the engine's lock for as long as it read.
     pub fn functions(self) -> Arc<FunctionCatalog> {
         self.engine.functions.catalog()

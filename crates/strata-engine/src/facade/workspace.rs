@@ -6,8 +6,10 @@ use strata_model::QueryOutput;
 
 use crate::policy::{Capability, Principal};
 use crate::query::ReadPolicy;
+use crate::statements::arms;
+use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::{accept, Admitted, Pipeline};
-use crate::{ddl, explain, Engine, RunOutcome, RunTag, WsId};
+use crate::{explain, Engine, RunOutcome, RunTag, WsId};
 
 /// One workspace's runs, from [`Engine::ws`].
 ///
@@ -32,7 +34,7 @@ impl Workspace<'_> {
     ///   the one thing the pipeline knows and the read path cannot: the [`ReadPolicy`] an
     ///   `EXECUTE` needs. It is the only arm that touches the snapshot lifecycle, which is what
     ///   keeps "DDL does not retire snapshots" true by construction rather than by care.
-    /// - `Statement(kind)` goes to `ddl::execute`, bracketed by `Engine::bookkeep` so
+    /// - `Statement(kind)` goes to `arms::execute`, bracketed by `Engine::bookkeep` so
     ///   [`cancel`](Self::cancel) / [`is_running`](Self::is_running) / the close-while-running
     ///   confirm see it like any other work — a CTAS is a full scan, and a window closing over
     ///   one has to ask.
@@ -55,14 +57,15 @@ impl Workspace<'_> {
     ) -> Result<RunOutcome, String> {
         let ws = self.ws;
         let engine = self.engine;
+        let who = Principal::new(Capability::full()).in_session(ws);
         let admitted = {
             let ctx = engine.ctx.clone();
             let policy = engine.policy.clone();
+            let who = who.clone();
             let sql = sql.clone();
             engine
                 .classify_bracket(ws, tag, async move {
                     let pipeline = Pipeline::new(&ctx);
-                    let who = Principal::new(Capability::full()).in_session(ws);
                     accept(&pipeline, &sql, policy.as_ref(), &who)
                         .await
                         .map_err(|r| r.message())
@@ -70,14 +73,14 @@ impl Workspace<'_> {
                 .await?
         };
         match admitted {
-            Admitted::Query { stmt, policy } => engine
+            Admitted::Query { stmt, policy, .. } => engine
                 .read(ws, tag, stmt.into_statement(), page_size, policy)
                 .await
                 .map(|(output, batch)| RunOutcome::Rows(output, batch)),
-            Admitted::Statement { kind, stmt } => {
-                let ctx = engine.ctx.clone();
+            Admitted::Statement { kind, stmt, .. } => {
                 let root = engine.data_root.lock().unwrap().clone();
-                let dispatch = ddl::Dispatch {
+                let cx = StmtCtx {
+                    ctx: engine.ctx.clone(),
                     sql,
                     root,
                     internal: engine.internal.clone(),
@@ -86,10 +89,11 @@ impl Workspace<'_> {
                     scope: engine.session.clone(),
                     functions: engine.functions.clone(),
                     baseline: engine.overrides(),
+                    policy: engine.policy.clone(),
                 };
                 let report = engine
                     .bookkeep(ws, tag, "statement", async move {
-                        ddl::execute(&ctx, kind, stmt.into_statement(), dispatch).await
+                        arms::execute(kind, stmt, &who, cx).await
                     })
                     .await?;
                 engine.settle_effect(report.effect.as_ref());

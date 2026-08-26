@@ -30,16 +30,19 @@ use datafusion::sql::TableReference;
 use strata_arrow::column_info;
 
 use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
+use crate::policy::Principal;
 use crate::query::is_snapshot_name;
-use crate::sources::Live;
-use crate::statements::pipeline::resolved_one;
+use crate::statements::ctx::StmtCtx;
+use crate::statements::pipeline::{resolved_one, Qualified};
+use crate::statements::report::{StatementOutcome, StoreEffect};
+use crate::statements::target::{elsewhere, resolve_named, resolve_target, Target};
 use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, quote_ident};
 use strata_model::ViewDef;
 
-use super::{bare_name, elsewhere, existing, left_invalid, remote, StatementOutcome, StoreEffect};
+use super::{existing, left_invalid, remote};
 
-/// What [`bare_name`] calls the objects these statements create.
+/// What [`elsewhere`] calls the objects these statements create.
 const WHAT: &str = "Views";
 
 /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and what it reads
@@ -111,20 +114,24 @@ pub async fn drop(ctx: &SessionContext, name: &str) -> Result<(), String> {
 /// statement is dispatched rather than reduced to a def, and `MATERIALIZED` is accepted there and
 /// nowhere else.
 pub async fn create_statement(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    sources: &Live,
-    source: &str,
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    let DFStatement::Statement(s) = &stmt else {
+    let ctx = &cx.ctx;
+    let DFStatement::Statement(s) = &**stmt else {
         return Err(not_a_view(StmtKind::CreateView));
     };
     let SqlStatement::CreateView(view) = s.as_ref() else {
         return Err(not_a_view(StmtKind::CreateView));
     };
-    if let Some(at) = remote::target(ctx, StmtKind::CreateView, &stmt) {
-        return remote::create_view(ctx, sources, &at, view.materialized, &stmt, source).await;
+    if let Some(at) = remote::target(ctx, StmtKind::CreateView, stmt) {
+        cx.require_target(who, StmtKind::CreateView, &Target::Remote(at.clone()))
+            .await?;
+        return remote::create_view(cx, &at, view.materialized, stmt).await;
     }
+    cx.require_target(who, StmtKind::CreateView, &resolve_named(ctx, &view.name))
+        .await?;
     let (name, sql) = definition(ctx, view)?;
 
     let replacing = match existing(ctx, &name).await {
@@ -166,17 +173,19 @@ pub async fn create_statement(
 /// The remote branch is taken before that, off the AST, because a plan of a name in a database
 /// connection tells this arm nothing it does not already have.
 pub async fn drop_statement(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    sources: &Live,
-    source: &str,
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    if let Some(at) = remote::target(ctx, StmtKind::DropView, &stmt) {
-        return remote::drop_relation(ctx, sources, &at, true, &stmt, source).await;
+    let ctx = &cx.ctx;
+    if let Some(at) = remote::target(ctx, StmtKind::DropView, stmt) {
+        cx.require_target(who, StmtKind::DropView, &Target::Remote(at.clone()))
+            .await?;
+        return remote::drop_relation(cx, &at, true, stmt).await;
     }
     let plan = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
     let LogicalPlan::Ddl(DdlStatement::DropView(dropping)) = plan else {
@@ -185,7 +194,9 @@ pub async fn drop_statement(
             StmtKind::DropView.label()
         ));
     };
-    let name = bare_name(ctx, &dropping.name, WHAT)?;
+    let target = resolve_target(ctx, &dropping.name);
+    cx.require_target(who, StmtKind::DropView, &target).await?;
+    let name = target.workspace(WHAT)?;
     match existing(ctx, &name).await {
         Some(TableType::View) => {}
         Some(_) => return Err(format!("'{name}' is a table. Use DROP TABLE")),
@@ -268,7 +279,8 @@ fn definition(ctx: &SessionContext, view: &CreateView) -> Result<(String, String
     if name.0.len() > 3 {
         return Err(elsewhere(WHAT));
     }
-    let name = bare_name(ctx, &TableReference::parse_str(&name.to_string()), WHAT)?;
+    let name =
+        resolve_target(ctx, &TableReference::parse_str(&name.to_string())).workspace(WHAT)?;
     Ok((name, query.to_string()))
 }
 

@@ -860,17 +860,24 @@ pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
     readers(ctx, name, |deps| deps.tables.contains(&target)).await
 }
 
-/// The registered views whose plans read `address` — `pg.public.orders` — inside a database
+/// The registered views whose plans read `at` — `pg.public.orders` — inside a database
 /// connection, so a `DROP` that runs on the server can name what it strands.
 ///
 /// The `remote` half of [`PlanDeps`], compared case-insensitively over the whole dotted address,
 /// which over-reports in the same direction the aliases half does: a spare name is one the user
 /// can look at, where a missed one is a destructive action reported as harmless.
-pub async fn remote_dependents(ctx: &SessionContext, address: &str) -> Vec<String> {
-    readers(ctx, address, |deps| {
+///
+/// **Reference-shaped, so the wrong comparison is unwritable.** `PlanDeps::remote` records
+/// `TableScan::table_name.to_string()` — every part bare — and a *rendered* address quotes the
+/// parts that need it, so `pg.public."Orders"` matched nothing and the drop that produced it
+/// reported a destructive action as consequence-free. Taking the recorded form means a caller
+/// cannot hand over a spelling meant for a message.
+pub async fn remote_dependents(ctx: &SessionContext, at: &TableReference) -> Vec<String> {
+    let address = at.to_string();
+    readers(ctx, &address, |deps| {
         deps.remote
             .iter()
-            .any(|read| read.eq_ignore_ascii_case(address))
+            .any(|read| read.eq_ignore_ascii_case(&address))
     })
     .await
 }

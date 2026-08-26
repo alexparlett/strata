@@ -40,9 +40,15 @@ use datafusion::sql::TableReference;
 
 use crate::catalog::register_external;
 use crate::export::partition_columns_are_bare_words;
+use crate::policy::Principal;
 use crate::register::table_spec;
+use crate::statements::ctx::StmtCtx;
+use crate::statements::pipeline::Qualified;
+use crate::statements::report::{StatementOutcome, StoreEffect};
+use crate::statements::target::{elsewhere, resolve_target};
+use crate::statements::StmtKind;
 use crate::store::store_identity;
-use crate::{Connections, InternalTables};
+use crate::Connections;
 use strata_arrow::client::client_key;
 use strata_core::project::{relativize, split_remote};
 use strata_core::util::{one_char, plural};
@@ -50,9 +56,9 @@ use strata_model::{
     CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef, TableOrigin,
 };
 
-use super::{bare_name, elsewhere, existing, DataRoot, StatementOutcome, StoreEffect};
+use super::existing;
 
-/// What [`bare_name`] calls the objects this statement creates.
+/// What [`elsewhere`] calls the objects this statement creates.
 const WHAT: &str = "Tables";
 
 /// The statement's own label, for the refusals that name it.
@@ -66,13 +72,12 @@ const LABEL: &str = "CREATE EXTERNAL TABLE";
 /// fail late, and it fails the way every other table's registration does, in
 /// `register_external`'s own words.
 pub async fn create(
-    ctx: &SessionContext,
-    stmt: DFStatement,
-    root: &DataRoot,
-    internal: &InternalTables,
-    connections: &Connections,
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    let DFStatement::CreateExternalTable(create) = stmt else {
+    let ctx = &cx.ctx;
+    let DFStatement::CreateExternalTable(create) = (**stmt).clone() else {
         return Err(format!("{LABEL} did not parse as a table"));
     };
     let CreateExternalTable {
@@ -90,7 +95,7 @@ pub async fn create(
         constraints,
     } = create;
 
-    let Some(root) = root.as_deref() else {
+    let Some(root) = cx.root.as_deref() else {
         return Err(format!("{LABEL} needs a project folder to store the table"));
     };
 
@@ -110,9 +115,12 @@ pub async fn create(
     if name.0.len() > 3 {
         return Err(elsewhere(WHAT));
     }
-    let name = bare_name(ctx, &TableReference::parse_str(&name.to_string()), WHAT)?;
+    let target = resolve_target(ctx, &TableReference::parse_str(&name.to_string()));
+    cx.require_target(who, StmtKind::CreateExternalTable, &target)
+        .await?;
+    let name = target.workspace(WHAT)?;
     let format = read_format(&file_type, &name, &options)?;
-    let (connection, source) = source_of(root, &location, connections)?;
+    let (connection, source) = source_of(root, &location, &cx.connections)?;
     let partitions = partition_cols(ctx, &columns, &table_partition_cols)?;
 
     let replacing = match existing(ctx, &name).await {
@@ -125,7 +133,7 @@ pub async fn create(
             })
         }
         Some(_) if !or_replace => return Err(format!("Table '{name}' already exists")),
-        Some(_) if internal.contains(&name) => {
+        Some(_) if cx.internal.contains(&name) => {
             return Err(format!(
                 "'{name}' is a table Strata stores in this project. Drop it first"
             ))
@@ -141,7 +149,7 @@ pub async fn create(
         partition_cols: partitions,
         origin: TableOrigin::External,
     };
-    let meta = register_external(ctx, &table_spec(root, &def, connections)).await?;
+    let meta = register_external(ctx, &table_spec(root, &def, &cx.connections)).await?;
 
     let verb = if replacing { "replaced" } else { "created" };
     Ok(StatementOutcome {

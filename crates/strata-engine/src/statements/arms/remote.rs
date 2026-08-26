@@ -21,40 +21,58 @@ use datafusion::sql::sqlparser::tokenizer::Location;
 use datafusion::sql::TableReference;
 
 use crate::catalog::remote_dependents;
+use crate::policy::Principal;
 use crate::providers::in_workspace;
 use crate::sources::{execute_text, relist_at, server_ident, writable, Live};
+use crate::statements::ctx::StmtCtx;
+use crate::statements::mechanism::{mechanism, Mechanism};
+use crate::statements::pipeline::Qualified;
+use crate::statements::report::{StatementOutcome, StoreEffect};
+use crate::statements::target::{read_only, resolve_named, resolve_target, Remote, Target};
 use crate::statements::StmtKind;
 use crate::{fold_ident, CATALOG, SCHEMA};
 use strata_core::util::plural;
 
-use super::{
-    left_invalid, read_only, remote_named, remote_target, RemoteTarget, StatementOutcome,
-    StoreEffect,
-};
+use super::left_invalid;
 
-/// The relation `kind` addresses, when it is one inside a database connection and the statement
-/// is therefore dispatched rather than planned — the one answer every arm and the editor read, so
-/// the two cannot disagree about which statements the server owns.
-pub(super) fn target(
-    ctx: &SessionContext,
-    kind: StmtKind,
-    stmt: &DFStatement,
-) -> Option<RemoteTarget> {
+/// The relation `kind` addresses, when it is one inside a database connection **and** the kind's
+/// [`Mechanism`] is to hand the statement to the server as text — the one answer every arm and
+/// the editor read, so the two cannot disagree about which statements the server owns.
+///
+/// The mechanism is asked first, so a kind whose remote form is planned into the source's sink
+/// (a CTAS, an `INSERT`) never reaches the splice, and a kind with no remote form at all reaches
+/// its own refusal. The AST match below then reads the managed name **off the parsed statement**,
+/// because these are the statements that must answer before anything plans.
+pub(super) fn target(ctx: &SessionContext, kind: StmtKind, stmt: &DFStatement) -> Option<Remote> {
+    if mechanism(kind) != Mechanism::ServerText {
+        return None;
+    }
+    let target = match kind {
+        StmtKind::Update | StmtKind::Delete => resolve_target(ctx, &dml_target(stmt).ok()?),
+        _ => resolve_named(ctx, managed_name(kind, stmt)?),
+    };
+    match target {
+        Target::Remote(at) => Some(at),
+        Target::Workspace { .. } | Target::Nowhere { .. } => None,
+    }
+}
+
+/// The name a create or a drop manages, read off the parsed statement — `None` where the
+/// classifier and sqlparser disagree about the shape, and for a `DROP` naming several objects,
+/// which nothing here can dispatch as one relation.
+fn managed_name(kind: StmtKind, stmt: &DFStatement) -> Option<&ObjectName> {
     let DFStatement::Statement(s) = stmt else {
         return None;
     };
     match (kind, s.as_ref()) {
-        (StmtKind::CreateTable, SqlStatement::CreateTable(create)) if create.query.is_none() => {
-            remote_named(ctx, &create.name)
-        }
-        (StmtKind::CreateView, SqlStatement::CreateView(view)) => remote_named(ctx, &view.name),
+        (StmtKind::CreateTable, SqlStatement::CreateTable(create)) => Some(&create.name),
+        (StmtKind::CreateView, SqlStatement::CreateView(view)) => Some(&view.name),
         (StmtKind::DropTable | StmtKind::DropView, SqlStatement::Drop { names, .. }) => {
             match names.as_slice() {
-                [one] => remote_named(ctx, one),
+                [one] => Some(one),
                 _ => None,
             }
         }
-        (StmtKind::Update | StmtKind::Delete, _) => remote_target(ctx, &dml_target(stmt).ok()?),
         _ => None,
     }
 }
@@ -69,35 +87,28 @@ pub(crate) fn dispatched(ctx: &SessionContext, kind: StmtKind, stmt: &DFStatemen
 /// One statement, run on the server behind both gates, in an order that is load-bearing: a
 /// refusal must never have reached the server, and the splice must never run over a statement the
 /// body check would have stopped.
-async fn dispatch(
-    ctx: &SessionContext,
-    sources: &Live,
-    at: &RemoteTarget,
-    stmt: &DFStatement,
-    source: &str,
-) -> Result<u64, String> {
-    if !writable(sources, &at.catalog) {
+async fn dispatch(cx: &StmtCtx, at: &Remote, stmt: &DFStatement) -> Result<u64, String> {
+    let sources = &cx.sources;
+    if !writable(sources, &at.connection) {
         return Err(read_only(at));
     }
     let named = Named::of(stmt);
-    named.check(ctx, &at.catalog)?;
-    let sql = splice(source, &named.names, &at.catalog, sources)?;
-    execute_text(sources, &at.catalog, &sql).await
+    named.check(&cx.ctx, &at.connection)?;
+    let sql = splice(&cx.sql, &named.names, &at.connection, sources)?;
+    execute_text(sources, &at.connection, &sql).await
 }
 
 /// [`dispatch`], plus the re-enumeration a statement that changed what the server holds owes: it
 /// is what puts a new relation in the tree with no ↻ and what drops the cached provider of one
 /// that is gone.
 async fn changed(
-    ctx: &SessionContext,
-    sources: &Live,
-    at: &RemoteTarget,
+    cx: &StmtCtx,
+    at: &Remote,
     stmt: &DFStatement,
-    source: &str,
     message: String,
 ) -> Result<StatementOutcome, String> {
-    dispatch(ctx, sources, at, stmt, source).await?;
-    relist_at(sources, &at.catalog).await;
+    dispatch(cx, at, stmt).await?;
+    relist_at(&cx.sources, &at.connection).await;
     Ok(StatementOutcome {
         message,
         count: None,
@@ -108,12 +119,10 @@ async fn changed(
 /// `CREATE VIEW` / `CREATE MATERIALIZED VIEW` inside a database connection — the only arm that
 /// accepts `MATERIALIZED`, the workspace having no such concept.
 pub(super) async fn create_view(
-    ctx: &SessionContext,
-    sources: &Live,
-    at: &RemoteTarget,
+    cx: &StmtCtx,
+    at: &Remote,
     materialized: bool,
-    stmt: &DFStatement,
-    source: &str,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
     let what = match materialized {
         true => "Materialized view",
@@ -122,40 +131,36 @@ pub(super) async fn create_view(
     let message = format!(
         "{what} '{}' created on '{}'",
         at.server_address(),
-        at.catalog
+        at.connection
     );
-    changed(ctx, sources, at, stmt, source, message).await
+    changed(cx, at, stmt, message).await
 }
 
 /// A **column-list** `CREATE TABLE` inside a database connection, whose types are the server's own
 /// vocabulary (`jsonb`, `serial`) and only the server's to judge.
 pub(super) async fn create_table(
-    ctx: &SessionContext,
-    sources: &Live,
-    at: &RemoteTarget,
-    stmt: &DFStatement,
-    source: &str,
+    cx: &StmtCtx,
+    at: &Remote,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
     let message = format!(
         "Table '{}' created on '{}'",
         at.server_address(),
-        at.catalog
+        at.connection
     );
-    changed(ctx, sources, at, stmt, source, message).await
+    changed(cx, at, stmt, message).await
 }
 
 /// `DROP TABLE` / `DROP VIEW` inside a database connection, naming the workspace views left
 /// reading the relation without cascading — existence is the server's question, the listing being
 /// only what the connection last told us and `IF EXISTS` travelling in the statement.
 pub(super) async fn drop_relation(
-    ctx: &SessionContext,
-    sources: &Live,
-    at: &RemoteTarget,
+    cx: &StmtCtx,
+    at: &Remote,
     view: bool,
-    stmt: &DFStatement,
-    source: &str,
+    stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    let dependents = remote_dependents(ctx, &at.dotted()).await;
+    let dependents = remote_dependents(&cx.ctx, at.recorded()).await;
     let what = match view {
         true => "View",
         false => "Table",
@@ -163,27 +168,47 @@ pub(super) async fn drop_relation(
     let message = format!(
         "{what} '{}' dropped on '{}'{}",
         at.server_address(),
-        at.catalog,
+        at.connection,
         left_invalid(&dependents)
     );
-    changed(ctx, sources, at, stmt, source, message).await
+    changed(cx, at, stmt, message).await
 }
 
 /// `UPDATE` and `DELETE`, remote-only, reporting the **server's** own affected-row count and no
 /// effect at all, rows being not relations. No `WHERE`-less guard either: the typed statement is
 /// the intent and the read-only toggle is the belt, the terms `DROP TABLE` already dispatches on.
-pub(super) async fn dml(
-    ctx: &SessionContext,
+pub(super) async fn update(
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
+) -> Result<StatementOutcome, String> {
+    dml(cx, who, stmt, StmtKind::Update).await
+}
+
+/// `DELETE`, [`update`]'s twin — one body, because the two differ only in the verb their report
+/// uses and in the preposition in front of the relation.
+pub(super) async fn delete(
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
+) -> Result<StatementOutcome, String> {
+    dml(cx, who, stmt, StmtKind::Delete).await
+}
+
+/// The body both DML statements share.
+async fn dml(
+    cx: &StmtCtx,
+    who: &Principal,
+    stmt: &Qualified,
     kind: StmtKind,
-    sources: &Live,
-    stmt: &DFStatement,
-    source: &str,
 ) -> Result<StatementOutcome, String> {
     dml_target(stmt)?;
-    let Some(at) = target(ctx, kind, stmt) else {
+    let Some(at) = target(&cx.ctx, kind, stmt) else {
         return Err(workspace_dml(kind));
     };
-    let rows = dispatch(ctx, sources, &at, stmt, source).await?;
+    cx.require_target(who, kind, &Target::Remote(at.clone()))
+        .await?;
+    let rows = dispatch(cx, &at, stmt).await?;
     let verb = match kind {
         StmtKind::Delete => "Deleted",
         _ => "Updated",
@@ -197,7 +222,7 @@ pub(super) async fn dml(
             "{verb} {} {preposition} '{}' on '{}'",
             plural(rows as usize, "row"),
             at.server_address(),
-            at.catalog
+            at.connection
         ),
         count: Some(rows),
         effect: None,
@@ -792,34 +817,48 @@ mod tests {
         );
     }
 
-    /// **A remote drop names its readers**, and the address it looks them up by is the plan's own
-    /// rendering rather than the quoted one a message prints: `PlanDeps::remote` holds
-    /// `pg.public.Orders`, and comparing it against `pg.public.\"Orders\"` matches nothing, so a
-    /// drop would report a destructive action as consequence-free.
+    /// **A remote drop names its readers** for the two spellings that used to strand them: a
+    /// quoted identifier and a reserved word.
+    ///
+    /// The address it looks them up by is the plan's own rendering rather than the quoted one a
+    /// message prints — `PlanDeps::remote` holds `pg.public.Orders`, and comparing it against
+    /// `pg.public.\"Orders\"` matches nothing, so a drop would report a destructive action as
+    /// consequence-free. [`remote_dependents`] takes the recorded reference now, which is what
+    /// makes the wrong comparison unwritable rather than merely unwritten.
+    ///
+    /// Pinned at the lookup, which is where the bug lived; the sentence a real drop prints around
+    /// it is `tests/postgres_federation.rs`'s, where a server can take the statement.
     #[tokio::test]
-    async fn the_dependents_lookup_uses_the_spelling_the_plan_records() {
-        let at = RemoteTarget {
-            catalog: "pg".into(),
-            schema: "public".into(),
-            table: "Orders".into(),
+    async fn a_drop_names_its_readers_for_a_quoted_and_a_reserved_name() {
+        let at = Remote {
+            connection: "pg".into(),
+            reference: TableReference::full("pg", "public", "Orders"),
         };
-        assert_eq!(at.dotted(), "pg.public.Orders");
+        assert_eq!(at.recorded().to_string(), "pg.public.Orders");
         assert_eq!(at.address(), "pg.public.\"Orders\"");
 
         let ctx = session();
-        fake_source(&ctx, "quoted", &["Orders"]);
-        crate::ddl::create_view(&ctx, "reader", "SELECT id FROM quoted.public.\"Orders\"")
-            .await
-            .expect("a workspace view over the remote relation");
+        fake_source(&ctx, "quoted", &["Orders", "order"]);
+        for (view, reads) in [
+            ("quoted_reader", "quoted.public.\"Orders\""),
+            ("reserved_reader", "quoted.public.\"order\""),
+        ] {
+            crate::statements::arms::views::create(&ctx, view, &format!("SELECT id FROM {reads}"))
+                .await
+                .expect("a workspace view over the remote relation");
+        }
 
-        let at = RemoteTarget {
-            catalog: "quoted".into(),
-            schema: "public".into(),
-            table: "Orders".into(),
-        };
-        assert_eq!(
-            remote_dependents(&ctx, &at.dotted()).await,
-            vec!["reader".to_string()]
-        );
+        for (relation, reader) in [("Orders", "quoted_reader"), ("order", "reserved_reader")] {
+            let at = Remote {
+                connection: "quoted".into(),
+                reference: TableReference::full("quoted", "public", relation),
+            };
+            assert_eq!(
+                remote_dependents(&ctx, at.recorded()).await,
+                vec![reader.to_string()],
+                "'{}' named no readers",
+                at.address()
+            );
+        }
     }
 }
