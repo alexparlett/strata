@@ -649,9 +649,9 @@ table when the future is dropped, which is `arms::tables::Staging`'s rule for th
 Whether the relation already exists is asked **inside the create's own transaction** rather than
 by a round trip before it, because `CreateTableBuilder` hardcodes `IF NOT EXISTS`: a relation that
 appeared in between would be silently adopted and then dropped by the rollback. The successful
-CTAS carries `StoreEffect::RemoteRelationsChanged`, whose only job is the catalog generation: a remote
-relation has no store row, and the tree, completion and every tab's diagnostics already key on the
-epoch, so the new table shows with no manual ↻.
+CTAS carries `StoreEffect::RemoteRelationsChanged`, whose only job is the catalog generation: a
+remote relation has no store row, and the tree, completion and every tab's diagnostics already key
+on that number, so the new table shows with no manual ↻.
 
 **Still refused**, each for its own reason: `INSERT OVERWRITE` (a statement that silently empties a
 server table is not v1) and `CREATE OR REPLACE TABLE` over a relation that **exists** (it would

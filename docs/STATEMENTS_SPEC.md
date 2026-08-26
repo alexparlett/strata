@@ -139,7 +139,8 @@ the crate's public surface: a surface that folds one gesture's answer folds the 
 **The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
 tab's request keeper so a statement run in a background tab still lands: store upsert on the
 matching `ProjChan` → `persisted_defs` writes `project.json` through the persist funnel →
-`catalog_settled` bumps the epoch (every tab's diagnostics re-derive) → the event log. The log
+`catalog_settled` adopts the engine's catalog generation (every tab's diagnostics re-derive) →
+the event log. The log
 entry is recorded by the fold, not by the run-logging hook, because only the fold knows whether
 the def actually reached disk — a success row logged over a failed write would promise a table the
 next open loses.
@@ -615,7 +616,8 @@ re-registering it**. Re-registering replaces the provider, and that is what stra
 view captured (D10/D11) — the only reason a table Refresh re-creates the views above it. An append
 cannot change the shape a view captured (the sink schema-checks first) and the provider re-LISTs
 per scan anyway, so the fold is `refresh_table_rows` → `Catalog::table_meta` →
-`ProjectState::table_reread`: no re-inference, no view churn, no epoch bump, no `Loading` flash.
+`ProjectState::table_reread`: no re-inference, no view churn, no move in the catalog generation,
+no `Loading` flash.
 The count is still read from the footers, never added up from what the statement claimed.
 
 **`DROP TABLE` works on both origins, and is the one place a table is dropped.** The catalog
@@ -979,7 +981,7 @@ whose settle moves the catalog generation, which is what every tab's `Catalog` s
 
 | Surface | Reads | Shows |
 |---|---|---|
-| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the epoch | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
+| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the catalog generation | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
 | diagnostics | `Lang::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
 | `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
 
@@ -1224,7 +1226,8 @@ query to `.strata/tables/<slug>/` → registers via `register_external`
 
 At settle: store upsert on `ProjChan::Tables` (the sidebar shows the row immediately,
 `Reg::Ready(meta)`) → `persisted_defs` rewrites `.strata/project.json` atomically through the
-persist funnel → `catalog_settled` epoch bump (diagnostics revalidate; other tabs resolve the new
+persist funnel → `catalog_settled` adopts the engine's catalog generation (diagnostics revalidate;
+other tabs resolve the new
 name) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
 rows") — no grid, no snapshot.
 
