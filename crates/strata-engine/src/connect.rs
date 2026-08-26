@@ -1,9 +1,10 @@
 //! **The contract every connection registers under**, written once: a connection is applied to
 //! the session or it is taken back, never both and never neither.
 //!
-//! Two arms register two different things — an object store keyed by [`ConnectionDef::url`]
-//! ([`store`](super::store)) and a database catalog keyed by its SQL name
-//! ([`db`](super::db)) — and their take-backs are different code, because the registries are.
+//! Two arms register two different things — an object store keyed by the URL its identity
+//! derives ([`store`](super::store)) and a source's catalog keyed by its SQL name
+//! ([`sources`](super::sources)) — and their take-backs are different code, because the
+//! registries are.
 //! What is *not* different, and is therefore here rather than in each of them, is the rule:
 //! **on `Err`, whatever this connection last registered comes out.**
 //!

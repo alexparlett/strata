@@ -383,7 +383,7 @@ mod tests {
                 .clone()
                 .table_provider(&Located {
                     connection: "fixture".into(),
-                    url: def.identity(),
+                    identity: def.identity(),
                     relation: "public.orders".into(),
                 })
                 .await

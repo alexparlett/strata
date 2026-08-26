@@ -1414,7 +1414,7 @@ impl Engine {
     ///
     /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
     /// the credential chain does not answer for, a server that refused the user, a password this
-    /// machine does not have, a kind no backend is registered for. See `store::connect` and
+    /// machine does not have, a kind nothing is registered for. See `store::connect` and
     /// [`sources::connect`].
     pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
         let ctx = self.ctx.clone();
@@ -1458,9 +1458,9 @@ impl Engine {
         sources::disconnect(&self.ctx, &self.live, name);
     }
 
-    /// What a live database connection registered: the catalog it is addressed by, and its
-    /// schemas **scoped and tagged** against the def's own [`PgStore::schemas`] — `None` for a
-    /// connection that is not a live database.
+    /// What a live connection to a source registered: the catalog it is addressed by, and its
+    /// schemas **scoped and tagged** against the def's own [`SourceDef::schemas`](strata_model::SourceDef::schemas) — `None` for a
+    /// connection that holds no live catalog.
     ///
     /// The one read the data-sources tree, the schema picker and completion share, so no
     /// consumer re-derives visibility from the def. It reads the connect-time enumeration
@@ -1468,7 +1468,7 @@ impl Engine {
     /// registration pass, and *that* is the refresh.
     ///
     /// Synchronous and not on the runtime, because there is no I/O in it.
-    pub fn db_listing(
+    pub fn source_listing(
         &self,
         conn: &ConnectionDef,
     ) -> Option<(String, Vec<sources::SchemaListingView>)> {
@@ -1486,7 +1486,7 @@ impl Engine {
     }
 
     /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
-    /// connection, its schemas and relations from [`db_listing`](Self::db_listing).
+    /// connection, its schemas and relations from [`source_listing`](Self::source_listing).
     ///
     /// Built here rather than in the editor because both halves are read the way the rest of the
     /// engine reads them: the catalog name off the def, so a connection that has never answered
@@ -1511,7 +1511,7 @@ impl Engine {
                     return None;
                 }
                 let schemas = self
-                    .db_listing(def)
+                    .source_listing(def)
                     .map(|(_, schemas)| schemas)
                     .unwrap_or_default()
                     .into_iter()
@@ -1562,7 +1562,7 @@ impl Engine {
     /// Membership, not liveness, in the same sense `connections` is: a catalog is on the list
     /// exactly while its connection is live, which is also exactly while a three-part name can
     /// resolve through it. Synchronous and free — the list is a map this session holds.
-    pub fn database_catalogs(&self) -> Vec<String> {
+    pub fn source_catalogs(&self) -> Vec<String> {
         self.ctx
             .catalog_names()
             .into_iter()
@@ -2065,9 +2065,8 @@ fn registered_function(ctx: &SessionContext, name: &str) -> bool {
 
 /// The catalog + schema **we own** — see [`build_context`].
 ///
-/// The catalog's name is `strata-model`'s, because a database connection's own catalog name may
-/// not be it ([`strata_model::PgStore::check_catalog`]) and a name written down twice is a name
-/// that can disagree.
+/// The catalog's name is `strata-model`'s, because a connection's own catalog name may not be it
+/// ([`strata_model::check_catalog`]) and a name written down twice is a name that can disagree.
 const CATALOG: &str = strata_model::WORKSPACE_CATALOG;
 const SCHEMA: &str = "public";
 
@@ -3832,12 +3831,12 @@ mod remote_catalog_tests {
     async fn the_workspace_catalog_is_not_a_database() {
         let engine = Engine::builder().build();
         assert!(
-            engine.database_catalogs().is_empty(),
+            engine.source_catalogs().is_empty(),
             "a project with no database connection has no database catalogs"
         );
         fake_source(&engine.ctx, "Sales", &["orders"]);
         assert_eq!(
-            engine.database_catalogs(),
+            engine.source_catalogs(),
             vec!["Sales".to_string()],
             "in the spelling it was registered under, and without the workspace's own"
         );

@@ -274,7 +274,7 @@ pub(super) fn bare_name(
     if in_workspace(name) {
         return Ok(name.table().to_string());
     }
-    Err(match database_catalog(ctx, name) {
+    Err(match source_catalog(ctx, name) {
         Some(catalog) => in_database(&name.to_string(), &catalog),
         None => elsewhere(what),
     })
@@ -290,10 +290,10 @@ pub(super) fn bare_name(
 /// **Folded on both sides, the workspace's own name included.** The catalog list resolves by
 /// [`fold_ident`], so a quoted `"STRATA"` names the workspace catalog — and compared raw it
 /// would slip past the guard below and then *match* the workspace's own entry in the search,
-/// telling the user their project's catalog is a database connection. No real connection can
-/// produce that (`PgStore::check_catalog` refuses `strata` case-insensitively), so the sentence
-/// would name a connection that cannot exist.
-fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<String> {
+/// telling the user their project's catalog is a connection. No real connection can produce that
+/// (`check_catalog` refuses `strata` case-insensitively), so the sentence would name a connection
+/// that cannot exist.
+fn source_catalog(ctx: &SessionContext, name: &TableReference) -> Option<String> {
     let TableReference::Full { catalog, .. } = name else {
         return None;
     };
@@ -311,7 +311,7 @@ fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<Strin
 ///
 /// Minted by [`remote_target`] in front of the arms, so the question "is this name the
 /// workspace's" is asked in one place and answered once — which is why it lives here rather than
-/// in [`sources`](crate::sources), whose backends are handed one to act on.
+/// in [`sources`](crate::sources), whose sources are handed one to act on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RemoteTarget {
     pub catalog: String,
@@ -365,7 +365,7 @@ pub(super) fn remote_target(ctx: &SessionContext, name: &TableReference) -> Opti
         return None;
     };
     Some(RemoteTarget {
-        catalog: database_catalog(ctx, name)?,
+        catalog: source_catalog(ctx, name)?,
         schema: schema.to_string(),
         table: table.to_string(),
     })
@@ -603,12 +603,12 @@ mod tests {
 
     /// **The workspace catalog is never a database connection**, however it is spelled.
     ///
-    /// `database_catalog` folds before it compares, and this is what says so: the catalog list
+    /// `source_catalog` folds before it compares, and this is what says so: the catalog list
     /// resolves by `fold_ident`, so a quoted `"STRATA"` names the workspace — and an unfolded
     /// guard let that spelling past, whereupon the search *matched the workspace's own entry*
-    /// and told the user their project's catalog was a database connection. No real connection
-    /// can produce that sentence: `PgStore::check_catalog` refuses the name `strata`
-    /// case-insensitively, so it would have named a connection that cannot exist.
+    /// and told the user their project's catalog was a connection. No real connection can
+    /// produce that sentence: `check_catalog` refuses the name `strata` case-insensitively, so it
+    /// would have named a connection that cannot exist.
     ///
     /// And what it answers instead is the *right* thing: the name resolves to the workspace
     /// catalog, so the statement simply acts on the workspace table, exactly as the unquoted

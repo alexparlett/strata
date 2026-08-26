@@ -1,5 +1,5 @@
-//! **One source, as DataFusion sees it** — the catalog and schema providers every backend is
-//! served through, SQL-speaking or not.
+//! One source, as DataFusion sees it: the catalog and schema providers every source is served
+//! through, SQL-speaking or not.
 //!
 //! One concrete pair rather than a trait a source implements, because nothing in them is a
 //! source's business: what they hold is the latest [`Listing`], and what they do with it is
@@ -37,7 +37,7 @@ pub struct SourceCatalogProvider {
     /// The name this connection registered under — Strata's own word for it.
     catalog: String,
     /// The connection's identity, carried down to every provider built under it as the fusion key.
-    url: String,
+    identity: String,
     source: Arc<dyn SourceCatalog>,
     /// Behind a lock because a statement that changes what the source holds re-enumerates and
     /// hands the result to [`adopt`](Self::adopt) — the alternative is a re-connect, which drops a
@@ -52,14 +52,14 @@ pub struct SourceCatalogProvider {
 impl SourceCatalogProvider {
     pub(crate) fn new(
         catalog: String,
-        url: String,
+        identity: String,
         source: Arc<dyn SourceCatalog>,
         listing: &Listing,
         shown: Shown,
     ) -> Self {
         let provider = Self {
             catalog,
-            url,
+            identity,
             source,
             schemas: RwLock::new(BTreeMap::new()),
             shown,
@@ -92,7 +92,7 @@ impl SourceCatalogProvider {
                         folded.clone(),
                         Arc::new(SourceSchemaProvider {
                             catalog: self.catalog.clone(),
-                            url: self.url.clone(),
+                            identity: self.identity.clone(),
                             schema: schema.name.clone(),
                             source: Arc::clone(&self.source),
                             relations: RwLock::new(schema.relations.clone()),
@@ -167,7 +167,7 @@ impl CatalogProvider for SourceCatalogProvider {
 /// re-runs the registration pass, which re-connects — that, and nothing else, is the refresh.
 pub struct SourceSchemaProvider {
     catalog: String,
-    url: String,
+    identity: String,
     schema: String,
     source: Arc<dyn SourceCatalog>,
     relations: RwLock<BTreeMap<String, Relation>>,
@@ -226,7 +226,7 @@ impl SchemaProvider for SourceSchemaProvider {
         }
         let at = Located {
             connection: self.catalog.clone(),
-            url: self.url.clone(),
+            identity: self.identity.clone(),
             relation: TableReference::partial(self.schema.clone(), relation.name.clone()),
         };
         let provider = Arc::clone(&self.source)

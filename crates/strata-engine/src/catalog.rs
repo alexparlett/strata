@@ -527,8 +527,8 @@ pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
 ///
 /// Only the first segment of the resolved name is read, because the catalog is the only part
 /// this has to judge; the rest is the relation's own address inside the database, which the
-/// sentence prints back whole. A catalog name cannot contain a `.` — `PgStore::check_catalog`
-/// admits only `[A-Za-z_][A-Za-z0-9_]*` — so that split cannot land mid-name.
+/// sentence prints back whole. A catalog name cannot contain a `.` — `check_catalog` admits
+/// only `[A-Za-z_][A-Za-z0-9_]*` — so that split cannot land mid-name.
 fn missing_relation(ctx: &SessionContext, raw: &str) -> Option<String> {
     let name = raw
         .split_once(MISSING_PREFIX)

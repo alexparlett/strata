@@ -154,7 +154,7 @@ const ARROW_VOCABULARY: &[&str] = &[
 
 /// Does this declaration name [`ARROW_VOCABULARY`] through `strata_engine`?
 ///
-/// Segment-exact, so `strata_engine::db::SchemaVisibility` is not `Schema`, and a name reached
+/// Segment-exact, so `strata_engine::sources::SchemaVisibility` is not `Schema`, and a name reached
 /// through any other crate — `strata_arrow::config`, which is the point — is not this rule's
 /// business.
 fn names_arrow_vocabulary(declaration: &str) -> bool {
@@ -260,7 +260,7 @@ fn the_arrow_vocabulary_is_matched_by_whole_segment_and_only_through_the_engine(
         "use strata_engine::{ column_info, TableMeta }"
     ));
     assert!(!names_arrow_vocabulary(
-        "use strata_engine::db::SchemaVisibility"
+        "use strata_engine::sources::SchemaVisibility"
     ));
     assert!(!names_arrow_vocabulary("use strata_arrow::config::key_def"));
 }

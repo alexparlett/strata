@@ -249,7 +249,7 @@ provider (a control that cannot mean anything for the chosen provider is not shi
 2. **The address box** — BUCKET for S3/GCS, URL for HTTP. A database has no single address box:
    it splits `ConnectionDef::address` into **URL** (`host:port`) and **DATABASE** (`appdb`),
    because a server and the database on it are two things Postgres names separately. The stored
-   def is still one `host:port/database` string, so `parse_pg_address` remains the only parse of
+   def is still one `host:port/database` string, so the source's own parse remains the only parse of
    that grammar.
 3. **CATALOG**, **USER**, **PASSWORD**, **SSL MODE** (PG only), in that order. CATALOG is
    the connection's **name**, the prefix Strata queries it by (`pg` makes
@@ -317,7 +317,7 @@ Top level is **data sources**:
   expansion to columns, and the TABLES `+` still opens Configure on a new table;
 - one node per **database connection**, opening onto its enabled schemas, then Tables and Views
   groups split by the listing's own `relkind`, then its relations. All of it is
-  `Engine::db_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
+  `Engine::source_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
   the network — so collapse and re-open cost nothing and ↻, which re-connects, is the refresh. A
   schema the def enables and the server does not have renders as its own failed node naming that
   fact. A relation **opens onto its columns** (DB-07), and it is the one node in the tree whose
@@ -340,7 +340,7 @@ what a tooltip holds and naming Problems for the rest), and a trailing **⋮** m
 right-click): **Edit**, **Schemas…** on a database, **Forget**. Pressing the row opens it; its
 actions are the menu.
 
-**Schemas…** is a picker over the same `db_listing` answer, so the tree, the picker and
+**Schemas…** is a picker over the same `source_listing` answer, so the tree, the picker and
 completion cannot disagree about what a connection shows. Its write is display-only, so it edits
 the def **in place** (`ProjectState::update_connection_def`) and keeps the row's registration —
 going through `upsert_connection` would leave a `Reg::Loading` that only a whole-catalog re-scan
@@ -447,7 +447,7 @@ a ↻ without either being noticed specially.
 The editor offers a database's names as you type them (DB-06): a connection's **catalog name** at
 any relation-target position, its **enabled schemas** after `catalog.`, and its **relations** after
 `catalog.schema.`. The catalog name comes from the def, so a connection that has never answered
-still offers the name a query has to say; the schemas and relations come from `db_listing`, the
+still offers the name a query has to say; the schemas and relations come from `source_listing`, the
 same scoped-and-tagged answer the tree and the Schemas… picker read. A non-enabled schema is
 absent from the offer and still resolves if typed — visibility, not policy. Nothing on the
 completion path touches the network. The full rules, including where it deliberately stops (a
@@ -549,7 +549,7 @@ regardless — the providers are lazy, so that costs nothing — which means a q
 that is not enabled still resolves and runs. What it *does* bound, since DB-09, is where an
 **unqualified** name is looked for (see *Unqualified names* above): a schema you switched off
 neither captures a bare name nor collides with one in a schema you left on.
-`Engine::db_listing` is the one read every surface shares, and it answers **scoped and tagged**
+`Engine::source_listing` is the one read every surface shares, and it answers **scoped and tagged**
 (`Live | EnabledButMissing | NotEnabled`), so nothing re-derives visibility. It reads the
 connect-time enumeration, which is why a ↻ *is* the refresh.
 

@@ -28,7 +28,7 @@ use strata_model::{
 };
 
 /// What this window is editing: a new connection, or an existing one by
-/// [`url`](ConnectionDef::url).
+/// [`named`](ConnectionDef::named).
 ///
 /// The URL is the identity — scheme *and* authority, because `s3://lake` and `gs://lake` are two
 /// connections over one bucket — and it is also what makes this window single-instance per
@@ -561,7 +561,7 @@ impl ConnectionDraft {
     /// never trimmed off behind the user's back.
     ///
     /// **Every other provider loses a scheme typed with the address**, because theirs is the
-    /// picker's answer and `ConnectionDef::url` puts it back. Stripped on the way in rather than
+    /// picker's answer and the identity puts it back. Stripped on the way in rather than
     /// on the way out, the rule a length-capped field follows: a box showing `s3://acme-lake`
     /// over a def storing `acme-lake` shows one thing and means another. A pasted
     /// `postgres://db:5432/analytics` lands the same way, on the same rule.
@@ -577,8 +577,8 @@ impl ConnectionDraft {
     /// The `host:port` half of a database address, and the database half — the two boxes the
     /// Postgres form splits [`address`](Self::address) into.
     ///
-    /// A split of the one stored string rather than two draft fields, so `ConnectionDef::address`
-    /// stays `host:port/database` and `parse_pg_address` remains the only parse of that grammar.
+    /// A split of the one stored string rather than two draft fields, so [`ConnectionDef::address`]
+    /// stays `host:port/database` and the source's own parse stays the only reading of it.
     /// Total where that parse is fallible: this is what the *boxes* show while the address is
     /// being typed and is still wrong, and `check_address` is what refuses it.
     pub fn pg_server(&self) -> &str {
@@ -674,7 +674,7 @@ impl ConnectionDraft {
     }
 
     /// What this connection is called: the box for a source, and the address's own mint for an
-    /// object store, which has no box until its form is drawn from a declaration too.
+    /// object store, whose form has no name box.
     pub fn named(&self) -> String {
         match self.provider {
             ProviderId::Source => self.pg.name.trim().to_string(),
@@ -889,9 +889,9 @@ mod tests {
         assert_eq!(draft.blocker(), None);
     }
 
-    /// **A database's blockers are the model's own**, so a name this form accepts is one
-    /// `engine::db::connect` accepts, in the same words. The project-wide catalog clash is the
-    /// footer's, since it needs the other connections.
+    /// **A database's blockers are the model's own**, so a name this form accepts is one the
+    /// engine registers, in the same words. The project-wide catalog clash is the footer's, since
+    /// it needs the other connections.
     #[test]
     fn a_database_draft_is_refused_on_the_engines_terms() {
         let good = ConnectionDraft {
@@ -942,7 +942,7 @@ mod tests {
         );
     }
 
-    /// **The database fields are trimmed into the def like every other field here.** `engine::db`
+    /// **The database fields are trimmed into the def like every other field here.** The engine
     /// trims at use, so an untrimmed name still registers as `pg` — while the committed,
     /// *shared* `project.json` would record `"pg "`, and the def is what every surface displays.
     #[test]
@@ -979,7 +979,7 @@ mod tests {
     }
 
     /// **URL and DATABASE are two boxes over one stored address**, so the def keeps
-    /// `host:port/database` and `parse_pg_address` stays the only parse of that grammar. Total in
+    /// `host:port/database` and the source's own parse stays the only reading of it. Total in
     /// both directions while the address is half-typed, which is most of the time.
     #[test]
     fn the_two_database_boxes_split_and_recompose_one_address() {

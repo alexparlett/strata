@@ -47,13 +47,13 @@ pub enum RegOutcome {
     /// A connection's object store or database catalog went in, or the connection could not
     /// describe one ([`Engine::connect`]). Nothing the *store* learns is reported here — an
     /// object store is registered, not inferred, and a database's enumeration is read back
-    /// through [`Engine::db_listing`] rather than folded onto a row — so the payload is the
+    /// through [`Engine::source_listing`] rather than folded onto a row — so the payload is the
     /// answer itself.
     Connection {
-        /// The connection's identity: [`ConnectionDef::url`], **not** its bucket. The bucket
-        /// alone is not unique — `s3:lake` and `gcs:lake` are two connections and two
-        /// registry keys — so a caller folding these answers onto rows by bucket would land
-        /// both on whichever it found first and leave the other unanswered forever.
+        /// The connection's own **name**, **not** its address. An address alone is not unique —
+        /// two connections may read one bucket, or reach one server as two roles — so a caller
+        /// folding these answers onto rows by address would land both on whichever it found
+        /// first and leave the other unanswered forever.
         url: String,
         result: Result<(), String>,
     },

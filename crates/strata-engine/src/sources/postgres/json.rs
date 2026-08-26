@@ -12,7 +12,7 @@
 //!
 //! **[`FAMILY`] is the whole of what this module knows**, and it is the only source of "mapped":
 //! the rewrite reads it to translate, and [`support`] hands the same table to the engine as the
-//! backend's [`FunctionMap`](crate::sources::backend::FunctionMap). A member is mapped only where
+//! source's [`FunctionMap`](crate::sources::source::FunctionMap). A member is mapped only where
 //! the operator means the *same thing* as the local function, judged against what the local
 //! function returns — never a lossy approximation, because a query that answers differently
 //! depending on where it ran is worse than one that refuses.

@@ -74,7 +74,7 @@ pub fn secret_slot(
     let source = conn.provider.source()?;
     Some(SecretRequest {
         family: format!("{}-{key}", source.kind.trim()),
-        url: conn.named(),
+        connection: conn.named(),
         env,
     })
 }
@@ -172,7 +172,7 @@ struct LiveSource {
     def: ConnectionDef,
     /// The latest enumeration — the connect-time one until a statement that changed what the
     /// source holds re-runs it ([`relist`](Live::relist)). Read by
-    /// [`Engine::db_listing`](super::Engine::db_listing) rather than asking the source again.
+    /// [`Engine::source_listing`](super::Engine::source_listing) rather than asking the source again.
     listing: Arc<Listing>,
     /// The namespaces this connection **shows**, shared with the catalog provider — see [`Shown`].
     shown: Shown,
@@ -204,7 +204,7 @@ fn shown_of(source: &SourceDef) -> BTreeSet<String> {
 /// The live source connections this engine holds — the [`Connections`](super::Connections)
 /// shape, for the same reasons.
 ///
-/// A handle rather than a plain field because [`Engine::connect`] spawns its work onto the
+/// A handle rather than a plain field because [`Engine::connect`](super::Engine::connect) spawns its work onto the
 /// engine runtime and that task must not hold the engine itself (the engine's `Drop` is what
 /// aborts it). It holds pools, so it must not outlive the runtime they ride: the engine's own
 /// field is the last strong reference, and the runtime is shut down after it in `Drop`.
@@ -214,55 +214,57 @@ pub struct Live(Arc<Mutex<HashMap<String, LiveSource>>>);
 impl Live {
     /// The defs of every *other* live source connection — what [`check_catalog_name`] folds a
     /// candidate against.
-    fn peers(&self, url: &str) -> Vec<ConnectionDef> {
+    fn peers(&self, name: &str) -> Vec<ConnectionDef> {
         self.0
             .lock()
             .unwrap()
             .iter()
-            .filter(|(held, _)| held.as_str() != url)
+            .filter(|(held, _)| held.as_str() != name)
             .map(|(_, live)| live.def.clone())
             .collect()
     }
 
     /// The catalog name and the enumeration a connection registered, or `None` if it is not
-    /// live — what [`Engine::db_listing`](super::Engine::db_listing) reads.
-    fn listing(&self, url: &str) -> Option<(String, Arc<Listing>)> {
+    /// live — what [`Engine::source_listing`](super::Engine::source_listing) reads.
+    fn listing(&self, name: &str) -> Option<(String, Arc<Listing>)> {
         let held = self.0.lock().unwrap();
-        let live = held.get(url)?;
+        let live = held.get(name)?;
         Some((live.catalog.clone(), Arc::clone(&live.listing)))
     }
 
-    /// Forget `url`, handing back the catalog name it had registered.
-    fn take(&self, url: &str) -> Option<String> {
-        self.0.lock().unwrap().remove(url).map(|live| live.catalog)
+    /// Forget the connection called `name`, handing back the catalog name it had registered.
+    fn take(&self, name: &str) -> Option<String> {
+        self.0.lock().unwrap().remove(name).map(|live| live.catalog)
     }
 
     /// What a statement needs of the connection registered as `catalog`: its identity, its
     /// connected source, its catalog provider, and whether it accepts writes at all.
     ///
-    /// Keyed by the **catalog name** rather than the URL, because that is what a statement wrote
-    /// and what the session's catalog list resolved; folded on both sides, since a catalog name is
+    /// Keyed by the **catalog name** rather than the connection's, because that is what a
+    /// statement wrote and what the session's catalog list resolved; folded on both sides, since
+    /// a catalog name is
     /// an unquoted identifier ([`StrataCatalogList`](crate::providers::StrataCatalogList)).
     fn at(&self, catalog: &str) -> Option<Connected> {
         let folded = fold_ident(catalog);
         let held = self.0.lock().unwrap();
-        let (url, live) = held
+        let (name, live) = held
             .iter()
             .find(|(_, live)| fold_ident(&live.catalog) == folded)?;
         Some(Connected {
-            url: url.clone(),
+            name: name.clone(),
             source: Arc::clone(&live.source),
             provider: Arc::clone(&live.provider),
             writable: live.def.provider.source().is_some_and(|s| !s.read_only),
         })
     }
 
-    /// Record a fresh enumeration for `url` — the half of a refresh the *map* owns, where
+    /// Record a fresh enumeration for the connection called `name` — the half of a refresh the
+    /// *map* owns, where
     /// [`SourceCatalogProvider::adopt`](providers::SourceCatalogProvider) is the half the catalog
-    /// owns. Both, because [`Engine::db_listing`](super::Engine::db_listing) reads this one and a
+    /// owns. Both, because [`Engine::source_listing`](super::Engine::source_listing) reads this one and a
     /// query resolves through the other.
-    fn relist(&self, url: &str, listing: Arc<Listing>) {
-        if let Some(live) = self.0.lock().unwrap().get_mut(url) {
+    fn relist(&self, name: &str, listing: Arc<Listing>) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(name) {
             live.listing = listing;
         }
     }
@@ -293,18 +295,18 @@ impl Live {
         }
     }
 
-    /// Record `live` under `url`, handing back whatever it displaced — which is the only thing
+    /// Record `live` under `name`, handing back whatever it displaced — which is the only thing
     /// that still knows the catalog name a renamed connection went in under. See [`connect`].
-    fn put(&self, url: String, live: LiveSource) -> Option<LiveSource> {
-        self.0.lock().unwrap().insert(url, live)
+    fn put(&self, name: String, live: LiveSource) -> Option<LiveSource> {
+        self.0.lock().unwrap().insert(name, live)
     }
 }
 
 /// One live source connection, as a statement reaches it — see [`Live::at`].
 struct Connected {
-    /// [`ConnectionDef::url`], which is what [`LiveSource`] is keyed by and therefore what a refresh has
-    /// to name to put a new listing back.
-    url: String,
+    /// The connection's own name, which is what [`LiveSource`] is keyed by and therefore what a
+    /// refresh has to name to put a new listing back.
+    name: String,
     source: Arc<dyn SourceCatalog>,
     provider: Arc<SourceCatalogProvider>,
     writable: bool,
@@ -406,10 +408,11 @@ pub(crate) async fn connect(
     settled
 }
 
-/// Remove whatever `url` last registered, under the name it registered it under. Silent when
-/// there is nothing: a first connect, or a def that has never worked.
-fn take_back(ctx: &SessionContext, live: &Live, url: &str) {
-    if let Some(previous) = live.take(url) {
+/// Remove whatever the connection called `name` last registered, under the catalog name it
+/// registered it under. Silent when there is nothing: a first connect, or a def that has never
+/// worked.
+fn take_back(ctx: &SessionContext, live: &Live, name: &str) {
+    if let Some(previous) = live.take(name) {
         deregister_catalog(ctx, &previous);
     }
 }
@@ -484,16 +487,16 @@ async fn prepare(
 /// Forget the catalog a connection registered — the Forget gesture's engine half, and the half
 /// an edit that moves a connection's URL also needs.
 ///
-/// Addressed by [`ConnectionDef::url`] like `store::disconnect`, and silent about doing
-/// nothing for the same reason: a URL this engine holds no source for is the ordinary case
-/// (every object-store connection, and every source that never connected).
-pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, url: &str) {
-    take_back(ctx, sources, url);
+/// Addressed by the connection's **name** like `store::disconnect` is by its identity, and silent
+/// about doing nothing for the same reason: a name this engine holds no source for is the ordinary
+/// case (every object-store connection, and every source that never connected).
+pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
+    take_back(ctx, sources, name);
 }
 
 /// What a surface sees of one live source: the catalog it is addressed by, and its namespaces
 /// scoped against the def's own [`SourceDef::schemas`] — see
-/// [`Engine::db_listing`](super::Engine::db_listing).
+/// [`Engine::source_listing`](super::Engine::source_listing).
 pub(crate) fn listing(
     sources: &Live,
     conn: &ConnectionDef,
@@ -704,17 +707,17 @@ pub(crate) async fn relist_at(sources: &Live, catalog: &str) {
 }
 
 /// Re-enumerate `live` and hand the result to both halves that hold one — the map that
-/// [`Engine::db_listing`](super::Engine::db_listing) reads, and the catalog a query resolves
+/// [`Engine::source_listing`](super::Engine::source_listing) reads, and the catalog a query resolves
 /// through.
 async fn relist(live: &Connected, sources: &Live) {
     match live.source.enumerate().await {
         Ok(listing) => {
             let listing = Arc::new(listing);
             live.provider.adopt(&listing);
-            sources.relist(&live.url, listing);
+            sources.relist(&live.name, listing);
         }
         Err(why) => tracing::warn!(
-            "could not re-read the database's schemas after a statement changed them ({why}); \
+            "could not re-read the source's schemas after a statement changed them ({why}); \
              refresh the catalog to see it"
         ),
     }

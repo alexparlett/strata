@@ -163,7 +163,7 @@ pub struct ConfigureDraft {
     /// table: what the table reads through is [`store`](Self::store), and while the two disagree
     /// Save is blocked naming the missing URL (`views::footer`).
     pub provider: ProviderId,
-    /// The chosen connection, by its [`ConnectionDef::url`] — the project's own identity for one.
+    /// The chosen connection, by its [`name`](ConnectionDef::named) — how the project addresses one.
     ///
     /// Kept across a flip back to Local, like every format's options are kept across a
     /// format switch: looking at the local arm and coming back must not forget which bucket was
@@ -1020,7 +1020,7 @@ impl ConfigureDraft {
     }
 }
 
-/// The connections one provider serves, by [`ConnectionDef::url`] and in the order the project
+/// The connections one provider serves, by name and in the order the project
 /// keeps them — what the CONNECTION picker offers, and where "this provider has none" is
 /// answered.
 ///

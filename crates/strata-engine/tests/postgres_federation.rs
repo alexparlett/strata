@@ -276,7 +276,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     assert!(why.contains("strata"), "{why}");
 
     assert!(
-        engine.db_listing(&conn).is_none(),
+        engine.source_listing(&conn).is_none(),
         "a refused connection registers nothing"
     );
 
@@ -330,7 +330,7 @@ async fn enumeration(engine: &Engine, port: u16) {
     );
 
     let (catalog, listing) = engine
-        .db_listing(&connection(port, CATALOG, &["public", "warehouse"]))
+        .source_listing(&connection(port, CATALOG, &["public", "warehouse"]))
         .expect("a live database has a listing");
     assert_eq!(catalog, CATALOG);
     assert_eq!(
@@ -990,7 +990,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "a forgotten connection's catalog must stop resolving"
     );
     assert!(
-        engine.db_listing(&renamed).is_none(),
+        engine.source_listing(&renamed).is_none(),
         "…and it is no longer a live database"
     );
 }
@@ -1319,7 +1319,7 @@ async fn remote_writes(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let (_, listing) = engine
-        .db_listing(&conn)
+        .source_listing(&conn)
         .expect("a live database has a listing");
     assert!(
         listing
@@ -1398,7 +1398,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
     assert_eq!(report.count, None);
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
-    let (_, listing) = engine.db_listing(&conn).expect("a live listing");
+    let (_, listing) = engine.source_listing(&conn).expect("a live listing");
     assert!(
         listing
             .iter()
@@ -1629,7 +1629,7 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let conn = writable(port, CATALOG, &["public"]);
-    let (_, listing) = engine.db_listing(&conn).expect("a live listing");
+    let (_, listing) = engine.source_listing(&conn).expect("a live listing");
     assert!(
         listing
             .iter()
@@ -1868,7 +1868,7 @@ async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     };
     assert!(!why.contains("already exists"), "{why}");
 
-    let (_, listing) = engine.db_listing(conn).expect("still live");
+    let (_, listing) = engine.source_listing(conn).expect("still live");
     assert!(
         listing
             .iter()

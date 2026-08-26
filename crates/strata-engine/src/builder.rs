@@ -54,9 +54,9 @@ pub struct EngineBuilder {
     sources: Sources,
 }
 
-/// **The shipped backends are registered here, through the same public call an embedder makes.**
-/// Each rides its own cargo feature, so an engine built with none of them has no backend at all —
-/// which is what makes the registry the only path in.
+/// The shipped sources are registered here, through the same public call an embedder makes. Each
+/// rides its own cargo feature, so an engine built with none of them has no source at all — which
+/// is what makes the registry the only path in.
 impl Default for EngineBuilder {
     fn default() -> Self {
         let builder = Self {
@@ -266,7 +266,7 @@ mod tests {
     fn ask() -> SecretRequest {
         SecretRequest {
             family: "postgres-password".into(),
-            url: "postgres://acme:5432/orders".into(),
+            connection: "orders".into(),
             env: &[],
         }
     }
@@ -301,7 +301,7 @@ mod tests {
     }
 
     /// The provider the builder was given is the one the engine reads through — the slug
-    /// a backend resolves a connection's password with.
+    /// a source resolves a connection's password with.
     #[test]
     fn secrets_given_to_the_builder_are_the_ones_the_engine_reads() {
         let engine = Engine::builder()

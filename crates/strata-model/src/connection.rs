@@ -1,5 +1,5 @@
 //! **Connections** — the persisted description of one remote source a project reads from: an
-//! object store, or a source served by a registered backend. Exactly what `.strata/project.json`
+//! object store, or a source served by a registered kind. Exactly what `.strata/project.json`
 //! stores, like the catalog defs beside it. Spec: `docs/CONNECTIONS_SPEC.md`.
 //!
 //! The rule the whole feature is built around: **no arm of this module holds a secret value.** A
@@ -117,9 +117,9 @@ impl ConnectionDef {
 /// Three object stores, and deliberately no fourth: S3-compatible stores (R2, MinIO, OSS, COS) ride
 /// [`S3`](Self::S3) via its [`endpoint`](S3Store::endpoint).
 ///
-/// **[`Source`](Self::Source) is one arm for every source a registered backend serves**, shipped
-/// and embedder-written alike: the engine's registry is keyed by a `kind` string, and the arm is
-/// that string plus the settings that kind declares. A source registers a catalog of relations
+/// [`Source`](Self::Source) is one arm for every source a registered kind serves, shipped and
+/// embedder-written alike: the engine's registry is keyed by that `kind` string, and the arm is
+/// the string plus the settings the kind declares. A source registers a catalog of relations
 /// where the object stores register a store, and that difference lives entirely in
 /// `strata_engine`: everything here is the same def, `Reg` row, editor window, registration pass
 /// and Forget confirm.
@@ -160,8 +160,7 @@ impl Provider {
         }
     }
 
-    /// What a registered backend serves, or `None` for a provider that registers an object
-    /// store.
+    /// What a registered kind serves, or `None` for a provider that registers an object store.
     pub fn source(&self) -> Option<&SourceDef> {
         match self {
             Self::S3(_) | Self::Gcs(_) | Self::Http => None,
@@ -191,13 +190,10 @@ impl Provider {
 
 /// One data source, in the terms the kind that serves it declares.
 ///
-/// **Flat and kind-keyed, shipped sources included**: what a typed arm per source would state in
-/// fields is [`config`](Self::config), whose keys are the kind's own declaration — so a source the
-/// engine gains needs no change here, and no source is more first-class than another.
-///
-/// **No arm of this module holds a secret value**, this one included: `config` carries the
-/// non-secret settings, and [`secrets`](Self::secrets) records only which of the kind's
-/// secret-typed keys this connection has set.
+/// Flat and kind-keyed for every source alike: what a typed arm per source would state in fields
+/// is [`config`](Self::config), whose keys are the kind's own declaration, so a source the engine
+/// gains needs no change here and none is more first-class than another. The values are non-secret
+/// — a credential is named by [`secrets`](Self::secrets) and stored elsewhere.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
 pub struct SourceDef {

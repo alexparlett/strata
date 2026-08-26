@@ -181,7 +181,7 @@ pub fn use_init_project(
 /// together through the driver and the fold, and positional arguments would let two of them
 /// swap with nothing to notice.
 struct ScanWork {
-    /// `ConnectionDef::url()`s — a connection's identity, and what the engine registers
+    /// connection names — how the project addresses one, and what the engine registers
     /// under. Not buckets: `s3://lake` and `gs://lake` are two connections sharing one.
     connections: Vec<String>,
     tables: Vec<String>,

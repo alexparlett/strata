@@ -22,7 +22,7 @@
 //! **A database password is the one secret this window handles, and it never touches the draft.**
 //! A server has no host-side credential chain to defer to, so the box exists; it writes this
 //! machine's OS keystore under a reference derived from the connection's URL, while the def
-//! records only the expectation ([`strata_model::PgPassword`]). The typed text lives on
+//! records only the expectation ([`strata_model::SourceDef::secrets`]). The typed text lives on
 //! [`ConnectionCtx::password`] for the window's lifetime, the settings window's rule for provider
 //! keys one surface along.
 //!

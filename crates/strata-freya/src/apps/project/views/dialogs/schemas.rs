@@ -19,7 +19,7 @@
 //! spinner over a change that touched no engine state. The store's def-in-place write
 //! ([`ProjectState::update_connection_def`]) keeps the row's verdict, which is still true.
 //!
-//! The offer is [`Engine::db_listing`]'s **scoped and tagged** answer and nothing derived beside
+//! The offer is [`Engine::source_listing`](strata_engine::Engine::source_listing)'s **scoped and tagged** answer and nothing derived beside
 //! it, so this picker, the tree and completion cannot disagree about what a connection shows. A
 //! connection that is not live has no enumeration to offer: the picker then lists the def's own
 //! schemas with the connection's failure named, rather than an unexplained empty list.
@@ -47,7 +47,7 @@ use crate::theme::{use_roles, Role};
 /// What a schema the def enables and the server does not have says on its row.
 const MISSING: &str = "not in the connection";
 
-/// The slot a trigger sets to ask for the picker — a connection's `ConnectionDef::url()`.
+/// The slot a trigger sets to ask for the picker — a connection's own name.
 /// Provided at the project root, like every other dialog's.
 pub type SchemasRequest = State<Option<String>>;
 
@@ -65,7 +65,7 @@ struct Offer {
 /// Live: the connection's own tagged enumeration. Not live: the def's `schemas`, so the user can
 /// still take one off a connection that is refusing to connect *because* of it.
 fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer>, bool) {
-    let Some((_, schemas)) = engine.db_listing(def) else {
+    let Some((_, schemas)) = engine.source_listing(def) else {
         let offers = pg
             .schemas
             .iter()

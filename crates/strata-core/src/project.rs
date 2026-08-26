@@ -580,8 +580,9 @@ fn ensure_gitignore(dir: &Path) {
 /// an absolute *path*, so a bucket-relative source handed to the local rule comes back as
 /// `<project>/events/2024`, which registers as a missing folder on the user's own disk.
 ///
-/// `connection` is a [`ConnectionDef::url`](strata_model::ConnectionDef::url) — scheme and
-/// authority — so the composition is that URL, a separator, and the source. Both sides are
+/// `connection` is the `scheme://authority` a connection's object store is registered under,
+/// composed by the engine, so the composition is that prefix, a separator, and the source. Both
+/// sides are
 /// trimmed of the separator first: a bucket URL never carries one and a path typed with a
 /// leading `/` means the bucket root, not an empty first segment.
 pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String {
@@ -613,15 +614,12 @@ pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String 
 ///
 /// Kept beside [`resolve_source`] so the composition rule has one home in both directions — a
 /// round-trip is asserted in this module's tests. The split is at the first `/` after the scheme,
-/// which is exactly where an **object store's**
-/// [`ConnectionDef::url`](strata_model::ConnectionDef::url) stops.
+/// which is exactly where an **object store's** registration URL stops.
 ///
-/// A **database** connection's URL does not stop there — `postgres://reader@host:5432/analytics`
-/// carries a role and a path, because it identifies a catalog rather than keying an object-store
-/// registry. Nothing is owed here: a `postgres://` location split by this function yields a URL
-/// no connection has, and the caller's existing membership check refuses it by name (`ddl::external`,
-/// pinned by DB-03). Which is the right answer — a table's `LOCATION` names *files*, and a
-/// database has none.
+/// A source that holds relations registers no object store, so nothing here is owed to one: a
+/// location split by this function yields a prefix no object-store connection has, and the
+/// caller's membership check refuses it by name. Which is the right answer — a table's `LOCATION`
+/// names *files*, and a catalog of relations has none.
 pub fn split_remote(location: &str) -> Option<(String, String)> {
     let (scheme, rest) = location.split_once("://")?;
     if scheme.is_empty() {

@@ -114,11 +114,11 @@ pub struct Located {
     /// The catalog the connection registered under, which is what a refusal about this relation
     /// names.
     pub connection: String,
-    /// The connection's identity, [`ConnectionDef::url`].
+    /// The connection's identity — its kind and address, as `ConnectionDef` derives it.
     ///
     /// Distinct from [`connection`](Self::connection), which a user can rename: this is what says
     /// two providers read through the same source.
-    pub url: String,
+    pub identity: String,
     /// The relation as the source spells it, `schema.relation`.
     pub relation: TableReference,
 }
@@ -255,7 +255,7 @@ pub fn unsupported_function(function: &str, connection: &str, why: &str) -> Stri
         true => String::new(),
         false => format!(" {why}"),
     };
-    format!("'{function}' cannot run on the database connection '{connection}'.{why} {MATERIALIZE}")
+    format!("'{function}' cannot run on the connection '{connection}'.{why} {MATERIALIZE}")
 }
 
 /// One data source the engine can connect to.
@@ -288,6 +288,12 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     /// Reached by the editor before a connect is attempted, so a mistyped address is refused at
     /// the field rather than by a connection failure. The default refuses only an empty one, which
     /// is the single thing no source can dial.
+    ///
+    /// # Errors
+    ///
+    /// If the address is not one this source could dial, in words that name what is wrong with it.
+    /// The sentence is shown under the field while the user is still typing, so it must say what
+    /// the address should look like rather than what went wrong.
     fn check_address(&self, address: &str) -> Result<(), String> {
         match address.trim().is_empty() {
             true => Err("This connection has no address.".into()),
@@ -328,6 +334,13 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
     /// Called again whenever a statement changes what the source holds, and by a catalog refresh.
     /// A relation left out is absent from the catalog tree, from completion, and from what a bare
     /// name resolves to.
+    ///
+    /// # Errors
+    ///
+    /// If the source could not be asked what it holds. Connecting is all-or-nothing, so on a
+    /// connect or a catalog refresh this settles the connection's own row and nothing under it is
+    /// registered. The re-read after a statement is the one exception: the previous listing
+    /// stands and the failure is logged, because that statement has already succeeded.
     async fn enumerate(&self) -> Result<Listing, String>;
 
     /// Returns a read provider for one relation, over the source's own read path.
@@ -534,7 +547,7 @@ mod tests {
             "A 'mongo' source cannot be written to."
         );
         let why = unsupported_function("json_length", "pg", "");
-        assert!(why.starts_with("'json_length' cannot run on the database connection 'pg'."));
+        assert!(why.starts_with("'json_length' cannot run on the connection 'pg'."));
         assert!(why.contains("CREATE TABLE"), "and the way out: {why}");
         assert!(
             unsupported_function("json_get", "pg", "Use '->>' instead.")

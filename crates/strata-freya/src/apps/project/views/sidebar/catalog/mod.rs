@@ -28,7 +28,7 @@
 //! DataFusion, which would be wrong where it matters most: a def whose registration *failed* has no
 //! engine presence at all yet is exactly the row the tree must keep showing. Everything under a
 //! database connection is the opposite — there are no defs, because a database answers for itself,
-//! so it is [`Engine::db_listing`](strata_engine::Engine::db_listing), which reads the
+//! so it is [`Engine::source_listing`](strata_engine::Engine::source_listing), which reads the
 //! connect-time enumeration held beside the pool rather than the network. A ↻ re-connects, and
 //! *that* is the refresh.
 //!

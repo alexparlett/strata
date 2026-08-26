@@ -217,7 +217,7 @@ impl SourceCatalog for PgCatalog {
     }
 }
 
-/// [`json::FAMILY`] as the engine's generic lens over it — built once, because the table is
+/// [`json`]'s own table as the engine's generic lens over it — built once, because the table is
 /// constant and the map is read per refusal.
 static JSON_SUPPORT: LazyLock<FunctionMap> = LazyLock::new(json::support);
 
@@ -347,14 +347,14 @@ impl PasswordProvider for SecretPassword {
             .map_err(|e| {
                 format!(
                     "Reading the password for '{}' failed: {e}",
-                    self.request.url
+                    self.request.connection
                 )
             })?;
         match read? {
             Some(secret) => Ok(SecretString::from(secret.expose().to_string())),
             None => Err(format!(
                 "No password is stored on this machine for '{}'. {}",
-                self.request.url,
+                self.request.connection,
                 self.request.fixes()
             )
             .into()),

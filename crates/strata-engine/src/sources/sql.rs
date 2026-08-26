@@ -1,8 +1,8 @@
-//! Reading a SQL-speaking source: the federation stack, assembled for a backend that composes it.
+//! Reading a SQL-speaking source: the federation stack, assembled for a source that composes it.
 //!
-//! A backend builds its `SqlTable`, describes it in a [`SqlSpec`] and hands that to [`federated`];
+//! A source builds its `SqlTable`, describes it in a [`SqlSpec`] and hands that to [`federated`];
 //! what comes back is a provider whose scans leave as one statement in the source's own SQL. A
-//! backend whose source speaks something else never names this module, and
+//! source that speaks something else never names this module, and
 //! [`SourceCatalog`](super::source::SourceCatalog) demands nothing of it.
 //!
 //! The stack is assembled a level below `datafusion-table-providers`' own factory, which leaves
@@ -110,7 +110,7 @@ impl OptimizerRule for WritesStayHome {
     }
 }
 
-/// Builds a backend's AST rewrite.
+/// Builds a source's AST rewrite.
 ///
 /// A factory rather than the rewrite itself: `AstAnalyzer` is a `FnMut` taken by value every time
 /// a plan is unparsed, so there is one per statement rather than one per provider.
@@ -150,7 +150,7 @@ pub fn federated(
         analyzer: spec.analyzer,
         source,
         connection: at.connection.clone(),
-        context: at.url.clone(),
+        context: at.identity.clone(),
     });
     let source = Arc::new(SQLTableSource::new_with_schema(
         Arc::new(SQLFederationProvider::new(executor)),
@@ -175,7 +175,7 @@ struct AnalyzedExecutor {
     source: Arc<dyn SourceCatalog>,
     /// The catalog the connection registered under — what a refusal names.
     connection: String,
-    /// [`Located::url`], as the fusion key.
+    /// [`Located::identity`], as the fusion key.
     context: String,
 }
 

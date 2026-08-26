@@ -8,7 +8,7 @@
 //! object store's contents are **declared**: its children are the workspace defs that name it
 //! ([`ProjectState::tables_over`]), as links back to their own rows rather than a second editable
 //! copy. A database answers for itself, so its contents are **discovered** — one call to
-//! [`Engine::db_listing`], which reads the connect-time enumeration held beside the pool rather
+//! [`Engine::source_listing`], which reads the connect-time enumeration held beside the pool rather
 //! than the network, already scoped and tagged, so the tree, the schemas picker and completion all
 //! read one answer and none of them re-derives visibility from the def. Collapsing and re-opening a
 //! schema costs nothing, and ↻ — which re-connects — is the refresh.
@@ -108,7 +108,7 @@ fn database(
     let catalog = def.provider.source().map(|_| def.named());
 
     let listing = (connected && (open.is_open(&path) || filtering))
-        .then(|| engine.db_listing(def))
+        .then(|| engine.source_listing(def))
         .flatten();
     let (registered, schemas) = shown_schemas(listing, needle);
 

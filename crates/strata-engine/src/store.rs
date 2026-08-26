@@ -14,8 +14,8 @@
 //! [`SdkCredentials::get_credential`], for the length of one signed request.
 //!
 //! That is the object-store half of a rule the DB workstream deliberately rewrote (see
-//! [`strata_model::connection`]): a secret Strata genuinely must hold lives in the OS keystore
-//! and is read per use ([`strata_core::secret`], and [`db`](super::db) for the database arm that
+//! [`strata_model::ConnectionDef`]): a secret Strata genuinely must hold lives in the OS keystore
+//! and is read per use ([`strata_core::secret`], and [`sources`](super::sources) for the arm that
 //! does it). Nothing changes here — object stores have host-side credential chains, so this
 //! module still needs no secret at all.
 

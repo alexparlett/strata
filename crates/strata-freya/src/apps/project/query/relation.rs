@@ -3,7 +3,7 @@
 //!
 //! ## Why this is a query at all
 //!
-//! Everything else the data-sources tree draws under a database is free: `Engine::db_listing` reads
+//! Everything else the data-sources tree draws under a database is free: `Engine::source_listing` reads
 //! the connect-time enumeration held beside the pool, so schemas and relation names cost nothing.
 //! A relation's **columns** are the exception — DB-02 builds a relation's `TableProvider` lazily
 //! precisely so that connecting to a database with a thousand tables is one round trip rather than

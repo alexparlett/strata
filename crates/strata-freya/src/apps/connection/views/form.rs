@@ -249,8 +249,9 @@ impl Component for Authority {
 /// **URL** — the server, `host:port`. The port is never assumed: a def reading `db.internal`
 /// while it means `:5432` shows one thing and connects to another.
 ///
-/// Half of `ConnectionDef::address`, which stays one `host:port/database` string — the two boxes
-/// are a form split, so `parse_pg_address` remains the only parse of that grammar.
+/// Half of [`ConnectionDef::address`](strata_model::ConnectionDef::address), which stays one
+/// `host:port/database` string — the two
+/// boxes are a form split, so the source's own parse stays the only reading of that grammar.
 #[derive(PartialEq)]
 struct PgUrl {
     key: DiffKey,
@@ -338,9 +339,9 @@ impl Component for PgDatabase {
 /// **CATALOG** — the prefix Strata addresses this connection by, since SQL cannot address
 /// `postgres://host:5432/analytics`.
 ///
-/// Strata's name for the connection rather than anything the server has: `PgStore::catalog`, the
-/// top of `catalog.schema.table`. The user's choice, not derived from [`PgDatabase`], because two
-/// servers' `analytics` would derive one prefix. What it may be is `PgStore::check_catalog` plus
+/// Strata's name for the connection rather than anything the server has, and the top of
+/// `catalog.schema.table`. The user's choice, not derived from [`PgDatabase`], because two
+/// servers' `analytics` would derive one prefix. What it may be is `check_catalog` plus
 /// the project-wide clash the footer asks `check_catalog_name` about, so the field and the
 /// registration cannot disagree.
 #[derive(PartialEq)]
@@ -959,7 +960,7 @@ impl Component for Endpoint {
 /// path list does not, because its section label already names the column.
 ///
 /// **Rows here, a map in the def**. The option is a `Select` over
-/// [`CLIENT_KEYS`] rather than a text box, because the set is closed and small — which removes
+/// [`CLIENT_KEYS`](strata_arrow::client::CLIENT_KEYS) rather than a text box, because the set is closed and small — which removes
 /// the typo class outright and takes the autocomplete the Settings grid needs with it.
 #[derive(PartialEq)]
 struct ClientOptions {

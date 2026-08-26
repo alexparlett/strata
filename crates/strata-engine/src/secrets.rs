@@ -25,8 +25,9 @@ use strata_core::secret::{Secret, SecretRef};
 pub struct SecretRequest {
     /// Which slot this is: `"{kind}-{key}"`, one per secret-typed key a source declares.
     pub family: String,
-    /// The connection the secret belongs to, [`ConnectionDef::url`](strata_model::ConnectionDef).
-    pub url: String,
+    /// The connection the secret belongs to, by its own name — which is what a fix asks the
+    /// user to open, and what moving the name has to move the entry to.
+    pub connection: String,
     /// The environment variables this source conventionally reads, in the order it reads them.
     pub env: &'static [&'static str],
 }
@@ -37,20 +38,20 @@ impl SecretRequest {
     /// Derived from the family and the connection rather than stored, so the committed
     /// `project.json` carries no machine-local id and each machine's keystore holds its own entry.
     pub fn key(&self) -> SecretRef {
-        SecretRef::derived(&self.family, &self.url)
+        SecretRef::derived(&self.family, &self.connection)
     }
 
     /// Both places this secret could have come from, for the sentence a miss produces.
     pub fn fixes(&self) -> String {
         match self.env {
-            [] => format!("Open the connection '{}' and enter it.", self.url),
+            [] => format!("Open the connection '{}' and enter it.", self.connection),
             [one] => format!(
                 "Open the connection '{}' and enter it, or set {one}.",
-                self.url
+                self.connection
             ),
             many => format!(
                 "Open the connection '{}' and enter it, or set one of {}.",
-                self.url,
+                self.connection,
                 many.join(", ")
             ),
         }
@@ -217,7 +218,7 @@ mod tests {
     fn request() -> SecretRequest {
         SecretRequest {
             family: "postgres-password".into(),
-            url: "postgres://acme:5432/orders".into(),
+            connection: "orders".into(),
             env: &["STRATA_TEST_PGPASSWORD"],
         }
     }
@@ -273,7 +274,7 @@ mod tests {
     fn a_filed_secret_comes_back_under_its_own_request_and_no_other() {
         let ask = request();
         let other = SecretRequest {
-            url: "postgres://acme:5432/events".into(),
+            connection: "events".into(),
             ..request()
         };
         let held = MemSecrets::new().with(ask.key(), Secret::new("hunter2").unwrap());
@@ -291,7 +292,7 @@ mod tests {
     fn two_keys_of_one_connection_are_two_slots() {
         let id = SecretRequest {
             family: "s3-access_key_id".into(),
-            url: "s3://acme-lake".into(),
+            connection: "acme-lake".into(),
             env: &[],
         };
         let secret = SecretRequest {
@@ -339,7 +340,7 @@ mod tests {
     #[test]
     fn a_miss_names_the_keystore_and_the_variable() {
         let fixes = request().fixes();
-        assert!(fixes.contains("postgres://acme:5432/orders"), "{fixes}");
+        assert!(fixes.contains("'orders'"), "{fixes}");
         assert!(fixes.contains("STRATA_TEST_PGPASSWORD"), "{fixes}");
         let bare = SecretRequest {
             env: &[],

@@ -173,8 +173,8 @@ fn url_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) 
 /// The other blocker the draft cannot see: a **catalog name** another database connection in this
 /// project already registers under.
 ///
-/// `check_catalog_name` rather than a comparison written here, so the field refuses what
-/// `engine::db::connect` refuses, in the same words. It folds, unlike [`url_clash`] beside it,
+/// [`check_catalog_name`] rather than a comparison written here, so the field refuses what
+/// registration refuses, in the same words. It folds, unlike [`url_clash`] beside it,
 /// because a catalog name is a SQL identifier. The set is the project's *stored* defs where the
 /// engine's is what is live — a connection that failed to connect reserves nothing.
 ///
