@@ -33,9 +33,7 @@ use freya::radio::RadioChannel;
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_engine::register::view_order;
 use strata_engine::{fold_ident, TableMeta, ViewMeta};
-use strata_model::{
-    CatalogKind, ColumnInfo, ConnectionDef, Provider, SavedQuery, TableDef, ViewDef,
-};
+use strata_model::{CatalogKind, ColumnInfo, ConnectionDef, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -207,11 +205,10 @@ pub struct ProjectState {
     /// source paths resolve against. Always set: opening a project that can't be
     /// canonicalized is an unrecoverable error, not a rootless fallback.
     pub root: PathBuf,
-    /// The remote object stores the project reads from (W7). Kept sorted by bucket like every
-    /// other section is sorted by name; **identity is [`ConnectionDef::url`]**, which is what
-    /// the engine's registry keys on and what a landing answer is addressed by. Two
-    /// connections may share a bucket (`s3://lake`, `gs://lake`) and are then simply
-    /// neighbours in the sort.
+    /// The sources the project reads through. Kept sorted by address like every other section is
+    /// sorted by name; **identity is the connection's own name**, which is what a landing answer
+    /// is addressed by. Two connections may share an address (`s3://lake` read two ways, one
+    /// server reached as two roles) and are then simply neighbours in the sort.
     pub connections: Vec<ConnRow>,
     pub tables: Vec<TableRow>,
     pub views: Vec<ViewRow>,
@@ -270,9 +267,9 @@ impl ProjectState {
     /// A refused **connection** (W7) is here for the reason the probe behind it exists
     /// (`CONNECTIONS_SPEC.md` §3): a bucket with no usable credentials takes every table over
     /// it down with it, so without this row the drawer fills with signing failures on the
-    /// tables and says nothing about the one thing that is actually wrong. It is named by
-    /// [`ConnectionDef::url`] rather than by its bucket, which is the only form that tells
-    /// `s3://lake` from `gs://lake`.
+    /// tables and says nothing about the one thing that is actually wrong. It is named by the
+    /// connection's own name rather than by its address, which is the only form that tells two
+    /// connections over one bucket apart.
     ///
     /// Saved queries can't appear: they are stored strings that are never registered, so there is
     /// no engine answer for them to have failed.
@@ -280,7 +277,7 @@ impl ProjectState {
         let connections = self.connections.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
                 kind: FaultKind::Connection,
-                name: r.def.url(),
+                name: r.def.named(),
                 why: why.to_string(),
             })
         });
@@ -410,21 +407,20 @@ impl ProjectState {
 
     /// Land a connected object store on its row (W7).
     ///
-    /// Addressed by [`ConnectionDef::url`] — the scheme-qualified form — and **not** by the
-    /// bucket, for the same reason the engine registers under it: `s3://lake` and `gs://lake`
-    /// are two connections, and a bucket-keyed lookup would land both answers on whichever row
-    /// came first and leave the other `Loading` for the life of the window, with no error
-    /// anywhere to say so.
-    pub fn connection_registered(&mut self, url: &str) {
-        if let Some(c) = self.connections.iter_mut().find(|c| c.def.url() == url) {
+    /// Addressed by the connection's **name** and **not** by its address, for the reason the name
+    /// is the identity at all: two connections may share an address, and an address-keyed lookup
+    /// would land both answers on whichever row came first and leave the other `Loading` for the
+    /// life of the window, with no error anywhere to say so.
+    pub fn connection_registered(&mut self, name: &str) {
+        if let Some(c) = self.connections.iter_mut().find(|c| c.def.named() == name) {
             c.reg = Reg::Ready(());
         }
     }
 
     /// Land a connection the engine refused on its row — what to fix, in the pane's tooltip.
     /// Addressed like [`connection_registered`](Self::connection_registered).
-    pub fn connection_failed(&mut self, url: &str, error: String) {
-        if let Some(c) = self.connections.iter_mut().find(|c| c.def.url() == url) {
+    pub fn connection_failed(&mut self, name: &str, error: String) {
+        if let Some(c) = self.connections.iter_mut().find(|c| c.def.named() == name) {
             c.reg = Reg::Failed(error);
         }
     }
@@ -718,38 +714,35 @@ impl ProjectState {
             .collect()
     }
 
-    /// The tables that read through the connection `url` names (W7 · 04), alphabetically — the
-    /// forget confirm's consequence line and its name chips.
+    /// The tables that read through the connection `name` names, alphabetically — the forget
+    /// confirm's consequence line and its name chips.
     ///
     /// The **other** dependency direction, and a different question from
     /// [`dependent_views`](Self::dependent_views): nothing can read an object store *by name*, so
     /// a connection has no dependents in the SQL namespace at all — what it has is the defs that
     /// name it, which is a stored field rather than anything the planner reported. So this is an
     /// exact match on the def's own [`TableDef::connection`], and it does **not** ask what the
-    /// engine last said about the row: a table over a forgotten bucket is left invalid whether it
-    /// had registered or not.
-    pub fn tables_over(&self, url: &str) -> Vec<String> {
+    /// engine last said about the row: a table over a forgotten connection is left invalid whether
+    /// it had registered or not.
+    pub fn tables_over(&self, name: &str) -> Vec<String> {
         self.tables
             .iter()
-            .filter(|t| t.def.connection.as_deref() == Some(url))
+            .filter(|t| t.def.connection.as_deref() == Some(name))
             .map(|t| t.def.name.clone())
             .collect()
     }
 
-    /// The catalog name a **database** connection registers under, from the def alone — `None`
-    /// for a URL this project has no connection for, and for one that is not a database.
+    /// The catalog name a connection to a **source** registers under, from the def alone — `None`
+    /// for a name this project has no connection for, and for one that registers an object store.
     ///
     /// The def's own spelling rather than the engine's registered name: this is asked by a Forget
     /// confirm, which has to work whether or not the connection ever connected, and the two only
     /// differ by whitespace the engine trims.
-    pub fn database_catalog(&self, url: &str) -> Option<String> {
+    pub fn source_catalog(&self, name: &str) -> Option<String> {
         self.connections
             .iter()
-            .find(|c| c.def.url() == url)
-            .and_then(|c| match &c.def.provider {
-                Provider::Postgres(pg) => Some(pg.catalog.trim().to_string()),
-                _ => None,
-            })
+            .find(|c| c.def.named() == name)
+            .and_then(|c| c.def.provider.source().map(|_| c.def.named()))
     }
 
     /// The views that read through the database connection registered as `catalog` — its
@@ -1027,36 +1020,58 @@ impl ProjectState {
         self.tables.insert(at.min(self.tables.len()), row);
     }
 
-    /// Insert-or-replace a connection def (the editor's Save, W7 · 03), at its address-sorted
-    /// slot. Resets the row to `Loading`, like every other upsert here — the connection has to
-    /// be registered again before the row may claim anything.
+    /// Insert-or-replace a connection def (the editor's Save), at its address-sorted slot. Resets
+    /// the row to `Loading`, like every other upsert here — the connection has to be registered
+    /// again before the row may claim anything.
     ///
-    /// **Matched on [`ConnectionDef::url`], inserted by `address`**, and the two being different
-    /// keys is the whole of what this method has to get right. The list is sorted by address and
-    /// identified by URL, so `s3://lake` and `gs://lake` are neighbours in the sort and two
-    /// different connections: replacing on the address would let saving a `gs://lake` silently
-    /// take out the `s3://lake` it sorts beside, deregistering nothing and leaving a live store
-    /// with no def. Matched case-**sensitively** for [`remove_connection`]'s reason — a URL is
-    /// not a SQL identifier and the object-store registry matches it verbatim.
+    /// **Matched on the name, inserted by `address`**, and the two being different keys is the
+    /// whole of what this method has to get right. The list is sorted by address and identified by
+    /// name, so two connections over one bucket are neighbours in the sort and two different
+    /// rows: replacing on the address would let saving one silently take out the other,
+    /// deregistering nothing and leaving a live store with no def.
     ///
-    /// It does **not** deregister anything. An edit that moves the address or the provider
-    /// changes `url()`, and the store the old URL registered survives this write untouched;
-    /// dropping it is `Engine::disconnect`, owed by the gesture that knows both URLs (the
-    /// editor's Save — `engine::store::connect` only ever sees the def it is given).
+    /// It does **not** deregister anything. An edit that moves the address or the kind changes
+    /// what the connection registered under, and that store survives this write untouched;
+    /// dropping it is `Engine::disconnect`, owed by the gesture that knows both names.
     pub fn upsert_connection(&mut self, def: ConnectionDef) {
-        let url = def.url();
-        self.connections.retain(|c| c.def.url() != url);
+        let name = def.named();
+        self.connections.retain(|c| c.def.named() != name);
         let at = self
             .connections
             .partition_point(|c| name_ord(&c.def.address, &def.address).is_lt());
         self.connections.insert(at, ConnRow::new(def));
     }
 
+    /// Save a connection that was **renamed**: the row moves, and every table reading through it
+    /// moves with it.
+    ///
+    /// A table names the connection it reads through, so a rename that left those references
+    /// behind would point them at a connection the project no longer has — the tables would fail
+    /// to register with "no suitable object store", naming a connection the user can see is
+    /// there under its new name.
+    ///
+    /// **In one settle**, and here rather than in the window that pressed Save: what a rename
+    /// costs is a property of how a connection is referenced, and a surface that had to remember
+    /// to fix the references would be one that could forget.
+    pub fn rename_connection(&mut self, from: &str, def: ConnectionDef) {
+        let to = def.named();
+        self.remove_connection(from);
+        self.upsert_connection(def);
+        if from == to {
+            return;
+        }
+        for table in &mut self.tables {
+            if table.def.connection.as_deref() == Some(from) {
+                table.def.connection = Some(to.clone());
+            }
+        }
+    }
+
     /// Edit a connection's def **in place**, keeping the row's `Reg` — the schemas picker's
     /// write, and the only one here that does not reset a row to `Loading`.
     ///
     /// Legitimate exactly because the field it exists for is **display-only**: registration
-    /// exposes every schema a database connection can reach and [`PgStore::schemas`] scopes what
+    /// exposes every schema a source connection can reach and the def's own `schemas` scopes what
     /// Strata shows, so what the last pass answered about this connection is still true after
     /// the write. Going through [`upsert_connection`](Self::upsert_connection) instead would
     /// replace the row with a fresh `Reg::Loading` that only a whole-catalog re-scan could
@@ -1066,24 +1081,25 @@ impl ProjectState {
     /// address change here would leave the list sorted wrong and the engine registered under a
     /// URL no def names. That edit is the connection editor's, and it goes through `upsert`.
     ///
-    /// [`PgStore::schemas`]: strata_model::PgStore::schemas
-    pub fn update_connection_def(&mut self, url: &str, edit: impl FnOnce(&mut ConnectionDef)) {
-        let Some(row) = self.connections.iter_mut().find(|c| c.def.url() == url) else {
+    pub fn update_connection_def(&mut self, name: &str, edit: impl FnOnce(&mut ConnectionDef)) {
+        let Some(row) = self.connections.iter_mut().find(|c| c.def.named() == name) else {
             return;
         };
         edit(&mut row.def);
     }
 
-    /// Forget the connection registered under `url` — the store half of the pane's Forget
-    /// (W7). Hands back the row and its slot, like [`remove_view`](Self::remove_view).
+    /// Forget the connection called `name` — the store half of the pane's Forget. Hands back the
+    /// row and its slot, like [`remove_view`](Self::remove_view).
     ///
-    /// Matched on [`ConnectionDef::url`] and **case-sensitively**, which is where it parts
-    /// company with every other remover here. A catalog name is a SQL identifier and the
-    /// engine folds it; a connection's key is a URL the object-store registry matches
-    /// verbatim, so folding it would let Forget take a row the engine would go on answering
-    /// for.
-    pub fn remove_connection(&mut self, url: &str) -> Option<(usize, ConnRow)> {
-        let at = self.connections.iter().position(|c| c.def.url() == url)?;
+    /// Matched on the name exactly, which is where it parts company with every other remover
+    /// here: those fold, because a table or a view name is one the user may also write in SQL.
+    /// A connection is addressed by gesture rather than by typing — the callers pass back the
+    /// spelling they read off the row — so there is no second spelling to reconcile with.
+    pub fn remove_connection(&mut self, name: &str) -> Option<(usize, ConnRow)> {
+        let at = self
+            .connections
+            .iter()
+            .position(|c| c.def.named() == name)?;
         Some((at, self.connections.remove(at)))
     }
 
@@ -1096,7 +1112,10 @@ impl ProjectState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strata_model::{GcsAuth, GcsStore, PgStore, Provider, S3Store, SourceFormat, TableOrigin};
+    use crate::apps::connection::model::PgDraft;
+    use strata_engine::sources::postgres::Pg;
+    use strata_engine::SourceKind;
+    use strata_model::{GcsAuth, GcsStore, Provider, S3Store, SourceFormat, TableOrigin};
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
@@ -1861,11 +1880,13 @@ mod tests {
             connections: vec![
                 ConnectionDef {
                     address: "lake".into(),
+                    name: "lake".into(),
                     provider: Provider::S3(S3Store::default()),
                     client_config: Default::default(),
                 },
                 ConnectionDef {
                     address: "lake".into(),
+                    name: "lake2".into(),
                     provider: Provider::Gcs(GcsStore::default()),
                     client_config: Default::default(),
                 },
@@ -1875,23 +1896,21 @@ mod tests {
         ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-connections-store-test"))
     }
 
-    /// Forget takes the row it was asked for and **only** that one. Keyed on `url()`, so the
-    /// bucket the two share is not what is matched — a bucket-keyed remover would take whichever
-    /// sorted first and leave the user's own connection gone.
+    /// Forget takes the row it was asked for and **only** that one. Keyed on the name, so the
+    /// address the two share is not what is matched — an address-keyed remover would take
+    /// whichever sorted first and leave the user's own connection gone.
     #[test]
-    fn remove_connection_matches_the_url_and_not_the_bucket() {
+    fn remove_connection_matches_the_name_and_not_the_address() {
         let mut p = two_stores_one_bucket();
 
-        let (at, row) = p
-            .remove_connection("gs://lake")
-            .expect("the GCS connection");
-        assert_eq!(row.def.url(), "gs://lake");
+        let (at, row) = p.remove_connection("lake2").expect("the GCS connection");
+        assert_eq!(row.def.named(), "lake2");
         assert_eq!(
             p.connections
                 .iter()
-                .map(|c| c.def.url())
+                .map(|c| c.def.named())
                 .collect::<Vec<_>>(),
-            ["s3://lake"],
+            ["lake"],
             "the S3 connection over the same bucket is untouched"
         );
 
@@ -1899,25 +1918,73 @@ mod tests {
         assert_eq!(
             p.connections
                 .iter()
-                .map(|c| c.def.url())
+                .map(|c| c.def.named())
                 .collect::<Vec<_>>(),
-            ["s3://lake", "gs://lake"]
+            ["lake", "lake2"]
         );
     }
 
-    /// The editor's Save **replaces on the URL and sorts on the bucket** — the two keys the two
+    /// The editor's Save **replaces on the name and sorts on the address** — the two keys the two
     /// halves of this method use, and the pair that makes it worth a test.
     ///
-    /// Saving over `gs://lake` must leave `s3://lake` exactly where it was. Replacing on the
-    /// bucket instead (the sort's key, and the tempting one) takes out a connection the user
-    /// never touched, deregisters nothing, and leaves a live object store with no def behind it.
+    /// Saving over `lake2` must leave `lake` exactly where it was. Replacing on the address
+    /// instead (the sort's key, and the tempting one) takes out a connection the user never
+    /// touched, deregisters nothing, and leaves a live object store with no def behind it.
+    /// **A rename takes the tables with it.** A table names the connection it reads through, so
+    /// the references move in the same settle — left behind, they would point at a connection the
+    /// project no longer has while the user can see it under its new name.
     #[test]
-    fn upsert_connection_replaces_the_url_and_sorts_the_bucket() {
+    fn a_rename_moves_the_tables_that_read_through_it() {
         let mut p = two_stores_one_bucket();
-        p.connection_registered("s3://lake");
+        p.upsert_table(TableDef {
+            connection: Some("lake".into()),
+            ..table_def("events")
+        });
+        p.upsert_table(TableDef {
+            connection: Some("lake2".into()),
+            ..table_def("shipments")
+        });
+        p.upsert_table(table_def("local"));
+
+        let renamed = ConnectionDef {
+            name: "depot".into(),
+            ..p.connections
+                .iter()
+                .find(|c| c.def.named() == "lake")
+                .expect("the S3 connection")
+                .def
+                .clone()
+        };
+        p.rename_connection("lake", renamed);
+
+        let over = |table: &str| {
+            p.tables
+                .iter()
+                .find(|t| t.def.name == table)
+                .and_then(|t| t.def.connection.clone())
+        };
+        assert_eq!(over("events").as_deref(), Some("depot"), "it moved with it");
+        assert_eq!(
+            over("shipments").as_deref(),
+            Some("lake2"),
+            "and the other connection's tables did not"
+        );
+        assert_eq!(over("local"), None, "nor did a local one gain a connection");
+        assert!(
+            p.connections.iter().any(|c| c.def.named() == "depot")
+                && !p.connections.iter().any(|c| c.def.named() == "lake"),
+            "the row itself moved"
+        );
+    }
+
+    #[test]
+    fn upsert_connection_replaces_the_name_and_sorts_the_address() {
+        let mut p = two_stores_one_bucket();
+        p.connection_registered("lake");
 
         p.upsert_connection(ConnectionDef {
             address: "lake".into(),
+            name: "lake2".into(),
             provider: Provider::Gcs(GcsStore {
                 auth: GcsAuth::Anonymous,
             }),
@@ -1932,7 +1999,7 @@ mod tests {
         let gcs = p
             .connections
             .iter()
-            .find(|c| c.def.url() == "gs://lake")
+            .find(|c| c.def.named() == "lake2")
             .expect("the GCS connection");
         assert_eq!(
             gcs.def.provider,
@@ -1944,11 +2011,12 @@ mod tests {
         let s3 = p
             .connections
             .iter()
-            .find(|c| c.def.url() == "s3://lake")
+            .find(|c| c.def.named() == "lake")
             .expect("the S3 connection over the same bucket");
         assert!(matches!(s3.reg, Reg::Ready(())));
         p.upsert_connection(ConnectionDef {
             address: "acme".into(),
+            name: "acme".into(),
             provider: Provider::S3(S3Store::default()),
             client_config: Default::default(),
         });
@@ -1966,10 +2034,11 @@ mod tests {
     #[test]
     fn upsert_connection_awaits_its_own_registration() {
         let mut p = two_stores_one_bucket();
-        p.connection_failed("s3://lake", "This S3 connection needs a region.".into());
+        p.connection_failed("lake", "This S3 connection needs a region.".into());
 
         p.upsert_connection(ConnectionDef {
             address: "lake".into(),
+            name: "lake".into(),
             provider: Provider::S3(S3Store {
                 region: "eu-west-2".into(),
                 ..Default::default()
@@ -1980,7 +2049,7 @@ mod tests {
         let row = p
             .connections
             .iter()
-            .find(|c| c.def.url() == "s3://lake")
+            .find(|c| c.def.named() == "lake")
             .expect("the S3 connection");
         assert!(
             matches!(row.reg, Reg::Loading),
@@ -1990,7 +2059,7 @@ mod tests {
 
     /// A URL nothing is registered under removes nothing, rather than taking the nearest row.
     #[test]
-    fn remove_connection_ignores_a_url_it_does_not_hold() {
+    fn remove_connection_ignores_a_name_it_does_not_hold() {
         let mut p = two_stores_one_bucket();
         assert!(p.remove_connection("s3://other").is_none());
         assert_eq!(p.connections.len(), 2);
@@ -2004,7 +2073,7 @@ mod tests {
         let mut p = two_stores_one_bucket();
         p.upsert_table(table_def("orders"));
         p.table_failed("orders", "No suitable object store found".into());
-        p.connection_failed("s3://lake", "This S3 connection needs a region.".into());
+        p.connection_failed("lake", "This S3 connection needs a region.".into());
 
         let faults = p.registration_faults();
         assert_eq!(
@@ -2013,7 +2082,7 @@ mod tests {
                 .map(|f| (f.kind, f.name.as_str()))
                 .collect::<Vec<_>>(),
             [
-                (FaultKind::Connection, "s3://lake"),
+                (FaultKind::Connection, "lake"),
                 (FaultKind::Table, "orders")
             ]
         );
@@ -2038,12 +2107,17 @@ mod tests {
     fn pg(database: &str, schemas: &[&str]) -> ConnectionDef {
         ConnectionDef {
             address: format!("db.internal:5432/{database}"),
-            provider: Provider::Postgres(PgStore {
-                catalog: database.into(),
-                user: "reader".into(),
-                schemas: schemas.iter().map(ToString::to_string).collect(),
-                ..Default::default()
-            }),
+            name: String::new(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: database.into(),
+                    user: "reader".into(),
+                    schemas: schemas.iter().map(ToString::to_string).collect(),
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         }
     }
@@ -2062,11 +2136,11 @@ mod tests {
             },
             PathBuf::from("/tmp/strata-schemas-write"),
         );
-        let url = p.connections[0].def.url();
-        p.connection_registered(&url);
+        let name = p.connections[0].def.named();
+        p.connection_registered(&name);
 
-        p.update_connection_def(&url, |def| {
-            if let Provider::Postgres(store) = &mut def.provider {
+        p.update_connection_def(&name, |def| {
+            if let Provider::Source(store) = &mut def.provider {
                 store.schemas = vec!["public".into(), "warehouse".into()];
             }
         });
@@ -2077,7 +2151,7 @@ mod tests {
             "the verdict is untouched"
         );
         match &row.def.provider {
-            Provider::Postgres(store) => {
+            Provider::Source(store) => {
                 assert_eq!(store.schemas, ["public", "warehouse"]);
             }
             other => panic!("still a database: {other:?}"),
@@ -2145,9 +2219,9 @@ mod tests {
             "the catalog name folds, and a workspace table sharing it is not a reader"
         );
         assert_eq!(
-            p.database_catalog(&p.connections[0].def.url()).as_deref(),
+            p.source_catalog(&p.connections[0].def.named()).as_deref(),
             Some("analytics")
         );
-        assert!(p.database_catalog("s3://lake").is_none());
+        assert!(p.source_catalog("lake").is_none());
     }
 }

@@ -66,15 +66,13 @@ use crate::theme::{use_roles, Role};
 /// What a drop confirm is about. The variants mirror each section's identity rule: tables and
 /// views are addressed by **name** (their engine/SQL identity, one shared namespace), a saved
 /// query by its stable **id** — its name is only the label, carried so the dialog can show it —
-/// and a connection by its [`ConnectionDef::url`], which is what the object-store registry keys
-/// on and the only form that tells `s3://lake` from `gs://lake`.
+/// and a connection by its **name**, which is what the project keys on and the only form that
+/// tells two connections over one address apart.
 ///
 /// **Forget is here rather than in a dialog of its own** because every path that destroys a
 /// project's work asks on the same terms: one card, one pair of actions, one Esc/Enter barrier,
 /// one event recorded afterwards. What varies per variant is the wording and what the confirm
 /// then calls, which is exactly what these methods are.
-///
-/// [`ConnectionDef::url`]: strata_model::ConnectionDef::url
 #[derive(Clone, PartialEq, Debug)]
 pub enum DropTarget {
     /// A table, by name, **with what dropping it destroys** (ED-05): an internal table's data
@@ -92,17 +90,16 @@ pub enum DropTarget {
         id: Uuid,
         name: String,
     },
-    /// A connection, by its `ConnectionDef::url()` — `s3://acme-lake`,
-    /// `postgres://reader@db:5432/analytics` (W7 · DB-05) — **with its provider**, carried from
-    /// the row for [`Table`](Self::Table)'s reason: by the time this copy renders, answering it
-    /// would take a lookup that can fail, and the wrong default tells the user nothing in the
-    /// *bucket* is deleted about a database.
+    /// A connection, by its own name — **with its provider**, carried from the row for
+    /// [`Table`](Self::Table)'s reason: by the time this copy renders, answering it would take a
+    /// lookup that can fail, and the wrong default tells the user nothing in the *bucket* is
+    /// deleted about a source that holds no files.
     ///
     /// The [`ProviderId`] rather than a "is it a database" flag, so a fifth provider is a compile
     /// error in every arm that words this card instead of a silent `false` that promises the
     /// wrong thing about whatever it turns out to be.
     Connection {
-        url: String,
+        name: String,
         provider: ProviderId,
     },
 }
@@ -111,7 +108,7 @@ impl DropTarget {
     /// The row's name, as the title shows it.
     pub fn name(&self) -> &str {
         match self {
-            DropTarget::View(name) | DropTarget::Connection { url: name, .. } => name,
+            DropTarget::View(name) | DropTarget::Connection { name, .. } => name,
             DropTarget::Table { name, .. } | DropTarget::Query { name, .. } => name,
         }
     }
@@ -159,7 +156,7 @@ impl DropTarget {
                 "Removes this saved query from the project. Any open tab keeps its SQL."
             }
             DropTarget::Connection {
-                provider: ProviderId::Postgres,
+                provider: ProviderId::Source,
                 ..
             } => "Removes the database connection. Nothing in the database is deleted.",
             DropTarget::Connection {
@@ -283,12 +280,12 @@ impl Component for DropConfirm {
         let (dependents, consequence) = match (&target, target.kind()) {
             (
                 DropTarget::Connection {
-                    url,
-                    provider: ProviderId::Postgres,
+                    name,
+                    provider: ProviderId::Source,
                 },
                 _,
             ) => {
-                let catalog = project.peek().database_catalog(url);
+                let catalog = project.peek().source_catalog(name);
                 let behind = match catalog {
                     Some(catalog) => views.read().views_reading(&catalog),
                     None => Vec::new(),
@@ -296,8 +293,8 @@ impl Component for DropConfirm {
                 let line = consequence(behind.len(), target.noun());
                 (behind, line)
             }
-            (DropTarget::Connection { url, .. }, _) => {
-                let over = project.peek().tables_over(url);
+            (DropTarget::Connection { name, .. }, _) => {
+                let over = project.peek().tables_over(name);
                 let behind = views.read().views_over(&over);
                 let line = forget_consequence(over.len(), behind.len());
                 (over.into_iter().chain(behind).collect(), line)
@@ -522,10 +519,10 @@ fn drop_row(
                 catalog_settled(catalog);
             });
         }
-        DropTarget::Connection { url, .. } => {
+        DropTarget::Connection { name, .. } => {
             let landed = {
                 let mut p = project.write_channel(ProjChan::Connections);
-                let taken = p.remove_connection(url);
+                let taken = p.remove_connection(name);
                 let landed = persisted_defs(&p, report);
                 if let (false, Some((at, row))) = (landed, taken) {
                     p.restore_connection(at, row);
@@ -535,7 +532,7 @@ fn drop_row(
             if !landed {
                 return;
             }
-            engine.disconnect(url);
+            engine.disconnect(name);
             catalog_settled(catalog);
         }
         DropTarget::Query { id, .. } => {
@@ -575,17 +572,20 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::thread::sleep;
     use std::time::Duration;
+    use strata_engine::sources::postgres::Pg;
+    use strata_engine::SourceKind;
 
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
+    use crate::apps::connection::model::PgDraft;
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
     use strata_engine::{RunTag, TableMeta, ViewMeta, WsId};
     use strata_model::{
-        ConnectionDef, GcsStore, Origin, PgStore, Provider, S3Store, SavedQuery, SourceFormat,
-        TableDef, TableOrigin, ViewDef,
+        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
+        TableOrigin, ViewDef,
     };
 
     use super::*;
@@ -654,16 +654,18 @@ mod tests {
             connections: vec![
                 ConnectionDef {
                     address: "lake".into(),
+                    name: "lake".into(),
                     provider: Provider::S3(S3Store::default()),
                     client_config: Default::default(),
                 },
                 ConnectionDef {
                     address: "lake".into(),
+                    name: "lake2".into(),
                     provider: Provider::Gcs(GcsStore::default()),
                     client_config: Default::default(),
                 },
             ],
-            tables: vec![table_over("orders", "s3://lake"), table("users")],
+            tables: vec![table_over("orders", "lake"), table("users")],
             views: vec![
                 view("orders_daily", "SELECT * FROM orders"),
                 view("orders_weekly", "SELECT * FROM orders_daily"),
@@ -1266,11 +1268,16 @@ mod tests {
             let mut write = p.write_channel(ProjChan::Connections);
             write.upsert_connection(ConnectionDef {
                 address: "db.internal:5432/analytics".into(),
-                provider: Provider::Postgres(PgStore {
-                    catalog: "analytics".into(),
-                    user: "reader".into(),
-                    ..Default::default()
-                }),
+                name: "analytics".into(),
+                provider: Provider::Source(
+                    PgDraft {
+                        kind: Pg::NAME.to_string(),
+                        name: "analytics".into(),
+                        user: "reader".into(),
+                        ..Default::default()
+                    }
+                    .def(),
+                ),
                 client_config: Default::default(),
             });
             write.view_registered(
@@ -1283,13 +1290,13 @@ mod tests {
                 },
             );
         }
-        let url = "postgres://reader@db.internal:5432/analytics";
+        let name = "analytics";
         open(
             &mut runner,
             &mut slot,
             DropTarget::Connection {
-                url: url.into(),
-                provider: ProviderId::Postgres,
+                name: name.into(),
+                provider: ProviderId::Source,
             },
         );
 
@@ -1311,7 +1318,7 @@ mod tests {
                 .peek()
                 .connections
                 .iter()
-                .any(|c| c.def.url() == url),
+                .any(|c| c.def.named() == name),
             "confirming forgot it"
         );
     }
@@ -1329,12 +1336,12 @@ mod tests {
             &mut runner,
             &mut slot,
             DropTarget::Connection {
-                url: "gs://lake".into(),
+                name: "lake2".into(),
                 provider: ProviderId::Gcs,
             },
         );
 
-        assert_eq!(title(&runner), "Forget connection gs://lake");
+        assert_eq!(title(&runner), "Forget connection lake2");
         assert!(
             !texts(&runner).iter().any(|t| t.contains("left invalid")),
             "nothing reads an object store by name: {:?}",
@@ -1351,9 +1358,9 @@ mod tests {
                 .peek()
                 .connections
                 .iter()
-                .map(|c| c.def.url())
+                .map(|c| c.def.named())
                 .collect::<Vec<_>>(),
-            ["s3://lake"],
+            ["lake"],
             "the other connection over the same bucket stays"
         );
         assert!(slot.peek().is_none(), "the dialog closed itself");
@@ -1372,7 +1379,7 @@ mod tests {
             &mut runner,
             &mut slot,
             DropTarget::Connection {
-                url: "s3://lake".into(),
+                name: "lake".into(),
                 provider: ProviderId::S3,
             },
         );
@@ -1416,7 +1423,7 @@ mod tests {
             &mut runner,
             &mut slot,
             DropTarget::Connection {
-                url: "s3://lake".into(),
+                name: "lake".into(),
                 provider: ProviderId::S3,
             },
         );
@@ -1430,7 +1437,7 @@ mod tests {
             .collect();
         assert_eq!(
             recorded,
-            [(LogLevel::Info, "Forgot connection 's3://lake'".to_string())]
+            [(LogLevel::Info, "Forgot connection 'lake'".to_string())]
         );
     }
 

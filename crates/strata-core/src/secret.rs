@@ -172,14 +172,14 @@ impl SecretRef {
     ///
     /// `Uuid::new_v5` over `"{kind}:{name}"`: deterministic, so the same def addresses the same
     /// keystore slot on every machine, while each machine's keystore holds its own entry (or
-    /// none). `kind` is the family of secret (`"pg-password"`), `name` the thing's own identity
-    /// within it (`ConnectionDef::url`).
+    /// none). `kind` is the family of secret (`"postgres-password"`), `name` the thing's own
+    /// identity within it (a connection's name).
     ///
     /// **The contract, which is not optional.** A minted [`SecretRef`] in a *committed* file
     /// would be rewritten by every colleague who entered their own password — two machines
     /// ping-ponging one id through git forever. So a derived ref exists precisely because the
-    /// def must never store it: it stores the *expectation* that there is a secret
-    /// (`PgPassword::Keystore`), and the ref is recomputed from the identity whenever one is
+    /// def must never store it: it stores the *expectation* that there is a secret, and the ref
+    /// is recomputed from the identity whenever one is
     /// needed. Two consequences ride with it, and whoever moves the identity owes both:
     /// migrate the entry ([`migrate_derived`]), and accept that a machine with no entry is a
     /// normal state that must be reported rather than treated as a fault.

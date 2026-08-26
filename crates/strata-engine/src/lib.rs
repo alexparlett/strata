@@ -36,11 +36,8 @@ mod boundaries;
 pub mod builder;
 mod catalog;
 mod chart;
-/// The all-or-nothing contract a connection registers under, shared by [`store`] and [`db`].
+/// The all-or-nothing contract a connection registers under, shared by [`store`] and [`sources`].
 mod connect;
-/// `pub` for the surfaces that read a live database's shape — the data-sources tree, the schema
-/// picker and completion all go through [`Engine::db_listing`], whose vocabulary is here.
-pub mod db;
 mod ddl;
 mod explain;
 pub mod export;
@@ -53,6 +50,7 @@ mod query;
 pub mod register;
 pub mod secrets;
 mod sink;
+pub mod sources;
 pub mod sql;
 pub mod statements;
 mod store;
@@ -60,7 +58,7 @@ pub mod udf_package;
 mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
-pub use db::RemoteRelation;
+pub use ddl::RemoteTarget;
 pub use ddl::{
     drop_intent, duplicate_column, SessionScope, StatementOutcome, StatementReport, StoreEffect,
 };
@@ -69,6 +67,11 @@ pub use policy::{
     PolicyProvider, Principal, RemoteScope, RemoteSel, TargetFacts,
 };
 pub use query::{purge_snapshot_root, ReadPolicy};
+pub use sources::source::{
+    ConnectionKey, DataSource, Field, Located, SourceCatalog, SourceInfo, SourceKind, SourceMode,
+    Sourced,
+};
+pub use sources::RemoteRelation;
 pub use statements::{Fault, Form, PolicyRefusal, Reason, StmtKind};
 
 pub use builder::EngineBuilder;
@@ -122,17 +125,17 @@ use datafusion_federation::FederatedQueryPlanner;
 use tokio::runtime::Runtime;
 use tokio::task::AbortHandle;
 
-use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
-use db::Databases;
 use ddl::StrataFunctionFactory;
 use functions::Functions;
 use providers::{StrataCatalogList, StrataCatalogProvider};
 use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat};
+use sources::source::Sources;
+use sources::Live;
 use sql::{DatabaseSym, FunctionCatalog, PreparedSym, RelationSym, SchemaSym};
 use strata_arrow::plan::QueryPlan;
+use strata_core::project::resolve_source;
 use strata_model::{
-    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, PgPassword, Provider, QueryOutput,
-    SnapshotId, TabId, Trend,
+    Cell, ChartData, ChartQuery, ConnectionDef, Diagnostic, QueryOutput, SnapshotId, TabId, Trend,
 };
 
 /// A workspace's stable identity — the query tab that owns a run and its current
@@ -344,10 +347,14 @@ pub struct Engine {
     internal: InternalTables,
     /// Which connections this engine has been told about — see [`Connections`].
     connections: Connections,
-    /// The database connections that are **live**: their pools and the catalogs they registered
-    /// — see [`Databases`]. A field on the engine rather than something a task holds,
-    /// because a pool owns bb8's driver tasks and the engine's `Drop` has to be what ends them.
-    databases: Databases,
+    /// The source connections that are **live**: their handles and the catalogs they registered
+    /// — see [`Live`]. A field on the engine rather than something a task holds, because a pool
+    /// owns its driver tasks and the engine's `Drop` has to be what ends them.
+    live: Live,
+    /// Which data sources this engine can serve a connection with
+    /// ([`EngineBuilder::with_source`]) — a def's kind is looked up here, and a kind nothing
+    /// answers to is a failed row naming the fix.
+    sources: Sources,
     /// The `SET` overlay and the prepared-statement mirror — see [`SessionScope`].
     /// Default on a fresh engine, which is what makes a restart clear the session.
     session: SessionScope,
@@ -414,37 +421,77 @@ impl InternalTables {
 /// every def, and [`Engine::disconnect`] — the Forget gesture and the edit that moves a
 /// connection's URL — is the one removal.
 #[derive(Clone, Debug, Default)]
-pub struct Connections(Arc<Mutex<HashSet<String>>>);
+pub struct Connections(Arc<Mutex<BTreeMap<String, String>>>);
 
 impl Connections {
-    /// The connection `url` names, **in the connection's own spelling** — `None` when this project
-    /// has none.
+    /// The connection `name` addresses, **in the connection's own spelling** — `None` when this
+    /// project has none.
     ///
     /// Answering with the stored string rather than a bool is what keeps a def's `connection`
-    /// field equal to the `ConnectionDef::url` everything else addresses it by: the store's
-    /// picker, `resolve_source` and the Forget confirm all match on that exact string.
+    /// field equal to the name everything else addresses it by: the store's picker, the table
+    /// spec's path composition and the Forget confirm all match on that exact string.
     ///
-    /// The fallback compares **case-insensitively**, because the object-store registry does. A URL
-    /// reaches DataFusion through `Url::parse`, which lower-cases the scheme and the host, so
-    /// `S3://acme-lake/events/` and `http://Aserver:8484/x.csv` resolve to stores that are
-    /// registered — and a byte-for-byte membership test would refuse them, naming a connection the
-    /// project visibly has. The exact hit is tried first so the ordinary case costs one lookup.
-    pub fn resolve(&self, url: &str) -> Option<String> {
-        let set = self.0.lock().unwrap();
-        if set.contains(url) {
-            return Some(url.to_string());
+    /// The fallback compares **case-insensitively**, because a connection's name is a SQL
+    /// identifier and queries fold one. The exact hit is tried first so the ordinary case costs
+    /// one lookup.
+    pub fn resolve(&self, name: &str) -> Option<String> {
+        let held = self.0.lock().unwrap();
+        if held.contains_key(name) {
+            return Some(name.to_string());
         }
-        set.iter()
-            .find(|held| held.eq_ignore_ascii_case(url))
+        held.keys()
+            .find(|held| held.eq_ignore_ascii_case(name))
             .cloned()
     }
 
-    fn note(&self, url: &str) {
-        self.0.lock().unwrap().insert(url.to_string());
+    /// What the connection called `name` **is** — the `(kind, address)` pair, for the one thing
+    /// that still needs it: composing the URL its object store is registered under.
+    fn identity(&self, name: &str) -> Option<String> {
+        let held = self.0.lock().unwrap();
+        held.get(name).cloned().or_else(|| {
+            held.iter()
+                .find(|(held, _)| held.eq_ignore_ascii_case(name))
+                .map(|(_, identity)| identity.clone())
+        })
     }
 
-    fn forget(&self, url: &str) {
-        self.0.lock().unwrap().remove(url);
+    /// The connection whose `(kind, address)` is `identity` — for the one caller that arrives
+    /// with a written location rather than with a name: a typed `CREATE EXTERNAL TABLE … LOCATION
+    /// 's3://acme-lake/events/'`, which has to be matched against what the project holds.
+    pub fn named(&self, identity: &str) -> Option<String> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, held)| held.eq_ignore_ascii_case(identity))
+            .map(|(name, _)| name.clone())
+    }
+
+    /// The connections a set of defs describes, for a caller that holds defs rather than a live
+    /// engine.
+    ///
+    /// The registration pass composes its table specs **before** its first phase registers
+    /// anything, so at that moment no engine can answer what a table's connection is; the defs in
+    /// hand are the only thing that can. Building the same type from them rather than reading the
+    /// defs directly is what keeps one lookup rule — including the case-insensitive fallback,
+    /// which a hand-rolled `find` over the defs would quietly drop.
+    pub fn of(defs: &[ConnectionDef]) -> Self {
+        let held = Self::default();
+        for def in defs {
+            held.note(&def.named(), &def.identity());
+        }
+        held
+    }
+
+    fn note(&self, name: &str, identity: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), identity.to_string());
+    }
+
+    fn forget(&self, name: &str) {
+        self.0.lock().unwrap().remove(name);
     }
 }
 
@@ -754,7 +801,7 @@ impl Engine {
                     root,
                     internal: self.internal.clone(),
                     connections: self.connections.clone(),
-                    databases: self.databases.clone(),
+                    sources: self.live.clone(),
                     scope: self.session.clone(),
                     functions: self.functions.clone(),
                     baseline: self.overrides(),
@@ -1378,64 +1425,58 @@ impl Engine {
     /// a view over `pg.public.orders` cannot be created before the catalog exists.
     ///
     /// **The provider decides the arm, and there is one spawn either way**, so the two cannot
-    /// drift apart on which runtime they ride: bb8 spawns a driver task per pooled connection,
-    /// and those have to land on the engine's own runtime or the engine's `Drop` does not end
-    /// them.
+    /// drift apart on which runtime they ride: a pool may spawn a driver task per connection, and
+    /// those have to land on the engine's own runtime or the engine's `Drop` does not end them.
     ///
     /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
     /// the credential chain does not answer for, a server that refused the user, a password this
-    /// machine does not have. See `store::connect` and [`db::connect`].
+    /// machine does not have, a kind nothing is registered for. See `store::connect` and
+    /// [`sources::connect`].
     pub async fn connect(&self, conn: ConnectionDef) -> Result<(), String> {
         let ctx = self.ctx.clone();
-        let url = conn.url();
-        self.connections.note(&url);
-        let dbs = self.databases.clone();
+        let name = conn.named();
+        self.connections.note(&name, &conn.identity());
+        let live = self.live.clone();
+        let sources = self.sources.clone();
         let secrets = Arc::clone(&self.secrets);
         let settled = self
             .rt()
             .spawn(async move {
-                match conn.provider.clone() {
-                    Provider::Postgres(pg) => {
-                        let passwords = match pg.password {
-                            PgPassword::None => None,
-                            PgPassword::Keystore => {
-                                Some(Arc::new(db::SecretPassword::new(conn.url(), secrets))
-                                    as Arc<dyn PasswordProvider>)
-                            }
-                        };
-                        db::connect(&ctx, &dbs, &conn, &pg, passwords).await
-                    }
-                    _ => store::connect(&ctx, &conn).await,
+                match conn.provider.source().is_some() {
+                    true => sources::connect(&ctx, &sources, &live, &conn, secrets).await,
+                    false => store::connect(&ctx, &conn).await,
                 }
             })
             .await
             .map_err(|e| format!("connect task failed: {e}"))?;
-        if self.connections.resolve(&url).is_none() {
-            self.disconnect(&url);
+        if self.connections.resolve(&name).is_none() {
+            self.disconnect(&name);
         }
         settled
     }
 
-    /// Forget what a connection registered — the Forget gesture's engine half (W7), addressed
-    /// by the same [`ConnectionDef::url`] [`connect`](Self::connect) put it in under.
+    /// Forget what the connection called `name` registered — the Forget gesture's engine half.
     ///
     /// Synchronous, like [`deregister`](Self::deregister) and for the same reason: DataFusion
     /// just drops the entry from its registry, so there is no work to spawn and no answer to
-    /// await. Dropping the pool is synchronous too — bb8's driver tasks end with it, on the
+    /// await. Dropping the handle is synchronous too — a pool's driver tasks end with it, on the
     /// runtime they were spawned on.
     ///
-    /// **Both arms are asked**, because a URL is all this is given — the def is gone by the time
-    /// a Forget reaches here. Neither is a fault when it does nothing: see `store::disconnect`
-    /// and [`db::disconnect`].
-    pub fn disconnect(&self, url: &str) {
-        self.connections.forget(url);
-        store::disconnect(&self.ctx, url);
-        db::disconnect(&self.ctx, &self.databases, url);
+    /// **Both arms are asked**, because a name is all this is given — the def is gone by the time
+    /// a Forget reaches here, which is why the identity an object store was registered under is
+    /// kept beside the name. Neither arm is a fault when it does nothing: see `store::disconnect`
+    /// and [`sources::disconnect`].
+    pub fn disconnect(&self, name: &str) {
+        if let Some(identity) = self.connections.identity(name) {
+            store::disconnect(&self.ctx, &identity);
+        }
+        self.connections.forget(name);
+        sources::disconnect(&self.ctx, &self.live, name);
     }
 
-    /// What a live database connection registered: the catalog it is addressed by, and its
-    /// schemas **scoped and tagged** against the def's own [`PgStore::schemas`] — `None` for a
-    /// connection that is not a live database.
+    /// What a live connection to a source registered: the catalog it is addressed by, and its
+    /// schemas **scoped and tagged** against the def's own [`SourceDef::schemas`](strata_model::SourceDef::schemas) — `None` for a
+    /// connection that holds no live catalog.
     ///
     /// The one read the data-sources tree, the schema picker and completion share, so no
     /// consumer re-derives visibility from the def. It reads the connect-time enumeration
@@ -1443,11 +1484,12 @@ impl Engine {
     /// registration pass, and *that* is the refresh.
     ///
     /// Synchronous and not on the runtime, because there is no I/O in it.
-    pub fn db_listing(&self, conn: &ConnectionDef) -> Option<(String, Vec<db::SchemaListingView>)> {
-        let Provider::Postgres(pg) = &conn.provider else {
-            return None;
-        };
-        db::listing(&self.databases, conn, pg)
+    pub fn source_listing(
+        &self,
+        conn: &ConnectionDef,
+    ) -> Option<(String, Vec<sources::SchemaListingView>)> {
+        let source = conn.provider.source()?;
+        sources::listing(&self.live, conn, source)
     }
 
     /// Tell the session which schemas `conn` now **shows** — the Schemas… picker's engine half,
@@ -1456,14 +1498,11 @@ impl Engine {
     /// An unqualified name searches what a connection shows, so the session has to
     /// learn the new set as the picker commits it. A no-op for a connection that is not live.
     pub fn show_schemas(&self, conn: &ConnectionDef) {
-        let Provider::Postgres(pg) = &conn.provider else {
-            return;
-        };
-        self.databases.show(&conn.url(), pg);
+        self.live.show(conn);
     }
 
     /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
-    /// connection, its schemas and relations from [`db_listing`](Self::db_listing).
+    /// connection, its schemas and relations from [`source_listing`](Self::source_listing).
     ///
     /// Built here rather than in the editor because both halves are read the way the rest of the
     /// engine reads them: the catalog name off the def, so a connection that has never answered
@@ -1471,7 +1510,7 @@ impl Engine {
     /// enumeration, already scoped. Only a `Live` schema is offered — one the def enables and the
     /// server does not have is a name that cannot resolve, and the tree already says so on its
     /// own row; a schema the connection does not show arrives here empty
-    /// ([`SchemaListingView::relations`](db::SchemaListingView::relations)), so this walk clones
+    /// ([`SchemaListingView::relations`](sources::SchemaListingView::relations)), so this walk clones
     /// what it offers rather than the whole database.
     ///
     /// Free and synchronous, like the listing it reads: it is what lets the completion snapshot
@@ -1482,46 +1521,64 @@ impl Engine {
     ) -> Vec<DatabaseSym> {
         defs.into_iter()
             .filter_map(|def| {
-                let Provider::Postgres(pg) = &def.provider else {
-                    return None;
-                };
-                let name = pg.catalog.trim();
+                def.provider.source()?;
+                let name = def.named();
                 if name.is_empty() {
                     return None;
                 }
                 let schemas = self
-                    .db_listing(def)
+                    .source_listing(def)
                     .map(|(_, schemas)| schemas)
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|s| s.visibility == db::SchemaVisibility::Live)
+                    .filter(|s| s.visibility == sources::SchemaVisibility::Live)
                     .map(|s| SchemaSym {
                         name: s.name,
                         relations: s
                             .relations
                             .into_iter()
                             .map(|r| RelationSym {
-                                view: r.is_view(),
+                                view: r.view,
                                 name: r.name,
                             })
                             .collect(),
                     })
                     .collect();
-                Some(DatabaseSym {
-                    name: name.to_string(),
-                    schemas,
-                })
+                Some(DatabaseSym { name, schemas })
             })
             .collect()
     }
 
-    /// The catalogs database connections have registered, in the spelling they were registered
+    /// Every data source this engine can connect to — what a picker offers, what a catalog row
+    /// badges, and what a connection form draws its rows from.
+    ///
+    /// One read for all three, off the registry itself, so a source an embedder registered is
+    /// offered on the same terms as a shipped one and nothing keeps a second list of them.
+    /// Synchronous and free.
+    pub fn source_registrants(&self) -> Vec<SourceInfo> {
+        self.sources.registrants()
+    }
+
+    /// What the source registered as `kind` makes of `address`.
+    ///
+    /// The kind's own naming rule, reached without the caller knowing whose it is — so the editor
+    /// refuses a mistyped address at the field rather than by a failed connect, and the rule has
+    /// exactly one copy.
+    ///
+    /// # Errors
+    ///
+    /// The address's own refusal, or the sentence saying nothing is registered for `kind`.
+    pub fn check_source_address(&self, kind: &str, address: &str) -> Result<(), String> {
+        self.sources.check_address(kind, address)
+    }
+
+    /// The catalogs data-source connections have registered, in the spelling they were registered
     /// under — the workspace's own excluded, since it is not one.
     ///
     /// Membership, not liveness, in the same sense `connections` is: a catalog is on the list
     /// exactly while its connection is live, which is also exactly while a three-part name can
     /// resolve through it. Synchronous and free — the list is a map this session holds.
-    pub fn database_catalogs(&self) -> Vec<String> {
+    pub fn source_catalogs(&self) -> Vec<String> {
         self.ctx
             .catalog_names()
             .into_iter()
@@ -1667,12 +1724,31 @@ impl Engine {
     }
 
     /// The Hive partition keys under `paths`, outermost first — what the Configure window's
-    /// Hive section offers. Listed through the session's object store, so it answers for
-    /// a bucket as readily as for a local folder.
-    pub async fn detect_partitions(&self, paths: Vec<String>) -> Vec<String> {
+    /// Hive section offers. Listed through the session's object store, so it answers for a bucket
+    /// as readily as for a local folder.
+    ///
+    /// `paths` are as a table def stores them: relative to `connection` where one is named, and to
+    /// `root` otherwise. **Composing the address is this side's**, because the scheme a store is
+    /// registered under is the registry's answer and a caller that composed one would be keeping a
+    /// second copy of it.
+    pub async fn detect_partitions(
+        &self,
+        connection: Option<String>,
+        root: Option<PathBuf>,
+        paths: Vec<String>,
+    ) -> Vec<String> {
+        let prefix = connection
+            .as_deref()
+            .and_then(|named| self.connections.identity(named))
+            .and_then(|identity| store::store_prefix(&identity));
+        let root = root.unwrap_or_default();
+        let resolved: Vec<String> = paths
+            .iter()
+            .map(|path| resolve_source(&root, prefix.as_deref(), path))
+            .collect();
         let ctx = self.ctx.clone();
         self.rt()
-            .spawn(async move { catalog::detect_partitions(&ctx, &paths).await })
+            .spawn(async move { catalog::detect_partitions(&ctx, &resolved).await })
             .await
             .unwrap_or_default()
     }
@@ -1864,7 +1940,7 @@ impl Drop for Engine {
         lc.current.clear();
         self.publish_inflight(&lc);
         drop(lc);
-        self.databases.shutdown(&self.ctx);
+        self.live.shutdown(&self.ctx);
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }
@@ -1971,7 +2047,7 @@ fn build_context(
         .with_runtime_env(rt)
         .with_default_features()
         .with_catalog_list(Arc::new(StrataCatalogList::default()))
-        .with_optimizer_rules(db::optimizer_rules())
+        .with_optimizer_rules(sources::sql::optimizer_rules())
         .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
         .build();
     let mut ctx = SessionContext::new_with_state(state);
@@ -2005,9 +2081,8 @@ fn registered_function(ctx: &SessionContext, name: &str) -> bool {
 
 /// The catalog + schema **we own** — see [`build_context`].
 ///
-/// The catalog's name is `strata-model`'s, because a database connection's own catalog name may
-/// not be it ([`strata_model::PgStore::check_catalog`]) and a name written down twice is a name
-/// that can disagree.
+/// The catalog's name is `strata-model`'s, because a connection's own catalog name may not be it
+/// ([`strata_model::check_catalog`]) and a name written down twice is a name that can disagree.
 const CATALOG: &str = strata_model::WORKSPACE_CATALOG;
 const SCHEMA: &str = "public";
 
@@ -3766,18 +3841,18 @@ mod read_options_tests {
 #[cfg(test)]
 mod remote_catalog_tests {
     use super::*;
-    use crate::providers::fake_database;
+    use crate::providers::fake_source;
 
     #[tokio::test]
     async fn the_workspace_catalog_is_not_a_database() {
         let engine = Engine::builder().build();
         assert!(
-            engine.database_catalogs().is_empty(),
+            engine.source_catalogs().is_empty(),
             "a project with no database connection has no database catalogs"
         );
-        fake_database(&engine.ctx, "Sales", &["orders"]);
+        fake_source(&engine.ctx, "Sales", &["orders"]);
         assert_eq!(
-            engine.database_catalogs(),
+            engine.source_catalogs(),
             vec!["Sales".to_string()],
             "in the spelling it was registered under, and without the workspace's own"
         );
@@ -3800,7 +3875,7 @@ mod remote_catalog_tests {
     #[tokio::test]
     async fn describe_remote_answers_for_a_relation_and_nothing_else() {
         let engine = Engine::builder().build();
-        fake_database(&engine.ctx, "pg", &["orders"]);
+        fake_source(&engine.ctx, "pg", &["orders"]);
 
         let described = engine
             .describe_remote("pg.public.orders".into())

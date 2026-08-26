@@ -220,7 +220,7 @@ registration, so there is no relation to resolve while typing — see §10.)
 `Engine::database_syms` and carried on the snapshot like everything else. Its two
 halves come from two places on purpose: the **catalog name** is the connection's own
 def, so a connection that has never answered still offers the name a query has to say,
-while the **schemas and relations** are `Engine::db_listing`'s scoped-and-tagged
+while the **schemas and relations** are `Engine::source_listing`'s scoped-and-tagged
 answer — the one visibility source the tree and the schema picker read, so a
 non-enabled schema is absent from the offer without anything here re-deriving what
 "enabled" means. (Absent, not refused: a typed query naming one still resolves and
@@ -230,7 +230,7 @@ where that is said. A catalog name ranks at the secondary tier at relation-targe
 positions, behind everything that can stand alone: accepting it leaves a name that
 needs a `.` after it, which is what its `database` detail says.
 
-**Nothing in this reaches the network.** `db_listing` is the connect-time enumeration
+**Nothing in this reaches the network.** `source_listing` is the connect-time enumeration
 held beside the pool, so the snapshot carries plain data and §1's "synchronous by
 construction" is untouched. A listing changes only at connect and disconnect, both of
 which bump the catalog epoch the snapshot is rebuilt on — so there is no warming step

@@ -83,7 +83,7 @@ impl PreparedSym {
 /// def — so it is offered whether or not the connection is live, exactly as the tree draws a
 /// collapsed database node it has never reached. The [`schemas`](Self::schemas) are the
 /// connect-time enumeration, scoped by the def's enabled set
-/// ([`Engine::db_listing`](crate::Engine::db_listing), the one visibility source), so a
+/// ([`Engine::source_listing`](crate::Engine::source_listing), the one visibility source), so a
 /// connection that has not answered offers its name and nothing under it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DatabaseSym {

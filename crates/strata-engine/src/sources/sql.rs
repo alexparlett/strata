@@ -1,18 +1,17 @@
-//! **The federated table provider, built one level down so a rewrite can ride it** (DB-08).
+//! Reading a SQL-speaking source: the federation stack, assembled for a source that composes it.
 //!
-//! [`table_provider`] is `PostgresTableFactory::table_provider` with its three steps written out —
-//! the `SqlTable`, the Postgres unparser dialect, the federation wrapper — because
-//! `datafusion-table-providers` leaves every one of `datafusion-federation`'s rewrite hooks at its
-//! `None` default (`datafusion-federation#129` is the open issue asking for exactly this pattern),
-//! and the hooks are on the **executor** the federation provider is built over. Nothing about the
-//! provider changes: same dialect, same wrapper, same lazily-built-and-cached provider per
-//! relation, and [`DbSchemaProvider`](super::DbSchemaProvider) remains the one construction site.
+//! A source builds its `SqlTable`, describes it in a [`SqlSpec`] and hands that to [`federated`];
+//! what comes back is a provider whose scans leave as one statement in the source's own SQL. A
+//! source that speaks something else never names this module, and
+//! [`SourceCatalog`](super::source::SourceCatalog) demands nothing of it.
 //!
-//! What is added is [`PgExecutor`], which is the crate's own executor plus the two things only
-//! Strata can supply: the [`json`] rewrite in front of the statement that leaves, and the
-//! connection's name in front of the error that comes back.
-//!
-//! And [`optimizer_rules`], which is the crate's rule list with the exemption it is missing.
+//! The stack is assembled a level below `datafusion-table-providers`' own factory, which leaves
+//! every one of `datafusion-federation`'s rewrite hooks at its `None` default
+//! (`datafusion-federation#129` asks for exactly this pattern). Those hooks are on the executor,
+//! so [`AnalyzedExecutor`] is where the source's AST rewrite reaches the statement going out, its
+//! recoding reaches the error coming back, and the connection's identity is stamped as the fusion
+//! key — stamped here, because a source that forgot it would federate two connections' relations
+//! into one statement sent to whichever executor won.
 
 use std::sync::Arc;
 
@@ -26,25 +25,22 @@ use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
-use datafusion::sql::unparser::dialect::{Dialect, PostgreSqlDialect};
-use datafusion::sql::TableReference;
+use datafusion::sql::unparser::dialect::Dialect;
 use datafusion_federation::sql::{
-    AstAnalyzer, LogicalOptimizer, RemoteTableRef, SQLExecutor, SQLFederationProvider,
-    SQLTableSource,
+    AstAnalyzer, LogicalOptimizer, RemoteTableRef, SQLFederationProvider, SQLTableSource,
 };
 use datafusion_federation::{default_optimizer_rules, FederatedTableProviderAdaptor};
-use datafusion_table_providers_common::sql::sql_provider_datafusion::SqlTable;
-use datafusion_table_providers_postgres::pool::PostgresConnectionPool;
-use datafusion_table_providers_postgres::DynPostgresConnectionPool;
 use futures::TryStreamExt;
 
-use super::json;
+use crate::sources::source::{Located, SourceCatalog};
+
+pub use datafusion_federation::sql::SQLExecutor;
 
 /// The name `datafusion-federation` gives its rule, which is how it is found in the list.
 const FEDERATION_RULE: &str = "federation_optimizer_rule";
 
 /// DataFusion's optimizer rules with federation among them — the crate's own list, with its
-/// federation rule wrapped so a **write** node is never federated whole (DB-12).
+/// federation rule wrapped so a **write** node is never federated whole.
 ///
 /// **Panics if the rule is not in the list**, because the alternative is worse: an unwrapped list
 /// is a working engine that has quietly lost the exemption, and what it loses is a CTAS or a
@@ -70,22 +66,19 @@ pub(crate) fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
 /// The federation rule, kept off a node that **writes**: its input is federated and the node is
 /// rebuilt around the result.
 ///
-/// A `CopyTo` or a `Dml` at the root of a plan whose every scan is one connection's — a CTAS
-/// spooling a remote query into an internal table, a typed `COPY … TO` reading one, an `INSERT`
-/// from one — is federated whole by the crate, and then unparsed, and `plan_to_sql` has no arm for
-/// a write. What comes back is several hundred characters of `LogicalPlan` debug where the rows
-/// should be.
+/// A `CopyTo` or a `Dml` at the root of a plan whose every scan is one connection's is federated
+/// whole by the crate, and then unparsed, and `plan_to_sql` has no arm for a write. What comes
+/// back is several hundred characters of `LogicalPlan` debug where the rows should be.
 ///
 /// The crate already draws this line and stops two nodes short of it: `LogicalPlan::Analyze` is
 /// exempted in the same recursion for the same reason, with "cannot be converted to SQL by the
 /// Unparser" written beside it. This adds the nodes the exemption is missing, from outside, and is
 /// the whole of `UPSTREAM_REPORTS.md`'s `datafusion-federation` entry.
 ///
-/// **`Dml` is named even though no `Dml` reaches the optimizer today** — both `INSERT` arms drive
-/// the target's own sink over the DML's input ([`sink::append_rows`](crate::sink::append_rows)),
-/// which is the better shape for its own reasons. The predicate here is "a node that writes", and
-/// leaving one of the two out would make it a rule that happens to hold rather than one that does:
-/// whatever plans a `Dml` next would meet DB-12 again, as a page of debug text.
+/// **`Dml` is named even though the `INSERT` arms reach no optimizer**, driving the target's own
+/// sink over the DML's input instead ([`sink::append_rows`](crate::sink::append_rows)). The
+/// predicate is "a node that writes", and leaving one of the two out would make it a rule that
+/// happens to hold rather than one that does.
 #[derive(Debug)]
 struct WritesStayHome(Arc<dyn OptimizerRule + Send + Sync>);
 
@@ -117,69 +110,95 @@ impl OptimizerRule for WritesStayHome {
     }
 }
 
-/// A federated provider for one remote relation, reading through `pool` and answering for the
-/// connection registered as `connection`.
-pub(super) async fn table_provider(
-    pool: &Arc<PostgresConnectionPool>,
-    connection: &str,
-    relation: TableReference,
-) -> Result<Arc<dyn TableProvider>, Box<dyn std::error::Error + Send + Sync>> {
-    let cloned = Arc::clone(pool);
-    let pool: Arc<DynPostgresConnectionPool> = cloned;
-    let table = Arc::new(
-        SqlTable::new("postgres", &pool, relation)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-            .with_dialect(Arc::new(PostgreSqlDialect {})),
-    );
-    let executor = Arc::new(PgExecutor {
-        inner: Arc::clone(&table) as Arc<dyn SQLExecutor>,
-        connection: connection.to_string(),
+/// Builds a source's AST rewrite.
+///
+/// A factory rather than the rewrite itself: `AstAnalyzer` is a `FnMut` taken by value every time
+/// a plan is unparsed, so there is one per statement rather than one per provider.
+pub type AstRewrite = Arc<dyn Fn() -> AstAnalyzer + Send + Sync>;
+
+/// What a SQL-speaking source brings to [`federated`].
+///
+/// The fields come from one object in practice, a `SqlTable` being both provider and executor,
+/// and are named separately because nothing here requires that.
+pub struct SqlSpec {
+    /// The unparser dialect the plan is rendered in: the source's SQL, not DataFusion's.
+    pub dialect: Arc<dyn Dialect>,
+    /// What sends the rendered statement and streams back what it answers.
+    pub executor: Arc<dyn SQLExecutor>,
+    /// The provider a scan the federation rule does not take falls back to, which a mixed join's
+    /// local side reads through.
+    pub provider: Arc<dyn TableProvider>,
+    /// The source's own rewrite of the statement about to leave, where it has one.
+    ///
+    /// What a dialect override cannot express: a UDF call unparses by name, and a source that
+    /// spells the same operation as an operator expression needs the shape changed, not the word.
+    pub analyzer: Option<AstRewrite>,
+}
+
+/// Returns the federated read provider for one relation.
+///
+/// The whole body of a SQL-speaking source's
+/// [`table_provider`](super::source::SourceCatalog::table_provider).
+pub fn federated(
+    source: Arc<dyn SourceCatalog>,
+    spec: SqlSpec,
+    at: &Located,
+) -> Arc<dyn TableProvider> {
+    let executor = Arc::new(AnalyzedExecutor {
+        inner: spec.executor,
+        dialect: spec.dialect,
+        analyzer: spec.analyzer,
+        source,
+        connection: at.connection.clone(),
+        context: at.identity.clone(),
     });
     let source = Arc::new(SQLTableSource::new_with_schema(
         Arc::new(SQLFederationProvider::new(executor)),
-        RemoteTableRef::from(table.table_reference.clone()),
-        table.schema(),
+        RemoteTableRef::from(at.relation.clone()),
+        spec.provider.schema(),
     ));
-    Ok(Arc::new(FederatedTableProviderAdaptor::new_with_provider(
-        source, table,
-    )))
+    Arc::new(FederatedTableProviderAdaptor::new_with_provider(
+        source,
+        spec.provider,
+    ))
 }
 
-/// The crate's executor, with the connection's name kept beside it.
+/// The source's executor, with the things the assembly owes every source that composes it.
 ///
-/// Held as `Arc<dyn SQLExecutor>` rather than the concrete `SqlTable`, whose generic parameters are
-/// the pooled connection and the driver's parameter type: nothing here needs to name them, and a
-/// signature that did would tie this module to `tokio-postgres`.
-///
-/// Every method delegates. The two that do not are the point: an [`ast_analyzer`](Self) that
-/// rewrites the statement about to leave, and an [`execute`](Self) that names the connection in the
-/// one failure the server can report that the user cannot act on as written.
-struct PgExecutor {
+/// Held as `Arc<dyn SQLExecutor>` rather than a concrete provider type, whose generic parameters
+/// are a pooled connection and a driver's parameter type: a signature naming them would tie this
+/// module to one driver. Every method delegates but the four that are the point.
+struct AnalyzedExecutor {
     inner: Arc<dyn SQLExecutor>,
+    dialect: Arc<dyn Dialect>,
+    analyzer: Option<AstRewrite>,
+    source: Arc<dyn SourceCatalog>,
+    /// The catalog the connection registered under — what a refusal names.
     connection: String,
+    /// [`Located::identity`], as the fusion key.
+    context: String,
 }
 
 #[async_trait]
-impl SQLExecutor for PgExecutor {
+impl SQLExecutor for AnalyzedExecutor {
     fn name(&self) -> &str {
         self.inner.name()
     }
 
-    /// **Delegated, and load-bearing.** This is what decides whether two relations federate into
-    /// one statement, so the wrapper has to answer exactly as the pool does.
+    /// The connection's identity, which is what decides whether two relations federate into one
+    /// statement. Two connections to one server may authenticate as different roles and see
+    /// different relations, so fusing across them sends a statement to whichever executor won.
     fn compute_context(&self) -> Option<String> {
-        self.inner.compute_context()
+        Some(self.context.clone())
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        self.inner.dialect()
+        Arc::clone(&self.dialect)
     }
 
-    /// **Delegated even though the crate answers `None` today.** It is the third rewrite hook, and
-    /// a wrapper that answers for the executor has to answer for all of them: taking the trait's
-    /// default here would silently drop a logical rewrite a later `datafusion-table-providers`
-    /// adds, with nothing to fail.
+    /// Delegated, because a wrapper that answers for an executor has to answer for all three
+    /// rewrite hooks: taking the trait's default would silently drop a rewrite the wrapped
+    /// executor supplies.
     ///
     /// Note what it is *not* good for: the plan it receives is already wrapped in the federation
     /// crate's own extension node, so an optimizer rule run here sees an opaque root and rewrites
@@ -190,10 +209,7 @@ impl SQLExecutor for PgExecutor {
     }
 
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        let connection = self.connection.clone();
-        Some(Box::new(move |statement| {
-            json::push_down(statement, &connection)
-        }))
+        self.analyzer.as_ref().map(|rewrite| rewrite())
     }
 
     fn execute(
@@ -202,17 +218,17 @@ impl SQLExecutor for PgExecutor {
         schema: SchemaRef,
         filters: &[Arc<dyn PhysicalExpr>],
     ) -> DfResult<SendableRecordBatchStream> {
+        let source = Arc::clone(&self.source);
         let connection = self.connection.clone();
         let stream = self.inner.execute(query, Arc::clone(&schema), filters)?;
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
-            stream.map_err(move |e| {
-                let raw = e.to_string();
-                match json::lacks_the_name(&raw) {
-                    true => DataFusionError::Execution(json::remote_refusal(&raw, &connection)),
-                    false => e,
-                }
-            }),
+            stream.map_err(
+                move |e| match source.remote_refusal(&e.to_string(), &connection) {
+                    Some(reworded) => DataFusionError::Execution(reworded),
+                    None => e,
+                },
+            ),
         )))
     }
 

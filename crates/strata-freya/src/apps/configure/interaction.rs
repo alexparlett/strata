@@ -48,6 +48,7 @@ fn project(root: &Path, connected: bool) -> ProjectState {
             false => Vec::new(),
             true => vec![ConnectionDef {
                 address: "acme-lake".into(),
+                name: "acme_lake".into(),
                 provider: Provider::S3(S3Store {
                     region: "eu-west-2".into(),
                     ..Default::default()
@@ -211,7 +212,7 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
 
     assert_eq!(
         ctx.draft.peek().connection.as_deref(),
-        Some("s3://acme-lake"),
+        Some("acme_lake"),
         "the provider's first connection is picked for you"
     );
     assert!(
@@ -220,8 +221,8 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
         texts(&runner)
     );
     assert!(
-        shows(&runner, "s3://acme-lake/"),
-        "the box wears the bucket its path is written against: {:?}",
+        shows(&runner, "acme_lake"),
+        "the row names the connection its path is written against: {:?}",
         texts(&runner)
     );
 
@@ -234,7 +235,7 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
         .find(|t| t.def.name == "events")
         .expect("the table was written")
         .def;
-    assert_eq!(def.connection.as_deref(), Some("s3://acme-lake"));
+    assert_eq!(def.connection.as_deref(), Some("acme_lake"));
     assert_eq!(
         def.sources,
         ["events/2024/"],
@@ -284,7 +285,7 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
     );
     assert_eq!(
         ctx.draft.peek().connection.as_deref(),
-        Some("s3://acme-lake"),
+        Some("acme_lake"),
         "the choice is remembered, so coming back does not ask again"
     );
     assert_eq!(

@@ -1032,7 +1032,7 @@ mod tests {
     /// total, outside the window, and outside 'matching' — a narrowed listing that dropped them
     /// would read as a project with no database connections.
     #[test]
-    fn database_catalogs_are_named_beside_the_entries() {
+    fn source_catalogs_are_named_beside_the_entries() {
         let entries = vec![CatalogEntry::Table {
             name: "people".into(),
             format: "csv".into(),

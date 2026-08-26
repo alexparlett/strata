@@ -25,8 +25,8 @@ pub use chart::{
     ChartSeries, ChartSort, ChartX, Trend,
 };
 pub use connection::{
-    check_catalog_name, parse_pg_address, ConnectionDef, GcsAuth, GcsStore, PgAddress, PgPassword,
-    PgSslMode, PgStore, Provider, ProviderId, S3Auth, S3Store, WORKSPACE_CATALOG,
+    check_catalog, check_catalog_name, mint_free_name, mint_name, ConnectionDef, GcsAuth, GcsStore,
+    Provider, ProviderId, S3Auth, S3Store, SourceDef, WORKSPACE_CATALOG,
 };
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;

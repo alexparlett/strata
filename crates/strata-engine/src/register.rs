@@ -27,7 +27,8 @@ use std::path::Path;
 use futures::stream::{self, StreamExt};
 use strata_model::{ConnectionDef, TableDef};
 
-use crate::{Engine, TableMeta, TableSpec, ViewMeta};
+use crate::store::store_prefix;
+use crate::{Connections, Engine, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
 /// How many tables register at once ([`register_pass`]'s table phase).
@@ -46,14 +47,15 @@ pub enum RegOutcome {
     /// A connection's object store or database catalog went in, or the connection could not
     /// describe one ([`Engine::connect`]). Nothing the *store* learns is reported here — an
     /// object store is registered, not inferred, and a database's enumeration is read back
-    /// through [`Engine::db_listing`] rather than folded onto a row — so the payload is the
+    /// through [`Engine::source_listing`] rather than folded onto a row — so the payload is the
     /// answer itself.
     Connection {
-        /// The connection's identity: [`ConnectionDef::url`], **not** its bucket. The bucket
-        /// alone is not unique — `s3://lake` and `gs://lake` are two connections and two
-        /// registry keys — so a caller folding these answers onto rows by bucket would land
-        /// both on whichever it found first and leave the other unanswered forever.
-        url: String,
+        /// The connection's own **name**, **not** its address. An address alone is not unique —
+        /// two connections may read one bucket, or reach one server as two roles — so a caller
+        /// folding these answers onto rows by address would land both on whichever it found
+        /// first and leave the other unanswered forever. It is also what every consumer addresses
+        /// a row by, so anything else here settles nothing and the row waits for good.
+        name: String,
         result: Result<(), String>,
     },
     Table {
@@ -66,22 +68,34 @@ pub enum RegOutcome {
     },
 }
 
-/// The engine-facing projection of one table def: sources resolved through
-/// [`resolve_source`] — composed onto the def's **connection** where it names one (W7 · 04),
-/// and otherwise joined onto the project folder — with everything else carried as stored. One
-/// copy of the mapping, shared by the app's catalog passes and [`register_project`].
+/// The engine-facing projection of one table def: sources resolved through [`resolve_source`] —
+/// composed onto the store its connection registered under where it names one, and otherwise
+/// joined onto the project folder — with everything else carried as stored. One copy of the
+/// mapping, shared by the app's catalog passes and [`register_project`].
+///
+/// **A table names its connection, and only a registry can say what that connection is.** The def
+/// carries a name, the store is registered under `scheme://address`, and nothing about the first
+/// yields the second — so this takes the registry rather than a string, which is what stops a
+/// caller handing over the name and getting a path with no scheme in it. `None` for a name the
+/// project has no connection for: the sources then compose as written and registration fails with
+/// DataFusion's "No suitable object store", which is the honest answer.
 ///
 /// A remote path needs **nothing** of the engine beyond this: the connection's object store is
 /// already registered under that same URL by the time any table registers (connections are
 /// [`register_pass`]'s first phase), so `s3://acme-lake/events/` is a `ListingTableUrl` the
 /// session can already resolve.
-pub fn table_spec(root: &Path, def: &TableDef) -> TableSpec {
+pub fn table_spec(root: &Path, def: &TableDef, connections: &Connections) -> TableSpec {
+    let prefix = def
+        .connection
+        .as_deref()
+        .and_then(|named| connections.identity(named))
+        .and_then(|identity| store_prefix(&identity));
     TableSpec {
         name: def.name.clone(),
         paths: def
             .sources
             .iter()
-            .map(|s| resolve_source(root, def.connection.as_deref(), s))
+            .map(|s| resolve_source(root, prefix.as_deref(), s))
             .collect(),
         format: def.format.clone(),
         partitions: def.partition_cols.clone(),
@@ -158,9 +172,9 @@ pub async fn register_pass(
     mut settled: impl FnMut(RegOutcome),
 ) {
     for conn in connections {
-        let url = conn.url();
+        let name = conn.named();
         let result = engine.connect(conn).await;
-        settled(RegOutcome::Connection { url, result });
+        settled(RegOutcome::Connection { name, result });
     }
 
     let mut registrations = stream::iter(tables)
@@ -217,10 +231,11 @@ pub async fn register_project(
     settled: impl FnMut(RegOutcome),
 ) {
     let connections = defs.connections.clone();
+    let known = Connections::of(&connections);
     let tables = defs
         .tables
         .iter()
-        .map(|def| table_spec(root, def))
+        .map(|def| table_spec(root, def, &known))
         .collect();
     let views = defs
         .views
@@ -232,6 +247,7 @@ pub async fn register_project(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};
@@ -277,11 +293,11 @@ mod tests {
         out
     }
 
-    /// Each outcome as `(identity, did it settle Ok)`, in the order the pass answered.
+    /// Each outcome as `(name, did it settle Ok)`, in the order the pass answered.
     fn names(out: &[RegOutcome]) -> Vec<(&str, bool)> {
         out.iter()
             .map(|o| match o {
-                RegOutcome::Connection { url, result } => (url.as_str(), result.is_ok()),
+                RegOutcome::Connection { name, result } => (name.as_str(), result.is_ok()),
                 RegOutcome::Table { name, result } => (name.as_str(), result.is_ok()),
                 RegOutcome::View { name, result } => (name.as_str(), result.is_ok()),
             })
@@ -450,10 +466,11 @@ mod tests {
     /// Both halves are load-bearing. A source path under a bucket resolves through the object
     /// store registered for it, so a table that registers before its connection fails on a def
     /// that is perfectly correct — an ordering bug that would look exactly like a broken table.
-    /// And a bucket is not unique across providers: the two `lake` defs below are two
-    /// connections and two registry keys, so an outcome carrying only `"lake"` would be
-    /// indistinguishable between them, and a caller folding by it would answer one row twice
-    /// and leave the other waiting forever.
+    /// And an address is not unique across providers: the two `lake` defs below are two
+    /// connections over one bucket, so an outcome carrying only the address would be
+    /// indistinguishable between them, and a caller folding by it would answer one row twice and
+    /// leave the other waiting forever. What tells them apart is the **name**, which is also what
+    /// every consumer looks a row up by — so that is what an outcome carries.
     ///
     /// **Every connection here is one that is refused locally**, and that is deliberate.
     /// `Engine::connect` now asks the bucket whether it answers (`store::reachable`), so a def
@@ -462,16 +479,17 @@ mod tests {
     /// buckets nobody owns, and fail on a plane. Each of the three is refused before any socket
     /// opens (a blank region twice, a blank service-account path once), which costs the test
     /// nothing it was actually asserting: the subject is *order* and *identity*, and an outcome
-    /// carries its URL whether it succeeded or not. `("local", true)` is still what proves the
+    /// carries its name whether it succeeded or not. `("local", true)` is still what proves the
     /// pass carried on to the table phase after three refusals.
     #[tokio::test]
-    async fn connections_settle_first_and_each_under_its_own_url() {
+    async fn connections_settle_first_and_each_under_its_own_name() {
         let root = scratch("connections");
         fs::write(root.join("local.csv"), "id\n1\n").unwrap();
         let defs = ProjectDefs {
             connections: vec![
                 ConnectionDef {
                     address: "lake".into(),
+                    name: "lake_s3".into(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
@@ -480,6 +498,7 @@ mod tests {
                 },
                 ConnectionDef {
                     address: "lake".into(),
+                    name: "lake_gcs".into(),
                     provider: Provider::Gcs(GcsStore {
                         auth: GcsAuth::ServiceAccount {
                             path: String::new(),
@@ -489,6 +508,7 @@ mod tests {
                 },
                 ConnectionDef {
                     address: "no-region".into(),
+                    name: "elsewhere".into(),
                     provider: Provider::S3(S3Store {
                         auth: S3Auth::Anonymous,
                         ..Default::default()
@@ -505,43 +525,63 @@ mod tests {
         assert_eq!(
             names(&out),
             vec![
-                ("s3://lake", false),
-                ("gs://lake", false),
-                ("s3://no-region", false),
+                ("lake_s3", false),
+                ("lake_gcs", false),
+                ("elsewhere", false),
                 ("local", true)
             ],
             "{out:?}"
         );
     }
 
-    /// **A def that names a connection is composed onto that bucket, never onto the project
-    /// folder** (W7 · 04). The engine half needs nothing: the store went in under this very URL
-    /// in the pass's first phase, so what reaches `register` is an address that session can
+    /// **A def that names a connection is composed onto that connection's store, never onto the
+    /// project folder.** The engine half needs nothing further: the store went in under that same
+    /// URL in the pass's first phase, so what reaches `register` is an address the session can
     /// already resolve.
     ///
-    /// The failure this pins is silent rather than loud — `s3://` is not an absolute path, so
-    /// the local rule turns a bucket-relative source into `<project>/events/2024/`, which
-    /// registers as a missing folder on the user's own disk and says nothing about a bucket.
+    /// The def carries the connection's **name**, so the lookup is the point — driven here
+    /// through a real registry rather than by handing the composition a pre-made identity, which
+    /// is exactly how this went green while a real bucket read `//acme-lake/events/`. A name the
+    /// registry does not hold composes nothing, which is what makes registration fail loudly.
+    ///
+    /// The failure the local half pins is silent rather than loud: a bucket-relative source under
+    /// the local rule becomes `<project>/events/2024/`, a missing folder on the user's own disk
+    /// that says nothing about a bucket.
     #[test]
     fn a_table_over_a_connection_resolves_against_its_bucket() {
+        let known = Connections::of(&[ConnectionDef {
+            address: "acme-lake".into(),
+            name: "acme_lake".into(),
+            provider: Provider::S3(S3Store::default()),
+            client_config: BTreeMap::new(),
+        }]);
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::from_name("parquet"),
-            connection: Some("s3://acme-lake".into()),
+            connection: Some("acme_lake".into()),
             sources: vec!["events/2024/**/*.parquet".into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         };
         assert_eq!(
-            table_spec(Path::new("/proj"), &def).paths,
+            table_spec(Path::new("/proj"), &def, &known).paths,
             ["s3://acme-lake/events/2024/**/*.parquet"]
+        );
+        let stranded = TableDef {
+            connection: Some("gone".into()),
+            ..def.clone()
+        };
+        assert_eq!(
+            table_spec(Path::new("/proj"), &stranded, &known).paths,
+            ["/proj/events/2024/**/*.parquet"],
+            "a name the project has no connection for composes nothing remote"
         );
         let local = TableDef {
             connection: None,
             ..def
         };
         assert_eq!(
-            table_spec(Path::new("/proj"), &local).paths,
+            table_spec(Path::new("/proj"), &local, &Connections::default()).paths,
             ["/proj/events/2024/**/*.parquet"]
         );
     }

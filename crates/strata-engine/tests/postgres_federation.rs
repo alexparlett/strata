@@ -21,8 +21,18 @@
 //! **Deliberately not `#[ignore]`d**, for the reason the MinIO test is not. One test, sequential
 //! phases, container held for the duration: a second `#[tokio::test]` would race this one for the
 //! single cloud worker.
+//!
+//! **This is the SQL ring's conformance run.** Everything it drives past the fixture is the
+//! generic path — connect, enumerate, resolve, federate, write, dispatch — reached through
+//! `DataSource` and the registry, so a source of your own registered under its own kind is
+//! exercised by the same phases: point the fixture at your server and change the kind the def
+//! names.
+//!
+//! Gated on the `postgres` feature, because the source it drives rides that feature: an engine
+//! built without it has no `PostgreSQL` in its tree, and neither does this.
+#![cfg(feature = "postgres")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::Path;
 use std::sync::Once;
@@ -34,16 +44,17 @@ use keyring_core::mock;
 use strata_arrow::column_info;
 use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
-use strata_core::secret::{Secret, SecretRef};
-use strata_engine::db::{SchemaVisibility, PG_PASSWORD};
+
 use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::{register_project, table_spec, RegOutcome};
+use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
+use strata_engine::sources::{migrate_secrets, put_secret, SchemaVisibility};
 use strata_engine::{
-    sql, stopped_on_purpose, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
+    sql, stopped_on_purpose, Connections, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
 };
 use strata_model::{
-    Cell, ConnectionDef, CsvRead, PgPassword, PgSslMode, PgStore, Provider, SourceFormat, StatKey,
-    TableDef, TableOrigin, ViewDef,
+    Cell, ConnectionDef, CsvRead, Provider, SourceDef, SourceFormat, StatKey, TableDef,
+    TableOrigin, ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -143,12 +154,14 @@ async fn seed(port: u16) {
 fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
     ConnectionDef {
         address: format!("127.0.0.1:{port}/{DATABASE}"),
-        provider: Provider::Postgres(PgStore {
-            catalog: catalog.into(),
-            user: USER.into(),
-            sslmode: PgSslMode::Disable,
-            sslrootcert: String::new(),
-            password: PgPassword::Keystore,
+        name: catalog.into(),
+        provider: Provider::Source(SourceDef {
+            kind: "postgres".into(),
+            config: BTreeMap::from([
+                ("user".to_string(), USER.to_string()),
+                ("sslmode".to_string(), "disable".to_string()),
+            ]),
+            secrets: BTreeSet::from([PASSWORD_KEY.to_string()]),
             schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
             read_only: true,
         }),
@@ -160,8 +173,8 @@ fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
 /// re-connect with this is exactly the user turning the toggle off.
 fn writable(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
     let mut def = connection(port, catalog, schemas);
-    if let Provider::Postgres(pg) = &mut def.provider {
-        pg.read_only = false;
+    if let Provider::Source(source) = &mut def.provider {
+        source.read_only = false;
     }
     def
 }
@@ -178,11 +191,7 @@ fn mocked_keystore() {
 /// File `value` under the slot `conn` derives, exactly as the connection editor will — the
 /// def stores no reference, so this is the only place the id exists.
 fn store_password(conn: &ConnectionDef, value: &str) {
-    let key = SecretRef::derived(PG_PASSWORD, &conn.url());
-    match Secret::new(value) {
-        Some(secret) => key.put(&secret).expect("store the password"),
-        None => key.delete().expect("clear the password"),
-    }
+    put_secret(conn, PASSWORD_KEY, value).expect("this machine's keystore answers");
 }
 
 /// Run `sql` and hand back its first page as text, row by row.
@@ -229,7 +238,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .await
         .expect_err("no password is stored for it");
     assert!(
-        why.contains("No password is stored on this machine") && why.contains(&missing.url()),
+        why.contains("No password is stored on this machine") && why.contains(&missing.named()),
         "the refusal names the machine and the connection: {why}"
     );
 
@@ -267,7 +276,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
     assert!(why.contains("strata"), "{why}");
 
     assert!(
-        engine.db_listing(&conn).is_none(),
+        engine.source_listing(&conn).is_none(),
         "a refused connection registers nothing"
     );
 
@@ -321,7 +330,7 @@ async fn enumeration(engine: &Engine, port: u16) {
     );
 
     let (catalog, listing) = engine
-        .db_listing(&connection(port, CATALOG, &["public", "warehouse"]))
+        .source_listing(&connection(port, CATALOG, &["public", "warehouse"]))
         .expect("a live database has a listing");
     assert_eq!(catalog, CATALOG);
     assert_eq!(
@@ -342,13 +351,13 @@ async fn enumeration(engine: &Engine, port: u16) {
             .map(|schema| schema
                 .relations
                 .iter()
-                .map(|r| (r.name.as_str(), r.relkind.as_str()))
+                .map(|r| (r.name.as_str(), r.view))
                 .collect::<Vec<_>>()),
         Some(vec![
-            ("big_orders", "v"),
-            ("customers", "r"),
-            ("events", "r"),
-            ("orders", "r")
+            ("big_orders", true),
+            ("customers", false),
+            ("events", false),
+            ("orders", false)
         ]),
         "a remote view is listed as one, which pg_tables could not have said"
     );
@@ -686,6 +695,7 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
+            &Connections::default(),
         ))
         .await
         .expect("a local file table");
@@ -922,6 +932,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
+            &Connections::default(),
         ))
         .await
         .expect("a local table with a JSON text column");
@@ -943,9 +954,24 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     );
 }
 
-/// **A reconnect replaces, and a disconnect stops resolving** — a phase of the test above.
+/// **A reconnect replaces, a rename does not, and a disconnect stops resolving** — a phase of the
+/// test above.
+///
+/// The middle one is the one worth pinning. `Live` is keyed by the connection's **name**, so a
+/// rename is a new key rather than a displacement, and it cannot be otherwise: two connections
+/// may share an identity and differ only by name, so nothing the engine can see tells a renamed
+/// connection from a second one to the same server. Retiring the old catalog is therefore the
+/// renaming gesture's own `Engine::disconnect`, which is what the connection editor's Save makes.
+///
+/// The rename goes through [`migrate_secrets`] rather than storing a second password, because
+/// that is what a rename *is* now: the keystore slot is derived from the connection's name, so
+/// moving the name moves the entry, and a rename that skipped this funnel would leave the
+/// connection unable to log in. Last phase of the test, so the old name's empty slot is nobody's
+/// problem afterwards.
 async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
+    let was = connection(port, CATALOG, &["public"]);
     let renamed = connection(port, "warehouse", &["public"]);
+    migrate_secrets(&was, &renamed).expect("this machine's keystore answers");
     engine
         .connect(renamed.clone())
         .await
@@ -963,16 +989,31 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
                 200,
             )
             .await
-            .is_err(),
-        "the name it was registered under before must stop resolving"
+            .is_ok(),
+        "the old name is still registered until something retires it: two connections may share \
+         an identity, so nothing the engine sees tells a rename from a second connection"
     );
 
-    engine.disconnect(&renamed.url());
+    engine.disconnect(&was.named());
     assert!(
         engine
             .query(
                 WsId(1),
                 RunTag(16),
+                format!("SELECT id FROM {CATALOG}.public.orders"),
+                200,
+            )
+            .await
+            .is_err(),
+        "and retiring it is the renaming gesture's own call, which is what Save makes"
+    );
+
+    engine.disconnect(&renamed.named());
+    assert!(
+        engine
+            .query(
+                WsId(1),
+                RunTag(17),
                 "SELECT id FROM warehouse.public.orders".to_string(),
                 200,
             )
@@ -981,7 +1022,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "a forgotten connection's catalog must stop resolving"
     );
     assert!(
-        engine.db_listing(&renamed).is_none(),
+        engine.source_listing(&renamed).is_none(),
         "…and it is no longer a live database"
     );
 }
@@ -1310,7 +1351,7 @@ async fn remote_writes(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let (_, listing) = engine
-        .db_listing(&conn)
+        .source_listing(&conn)
         .expect("a live database has a listing");
     assert!(
         listing
@@ -1389,7 +1430,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
     assert_eq!(report.count, None);
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
-    let (_, listing) = engine.db_listing(&conn).expect("a live listing");
+    let (_, listing) = engine.source_listing(&conn).expect("a live listing");
     assert!(
         listing
             .iter()
@@ -1397,7 +1438,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
             .is_some_and(|schema| schema
                 .relations
                 .iter()
-                .any(|r| r.name == "barrier_view" && r.is_view())),
+                .any(|r| r.name == "barrier_view" && r.view)),
         "the tree sees the view, as a view, with no manual refresh"
     );
     assert!(
@@ -1620,7 +1661,7 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
     assert_eq!(report.effect, Some(StoreEffect::RemoteRelationsChanged));
 
     let conn = writable(port, CATALOG, &["public"]);
-    let (_, listing) = engine.db_listing(&conn).expect("a live listing");
+    let (_, listing) = engine.source_listing(&conn).expect("a live listing");
     assert!(
         listing
             .iter()
@@ -1859,7 +1900,7 @@ async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     };
     assert!(!why.contains("already exists"), "{why}");
 
-    let (_, listing) = engine.db_listing(conn).expect("still live");
+    let (_, listing) = engine.source_listing(conn).expect("still live");
     assert!(
         listing
             .iter()

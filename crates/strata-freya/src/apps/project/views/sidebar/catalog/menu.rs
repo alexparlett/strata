@@ -582,28 +582,28 @@ pub fn use_connection_actions() -> ConnectionActions {
 ///
 /// *Schemas…* is absent on an object store rather than parked, for [`table_menu`]'s reason: a
 /// bucket has no schemas to scope, ever, where parking means "not this second".
-pub fn connection_menu(actions: &ConnectionActions, url: String, provider: ProviderId) -> Menu {
+pub fn connection_menu(actions: &ConnectionActions, name: String, provider: ProviderId) -> Menu {
     let actions = *actions;
     Menu::new()
         .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child(
             MenuButton::new()
                 .on_press({
-                    let url = url.clone();
+                    let name = name.clone();
                     move |_| {
                         let mut slot = actions.editor;
-                        slot.set(Some(ConnectionTarget::Edit(url.clone())));
+                        slot.set(Some(ConnectionTarget::Edit(name.clone())));
                         ContextMenu::close();
                     }
                 })
                 .child(menu_row(IconName::Pencil, "Edit connection")),
         )
-        .maybe_child((provider == ProviderId::Postgres).then(|| {
-            let url = url.clone();
+        .maybe_child((provider == ProviderId::Source).then(|| {
+            let name = name.clone();
             MenuButton::new()
                 .on_press(move |_| {
                     let mut slot = actions.schemas;
-                    slot.set(Some(url.clone()));
+                    slot.set(Some(name.clone()));
                     ContextMenu::close();
                 })
                 .child(menu_row(IconName::Folder, "Schemas…"))
@@ -616,7 +616,7 @@ pub fn connection_menu(actions: &ConnectionActions, url: String, provider: Provi
                 .on_press(move |_| {
                     let mut slot = actions.drop_target;
                     slot.set(Some(DropTarget::Connection {
-                        url: url.clone(),
+                        name: name.clone(),
                         provider,
                     }));
                     ContextMenu::close();

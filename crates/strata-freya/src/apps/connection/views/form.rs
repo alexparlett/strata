@@ -26,10 +26,12 @@
 
 use freya::prelude::*;
 use strata_arrow::client::ClientKey;
-use strata_model::{PgPassword, PgSslMode, ProviderId};
+use strata_engine::sources::postgres::settings::{verifies, SSL_MODES};
+use strata_model::ProviderId;
 
 use crate::apps::connection::model::{GcsAuthId, S3AuthId};
 use crate::apps::connection::{ConnectionCtx, PasswordRow};
+use crate::apps::project::contexts::EngineCtx;
 use crate::components::divider::Divider;
 use crate::components::form::{
     form_theme, Form, Note, PathField, Row, ValueField, FIELD_HEIGHT, LABEL_GAP,
@@ -96,7 +98,7 @@ impl Component for Fields {
         let mut form = Form::new()
             .child(ProviderPicker { key: DiffKey::None }.key(format!("provider·{scope}")));
         form = match provider {
-            ProviderId::Postgres => form
+            ProviderId::Source => form
                 .child(PgUrl { key: DiffKey::None }.key(format!("url·{scope}")))
                 .child(PgDatabase { key: DiffKey::None }.key(format!("database·{scope}")))
                 .child(CatalogName { key: DiffKey::None }.key(format!("catalog·{scope}")))
@@ -130,9 +132,11 @@ impl Component for Fields {
 /// **PROVIDER** — explicit, never inferred from a typed URL scheme (spec §1). The one control
 /// that decides which of the rows below exist.
 ///
-/// [`ProviderId::ALL`], because this is the picker that constant is for. The narrower question —
-/// which connection a set of *files* reads through — belongs to the Configure window's LOCATION
-/// pill, which is what [`ProviderId::OBJECT_STORES`] answers.
+/// [`ProviderId::ALL`] for the object stores, and one segment per **registered source** — which
+/// is the engine's answer, not this crate's, so a source an embedder registered is offered on the
+/// same terms as a shipped one. The narrower question — which connection a set of *files* reads
+/// through — belongs to the Configure window's LOCATION pill, which is what
+/// [`ProviderId::OBJECT_STORES`] answers.
 #[derive(PartialEq)]
 struct ProviderPicker {
     key: DiffKey,
@@ -151,7 +155,11 @@ impl Component for ProviderPicker {
 
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
-        let current = ctx.draft.read().provider;
+        let engine = use_consume::<EngineCtx>();
+        let (current, kind) = {
+            let draft = ctx.draft.read();
+            (draft.provider, draft.pg.kind.clone())
+        };
 
         let mut pill = SegmentedToggle::new().form();
         for id in ProviderId::ALL {
@@ -160,6 +168,17 @@ impl Component for ProviderPicker {
                     .selected(id == current)
                     .on_press(move |_| ctx.edit(move |draft| draft.provider = id)),
             );
+        }
+        for source in engine.source_registrants() {
+            let picked = current == ProviderId::Source && kind == source.kind;
+            pill = pill.child(ToggleSegment::text(source.badge).selected(picked).on_press(
+                move |_| {
+                    ctx.edit(move |draft| {
+                        draft.provider = ProviderId::Source;
+                        draft.pg.kind = source.kind.to_string();
+                    });
+                },
+            ));
         }
         Row::new("PROVIDER").child(pill)
     }
@@ -201,7 +220,7 @@ impl Component for Authority {
                     _ => None,
                 },
                 match draft.provider {
-                    ProviderId::Http => "https://aserver:8484",
+                    ProviderId::Http => "aserver",
                     _ => "my-bucket",
                 },
             )
@@ -230,8 +249,9 @@ impl Component for Authority {
 /// **URL** — the server, `host:port`. The port is never assumed: a def reading `db.internal`
 /// while it means `:5432` shows one thing and connects to another.
 ///
-/// Half of `ConnectionDef::address`, which stays one `host:port/database` string — the two boxes
-/// are a form split, so `parse_pg_address` remains the only parse of that grammar.
+/// Half of [`ConnectionDef::address`](strata_model::ConnectionDef::address), which stays one
+/// `host:port/database` string — the two
+/// boxes are a form split, so the source's own parse stays the only reading of that grammar.
 #[derive(PartialEq)]
 struct PgUrl {
     key: DiffKey,
@@ -319,9 +339,9 @@ impl Component for PgDatabase {
 /// **CATALOG** — the prefix Strata addresses this connection by, since SQL cannot address
 /// `postgres://host:5432/analytics`.
 ///
-/// Strata's name for the connection rather than anything the server has: `PgStore::catalog`, the
-/// top of `catalog.schema.table`. The user's choice, not derived from [`PgDatabase`], because two
-/// servers' `analytics` would derive one prefix. What it may be is `PgStore::check_catalog` plus
+/// Strata's name for the connection rather than anything the server has, and the top of
+/// `catalog.schema.table`. The user's choice, not derived from [`PgDatabase`], because two
+/// servers' `analytics` would derive one prefix. What it may be is `check_catalog` plus
 /// the project-wide clash the footer asks `check_catalog_name` about, so the field and the
 /// registration cannot disagree.
 #[derive(PartialEq)]
@@ -343,12 +363,12 @@ impl Component for CatalogName {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
         let text = use_state({
-            let initial = ctx.draft.peek().pg.catalog.clone();
+            let initial = ctx.draft.peek().pg.name.clone();
             move || initial
         });
         use_side_effect(move || {
             let catalog = text.read().clone();
-            ctx.edit(move |draft| draft.pg.catalog = catalog);
+            ctx.edit(move |draft| draft.pg.name = catalog);
         });
 
         Row::new("CATALOG")
@@ -448,7 +468,7 @@ impl Component for PasswordField {
             }
             let expected = *ctx.password_expected.read();
             let now = match typed {
-                true => PgPassword::Keystore,
+                true => true,
                 false => expected,
             };
             ctx.edit(move |draft| draft.pg.password = now);
@@ -524,9 +544,9 @@ impl Component for PasswordField {
                                         let mut removed = ctx.password_removed;
                                         let mut text = text;
                                         text.set(String::new());
-                                        expected.set(PgPassword::None);
+                                        expected.set(false);
                                         removed.set(true);
-                                        ctx.edit(|draft| draft.pg.password = PgPassword::None);
+                                        ctx.edit(|draft| draft.pg.password = false);
                                     })
                                     .child(Control::new("This connection uses no password"))
                             })),
@@ -556,15 +576,17 @@ impl Component for Ssl {
 
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConnectionCtx>();
-        let mode = ctx.draft.read().pg.sslmode;
+        let mode = ctx.draft.read().pg.sslmode.clone();
 
-        let options: Vec<Element> = PgSslMode::ALL
-            .into_iter()
+        let options: Vec<Element> = SSL_MODES
+            .iter()
             .map(|option| {
                 MenuItem::new()
-                    .selected(option == mode)
-                    .on_press(move |_| ctx.edit(move |draft| draft.pg.sslmode = option))
-                    .child(MonoValue::new(option.as_str()))
+                    .selected(*option == mode)
+                    .on_press(move |_| {
+                        ctx.edit(move |draft| draft.pg.sslmode = (*option).to_string());
+                    })
+                    .child(MonoValue::new(*option))
                     .into()
             })
             .collect();
@@ -581,7 +603,7 @@ impl Component for Ssl {
                             .children(options),
                     ),
             )
-            .maybe_child(mode.verifies().then(|| qualifier(RootCertificate)))
+            .maybe_child(verifies(&mode).then(|| qualifier(RootCertificate)))
     }
 }
 
@@ -938,7 +960,7 @@ impl Component for Endpoint {
 /// path list does not, because its section label already names the column.
 ///
 /// **Rows here, a map in the def**. The option is a `Select` over
-/// [`CLIENT_KEYS`] rather than a text box, because the set is closed and small — which removes
+/// [`CLIENT_KEYS`](strata_arrow::client::CLIENT_KEYS) rather than a text box, because the set is closed and small — which removes
 /// the typo class outright and takes the autocomplete the Settings grid needs with it.
 #[derive(PartialEq)]
 struct ClientOptions {

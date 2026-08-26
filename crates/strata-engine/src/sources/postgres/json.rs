@@ -1,4 +1,4 @@
-//! **The JSON accessor family, spelled the way Postgres spells it** (DB-08).
+//! **The JSON accessor family, spelled the way Postgres spells it.**
 //!
 //! `payload ->> 'type'` is planned by `datafusion-functions-json` into a UDF call — `->` becomes
 //! `json_get`, `->>` becomes `json_as_text`, `?` becomes `json_contains` — and a UDF call unparses
@@ -11,11 +11,11 @@
 //! 'type'` is better SQL there than anything we could send instead.
 //!
 //! **[`FAMILY`] is the whole of what this module knows**, and it is the only source of "mapped":
-//! the rewrite reads it to translate, and [`unmapped_refusal`] exists because reading it is also
-//! how a member with no faithful spelling is recognised. A member is mapped only where the
-//! operator means the *same thing* as the local function, judged against what the local function
-//! returns — never a lossy approximation, because a query that answers differently depending on
-//! where it ran is worse than one that refuses.
+//! the rewrite reads it to translate, and [`support`] hands the same table to the engine as the
+//! source's [`FunctionMap`](crate::sources::source::FunctionMap). A member is mapped only where
+//! the operator means the *same thing* as the local function, judged against what the local
+//! function returns — never a lossy approximation, because a query that answers differently
+//! depending on where it ran is worse than one that refuses.
 
 use std::ops::ControlFlow;
 
@@ -24,6 +24,8 @@ use datafusion::sql::sqlparser::ast::{
     BinaryOperator, Expr, Function, FunctionArg, FunctionArgExpr, FunctionArguments, Statement,
     VisitMut, VisitorMut,
 };
+
+use crate::sources::source::{unsupported_function, FunctionMap, Support, MATERIALIZE};
 
 /// What an accessor becomes on the server, given a value and a path of one or more keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,28 +71,38 @@ enum Spelling {
 /// subquery under it. Left out, the `json_get` that put the union there is what refuses, in the
 /// user's own terms; and a union that reached a remote statement without one would fail on the
 /// server as an undefined function, which [`remote_refusal`] answers.
-const FAMILY: &[(&str, Option<Spelling>)] = &[
-    ("json_as_text", Some(Spelling::Text)),
-    ("json_contains", Some(Spelling::Present)),
-    ("json_from_scalar", None),
-    ("json_get", None),
-    ("json_get_array", None),
-    ("json_get_bool", None),
-    ("json_get_float", None),
-    ("json_get_int", None),
-    ("json_get_json", None),
-    ("json_get_str", None),
-    ("json_length", None),
-    ("json_object_keys", None),
+const FAMILY: &[(&str, Option<Spelling>, &str)] = &[
+    ("json_as_text", Some(Spelling::Text), ""),
+    ("json_contains", Some(Spelling::Present), ""),
+    ("json_from_scalar", None, ""),
+    ("json_get", None, ARROW_INSTEAD),
+    ("json_get_array", None, ""),
+    ("json_get_bool", None, ""),
+    ("json_get_float", None, ""),
+    ("json_get_int", None, ""),
+    ("json_get_json", None, ""),
+    ("json_get_str", None, ""),
+    ("json_length", None, ""),
+    ("json_object_keys", None, ""),
 ];
 
-/// The way out of every refusal here, minted once so the two callers cannot offer different ones.
-///
-/// It is the same way out in both cases: the data has to be on this side before a function only
-/// this side has can be applied to it, and a `CREATE TABLE … AS SELECT` is how a remote read
-/// becomes rows Strata owns.
-const MATERIALIZE: &str = "To use it as it is, copy the rows into the project first with CREATE \
-                           TABLE ... AS SELECT ..., and query that table.";
+/// What `->` has instead of itself: the one member of the family whose refusal can name a working
+/// alternative.
+pub(super) const ARROW_INSTEAD: &str = "Use '->>' instead, which does run on the server.";
+
+/// [`FAMILY`] as the engine reads it — which members this server can compute, and what a refusal
+/// about one of the others has to add.
+pub(super) fn support() -> FunctionMap {
+    FunctionMap::of(FAMILY.iter().map(|&(name, spelling, why)| {
+        let support = match spelling {
+            Some(_) => Support::Mapped,
+            None => Support::Unmapped {
+                why: why.to_string(),
+            },
+        };
+        (name, support)
+    }))
+}
 
 /// Postgres's `undefined_function`, which covers a missing function *and* a missing operator —
 /// what a federated statement gets back for carrying a name only DataFusion knows.
@@ -105,26 +117,12 @@ const MATERIALIZE: &str = "To use it as it is, copy the rows into the project fi
 /// answer, exactly as before this existed.
 const UNDEFINED_FUNCTION: &str = "SQLSTATE: 42883";
 
-/// Why `function` cannot be sent to `connection`, naming the function, the connection and the way
-/// out.
-///
-/// Built beside [`FAMILY`] because that table is the only thing that knows which members are
-/// unmapped, and called from the one place that consults it.
-fn unmapped_refusal(function: &str, connection: &str) -> String {
-    let instead = match function {
-        "json_get" => " Use '->>' instead, which does run on the server.",
-        _ => "",
-    };
-    format!(
-        "'{function}' cannot run on the database connection '{connection}'.{instead} {MATERIALIZE}"
-    )
-}
-
 /// Why a **mapped** accessor cannot be sent *in this shape* — the call has no lookup path, and a
 /// path is the whole of what either operator form is built from.
 ///
-/// Its own sentence rather than [`unmapped_refusal`]'s, because that one says the function cannot
-/// run on this connection at all, which the same accessor with a key would immediately disprove.
+/// Its own sentence rather than [`unsupported_function`]'s, because that one says the function
+/// cannot run on this connection at all, which the same accessor with a key would immediately
+/// disprove.
 fn pathless_refusal(function: &str, connection: &str) -> String {
     format!(
         "'{function}' cannot run on the database connection '{connection}' without a key to look \
@@ -180,11 +178,12 @@ impl VisitorMut for PushDown<'_> {
         let Some(called) = plain_call(function) else {
             return ControlFlow::Continue(());
         };
-        let Some(&(name, spelling)) = FAMILY.iter().find(|(known, _)| *known == called) else {
+        let Some(&(name, spelling, why)) = FAMILY.iter().find(|(known, ..)| *known == called)
+        else {
             return ControlFlow::Continue(());
         };
         let Some(spelling) = spelling else {
-            return ControlFlow::Break(unmapped_refusal(name, self.connection));
+            return ControlFlow::Break(unsupported_function(name, self.connection, why));
         };
         match spelled(spelling, function) {
             Some(operators) => {

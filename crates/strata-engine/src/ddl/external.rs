@@ -41,6 +41,7 @@ use datafusion::sql::TableReference;
 use crate::catalog::register_external;
 use crate::export::partition_columns_are_bare_words;
 use crate::register::table_spec;
+use crate::store::store_identity;
 use crate::{Connections, InternalTables};
 use strata_arrow::client::client_key;
 use strata_core::project::{relativize, split_remote};
@@ -140,7 +141,7 @@ pub async fn create(
         partition_cols: partitions,
         origin: TableOrigin::External,
     };
-    let meta = register_external(ctx, &table_spec(root, &def)).await?;
+    let meta = register_external(ctx, &table_spec(root, &def, connections)).await?;
 
     let verb = if replacing { "replaced" } else { "created" };
     Ok(StatementOutcome {
@@ -515,11 +516,17 @@ fn source_of(
     if url.starts_with("file:") {
         return Err("LOCATION takes a path, not a file:// URL".into());
     }
-    let Some(url) = connections.resolve(&url) else {
+    let Some(named) = store_identity(&url) else {
         return Err(format!(
             "'{url}' is not a connection in this project. Add it in Connections"
         ));
     };
+    let Some(named) = connections.named(&named) else {
+        return Err(format!(
+            "'{url}' is not a connection in this project. Add it in Connections"
+        ));
+    };
+    let url = named;
     if source.trim().is_empty() {
         return Err(format!(
             "LOCATION '{location}' names the bucket. Add the path inside it that holds the files"
@@ -876,7 +883,7 @@ mod tests {
     #[test]
     fn a_location_over_a_connection_splits_into_the_url_and_a_bucket_relative_source() {
         let connections = Connections::default();
-        connections.note("s3://acme-lake");
+        connections.note("acme_lake", "s3:acme-lake");
         let root = Path::new("/proj");
 
         assert_eq!(
@@ -886,7 +893,7 @@ mod tests {
                 &connections
             ),
             Ok((
-                Some("s3://acme-lake".to_string()),
+                Some("acme_lake".to_string()),
                 "events/2024/**/*.parquet".to_string()
             ))
         );
@@ -912,7 +919,7 @@ mod tests {
         );
         assert_eq!(
             source_of(root, "S3://ACME-LAKE/events/", &connections),
-            Ok((Some("s3://acme-lake".to_string()), "events/".to_string()))
+            Ok((Some("acme_lake".to_string()), "events/".to_string()))
         );
     }
 
@@ -924,6 +931,7 @@ mod tests {
         let eng = Engine::builder().build();
         let conn = ConnectionDef {
             address: "acme-lake".into(),
+            name: String::new(),
             provider: Provider::S3(S3Store {
                 auth: S3Auth::Anonymous,
                 ..Default::default()
@@ -935,11 +943,11 @@ mod tests {
             "the def cannot describe a store"
         );
         assert_eq!(
-            eng.connections.resolve("s3://acme-lake").as_deref(),
-            Some("s3://acme-lake")
+            eng.connections.resolve("acme_lake").as_deref(),
+            Some("acme_lake")
         );
-        eng.disconnect("s3://acme-lake");
-        assert_eq!(eng.connections.resolve("s3://acme-lake"), None);
+        eng.disconnect("acme_lake");
+        assert_eq!(eng.connections.resolve("acme_lake"), None);
     }
 
     /// The schema is inferred, so a **data** column list is refused — while a list that is

@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use freya::prelude::{consume_context, use_provide_context, use_side_effect, State, WritableUtils};
 use freya::radio::use_radio;
-use strata_model::{ColRef, Provider, RemoteRef};
+use strata_model::{ColRef, RemoteRef};
 
 use super::{ProjChan, ProjectState, Reg};
 use crate::apps::project::query::ScanId;
@@ -84,10 +84,7 @@ fn connected_catalogs(project: &ProjectState) -> BTreeSet<String> {
         .connections
         .iter()
         .filter(|row| matches!(row.reg, Reg::Ready(())))
-        .filter_map(|row| match &row.def.provider {
-            Provider::Postgres(pg) => Some(pg.catalog.trim().to_string()),
-            _ => None,
-        })
+        .filter_map(|row| row.def.provider.source().map(|_| row.def.named()))
         .collect()
 }
 

@@ -43,10 +43,10 @@ use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 
 use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
-use crate::db::{self, Databases, RemoteTarget};
 use crate::export::copy_row_count;
 use crate::query::ipc_write_options;
 use crate::sink::append_rows;
+use crate::sources::{create_table_as, insert_into, writable, Live};
 use crate::statements::{Fault, StmtKind};
 use crate::{fold_ident, InternalTables};
 use strata_core::project::{internal_source, tables_dir};
@@ -54,7 +54,7 @@ use strata_core::util::{plural, temp_dir_name};
 use strata_model::{SourceFormat, TableDef, TableOrigin};
 
 use super::{
-    bare_name, existing, left_invalid, read_only, remote, remote_target, DataRoot,
+    bare_name, existing, left_invalid, read_only, remote, remote_target, DataRoot, RemoteTarget,
     StatementOutcome, StoreEffect,
 };
 
@@ -77,11 +77,11 @@ pub async fn create(
     kind: StmtKind,
     stmt: DFStatement,
     root: DataRoot,
-    databases: &Databases,
+    sources: &Live,
     source: &str,
 ) -> Result<StatementOutcome, String> {
     if let Some(at) = remote::target(ctx, kind, &stmt) {
-        return remote::create_table(ctx, databases, &at, &stmt, source).await;
+        return remote::create_table(ctx, sources, &at, &stmt, source).await;
     }
     let plan = ctx
         .state()
@@ -114,7 +114,7 @@ pub async fn create(
     }
 
     if let Some(at) = remote_target(ctx, &name) {
-        return materialize(ctx, &at, databases, &input, if_not_exists, or_replace).await;
+        return materialize(ctx, &at, sources, &input, if_not_exists, or_replace).await;
     }
     let name = bare_name(ctx, &name, WHAT)?;
     let Some(root) = root else {
@@ -192,20 +192,20 @@ pub async fn create(
 ///
 /// **The three name semantics are answered against the server as it is now**, by the same
 /// transaction that creates — never against the connect-time enumeration, and never by a round
-/// trip whose answer could go stale before the create (`db::create_table_as`). `OR REPLACE` is
+/// trip whose answer could go stale before the create (`create_table_as`). `OR REPLACE` is
 /// refused for `INSERT OVERWRITE`'s reason, but **only where there is something to replace**: it
 /// would drop a server table, and a statement that silently destroys one is not v1. Over a free
 /// name it simply creates, exactly as the local arm does.
 async fn materialize(
     ctx: &SessionContext,
     at: &RemoteTarget,
-    databases: &Databases,
+    sources: &Live,
     input: &Arc<LogicalPlan>,
     if_not_exists: bool,
     or_replace: bool,
 ) -> Result<StatementOutcome, String> {
     let address = at.address();
-    if !db::writable(databases, &at.catalog) {
+    if !writable(sources, &at.catalog) {
         return Err(read_only(at));
     }
 
@@ -216,7 +216,7 @@ async fn materialize(
         .verify_plan(input)
         .map_err(|e| e.to_string())?;
 
-    let Some(rows) = db::create_table_as(ctx, databases, at, input).await? else {
+    let Some(rows) = create_table_as(ctx, sources, at, input).await? else {
         if or_replace {
             return Err(format!(
                 "CREATE OR REPLACE TABLE is not supported on '{address}'. Drop it on the server \
@@ -362,13 +362,13 @@ const INSERT_EXTERNAL: &str =
 ///
 /// **The remote branch builds the provider it drives**, because the one the catalog serves is the
 /// federated *read* provider, whose `insert_into` is the trait's own `not_impl_err`. The writer
-/// that can is built by [`db::insert_into`], used once and dropped, so no plan ever sees it and
+/// that can is built by [`insert_into`], used once and dropped, so no plan ever sees it and
 /// pushdown on every read is untouched.
 pub async fn insert(
     ctx: &SessionContext,
     stmt: DFStatement,
     internal: &InternalTables,
-    databases: &Databases,
+    sources: &Live,
 ) -> Result<StatementOutcome, String> {
     let plan = ctx
         .state()
@@ -386,11 +386,11 @@ pub async fn insert(
     }
 
     if let Some(at) = remote_target(ctx, &dml.table_name) {
-        if !db::writable(databases, &at.catalog) {
+        if !writable(sources, &at.catalog) {
             return Err(read_only(&at));
         }
         verify_insert(&plan)?;
-        let rows = db::insert_into(ctx, databases, &at, &dml.input).await?;
+        let rows = insert_into(ctx, sources, &at, &dml.input).await?;
         return Ok(StatementOutcome {
             message: format!(
                 "Inserted {} into '{}'",
@@ -448,11 +448,11 @@ pub async fn drop_statement(
     root: &DataRoot,
     internal: &InternalTables,
     stmt: DFStatement,
-    databases: &Databases,
+    sources: &Live,
     source: &str,
 ) -> Result<StatementOutcome, String> {
     if let Some(at) = remote::target(ctx, StmtKind::DropTable, &stmt) {
-        return remote::drop_relation(ctx, databases, &at, false, &stmt, source).await;
+        return remote::drop_relation(ctx, sources, &at, false, &stmt, source).await;
     }
     let plan = ctx
         .state()
@@ -793,7 +793,7 @@ mod tests {
     use crate::builder::test_context;
     use crate::register::{register_project, table_spec, RegOutcome};
     use crate::statements::Fault;
-    use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
+    use crate::{Connections, Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
 
     use super::*;
@@ -1174,7 +1174,7 @@ mod tests {
 
         let cold = Engine::builder().build();
         let error = cold
-            .register(table_spec(&root, &def))
+            .register(table_spec(&root, &def, &Connections::default()))
             .await
             .expect_err("no data");
 

@@ -67,7 +67,7 @@ pub fn use_watch_connection(mut ctx: ConnectionCtx) {
             return;
         };
         let answer = project.read().connections.iter().find_map(|row| {
-            (row.def.url() == url).then(|| match &row.reg {
+            (row.def.named() == url).then(|| match &row.reg {
                 Reg::Loading => None,
                 Reg::Ready(()) => Some(Ok(())),
                 Reg::Failed(why) => Some(Err(why.clone())),

@@ -11,8 +11,8 @@
 //! target, one node fewer.
 //!
 //! A `CopyTo` cannot be driven this way — its sink is the file format's, built by DataFusion's own
-//! physical planner from the node — so the other half of DB-12 keeps that node out of the rule's
-//! reach instead ([`db::federate`](crate::db)).
+//! physical planner from the node — so the federation assembly keeps that node out of the rule's
+//! reach instead ([`sources::sql`](crate::sources::sql)).
 
 use std::sync::Arc;
 

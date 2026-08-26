@@ -54,20 +54,50 @@ fn use_declarations(source: &str) -> Vec<String> {
     found
 }
 
-/// Does this declaration reach into the crate-local module `module`?
+/// The module `file` is, as segments under `src/` — `sources/postgres/mod.rs` is
+/// `["sources", "postgres"]` and `sources/sql.rs` is `["sources", "sql"]`.
 ///
-/// `crate::sql::…` and, from a `mod.rs`, `super::sql::…` are the same reach spelled two ways, so
-/// both count. A path that starts anywhere else names another crate and is not this rule's
-/// business.
-fn reaches(declaration: &str, module: &str) -> bool {
+/// What `super` means depends on this, which is why it is computed rather than assumed: from
+/// `sources/mod.rs` it is the crate root, and from `sources/sql.rs` it is `sources`.
+fn module_of(file: &Path, src: &Path) -> Vec<String> {
+    let relative = file.strip_prefix(src).unwrap_or(file);
+    let mut segments: Vec<String> = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    match segments.pop() {
+        Some(file) if file != "mod.rs" && file != "lib.rs" => {
+            segments.push(file.trim_end_matches(".rs").to_string());
+        }
+        _ => {}
+    }
+    segments
+}
+
+/// The **top-level** module this declaration reaches into, resolved against the module it is
+/// written in — `None` for a path naming another crate.
+///
+/// Resolved rather than pattern-matched, because `super::sql` is `crate::sql` from
+/// `sources/mod.rs` and `crate::sources::sql` from `sources/providers.rs`: one spelling, two
+/// reaches, and only the first is one this rule is about.
+fn reaches(declaration: &str, module: &[String]) -> Option<String> {
     let mut segments = declaration
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|segment| !segment.is_empty());
-    segments.next() == Some("use")
-        && segments
-            .next()
-            .is_some_and(|head| head == "crate" || head == "super")
-        && segments.any(|segment| segment == module)
+    if segments.next() != Some("use") {
+        return None;
+    }
+    let mut path: Vec<String> = match segments.next()? {
+        "crate" => Vec::new(),
+        "super" => module
+            .iter()
+            .take(module.len().saturating_sub(1))
+            .cloned()
+            .collect(),
+        _ => return None,
+    };
+    path.extend(segments.map(str::to_string));
+    path.first().cloned()
 }
 
 fn crate_dir(name: &str) -> PathBuf {
@@ -85,8 +115,9 @@ fn the_sources_and_language_layers_do_not_import_each_other() {
     for (importer, forbidden) in [("sources", "sql"), ("sql", "sources")] {
         for file in rust_files(&src.join(importer)) {
             let source = fs::read_to_string(&file).expect("readable");
+            let module = module_of(&file, &src);
             for declaration in use_declarations(&source) {
-                if reaches(&declaration, forbidden) {
+                if reaches(&declaration, &module).as_deref() == Some(forbidden) {
                     offences.push(format!("{}: {declaration}", file.display()));
                 }
             }
@@ -123,7 +154,7 @@ const ARROW_VOCABULARY: &[&str] = &[
 
 /// Does this declaration name [`ARROW_VOCABULARY`] through `strata_engine`?
 ///
-/// Segment-exact, so `strata_engine::db::SchemaVisibility` is not `Schema`, and a name reached
+/// Segment-exact, so `strata_engine::sources::SchemaVisibility` is not `Schema`, and a name reached
 /// through any other crate — `strata_arrow::config`, which is the point — is not this rule's
 /// business.
 fn names_arrow_vocabulary(declaration: &str) -> bool {
@@ -176,9 +207,48 @@ fn a_use_declaration_is_read_to_its_semicolon_and_prose_is_not_one() {
             "use crate::sql::validate".to_string(),
         ]
     );
-    assert!(reaches("use crate::sql::validate", "sql"));
-    assert!(reaches("use super::sql::validate", "sql"));
-    assert!(!reaches("use strata_engine::sql::validate", "sql"));
+}
+
+/// **`super` is resolved, not matched.** The same declaration reaches the language layer from one
+/// file and a sibling of this layer's own from another, and the rule is only about the first —
+/// `sources/sql.rs` is a module *inside* `sources`, not the `sql` this rule fences off.
+#[test]
+fn a_reach_is_resolved_against_the_module_it_is_written_in() {
+    let shell = vec!["sources".to_string()];
+    let inner = vec!["sources".to_string(), "providers".to_string()];
+    assert_eq!(
+        reaches("use super::sql::validate", &shell).as_deref(),
+        Some("sql"),
+        "super from sources/mod.rs is the crate root"
+    );
+    assert_eq!(
+        reaches("use super::sql::federated", &inner).as_deref(),
+        Some("sources"),
+        "super from a file inside sources is sources"
+    );
+    assert_eq!(
+        reaches("use crate::sources::sql::federated", &inner).as_deref(),
+        Some("sources")
+    );
+    assert_eq!(
+        reaches("use crate::sql::qualified", &inner).as_deref(),
+        Some("sql")
+    );
+    assert_eq!(reaches("use strata_engine::sql::validate", &inner), None);
+}
+
+#[test]
+fn a_files_module_is_its_path_under_src() {
+    let src = Path::new("/w/crates/strata-engine/src");
+    assert_eq!(module_of(&src.join("sources/mod.rs"), src), vec!["sources"]);
+    assert_eq!(
+        module_of(&src.join("sources/sql.rs"), src),
+        vec!["sources", "sql"]
+    );
+    assert_eq!(
+        module_of(&src.join("sources/postgres/mod.rs"), src),
+        vec!["sources", "postgres"]
+    );
 }
 
 #[test]
@@ -190,7 +260,108 @@ fn the_arrow_vocabulary_is_matched_by_whole_segment_and_only_through_the_engine(
         "use strata_engine::{ column_info, TableMeta }"
     ));
     assert!(!names_arrow_vocabulary(
-        "use strata_engine::db::SchemaVisibility"
+        "use strata_engine::sources::SchemaVisibility"
     ));
     assert!(!names_arrow_vocabulary("use strata_arrow::config::key_def"));
+}
+
+/// The crates a **source's own driver** brings in — what nothing outside that source's module may
+/// name.
+///
+/// The point of a source being a registrant is that its dependency tree is its own: a file
+/// elsewhere naming one of these has reached past the trait, and the cargo feature that gates the
+/// module would stop gating anything.
+const DRIVER_CRATES: &[&str] = &[
+    "bb8",
+    "datafusion_table_providers_common",
+    "datafusion_table_providers_postgres",
+    "tokio_postgres",
+];
+
+/// The federation crate, whose assembly types belong to [`sources::sql`](crate::sources::sql)
+/// alone.
+///
+/// A source composes that assembly in one call or writes its own provider; either way it never
+/// touches `SQLExecutor`, `SQLFederationProvider` or the adaptor directly. `build_context` is the
+/// one exception, and it names the rule list rather than the assembly.
+const FEDERATION_CRATE: &str = "datafusion_federation";
+
+/// Does this declaration name a crate in `crates`?
+fn names_crate(declaration: &str, crates: &[&str]) -> bool {
+    declaration
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|segment| !segment.is_empty())
+        .nth(1)
+        .is_some_and(|head| crates.contains(&head))
+}
+
+/// Every engine file whose `use` declarations break `rule`, by the name of the thing it reached.
+fn offenders(allowed: &[&str], rule: impl Fn(&str) -> bool) -> Vec<String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for file in rust_files(&src) {
+        let relative = file.strip_prefix(&src).unwrap_or(&file).to_string_lossy();
+        if allowed.iter().any(|ok| relative.starts_with(ok)) {
+            continue;
+        }
+        let source = fs::read_to_string(&file).expect("readable");
+        for declaration in use_declarations(&source) {
+            if rule(&declaration) {
+                found.push(format!("{relative}: {declaration}"));
+            }
+        }
+    }
+    found
+}
+
+/// A source's driver is named inside that source's module and nowhere else.
+#[test]
+fn a_sources_driver_stays_inside_that_source() {
+    let offences = offenders(&["sources/postgres"], |declaration| {
+        names_crate(declaration, DRIVER_CRATES)
+    });
+    assert!(
+        offences.is_empty(),
+        "a source's own driver is its module's, reached through `DataSource` from anywhere \
+         else:\n{}",
+        offences.join("\n")
+    );
+}
+
+/// The federation assembly is `sources/sql.rs`'s, and a source composes it rather than building
+/// one.
+#[test]
+fn the_federation_assembly_stays_in_the_sql_module() {
+    let offences = offenders(&["sources/sql.rs", "lib.rs"], |declaration| {
+        names_crate(declaration, &[FEDERATION_CRATE])
+    });
+    assert!(
+        offences.is_empty(),
+        "the federation stack is assembled in one place, and composed through `SqlSpec` \
+         elsewhere:\n{}",
+        offences.join("\n")
+    );
+}
+
+#[test]
+fn a_crate_is_matched_by_its_own_segment() {
+    assert!(names_crate(
+        "use tokio_postgres::Client",
+        &["tokio_postgres"]
+    ));
+    assert!(names_crate(
+        "use datafusion_federation::sql::SQLExecutor",
+        &["datafusion_federation"]
+    ));
+    assert!(
+        !names_crate(
+            "use datafusion::sql::TableReference",
+            &["datafusion_federation"]
+        ),
+        "the segment is whole, so DataFusion itself is not the federation crate"
+    );
+    assert!(!names_crate(
+        "use crate::sources::sql::federated",
+        &["tokio_postgres"]
+    ));
 }

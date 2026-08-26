@@ -50,8 +50,9 @@ use datafusion::sql::sqlparser::ast::{
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
 
+use crate::fold_ident;
+use crate::providers::shown_schemas;
 use crate::sql::qualified;
-use crate::{db, fold_ident};
 
 /// A bare name this pass refused rather than resolved, spanned into the statement it was read
 /// from so the editor can squiggle the name itself.
@@ -212,7 +213,7 @@ impl<'a> Names<'a> {
     /// Where a bare name resolves outside the workspace — `None` when the workspace has it (it
     /// wins) or when nothing does.
     ///
-    /// **Scoped to the schemas each connection shows** ([`db::shown_schemas`]): a schema switched
+    /// **Scoped to the schemas each connection shows** ([`shown_schemas`]): a schema switched
     /// off neither captures a bare name nor collides with one in a schema left on, where a name
     /// written in full still resolves into any of them. `table_exist` throughout, so only a hit
     /// pays for `table_names` — and only to recover the server's spelling.
@@ -226,7 +227,7 @@ impl<'a> Names<'a> {
             let Some(provider) = self.ctx.catalog(catalog) else {
                 continue;
             };
-            let shown = db::shown_schemas(provider.as_ref());
+            let shown = shown_schemas(provider.as_ref());
             for schema in provider.schema_names() {
                 if shown
                     .as_ref()
@@ -431,7 +432,7 @@ mod tests {
 
     use super::SessionContext;
     use crate::builder::test_context;
-    use crate::providers::fake_database;
+    use crate::providers::fake_source;
     use crate::statements::pipeline::resolved_one;
     use crate::{Engine, RunTag, WsId};
 
@@ -446,7 +447,7 @@ mod tests {
         .expect("batch");
         ctx.register_batch("events", batch).expect("table");
         for (catalog, relations) in databases {
-            fake_database(&ctx, catalog, relations);
+            fake_source(&ctx, catalog, relations);
         }
         ctx
     }
@@ -566,7 +567,7 @@ mod tests {
         eng.query(WsId(1), RunTag(1), "SELECT 1 AS n".into(), 10)
             .await
             .expect("run");
-        fake_database(&eng.ctx, "pg", &["__snap_1"]);
+        fake_source(&eng.ctx, "pg", &["__snap_1"]);
         assert_eq!(
             resolved(&eng.ctx, "SELECT * FROM __snap_1").expect("resolves"),
             "SELECT * FROM __snap_1"

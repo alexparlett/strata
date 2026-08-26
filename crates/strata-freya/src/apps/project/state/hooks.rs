@@ -17,7 +17,7 @@ use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioSt
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
 use strata_engine::register::{register_pass, table_spec, RegOutcome};
-use strata_engine::TableSpec;
+use strata_engine::{Connections, TableSpec};
 use strata_model::{ConnectionDef, SessionSnapshot, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -181,7 +181,7 @@ pub fn use_init_project(
 /// together through the driver and the fold, and positional arguments would let two of them
 /// swap with nothing to notice.
 struct ScanWork {
-    /// `ConnectionDef::url()`s — a connection's identity, and what the engine registers
+    /// connection names — how the project addresses one, and what the engine registers
     /// under. Not buckets: `s3://lake` and `gs://lake` are two connections sharing one.
     connections: Vec<String>,
     tables: Vec<String>,
@@ -219,7 +219,7 @@ impl ScanWork {
 fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
     match scope {
         ScanScope::All => ScanWork {
-            connections: p.connections.iter().map(|c| c.def.url()).collect(),
+            connections: p.connections.iter().map(|c| c.def.named()).collect(),
             tables: p.tables.iter().map(|t| t.def.name.clone()).collect(),
             views: p.refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect()),
         },
@@ -447,22 +447,28 @@ async fn register_defs(
         let connections: Vec<ConnectionDef> = work
             .connections
             .into_iter()
-            .filter_map(|url| {
+            .filter_map(|name| {
                 Some(
                     p.connections
                         .iter()
-                        .find(|c| c.def.url() == url)?
+                        .find(|c| c.def.named() == name)?
                         .def
                         .clone(),
                 )
             })
             .collect();
+        let known = Connections::of(
+            &p.connections
+                .iter()
+                .map(|c| c.def.clone())
+                .collect::<Vec<_>>(),
+        );
         let tables: Vec<TableSpec> = work
             .tables
             .into_iter()
             .filter_map(|name| {
                 let def = &p.tables.iter().find(|t| t.def.name == name)?.def;
-                Some(table_spec(&root, def))
+                Some(table_spec(&root, def, &known))
             })
             .collect();
         let views: Vec<(String, String)> = work
@@ -482,23 +488,23 @@ async fn register_defs(
         tables,
         views,
         |outcome| match outcome {
-            RegOutcome::Connection { url, result } => match result {
+            RegOutcome::Connection { name, result } => match result {
                 Ok(()) => {
-                    log_event(log, LogLevel::Ok, format!("Connected '{url}'"));
+                    log_event(log, LogLevel::Ok, format!("Connected '{name}'"));
                     station
                         .write_channel(ProjChan::Connections)
-                        .connection_registered(&url);
+                        .connection_registered(&name);
                 }
                 Err(e) => {
-                    tracing::error!("connect '{url}' failed: {e}");
+                    tracing::error!("connect '{name}' failed: {e}");
                     log_event(
                         log,
                         LogLevel::Error,
-                        format!("Connection '{url}' failed: {e}"),
+                        format!("Connection '{name}' failed: {e}"),
                     );
                     station
                         .write_channel(ProjChan::Connections)
-                        .connection_failed(&url, e);
+                        .connection_failed(&name, e);
                 }
             },
             RegOutcome::Table { name, result } => match result {

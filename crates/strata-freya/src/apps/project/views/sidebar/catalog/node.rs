@@ -228,6 +228,13 @@ pub struct Remote {
 #[derive(Clone, PartialEq)]
 pub struct Connection {
     pub def: ConnectionDef,
+    /// The short word this row wears — the **registered source's** own badge, or the object
+    /// store's provider label.
+    ///
+    /// Carried on the node rather than derived where the row paints: what a kind is called is the
+    /// registry's answer, and a virtualized row asking per frame would be asking it once per
+    /// visible row per paint.
+    pub badge: String,
     /// The catalog a **database** is addressed by, taken from the def rather than from a listing a
     /// collapsed row has not fetched. `None` on an object store, which has none.
     pub catalog: Option<String>,

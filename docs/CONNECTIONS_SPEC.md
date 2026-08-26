@@ -1,35 +1,46 @@
 # Connections — reading from remote sources
 
 How Strata reads parquet/CSV/JSON out of S3, GCS and plain HTTP(S), and how it queries a live
-PostgreSQL. A **connection** is a project-scoped description of one remote source: the bucket,
-origin or server it names, the provider that serves it, and a *reference* to where credentials
-live. Tables read through an object-store connection by naming it; a database connection needs no
-tables at all — see [Database connections](#database-connections).
+`PostgreSQL`. A **connection** is a project-scoped description of one remote source: the name it
+is called, the bucket, origin or server it addresses, what serves it, and a *reference* to where
+credentials live. Tables read through an object-store connection by naming it; a source
+connection needs no tables at all — see [Database connections](#database-connections).
 
 Two rules shape everything below:
 
 - **No connection field is a secret value.** A connection carries only non-secret metadata —
   bucket, region, endpoint, an auth *mode*, a server and a role — plus at most a named `~/.aws`
   profile, a service-account key **file path**, or the bare statement that this machine's OS
-  keystore holds a password. There is no key or token field anywhere in the model
+  keystore holds one. There is no key or token field anywhere in the model
   (`crates/strata-model/src/connection.rs`), so one cannot be persisted by accident. Object-store
   credentials resolve at query time from the machine's own provider chains, and never touch
-  Strata; a database password is held by `strata_core::secret` and read per use.
+  Strata; a source's secret is held by `strata_core::secret` and read per use — the def records
+  only **which** of the kind's secret-typed keys are set (`SourceDef::secrets`).
 - **DataFusion resolves nothing itself.** There is no built-in "read `s3://…`": the embedder
   builds an `object_store` and registers it per bucket, or every scan fails with *"No suitable
   object store found"*. Registering that store is the whole of what an object-store connection
-  *does* (`crates/strata-engine/src/store.rs`). A database connection is the same shape
-  against a different registry: it builds a connection pool and registers a **catalog**
-  (`crates/strata-engine/src/db/`).
+  *does* (`crates/strata-engine/src/store.rs`). A source connection is the same shape against a
+  different registry: it opens a live handle and registers a **catalog**
+  (`crates/strata-engine/src/sources/`).
 
-## Providers
+## Providers and sources
 
-Four providers — **S3**, **GCS**, **HTTP** and **PG** (`ProviderId::ALL`, pinned at four by test).
-The provider is an **explicit picker** in the editor, never inferred from a typed URL scheme.
+Three object stores — **S3**, **GCS**, **HTTP** (`ProviderId::ALL`) — plus one arm for every
+**registered source**, `Provider::Source(SourceDef)`. Which sources exist is the engine's answer,
+not the model's: `Engine::source_registrants()` lists what is registered, and the editor's picker,
+a catalog row's badge and a connection form all read that one list, so a source an embedder
+registered is offered on the same terms as a shipped one. The provider is an **explicit picker**,
+never inferred from a typed URL scheme.
 
-The first three register an object store; PG registers a catalog. Where a surface asks *which
+The object stores register a store; a source registers a catalog. Where a surface asks *which
 connection do these files read through* it offers `ProviderId::OBJECT_STORES` rather than `ALL` —
 the Configure window's LOCATION **TYPE** pill, and nothing else.
+
+A source is implemented as a `DataSource` and registered with `EngineBuilder::with_source`; the
+shipped `PostgreSQL` reaches the engine through that same call, behind its own cargo feature. The
+seam is `crates/strata-engine/src/sources/source.rs`; what a source declares about itself —
+its label, its badge, whether connecting yields a store or a catalog, and the settings its form
+draws — is read from the registrant rather than written down here.
 
 - **S3-compatible** stores (Cloudflare R2, MinIO, Alibaba OSS, Tencent COS) ride the S3 provider
   via its **Endpoint** field plus an **Allow plain HTTP** toggle — they are not separate
@@ -39,17 +50,25 @@ the Configure window's LOCATION **TYPE** pill, and nothing else.
 - **HTTP** is a public origin: always anonymous, no auth control, no region — the address itself
   is a whole URL, scheme included.
 
-## Identity and persistence
+## Name, identity and persistence
 
-**A connection's identity is its URL** — `ConnectionDef::url()`. For an object store that is
-scheme *and* authority, because that is exactly what DataFusion's object-store registry keys on.
-Never the bucket alone: `s3://lake` and `gs://lake` share a bucket and are two different
-connections over two different stores. Everything that addresses a connection (a registration
-outcome, a store row, the Configure picker, a table def, a derived keystore slot) names it by this
-URL. The pane's sort order is the **address**, so `upsert_connection` replaces by URL and inserts
-in address order.
+**A connection is addressed by its name** — `ConnectionDef::named()`. It is what the catalog tree
+shows, what the editor titles, what a table def points at, what the keystore slot derives from,
+and — for a source — the catalog half of `catalog.schema.table`. One field for all of it, so what
+a user renames is what queries say. A def that predates the field is called what its address mints
+(`mint_name`), numbered apart where two would mint the same (`mint_free_name`, applied at load).
 
-The def stores the **address** and derives the scheme from the provider:
+**A connection's identity is `(kind, address)`** — `ConnectionDef::identity()`, spelled
+`{kind}:{address}` where one string is needed. It is not a URL: the scheme an object store is
+registered under is the engine's own rendering, composed where the store is registered
+(`store::store_prefix`) and nowhere else. Identity has exactly two jobs — the clash check that
+stops two connections describing one thing, and that registration URL.
+
+A **rename** is a store-funnel operation (`ProjectState::rename_connection`): the row moves, every
+`TableDef::connection` pointing at the old name moves with it, and the engine migrates the
+keystore entries, all in one settle. No surface fixes references up afterwards.
+
+The def stores the **address**, and what a scheme would have said is the kind's:
 
 - **S3 / GCS** — the bucket name alone (`acme-lake`). Storing the scheme too would be two
   statements of one fact that can disagree: an `s3://` bucket under a GCS provider would read one
@@ -57,12 +76,9 @@ The def stores the **address** and derives the scheme from the provider:
 - **HTTP** — the whole origin (`http://aserver:8484`). `http` and `https` are two different
   origins, so the scheme is part of the address and only the person typing knows which their
   server speaks.
-- **PG** — `host:port/database` (`db.internal:5432/analytics`). Its URL is
-  `postgres://{user}@{address}`, which does *not* stop at the authority: a database connection
-  keys no object-store registry, and the two further things that make two of them different — the
-  database and the **role** — belong in its identity. Two roles over one database are two
-  connections with two sets of visible schemas, and the provider crate's own join-pushdown context
-  agrees, keying on host + port + db + user.
+- **A source** — whatever its kind says an address is (`host:port/database` for `PostgreSQL`),
+  judged by that kind's own rule through `Engine::check_source_address`. The model holds no copy
+  of it.
 
 Defs persist in the committed `.strata/project.json` (`ProjectDefs::connections`), beside the
 tables and views. Nothing in a def needs gitignoring: a profile *name* and a key *file path* hold
@@ -70,14 +86,23 @@ nothing a colleague may not have. The shape is a tagged provider — the provide
 settings, so an S3 region cannot be written down on a GCS bucket:
 
 ```json
-{ "address": "acme-lake",
+{ "address": "acme-lake", "name": "acme_lake",
   "provider": { "provider": "s3", "region": "eu-west-2",
                 "auth": { "mode": "profile", "name": "analytics" },
                 "endpoint": "", "allow_http": false },
   "client_config": { "timeout": "30s" } }
-{ "address": "lake",                "provider": { "provider": "gcs", "auth": { "mode": "service-account", "path": "…" } } }
-{ "address": "http://aserver:8484", "provider": { "provider": "http" } }
+{ "address": "lake",                "name": "lake",     "provider": { "provider": "gcs", "auth": { "mode": "service-account", "path": "…" } } }
+{ "address": "http://aserver:8484", "name": "aserver",  "provider": { "provider": "http" } }
+{ "address": "db.internal:5432/analytics", "name": "warehouse",
+  "provider": { "provider": "source", "kind": "postgres",
+                "config": { "user": "reader", "sslmode": "verify-full" },
+                "secrets": ["password"], "schemas": ["public"], "read_only": true } }
 ```
+
+A source's `config` keys are the **kind's own vocabulary**, declared by the registrant
+(`DataSource::config_keys`) and read by it; this crate never interprets them. `secrets` names the
+declared keys whose values this connection has set — the values themselves live in the keystore
+or arrive through the kind's environment convention, never here.
 
 `client_config` is absent unless set; every provider setting is `#[serde(default)]`, so a def
 written before a setting existed still loads. Older files that stored the field as `bucket` (and,
@@ -177,16 +202,15 @@ refused by the engine in the same words:
   `db.internal/analytics` while it means `:5432` shows one thing and connects to another — the
   same argument that keeps S3's region out of `object_store`'s silent default. A scheme is refused
   (the provider supplies it), a second `/` is refused (one database), and userinfo is refused for
-  HTTP's reason — the role is its own field. The port is the **last** `:`, so an IPv6 literal
-  reads either way (`::1:5432/db` or `[::1]:5432/db`); `engine::db` unwraps the brackets before
-  the driver sees the host, which takes the address itself.
+  HTTP's reason — the role is its own declared key. The port is the **last** `:`, so an IPv6
+  literal reads either way (`::1:5432/db` or `[::1]:5432/db`); the source unwraps the brackets
+  before the driver sees the host, which takes the address itself.
 
-  The **role** is checked on the same terms (`PgStore::check_user`), and for a sharper reason: the
+  The **role** is checked on the same terms (`settings::check_user`), and for a sharper reason: the
   driver's parameters are interpolated into a connection string with no quoting, so a space or an
   `=` in the user fails as a connection string the parser cannot read rather than as "that user is
   wrong". `CREATE ROLE "read only"` is legal Postgres and simply cannot be dialled through this
-  stack, so it is refused by name. It is also half of `ConnectionDef::url()` — the connection's
-  identity, and the input its keystore slot derives from.
+  stack, so it is refused by name.
 
 The checks are deliberately not exhaustive — each provider reserves further names no local check
 can settle — they catch what is *statically* wrong so the user is told at the field instead of by
@@ -225,10 +249,10 @@ provider (a control that cannot mean anything for the chosen provider is not shi
 2. **The address box** — BUCKET for S3/GCS, URL for HTTP. A database has no single address box:
    it splits `ConnectionDef::address` into **URL** (`host:port`) and **DATABASE** (`appdb`),
    because a server and the database on it are two things Postgres names separately. The stored
-   def is still one `host:port/database` string, so `parse_pg_address` remains the only parse of
+   def is still one `host:port/database` string, so the source's own parse remains the only parse of
    that grammar.
 3. **CATALOG**, **USER**, **PASSWORD**, **SSL MODE** (PG only), in that order. CATALOG is
-   `PgStore::catalog`, the prefix Strata queries the connection by (`pg` makes
+   the connection's **name**, the prefix Strata queries it by (`pg` makes
    `pg.public.orders`) — Strata's name for the connection, not anything the server has, and its
    hint says so. It is the user's choice rather than derived from DATABASE, because two servers'
    `analytics` would derive one prefix. It is not needed for an everyday query: a bare name
@@ -260,18 +284,20 @@ honest because it minted the reference when it stored one; a def carries only th
 so the row probes the local keystore once at mount and shows one of: no password expected, stored
 on this machine, expected but not stored here, still asking, or the keystore's own refusal. The
 two clearing gestures are deliberately separate presses — *remove from this machine* deletes the
-local entry and leaves `PgPassword::Keystore` standing, while *this connection uses no password*
-edits the shared def to `PgPassword::None`. Conflating them means one person casually breaking
+local entry and leaves the def's expectation standing, while *this connection uses no password*
+edits the shared def to expect none. Conflating them means one person casually breaking
 every colleague who has a password. There is no mode pill: a password is optional, so absence is
 a state rather than a mode.
 
-Save writes the def, persists the project, **deregisters the old URL itself** when the edit moved
-the bucket, the provider or a database's user (nothing downstream ever sees the def it replaced),
+Save writes the def through the store's own funnel, persists the project, **deregisters what the
+old name registered** when the edit moved it (nothing downstream ever sees the def it replaced),
 and asks for a whole-catalog registration pass; the window then watches its own row and closes
-when the connection settles. A database connection has one step in front of all of that: whatever
-this machine's keystore owes the password, on a worker, so a keystore that refuses writes nothing
-— a migration when the identity moved (`secret::migrate_derived`), then the put or the delete.
-A **catalog-name** move with an unchanged URL needs nothing of Save's: `db::connect` replaces on
+when the connection settles. A **rename** goes through `rename_connection`, which moves the tables
+reading through it in the same settle. A source has one step in front of all of that: whatever
+this machine's keystore owes, on a worker, so a keystore that refuses writes nothing — the move
+when the name changed, then the put or the delete, all of it `sources`' own.
+
+An **address** move with an unchanged name needs nothing further of Save's: connecting replaces on
 re-connect, and the whole-catalog pass is what re-connects.
 
 ## The data-sources tree
@@ -291,7 +317,7 @@ Top level is **data sources**:
   expansion to columns, and the TABLES `+` still opens Configure on a new table;
 - one node per **database connection**, opening onto its enabled schemas, then Tables and Views
   groups split by the listing's own `relkind`, then its relations. All of it is
-  `Engine::db_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
+  `Engine::source_listing`'s scoped-and-tagged answer — read from the connect-time enumeration, not
   the network — so collapse and re-open cost nothing and ↻, which re-connects, is the refresh. A
   schema the def enables and the server does not have renders as its own failed node naming that
   fact. A relation **opens onto its columns** (DB-07), and it is the one node in the tree whose
@@ -314,7 +340,7 @@ what a tooltip holds and naming Problems for the rest), and a trailing **⋮** m
 right-click): **Edit**, **Schemas…** on a database, **Forget**. Pressing the row opens it; its
 actions are the menu.
 
-**Schemas…** is a picker over the same `db_listing` answer, so the tree, the picker and
+**Schemas…** is a picker over the same `source_listing` answer, so the tree, the picker and
 completion cannot disagree about what a connection shows. Its write is display-only, so it edits
 the def **in place** (`ProjectState::update_connection_def`) and keeps the row's registration —
 going through `upsert_connection` would leave a `Reg::Loading` that only a whole-catalog re-scan
@@ -421,7 +447,7 @@ a ↻ without either being noticed specially.
 The editor offers a database's names as you type them (DB-06): a connection's **catalog name** at
 any relation-target position, its **enabled schemas** after `catalog.`, and its **relations** after
 `catalog.schema.`. The catalog name comes from the def, so a connection that has never answered
-still offers the name a query has to say; the schemas and relations come from `db_listing`, the
+still offers the name a query has to say; the schemas and relations come from `source_listing`, the
 same scoped-and-tagged answer the tree and the Schemas… picker read. A non-enabled schema is
 absent from the offer and still resolves if typed — visibility, not policy. Nothing on the
 completion path touches the network. The full rules, including where it deliberately stops (a
@@ -489,15 +515,24 @@ keystore not existing when W7 was built, and of object stores happening to have 
 credential chains where a database does not. The password is captured exactly as an assistant
 provider key is (`strata_core::secret`) and read **per pool connection**, never cached.
 
-The reference is **derived**, not minted: `SecretRef::derived("pg-password", def.url())`, a
-`Uuid::new_v5` over a fixed namespace. A minted id in a committed, shared `project.json` would be
-rewritten by every colleague who entered their own password — two machines ping-ponging one id
-through git forever. A derived one addresses the same slot on every machine while each machine's
-keystore holds its own entry, and the def therefore stores only `PgPassword::Keystore`: storing a
-derivable value beside the fields it derives from is two statements of one fact that can disagree.
-The consequences are carried honestly — an identity edit **migrates** the entry
-(`secret::migrate_derived`), a Forget deletes it without needing a stored ref, and on a machine
-with no entry the row settles failed naming the fix ("No password is stored on this machine for
+The reference is **derived**, not minted: `SecretRef::derived("{kind}-{key}", def.named())`, a
+`Uuid::new_v5` over a fixed namespace. The family is per **key**, so a source declaring two
+credentials keeps them in two slots and no kind's family collides with another's. A minted id in a
+committed, shared `project.json` would be rewritten by every colleague who entered their own
+password — two machines ping-ponging one id through git forever. A derived one addresses the same
+slot on every machine while each machine's keystore holds its own entry, and the def therefore
+records only that the key is *set*: storing a derivable value beside the fields it derives from is
+two statements of one fact that can disagree.
+
+**The engine owns the write.** `sources::{put_secret, forget_secrets, migrate_secrets}` are where
+a secret is stored, dropped and moved; no surface composes a slot. A **rename** moves the entries
+with the connection, which is a fact about how the slot is derived and therefore lives beside the
+derivation. A value may also arrive from the kind's own environment convention (`PGPASSWORD` for
+`PostgreSQL`), declared in its `SecretRequest` and asked through `ChainSecrets`; the app asks the
+keystore first, a headless tool the environment alone, and a miss names **both** fixes.
+
+The consequences are carried honestly — a Forget deletes the entries without needing a stored ref,
+and on a machine with no entry the row settles failed naming the fix ("No password is stored on this machine for
 '…'"), the same shape as an expired SSO session.
 
 **Connecting is the probe, with nothing extra.** Building the pool resolves the host, opens a TCP
@@ -514,7 +549,7 @@ regardless — the providers are lazy, so that costs nothing — which means a q
 that is not enabled still resolves and runs. What it *does* bound, since DB-09, is where an
 **unqualified** name is looked for (see *Unqualified names* above): a schema you switched off
 neither captures a bare name nor collides with one in a schema you left on.
-`Engine::db_listing` is the one read every surface shares, and it answers **scoped and tagged**
+`Engine::source_listing` is the one read every surface shares, and it answers **scoped and tagged**
 (`Live | EnabledButMissing | NotEnabled`), so nothing re-derives visibility. It reads the
 connect-time enumeration, which is why a ↻ *is* the refresh.
 
@@ -663,7 +698,7 @@ the one parse in front of both the router and the planner).
    connection registered it, the schema and the relation as the server spells them. Views and
    materialized views included; the search asks the providers, and the listing is
    `relkind IN ('r','p','v','m','f')`. **The search runs in the schemas each connection shows**
-   (`PgStore::schemas`) — see below.
+   (`SourceDef::schemas`) — see below.
 3. More than one: refused, naming every candidate — `'orders' is ambiguous: 'pg.public.orders',
    'pg.analytics.orders'. Qualify it`. Never a coin flip between two servers.
 4. None: left bare, which is the error DataFusion already gives.
@@ -697,7 +732,7 @@ the name the read reached, so `PlanDeps` records `pg.public.orders` in its remot
 There is no mode, nothing to display and nothing a restart has to clear.
 
 **The implicit search is scoped to the schemas a connection shows, and only the implicit one.**
-`PgStore::schemas` bounds what an *unqualified* name searches; a name written in full still
+`SourceDef::schemas` bounds what an *unqualified* name searches; a name written in full still
 resolves into any schema the role can see, which is what "display, never resolution" was always
 about. Both halves are one rule: the tree is the statement of what you are working with, so a
 schema switched off cannot capture a bare name, and — the case that made this obvious — cannot
@@ -721,13 +756,18 @@ and the dependency assertion that is the whole risk.
 
 ## Tables over a connection
 
-`TableDef::connection` holds the chosen connection's `url()` — a *reference*, never a copy of the
+`TableDef::connection` holds the chosen connection's **name** — a *reference*, never a copy of the
 bucket, provider or auth — and it is the one field that says a table is remote. Exactly when it
 is set, the table's sources are **bucket-relative** (`events/2024/**/*.parquet`), stored as
-typed. `strata_core::project::resolve_source` is the single place the two halves compose: given
-the connection it prepends the URL, and without one it joins onto the project folder. One
-function taking the connection, rather than a local rule with a remote one beside it, so a
-bucket-relative source can never be silently resolved against the local disk.
+typed. A def written when the field held a URL or an identity migrates on read
+(`TableDef::migrated`), because both older spellings carry the address a name is minted from.
+
+Composing the two halves is the **engine's**: `register::table_spec` turns the name into the
+address that connection's store is registered under and hands
+`strata_core::project::resolve_source` the result, so a bucket-relative source can never be
+silently resolved against the local disk — and no surface keeps a second copy of the scheme. The
+same rule is why `Engine::detect_partitions` takes a connection name and def-relative paths rather
+than composed ones.
 
 In the Configure window, **LOCATION** is an explicit Local / Remote toggle — never inferred from
 a path's scheme. Remote mode shows a single bucket-relative SOURCE PATH (rendered with the

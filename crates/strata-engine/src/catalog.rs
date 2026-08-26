@@ -527,8 +527,8 @@ pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
 ///
 /// Only the first segment of the resolved name is read, because the catalog is the only part
 /// this has to judge; the rest is the relation's own address inside the database, which the
-/// sentence prints back whole. A catalog name cannot contain a `.` — `PgStore::check_catalog`
-/// admits only `[A-Za-z_][A-Za-z0-9_]*` — so that split cannot land mid-name.
+/// sentence prints back whole. A catalog name cannot contain a `.` — `check_catalog` admits
+/// only `[A-Za-z_][A-Za-z0-9_]*` — so that split cannot land mid-name.
 fn missing_relation(ctx: &SessionContext, raw: &str) -> Option<String> {
     let name = raw
         .split_once(MISSING_PREFIX)
@@ -1582,7 +1582,7 @@ mod cross_source_tests {
     use super::*;
     use crate::builder::test_context;
     use crate::fold_ident;
-    use crate::providers::fake_database;
+    use crate::providers::fake_source;
 
     /// A session with a workspace table `orders`, a connection `pg` whose catalog holds its own
     /// `orders`, and nothing else. The shared bare name is the fixture's whole point.
@@ -1599,7 +1599,7 @@ mod cross_source_tests {
         let batch = RecordBatch::new_empty(schema);
         ctx.register_batch("orders", batch)
             .expect("workspace table");
-        fake_database(&ctx, "pg", &["orders"]);
+        fake_source(&ctx, "pg", &["orders"]);
         ctx
     }
 
@@ -1689,7 +1689,7 @@ mod cross_source_tests {
     #[tokio::test]
     async fn the_connection_is_named_as_it_was_registered() {
         let ctx = test_context(&BTreeMap::new());
-        fake_database(&ctx, "Sales", &["orders"]);
+        fake_source(&ctx, "Sales", &["orders"]);
         assert_eq!(fold_ident("Sales"), "sales");
         assert!(view_error(
             &ctx,

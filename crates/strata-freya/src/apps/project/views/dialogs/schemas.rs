@@ -2,7 +2,7 @@
 //! tree, the inspector and completion show.
 //!
 //! **No reconnect**, and that is what makes this dialog legitimate at all. Registration exposes
-//! every schema the connection can reach; [`PgStore::schemas`] scopes what Strata *shows*, so a
+//! every schema the connection can reach; [`SourceDef::schemas`] scopes what Strata *shows*, so a
 //! change here rebuilds no pool, invalidates no plan and cannot break a query that already names
 //! a schema this list leaves out.
 //!
@@ -19,7 +19,7 @@
 //! spinner over a change that touched no engine state. The store's def-in-place write
 //! ([`ProjectState::update_connection_def`]) keeps the row's verdict, which is still true.
 //!
-//! The offer is [`Engine::db_listing`]'s **scoped and tagged** answer and nothing derived beside
+//! The offer is [`Engine::source_listing`](strata_engine::Engine::source_listing)'s **scoped and tagged** answer and nothing derived beside
 //! it, so this picker, the tree and completion cannot disagree about what a connection shows. A
 //! connection that is not live has no enumeration to offer: the picker then lists the def's own
 //! schemas with the connection's failure named, rather than an unexplained empty list.
@@ -29,8 +29,8 @@ use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
 use std::collections::BTreeSet;
 
-use strata_engine::db::SchemaVisibility;
-use strata_model::{ConnectionDef, PgStore, Provider};
+use strata_engine::sources::SchemaVisibility;
+use strata_model::{ConnectionDef, Provider, SourceDef};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
@@ -47,7 +47,7 @@ use crate::theme::{use_roles, Role};
 /// What a schema the def enables and the server does not have says on its row.
 const MISSING: &str = "not in the connection";
 
-/// The slot a trigger sets to ask for the picker — a connection's `ConnectionDef::url()`.
+/// The slot a trigger sets to ask for the picker — a connection's own name.
 /// Provided at the project root, like every other dialog's.
 pub type SchemasRequest = State<Option<String>>;
 
@@ -64,8 +64,8 @@ struct Offer {
 ///
 /// Live: the connection's own tagged enumeration. Not live: the def's `schemas`, so the user can
 /// still take one off a connection that is refusing to connect *because* of it.
-fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &PgStore) -> (Vec<Offer>, bool) {
-    let Some((_, schemas)) = engine.db_listing(def) else {
+fn offers(engine: &EngineCtx, def: &ConnectionDef, pg: &SourceDef) -> (Vec<Offer>, bool) {
+    let Some((_, schemas)) = engine.source_listing(def) else {
         let offers = pg
             .schemas
             .iter()
@@ -108,11 +108,11 @@ fn apply(
     {
         let mut p = project.write_channel(ProjChan::Connections);
         p.update_connection_def(url, |def| {
-            if let Provider::Postgres(pg) = &mut def.provider {
+            if let Provider::Source(pg) = &mut def.provider {
                 pg.schemas = schemas;
             }
         });
-        if let Some(row) = p.connections.iter().find(|c| c.def.url() == url) {
+        if let Some(row) = p.connections.iter().find(|c| c.def.named() == url) {
             engine.show_schemas(&row.def);
         }
         persisted_defs(&p, report);
@@ -158,9 +158,9 @@ impl Component for SchemasPicker {
             .read()
             .connections
             .iter()
-            .find(|c| c.def.url() == url)
+            .find(|c| c.def.named() == url)
             .and_then(|c| match &c.def.provider {
-                Provider::Postgres(pg) => Some((c.def.clone(), pg.clone())),
+                Provider::Source(pg) => Some((c.def.clone(), pg.clone())),
                 _ => None,
             })
         else {
@@ -273,14 +273,16 @@ impl Component for SchemasPicker {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use strata_engine::sources::postgres::Pg;
+    use strata_engine::SourceKind;
 
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{PgPassword, PgSslMode};
 
     use super::*;
+    use crate::apps::connection::model::PgDraft;
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
     use crate::theme::strata_theme;
 
@@ -292,15 +294,18 @@ mod tests {
     fn connection() -> ConnectionDef {
         ConnectionDef {
             address: "db.internal:5432/analytics".into(),
-            provider: Provider::Postgres(PgStore {
-                catalog: "pg".into(),
-                user: "reader".into(),
-                sslmode: PgSslMode::Disable,
-                sslrootcert: String::new(),
-                password: PgPassword::None,
-                schemas: vec!["public".into(), "analytics".into()],
-                read_only: true,
-            }),
+            name: "analytics".into(),
+            provider: Provider::Source(
+                PgDraft {
+                    kind: Pg::NAME.to_string(),
+                    name: "pg".into(),
+                    user: "reader".into(),
+                    sslmode: "disable".into(),
+                    schemas: vec!["public".into(), "analytics".into()],
+                    ..Default::default()
+                }
+                .def(),
+            ),
             client_config: Default::default(),
         }
     }
@@ -376,7 +381,7 @@ mod tests {
     fn applying_a_schema_change_bumps_the_catalog_epoch() {
         let (mut runner, (mut target, project, catalog)) = runner();
         runner.sync_and_update();
-        target.set(Some(connection().url()));
+        target.set(Some(connection().named()));
         runner.sync_and_update();
         runner.sync_and_update();
 
@@ -385,10 +390,10 @@ mod tests {
 
         assert_eq!(
             project.peek().connections[0].def.provider.clone(),
-            Provider::Postgres(PgStore {
+            Provider::Source(SourceDef {
                 schemas: vec!["public".into()],
                 ..match connection().provider {
-                    Provider::Postgres(pg) => pg,
+                    Provider::Source(pg) => pg,
                     _ => unreachable!(),
                 }
             }),

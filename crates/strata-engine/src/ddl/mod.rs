@@ -42,9 +42,10 @@ use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::TableReference;
 
 use crate::catalog::{TableMeta, ViewMeta};
-use crate::db::{Databases, RemoteTarget};
 use crate::functions::Functions;
 use crate::providers::in_workspace;
+use crate::sources::Live;
+use crate::sql::qualified;
 use crate::statements::StmtKind;
 use crate::{fold_ident, Connections, InternalTables, CATALOG, SCHEMA};
 use strata_core::util::plural;
@@ -174,7 +175,7 @@ pub struct Dispatch {
     pub connections: Connections,
     /// The live database connections — what a write into a remote relation goes through,
     /// and what says whether one accepts writes at all.
-    pub(crate) databases: Databases,
+    pub(crate) sources: Live,
     /// The `SET` overlay and the prepared-statement mirror.
     pub scope: SessionScope,
     /// The function catalog and the names this session created.
@@ -199,7 +200,7 @@ pub async fn execute(
         root,
         internal,
         connections,
-        databases,
+        sources,
         scope,
         functions: registry,
         baseline,
@@ -207,17 +208,15 @@ pub async fn execute(
     let start = Instant::now();
     let outcome: StatementOutcome = match kind {
         StmtKind::CreateTable | StmtKind::Ctas => {
-            tables::create(ctx, kind, stmt, root, &databases, &sql).await
+            tables::create(ctx, kind, stmt, root, &sources, &sql).await
         }
-        StmtKind::Insert => tables::insert(ctx, stmt, &internal, &databases).await,
+        StmtKind::Insert => tables::insert(ctx, stmt, &internal, &sources).await,
         StmtKind::DropTable => {
-            tables::drop_statement(ctx, &root, &internal, stmt, &databases, &sql).await
+            tables::drop_statement(ctx, &root, &internal, stmt, &sources, &sql).await
         }
-        StmtKind::CreateView => views::create_statement(ctx, stmt, &databases, &sql).await,
-        StmtKind::DropView => views::drop_statement(ctx, stmt, &databases, &sql).await,
-        StmtKind::Update | StmtKind::Delete => {
-            remote::dml(ctx, kind, &databases, &stmt, &sql).await
-        }
+        StmtKind::CreateView => views::create_statement(ctx, stmt, &sources, &sql).await,
+        StmtKind::DropView => views::drop_statement(ctx, stmt, &sources, &sql).await,
+        StmtKind::Update | StmtKind::Delete => remote::dml(ctx, kind, &sources, &stmt, &sql).await,
         StmtKind::Copy => copy::copy_to(ctx, stmt, &root).await,
         StmtKind::Set => session::set(ctx, stmt, &scope).await,
         StmtKind::Reset => session::reset(ctx, stmt, &scope, &baseline).await,
@@ -275,7 +274,7 @@ pub(super) fn bare_name(
     if in_workspace(name) {
         return Ok(name.table().to_string());
     }
-    Err(match database_catalog(ctx, name) {
+    Err(match source_catalog(ctx, name) {
         Some(catalog) => in_database(&name.to_string(), &catalog),
         None => elsewhere(what),
     })
@@ -291,10 +290,10 @@ pub(super) fn bare_name(
 /// **Folded on both sides, the workspace's own name included.** The catalog list resolves by
 /// [`fold_ident`], so a quoted `"STRATA"` names the workspace catalog — and compared raw it
 /// would slip past the guard below and then *match* the workspace's own entry in the search,
-/// telling the user their project's catalog is a database connection. No real connection can
-/// produce that (`PgStore::check_catalog` refuses `strata` case-insensitively), so the sentence
-/// would name a connection that cannot exist.
-fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<String> {
+/// telling the user their project's catalog is a connection. No real connection can produce that
+/// (`check_catalog` refuses `strata` case-insensitively), so the sentence would name a connection
+/// that cannot exist.
+fn source_catalog(ctx: &SessionContext, name: &TableReference) -> Option<String> {
     let TableReference::Full { catalog, .. } = name else {
         return None;
     };
@@ -305,6 +304,53 @@ fn database_catalog(ctx: &SessionContext, name: &TableReference) -> Option<Strin
     ctx.catalog_names()
         .into_iter()
         .find(|registered| fold_ident(registered) == folded)
+}
+
+/// One relation inside a data-source connection, as a **write target**: the connection's catalog
+/// in its registered spelling, and the schema and relation as the statement named them.
+///
+/// Minted by [`remote_target`] in front of the arms, so the question "is this name the
+/// workspace's" is asked in one place and answered once — which is why it lives here rather than
+/// in [`sources`](crate::sources), whose sources are handed one to act on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteTarget {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+}
+
+impl RemoteTarget {
+    /// The address a message prints — `qualified`, because these three parts are a source's
+    /// spelling and quoting them whole would name one relation with dots in it.
+    pub fn address(&self) -> String {
+        qualified([
+            self.catalog.as_str(),
+            self.schema.as_str(),
+            self.table.as_str(),
+        ])
+    }
+
+    /// The address as a **plan** renders it: every part bare, dots between, which is what
+    /// `TableReference::to_string` gives and therefore the spelling `PlanDeps::remote` holds.
+    /// Never [`address`](Self::address), which quotes a part that needs it and so matches nothing
+    /// the moment a schema or relation is not a plain lowercase word.
+    pub fn dotted(&self) -> String {
+        format!("{}.{}.{}", self.catalog, self.schema, self.table)
+    }
+
+    /// The address as the **source** knows it, `schema.relation` — what a report about a
+    /// statement the server ran names, the catalog being Strata's word for the connection and
+    /// already in that report's other half ("on 'pg'").
+    pub fn server_address(&self) -> String {
+        qualified([self.schema.as_str(), self.table.as_str()])
+    }
+
+    /// How the **source** is addressed: `schema.table`, never the catalog, which is Strata's own
+    /// prefix for the connection and means nothing to the server. A full reference would render
+    /// `"pg"."public"."orders"` into a statement the server then refuses.
+    pub fn relation(&self) -> TableReference {
+        TableReference::partial(self.schema.clone(), self.table.clone())
+    }
 }
 
 /// One relation inside a database connection, as a **write target** — `None` for the workspace's
@@ -319,7 +365,7 @@ pub(super) fn remote_target(ctx: &SessionContext, name: &TableReference) -> Opti
         return None;
     };
     Some(RemoteTarget {
-        catalog: database_catalog(ctx, name)?,
+        catalog: source_catalog(ctx, name)?,
         schema: schema.to_string(),
         table: table.to_string(),
     })
@@ -403,8 +449,8 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
 /// planning, which is one refusal in one place rather than a second of ours), and the four session
 /// statements name no relation.
 ///
-/// Against a fake catalog rather than a server: see `providers::fake_database` for what that does
-/// and does not stand in for. It is registered on the session and held by no `Databases`, which is
+/// Against a fake catalog rather than a server: see `sources::fake::fake_source` for what that does
+/// and does not stand in for. It is registered on the session and held by no `Live`, which is
 /// exactly a connection that is not opted in — so the write half is pinned here at its refusal and
 /// the landing is `tests/postgres_federation.rs`'s, where a real server can take an insert.
 #[cfg(test)]
@@ -413,7 +459,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use crate::providers::fake_database;
+    use crate::providers::fake_source;
     use crate::{Engine, RunOutcome, RunTag, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
@@ -432,7 +478,7 @@ mod tests {
         run(&eng, "CREATE TABLE orders AS SELECT 1 AS id, 2 AS total")
             .await
             .expect("workspace table");
-        fake_database(&eng.ctx, "pg", &["orders"]);
+        fake_source(&eng.ctx, "pg", &["orders"]);
         (root, eng)
     }
 
@@ -514,7 +560,7 @@ mod tests {
     #[tokio::test]
     async fn a_bare_write_target_reaches_the_arm_the_qualified_one_does() {
         let (_root, eng) = engine("bare_write").await;
-        fake_database(&eng.ctx, "warehouse", &["shipments"]);
+        fake_source(&eng.ctx, "warehouse", &["shipments"]);
 
         let expected = read_only(&RemoteTarget {
             catalog: "warehouse".into(),
@@ -557,12 +603,12 @@ mod tests {
 
     /// **The workspace catalog is never a database connection**, however it is spelled.
     ///
-    /// `database_catalog` folds before it compares, and this is what says so: the catalog list
+    /// `source_catalog` folds before it compares, and this is what says so: the catalog list
     /// resolves by `fold_ident`, so a quoted `"STRATA"` names the workspace — and an unfolded
     /// guard let that spelling past, whereupon the search *matched the workspace's own entry*
-    /// and told the user their project's catalog was a database connection. No real connection
-    /// can produce that sentence: `PgStore::check_catalog` refuses the name `strata`
-    /// case-insensitively, so it would have named a connection that cannot exist.
+    /// and told the user their project's catalog was a connection. No real connection can
+    /// produce that sentence: `check_catalog` refuses the name `strata` case-insensitively, so it
+    /// would have named a connection that cannot exist.
     ///
     /// And what it answers instead is the *right* thing: the name resolves to the workspace
     /// catalog, so the statement simply acts on the workspace table, exactly as the unquoted
