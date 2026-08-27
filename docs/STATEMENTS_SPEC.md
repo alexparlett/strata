@@ -525,8 +525,8 @@ The target is resolved **before** the project folder is looked at, because since
 target is qualified into a writable database connection needs no project folder: it branches to
 `db::create_table_as` and everything below is the workspace's path
 (`docs/CONNECTIONS_SPEC.md` for the remote half). The duplicate-column check is in front of both.
-A workspace CTAS whose *query* reads a connection spools through the same `CopyTo` as any other,
-and what makes that work is §6.8.
+A workspace CTAS whose *query* reads a connection executes that read federated exactly as a
+typed query would — the input is executed to a stream, and only its scans reach §6.8's rules.
 
 The parsed statement goes to `SessionState::statement_to_plan`, which executes nothing and buys
 two things outright: DataFusion's planner already refuses every clause it does not implement
@@ -537,17 +537,25 @@ duplicate result column names (an IPC file would store both, and every later rea
 the second onto the first), and running with no project open ("… needs a project folder to store
 the table's data").
 
-The spool is a `LogicalPlan::Copy` node built over the plan's `input` directly, `STORED AS ARROW`
-into `.strata/tables/.tmp-…/`, then renamed into `.strata/tables/<slug>/` (atomic; a crash leaves
-only a tmp dir the tidy sweeps). **No SQL text is re-rendered and no span is sliced** — the query
-that runs is the query the user wrote, by construction rather than by fidelity of a round trip.
+The plan's `input` is executed to a stream and handed to the engine's **internal-table store**
+(`engine::tables::InternalTableStore`, the EA-08 seam — `EngineBuilder::with_table_store`), whose
+`create` publishes it atomically under the slug. The shipped default (`LocalIpcTableStore`,
+following the project folder) spools one LZ4-frame IPC file into `.strata/tables/.tmp-…/` and
+renames the directory into `.strata/tables/<slug>/` (atomic; a crash leaves only a tmp dir the
+tidy sweeps). **No SQL text is re-rendered and no span is sliced** — the query that runs is the
+query the user wrote, by construction rather than by fidelity of a round trip.
 `IF NOT EXISTS` / `OR REPLACE` / plain-exists resolve against the one namespace tables and views
-share. A bare `CREATE TABLE (cols…)` plans as an `EmptyRelation` and writes one empty,
-schema-carrying IPC file — IPC self-describes, so replay infers without a schema in the def.
+share, in the arm, before the store is asked anything. A bare `CREATE TABLE (cols…)` plans as an
+`EmptyRelation` and publishes one empty, schema-carrying IPC file — IPC self-describes, so replay
+infers without a schema in the def.
 
 Registration goes through the funnel every table uses: `register_external` with
 `TableSpec { format: Arrow, internal: true }` → `TableMeta` →
-`StoreEffect::TableUpserted { def, meta }`. The def is a `TableDef` with `origin: Internal` and a
+`StoreEffect::TableUpserted { def, meta }`. For an internal spec that funnel asks the table
+store — `provider(slug)`, registered under the def's folded name — and only falls back to the
+spec's own resolved paths when the store holds nothing under the slug, which is what lets a
+rootless engine replay pre-resolved paths and what turns an ephemeral store's vanished data into
+the honest failed row. The def is a `TableDef` with `origin: Internal` and a
 project-relative source, so the store, the persist funnel, replay and the headless host need no
 new code. The def travels and the data does not: `tables/` is gitignored, and a clone without the
 data gets an honest `Reg::Failed` row in its own words.
@@ -567,13 +575,14 @@ Around it, as built:
   columns, and an internal table has none to edit, ever — so the window is structurally unable to
   receive an internal def.
 - A drop of an internal table **deletes its data** — see the next section.
-- `register_external` hands the table the runtime's per-file **statistics cache**
-  (`ListingTable::with_cache`), as `LocalIpcSnapshotStore::open` does for a snapshot; both build
-  their `ListingTable` by hand, and a hand-built one opts into applying every default
-  `SessionContext::register_listing_table` would have applied. Without it statistics are
-  re-read on every scan *and* every registration. **Not** the list-files cache, which
-  `ENGINE_KEYS` zeroes on purpose: that one answers "which files are there", and a re-scan means
-  asking again. This one answers "what is in *this* file", invalidated on size and mtime.
+- `LocalIpcTableStore::provider` hands the table the runtime's per-file **statistics cache**
+  (`ListingTable::with_cache`), as `LocalIpcSnapshotStore::open` does for a snapshot and
+  `register_external`'s path-built listing does for every other table; a hand-built
+  `ListingTable` opts into applying every default `SessionContext::register_listing_table` would
+  have applied. Without it statistics are re-read on every scan *and* every registration.
+  **Not** the list-files cache, which `ENGINE_KEYS` zeroes on purpose: that one answers "which
+  files are there", and a re-scan means asking again. This one answers "what is in *this* file",
+  invalidated on size and mtime.
 
 Completion (ED-11): `CREATE TABLE` is a statement lead; the name position is a Binding (an
 invented name offers nothing) and the `AS |` of a CTAS restarts the query ladder
@@ -592,24 +601,29 @@ settings, so the panel asks the planner rather than declaring anything.
 
 ### 6.2 Writes over an internal table — `INSERT` and `DROP TABLE`
 
-**`INSERT` is DataFusion's own write behind a target gate.** The statement is planned (side-effect
+**`INSERT` is DataFusion's own plan behind a target gate.** The statement is planned (side-effect
 free) and the gate reads what the plan names — first whether it is remote, since DB-10, which
 branches to `db::insert_into` and reports without a store effect; then, for a workspace name, the
 rest of this section. A target outside `Catalog::is_internal` is refused
-(`arms::tables::INSERT_EXTERNAL` — a view is the same refusal, neither being a directory a
-`CREATE TABLE` wrote), and any write op that is not `Append` is refused
+(`arms::tables::INSERT_EXTERNAL` — a view is the same refusal, neither being data a
+`CREATE TABLE` published), and any write op that is not `Append` is refused
 (`Fault::InsertOverwrite`; the classifier already catches `INSERT OVERWRITE` off the bare statement,
-while `REPLACE INTO` reaches the arm because only the plan names it). Everything after the gate is
-DataFusion's INSERT path unchanged — the column list, the source query, the schema check, and the
-single LZ4-frame IPC file the Arrow sink appends.
+while `REPLACE INTO` reaches the arm because only the plan names it). Everything up to the write is
+DataFusion's INSERT path unchanged — the column list, the source query, and the schema check,
+which is the planner's: it casts and renames the source onto the registered schema and refuses in
+its own words what cannot be coerced.
 
-**The plan that was gated is the plan that runs, and what runs it is the sink.** Both branches go
-through `sink::append_rows`: the `Dml`'s input is physical-planned, coalesced to one partition and
-handed to `insert_into` on the provider the plan already resolved — DataFusion's own DML arm minus
-the node it would have consumed. Re-dispatching the text would gate one value and execute another.
-Handing the **node** to a planner breaks it the other way — see §6.8.
+**The plan that was gated is the plan that runs, and the `Dml` node itself never executes.** The
+local arm executes the input (`sink::insert_stream` — the same projection collapse, since what
+decides whether anything is unparsed is where the rows are read from) and hands the stream to the
+table store's `append` (the EA-08 seam); under the default store that is the single LZ4-frame IPC
+file the sink has always appended, made visible by rename once the unit is whole. The remote arm
+drives the input through the connection's own sink (`sink::append_rows`). Re-dispatching the text
+would gate one value and execute another; handing the **node** to a planner breaks it the other
+way — see §6.8. The provider registration serves is read through, never written through: the arm
+is the only writer.
 
-One file per statement and **no compaction** — `DROP TABLE` plus `CREATE TABLE AS SELECT * FROM t`
+One unit per statement and **no compaction** — `DROP TABLE` plus `CREATE TABLE AS SELECT * FROM t`
 is the compaction story until a task owns one.
 
 The effect is `StoreEffect::RescanTable`, and its fold **re-reads the table's facts without
@@ -634,8 +648,9 @@ against its own provider. Only then is the data destroyed, and only where the de
 Dependent views are **named, never cascaded**: read from the providers before the deregister,
 because a `ViewTable`'s plan was inlined at creation and goes on executing until reload.
 
-The data is discarded **by rename** — the directory moves into a `.tmp-…` sibling and is only then
-walked, the mirror of the spool's publish-by-rename, so an interrupted delete leaves what the
+The data is destroyed through the table store's `discard` — under the default store **by
+rename**: the directory moves into a `.tmp-…` sibling and is only then walked, the mirror of the
+spool's publish-by-rename, so an interrupted delete leaves what the
 `.strata` sweep collects rather than a half-emptied directory under a live table name. The rename
 is the operation and the removal is housekeeping (logged, not returned); a failure of the *rename*
 puts the provider back, so a drop that reports a failure has not half-happened. And because an
@@ -1226,8 +1241,8 @@ where that note lives. `CREATE`/`DROP FUNCTION` keep DataFusion's own qualified-
 CTAS, the implemented case. At Run: `Workspace::run` classifies → `Admitted::Statement { kind:
 Ctas }` → `arms::execute` → the arm plans the statement, resolves its target
 (`Target::Workspace`), asks the policy provider once more about that target
-(`StmtCtx::require_target`) → spools the inner
-query to `.strata/tables/<slug>/` → registers via `register_external`
+(`StmtCtx::require_target`) → executes the inner query and publishes the stream through the
+table store (`.strata/tables/<slug>/` under the default) → registers via `register_external`
 (`TableSpec { format: Arrow, internal: true }`) → returns `RunOutcome::Statement` carrying
 `StoreEffect::TableUpserted { def, meta }`.
 

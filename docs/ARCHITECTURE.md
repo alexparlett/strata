@@ -145,8 +145,10 @@ flowchart LR
   dispatched to the server as text, or refused), and `StmtCtx` is what the engine hands every arm —
   so all sixteen share the signature `(&StmtCtx, &Principal, &Qualified) -> StatementOutcome` and
   adding a kind is five compile errors.
-- An interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS spools into
-  `.strata/tables/<slug>/` as Arrow IPC and registers through the ordinary external-table path —
+- An interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS publishes
+  its result through the engine's internal-table store (`engine::tables`, the EA-08 seam — under
+  the default store, Arrow IPC in `.strata/tables/<slug>/`) and registers through the ordinary
+  external-table path —
   the def it produces is a plain `TableDef` flagged `origin: Internal`, so persist, replay and the
   headless host need no new code. A typed `CREATE EXTERNAL TABLE` is that same funnel with the def
   read off the statement instead, which is what makes it and Table Config two gestures at one

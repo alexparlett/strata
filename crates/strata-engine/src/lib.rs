@@ -58,6 +58,7 @@ pub mod sources;
 pub mod sql;
 pub mod statements;
 mod store;
+pub mod tables;
 pub mod udf_package;
 pub mod udfs;
 
@@ -82,6 +83,7 @@ pub use statements::{
     Fault, Form, Mechanism, PolicyRefusal, Reason, Remote, StatementReport, StmtKind, StoreEffect,
     Target,
 };
+pub use tables::{InternalTableStore, LocalIpcTableStore, MemTableStore};
 
 pub use builder::EngineBuilder;
 pub use udf_package::UdfPackage;
@@ -471,7 +473,17 @@ pub struct Engine {
     /// open by whichever host owns it — see [`set_data_dir`](Engine::set_data_dir), or
     /// [`with_data_dir`](EngineBuilder::with_data_dir), which says it at construction. `None`
     /// until then, and forever for an engine with no project behind it.
-    data_root: Mutex<Option<PathBuf>>,
+    ///
+    /// An `Arc` because the default table store **follows** it
+    /// ([`LocalIpcTableStore::following`](tables::local_ipc::LocalIpcTableStore)): the store is
+    /// built before any project is opened, and where a project's tables live has to move with
+    /// this cell rather than be copied out of it once.
+    data_root: Arc<Mutex<Option<PathBuf>>>,
+    /// Where this engine's internal tables' bytes live ([`EngineBuilder::with_table_store`]).
+    ///
+    /// Shared by handle because the arms that write through it run inside tasks the engine
+    /// spawned, and those tasks must not hold the engine — its `Drop` is what aborts them.
+    tables: Arc<dyn InternalTableStore>,
     /// Which registered tables are **internal** — see [`InternalTables`].
     internal: InternalTables,
     /// What each registered name reads — see [`Dependencies`].

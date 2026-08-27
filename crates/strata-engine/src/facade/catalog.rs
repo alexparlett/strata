@@ -63,12 +63,13 @@ impl Catalog<'_> {
         self.cancel_profile(&spec.name);
         let ctx = self.engine.ctx.clone();
         let formats = self.engine.formats.clone();
+        let tables = self.engine.tables.clone();
         let (name, internal) = (spec.name.clone(), spec.internal);
         let connection = spec.connection.clone();
         let meta = self
             .engine
             .rt()
-            .spawn(async move { catalog::register_external(&ctx, &formats, &spec).await })
+            .spawn(async move { catalog::register_external(&ctx, &formats, &*tables, &spec).await })
             .await
             .map_err(|e| format!("register task failed: {e}"))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
@@ -235,10 +236,13 @@ impl Catalog<'_> {
         let ctx = self.engine.ctx.clone();
         let root = self.engine.data_root.lock().unwrap().clone();
         let internal = self.engine.internal.clone();
+        let tables = self.engine.tables.clone();
         let outcome = self
             .engine
             .rt()
-            .spawn(async move { arms::drop_table(&ctx, &root, &internal, &name, if_exists).await })
+            .spawn(async move {
+                arms::drop_table(&ctx, &root, &internal, &*tables, &name, if_exists).await
+            })
             .await
             .map_err(|e| format!("drop table task failed: {e}"))??;
         let report = stamped(StmtKind::DropTable, start, outcome);

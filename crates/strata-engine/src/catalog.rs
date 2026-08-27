@@ -23,6 +23,7 @@ use crate::providers::{in_workspace, replace_table};
 use crate::snapshots::is_snapshot_name;
 use crate::sql::qualified;
 use crate::statements::Fault;
+use crate::tables::InternalTableStore;
 use crate::{fold_ident, quote_ident, CATALOG, SCHEMA};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
@@ -103,14 +104,61 @@ pub struct ViewMeta {
 pub async fn register_external(
     ctx: &SessionContext,
     formats: &Formats,
+    tables: &dyn InternalTableStore,
     spec: &TableSpec,
 ) -> Result<TableMeta, String> {
     if is_snapshot_name(&spec.name) {
         return Err(Fault::ReservedName.message());
     }
-    let built = build_listing(ctx, formats, spec).await;
+    let built = build_provider(ctx, formats, tables, spec).await;
     swap_in(ctx, &spec.name, built)?;
     table_meta(ctx, spec.name.as_str()).await
+}
+
+/// The provider `spec` registers: for a table whose data Strata owns, the internal-table
+/// store's answer for its slug; the listing built from the spec's own paths for everything
+/// else.
+///
+/// An internal spec the store holds **nothing** for falls through to those paths too, and the
+/// fallthrough is load-bearing twice over: an engine that was never told its project folder
+/// still replays defs whose paths the caller already resolved (the contract
+/// [`Engine::set_data_dir`](crate::Engine::set_data_dir) states), and a def replayed against a
+/// store whose data is gone fails on the resolved paths with the no-data sentence — the honest
+/// failed row the ephemeral store's caveat promises — rather than as a fault about the store.
+async fn build_provider(
+    ctx: &SessionContext,
+    formats: &Formats,
+    tables: &dyn InternalTableStore,
+    spec: &TableSpec,
+) -> Result<Arc<dyn TableProvider>, String> {
+    if spec.internal {
+        if let Some(slug) = spool_slug(spec) {
+            match tables.provider(ctx, &slug).await {
+                Ok(Some(provider)) => return Ok(provider),
+                Ok(None) => {}
+                Err(raw) => {
+                    return Err(register_error(
+                        spec,
+                        &formats.extension(&spec.format),
+                        &raw,
+                        None,
+                    ))
+                }
+            }
+        }
+    }
+    build_listing(ctx, formats, spec).await
+}
+
+/// The store slug an internal spec's source path names — its last segment, because the def's
+/// one source is [`internal_source`](strata_core::project::internal_source)`(slug)` resolved
+/// against the project root, and nothing else writes internal specs. `None` for a spec whose
+/// paths carry no segment to read, which falls back to the paths themselves.
+fn spool_slug(spec: &TableSpec) -> Option<String> {
+    let path = spec.paths.first()?;
+    let name = Path::new(path.trim_end_matches(['/', '\\'])).file_name()?;
+    let name = name.to_str()?;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Builds the provider `spec` describes, registering nothing.
