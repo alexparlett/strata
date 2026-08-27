@@ -312,6 +312,7 @@ pub async fn run_export(
 
     let select = select_sql(&snap, &spec, &schema, stats.ord.as_deref());
 
+    extension_words_are_plain(&spec.format, ctx)?;
     partition_columns_are_bare_words(&spec.partition.columns, ctx)?;
     partition_columns_have_no_nulls(&spec.partition.columns, &schema, stats)?;
 
@@ -569,6 +570,43 @@ pub(super) fn partition_columns_are_bare_words(
     }
 }
 
+/// Refuse a registered format whose own words cannot be spliced into the statement.
+///
+/// Its name reaches the `COPY` **unquoted** (`STORED AS geojson`), so no escaping can make it
+/// safe; its option keys are quoted but are read as config *paths* rather than as values, so a
+/// key that would need escaping is one no writer could have accepted. Every other [`Format`] arm
+/// names both with `&'static str` literals — this is the one arm where they are the caller's own
+/// strings, and [`Format`] is public API an embedder may fill from anywhere.
+///
+/// Refused rather than escaped for the reason the partition columns are: these are grammar, not
+/// data. The path and the option *values* are the opposite case and stay escaped, any byte being
+/// legitimate in either.
+fn extension_words_are_plain(format: &Format, ctx: &SessionContext) -> Result<(), String> {
+    let Format::Extension { format, options } = format else {
+        return Ok(());
+    };
+    let dialect = sql::lex::dialect(ctx.state().config_options().sql_parser.dialect.as_ref());
+    if !is_bare_word(dialect.as_ref(), format) {
+        return Err(format!(
+            "Can't write '{format}': STORED AS takes an unquoted format name, so a format has to \
+             be a single plain word"
+        ));
+    }
+    let plain = |key: &str| {
+        !key.is_empty()
+            && key
+                .split('.')
+                .all(|part| is_bare_word(dialect.as_ref(), part))
+    };
+    match options.keys().find(|key| !plain(key)) {
+        Some(bad) => Err(format!(
+            "Can't write with the option '{bad}': an option key is a plain word, or plain words \
+             separated by dots"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Whether `name` tokenises as a single **unquoted** identifier, asked of the very
 /// dialect DataFusion will parse the generated `COPY` with rather than a hardcoded
 /// character set (`sql::lex` follows the same setting for the editor).
@@ -820,6 +858,67 @@ mod tests {
             format,
             partition: Partition::default(),
         }
+    }
+
+    /// **A registered format's own words are grammar, so they are refused rather than escaped.**
+    /// The name lands unquoted in `STORED AS` and an option key is read as a config path, so
+    /// neither can be made safe by escaping — and [`Format`] is public, so both are a caller's
+    /// strings on this arm alone. The values beside them stay escaped, any byte being legitimate
+    /// in one.
+    #[test]
+    fn a_registered_formats_name_and_option_keys_have_to_be_plain_words() {
+        let ctx = crate::builder::test_context(&BTreeMap::new());
+        let extension = |format: &str, options: BTreeMap<String, String>| Format::Extension {
+            format: format.to_string(),
+            options,
+        };
+        let none = BTreeMap::new;
+
+        assert!(extension_words_are_plain(&extension("geojson", none()), &ctx).is_ok());
+        assert!(extension_words_are_plain(
+            &extension(
+                "geojson",
+                BTreeMap::from([("format.crs".into(), "EPSG:4326".into())])
+            ),
+            &ctx
+        )
+        .is_ok());
+
+        assert_eq!(
+            extension_words_are_plain(&extension("geo json'); DROP TABLE t; --", none()), &ctx),
+            Err(
+                "Can't write 'geo json'); DROP TABLE t; --': STORED AS takes an unquoted format \
+                 name, so a format has to be a single plain word"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            extension_words_are_plain(
+                &extension(
+                    "geojson",
+                    BTreeMap::from([("format.crs', 'x'); DROP TABLE t; --".into(), "v".into())])
+                ),
+                &ctx
+            ),
+            Err(
+                "Can't write with the option 'format.crs', 'x'); DROP TABLE t; --': an option key \
+                 is a plain word, or plain words separated by dots"
+                    .to_string()
+            )
+        );
+        assert!(
+            extension_words_are_plain(
+                &extension("geojson", BTreeMap::from([(String::new(), "v".into())])),
+                &ctx
+            )
+            .is_err(),
+            "an empty key is not a word either"
+        );
+
+        assert!(
+            extension_words_are_plain(&Format::Csv(csv()), &ctx).is_ok(),
+            "the shipped arms name both with literals and have nothing to judge"
+        );
     }
 
     /// The ` OPTIONS (…)` a format alone contributes — what [`run_export`] then appends the

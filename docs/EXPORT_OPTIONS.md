@@ -111,6 +111,14 @@ fixed four. The shipped formats are ordinary registrants (`docs/IMPORT_OPTIONS.m
 an embedder added with `EngineBuilder::with_format` gets a card here the moment it declares
 `copy_to`, and a read-only one never does. `FormatId::offered` is the whole rule.
 
+**Its name and its option keys are refused unless they are plain words** — the name lands
+unquoted in `STORED AS`, and an option key is read by DataFusion as a config *path* rather than as
+a value, so neither can be made safe by escaping the way the destination path and the option
+values are. This is the one `Format` arm whose name and keys are the caller's own strings rather
+than `&'static str` literals, and `Format` is public API an embedder can fill from anywhere; the
+rule is the partition columns' rule, applied to the other two unquoted positions
+(`extension_words_are_plain`).
+
 A registered format's card carries its own word and **no options section** — just a `Note` saying
 the writer it was registered with decides how it is written. There is no options panel to draw:
 this build knows nothing about that format's settings. A caller who needs them writes the `COPY`
