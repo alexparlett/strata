@@ -347,8 +347,8 @@ pub async fn sync(
     }
 }
 
-/// Every table and view `desired` names, folded — what
-/// [`Dependencies`](crate::Dependencies) is kept to.
+/// Every table and view `desired` names, folded: the set
+/// [`Dependencies`](crate::Dependencies) is pruned to.
 ///
 /// [`remove_absent`] cannot do this job: it diffs against the **registered** catalog, and a table
 /// whose registration failed is not in it — so its dependency entry is reported by no removal and

@@ -245,8 +245,7 @@ pub fn disconnect(ctx: &SessionContext, identity: &str) {
     }
 }
 
-/// Whether an object store answers for `identity` on this session right now — the store half of
-/// [`SourcesSnapshot`](crate::sources::SourcesSnapshot)'s `live`.
+/// Whether an object store answers for `identity` on this session right now.
 ///
 /// Asked of the registry rather than remembered beside the def, because the registry is what a
 /// scan resolves through: a connection is live exactly while a path under it can be read. `false`

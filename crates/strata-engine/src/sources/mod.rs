@@ -228,11 +228,9 @@ impl Live {
 
     /// The enumeration a connection registered, or `None` if it is not live.
     ///
-    /// **[`snapshot`]'s one read of this map per connection**, answering both halves at once:
-    /// whether it is live, and what it enumerated. Asking twice — once for the flag, once for the
-    /// schemas — is two moments, and a teardown landing between them produces a row that claims
-    /// to be live over nothing, which no state of this map ever held. `scoped` takes the
-    /// enumeration rather than the map so that a second read is not expressible.
+    /// [`snapshot`]'s **one** read of this map per connection: it answers whether the connection
+    /// is live and what it enumerated together, because a teardown landing between two reads
+    /// leaves a row claiming to be live over nothing — a state this map never held.
     fn listing(&self, name: &str) -> Option<Arc<Listing>> {
         let held = self.0.lock().unwrap();
         Some(Arc::clone(&held.get(name)?.listing))
@@ -374,75 +372,70 @@ pub struct RemoteRelation {
     pub columns: Vec<ColumnInfo>,
 }
 
-/// **Every connection this engine holds, as one value** — see
-/// [`Sources::listing`](super::Sources::listing).
+/// Every connection an engine holds, read as of one moment.
 ///
-/// One read rather than a call per connection, because the surfaces that disagreed were the ones
-/// stitching several: the tree asked the listing per def and the registry per row, completion
-/// asked a third time, and each of them could be looking at a different moment. A snapshot is one
-/// moment, stamped with the [`generation`](Self::generation) it was taken at.
+/// Answering each question separately would let two of them describe different instants; this is
+/// taken under one read and stamped with the [`generation`](Self::generation) it was taken at.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourcesSnapshot {
-    /// The catalog generation this was read at — what a consumer keys a derived answer on, so a
-    /// re-connect, a Forget or a schema-visibility edit re-derives it. See [`CatalogGen`].
+    /// The catalog generation this was read at.
+    ///
+    /// Key a derived answer on it and re-derive when [`Catalog::generation`](crate::Catalog::generation)
+    /// stops matching: connecting, disconnecting and changing which schemas a connection shows all
+    /// move it.
     pub generation: CatalogGen,
     /// Every connection, in name order.
     ///
-    /// The **workspace is not among them**: it is the project's own catalog rather than a
-    /// connection, its identity is [`WORKSPACE_CATALOG`](strata_model::WORKSPACE_CATALOG), and
-    /// what is in it is the host's store to answer.
+    /// The workspace catalog is not among them — it is the engine's own, addressed as
+    /// [`WORKSPACE_CATALOG`](strata_model::WORKSPACE_CATALOG), and nothing connects to it.
     pub sources: Vec<SourceListing>,
-    /// Every source this engine *can* serve a connection with — the same list
-    /// [`Sources::registrants`](super::Sources::registrants) answers, carried here so the one
-    /// read is a complete answer.
+    /// Every source this engine can serve a connection with — what
+    /// [`Sources::registrants`](super::Sources::registrants) answers.
     ///
-    /// It is what lets a surface badge a connection this engine has not been told about: a
-    /// project's rows exist before its open pass has connected any of them, and a badge is a fact
-    /// about the **kind** rather than about the connection.
+    /// Carried so that [`badge`](Self::badge) can answer for a kind this engine has not been asked
+    /// to connect yet.
     pub registrants: Vec<SourceInfo>,
 }
 
-/// One connection, as every surface outside the engine sees it.
+/// One connection, and what it registered.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceListing {
-    /// The connection's own name — **the handle**, and the only one the front end speaks.
+    /// What the connection is called, which is how every call addresses it.
     pub name: String,
-    /// Whether this connection is **registered on the session right now** — its store answers
-    /// for paths, or its catalog resolves names.
+    /// Whether the session holds its registration now: its store resolves paths, or its catalog
+    /// resolves names.
     ///
-    /// Not the connection's `Reg` row, which is the host's: a row says what the last pass
-    /// settled, and this says what the session holds.
+    /// A connection this engine was told about but could not reach is listed with `false` rather
+    /// than left out.
     pub live: bool,
     pub detail: SourceDetail,
 }
 
-/// What a connection registered, and what it can say about itself.
+/// What connecting yielded, by mode.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceDetail {
-    /// An **object store**. It has nothing to enumerate — a bucket cannot say what its tables
-    /// are, which is why what it holds is answered by the table defs read through it, and those
-    /// are the host's rows.
+    /// An object store. It enumerates nothing: what it holds is described by the table defs read
+    /// through it.
     Store,
-    /// A **catalog of relations**, which the source named itself.
+    /// A catalog of relations the source names itself.
     Catalog {
-        /// The catalog its relations are addressed by — the connection's name, from the def, so
-        /// a connection that has never answered still says what a query would have to write.
+        /// The catalog its relations are addressed by.
+        ///
+        /// Taken from the def, so a connection that has never answered still reports the name a
+        /// query would have to write.
         catalog: String,
-        /// Its namespaces, scoped and tagged against the def's own
-        /// [`SourceDef::schemas`]. Empty for a connection that is not live: there is no
-        /// enumeration to scope.
+        /// Its namespaces, scoped and tagged against [`SourceDef::schemas`]. Empty while the
+        /// connection is not live.
         schemas: Vec<SchemaListingView>,
     },
 }
 
 impl SourcesSnapshot {
-    /// The catalogs **live** connections registered — what an agent is told the databases are
-    /// called, and what a three-part name resolves through right now.
+    /// The catalogs live connections registered — what a three-part name resolves through now.
     ///
-    /// Live, where [`Sources::database_syms`](super::Sources::database_syms) is not, and the
-    /// difference is what each answer is for: completion offers the name a query would have to
-    /// write whether or not the connection is up, while a listing that says a database is there
-    /// is saying it can be reached into.
+    /// Live, where [`Sources::database_syms`](super::Sources::database_syms) is not: use this to
+    /// report what can be reached into, and that to offer the name a query would have to write
+    /// whether or not the connection is up.
     pub fn catalog_names(&self) -> Vec<String> {
         self.sources
             .iter()
@@ -454,18 +447,15 @@ impl SourcesSnapshot {
             .collect()
     }
 
-    /// One connection by name, or `None` for a name this engine has not been told about — what a
-    /// surface about a single connection reads, rather than filtering the list itself.
+    /// One connection by name, or `None` for a name this engine has not been told about.
     pub fn source(&self, name: &str) -> Option<&SourceListing> {
         self.sources.iter().find(|source| source.name == name)
     }
 
-    /// The short word a connection served by `kind` wears — the registered kind's own
-    /// [`BADGE`](source::SourceKind::BADGE).
+    /// The short word `kind` is badged with — its [`BADGE`](source::SourceKind::BADGE).
     ///
-    /// A kind nothing is registered for wears the kind itself, which is what a row can honestly
-    /// say about a connection this build cannot serve. Asked of the **kind**, not of a
-    /// connection, so a project's row can be badged before anything has connected it.
+    /// A kind nothing is registered for is badged with the kind itself, which is all that can
+    /// honestly be said about a connection this build cannot serve.
     pub fn badge(&self, kind: &str) -> String {
         let kind = kind.trim();
         self.registrants
@@ -478,10 +468,8 @@ impl SourcesSnapshot {
 
 /// Read every connection this engine has been told about into one [`SourcesSnapshot`].
 ///
-/// Synchronous and free: every answer here is already held — the defs by
-/// [`Connections`](crate::Connections), the enumeration beside the pool, the badge in the
-/// registry, and liveness by the two registries a connection can be on. Asking the *source*
-/// anything is what a ↻ does.
+/// Costs no I/O — every answer is already held — so re-reading it is how a caller refreshes a
+/// derived value. Asking a source anything is the registration pass's job.
 pub(crate) fn snapshot(
     ctx: &SessionContext,
     registrants: &Sources,
@@ -660,13 +648,10 @@ pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
     take_back(ctx, sources, name);
 }
 
-/// One connection's namespaces, scoped and tagged against the def's own
-/// [`SourceDef::schemas`] — the [`SourceDetail::Catalog`] half of a [`snapshot`].
+/// One connection's namespaces, scoped and tagged against [`SourceDef::schemas`].
 ///
-/// Takes the **enumeration**, not the map that holds it, so it cannot reach [`Live`] a second
-/// time. A snapshot is one moment, and a connection torn down between two lock acquisitions would
-/// otherwise leave a row claiming `live: true` over no schemas — a state `Live` never held, and
-/// one that reports a just-forgotten catalog to `catalog_names` as reachable.
+/// Takes the enumeration rather than the [`Live`] map that holds it, so a second read of that map
+/// is not expressible here — see [`Live::listing`].
 fn scoped(listing: &Listing, source: &SourceDef) -> Vec<SchemaListingView> {
     let enabled: BTreeSet<String> = shown_of(source);
     let mut views: Vec<SchemaListingView> = listing
@@ -928,8 +913,8 @@ async fn relation_provider(
         .map_err(|e| e.to_string())
 }
 
-/// **What one snapshot says**, driven through a real engine: the four questions every surface
-/// used to ask separately, asked once and answered together.
+/// **What one snapshot says**, driven through a real engine — membership, liveness, badges and
+/// the two name reads, asked once and answered together.
 #[cfg(test)]
 mod snapshot_tests {
     use std::collections::BTreeMap;
@@ -1070,8 +1055,8 @@ mod snapshot_tests {
     }
 }
 
-/// **What a Forget would leave invalid**, driven through a real pass — the two derivations the
-/// confirms used to make for themselves, and the reconciliation that keeps them true.
+/// **What a Forget would leave invalid**, driven through a real pass — both derivations, and the
+/// reconciliation that keeps them true.
 #[cfg(test)]
 mod dependents_tests {
     use std::collections::BTreeMap;

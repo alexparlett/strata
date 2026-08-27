@@ -93,20 +93,15 @@ impl Sources<'_> {
         engine.generation.bump();
     }
 
-    /// **Every connection this engine holds**, as one value — see [`SourcesSnapshot`].
+    /// Every connection this engine holds, read as of one moment — see [`SourcesSnapshot`].
     ///
-    /// The one read the data-sources tree, the schema picker, completion and the agent's catalog
-    /// answers share, so no two of them can be looking at different moments and no consumer
-    /// re-derives schema visibility from a def. It reads the connect-time enumeration rather than
-    /// asking any source, which is what makes it free to call: a ↻ re-runs the registration pass,
-    /// and *that* is the refresh.
+    /// Answers from the connect-time enumeration rather than from any source, so it costs no I/O
+    /// and every surface that reads it describes the same instant. Re-running the registration
+    /// pass is the refresh.
     ///
-    /// Every connection is listed, live or not — membership, in the same sense
-    /// [`Connections`](crate::Connections) is — because a connection whose credentials this
-    /// machine cannot resolve today is still one the project has, and a surface that dropped it
-    /// would have nothing to hang the failure on.
-    ///
-    /// Synchronous and not on the runtime, because there is no I/O in it.
+    /// A connection this engine was told about is listed whether or not it could be reached: one
+    /// whose credentials this machine cannot resolve today is still a connection, and
+    /// [`SourceListing::live`](crate::sources::SourceListing::live) says so.
     pub fn listing(self) -> SourcesSnapshot {
         let engine = self.engine;
         sources::snapshot(
@@ -118,23 +113,19 @@ impl Sources<'_> {
         )
     }
 
-    /// Tell the session which schemas the connection called `name` now **shows** — the Schemas…
-    /// picker's engine half, which writes the session without reconnecting.
+    /// Sets which schemas the connection called `name` shows, without reconnecting.
     ///
-    /// An unqualified name searches what a connection shows, so the session has to learn the new
-    /// set as the picker commits it. Silent about a name this engine holds nothing for, and about
-    /// one that registers an object store — a bucket has no namespaces — which are the ordinary
-    /// cases rather than faults.
+    /// An unqualified name is searched for in the schemas a connection shows, so the session has
+    /// to be told as the choice is made. Silent for a name this engine holds nothing for, and for
+    /// one that registered an object store, which has no namespaces.
     ///
-    /// Addressed by **name and the set**, rather than by a def: the picker has just written the
-    /// def the host holds, and handing that back would let two spellings of one connection's
-    /// schemas exist for as long as it took to be told. The engine's own retained def is updated
-    /// with it, so [`listing`](Self::listing) answers the new scoping on the next read.
+    /// Takes the set rather than a def, so the caller's own copy and this one cannot disagree
+    /// about a connection's scoping; [`listing`](Self::listing) answers the new set on the next
+    /// read.
     ///
-    /// Moves the [`generation`](crate::Catalog::generation) **on the gesture**, not on whether
-    /// this engine happened to hold the connection: the caller has changed what its project
-    /// shows, and every surface that re-derives on the generation is cheaper to over-invalidate
-    /// once than to leave answering about a scoping that has moved.
+    /// Moves the [`generation`](crate::Catalog::generation) whether or not this engine held the
+    /// connection: over-invalidating once is cheaper than leaving a caller answering about a
+    /// scoping that has moved.
     pub fn show_schemas(self, name: &str, schemas: &[String]) {
         let engine = self.engine;
         if let Some(mut def) = engine.connections.def(name) {
@@ -147,22 +138,15 @@ impl Sources<'_> {
         engine.generation.bump();
     }
 
-    /// The **qualified names completion may offer** — one [`DatabaseSym`] per connection that
-    /// registers a catalog, its schemas and relations off [`listing`](Self::listing), so the
-    /// popup and the tree cannot disagree about which remote names exist.
+    /// The qualified names completion may offer — one [`DatabaseSym`] per connection that
+    /// registers a catalog, with its schemas and their relations.
     ///
-    /// Derived here rather than on the snapshot because `sources` and `sql` are peers inside this
-    /// crate and neither imports the other; the facade is where both are already in scope.
+    /// Every catalog, live or not: the name comes from the def, so a connection that has never
+    /// answered still offers the name a query would have to write. Only a
+    /// [`Live`](SchemaVisibility::Live) schema is offered under it, a schema the source does not
+    /// have being a name that cannot resolve.
     ///
-    /// **Every catalog, live or not**: the name comes from the def, so a connection that has
-    /// never answered still offers the name a query has to say. Only a
-    /// [`Live`](SchemaVisibility::Live) schema is offered under it — one the def enables and the
-    /// source does not have is a name that cannot resolve, and the tree already says so on its own
-    /// row; a schema the connection does not show arrives with no relations, so this walk clones
-    /// what it offers rather than the whole database.
-    ///
-    /// Free and synchronous, like the listing it reads: it is what lets the completion snapshot
-    /// carry remote names without the popup ever reaching the network.
+    /// Costs no I/O, like the [`listing`](Self::listing) it reads.
     pub fn database_syms(self) -> Vec<DatabaseSym> {
         self.listing()
             .sources
@@ -194,30 +178,23 @@ impl Sources<'_> {
             .collect()
     }
 
-    /// **What forgetting the connection called `name` would leave invalid** — the tables that
-    /// read through it and the views behind those, in one answer.
+    /// What forgetting the connection called `name` would leave invalid.
     ///
-    /// The Forget confirm's whole sentence, and the reason it is the engine's: the two halves are
-    /// derived from what registration *established* — a table's own def named its connection, and
-    /// a view's plan named what it scanned — and re-deriving them beside the surface meant two
-    /// consumers reimplementing a dependency walk over data this engine produced.
+    /// Which half of the answer is empty follows from the kind of connection, so the caller does
+    /// not say. Nothing reads an object store by name, so what it holds up is the table defs that
+    /// name it and then everything reading one of those; no def can name a source, its relations
+    /// being discovered rather than declared, so what it holds up is the views whose plans scan
+    /// through its catalog.
     ///
-    /// **Which half is empty is what kind of connection it is**, not an option the caller passes.
-    /// An object store has no readers in the SQL namespace at all — nothing reads a bucket *by
-    /// name* — so what it has is the table defs that name it, and then everything reading one of
-    /// those. A source is the other way round: no def can name one, its relations being discovered
-    /// rather than declared, so its only readers are the views whose plans scan through its
-    /// catalog.
+    /// *Invalid*, not stopped: a dependent view captured its sources by `Arc` and goes on
+    /// answering until the next reload.
     ///
-    /// **Left invalid, not stopped**: a dependent view captured its sources by `Arc` and goes on
-    /// answering until the next reload. What this names is what the catalog rows will say.
+    /// Bounded by what the last registration established (see
+    /// [`Dependencies`](crate::Dependencies)): a def no pass has reached is not counted, and
+    /// neither is a view the engine could not create, which has no recorded plan to have read
+    /// anything with.
     ///
-    /// Bounded by what the **last pass established** (see [`Dependencies`](crate::Dependencies)):
-    /// a def no pass has reached yet is not counted, and neither is a view the engine could not
-    /// create — the second bound is `ViewMeta`'s own and predates this, and a view that failed
-    /// against a connection has no recorded plan to have read it with.
-    ///
-    /// Synchronous and free — two maps this session holds.
+    /// Costs no I/O.
     pub fn dependents(self, name: &str) -> Dependents {
         let engine = self.engine;
         match engine.connections.def(name).and_then(|def| def.catalog()) {

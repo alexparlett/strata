@@ -44,14 +44,13 @@ pub struct TableSpec {
     /// delimiter cannot be named on a parquet table.
     pub format: SourceFormat,
     pub partitions: Vec<(String, String)>,
-    /// The **connection this table reads through**, by name — `None` for one over local files.
+    /// The connection this table reads through, by name. `None` over local files.
     ///
-    /// Carried rather than consumed, and it is the only field here that registration does not
-    /// use: [`table_spec`](crate::register::table_spec) has already spent it composing
-    /// [`paths`](Self::paths) onto that connection's store. It rides along because the engine is
-    /// what answers [`Sources::dependents`](crate::Sources::dependents), and a path is not a
-    /// connection — reading one back out of `s3://acme-lake/events/` would be guessing where the
-    /// def stated.
+    /// The one field registration does not use: [`table_spec`](crate::register::table_spec) has
+    /// already spent it composing [`paths`](Self::paths) onto that connection's store. It is
+    /// carried so [`Sources::dependents`](crate::Sources::dependents) can answer, a path being
+    /// something a connection was composed into rather than something one can be read back out
+    /// of.
     pub connection: Option<String>,
     /// [`TableOrigin::Internal`](strata_model::TableOrigin::Internal) — the data under
     /// [`paths`](Self::paths) is Strata's, spooled into the project's `.strata/tables/` by a

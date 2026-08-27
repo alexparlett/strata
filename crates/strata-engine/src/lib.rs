@@ -525,31 +525,27 @@ impl InternalTables {
     }
 }
 
-/// **What each registered name reads** — the table's connection, or the view's scans.
+/// What each registered name reads: a table's connection, or a view's scans.
 ///
-/// The [`InternalTables`] shape once more, for the same reasons, and answering exactly one
-/// question: [`Sources::dependents`] — what a Forget or a drop is about to leave invalid. Nothing
-/// else reads it, and it is deliberately not a second catalog: what a *row* says (its `Reg`
-/// verdict, its columns, its counts) is the host's, and none of it is here.
+/// The [`InternalTables`] shape, with the same limits, and it answers one question —
+/// [`Sources::dependents`]. It is not a second catalog: what a host's row says about a name is
+/// the host's, and none of it is here.
 ///
-/// **Registration is a reconciliation, so this is too.** Every funnel that registers a name notes
+/// Registration is a reconciliation, so this is too. Every funnel that registers a name notes
 /// what it reads and every funnel that takes one out forgets it, and [`sync`](register::sync)
-/// then prunes to exactly the names its `CatalogSpec` holds — which is what makes a table whose
-/// registration *failed* answerable (it is noted from the spec, and no deregistration will ever
-/// report it) without its entry outliving the def.
+/// prunes to the names its `CatalogSpec` holds. That last step is what keeps a table whose
+/// registration **failed** answerable — it is noted from the spec, and no deregistration will
+/// ever report it — without its entry outliving the def.
 ///
-/// **Bounded by what the last pass established**, and the sentence that renders it has to live
-/// with that: a def written a moment ago that no pass has reached yet is not here, and a view the
-/// engine could not create has no scans to record — the second is the bound
-/// [`ViewMeta`](catalog::ViewMeta) has always had, and the first is new with this map.
+/// Bounded by what the last pass established: a def no pass has reached is not here, and a view
+/// the engine could not create has no scans to record.
 #[derive(Clone, Debug, Default)]
 pub struct Dependencies(Arc<Mutex<BTreeMap<String, Scanned>>>);
 
-/// **What a connection is holding up** — [`Sources::dependents`]'s answer.
+/// What a connection is holding up — [`Sources::dependents`]'s answer.
 ///
-/// Two lists rather than one, because the sentence that renders them counts two different things:
-/// a forget names the tables that read through the connection *and* the views left behind them,
-/// and "3 defs" is not a word the catalog uses. Both are alphabetical and each name appears once.
+/// Two lists, because a caller counting them counts two different things. Both are alphabetical
+/// and name each thing once.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Dependents {
     /// Workspace tables whose def reads its files through this connection. Always empty for a
@@ -562,8 +558,8 @@ pub struct Dependents {
 
 /// One registered name, in its own spelling, and what it reads.
 ///
-/// The spelling is carried because the map is keyed by [`fold_ident`] — a name is matched the way
-/// SQL matches it — while what a confirm renders is what the user called the thing.
+/// The spelling is carried because the map is keyed by [`fold_ident`], names being matched the way
+/// SQL matches them, while a caller renders the name as it was written.
 #[derive(Clone, Debug)]
 struct Scanned {
     name: String,
@@ -575,8 +571,8 @@ struct Scanned {
 enum Scans {
     /// A table, and the connection its files are read through — `None` over local files.
     Table(Option<String>),
-    /// A view, and what its plan scanned — see [`ViewMeta`](catalog::ViewMeta), whose two lists
-    /// these are: workspace scans bare, everything else qualified whole.
+    /// A view, and the two lists [`ViewMeta`] records: workspace scans bare, everything else
+    /// qualified whole.
     View {
         tables: Vec<String>,
         remote: Vec<String>,
@@ -610,8 +606,8 @@ impl Dependencies {
 
     /// The views scanning through the catalog `catalog`, alphabetically and each named once.
     ///
-    /// Matched on the qualified name's **first part**, folded, because that part is the catalog —
-    /// the split [`ViewMeta`](catalog::ViewMeta) keeps its two lists apart for.
+    /// Matched on the qualified name's **first part**, folded: that part is the catalog, which is
+    /// what [`ViewMeta`] keeps its two lists apart for.
     fn reading(&self, catalog: &str) -> Vec<String> {
         let wanted = fold_ident(catalog);
         self.named(|scans| match scans {
@@ -661,19 +657,16 @@ impl Dependencies {
     }
 }
 
-/// The connections this engine has been told about — **the last def handed to
-/// [`Sources::connect`] for each name**, keyed by that name.
+/// The connections this engine has been told about: the last def handed to
+/// [`Sources::connect`] for each name, keyed by that name.
 ///
-/// It answers two engine-side questions from the one map: may a typed `CREATE EXTERNAL TABLE`
-/// name this bucket, and what does this engine hold a connection *for* — which is what
-/// [`Sources::listing`] reads to answer every surface at once. Holding the def rather than the
-/// identity alone is what makes the second question answerable without asking the host for its
-/// rows back: an engine that has been told about a connection can say what kind serves it and
-/// what it registers, whether or not it is live.
+/// It answers two questions from the one map — may a typed `CREATE EXTERNAL TABLE` name this
+/// bucket, and what does this engine hold a connection for ([`Sources::listing`]). The def rather
+/// than the identity alone is what makes the second answerable without asking the host: an engine
+/// told about a connection can say what kind serves it and what it registers, live or not.
 ///
-/// It is still **not a second copy of the catalog**. What a connection's row says — its `Reg`
-/// verdict, whether it is waiting, the sentence a failure left — is the host's, and nothing here
-/// records it.
+/// It is not a second copy of the catalog. What a host's row says about a connection — whether it
+/// is waiting, the sentence a failure left — is the host's, and nothing here records it.
 ///
 /// **Membership, not connectivity.** [`Sources::connect`] notes the def whether what it describes
 /// went in or not, because a connection that cannot resolve a credential today is still a

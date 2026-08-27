@@ -703,14 +703,13 @@ mod tests {
     /// An engine holding **this fixture's catalog**, registered for real.
     ///
     /// The forget confirm reads what registration established
-    /// ([`Sources::dependents`](strata_engine::Sources::dependents)), so a store built inline is
-    /// no longer the whole fixture: what a connection is holding up is a fact about the engine's
-    /// pass, and a test that hand-wrote it on the store alone would assert a state nothing
-    /// produces.
+    /// ([`Sources::dependents`](strata_engine::Sources::dependents)), so the store built inline
+    /// above is only half the fixture: hand-writing what a connection is holding up would assert
+    /// a state nothing produces.
     ///
     /// The tables read a **local** CSV while their specs name the connection, which is the one
-    /// thing `table_spec` would not compose for us: it spends the connection turning the sources
-    /// into `s3://lake/…`, and a bucket is not something a unit test can read. The field the spec
+    /// thing `table_spec` will not compose: it spends the connection turning the sources into
+    /// `s3://lake/…`, and a bucket is not something a unit test can read. The field the spec
     /// carries is exactly the subject here, so it is set directly — and the views are then created
     /// by DataFusion from real SQL, so what they are recorded as reading is derived rather than
     /// declared.
@@ -1291,7 +1290,7 @@ mod tests {
         assert!(slot.peek().is_none(), "and closed the dialog");
     }
 
-    /// A **database** forget says something different, and counts different dependents (DB-05).
+    /// A **database** forget says something different, and counts different dependents.
     ///
     /// Different copy, because "nothing in the bucket is deleted" is not a sentence about a
     /// database — which is why the target carries what kind of thing it is rather than looking it
@@ -1299,13 +1298,11 @@ mod tests {
     /// database: what breaks is the views whose plans scan through its catalog, so there is never
     /// a table half to count and `forget_consequence`'s wording would be wrong.
     ///
-    /// **What this can no longer assert is the derivation itself.** Which views read through a
-    /// catalog is now the engine's answer, taken from what creating each view actually planned —
-    /// and a view over `analytics.public.customers` only plans against a live server, which is
-    /// exactly why the confirm stopped deriving it here. That half is
-    /// `sources::dependents_tests::a_source_names_the_views_that_scan_through_it`, over a
-    /// registered source; what is left here is the dialog's own: which sentence a database gets,
-    /// and that its dependents are rendered as chips (the bucket case above, same code path).
+    /// **The derivation behind it is pinned in the engine**, not here:
+    /// `sources::dependents_tests::a_source_names_the_views_that_scan_through_it` registers a
+    /// source and creates a view across it, which a view over `analytics.public.customers` needs
+    /// a live server to do. What this covers is the dialog's own — which sentence a database gets
+    /// — and the chips it renders them as are the bucket case above, on the same code path.
     #[test]
     fn forgetting_a_database_uses_the_database_wording() {
         let (mut runner, (mut slot, _, project, ..)) = runner("forget-db");

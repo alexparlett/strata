@@ -225,10 +225,9 @@ pub struct Remote {
 
 /// A connection of either kind, as its **row** draws it.
 ///
-/// What the row needs and no more: the def it was resolved from is not carried, because a
-/// virtualized tree clones every visible row on every walk and the row draws four of its fields.
-/// Everything else a gesture on it needs is reached by the connection's **name**, which is the
-/// handle.
+/// What the row needs and no more: the def it was resolved from is not carried, a virtualized tree
+/// cloning every visible row on every walk. Everything else a gesture on it needs is reached by
+/// the connection's **name**, which is the handle.
 #[derive(Clone, PartialEq)]
 pub struct Connection {
     pub name: String,

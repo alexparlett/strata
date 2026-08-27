@@ -274,9 +274,9 @@ fn survives(schema: &SchemaListingView, needle: &str) -> bool {
 
 /// An object-store connection and the workspace defs reading through it.
 ///
-/// The links are the [`SourceNode`]'s, joined once out of the project's tables rather than
-/// scanned per bucket as the row was drawn — a project full of tables used to pay for every link
-/// name of every *closed* bucket on every walk, and drop them all.
+/// The links arrive on the [`SourceNode`], joined once out of the project's tables: scanning per
+/// bucket as the row is drawn costs a project full of tables the link names of every bucket on
+/// every walk, closed ones included.
 fn store(node: &SourceNode, tables: &[String], needle: &str, open: &Open, out: &mut Vec<Node>) {
     let path = format!("conn/{}", node.name);
     let filtering = !needle.is_empty();

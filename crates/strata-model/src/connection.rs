@@ -95,11 +95,10 @@ impl ConnectionDef {
 
     /// The catalog this connection registers, or `None` for one that registers an object store.
     ///
-    /// A source's relations are addressed through a catalog and that catalog **is** the
-    /// connection's name ([`named`](Self::named)) — one field, so the tree's mark, the Forget
-    /// confirm, the remote scans a window keeps and the names completion offers cannot spell it
-    /// differently. Asked of the def rather than of a live engine on purpose: a connection that
-    /// has never answered still has to say what a query would have to write.
+    /// A source's relations are addressed through a catalog, and that catalog is the connection's
+    /// [`named`](Self::named) — one field, so no surface can spell it differently. Asked of the
+    /// def rather than of a live engine, so a connection that has never answered still reports
+    /// the name a query would have to write.
     pub fn catalog(&self) -> Option<String> {
         self.provider.source().map(|_| self.named())
     }

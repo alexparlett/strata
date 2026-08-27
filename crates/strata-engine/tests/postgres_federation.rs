@@ -389,8 +389,7 @@ async fn enumeration(engine: &Engine) {
     );
 }
 
-/// Is `conn` a connection this engine holds live right now? — the snapshot's own answer, which
-/// is what replaced the per-def listing call.
+/// Is `conn` a connection this engine holds live right now? — the snapshot's own answer.
 fn live(engine: &Engine, conn: &ConnectionDef) -> bool {
     engine
         .sources()

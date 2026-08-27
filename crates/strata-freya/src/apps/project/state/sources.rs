@@ -1,15 +1,11 @@
 //! **The data sources, joined once** — the project's connection rows and the engine's
-//! [`SourcesSnapshot`] folded into one list the catalog tree then only has to draw.
+//! [`SourcesSnapshot`] folded into the one list the catalog tree draws.
 //!
-//! The tree used to stitch four things together as it walked: the store's `ConnRow`s, a
-//! `listing(def)` per database, a `registrants()` lookup per row for its badge, and
-//! `tables_over` per bucket. Two of those are engine calls, made from inside a render walk that
-//! runs on every filter keystroke, and each of them is a separate moment — so a row's badge, its
-//! schemas and its verdict could all be answering as of different instants.
-//!
-//! [`assemble`] is that join, made once against one snapshot. What it produces is a plain value:
-//! the walk below it decides shape, and the rows below that draw. **Nothing here renders and
-//! nothing here reaches the engine.**
+//! [`assemble`] is that join, and it is made **once, against one snapshot**, above the tree's
+//! walk. Both halves of a connection's row — its badge and status from the project, its schemas
+//! from the engine — then describe the same instant, where a lookup per row would be a moment
+//! per row. What it produces is a plain value: the walk below it decides shape, and the rows
+//! below that draw. Nothing here renders and nothing here reaches the engine.
 //!
 //! ## The two halves are the same difference the tree draws
 //!
@@ -26,11 +22,11 @@ use strata_model::ProviderId;
 
 use super::{ProjectState, Reg};
 
-/// One data source as the tree draws it.
+/// One data source as the tree draws it, resolved.
 ///
-/// A resolved value rather than the def plus three lookups: the def is cloned nowhere, the badge
-/// is the registry's answer taken once, and the verdict is the store row's. What opens underneath
-/// is [`contents`](Self::contents).
+/// Carries what a row paints and no more — the def itself is not cloned, a virtualized tree
+/// copying every visible node on every walk. What opens underneath is
+/// [`contents`](Self::contents).
 #[derive(Clone, PartialEq, Debug)]
 pub struct SourceNode {
     /// The connection's name — the handle every gesture addresses it by, and the tree key
@@ -40,8 +36,8 @@ pub struct SourceNode {
     pub address: String,
     /// Which provider serves it, for the row's menu and the editor it opens.
     pub provider: ProviderId,
-    /// The short word its row wears — the registered kind's own, asked of the **kind** so a
-    /// connection the engine has not been told about yet is still badged for what serves it.
+    /// The short word its row wears: the registered kind's own, asked of the kind so that a
+    /// connection nothing has connected yet is still badged for what serves it.
     pub badge: String,
     /// The last pass has not answered for it yet.
     pub waiting: bool,
@@ -78,14 +74,13 @@ impl SourceNode {
 
 /// Join the project's connection rows with what the engine holds for each.
 ///
-/// Ordered by the project's own rows, because that is the order the catalog pane has always drawn
-/// and the order a user rearranges. A connection the engine has never been told about — the
-/// window's first frames, before the open pass has run — still gets its node, carrying its row's
-/// `Loading` and nothing else: the tree must draw a project's connections before anything has
-/// registered them.
+/// Ordered by the project's own rows, which is the order the pane draws and the user rearranges.
+/// A connection the engine has not been told about still gets its node, carrying its row's
+/// `Loading` and nothing else — a window's first frames are exactly that, and the tree has to
+/// draw a project's connections before anything has registered them.
 ///
-/// The bucket links are grouped in **one pass over the tables** rather than a scan per bucket, so
-/// a project with many tables and many connections costs one walk instead of their product.
+/// Bucket links are grouped in **one pass over the tables**: a scan per bucket would cost a
+/// project with many tables and many connections their product.
 pub fn assemble(project: &ProjectState, snapshot: &SourcesSnapshot) -> Vec<SourceNode> {
     let mut over: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for table in &project.tables {

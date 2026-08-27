@@ -32,15 +32,14 @@
 //! connect-time enumeration held beside the pool rather than the network. A ↻ re-connects, and
 //! *that* is the refresh.
 //!
-//! **The two are joined once, before the walk** ([`assemble`]) — so every connection row is drawn
-//! from the same moment, where a listing call per row per walk was one moment per row. It is a
-//! `use_side_effect_value` rather than a line in the render, and that is what keeps the join off
-//! the keystroke path: a schema's relation list is the *server's* and can be enormous, and this
-//! re-runs only when one of the three things it reads moves — `Tables`, `Connections`, the catalog
-//! epoch. **Value**, not a plain effect writing a slot: it computes once at mount, so there is no
-//! pass where the pane has a project full of connections and nothing to draw for them. The walk it
-//! feeds reaches no engine at all, which is what makes it the plain function of its inputs it is
-//! supposed to be.
+//! **The two are joined once, before the walk** ([`assemble`]), so every connection row is drawn
+//! from the same moment. It is a `use_side_effect_value` rather than a line in the render, which
+//! is what keeps the join off the keystroke path: a schema's relation list is the *server's* and
+//! can be enormous, and this re-runs only when one of the three things it reads moves — `Tables`,
+//! `Connections`, the catalog generation. **Value**, not a plain effect writing a slot: it
+//! computes once at mount, so there is no pass where the pane has a project full of connections
+//! and nothing to draw for them. The walk it feeds reaches no engine at all, which is what makes
+//! it the plain function of its inputs it is supposed to be.
 //!
 //! ## Subscriptions
 //!
