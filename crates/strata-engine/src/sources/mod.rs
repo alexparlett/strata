@@ -1186,7 +1186,10 @@ mod dependents_tests {
     }
 
     /// **A source's dependents are the views scanning its catalog, and it never has tables** —
-    /// no def can name a connection whose relations are discovered rather than declared.
+    /// no def can name a connection whose relations are discovered rather than declared, so a def
+    /// that names one anyway (an edited `project.json`; the Configure picker offers only object
+    /// stores) is still not a table over it. Which half is empty is the *kind*, and this is what
+    /// pins that the arm is chosen by the connection rather than by what happens to be recorded.
     ///
     /// The two views that must *not* count are the point. `just_local` reads nothing remote. And
     /// `homonym` reads a **workspace table called `sales`**, which is the same word as the
@@ -1203,7 +1206,10 @@ mod dependents_tests {
             .sync(
                 CatalogSpec {
                     connections: vec![fake_def::<TestDoc>("sales", "fixture")],
-                    tables: vec![table(&root, "sales", None), table(&root, "local", None)],
+                    tables: vec![
+                        table(&root, "sales", None),
+                        table(&root, "local", Some("sales")),
+                    ],
                     views: vec![
                         view("remote_orders", "SELECT * FROM SALES.public.orders"),
                         view("homonym", "SELECT * FROM sales"),
@@ -1220,8 +1226,8 @@ mod dependents_tests {
                 tables: Vec::new(),
                 views: vec!["remote_orders".into()],
             },
-            "the view that reads across it — the catalog part folds, and a workspace table \
-             sharing its name is not a reader"
+            "the view that reads across it — the catalog part folds, a workspace table sharing \
+             its name is not a reader, and a def naming a source is not a table over it"
         );
     }
 
