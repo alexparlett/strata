@@ -78,6 +78,7 @@ mod tests {
             paths: vec![root.join("t.csv").display().to_string()],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
+            connection: None,
             internal: false,
         }
     }

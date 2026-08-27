@@ -357,10 +357,15 @@ the def's own schemas and says so.
 
 The header's `+`, the empty state's row and a node's Edit all open the editor window. **Forget's
 consequence differs by kind**, and the confirm carries which kind it is rather than looking it
-up: an object store's readers are the tables whose sources name it and the views behind those; a
-database's are the views whose plans scan through its catalog (`ViewInfo::remote_deps`), since no
-def can name a database. Confirming removes the def, deregisters the store or catalog, and — for
-a database — deletes the derived keystore entry the def expected.
+up — that decides the *sentence*. What it counts is one engine read, `Sources::dependents(name)`
+(EA-18): an object store's readers are the tables whose defs name it and the views behind those; a
+database's are the views whose plans scan through its catalog, since no def can name a database.
+Both are what registration established — a table's def named its connection, a view's plan named
+what it scanned — so the engine answers rather than two surfaces re-deriving it, and the answer is
+bounded by the last pass: a def nothing has registered yet is not counted, and a view the engine
+could not create recorded no plan to have read anything with. Confirming removes the def,
+deregisters the store or catalog, and — for a database — deletes the derived keystore entry the
+def expected.
 
 One filter spans the tree. A node survives it if its own name matches or any descendant's does,
 and a node kept by a descendant's match opens itself, since keeping the container and then hiding

@@ -145,6 +145,7 @@ mod tests {
                 "database_syms",
                 "registrants",
                 "check_address",
+                "dependents",
                 "describe_remote",
                 "aws_profiles",
             ],

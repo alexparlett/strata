@@ -11,7 +11,7 @@ use crate::catalog;
 use crate::sources::source::SourceInfo;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, store, Engine, CATALOG};
+use crate::{fold_ident, store, Dependents, Engine, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -122,29 +122,28 @@ impl Sources<'_> {
     /// picker's engine half, which writes the session without reconnecting.
     ///
     /// An unqualified name searches what a connection shows, so the session has to learn the new
-    /// set as the picker commits it. A **no-op, generation included**, for a name this engine
-    /// holds nothing for and for one that registers an object store: a bucket has no namespaces
-    /// to show, so nothing about what a name resolves to has moved and re-validating every open
-    /// tab would be a lie about it.
+    /// set as the picker commits it. Silent about a name this engine holds nothing for, and about
+    /// one that registers an object store — a bucket has no namespaces — which are the ordinary
+    /// cases rather than faults.
     ///
     /// Addressed by **name and the set**, rather than by a def: the picker has just written the
     /// def the host holds, and handing that back would let two spellings of one connection's
     /// schemas exist for as long as it took to be told. The engine's own retained def is updated
     /// with it, so [`listing`](Self::listing) answers the new scoping on the next read.
     ///
-    /// Moves the [`generation`](crate::Catalog::generation): what a bare name resolves to has
-    /// changed.
+    /// Moves the [`generation`](crate::Catalog::generation) **on the gesture**, not on whether
+    /// this engine happened to hold the connection: the caller has changed what its project
+    /// shows, and every surface that re-derives on the generation is cheaper to over-invalidate
+    /// once than to leave answering about a scoping that has moved.
     pub fn show_schemas(self, name: &str, schemas: &[String]) {
         let engine = self.engine;
-        let Some(mut def) = engine.connections.def(name) else {
-            return;
-        };
-        let Provider::Source(source) = &mut def.provider else {
-            return;
-        };
-        source.schemas = schemas.to_vec();
-        engine.connections.note(&def);
-        engine.live.show(&def);
+        if let Some(mut def) = engine.connections.def(name) {
+            if let Provider::Source(source) = &mut def.provider {
+                source.schemas = schemas.to_vec();
+                engine.connections.note(&def);
+                engine.live.show(&def);
+            }
+        }
         engine.generation.bump();
     }
 
@@ -193,6 +192,45 @@ impl Sources<'_> {
                     .collect(),
             })
             .collect()
+    }
+
+    /// **What forgetting the connection called `name` would leave invalid** — the tables that
+    /// read through it and the views behind those, in one answer.
+    ///
+    /// The Forget confirm's whole sentence, and the reason it is the engine's: the two halves are
+    /// derived from what registration *established* — a table's own def named its connection, and
+    /// a view's plan named what it scanned — and re-deriving them beside the surface meant two
+    /// consumers reimplementing a dependency walk over data this engine produced.
+    ///
+    /// **Which half is empty is what kind of connection it is**, not an option the caller passes.
+    /// An object store has no readers in the SQL namespace at all — nothing reads a bucket *by
+    /// name* — so what it has is the table defs that name it, and then everything reading one of
+    /// those. A source is the other way round: no def can name one, its relations being discovered
+    /// rather than declared, so its only readers are the views whose plans scan through its
+    /// catalog.
+    ///
+    /// **Left invalid, not stopped**: a dependent view captured its sources by `Arc` and goes on
+    /// answering until the next reload. What this names is what the catalog rows will say.
+    ///
+    /// Bounded by what the **last pass established** (see [`Dependencies`](crate::Dependencies)):
+    /// a def no pass has reached yet is not counted, and neither is a view the engine could not
+    /// create — the second bound is `ViewMeta`'s own and predates this, and a view that failed
+    /// against a connection has no recorded plan to have read it with.
+    ///
+    /// Synchronous and free — two maps this session holds.
+    pub fn dependents(self, name: &str) -> Dependents {
+        let engine = self.engine;
+        match engine.connections.def(name).and_then(|def| def.catalog()) {
+            Some(catalog) => Dependents {
+                tables: Vec::new(),
+                views: engine.dependencies.reading(&catalog),
+            },
+            None => {
+                let tables = engine.dependencies.over(name);
+                let views = engine.dependencies.above(&tables);
+                Dependents { tables, views }
+            }
+        }
     }
 
     /// Every data source this engine can connect to — what a picker offers, what a catalog row

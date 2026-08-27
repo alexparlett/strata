@@ -1060,3 +1060,244 @@ mod snapshot_tests {
         );
     }
 }
+
+/// **What a Forget would leave invalid**, driven through a real pass — the two derivations the
+/// confirms used to make for themselves, and the reconciliation that keeps them true.
+#[cfg(test)]
+mod dependents_tests {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::{env, fs, process};
+
+    use strata_model::{Provider, S3Auth, S3Store, SourceFormat, ViewDef};
+
+    use super::fake::{fake_def, TestDoc};
+    use super::*;
+    use crate::register::CatalogSpec;
+    use crate::{Dependents, Engine, TableSpec};
+
+    /// A scratch folder holding one two-column CSV, so every table below registers for real.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("strata_dependents_{}_{tag}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("t.csv"), "id,name\n1,a\n2,b\n").unwrap();
+        dir
+    }
+
+    /// A table over `root/t.csv` that **names** `connection`.
+    ///
+    /// Built directly rather than through `table_spec`, which is what composes a remote path onto
+    /// the connection's store: the subject here is the field the spec carries, and a bucket is
+    /// not something a unit test can read.
+    fn table(root: &Path, name: &str, connection: Option<&str>) -> TableSpec {
+        TableSpec {
+            name: name.into(),
+            paths: vec![root.join("t.csv").display().to_string()],
+            format: SourceFormat::from_name("csv"),
+            partitions: Vec::new(),
+            connection: connection.map(str::to_string),
+            internal: false,
+        }
+    }
+
+    fn view(name: &str, sql: &str) -> ViewDef {
+        ViewDef {
+            name: name.into(),
+            sql: sql.into(),
+        }
+    }
+
+    /// A bucket connection nothing can reach — membership is what this test needs, and a def the
+    /// engine was told about is a member whatever the connect answered.
+    fn bucket(name: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: "acme-lake".into(),
+            name: name.into(),
+            provider: Provider::S3(S3Store {
+                region: String::new(),
+                auth: S3Auth::Ambient,
+                ..Default::default()
+            }),
+            client_config: BTreeMap::new(),
+        }
+    }
+
+    /// **An object store's dependents are its tables and the views over them** — including a view
+    /// that reaches the bucket only through another view, because DataFusion inlines what a view
+    /// reads and the recorded scans are the base tables of both.
+    #[tokio::test]
+    async fn a_bucket_names_its_tables_and_the_views_behind_them() {
+        let root = scratch("bucket");
+        let engine = Engine::builder().build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake"), bucket("spare")],
+                    tables: vec![
+                        table(&root, "orders", Some("lake")),
+                        table(&root, "users", None),
+                    ],
+                    views: vec![
+                        view("orders_daily", "SELECT * FROM orders"),
+                        view("orders_weekly", "SELECT * FROM orders_daily"),
+                        view("everyone", "SELECT * FROM users"),
+                    ],
+                },
+                |_| {},
+            )
+            .await;
+
+        assert_eq!(
+            engine.sources().dependents("lake"),
+            Dependents {
+                tables: vec!["orders".into()],
+                views: vec!["orders_daily".into(), "orders_weekly".into()],
+            },
+            "the table that names it, and both views over that table"
+        );
+        assert_eq!(
+            engine.sources().dependents("spare"),
+            Dependents::default(),
+            "a connection nothing reads through holds nothing up"
+        );
+    }
+
+    /// **A name is matched the way SQL matches one**, because that is also what decided whether
+    /// the table registered over that store at all.
+    #[tokio::test]
+    async fn a_connection_is_matched_folded() {
+        let root = scratch("folded");
+        let engine = Engine::builder().build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("Lake")],
+                    tables: vec![table(&root, "orders", Some("Lake"))],
+                    views: Vec::new(),
+                },
+                |_| {},
+            )
+            .await;
+
+        assert_eq!(engine.sources().dependents("lake").tables, ["orders"]);
+    }
+
+    /// **A source's dependents are the views scanning its catalog, and it never has tables** —
+    /// no def can name a connection whose relations are discovered rather than declared.
+    ///
+    /// The two views that must *not* count are the point. `just_local` reads nothing remote. And
+    /// `homonym` reads a **workspace table called `sales`**, which is the same word as the
+    /// catalog and is matched by the other of `ViewMeta`'s two lists — the split those lists exist
+    /// for, and the reason a bare name resolves to the workspace first.
+    #[tokio::test]
+    async fn a_source_names_the_views_that_scan_through_it() {
+        let root = scratch("source");
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![fake_def::<TestDoc>("sales", "fixture")],
+                    tables: vec![table(&root, "sales", None), table(&root, "local", None)],
+                    views: vec![
+                        view("remote_orders", "SELECT * FROM SALES.public.orders"),
+                        view("homonym", "SELECT * FROM sales"),
+                        view("just_local", "SELECT * FROM local"),
+                    ],
+                },
+                |_| {},
+            )
+            .await;
+
+        assert_eq!(
+            engine.sources().dependents("sales"),
+            Dependents {
+                tables: Vec::new(),
+                views: vec!["remote_orders".into()],
+            },
+            "the view that reads across it — the catalog part folds, and a workspace table \
+             sharing its name is not a reader"
+        );
+    }
+
+    /// **The reconciliation is what keeps it true.** A table whose registration *failed* is still
+    /// a table that reads through the connection — no deregistration will ever report it, so only
+    /// a later pass that stops naming it can take its entry out.
+    #[tokio::test]
+    async fn a_failed_table_still_counts_and_a_pass_that_drops_it_takes_it_out() {
+        let root = scratch("failed");
+        let engine = Engine::builder().build();
+        let mut broken = table(&root, "orders", Some("lake"));
+        broken.paths = vec![root.join("nothing-here.csv").display().to_string()];
+
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake")],
+                    tables: vec![broken],
+                    views: Vec::new(),
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(
+            engine.sources().dependents("lake").tables,
+            ["orders"],
+            "a table over the connection is a table over it whether or not it registered"
+        );
+
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake")],
+                    tables: Vec::new(),
+                    views: Vec::new(),
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(
+            engine.sources().dependents("lake"),
+            Dependents::default(),
+            "and the def is gone, so nothing is left holding the connection up"
+        );
+    }
+
+    /// A **drop** takes its entry out through the funnel it already goes through, so the confirm
+    /// after it does not name what the drop just removed.
+    #[tokio::test]
+    async fn dropping_a_view_stops_it_being_named() {
+        let root = scratch("dropped");
+        let engine = Engine::builder().build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake")],
+                    tables: vec![table(&root, "orders", Some("lake"))],
+                    views: vec![view("orders_daily", "SELECT * FROM orders")],
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(engine.sources().dependents("lake").views, ["orders_daily"]);
+
+        engine
+            .catalog()
+            .drop_view("orders_daily".into())
+            .await
+            .expect("drop view");
+
+        assert!(
+            engine.sources().dependents("lake").views.is_empty(),
+            "the view is gone, and so is what it read"
+        );
+    }
+}

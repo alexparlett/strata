@@ -186,6 +186,7 @@ async fn create(
         paths: vec![dir_path(&dir)],
         format: SourceFormat::Arrow,
         partitions: Vec::new(),
+        connection: None,
         internal: true,
     };
     let meta = match register_external(ctx, &spec).await {
@@ -1134,6 +1135,7 @@ mod tests {
                     paths: vec![root.display().to_string()],
                     format: SourceFormat::Arrow,
                     partitions: Vec::new(),
+                    connection: None,
                     internal: true,
                 })
                 .await
@@ -1367,6 +1369,7 @@ mod tests {
                 paths: vec![dir_path(dir)],
                 format: SourceFormat::Arrow,
                 partitions: Vec::new(),
+                connection: None,
                 internal: false,
             })
             .await

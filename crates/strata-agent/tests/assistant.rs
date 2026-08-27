@@ -225,6 +225,7 @@ async fn project(tag: &str) -> (Arc<Engine>, StrataTools<MockHost>) {
             paths: vec![root.join("people.csv").display().to_string()],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
+            connection: None,
             internal: false,
         })
         .await

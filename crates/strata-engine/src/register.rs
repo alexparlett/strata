@@ -167,6 +167,7 @@ pub fn table_spec(root: &Path, def: &TableDef, connections: &Connections) -> Tab
             .collect(),
         format: def.format.clone(),
         partitions: def.partition_cols.clone(),
+        connection: def.connection.clone(),
         internal: def.origin.is_internal(),
     }
 }
@@ -332,6 +333,7 @@ pub async fn sync(
     mut settled: impl FnMut(RegOutcome),
 ) -> PassReport {
     remove_absent(engine, &desired, &mut settled).await;
+    engine.dependencies.retain(&named(&desired));
     register_pass(
         engine,
         desired.connections,
@@ -343,6 +345,22 @@ pub async fn sync(
     PassReport {
         generation: engine.catalog().generation(),
     }
+}
+
+/// Every table and view `desired` names, folded — what
+/// [`Dependencies`](crate::Dependencies) is kept to.
+///
+/// [`remove_absent`] cannot do this job: it diffs against the **registered** catalog, and a table
+/// whose registration failed is not in it — so its dependency entry is reported by no removal and
+/// would outlive the def that put it there. Reconciling against the spec instead is the same rule
+/// the pass itself follows, and it is total.
+fn named(desired: &CatalogSpec) -> BTreeSet<String> {
+    desired
+        .tables
+        .iter()
+        .map(|t| fold_ident(&t.name))
+        .chain(desired.views.iter().map(|v| fold_ident(&v.name)))
+        .collect()
 }
 
 /// Takes out everything the engine holds that `desired` does not name — [`sync`]'s first phase,

@@ -13,7 +13,7 @@ use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
-    fold_ident, profile, store, BackgroundGuard, CatalogGen, Engine, ProfileRun, CANCELLED,
+    fold_ident, profile, store, BackgroundGuard, CatalogGen, Engine, ProfileRun, Scans, CANCELLED,
     SUPERSEDED_SCAN,
 };
 
@@ -63,6 +63,7 @@ impl Catalog<'_> {
         self.cancel_profile(&spec.name);
         let ctx = self.engine.ctx.clone();
         let (name, internal) = (spec.name.clone(), spec.internal);
+        let connection = spec.connection.clone();
         let meta = self
             .engine
             .rt()
@@ -70,6 +71,8 @@ impl Catalog<'_> {
             .await
             .map_err(|e| format!("register task failed: {e}"))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
+        self.engine
+            .note_scans(&name, Some(Scans::Table(connection)));
         self.engine.generation.bump();
         meta
     }
@@ -82,6 +85,7 @@ impl Catalog<'_> {
         self.cancel_profile(table);
         let _ = self.engine.ctx.deregister_table(table);
         self.engine.note_origin(table, false);
+        self.engine.note_scans(table, None);
         self.engine.generation.bump();
     }
 
@@ -148,12 +152,22 @@ impl Catalog<'_> {
     pub async fn create_view(self, name: String, sql: String) -> Result<ViewMeta, String> {
         self.cancel_profile(&name);
         let ctx = self.engine.ctx.clone();
+        let created_as = name.clone();
         let created = self
             .engine
             .rt()
             .spawn(async move { arms::create_view(&ctx, &name, &sql).await })
             .await
             .map_err(|e| format!("create view task failed: {e}"))?;
+        if let Ok(meta) = &created {
+            self.engine.note_scans(
+                &created_as,
+                Some(Scans::View {
+                    tables: meta.tables.clone(),
+                    remote: meta.remote.clone(),
+                }),
+            );
+        }
         self.engine.generation.bump();
         created
     }
