@@ -933,7 +933,7 @@ mod tests {
             .query(crate::RunTag(1), "SELECT 1 AS n".into(), 10)
             .await
             .expect("run");
-        let snapshot = crate::query::snapshot_name(strata_model::SnapshotId(1));
+        let snapshot = crate::snapshots::snapshot_name(strata_model::SnapshotId(1));
 
         engine.catalog().sync(CatalogSpec::default(), |_| {}).await;
 

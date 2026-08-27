@@ -31,7 +31,7 @@
 //! ([`SourceSchemaProvider`](super::sources::providers::SourceSchemaProvider)) deliberately has
 //! none: the namespace is the workspace
 //! catalog's, so a remote relation a server happens to call `__snap_x` is an ordinary table — the
-//! same scoping [`is_snapshot_ref`](super::query::is_snapshot_ref) applies to the refusal, off
+//! same scoping [`is_snapshot_ref`](super::snapshots::is_snapshot_ref) applies to the refusal, off
 //! [`in_workspace`].
 //!
 //! Everything else delegates to the map verbatim, `MemorySchemaProvider`'s duplicate-name error
@@ -47,7 +47,7 @@ use datafusion::common::{exec_err, DataFusionError, Result};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 
-use super::query::is_snapshot_name;
+use super::snapshots::is_snapshot_name;
 use super::sources::providers::SourceCatalogProvider;
 use super::{fold_ident, CATALOG, SCHEMA};
 
@@ -57,7 +57,7 @@ use super::{fold_ident, CATALOG, SCHEMA};
 /// One predicate rather than the test written per caller, because two rules turn on it and must not
 /// drift: what an intercepted statement may create, drop or write
 /// ([`resolve_target`](super::statements::resolve_target)), and what the `__snap_` namespace covers
-/// ([`is_snapshot_ref`](super::query::is_snapshot_ref)). Since the DB workstream the session holds
+/// ([`is_snapshot_ref`](super::snapshots::is_snapshot_ref)). Since the DB workstream the session holds
 /// more than one catalog, so "is this name ours" is a real question.
 ///
 /// Reference-shaped, so it is asked of the value DataFusion resolved: a `Partial` whose schema is
@@ -352,7 +352,7 @@ mod tests {
 
     use super::*;
     use crate::builder::test_context;
-    use crate::query::snapshot_name;
+    use crate::snapshots::snapshot_name;
     use crate::{Engine, RunTag, WsId, CATALOG};
     use strata_model::SnapshotId;
 

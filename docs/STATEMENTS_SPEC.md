@@ -568,8 +568,9 @@ Around it, as built:
   receive an internal def.
 - A drop of an internal table **deletes its data** — see the next section.
 - `register_external` hands the table the runtime's per-file **statistics cache**
-  (`ListingTable::with_cache`). `SessionContext::register_listing_table` does this for itself, so
-  snapshots always had it and only the hand-built config did not; without it statistics are
+  (`ListingTable::with_cache`), as `LocalIpcSnapshotStore::open` does for a snapshot; both build
+  their `ListingTable` by hand, and a hand-built one opts into applying every default
+  `SessionContext::register_listing_table` would have applied. Without it statistics are
   re-read on every scan *and* every registration. **Not** the list-files cache, which
   `ENGINE_KEYS` zeroes on purpose: that one answers "which files are there", and a re-scan means
   asking again. This one answers "what is in *this* file", invalidated on size and mtime.

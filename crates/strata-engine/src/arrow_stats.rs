@@ -218,7 +218,7 @@ mod tests {
     use datafusion::object_store::local::LocalFileSystem;
     use datafusion::object_store::path::Path as StorePath;
 
-    use crate::query::ipc_write_options;
+    use crate::ipc::ipc_write_options;
 
     use super::*;
 

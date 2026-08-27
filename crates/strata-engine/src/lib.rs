@@ -44,6 +44,7 @@ mod facade;
 pub mod formats;
 mod functions;
 mod generation;
+mod ipc;
 pub mod json_poly;
 pub mod policy;
 pub mod profile;
@@ -52,6 +53,7 @@ mod query;
 pub mod register;
 pub mod secrets;
 mod sink;
+pub mod snapshots;
 pub mod sources;
 pub mod sql;
 pub mod statements;
@@ -66,7 +68,10 @@ pub use policy::{
     Admit, Capability, CapabilityPolicyProvider, DenyCode, Grant, GrantFamily, Grants, Locality,
     PolicyProvider, Principal, RemoteScope, RemoteSel, TargetFacts,
 };
-pub use query::{purge_snapshot_root, ReadPolicy};
+pub use query::ReadPolicy;
+pub use snapshots::{
+    LocalIpcSnapshotStore, MemSnapshotStore, SnapshotSink, SnapshotStats, SnapshotStore,
+};
 pub use sources::source::{
     ConnectionKey, DataSource, Field, Located, SourceCatalog, SourceInfo, SourceKind, SourceMode,
     Sourced,
@@ -110,6 +115,7 @@ pub fn stopped_on_purpose(error: &str) -> bool {
 }
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+#[cfg(test)]
 use std::fs::File;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -132,7 +138,8 @@ use formats::Formats;
 use functions::Functions;
 use generation::GenClock;
 use providers::{StrataCatalogList, StrataCatalogProvider};
-use query::{discard_snapshot_dir, retire_snapshot, run_and_snapshot, CellFormat};
+use query::{run_and_snapshot, CellFormat};
+use snapshots::snapshot_name;
 use sources::source::Sources as SourceRegistry;
 use sources::Live;
 use statements::arms::StrataFunctionFactory;
@@ -356,14 +363,14 @@ struct Lifecycle {
     /// Snapshots whose retire arrived while they were pinned. They are retired for real
     /// when the last pin releases — deferred, never skipped, so nothing leaks.
     deferred: HashSet<SnapshotId>,
-    /// What each live snapshot's write pass observed ([`query::SnapshotStats`]) — today the
+    /// What each live snapshot's write pass observed ([`SnapshotStats`]) — today the
     /// exact per-column null counts a partitioned export has to check.
     ///
     /// Here rather than in the file because a snapshot never outlives its process, so this has
     /// exactly its lifetime: inserted when it materializes, dropped when it retires. The Arrow
     /// IPC snapshot carries no statistics of its own, and asking the file was never the point —
     /// the write pass already streams every batch.
-    stats: HashMap<SnapshotId, query::SnapshotStats>,
+    stats: HashMap<SnapshotId, SnapshotStats>,
 }
 
 /// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
@@ -440,11 +447,12 @@ pub struct Engine {
     snap_seq: AtomicU64,
     /// Dispatch-id allocator — see [`InFlight::dispatch`].
     dispatch_seq: AtomicU64,
-    /// The exclusive lock on this engine's snapshot directory, held open for the engine's
-    /// whole life: it is what tells *another* process's startup purge that these
-    /// snapshots are live (`query::claim_snapshot_dir`). Never read — closing it is the
-    /// entire contract, so it drops with the engine, after `Drop` has cleaned up.
-    _snapshot_lock: Option<File>,
+    /// Where this engine's settled results live ([`EngineBuilder::with_snapshot_store`]).
+    ///
+    /// Shared by handle because the write pass runs on a spawned task, and held for the engine's
+    /// whole life because a store's own claim on wherever it puts things is released when the
+    /// last handle to it goes.
+    snapshots: Arc<dyn SnapshotStore>,
     lifecycle: Mutex<Lifecycle>,
     /// "This engine has work in flight", published on every lifecycle mutation for readers
     /// that can reach neither the lock nor async code — the window's winit close hook (T2),
@@ -1139,9 +1147,9 @@ impl Engine {
                 self.retire_or_defer(&mut lc, old);
             }
             let ctx = self.ctx.clone();
-            let engine_id = self.engine_id;
+            let store = Arc::clone(&self.snapshots);
             let task = self.rt().spawn(async move {
-                run_and_snapshot(&ctx, engine_id, snapshot, stmt, page_size, &fmt, policy).await
+                run_and_snapshot(&ctx, &*store, snapshot, stmt, page_size, &fmt, policy).await
             });
             lc.inflight.insert(
                 ws,
@@ -1176,17 +1184,17 @@ impl Engine {
                     }
                     Ok((output, batch))
                 } else {
-                    retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                    self.retire_snapshot(snapshot);
                     Err(SUPERSEDED_RUN.into())
                 }
             }
             Ok(Err(e)) => Err(e),
             Err(join) if join.is_cancelled() => {
-                retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                self.retire_snapshot(snapshot);
                 Err(CANCELLED.into())
             }
             Err(join) => {
-                retire_snapshot(&self.ctx, self.engine_id, snapshot);
+                self.retire_snapshot(snapshot);
                 Err(format!("query task failed: {join}"))
             }
         }
@@ -1224,6 +1232,16 @@ impl Engine {
         }
     }
 
+    /// Retire one snapshot: deregister its table and discard its bytes.
+    ///
+    /// The two halves have different owners — the name is this engine's registration, the bytes
+    /// are the [store](SnapshotStore)'s — and both are best effort, so this is safe on a snapshot
+    /// that never fully materialized (a failed or cancelled run's partial).
+    fn retire_snapshot(&self, snapshot: SnapshotId) {
+        let _ = self.ctx.deregister_table(snapshot_name(snapshot).as_str());
+        self.snapshots.retire(snapshot);
+    }
+
     /// Retire `snapshot` unless someone is holding it open, in which case remember to retire
     /// it when the last hold releases.
     ///
@@ -1244,7 +1262,7 @@ impl Engine {
     /// snapshots it describes.
     fn retire_now(&self, lc: &mut Lifecycle, snapshot: SnapshotId) {
         lc.stats.remove(&snapshot);
-        retire_snapshot(&self.ctx, self.engine_id, snapshot);
+        self.retire_snapshot(snapshot);
     }
 
     /// Abort an in-flight run and retire whatever snapshot it was materializing.
@@ -1258,7 +1276,7 @@ impl Engine {
     fn abort_inflight(&self, f: InFlight) {
         f.abort.abort();
         if let Some(snap) = f.snapshot {
-            retire_snapshot(&self.ctx, self.engine_id, snap);
+            self.retire_snapshot(snap);
         }
     }
 }
@@ -1364,15 +1382,15 @@ impl Drop for SnapshotPin {
 }
 
 impl Drop for Engine {
-    /// The window is closing: abort everything in flight and remove this engine's
-    /// snapshot directory. (`purge_snapshot_root` at the *next* process start covers an
-    /// abrupt exit that skips this.)
+    /// The window is closing: abort everything in flight and tell the store nothing of ours is
+    /// live any more. (A store that keeps them across processes sweeps what an abrupt exit
+    /// skipped when the next one of its kind starts.)
     ///
     /// Same asynchronous-abort caveat as `cleanup_ws`, with a smaller blast radius: an
-    /// aborted task that outlives us can only recreate files under a directory nobody
-    /// reads any more (its `SessionContext` dies with the engine), and the next startup
-    /// purge sweeps it — the claim goes with `_snapshot_lock`, which drops right after
-    /// this body, so that directory is no longer defended.
+    /// aborted task that outlives us can only write into a store nobody reads any more (its
+    /// `SessionContext` dies with the engine), and the next startup purge sweeps what it left —
+    /// the store's own claim goes when the last handle to it drops, right after this body, so
+    /// what it was holding is no longer defended.
     fn drop(&mut self) {
         let mut lc = self.lifecycle.lock().unwrap();
         for (_, f) in lc.inflight.drain() {
@@ -1391,7 +1409,7 @@ impl Drop for Engine {
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }
-        discard_snapshot_dir(self.engine_id);
+        self.snapshots.purge_orphans(&HashSet::new());
     }
 }
 

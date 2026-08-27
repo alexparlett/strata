@@ -31,7 +31,7 @@ use strata_arrow::column_info;
 
 use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
 use crate::policy::Principal;
-use crate::query::is_snapshot_name;
+use crate::snapshots::is_snapshot_name;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::{resolved_one, Qualified};
 use crate::statements::report::{StatementOutcome, StoreEffect};
