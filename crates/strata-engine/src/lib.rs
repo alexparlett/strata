@@ -464,6 +464,8 @@ pub struct Engine {
     data_root: Mutex<Option<PathBuf>>,
     /// Which registered tables are **internal** — see [`InternalTables`].
     internal: InternalTables,
+    /// What each registered name reads — see [`Dependencies`].
+    dependencies: Dependencies,
     /// Which connections this engine has been told about — see [`Connections`].
     connections: Connections,
     /// What generation of the catalog this engine is at — see [`CatalogGen`].
@@ -523,26 +525,162 @@ impl InternalTables {
     }
 }
 
-/// The connection **URLs** this engine has been told about — the same shape as
-/// [`InternalTables`], for the same reasons and with the same limits.
+/// What each registered name reads: a table's connection, or a view's scans.
 ///
-/// It holds URLs and nothing else, and answers exactly one engine-side question: **may a typed
-/// `CREATE EXTERNAL TABLE` name this bucket**. Everything else about a connection — its provider,
-/// its region, where its credentials come from, whether its row is green — is the store's, and
-/// this is deliberately not a second copy of any of it.
+/// The [`InternalTables`] shape, with the same limits, and it answers one question —
+/// [`Sources::dependents`]. It is not a second catalog: what a host's row says about a name is
+/// the host's, and none of it is here.
 ///
-/// **Membership, not connectivity.** [`Sources::connect`] notes the URL whether the store went in
-/// or not, because a connection that cannot resolve a credential today is still a connection this
-/// project has: the def a statement writes is durable and the fix (`aws sso login`, a region typed
-/// into the editor, ↻) happens afterwards. Asking DataFusion's object-store registry instead would
-/// have answered *no* for exactly those, in a sentence — "not a connection in this project" — that
-/// would then be false.
+/// Registration is a reconciliation, so this is too. Every funnel that registers a name notes
+/// what it reads and every funnel that takes one out forgets it, and [`sync`](register::sync)
+/// prunes to the names its `CatalogSpec` holds. That last step is what keeps a table whose
+/// registration **failed** answerable — it is noted from the spec, and no deregistration will
+/// ever report it — without its entry outliving the def.
+///
+/// Bounded by what the last pass established: a def no pass has reached is not here, and a view
+/// the engine could not create has no scans to record.
+#[derive(Clone, Debug, Default)]
+pub struct Dependencies(Arc<Mutex<BTreeMap<String, Scanned>>>);
+
+/// What a connection is holding up — [`Sources::dependents`]'s answer.
+///
+/// Two lists, because a caller counting them counts two different things. Both are alphabetical
+/// and name each thing once.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Dependents {
+    /// Workspace tables whose def reads its files through this connection. Always empty for a
+    /// connection that registers a **catalog**: no def can name one.
+    pub tables: Vec<String>,
+    /// The views left invalid — those over [`tables`](Self::tables) for an object store, and
+    /// those scanning its catalog for a source.
+    pub views: Vec<String>,
+}
+
+/// One registered name, in its own spelling, and what it reads.
+///
+/// The spelling is carried because the map is keyed by [`fold_ident`], names being matched the way
+/// SQL matches them, while a caller renders the name as it was written.
+#[derive(Clone, Debug)]
+struct Scanned {
+    name: String,
+    scans: Scans,
+}
+
+/// What one name reads. Two arms and no third: a saved query registers nothing.
+#[derive(Clone, Debug)]
+enum Scans {
+    /// A table, and the connection its files are read through — `None` over local files.
+    Table(Option<String>),
+    /// A view, and the two lists [`ViewMeta`] records: workspace scans bare, everything else
+    /// qualified whole.
+    View {
+        tables: Vec<String>,
+        remote: Vec<String>,
+    },
+}
+
+impl Dependencies {
+    /// The tables read through the connection called `name`, alphabetically.
+    ///
+    /// Case-insensitive, because a connection's name is a SQL identifier and
+    /// [`Connections::resolve`] answers that way — which is also what decides, one level down,
+    /// whether the table registered over that store at all.
+    fn over(&self, name: &str) -> Vec<String> {
+        self.named(|scans| match scans {
+            Scans::Table(Some(held)) => held.eq_ignore_ascii_case(name),
+            _ => false,
+        })
+    }
+
+    /// The views scanning any of `tables`, alphabetically and each named once.
+    ///
+    /// Flat rather than transitive on purpose, and still complete: DataFusion inlines a view it
+    /// reads, so a view over a view records the *base* tables of both.
+    fn above(&self, tables: &[String]) -> Vec<String> {
+        let wanted: BTreeSet<String> = tables.iter().map(|t| fold_ident(t)).collect();
+        self.named(|scans| match scans {
+            Scans::View { tables, .. } => tables.iter().any(|t| wanted.contains(&fold_ident(t))),
+            Scans::Table(_) => false,
+        })
+    }
+
+    /// The views scanning through the catalog `catalog`, alphabetically and each named once.
+    ///
+    /// Matched on the qualified name's **first part**, folded: that part is the catalog, which is
+    /// what [`ViewMeta`] keeps its two lists apart for.
+    fn reading(&self, catalog: &str) -> Vec<String> {
+        let wanted = fold_ident(catalog);
+        self.named(|scans| match scans {
+            Scans::View { remote, .. } => remote
+                .iter()
+                .filter_map(|dep| dep.split('.').next())
+                .any(|part| fold_ident(part) == wanted),
+            Scans::Table(_) => false,
+        })
+    }
+
+    /// Every held name whose scans `wanted` accepts, in its own spelling, alphabetically.
+    fn named(&self, wanted: impl Fn(&Scans) -> bool) -> Vec<String> {
+        let held = self.0.lock().unwrap();
+        let mut found: Vec<String> = held
+            .values()
+            .filter(|held| wanted(&held.scans))
+            .map(|held| held.name.clone())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Record what registering `name` established about what it reads.
+    fn note(&self, name: &str, scans: Scans) {
+        self.0.lock().unwrap().insert(
+            fold_ident(name),
+            Scanned {
+                name: name.to_string(),
+                scans,
+            },
+        );
+    }
+
+    /// Forget `name` — every funnel that deregisters one.
+    fn forget(&self, name: &str) {
+        self.0.lock().unwrap().remove(&fold_ident(name));
+    }
+
+    /// Keep only the names `wanted` holds — [`sync`](register::sync)'s reconciliation, and the
+    /// only thing that can retire an entry no deregistration will ever report.
+    pub(crate) fn retain(&self, wanted: &BTreeSet<String>) {
+        self.0
+            .lock()
+            .unwrap()
+            .retain(|held, _| wanted.contains(held));
+    }
+}
+
+/// The connections this engine has been told about: the last def handed to
+/// [`Sources::connect`] for each name, keyed by that name.
+///
+/// It answers two questions from the one map — may a typed `CREATE EXTERNAL TABLE` name this
+/// bucket, and what does this engine hold a connection for ([`Sources::listing`]). The def rather
+/// than the identity alone is what makes the second answerable without asking the host: an engine
+/// told about a connection can say what kind serves it and what it registers, live or not.
+///
+/// It is not a second copy of the catalog. What a host's row says about a connection — whether it
+/// is waiting, the sentence a failure left — is the host's, and nothing here records it.
+///
+/// **Membership, not connectivity.** [`Sources::connect`] notes the def whether what it describes
+/// went in or not, because a connection that cannot resolve a credential today is still a
+/// connection this project has: the def a statement writes is durable and the fix (`aws sso
+/// login`, a region typed into the editor, ↻) happens afterwards. Asking DataFusion's object-store
+/// registry instead would have answered *no* for exactly those, in a sentence — "not a connection
+/// in this project" — that would then be false. (What the *session* holds right now is a different
+/// question, and [`Sources::listing`] answers it as `live`.)
 ///
 /// Rebuilt by the pass, like the origin set: the registration pass's first phase calls `connect` for
 /// every def, and [`Sources::disconnect`] — the Forget gesture and the edit that moves a
-/// connection's URL — is the one removal.
+/// connection's identity — is the one removal.
 #[derive(Clone, Debug, Default)]
-pub struct Connections(Arc<Mutex<BTreeMap<String, String>>>);
+pub struct Connections(Arc<Mutex<BTreeMap<String, ConnectionDef>>>);
 
 impl Connections {
     /// The connection `name` addresses, **in the connection's own spelling** — `None` when this
@@ -568,12 +706,28 @@ impl Connections {
     /// What the connection called `name` **is** — the `(kind, address)` pair, for the one thing
     /// that still needs it: composing the URL its object store is registered under.
     fn identity(&self, name: &str) -> Option<String> {
+        self.def(name).map(|def| def.identity())
+    }
+
+    /// The def this engine was last handed for the connection called `name`, matched the way
+    /// [`resolve`](Self::resolve) matches.
+    fn def(&self, name: &str) -> Option<ConnectionDef> {
         let held = self.0.lock().unwrap();
         held.get(name).cloned().or_else(|| {
             held.iter()
                 .find(|(held, _)| held.eq_ignore_ascii_case(name))
-                .map(|(_, identity)| identity.clone())
+                .map(|(_, def)| def.clone())
         })
+    }
+
+    /// Every connection this engine has been told about, in name order — what
+    /// [`Sources::listing`] walks.
+    ///
+    /// **Membership, not liveness**, exactly as the rest of this type is: a connection whose
+    /// credentials this machine cannot resolve today is still one the project has, and the
+    /// listing says so by answering `live: false` rather than by leaving it out.
+    fn all(&self) -> Vec<ConnectionDef> {
+        self.0.lock().unwrap().values().cloned().collect()
     }
 
     /// The connection whose `(kind, address)` is `identity` — for the one caller that arrives
@@ -584,7 +738,7 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, held)| held.eq_ignore_ascii_case(identity))
+            .find(|(_, held)| held.identity().eq_ignore_ascii_case(identity))
             .map(|(name, _)| name.clone())
     }
 
@@ -599,7 +753,7 @@ impl Connections {
     pub fn of(defs: &[ConnectionDef]) -> Self {
         let held = Self::default();
         for def in defs {
-            held.note(&def.named(), &def.identity());
+            held.note(def);
         }
         held
     }
@@ -615,15 +769,12 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, identity)| (name.clone(), identity.clone()))
+            .map(|(name, def)| (name.clone(), def.identity()))
             .collect()
     }
 
-    fn note(&self, name: &str, identity: &str) {
-        self.0
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), identity.to_string());
+    fn note(&self, def: &ConnectionDef) {
+        self.0.lock().unwrap().insert(def.named(), def.clone());
     }
 
     fn forget(&self, name: &str) {
@@ -665,6 +816,16 @@ impl Engine {
     /// registers one, so the set is rebuilt by the pass rather than maintained beside it.
     fn note_origin(&self, name: &str, internal: bool) {
         self.internal.note(name, internal);
+    }
+
+    /// Record what a registration established about what `name` reads, or forget it — called from
+    /// every path that registers or takes out a table or a view, so the map is rebuilt by the
+    /// pass rather than maintained beside it.
+    fn note_scans(&self, name: &str, scans: Option<Scans>) {
+        match scans {
+            Some(scans) => self.dependencies.note(name, scans),
+            None => self.dependencies.forget(name),
+        }
     }
 
     /// Publish "this engine has work in flight". Called from **every**
@@ -786,19 +947,29 @@ impl Engine {
         match effect {
             StoreEffect::TableUpserted { def, .. } => {
                 self.note_origin(&def.name, def.origin.is_internal());
+                self.note_scans(&def.name, Some(Scans::Table(def.connection.clone())));
                 self.generation.bump();
             }
             StoreEffect::TableRemoved { name, .. } => {
                 self.catalog().cancel_profile(name);
                 self.note_origin(name, false);
+                self.note_scans(name, None);
                 self.generation.bump();
             }
-            StoreEffect::ViewUpserted { def, .. } => {
+            StoreEffect::ViewUpserted { def, meta } => {
                 self.catalog().cancel_profile(&def.name);
+                self.note_scans(
+                    &def.name,
+                    Some(Scans::View {
+                        tables: meta.tables.clone(),
+                        remote: meta.remote.clone(),
+                    }),
+                );
                 self.generation.bump();
             }
             StoreEffect::ViewRemoved { name } => {
                 self.catalog().cancel_profile(name);
+                self.note_scans(name, None);
                 self.generation.bump();
             }
             StoreEffect::FunctionsChanged
@@ -2146,6 +2317,7 @@ mod tests {
                 )],
                 format: SourceFormat::from_name("csv"),
                 partitions: Vec::new(),
+                connection: None,
                 internal: false,
             })
             .await
@@ -2630,6 +2802,7 @@ mod read_options_tests {
             paths,
             format,
             partitions: Vec::new(),
+            connection: None,
             internal: false,
         }
     }
@@ -3228,17 +3401,29 @@ mod read_options_tests {
 mod remote_catalog_tests {
     use super::*;
     use crate::providers::fake_source;
+    use crate::sources::fake::{fake_def, TestDoc};
 
+    /// **The workspace is not a database, by construction.** The catalogs an agent is told about
+    /// are the *connections* this engine holds, so the project's own catalog cannot appear among
+    /// them however it is registered — and neither can a bucket, which holds files.
     #[tokio::test]
     async fn the_workspace_catalog_is_not_a_database() {
-        let engine = Engine::builder().build();
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
         assert!(
-            engine.sources().catalogs().is_empty(),
-            "a project with no database connection has no database catalogs"
+            engine.sources().listing().catalog_names().is_empty(),
+            "a project with no connection has no database catalogs"
         );
-        fake_source(&engine.ctx, "Sales", &["orders"]);
+
+        engine
+            .sources()
+            .connect(fake_def::<TestDoc>("Sales", "fixture"))
+            .await
+            .expect("the source registers its catalog");
+
         assert_eq!(
-            engine.sources().catalogs(),
+            engine.sources().listing().catalog_names(),
             vec!["Sales".to_string()],
             "in the spelling it was registered under, and without the workspace's own"
         );

@@ -19,7 +19,8 @@ use crate::sources::source::{DataSource, SourceKind, Sources};
 use crate::sources::Live;
 use crate::udf_package::UdfPackage;
 use crate::{
-    build_context, query, runtime_subset, Connections, Engine, InternalTables, SessionScope,
+    build_context, query, runtime_subset, Connections, Dependencies, Engine, InternalTables,
+    SessionScope,
 };
 
 /// The engine-id allocator — see [`Engine::id`].
@@ -192,6 +193,7 @@ impl EngineBuilder {
             functions,
             data_root: Mutex::new(self.data_dir),
             internal: InternalTables::default(),
+            dependencies: Dependencies::default(),
             connections: Connections::default(),
             generation: GenClock::default(),
             live: Live::default(),

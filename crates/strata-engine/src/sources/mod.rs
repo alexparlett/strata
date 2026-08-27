@@ -46,13 +46,14 @@ use datafusion::prelude::*;
 use strata_model::{check_catalog_name, ColumnInfo, ConnectionDef, SourceDef};
 
 use self::providers::SourceCatalogProvider;
-use self::source::{Listing, Relation, SourceCatalog, Sourced, Sources};
+use self::source::{Listing, Relation, SourceCatalog, SourceInfo, Sourced, Sources};
 use super::connect::{self, Registration};
 use super::fold_ident;
 use super::providers::deregister_catalog;
 use super::secrets::{SecretProvider, SecretRequest};
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
+use crate::{store, CatalogGen};
 use strata_core::secret::{migrate_derived, Secret, SecretRef};
 
 /// The keystore slot one of `conn`'s secrets lives in — **the one place the derivation is
@@ -225,12 +226,14 @@ impl Live {
             .collect()
     }
 
-    /// The catalog name and the enumeration a connection registered, or `None` if it is not
-    /// live — what [`Sources::listing`](super::Sources::listing) reads.
-    fn listing(&self, name: &str) -> Option<(String, Arc<Listing>)> {
+    /// The enumeration a connection registered, or `None` if it is not live.
+    ///
+    /// [`snapshot`]'s **one** read of this map per connection: it answers whether the connection
+    /// is live and what it enumerated together, because a teardown landing between two reads
+    /// leaves a row claiming to be live over nothing — a state this map never held.
+    fn listing(&self, name: &str) -> Option<Arc<Listing>> {
         let held = self.0.lock().unwrap();
-        let live = held.get(name)?;
-        Some((live.catalog.clone(), Arc::clone(&live.listing)))
+        Some(Arc::clone(&held.get(name)?.listing))
     }
 
     /// Forget the connection called `name`, handing back the catalog name it had registered.
@@ -367,6 +370,144 @@ pub struct RemoteRelation {
     /// and answers for free.
     pub view: bool,
     pub columns: Vec<ColumnInfo>,
+}
+
+/// Every connection an engine holds, read as of one moment.
+///
+/// Answering each question separately would let two of them describe different instants; this is
+/// taken under one read and stamped with the [`generation`](Self::generation) it was taken at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourcesSnapshot {
+    /// The catalog generation this was read at.
+    ///
+    /// Key a derived answer on it and re-derive when [`Catalog::generation`](crate::Catalog::generation)
+    /// stops matching: connecting, disconnecting and changing which schemas a connection shows all
+    /// move it.
+    pub generation: CatalogGen,
+    /// Every connection, in name order.
+    ///
+    /// The workspace catalog is not among them — it is the engine's own, addressed as
+    /// [`WORKSPACE_CATALOG`](strata_model::WORKSPACE_CATALOG), and nothing connects to it.
+    pub sources: Vec<SourceListing>,
+    /// Every source this engine can serve a connection with — what
+    /// [`Sources::registrants`](super::Sources::registrants) answers.
+    ///
+    /// Carried so that [`badge`](Self::badge) can answer for a kind this engine has not been asked
+    /// to connect yet.
+    pub registrants: Vec<SourceInfo>,
+}
+
+/// One connection, and what it registered.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceListing {
+    /// What the connection is called, which is how every call addresses it.
+    pub name: String,
+    /// Whether the session holds its registration now: its store resolves paths, or its catalog
+    /// resolves names.
+    ///
+    /// A connection this engine was told about but could not reach is listed with `false` rather
+    /// than left out.
+    pub live: bool,
+    pub detail: SourceDetail,
+}
+
+/// What connecting yielded, by mode.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourceDetail {
+    /// An object store. It enumerates nothing: what it holds is described by the table defs read
+    /// through it.
+    Store,
+    /// A catalog of relations the source names itself.
+    Catalog {
+        /// The catalog its relations are addressed by.
+        ///
+        /// Taken from the def, so a connection that has never answered still reports the name a
+        /// query would have to write.
+        catalog: String,
+        /// Its namespaces, scoped and tagged against [`SourceDef::schemas`]. Empty while the
+        /// connection is not live.
+        schemas: Vec<SchemaListingView>,
+    },
+}
+
+impl SourcesSnapshot {
+    /// The catalogs live connections registered — what a three-part name resolves through now.
+    ///
+    /// Live, where [`Sources::database_syms`](super::Sources::database_syms) is not: use this to
+    /// report what can be reached into, and that to offer the name a query would have to write
+    /// whether or not the connection is up.
+    pub fn catalog_names(&self) -> Vec<String> {
+        self.sources
+            .iter()
+            .filter(|source| source.live)
+            .filter_map(|source| match &source.detail {
+                SourceDetail::Catalog { catalog, .. } => Some(catalog.clone()),
+                SourceDetail::Store => None,
+            })
+            .collect()
+    }
+
+    /// One connection by name, or `None` for a name this engine has not been told about.
+    pub fn source(&self, name: &str) -> Option<&SourceListing> {
+        self.sources.iter().find(|source| source.name == name)
+    }
+
+    /// The short word `kind` is badged with — its [`BADGE`](source::SourceKind::BADGE).
+    ///
+    /// A kind nothing is registered for is badged with the kind itself, which is all that can
+    /// honestly be said about a connection this build cannot serve.
+    pub fn badge(&self, kind: &str) -> String {
+        let kind = kind.trim();
+        self.registrants
+            .iter()
+            .find(|info| info.kind == kind)
+            .map(|info| info.badge.to_string())
+            .unwrap_or_else(|| kind.to_string())
+    }
+}
+
+/// Read every connection this engine has been told about into one [`SourcesSnapshot`].
+///
+/// Costs no I/O — every answer is already held — so re-reading it is how a caller refreshes a
+/// derived value. Asking a source anything is the registration pass's job.
+pub(crate) fn snapshot(
+    ctx: &SessionContext,
+    registrants: &Sources,
+    live: &Live,
+    defs: &[ConnectionDef],
+    generation: CatalogGen,
+) -> SourcesSnapshot {
+    let sources = defs
+        .iter()
+        .map(|def| {
+            let name = def.named();
+            match def.provider.source() {
+                Some(source) => {
+                    let enumerated = live.listing(&name);
+                    SourceListing {
+                        live: enumerated.is_some(),
+                        detail: SourceDetail::Catalog {
+                            catalog: name.clone(),
+                            schemas: enumerated
+                                .map(|listing| scoped(&listing, source))
+                                .unwrap_or_default(),
+                        },
+                        name,
+                    }
+                }
+                None => SourceListing {
+                    live: store::registered(ctx, &def.identity()),
+                    detail: SourceDetail::Store,
+                    name,
+                },
+            }
+        })
+        .collect();
+    SourcesSnapshot {
+        generation,
+        sources,
+        registrants: registrants.registrants(),
+    }
 }
 
 /// Whether a namespace is one the connection shows, and whether the source has it.
@@ -507,15 +648,11 @@ pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
     take_back(ctx, sources, name);
 }
 
-/// What a surface sees of one live source: the catalog it is addressed by, and its namespaces
-/// scoped against the def's own [`SourceDef::schemas`] — see
-/// [`Sources::listing`](super::Sources::listing).
-pub(crate) fn listing(
-    sources: &Live,
-    conn: &ConnectionDef,
-    source: &SourceDef,
-) -> Option<(String, Vec<SchemaListingView>)> {
-    let (catalog, listing) = sources.listing(&conn.named())?;
+/// One connection's namespaces, scoped and tagged against [`SourceDef::schemas`].
+///
+/// Takes the enumeration rather than the [`Live`] map that holds it, so a second read of that map
+/// is not expressible here — see [`Live::listing`].
+fn scoped(listing: &Listing, source: &SourceDef) -> Vec<SchemaListingView> {
     let enabled: BTreeSet<String> = shown_of(source);
     let mut views: Vec<SchemaListingView> = listing
         .schemas()
@@ -549,7 +686,7 @@ pub(crate) fn listing(
             }),
     );
     views.sort_by(|a, b| a.name.cmp(&b.name));
-    Some((catalog, views))
+    views
 }
 
 /// Whether the connection registered as `catalog` accepts writes — the inverse of
@@ -774,4 +911,393 @@ async fn relation_provider(
     ctx.table_provider(at.recorded().clone())
         .await
         .map_err(|e| e.to_string())
+}
+
+/// **What one snapshot says**, driven through a real engine — membership, liveness, badges and
+/// the two name reads, asked once and answered together.
+#[cfg(test)]
+mod snapshot_tests {
+    use std::collections::BTreeMap;
+
+    use strata_model::{Provider, S3Auth, S3Store};
+
+    use super::fake::{fake_def, TestDoc};
+    use super::source::SourceKind;
+    use super::*;
+    use crate::Engine;
+
+    /// A bucket connection whose credentials nothing here can resolve — it registers no store,
+    /// which is exactly the state `live` has to be able to say.
+    fn bucket(name: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: "acme-lake".into(),
+            name: name.into(),
+            provider: Provider::S3(S3Store {
+                region: String::new(),
+                auth: S3Auth::Ambient,
+                ..Default::default()
+            }),
+            client_config: BTreeMap::new(),
+        }
+    }
+
+    /// The snapshot is **membership**: a connection the engine was told about is listed whether
+    /// or not it went in, in name order, each carrying what it registers and its kind's own
+    /// badge.
+    #[tokio::test]
+    async fn every_connection_told_about_is_listed_live_or_not() {
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await;
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("void", "nowhere"))
+            .await;
+        let _ = engine.sources().connect(bucket("lake")).await;
+
+        let snapshot = engine.sources().listing();
+        let names: Vec<&str> = snapshot.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["lake", "sales", "void"], "in name order");
+
+        let sales = &snapshot.sources[1];
+        assert!(sales.live, "it connected");
+        assert_eq!(
+            snapshot.badge(TestDoc::NAME),
+            TestDoc::BADGE,
+            "its kind's own word, asked of the kind"
+        );
+        let SourceDetail::Catalog { catalog, schemas } = &sales.detail else {
+            panic!("a source registers a catalog");
+        };
+        assert_eq!(catalog, "sales", "addressed by its own name");
+        assert_eq!(schemas.len(), 1, "the one schema it enumerated");
+        assert_eq!(schemas[0].visibility, SchemaVisibility::Live);
+
+        let void = &snapshot.sources[2];
+        assert!(!void.live, "it was refused");
+        let SourceDetail::Catalog { catalog, schemas } = &void.detail else {
+            panic!("a refused source is still a source");
+        };
+        assert_eq!(catalog, "void", "and still says what a query would write");
+        assert!(schemas.is_empty(), "with nothing enumerated behind it");
+
+        assert_eq!(snapshot.sources[0].detail, SourceDetail::Store);
+        assert!(!snapshot.sources[0].live, "no credentials, no store");
+    }
+
+    /// **The two name reads are not the same question.** Completion offers the catalog of a
+    /// connection that has never answered, because that is the name a query has to write;
+    /// the listing of databases an agent is handed is what can be reached into now.
+    #[tokio::test]
+    async fn completion_offers_what_a_query_writes_and_the_agent_is_told_what_answers() {
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await;
+        let _ = engine
+            .sources()
+            .connect(fake_def::<TestDoc>("void", "nowhere"))
+            .await;
+        let _ = engine.sources().connect(bucket("lake")).await;
+
+        let syms = engine.sources().database_syms();
+        let offered: Vec<&str> = syms.iter().map(|sym| sym.name.as_str()).collect();
+        assert_eq!(offered, ["sales", "void"], "both catalogs, no bucket");
+        assert_eq!(
+            engine.sources().listing().catalog_names(),
+            ["sales".to_string()],
+            "only the one that answered"
+        );
+
+        let sales = syms
+            .iter()
+            .find(|sym| sym.name == "sales")
+            .expect("the live catalog");
+        assert_eq!(sales.schemas.len(), 1);
+        assert_eq!(sales.schemas[0].relations.len(), 1, "its one relation");
+    }
+
+    /// The picker's Apply writes the session **and** the def this engine retained, so the next
+    /// read scopes by what was just chosen rather than by what the def said at connect.
+    #[tokio::test]
+    async fn showing_a_different_set_of_schemas_moves_the_next_listing() {
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await
+            .expect("connect");
+
+        engine.sources().show_schemas("sales", &[]);
+
+        let snapshot = engine.sources().listing();
+        let SourceDetail::Catalog { schemas, .. } = &snapshot.sources[0].detail else {
+            panic!("a source registers a catalog");
+        };
+        assert_eq!(
+            schemas.iter().map(|s| s.visibility).collect::<Vec<_>>(),
+            [SchemaVisibility::NotEnabled],
+            "the schema is still there, and no longer shown"
+        );
+        assert!(
+            engine.sources().database_syms()[0].schemas.is_empty(),
+            "so completion stops offering its names"
+        );
+    }
+}
+
+/// **What a Forget would leave invalid**, driven through a real pass — both derivations, and the
+/// reconciliation that keeps them true.
+#[cfg(test)]
+mod dependents_tests {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::{env, fs, process};
+
+    use strata_model::{Provider, S3Auth, S3Store, SourceFormat, ViewDef};
+
+    use super::fake::{fake_def, TestDoc};
+    use super::*;
+    use crate::register::CatalogSpec;
+    use crate::{Dependents, Engine, TableSpec};
+
+    /// A scratch folder holding one two-column CSV, so every table below registers for real.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("strata_dependents_{}_{tag}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("t.csv"), "id,name\n1,a\n2,b\n").unwrap();
+        dir
+    }
+
+    /// A table over `root/t.csv` that **names** `connection`.
+    ///
+    /// Built directly rather than through `table_spec`, which is what composes a remote path onto
+    /// the connection's store: the subject here is the field the spec carries, and a bucket is
+    /// not something a unit test can read.
+    fn table(root: &Path, name: &str, connection: Option<&str>) -> TableSpec {
+        TableSpec {
+            name: name.into(),
+            paths: vec![root.join("t.csv").display().to_string()],
+            format: SourceFormat::from_name("csv"),
+            partitions: Vec::new(),
+            connection: connection.map(str::to_string),
+            internal: false,
+        }
+    }
+
+    fn view(name: &str, sql: &str) -> ViewDef {
+        ViewDef {
+            name: name.into(),
+            sql: sql.into(),
+        }
+    }
+
+    /// A bucket connection nothing can reach — membership is what this test needs, and a def the
+    /// engine was told about is a member whatever the connect answered.
+    fn bucket(name: &str) -> ConnectionDef {
+        ConnectionDef {
+            address: "acme-lake".into(),
+            name: name.into(),
+            provider: Provider::S3(S3Store {
+                region: String::new(),
+                auth: S3Auth::Ambient,
+                ..Default::default()
+            }),
+            client_config: BTreeMap::new(),
+        }
+    }
+
+    /// **An object store's dependents are its tables and the views over them** — including a view
+    /// that reaches the bucket only through another view, because DataFusion inlines what a view
+    /// reads and the recorded scans are the base tables of both.
+    #[tokio::test]
+    async fn a_bucket_names_its_tables_and_the_views_behind_them() {
+        let root = scratch("bucket");
+        let engine = Engine::builder().build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake"), bucket("spare")],
+                    tables: vec![
+                        table(&root, "orders", Some("lake")),
+                        table(&root, "users", None),
+                    ],
+                    views: vec![
+                        view("orders_daily", "SELECT * FROM orders"),
+                        view("orders_weekly", "SELECT * FROM orders_daily"),
+                        view("everyone", "SELECT * FROM users"),
+                    ],
+                },
+                |_| {},
+            )
+            .await;
+
+        assert_eq!(
+            engine.sources().dependents("lake"),
+            Dependents {
+                tables: vec!["orders".into()],
+                views: vec!["orders_daily".into(), "orders_weekly".into()],
+            },
+            "the table that names it, and both views over that table"
+        );
+        assert_eq!(
+            engine.sources().dependents("spare"),
+            Dependents::default(),
+            "a connection nothing reads through holds nothing up"
+        );
+    }
+
+    /// **A name is matched the way SQL matches one**, because that is also what decided whether
+    /// the table registered over that store at all.
+    #[tokio::test]
+    async fn a_connection_is_matched_folded() {
+        let root = scratch("folded");
+        let engine = Engine::builder().build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("Lake")],
+                    tables: vec![table(&root, "orders", Some("Lake"))],
+                    views: Vec::new(),
+                },
+                |_| {},
+            )
+            .await;
+
+        assert_eq!(engine.sources().dependents("lake").tables, ["orders"]);
+    }
+
+    /// **A source's dependents are the views scanning its catalog, and it never has tables** —
+    /// no def can name a connection whose relations are discovered rather than declared, so a def
+    /// that names one anyway (an edited `project.json`; the Configure picker offers only object
+    /// stores) is still not a table over it. Which half is empty is the *kind*, and this is what
+    /// pins that the arm is chosen by the connection rather than by what happens to be recorded.
+    ///
+    /// The two views that must *not* count are the point. `just_local` reads nothing remote. And
+    /// `homonym` reads a **workspace table called `sales`**, which is the same word as the
+    /// catalog and is matched by the other of `ViewMeta`'s two lists — the split those lists exist
+    /// for, and the reason a bare name resolves to the workspace first.
+    #[tokio::test]
+    async fn a_source_names_the_views_that_scan_through_it() {
+        let root = scratch("source");
+        let engine = Engine::builder()
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![fake_def::<TestDoc>("sales", "fixture")],
+                    tables: vec![
+                        table(&root, "sales", None),
+                        table(&root, "local", Some("sales")),
+                    ],
+                    views: vec![
+                        view("remote_orders", "SELECT * FROM SALES.public.orders"),
+                        view("homonym", "SELECT * FROM sales"),
+                        view("just_local", "SELECT * FROM local"),
+                    ],
+                },
+                |_| {},
+            )
+            .await;
+
+        assert_eq!(
+            engine.sources().dependents("sales"),
+            Dependents {
+                tables: Vec::new(),
+                views: vec!["remote_orders".into()],
+            },
+            "the view that reads across it — the catalog part folds, a workspace table sharing \
+             its name is not a reader, and a def naming a source is not a table over it"
+        );
+    }
+
+    /// **The reconciliation is what keeps it true.** A table whose registration *failed* is still
+    /// a table that reads through the connection — no deregistration will ever report it, so only
+    /// a later pass that stops naming it can take its entry out.
+    #[tokio::test]
+    async fn a_failed_table_still_counts_and_a_pass_that_drops_it_takes_it_out() {
+        let root = scratch("failed");
+        let engine = Engine::builder().build();
+        let mut broken = table(&root, "orders", Some("lake"));
+        broken.paths = vec![root.join("nothing-here.csv").display().to_string()];
+
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake")],
+                    tables: vec![broken],
+                    views: Vec::new(),
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(
+            engine.sources().dependents("lake").tables,
+            ["orders"],
+            "a table over the connection is a table over it whether or not it registered"
+        );
+
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake")],
+                    tables: Vec::new(),
+                    views: Vec::new(),
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(
+            engine.sources().dependents("lake"),
+            Dependents::default(),
+            "and the def is gone, so nothing is left holding the connection up"
+        );
+    }
+
+    /// A **drop** takes its entry out through the funnel it already goes through, so the confirm
+    /// after it does not name what the drop just removed.
+    #[tokio::test]
+    async fn dropping_a_view_stops_it_being_named() {
+        let root = scratch("dropped");
+        let engine = Engine::builder().build();
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    connections: vec![bucket("lake")],
+                    tables: vec![table(&root, "orders", Some("lake"))],
+                    views: vec![view("orders_daily", "SELECT * FROM orders")],
+                },
+                |_| {},
+            )
+            .await;
+        assert_eq!(engine.sources().dependents("lake").views, ["orders_daily"]);
+
+        engine
+            .catalog()
+            .drop_view("orders_daily".into())
+            .await
+            .expect("drop view");
+
+        assert!(
+            engine.sources().dependents("lake").views.is_empty(),
+            "the view is gone, and so is what it read"
+        );
+    }
 }

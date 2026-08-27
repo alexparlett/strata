@@ -195,6 +195,7 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
                     paths: vec![SCAN_FIXTURE.into()],
                     format: SourceFormat::from_name("csv"),
                     partitions: Vec::new(),
+                    connection: None,
                     internal: false,
                 }))
                 .expect("the fixture registers");

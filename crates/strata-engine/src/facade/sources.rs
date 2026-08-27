@@ -5,13 +5,13 @@ use std::sync::Arc;
 use datafusion::common::TableReference;
 use datafusion::logical_expr::TableType;
 use strata_arrow::column_info;
-use strata_model::ConnectionDef;
+use strata_model::{ConnectionDef, Provider};
 
 use crate::catalog;
 use crate::sources::source::SourceInfo;
-use crate::sources::{self, RemoteRelation, SchemaListingView, SchemaVisibility};
+use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, store, Engine, CATALOG};
+use crate::{fold_ident, store, Dependents, Engine, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -51,7 +51,7 @@ impl Sources<'_> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
         let name = conn.named();
-        engine.connections.note(&name, &conn.identity());
+        engine.connections.note(&conn);
         let live = engine.live.clone();
         let registrants = engine.sources.clone();
         let secrets = Arc::clone(&engine.secrets);
@@ -93,63 +93,73 @@ impl Sources<'_> {
         engine.generation.bump();
     }
 
-    /// What a live connection to a source registered: the catalog it is addressed by, and its
-    /// schemas **scoped and tagged** against the def's own [`SourceDef::schemas`](strata_model::SourceDef::schemas) — `None` for a
-    /// connection that holds no live catalog.
+    /// Every connection this engine holds, read as of one moment — see [`SourcesSnapshot`].
     ///
-    /// The one read the data-sources tree, the schema picker and completion share, so no
-    /// consumer re-derives visibility from the def. It reads the connect-time enumeration
-    /// rather than asking the server, which is what makes it free to call: a ↻ re-runs the
-    /// registration pass, and *that* is the refresh.
+    /// Answers from the connect-time enumeration rather than from any source, so it costs no I/O
+    /// and every surface that reads it describes the same instant. Re-running the registration
+    /// pass is the refresh.
     ///
-    /// Synchronous and not on the runtime, because there is no I/O in it.
-    pub fn listing(self, conn: &ConnectionDef) -> Option<(String, Vec<SchemaListingView>)> {
-        let source = conn.provider.source()?;
-        sources::listing(&self.engine.live, conn, source)
+    /// A connection this engine was told about is listed whether or not it could be reached: one
+    /// whose credentials this machine cannot resolve today is still a connection, and
+    /// [`SourceListing::live`](crate::sources::SourceListing::live) says so.
+    pub fn listing(self) -> SourcesSnapshot {
+        let engine = self.engine;
+        sources::snapshot(
+            &engine.ctx,
+            &engine.sources,
+            &engine.live,
+            &engine.connections.all(),
+            engine.generation.current(),
+        )
     }
 
-    /// Tell the session which schemas `conn` now **shows** — the Schemas… picker's engine half,
-    /// which writes the def without reconnecting.
+    /// Sets which schemas the connection called `name` shows, without reconnecting.
     ///
-    /// An unqualified name searches what a connection shows, so the session has to
-    /// learn the new set as the picker commits it. A no-op for a connection that is not live.
+    /// An unqualified name is searched for in the schemas a connection shows, so the session has
+    /// to be told as the choice is made. Silent for a name this engine holds nothing for, and for
+    /// one that registered an object store, which has no namespaces.
     ///
-    /// Moves the [`generation`](crate::Catalog::generation): what a bare name resolves to has
-    /// changed.
-    pub fn show_schemas(self, conn: &ConnectionDef) {
-        self.engine.live.show(conn);
-        self.engine.generation.bump();
+    /// Takes the set rather than a def, so the caller's own copy and this one cannot disagree
+    /// about a connection's scoping; [`listing`](Self::listing) answers the new set on the next
+    /// read.
+    ///
+    /// Moves the [`generation`](crate::Catalog::generation) whether or not this engine held the
+    /// connection: over-invalidating once is cheaper than leaving a caller answering about a
+    /// scoping that has moved.
+    pub fn show_schemas(self, name: &str, schemas: &[String]) {
+        let engine = self.engine;
+        if let Some(mut def) = engine.connections.def(name) {
+            if let Provider::Source(source) = &mut def.provider {
+                source.schemas = schemas.to_vec();
+                engine.connections.note(&def);
+                engine.live.show(&def);
+            }
+        }
+        engine.generation.bump();
     }
 
-    /// The **qualified names completion may offer** for `defs` — one [`DatabaseSym`] per database
-    /// connection, its schemas and relations from [`listing`](Self::listing).
+    /// The qualified names completion may offer — one [`DatabaseSym`] per connection that
+    /// registers a catalog, with its schemas and their relations.
     ///
-    /// Built here rather than in the editor because both halves are read the way the rest of the
-    /// engine reads them: the catalog name off the def, so a connection that has never answered
-    /// still offers the name a query has to say, and the schemas off the connect-time
-    /// enumeration, already scoped. Only a `Live` schema is offered — one the def enables and the
-    /// server does not have is a name that cannot resolve, and the tree already says so on its
-    /// own row; a schema the connection does not show arrives here empty
-    /// ([`SchemaListingView::relations`]), so this walk clones what it offers rather than the
-    /// whole database.
+    /// Every catalog, live or not: the name comes from the def, so a connection that has never
+    /// answered still offers the name a query would have to write. Only a
+    /// [`Live`](SchemaVisibility::Live) schema is offered under it, a schema the source does not
+    /// have being a name that cannot resolve.
     ///
-    /// Free and synchronous, like the listing it reads: it is what lets the completion snapshot
-    /// carry remote names without the popup ever reaching the network.
-    pub fn database_syms<'a>(
-        self,
-        defs: impl IntoIterator<Item = &'a ConnectionDef>,
-    ) -> Vec<DatabaseSym> {
-        defs.into_iter()
-            .filter_map(|def| {
-                def.provider.source()?;
-                let name = def.named();
-                if name.is_empty() {
-                    return None;
+    /// Costs no I/O, like the [`listing`](Self::listing) it reads.
+    pub fn database_syms(self) -> Vec<DatabaseSym> {
+        self.listing()
+            .sources
+            .into_iter()
+            .filter_map(|source| match source.detail {
+                SourceDetail::Catalog { catalog, schemas } if !catalog.is_empty() => {
+                    Some((catalog, schemas))
                 }
-                let schemas = self
-                    .listing(def)
-                    .map(|(_, schemas)| schemas)
-                    .unwrap_or_default()
+                _ => None,
+            })
+            .map(|(name, schemas)| DatabaseSym {
+                name,
+                schemas: schemas
                     .into_iter()
                     .filter(|s| s.visibility == SchemaVisibility::Live)
                     .map(|s| SchemaSym {
@@ -163,10 +173,41 @@ impl Sources<'_> {
                             })
                             .collect(),
                     })
-                    .collect();
-                Some(DatabaseSym { name, schemas })
+                    .collect(),
             })
             .collect()
+    }
+
+    /// What forgetting the connection called `name` would leave invalid.
+    ///
+    /// Which half of the answer is empty follows from the kind of connection, so the caller does
+    /// not say. Nothing reads an object store by name, so what it holds up is the table defs that
+    /// name it and then everything reading one of those; no def can name a source, its relations
+    /// being discovered rather than declared, so what it holds up is the views whose plans scan
+    /// through its catalog.
+    ///
+    /// *Invalid*, not stopped: a dependent view captured its sources by `Arc` and goes on
+    /// answering until the next reload.
+    ///
+    /// Bounded by what the last registration established (see
+    /// [`Dependencies`](crate::Dependencies)): a def no pass has reached is not counted, and
+    /// neither is a view the engine could not create, which has no recorded plan to have read
+    /// anything with.
+    ///
+    /// Costs no I/O.
+    pub fn dependents(self, name: &str) -> Dependents {
+        let engine = self.engine;
+        match engine.connections.def(name).and_then(|def| def.catalog()) {
+            Some(catalog) => Dependents {
+                tables: Vec::new(),
+                views: engine.dependencies.reading(&catalog),
+            },
+            None => {
+                let tables = engine.dependencies.over(name);
+                let views = engine.dependencies.above(&tables);
+                Dependents { tables, views }
+            }
+        }
     }
 
     /// Every data source this engine can connect to — what a picker offers, what a catalog row
@@ -190,21 +231,6 @@ impl Sources<'_> {
     /// The address's own refusal, or the sentence saying nothing is registered for `kind`.
     pub fn check_address(self, kind: &str, address: &str) -> Result<(), String> {
         self.engine.sources.check_address(kind, address)
-    }
-
-    /// The catalogs data-source connections have registered, in the spelling they were registered
-    /// under — the workspace's own excluded, since it is not one.
-    ///
-    /// Membership, not liveness, in the same sense `connections` is: a catalog is on the list
-    /// exactly while its connection is live, which is also exactly while a three-part name can
-    /// resolve through it. Synchronous and free — the list is a map this session holds.
-    pub fn catalogs(self) -> Vec<String> {
-        self.engine
-            .ctx
-            .catalog_names()
-            .into_iter()
-            .filter(|name| fold_ident(name) != CATALOG)
-            .collect()
     }
 
     /// One relation inside a database connection's catalog, from what the session already

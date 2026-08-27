@@ -44,6 +44,7 @@ mod tests {
 
     use super::*;
     use crate::register::CatalogSpec;
+    use crate::sources::fake::{fake_def, TestDoc};
     use crate::{Engine, RunTag, TableSpec, WsId};
 
     /// The two properties every consumer leans on: a fresh clock is the seed, and a bump is
@@ -77,6 +78,7 @@ mod tests {
             paths: vec![root.join("t.csv").display().to_string()],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
+            connection: None,
             internal: false,
         }
     }
@@ -105,7 +107,10 @@ mod tests {
     #[tokio::test]
     async fn every_catalog_gesture_moves_the_generation() {
         let root = scratch("gestures");
-        let engine = Engine::builder().with_data_dir(&root).build();
+        let engine = Engine::builder()
+            .with_data_dir(&root)
+            .with_source(TestDoc::holding("fixture", &["orders"]))
+            .build();
         let catalog = engine.catalog();
         let mut seen = catalog.generation();
         assert_eq!(seen, CatalogGen::default(), "an engine holding nothing");
@@ -175,7 +180,15 @@ mod tests {
 
         let _ = engine.sources().connect(unreachable("lake")).await;
         moved("a connection, refused or not", &engine);
-        engine.sources().show_schemas(&unreachable("lake"));
+        engine
+            .sources()
+            .connect(fake_def::<TestDoc>("sales", "fixture"))
+            .await
+            .expect("the fake source connects");
+        moved("a source registering its catalog", &engine);
+        engine
+            .sources()
+            .show_schemas("sales", &["public".to_string()]);
         moved("changing which schemas a connection shows", &engine);
         engine.sources().disconnect("lake");
         moved("forgetting a connection", &engine);

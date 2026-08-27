@@ -26,13 +26,12 @@
 //! (save-as-view, register, drop), never on a timer. The local session file is the
 //! session-persistence slice's, not this store's.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use freya::radio::RadioChannel;
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_engine::register::view_order;
-use strata_engine::{fold_ident, TableMeta, ViewMeta};
+use strata_engine::{TableMeta, ViewMeta};
 use strata_model::{CatalogKind, ColumnInfo, ConnectionDef, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
@@ -711,92 +710,6 @@ impl ProjectState {
                 .any(|dep| Self::same_name(dep, name))
             })
             .map(|v| v.def.name.clone())
-            .collect()
-    }
-
-    /// The tables that read through the connection `name` names, alphabetically — the forget
-    /// confirm's consequence line and its name chips.
-    ///
-    /// The **other** dependency direction, and a different question from
-    /// [`dependent_views`](Self::dependent_views): nothing can read an object store *by name*, so
-    /// a connection has no dependents in the SQL namespace at all — what it has is the defs that
-    /// name it, which is a stored field rather than anything the planner reported. So this is an
-    /// exact match on the def's own [`TableDef::connection`], and it does **not** ask what the
-    /// engine last said about the row: a table over a forgotten connection is left invalid whether
-    /// it had registered or not.
-    pub fn tables_over(&self, name: &str) -> Vec<String> {
-        self.tables
-            .iter()
-            .filter(|t| t.def.connection.as_deref() == Some(name))
-            .map(|t| t.def.name.clone())
-            .collect()
-    }
-
-    /// The catalog name a connection to a **source** registers under, from the def alone — `None`
-    /// for a name this project has no connection for, and for one that registers an object store.
-    ///
-    /// The def's own spelling rather than the engine's registered name: this is asked by a Forget
-    /// confirm, which has to work whether or not the connection ever connected, and the two only
-    /// differ by whitespace the engine trims.
-    pub fn source_catalog(&self, name: &str) -> Option<String> {
-        self.connections
-            .iter()
-            .find(|c| c.def.named() == name)
-            .and_then(|c| c.def.provider.source().map(|_| c.def.named()))
-    }
-
-    /// The views that read through the database connection registered as `catalog` — its
-    /// dependents, and the whole of them.
-    ///
-    /// The **other** half of a view's dependency record ([`ViewInfo::remote_deps`]), which is why
-    /// DB-03 kept the two apart: `deps` is bare names checkable against this project's rows, and a
-    /// remote scan has no row to check. Matched on the qualified name's **first part**, folded,
-    /// because that part is the catalog and a catalog name is a SQL identifier — where a
-    /// connection's own key, a URL, is matched verbatim everywhere else here.
-    ///
-    /// **Bounded by what the last pass recorded**, and the confirm's wording has to live with it:
-    /// only a view the engine *created* has a `remote_deps` list, so a view the same broken
-    /// connection already failed reports nothing here. That is the case a Forget is most likely to
-    /// be reached from, and there is no second source — a failed view's plan was never built, so
-    /// nothing on our side knows what it read. `tables_over` has no such gap because a table names
-    /// its connection in the def itself.
-    ///
-    /// Alphabetical and each named once: a view reading three of the connection's relations is one
-    /// broken view.
-    pub fn views_reading(&self, catalog: &str) -> Vec<String> {
-        let wanted = fold_ident(catalog);
-        self.views
-            .iter()
-            .filter(|v| {
-                v.reg.ready().is_some_and(|info| {
-                    info.remote_deps
-                        .iter()
-                        .filter_map(|dep| dep.split('.').next())
-                        .any(|part| fold_ident(part) == wanted)
-                })
-            })
-            .map(|v| v.def.name.clone())
-            .collect()
-    }
-
-    /// The views left invalid **behind** those tables, alphabetically and each named once —
-    /// the second half of a forget's consequence (W7 · 04).
-    ///
-    /// Forgetting a connection does not stop at its tables: a view over one of them is as invalid
-    /// as it would be if that table had been dropped, and the dialog that names the tables and
-    /// stops would under-report a forget against exactly the reading a table drop *does* report.
-    /// [`dependent_views`](Self::dependent_views) answers per table and is transitive (the
-    /// planner inlines nested views), so this is its union over `tables`, deduplicated: one view
-    /// reading two of them is one broken view, not two.
-    pub fn views_over(&self, tables: &[String]) -> Vec<String> {
-        let broken: BTreeSet<String> = tables
-            .iter()
-            .flat_map(|table| self.dependent_views(CatalogKind::Table, table))
-            .collect();
-        self.views
-            .iter()
-            .map(|v| v.def.name.clone())
-            .filter(|name| broken.contains(name))
             .collect()
     }
 
@@ -2157,71 +2070,5 @@ mod tests {
             other => panic!("still a database: {other:?}"),
         }
         assert_eq!(p.connections.len(), 1, "edited in place, not inserted");
-    }
-
-    /// **A database's readers are views, matched on the qualified scan's catalog part.** No
-    /// `TableDef` can name a database — its relations are discovered rather than declared — so
-    /// this is the only dependency direction a Forget has to report, and it reads the half of a
-    /// view's record that is deliberately *not* checkable against the project's rows.
-    #[test]
-    fn views_reading_matches_the_catalog_part_and_folds_it() {
-        let defs = ProjectDefs {
-            name: "test".into(),
-            connections: vec![pg("analytics", &["public"])],
-            views: vec![
-                ViewDef {
-                    name: "joined".into(),
-                    sql: "SELECT 1".into(),
-                },
-                ViewDef {
-                    name: "local_only".into(),
-                    sql: "SELECT 2".into(),
-                },
-                ViewDef {
-                    name: "elsewhere".into(),
-                    sql: "SELECT 3".into(),
-                },
-            ],
-            ..Default::default()
-        };
-        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-views-reading"));
-        p.view_registered(
-            "joined",
-            ViewMeta {
-                columns: Vec::new(),
-                tables: vec!["orders".into()],
-                remote: vec!["ANALYTICS.public.customers".into()],
-                aliases: Vec::new(),
-            },
-        );
-        p.view_registered(
-            "local_only",
-            ViewMeta {
-                columns: Vec::new(),
-                tables: vec!["analytics".into()],
-                remote: Vec::new(),
-                aliases: Vec::new(),
-            },
-        );
-        p.view_registered(
-            "elsewhere",
-            ViewMeta {
-                columns: Vec::new(),
-                tables: Vec::new(),
-                remote: vec!["warehouse.public.orders".into()],
-                aliases: Vec::new(),
-            },
-        );
-
-        assert_eq!(
-            p.views_reading("analytics"),
-            ["joined"],
-            "the catalog name folds, and a workspace table sharing it is not a reader"
-        );
-        assert_eq!(
-            p.source_catalog(&p.connections[0].def.named()).as_deref(),
-            Some("analytics")
-        );
-        assert!(p.source_catalog("lake").is_none());
     }
 }

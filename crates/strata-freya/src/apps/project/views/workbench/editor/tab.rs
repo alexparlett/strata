@@ -105,11 +105,7 @@ impl Component for EditorTab {
                     engine.lang().prepared(),
                     dialect,
                 )
-                .with_databases(
-                    engine
-                        .sources()
-                        .database_syms(p.connections.iter().map(|c| &c.def)),
-                );
+                .with_databases(engine.sources().database_syms());
             });
         }
         let on_completions = move |req: CompletionRequest| {

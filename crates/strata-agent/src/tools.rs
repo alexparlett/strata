@@ -695,7 +695,7 @@ impl<H: Host> StrataTools<H> {
         let entries = self.host.catalog(&project.root).await?;
         Ok(tables_result(
             entries,
-            engine.sources().catalogs(),
+            engine.sources().listing().catalog_names(),
             params.matching.as_deref(),
             params.page,
         ))
@@ -1272,6 +1272,7 @@ mod tests {
                 paths: vec![root.join("people.csv").display().to_string()],
                 format: SourceFormat::from_name("csv"),
                 partitions: Vec::new(),
+                connection: None,
                 internal: false,
             })
             .await
@@ -1976,6 +1977,7 @@ mod tests {
                     paths: vec![root.join("people.csv").display().to_string()],
                     format: SourceFormat::from_name("csv"),
                     partitions: Vec::new(),
+                    connection: None,
                     internal: false,
                 })
                 .await

@@ -44,6 +44,14 @@ pub struct TableSpec {
     /// delimiter cannot be named on a parquet table.
     pub format: SourceFormat,
     pub partitions: Vec<(String, String)>,
+    /// The connection this table reads through, by name. `None` over local files.
+    ///
+    /// The one field registration does not use: [`table_spec`](crate::register::table_spec) has
+    /// already spent it composing [`paths`](Self::paths) onto that connection's store. It is
+    /// carried so [`Sources::dependents`](crate::Sources::dependents) can answer, a path being
+    /// something a connection was composed into rather than something one can be read back out
+    /// of.
+    pub connection: Option<String>,
     /// [`TableOrigin::Internal`](strata_model::TableOrigin::Internal) — the data under
     /// [`paths`](Self::paths) is Strata's, spooled into the project's `.strata/tables/` by a
     /// `CREATE TABLE`.
@@ -1146,6 +1154,7 @@ mod tests {
             paths: paths.iter().map(ToString::to_string).collect(),
             format: SourceFormat::from_name(format),
             partitions: Vec::new(),
+            connection: None,
             internal: false,
         }
     }

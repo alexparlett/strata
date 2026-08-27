@@ -4,14 +4,16 @@
 //! an address, a status glyph and the same three-item menu. What differs is what opens *underneath*
 //! them, and that is the walk's business rather than the row's.
 //!
-//! What opens underneath is the whole difference. A bucket cannot say what its tables are, so an
-//! object store's contents are **declared**: its children are the workspace defs that name it
-//! ([`ProjectState::tables_over`]), as links back to their own rows rather than a second editable
-//! copy. A database answers for itself, so its contents are **discovered** — one call to
-//! [`Sources::listing`], which reads the connect-time enumeration held beside the pool rather
-//! than the network, already scoped and tagged, so the tree, the schemas picker and completion all
-//! read one answer and none of them re-derives visibility from the def. Collapsing and re-opening a
-//! schema costs nothing, and ↻ — which re-connects — is the refresh.
+//! What opens underneath is the whole difference, and **both halves arrive resolved**: the walk
+//! is handed [`SourceNode`]s, which `state::sources::assemble` has already joined out of the
+//! project's rows and the engine's one [`SourcesSnapshot`](strata_engine::sources::SourcesSnapshot).
+//! A bucket cannot say what its tables are, so an object store's contents are **declared** — the
+//! workspace defs that name it, as links back to their own rows rather than a second editable
+//! copy. A database answers for itself, so its contents are **discovered**, from the connect-time
+//! enumeration held beside the pool rather than from the network, already scoped and tagged, so
+//! the tree, the schemas picker and completion all read one answer and none of them re-derives
+//! visibility from the def. Collapsing and re-opening a schema costs nothing, and ↻ — which
+//! re-connects — is the refresh.
 //!
 //! A relation **opens onto its columns** (DB-07), and it is the one node here whose children are
 //! not free: they are a round trip through the provider the connection caches per relation. The
@@ -21,9 +23,8 @@
 use freya::prelude::*;
 use strata_engine::sources::{SchemaListingView, SchemaVisibility};
 use strata_engine::sql::qualified;
-use strata_engine::{Engine, RemoteRelation};
-use strata_model::ConnectionDef;
-use strata_model::{CatalogKind, ColOwner, ProviderId, RemoteRef};
+use strata_engine::RemoteRelation;
+use strata_model::{CatalogKind, ColOwner, RemoteRef};
 
 use super::columns::flatten_cols;
 use super::matches;
@@ -34,7 +35,7 @@ use super::view::{body, RowBody, RowCtx};
 use super::workspace::{entry_ancestors, entry_path};
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::query::RemoteSchemas;
-use crate::apps::project::state::{ConnRow, ProjectState, Reg};
+use crate::apps::project::state::{SourceContents, SourceNode};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{SP_3, STATUS_DOT};
@@ -66,77 +67,65 @@ fn missing_schema(name: &str) -> String {
 
 /// Every connection node, and whatever each of them has open.
 pub fn walk_connections(
-    project: &ProjectState,
-    engine: &Engine,
+    sources: &[SourceNode],
     needle: &str,
     open: &Open,
     columns: &RemoteSchemas,
     out: &mut Walked,
 ) {
-    for row in &project.connections {
-        match row.def.provider.id() {
-            ProviderId::Source => database(engine, row, needle, open, columns, out),
-            _ => store(project, row, needle, open, &mut out.nodes),
+    for node in sources {
+        match &node.contents {
+            SourceContents::Catalog { catalog, schemas } => {
+                database(node, catalog, schemas, needle, open, columns, out);
+            }
+            SourceContents::Store { tables } => store(node, tables, needle, open, &mut out.nodes),
         }
     }
-    if project.connections.is_empty() && needle.is_empty() {
+    if sources.is_empty() && needle.is_empty() {
         out.nodes.push(Node::leaf(0, NodeKind::AddConnection));
     }
 }
 
 /// A database connection, its enabled schemas, and the Tables / Views groups inside each.
 ///
-/// The listing is fetched only for a node that is **connected and either open or being filtered**,
-/// so a collapsed or unreachable database costs nothing. The catalog label comes from the def
-/// regardless, because a collapsed row still has to say what it is addressed by — and a blank one is
-/// *no* catalog rather than an empty one, since `Some("")` budgets a fold slot for a mark the row
-/// then draws as an empty label, buying room at the provider badge's expense.
+/// Both halves arrive on the [`SourceNode`]: the schemas the connection shows — empty for one that
+/// is not live, which is what makes an unreachable database a leaf — and the catalog it is
+/// addressed by, which a collapsed row still has to say, so it comes from the def rather than from
+/// a listing that connection may never have produced.
 fn database(
-    engine: &Engine,
-    row: &ConnRow,
+    node: &SourceNode,
+    catalog: &str,
+    schemas: &[SchemaListingView],
     needle: &str,
     open: &Open,
     columns: &RemoteSchemas,
     out: &mut Walked,
 ) {
-    let def = &row.def;
-    let path = format!("conn/{}", def.named());
-    let waiting = matches!(row.reg, Reg::Loading);
-    let problem = row.reg.error().map(str::to_owned);
-    let connected = row.reg.ready().is_some();
+    let path = format!("conn/{}", node.name);
     let filtering = !needle.is_empty();
-    let catalog = def.provider.source().map(|_| def.named());
+    let kept: Vec<&SchemaListingView> = schemas
+        .iter()
+        .filter(|schema| !filtering || survives(schema, needle))
+        .collect();
 
-    let listing = (connected && (open.is_open(&path) || filtering))
-        .then(|| engine.sources().listing(def))
-        .flatten();
-    let (registered, schemas) = shown_schemas(listing, needle);
-
-    let named =
-        matches(&def.address, needle) || catalog.as_deref().is_some_and(|c| matches(c, needle));
-    if filtering && !named && schemas.is_empty() {
+    if filtering && !matches(&node.address, needle) && !matches(catalog, needle) && kept.is_empty()
+    {
         return;
     }
 
-    let shown = open.shows(&path, filtering && !schemas.is_empty());
+    let shown = open.shows(&path, filtering && !kept.is_empty());
     out.nodes.push(Node::branch(
         0,
         path.clone(),
         shown,
-        connected,
-        NodeKind::Connection(Connection {
-            def: def.clone(),
-            badge: badge(engine, def),
-            catalog,
-            waiting,
-            problem,
-        }),
+        node.can_open(),
+        NodeKind::Connection(Connection::of(node, Some(catalog.to_string()))),
     ));
     if !shown {
         return;
     }
 
-    for schema in schemas {
+    for schema in kept {
         let missing = schema.visibility == SchemaVisibility::EnabledButMissing;
         let schema_path = format!("{path}/{}", schema.name);
         let matched = filtering && schema.relations.iter().any(|r| matches(&r.name, needle));
@@ -179,7 +168,7 @@ fn database(
             }
             for relation in relations {
                 let reference = RemoteRef {
-                    connection: registered.clone(),
+                    connection: catalog.to_string(),
                     schema: schema.name.clone(),
                     relation: relation.name.clone(),
                 };
@@ -278,48 +267,6 @@ fn relation_columns(
 /// What an open relation says while its one introspection is in flight.
 const LOADING_COLUMNS: &str = "Reading columns…";
 
-/// What a connection's listing leaves the tree: the name its relations are addressed by, and the
-/// schemas it shows.
-///
-/// The two travel together because the name is the **registered** one, and a connection with no
-/// listing has neither — no listing, no schemas, and so no relation to address. That is what makes
-/// the empty name safe rather than a fallback: nothing reads it unless a schema survives to carry a
-/// relation, and none can.
-fn shown_schemas(
-    listing: Option<(String, Vec<SchemaListingView>)>,
-    needle: &str,
-) -> (String, Vec<SchemaListingView>) {
-    let filtering = !needle.is_empty();
-    match listing {
-        Some((registered, schemas)) => (
-            registered,
-            schemas
-                .into_iter()
-                .filter(|s| s.visibility != SchemaVisibility::NotEnabled)
-                .filter(|s| !filtering || survives(s, needle))
-                .collect(),
-        ),
-        None => (String::new(), Vec::new()),
-    }
-}
-
-/// The short word `def`'s row wears — its kind's own, from the registry that answers for it.
-///
-/// A kind no source is registered for falls back to the kind itself, which is what the row can
-/// honestly say about a connection this build cannot serve.
-fn badge(engine: &Engine, def: &ConnectionDef) -> String {
-    let Some(source) = def.provider.source() else {
-        return def.provider.id().label().to_string();
-    };
-    engine
-        .sources()
-        .registrants()
-        .into_iter()
-        .find(|info| info.kind == source.kind.trim())
-        .map(|info| info.badge.to_string())
-        .unwrap_or_else(|| source.kind.trim().to_string())
-}
-
 /// Does this schema, or anything in it, survive the filter?
 fn survives(schema: &SchemaListingView, needle: &str) -> bool {
     matches(&schema.name, needle) || schema.relations.iter().any(|r| matches(&r.name, needle))
@@ -327,42 +274,29 @@ fn survives(schema: &SchemaListingView, needle: &str) -> bool {
 
 /// An object-store connection and the workspace defs reading through it.
 ///
-/// A collapsed node asks only **whether** it has children, never which: `tables_over` clones a name
-/// per match, and the walk runs on every registration, so a project full of tables was paying for
-/// every link name of every closed bucket and dropping them all.
-fn store(project: &ProjectState, row: &ConnRow, needle: &str, open: &Open, out: &mut Vec<Node>) {
-    let def = &row.def;
-    let name = def.named();
-    let path = format!("conn/{name}");
+/// The links arrive on the [`SourceNode`], joined once out of the project's tables: scanning per
+/// bucket as the row is drawn costs a project full of tables the link names of every bucket on
+/// every walk, closed ones included.
+fn store(node: &SourceNode, tables: &[String], needle: &str, open: &Open, out: &mut Vec<Node>) {
+    let path = format!("conn/{}", node.name);
     let filtering = !needle.is_empty();
-    let any = project.tables.iter().any(|t| {
-        t.def.connection.as_deref() == Some(name.as_str()) && matches(&t.def.name, needle)
-    });
-    if filtering && !matches(&def.address, needle) && !any {
+    let kept: Vec<&String> = tables.iter().filter(|name| matches(name, needle)).collect();
+    if filtering && !matches(&node.address, needle) && kept.is_empty() {
         return;
     }
 
-    let shown = open.shows(&path, filtering && any);
+    let shown = open.shows(&path, filtering && !kept.is_empty());
     out.push(Node::branch(
         0,
         path,
         shown,
-        any,
-        NodeKind::Connection(Connection {
-            def: def.clone(),
-            badge: def.provider.id().label().to_string(),
-            catalog: None,
-            waiting: matches!(row.reg, Reg::Loading),
-            problem: row.reg.error().map(str::to_owned),
-        }),
+        node.can_open(),
+        NodeKind::Connection(Connection::of(node, None)),
     ));
     if shown {
         out.extend(
-            project
-                .tables_over(&name)
-                .into_iter()
-                .filter(|name| matches(name, needle))
-                .map(|name| Node::leaf(1, NodeKind::Link { name })),
+            kept.into_iter()
+                .map(|name| Node::leaf(1, NodeKind::Link { name: name.clone() })),
         );
     }
 }
@@ -377,8 +311,8 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
     let mut measured = cx.measured;
     let actions = cx.connections;
 
-    let (name, provider) = (connection.def.named(), connection.def.provider.id());
-    let address = connection.def.address.clone();
+    let (name, provider) = (connection.name.clone(), connection.provider);
+    let address = connection.address.clone();
     let mark = connection.catalog.clone();
     let mark_slot = mark
         .as_ref()

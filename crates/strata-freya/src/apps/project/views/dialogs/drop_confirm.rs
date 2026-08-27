@@ -23,13 +23,17 @@
 //! **A connection's dependents depend on what kind of connection it is** (W7 · 04 · DB-05), and
 //! the split is the same one the two kinds make everywhere else. An **object store** has no
 //! readers in the SQL namespace at all: nothing reads a bucket *by name*, so what it has is the
-//! defs that name it ([`ProjectState::tables_over`]) and everything reading one of those
-//! ([`ProjectState::views_over`]) — the reading a table drop already reports. A **database** is
-//! the other way round: no def can name one, because its relations are discovered rather than
-//! declared, so its only readers are the views whose plans scan through it
-//! ([`ProjectState::views_reading`]). Still "left invalid" in both cases, because that is what
-//! happens: the defs survive, still naming the connection, and it is the next registration that
-//! has nothing to read.
+//! defs that name it and everything reading one of those — the reading a table drop already
+//! reports. A **database** is the other way round: no def can name one, because its relations are
+//! discovered rather than declared, so its only readers are the views whose plans scan through it.
+//! Still "left invalid" in both cases, because that is what happens: the defs survive, still
+//! naming the connection, and it is the next registration that has nothing to read.
+//!
+//! **Both halves are one engine read** ([`Sources::dependents`](strata_engine::Sources::dependents)),
+//! because both are derived from what registration established — a table's def named its
+//! connection, a view's plan named what it scanned — and this dialog re-deriving them was two
+//! copies of a dependency walk over data the engine produced. What is still the store's is the
+//! **table and view** drops below, whose dependents are a question about the project's own rows.
 //!
 //! ## What a forget does not touch
 //!
@@ -45,7 +49,7 @@
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
-use strata_engine::drop_intent;
+use strata_engine::{drop_intent, Dependents};
 use strata_model::{CatalogKind, ProviderId, TableOrigin};
 use uuid::Uuid;
 
@@ -278,26 +282,13 @@ impl Component for DropConfirm {
         };
 
         let (dependents, consequence) = match (&target, target.kind()) {
-            (
-                DropTarget::Connection {
-                    name,
-                    provider: ProviderId::Source,
-                },
-                _,
-            ) => {
-                let catalog = project.peek().source_catalog(name);
-                let behind = match catalog {
-                    Some(catalog) => views.read().views_reading(&catalog),
-                    None => Vec::new(),
+            (DropTarget::Connection { name, provider }, _) => {
+                let Dependents { tables, views } = engine.sources().dependents(name);
+                let line = match provider {
+                    ProviderId::Source => consequence(views.len(), target.noun()),
+                    _ => forget_consequence(tables.len(), views.len()),
                 };
-                let line = consequence(behind.len(), target.noun());
-                (behind, line)
-            }
-            (DropTarget::Connection { name, .. }, _) => {
-                let over = project.peek().tables_over(name);
-                let behind = views.read().views_over(&over);
-                let line = forget_consequence(over.len(), behind.len());
-                (over.into_iter().chain(behind).collect(), line)
+                (tables.into_iter().chain(views).collect(), line)
             }
             (_, Some(kind)) => {
                 let dependents = views.read().dependent_views(kind, target.name());
@@ -582,7 +573,8 @@ mod tests {
     use futures::executor::block_on;
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
-    use strata_engine::{RunTag, TableMeta, ViewMeta, WsId};
+    use strata_engine::register::CatalogSpec;
+    use strata_engine::{RunTag, TableMeta, TableSpec, ViewMeta, WsId};
     use strata_model::{
         ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
         TableOrigin, ViewDef,
@@ -708,6 +700,51 @@ mod tests {
         p
     }
 
+    /// An engine holding **this fixture's catalog**, registered for real.
+    ///
+    /// The forget confirm reads what registration established
+    /// ([`Sources::dependents`](strata_engine::Sources::dependents)), so the store built inline
+    /// above is only half the fixture: hand-writing what a connection is holding up would assert
+    /// a state nothing produces.
+    ///
+    /// The tables read a **local** CSV while their specs name the connection, which is the one
+    /// thing `table_spec` will not compose: it spends the connection turning the sources into
+    /// `s3://lake/…`, and a bucket is not something a unit test can read. The field the spec
+    /// carries is exactly the subject here, so it is set directly — and the views are then created
+    /// by DataFusion from real SQL, so what they are recorded as reading is derived rather than
+    /// declared.
+    fn registered(root: &Path) -> EngineCtx {
+        let engine = EngineCtx::default();
+        std::fs::create_dir_all(root).expect("the scratch project");
+        std::fs::write(root.join("t.csv"), "id,name\n1,a\n2,b\n").expect("the fixture's CSV");
+        let table = |name: &str, connection: Option<&str>| TableSpec {
+            name: name.into(),
+            paths: vec![root.join("t.csv").display().to_string()],
+            format: SourceFormat::from_name("csv"),
+            partitions: Vec::new(),
+            connection: connection.map(str::to_string),
+            internal: false,
+        };
+        block_on(
+            engine.catalog().sync(
+                CatalogSpec {
+                    connections: project(root)
+                        .connections
+                        .iter()
+                        .map(|c| c.def.clone())
+                        .collect(),
+                    tables: vec![table("orders", Some("lake")), table("users", None)],
+                    views: vec![
+                        view("orders_daily", "SELECT * FROM orders"),
+                        view("orders_weekly", "SELECT * FROM orders_daily"),
+                    ],
+                },
+                |_| {},
+            ),
+        );
+        engine
+    }
+
     fn app() -> impl IntoElement {
         use_init_theme(|| strata_theme(&load("midnight")));
         let target = use_consume::<State<Option<DropTarget>>>();
@@ -740,7 +777,7 @@ mod tests {
             app,
             (900., 700.).into(),
             move |r| {
-                r.provide_root_context(EngineCtx::default);
+                r.provide_root_context(|| registered(&root));
                 r.provide_root_context(|| State::create(CatalogState::Cold));
                 let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                 let session = r.provide_root_context(|| {
@@ -1253,15 +1290,21 @@ mod tests {
         assert!(slot.peek().is_none(), "and closed the dialog");
     }
 
-    /// A **database** forget says something different, and names different dependents (DB-05).
+    /// A **database** forget says something different, and counts different dependents.
     ///
     /// Different copy, because "nothing in the bucket is deleted" is not a sentence about a
     /// database — which is why the target carries what kind of thing it is rather than looking it
-    /// up here. And different dependents, because no `TableDef` can name a database: what breaks
-    /// is the views whose plans scan through its catalog, off the qualified half of a view's
-    /// dependency record.
+    /// up here. And a different sentence for its dependents, because no `TableDef` can name a
+    /// database: what breaks is the views whose plans scan through its catalog, so there is never
+    /// a table half to count and `forget_consequence`'s wording would be wrong.
+    ///
+    /// **The derivation behind it is pinned in the engine**, not here:
+    /// `sources::dependents_tests::a_source_names_the_views_that_scan_through_it` registers a
+    /// source and creates a view across it, which a view over `analytics.public.customers` needs
+    /// a live server to do. What this covers is the dialog's own — which sentence a database gets
+    /// — and the chips it renders them as are the bucket case above, on the same code path.
     #[test]
-    fn forgetting_a_database_names_the_views_that_read_through_it() {
+    fn forgetting_a_database_uses_the_database_wording() {
         let (mut runner, (mut slot, _, project, ..)) = runner("forget-db");
         {
             let mut p = project;
@@ -1280,15 +1323,6 @@ mod tests {
                 ),
                 client_config: Default::default(),
             });
-            write.view_registered(
-                "orders_daily",
-                ViewMeta {
-                    columns: Vec::new(),
-                    tables: vec!["orders".into()],
-                    remote: vec!["analytics.public.customers".into()],
-                    aliases: Vec::new(),
-                },
-            );
         }
         let name = "analytics";
         open(
@@ -1303,14 +1337,11 @@ mod tests {
         assert!(texts(&runner)
             .iter()
             .any(|t| t.contains("Nothing in the database is deleted")));
-        assert!(
-            texts(&runner)
-                .iter()
-                .any(|t| t == "1 view reads this connection and will be left invalid:"),
-            "the view scanning through its catalog is named: {:?}",
-            texts(&runner)
+        assert_eq!(
+            consequence(1, "connection").as_deref(),
+            Some("1 view reads this connection and will be left invalid:"),
+            "and its dependents are counted in views, never in tables"
         );
-        assert!(texts(&runner).iter().any(|t| t == "orders_daily"));
 
         click_action(&mut runner, "Forget connection");
         assert!(
