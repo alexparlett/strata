@@ -165,11 +165,12 @@ Two kinds, deliberately distinguished:
     so statement phrases must not enter it.
   - `JOIN_LEADINS` — join modifiers after which `JOIN` itself is next.
   - Statement vocabularies owned by the modules whose dispatch they mirror:
-    `arms::external`'s `STORED_AS_FORMATS` (each entry must parse through
-    `read_format`, held by its own test) and its `CSV_OPTION_KEYS` /
-    `JSON_OPTION_KEYS` tables (`{key, kind, what, set}` — the table **is**
-    `apply`'s arm set, so the offer and the arm cannot drift); `config::ENGINE_KEYS`
-    filtered through `arms::session::refuse_reserved_key` for the `SET` key pool.
+    the **format registry** (`Catalog::formats`, from `Engine::formats`) for the
+    `STORED AS` word pool and, per word, that format's own `reader_options`
+    (`{key, kind, what}` — the same table its `read` consumes, so the offer and the
+    arm cannot drift, and a format an embedder registers is offered without a second
+    list); `config::ENGINE_KEYS` filtered through `arms::session::refuse_reserved_key`
+    for the `SET` key pool.
 
 ## 4. Pools and ranking
 
@@ -191,7 +192,7 @@ the rank pipeline, `tests.rs` = the suite):
 | `DropView` operand | views only, for the mirror reason |
 | `Insert` operand | at the target: tables with `internal: true` only — the same answer `Catalog::is_internal` gives dispatch, read from the store; in the column list: the target's own columns (see the column-list rule below), offered only when the target is one an INSERT may reach |
 | `Copy` operand, in `PARTITIONED BY (…)` | the source's columns — the catalog's for a named table, the scraped projection for a `COPY (SELECT …)` source (the column-list rule below) |
-| `CreateExternal` operand (`STORED AS \|`) | `STORED_AS_FORMATS` as keyword items |
+| `CreateExternal` operand (`STORED AS \|`) | the engine's registered formats as keyword items, uppercased, in registration order |
 | `DropFunction` operand | function syms with `created: true` — bare-name insert, detail `session function` |
 | `CreateFunction` operand (the body, after `RETURN`) | the declared argument names (scraped from the token stream, detail `argument`), then functions — **never** catalog columns or relations (the body may reference only its arguments) |
 | `Execute` operand | the session's prepared names |
@@ -245,10 +246,9 @@ cases, both required: a terminated literal rides the ordinary token stream (repl
 the content span between the quotes); an unterminated one (`OPTIONS ('format.h|`)
 errors the tokenizer, and the recovery — bounded to this position — lexes the prefix
 before the opening quote, which must be clean; any other lex error stays a guard.
-The offer is format-aware (`STORED AS <word>` scanned from the statement): CSV →
-`CSV_OPTION_KEYS`, JSON → `JSON_OPTION_KEYS`, NDJSON → the JSON set minus
-`format.newline_delimited` (refused there toward `STORED AS JSON`), Parquet / Arrow /
-unwritten → empty. Value offers ride the same carve-out with the preceding key looked
+The offer is format-aware (`STORED AS <word>` scanned from the statement): each
+registered format offers its own `reader_options`, and Parquet / Arrow / a format
+offering none / a word nothing is registered for / unwritten → empty. Value offers ride the same carve-out with the preceding key looked
 up in the table (`Bool`/`Enum` only). Store-namespace keys and `CLIENT_KEYS` are
 never offered — the arm refuses them toward Connections, and absence from the offer
 is the same policy stated once.

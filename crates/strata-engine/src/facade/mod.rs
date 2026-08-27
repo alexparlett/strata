@@ -90,6 +90,7 @@ mod tests {
         "set_config",
         "restart_owed",
         "overrides",
+        "formats",
     ];
 
     /// The six accessors, which this module adds to `Engine` and `lib.rs` therefore must not.

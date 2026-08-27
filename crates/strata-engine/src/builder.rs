@@ -10,6 +10,7 @@ use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::prelude::SessionContext;
 use tokio::runtime::Builder as RuntimeBuilder;
 
+use crate::formats::{FileFormatKind, FormatProvider, Formats};
 use crate::functions::Functions;
 use crate::generation::GenClock;
 use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
@@ -54,11 +55,12 @@ pub struct EngineBuilder {
     memory_pool: Option<Arc<dyn MemoryPool>>,
     policy: Arc<dyn PolicyProvider>,
     sources: Sources,
+    formats: Formats,
 }
 
-/// The shipped sources are registered here, through the same public call an embedder makes. Each
-/// rides its own cargo feature, so an engine built with none of them has no source at all — which
-/// is what makes the registry the only path in.
+/// The shipped sources and formats are registered here, through the same public calls an embedder
+/// makes. Each source rides its own cargo feature, so an engine built with none of them has no
+/// source at all — which is what makes the registry the only path in, on both axes.
 impl Default for EngineBuilder {
     fn default() -> Self {
         let builder = Self {
@@ -69,6 +71,7 @@ impl Default for EngineBuilder {
             memory_pool: None,
             policy: Arc::new(CapabilityPolicyProvider::new(Capability::full())),
             sources: Sources::default(),
+            formats: Formats::shipped(),
         };
         #[cfg(feature = "postgres")]
         let builder = builder.with_source(crate::sources::postgres::Pg);
@@ -145,6 +148,26 @@ impl EngineBuilder {
         self
     }
 
+    /// Adds a file format this engine can read
+    ///
+    /// May be called more than once. A table def reaches its reader by
+    /// [`FileFormatKind::NAME`], which is also the word `STORED AS` takes and the key the
+    /// `STORED AS` offer is built from; a format nothing answers to settles as a failed row
+    /// naming the fix rather than a fault. A format declaring
+    /// [`writer`](FormatProvider::writer) is registered on the session under that same name, so
+    /// `COPY … STORED AS <name>` writes through it.
+    ///
+    /// # Panics
+    ///
+    /// If that name is already registered, including by one of the shipped formats. Unlike a
+    /// data source, a format is not replaceable: the session's writer map is what DataFusion
+    /// resolves `COPY … STORED AS` against, so registering over `parquet` / `csv` / `json` /
+    /// `arrow` would change what every other `COPY` in the session writes.
+    pub fn with_format<F: FormatProvider + FileFormatKind>(mut self, format: F) -> Self {
+        self.formats.insert(format);
+        self
+    }
+
     /// Sets the memory pool DataFusion allocates from
     ///
     /// Takes precedence over `datafusion.runtime.memory_limit`, which otherwise builds one.
@@ -165,7 +188,7 @@ impl EngineBuilder {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let ctx = build_context(&self.config, &self.udfs, self.memory_pool);
+        let ctx = build_context(&self.config, &self.udfs, &self.formats, self.memory_pool);
         let functions = Functions::new(&ctx);
         let snapshot_lock = match claim_snapshot_dir(engine_id) {
             Ok(lock) => Some(lock),
@@ -198,6 +221,7 @@ impl EngineBuilder {
             generation: GenClock::default(),
             live: Live::default(),
             sources: self.sources,
+            formats: self.formats,
             session: SessionScope::default(),
             secrets: self.secrets,
             policy: self.policy,
@@ -211,7 +235,12 @@ impl EngineBuilder {
 #[cfg(test)]
 pub(crate) fn test_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     let builder = EngineBuilder::new().with_config(overrides.clone());
-    build_context(&builder.config, &builder.udfs, builder.memory_pool)
+    build_context(
+        &builder.config,
+        &builder.udfs,
+        &builder.formats,
+        builder.memory_pool,
+    )
 }
 
 #[cfg(test)]
@@ -283,6 +312,19 @@ mod tests {
             .with_udfs(OnePackage("embedder_answer"))
             .build();
         assert!(engine.lang().functions().contains("embedder_answer"));
+    }
+
+    /// A default engine reads the four shipped formats, in the order they are offered — which is
+    /// what every surface that names a format is built from.
+    #[test]
+    fn the_shipped_formats_are_what_a_default_engine_reads() {
+        let engine = Engine::builder().build();
+        let words: Vec<&str> = engine.formats().iter().map(|f| f.name).collect();
+        assert_eq!(words, ["parquet", "csv", "json", "arrow"]);
+        assert!(
+            engine.formats().iter().all(|f| f.copy_to),
+            "every shipped format is one DataFusion writes"
+        );
     }
 
     /// The defaults build the engine the app has always built.

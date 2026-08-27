@@ -12,10 +12,14 @@ halves of the read path (schema inference and the scan), which makes reload dete
 project reopens reading its files exactly as it did. Every field defaults to DataFusion's own
 default, so a def written before read options existed registers the way it always did.
 
-Two sources of truth sit under this, and they are the ones to change:
+Three sources of truth sit under this, and they are the ones to change:
 
 - **`strata-model::catalog`** — `CsvRead` / `JsonRead` / `SourceFormat`: the persisted fields and
   the doc comments carrying each option's semantics and exclusions.
+- **`strata-engine::formats::shipped`** — the `FormatProvider` for each shipped format: its
+  `read` reads the `OPTIONS` keys below onto those fields, its `build` dresses the reader in
+  them, and its `reader_options` is the same table projected for completion. The key tables
+  **are** the arms, so the offer at `OPTIONS ('|')` cannot drift from what dispatch accepts.
 - **`strata-freya::apps::configure::model`** — `ConfigureDraft::options()`, the list the window
   renders (options are data, same mechanism as the export window).
 
@@ -121,7 +125,7 @@ echoed back in the message.
 Whole-file compression applies to the text formats only — parquet and Arrow carry compression
 *inside* the file. The codec changes the extension the source listing filters on: a gzipped CSV
 is `events.csv.gz`, and a listing filtered on `.csv` alone would match none of them, so
-`SourceFormat::extension` composes the format's extension with the codec's
+`FormatProvider::extension` composes the format's extension with the codec's
 (DataFusion's own suffixes: `.gz`, `.bz2`, `.xz`, `.zst`).
 
 ---
@@ -140,3 +144,41 @@ read as text, so `WHERE year = 2024` needs a cast until the column is given its 
 *literal* `key=value` segment in a source path deliberately does not declare a column: the path
 is the listing root, so a literal segment means that level is already consumed, and declaring it
 would produce a table that registers cleanly and returns zero rows for every query.
+
+---
+
+## Formats beyond these four
+
+The four above are the **first-party** vocabulary: they are the ones Table Config draws options
+for, so each has a typed struct in the def. They are not, however, the whole list — they are five
+ordinary registrants (`parquet` · `csv` · `json` · `arrow`) in the engine's format registry, and
+an embedder adds a fifth with one builder call:
+
+```rust
+let engine = Engine::builder().with_format(GeoJson).build();
+```
+
+There is **no `NDJSON` word**, deliberately: newline-delimited is a *layout*, chosen by
+`format.newline_delimited` on the one JSON format, and it is that format's default. This is
+DataFusion's own model — `newline_delimited` is a `JsonOptions` field, and DataFusion's own
+`STORED AS NDJSON` parses and then fails to resolve a file format. A word that produces another
+format's def could not be a registry key here anyway, the key being the def's discriminator.
+
+A registered format is named by its own word wherever a format is named — `STORED AS geojson` in a
+typed `CREATE EXTERNAL TABLE`, the `STORED AS` completion offer, the Export window's format cards
+(if it declares that `COPY` can write it), and the agent's `export_result`. Its `OPTIONS` keys are
+its reader's own: they are kept on the def verbatim (`SourceFormat::Extension`, in the same
+`format.*` spelling written above) rather than read onto fields Strata knows the meaning of.
+
+Two things stay closed, deliberately. Table Config offers the four it can draw options for, and a
+def naming any other format opens showing that format and blocks Save — the window has nothing to
+draw for options it does not know. And a format cannot be registered over a name already taken:
+DataFusion resolves `COPY … STORED AS` against the session's writer map, so registering over
+`parquet` / `csv` / `json` / `arrow` would change what every other `COPY` in the session writes.
+
+A def naming a format nothing is registered for is not a silent mis-read: it loads, it keeps its
+own spelling across a save, and its registration fails on its own catalog row naming the fix.
+
+The seam is `strata-engine::formats` — `FormatProvider` (`build` · `read` · `extension` ·
+`copy_to` · `writer` · `reader_options`) plus `FileFormatKind { const NAME }`, where the registry
+key **is** the `STORED AS` word **is** the def's discriminator. Only `build` has no default.

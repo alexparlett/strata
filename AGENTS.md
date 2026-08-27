@@ -72,10 +72,10 @@ Tokio runtime, spawns each call onto it, and the caller awaits the result — no
 request ids, no UI-side runtime, no worker loop. A Run materializes an immutable on-disk Arrow
 IPC snapshot, and every later read — page, sort, chart, export — is a bounded read of that
 snapshot, which is what makes paging stable and caching sound. It is built one way, by
-`Engine::builder()`, which is where an embedder's choices go — config, secrets, SQL functions, the
-memory pool — and every method on the built engine takes `&self`, so a handle reaches all of them
-through `Deref` and no wrapper needs forwarders. Those methods are reached through six borrowed
-**group handles** naming what the call is about — `ws(id)`, `snapshot(id)`, `catalog()`,
+`Engine::builder()`, which is where an embedder's choices go — config, secrets, SQL functions, data
+sources, file formats, the memory pool — and every method on the built engine takes `&self`, so a
+handle reaches all of them through `Deref` and no wrapper needs forwarders. Those methods are
+reached through six borrowed **group handles** naming what the call is about — `ws(id)`, `snapshot(id)`, `catalog()`,
 `sources()`, `lang()`, `work()` — plus a short root set for the engine itself; the mapping is
 total, and a test fails when a new public method escapes it.
 

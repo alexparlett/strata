@@ -62,12 +62,13 @@ impl Catalog<'_> {
     pub async fn register(self, spec: TableSpec) -> Result<TableMeta, String> {
         self.cancel_profile(&spec.name);
         let ctx = self.engine.ctx.clone();
+        let formats = self.engine.formats.clone();
         let (name, internal) = (spec.name.clone(), spec.internal);
         let connection = spec.connection.clone();
         let meta = self
             .engine
             .rt()
-            .spawn(async move { catalog::register_external(&ctx, &spec).await })
+            .spawn(async move { catalog::register_external(&ctx, &formats, &spec).await })
             .await
             .map_err(|e| format!("register task failed: {e}"))?;
         self.engine.note_origin(&name, internal && meta.is_ok());

@@ -20,6 +20,7 @@
 //! own copy of a rule the user reads as one.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{is_separator, Component, Path, PathBuf};
 
@@ -75,22 +76,34 @@ pub enum Scope {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Format {
     Csv(Csv),
-    /// Newline-delimited JSON. DataFusion's writer can also emit a JSON array
-    /// (`newline_delimited`), but the canvas offers NDJSON only, so the option isn't spelled.
+    /// Newline-delimited JSON, which is the only shape DataFusion writes: its `JsonSerializer`
+    /// is an `arrow::json::LineDelimitedWriter` with no array mode, so there is no shape option
+    /// to spell. `newline_delimited` is a *read* option.
     Json(Json),
     Parquet(Parquet),
     /// Arrow IPC — **no write options exist**, which is why this variant carries nothing.
     Arrow,
+    /// A format registered with [`EngineBuilder::with_format`](crate::EngineBuilder::with_format),
+    /// written through the writer it brought.
+    ///
+    /// Its options are strings because they are its own writer's, not ours: there is no options
+    /// panel to draw for a format this build does not know the settings of, so they travel in the
+    /// `format.*` spelling a typed `COPY` writes them in.
+    Extension {
+        format: String,
+        options: BTreeMap<String, String>,
+    },
 }
 
 impl Format {
     /// The `STORED AS` keyword.
-    fn stored_as(&self) -> &'static str {
+    fn stored_as(&self) -> &str {
         match self {
             Self::Csv(_) => "CSV",
             Self::Json(_) => "JSON",
             Self::Parquet(_) => "PARQUET",
             Self::Arrow => "ARROW",
+            Self::Extension { format, .. } => format,
         }
     }
 }
@@ -299,6 +312,7 @@ pub async fn run_export(
 
     let select = select_sql(&snap, &spec, &schema, stats.ord.as_deref());
 
+    extension_words_are_plain(&spec.format, ctx)?;
     partition_columns_are_bare_words(&spec.partition.columns, ctx)?;
     partition_columns_have_no_nulls(&spec.partition.columns, &schema, stats)?;
 
@@ -307,7 +321,7 @@ pub async fn run_export(
         String::new()
     } else {
         options.push((
-            KEEP_PARTITION_COLUMNS,
+            KEEP_PARTITION_COLUMNS.to_string(),
             spec.partition.keep_columns.to_string(),
         ));
         format!(" PARTITIONED BY ({})", spec.partition.columns.join(", "))
@@ -395,8 +409,8 @@ const KEEP_PARTITION_COLUMNS: &str = "execution.keep_partition_by_columns";
 /// `format.` prefix itself, so these resolve onto `CsvOptions` / `JsonOptions` /
 /// `TableParquetOptions` field names. A key that carries its own namespace
 /// ([`KEEP_PARTITION_COLUMNS`]) keeps it — the planner only prefixes a key with no dot in it.
-fn format_pairs(format: &Format) -> Result<Vec<(&'static str, String)>, String> {
-    let pairs: Vec<(&'static str, String)> = match format {
+fn format_pairs(format: &Format) -> Result<Vec<(String, String)>, String> {
+    let pairs: Vec<(&str, String)> = match format {
         Format::Csv(csv) => {
             let mut pairs = vec![
                 ("HAS_HEADER", csv.header.to_string()),
@@ -423,12 +437,21 @@ fn format_pairs(format: &Format) -> Result<Vec<(&'static str, String)>, String> 
             ("DICTIONARY_ENABLED", pq.dictionary.to_string()),
         ],
         Format::Arrow => vec![],
+        Format::Extension { options, .. } => {
+            return Ok(options
+                .iter()
+                .map(|(key, value)| (key.clone(), quote_literal(value)))
+                .collect())
+        }
     };
-    Ok(pairs)
+    Ok(pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect())
 }
 
 /// The ` OPTIONS (…)` clause for a set of pairs, or an empty string for none.
-fn options_clause(pairs: &[(&str, String)]) -> String {
+fn options_clause(pairs: &[(String, String)]) -> String {
     if pairs.is_empty() {
         return String::new();
     }
@@ -542,6 +565,43 @@ pub(super) fn partition_columns_are_bare_words(
         Some(bad) => Err(format!(
             "Can't partition by '{bad}': PARTITIONED BY takes unquoted column names, so a \
              partition column has to be a single plain word"
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a registered format whose own words cannot be spliced into the statement.
+///
+/// Its name reaches the `COPY` **unquoted** (`STORED AS geojson`), so no escaping can make it
+/// safe; its option keys are quoted but are read as config *paths* rather than as values, so a
+/// key that would need escaping is one no writer could have accepted. Every other [`Format`] arm
+/// names both with `&'static str` literals — this is the one arm where they are the caller's own
+/// strings, and [`Format`] is public API an embedder may fill from anywhere.
+///
+/// Refused rather than escaped for the reason the partition columns are: these are grammar, not
+/// data. The path and the option *values* are the opposite case and stay escaped, any byte being
+/// legitimate in either.
+fn extension_words_are_plain(format: &Format, ctx: &SessionContext) -> Result<(), String> {
+    let Format::Extension { format, options } = format else {
+        return Ok(());
+    };
+    let dialect = sql::lex::dialect(ctx.state().config_options().sql_parser.dialect.as_ref());
+    if !is_bare_word(dialect.as_ref(), format) {
+        return Err(format!(
+            "Can't write '{format}': STORED AS takes an unquoted format name, so a format has to \
+             be a single plain word"
+        ));
+    }
+    let plain = |key: &str| {
+        !key.is_empty()
+            && key
+                .split('.')
+                .all(|part| is_bare_word(dialect.as_ref(), part))
+    };
+    match options.keys().find(|key| !plain(key)) {
+        Some(bad) => Err(format!(
+            "Can't write with the option '{bad}': an option key is a plain word, or plain words \
+             separated by dots"
         )),
         None => Ok(()),
     }
@@ -800,6 +860,67 @@ mod tests {
         }
     }
 
+    /// **A registered format's own words are grammar, so they are refused rather than escaped.**
+    /// The name lands unquoted in `STORED AS` and an option key is read as a config path, so
+    /// neither can be made safe by escaping — and [`Format`] is public, so both are a caller's
+    /// strings on this arm alone. The values beside them stay escaped, any byte being legitimate
+    /// in one.
+    #[test]
+    fn a_registered_formats_name_and_option_keys_have_to_be_plain_words() {
+        let ctx = crate::builder::test_context(&BTreeMap::new());
+        let extension = |format: &str, options: BTreeMap<String, String>| Format::Extension {
+            format: format.to_string(),
+            options,
+        };
+        let none = BTreeMap::new;
+
+        assert!(extension_words_are_plain(&extension("geojson", none()), &ctx).is_ok());
+        assert!(extension_words_are_plain(
+            &extension(
+                "geojson",
+                BTreeMap::from([("format.crs".into(), "EPSG:4326".into())])
+            ),
+            &ctx
+        )
+        .is_ok());
+
+        assert_eq!(
+            extension_words_are_plain(&extension("geo json'); DROP TABLE t; --", none()), &ctx),
+            Err(
+                "Can't write 'geo json'); DROP TABLE t; --': STORED AS takes an unquoted format \
+                 name, so a format has to be a single plain word"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            extension_words_are_plain(
+                &extension(
+                    "geojson",
+                    BTreeMap::from([("format.crs', 'x'); DROP TABLE t; --".into(), "v".into())])
+                ),
+                &ctx
+            ),
+            Err(
+                "Can't write with the option 'format.crs', 'x'); DROP TABLE t; --': an option key \
+                 is a plain word, or plain words separated by dots"
+                    .to_string()
+            )
+        );
+        assert!(
+            extension_words_are_plain(
+                &extension("geojson", BTreeMap::from([(String::new(), "v".into())])),
+                &ctx
+            )
+            .is_err(),
+            "an empty key is not a word either"
+        );
+
+        assert!(
+            extension_words_are_plain(&Format::Csv(csv()), &ctx).is_ok(),
+            "the shipped arms name both with literals and have nothing to judge"
+        );
+    }
+
     /// The ` OPTIONS (…)` a format alone contributes — what [`run_export`] then appends the
     /// partition option to.
     fn format_options(format: &Format) -> Result<String, String> {
@@ -936,7 +1057,7 @@ mod tests {
     #[test]
     fn keeping_partition_columns_is_a_copy_option_in_its_own_namespace() {
         let mut pairs = format_pairs(&Format::Arrow).expect("arrow");
-        pairs.push((KEEP_PARTITION_COLUMNS, true.to_string()));
+        pairs.push((KEEP_PARTITION_COLUMNS.to_string(), true.to_string()));
         assert_eq!(
             options_clause(&pairs),
             " OPTIONS ('execution.keep_partition_by_columns' 'true')"

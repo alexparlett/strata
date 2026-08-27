@@ -86,6 +86,7 @@ impl Workspace<'_> {
                     internal: engine.internal.clone(),
                     connections: engine.connections.clone(),
                     sources: engine.live.clone(),
+                    formats: engine.formats.clone(),
                     scope: engine.session.clone(),
                     functions: engine.functions.clone(),
                     baseline: engine.overrides(),

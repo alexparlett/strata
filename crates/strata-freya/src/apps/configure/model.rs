@@ -78,18 +78,25 @@ impl ConfigureTarget {
 
 /// Which reader the format picker is on.
 ///
-/// Four, not the canvas's five: there is no Avro in this build. [`Unknown`](Self::Unknown) is
-/// never *offered* — it is what an existing def whose format has no reader opens as, so the
-/// window shows what the def really says and Save stays blocked until a real format is picked.
-/// Quietly opening such a table as parquet is exactly the silent mis-read the typed format
-/// exists to prevent.
+/// Four, not the canvas's five: there is no Avro in this build. This window's vocabulary is the
+/// **first-party** one, because what it draws is each reader's own options —
+/// [`Extension`](Self::Extension) is never *offered*, it is what a def naming any other format
+/// opens as, so the window shows what the def really says and Save stays blocked until a format
+/// this window can set up is picked. Quietly opening such a table as parquet is exactly the
+/// silent mis-read the typed format exists to prevent.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum FormatId {
     Parquet,
     Csv,
     Json,
     Arrow,
-    Unknown(String),
+    /// A format registered with `EngineBuilder::with_format`, or one nothing is registered for.
+    /// Carries the def's own options so a draft that opens on one still holds everything the def
+    /// held.
+    Extension {
+        format: String,
+        options: BTreeMap<String, String>,
+    },
 }
 
 impl FormatId {
@@ -102,7 +109,7 @@ impl FormatId {
             Self::Csv => "CSV".into(),
             Self::Json => "JSON".into(),
             Self::Arrow => "ARROW".into(),
-            Self::Unknown(name) => name.to_uppercase(),
+            Self::Extension { format, .. } => format.to_uppercase(),
         }
     }
 
@@ -112,7 +119,10 @@ impl FormatId {
             SourceFormat::Csv(_) => Self::Csv,
             SourceFormat::Json(_) => Self::Json,
             SourceFormat::Arrow => Self::Arrow,
-            SourceFormat::Unknown(name) => Self::Unknown(name.clone()),
+            SourceFormat::Extension { format, options } => Self::Extension {
+                format: format.clone(),
+                options: options.clone(),
+            },
         }
     }
 }
@@ -359,7 +369,7 @@ impl ConfigureDraft {
                 draft.json_infer_rows = o.infer_rows.unwrap_or(0) as u32;
                 draft.json_compression = o.compression;
             }
-            SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Unknown(_) => {}
+            SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Extension { .. } => {}
         }
         draft
     }
@@ -764,7 +774,10 @@ impl ConfigureDraft {
         match &self.format {
             FormatId::Parquet => SourceFormat::Parquet,
             FormatId::Arrow => SourceFormat::Arrow,
-            FormatId::Unknown(name) => SourceFormat::Unknown(name.clone()),
+            FormatId::Extension { format, options } => SourceFormat::Extension {
+                format: format.clone(),
+                options: options.clone(),
+            },
             FormatId::Csv => SourceFormat::Csv(CsvRead {
                 header: self.csv_header,
                 delimiter: self.delimiter_char().unwrap_or(','),
@@ -838,9 +851,10 @@ impl ConfigureDraft {
         if self.nonblank_sources().is_empty() {
             return Some("A table needs at least one source path.".into());
         }
-        if let FormatId::Unknown(name) = &self.format {
+        if let FormatId::Extension { format, .. } = &self.format {
             return Some(format!(
-                "'{name}' is not a format Strata can read. Choose another."
+                "'{format}' is not a format this window can set up. Choose another, or edit this \
+                 table with CREATE EXTERNAL TABLE."
             ));
         }
         if self.hive_on && self.partitions.is_empty() {
@@ -927,7 +941,7 @@ impl ConfigureDraft {
                     .collect(),
                 },
             }],
-            FormatId::Parquet | FormatId::Arrow | FormatId::Unknown(_) => Vec::new(),
+            FormatId::Parquet | FormatId::Arrow | FormatId::Extension { .. } => Vec::new(),
         }
     }
 
@@ -1015,7 +1029,7 @@ impl ConfigureDraft {
                 },
                 compression_group(self.json_compression, Edit::JsonCompression),
             ],
-            FormatId::Parquet | FormatId::Arrow | FormatId::Unknown(_) => Vec::new(),
+            FormatId::Parquet | FormatId::Arrow | FormatId::Extension { .. } => Vec::new(),
         }
     }
 }
@@ -1291,19 +1305,31 @@ mod tests {
         );
     }
 
+    /// A def naming a format outside this window's vocabulary opens as **itself**, keeps its
+    /// reader's own options, and blocks Save — the window draws each first-party reader's
+    /// options, so it has nothing to draw for one whose options are its own.
     #[test]
-    fn an_unreadable_format_opens_as_itself_and_blocks_save() {
+    fn a_format_this_window_cannot_set_up_opens_as_itself_and_blocks_save() {
+        let format = SourceFormat::of(
+            "geojson",
+            BTreeMap::from([("format.crs".to_string(), "EPSG:4326".to_string())]),
+        );
         let def = TableDef {
-            name: "legacy".into(),
-            format: SourceFormat::Unknown("avro".into()),
+            name: "places".into(),
+            format: format.clone(),
             connection: None,
             sources: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
         let draft = ConfigureDraft::of(&def, &[]);
-        assert_eq!(draft.format, FormatId::Unknown("avro".into()));
-        assert!(draft.blocker().is_some_and(|b| b.contains("avro")));
+        assert_eq!(draft.format.label(), "GEOJSON");
+        assert!(draft.blocker().is_some_and(|b| b.contains("geojson")));
+        assert_eq!(
+            draft.def(Path::new("/project")).format,
+            format,
+            "the def keeps the options this window never drew"
+        );
     }
 
     #[test]

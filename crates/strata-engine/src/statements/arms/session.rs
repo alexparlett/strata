@@ -702,6 +702,7 @@ mod tests {
                 [],
                 Arc::default(),
                 eng.lang().prepared(),
+                eng.formats(),
                 "generic".into(),
             )
         };

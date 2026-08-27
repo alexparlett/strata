@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 
+use crate::formats::Formats;
 use crate::functions::Functions;
 use crate::policy::{Admit, PolicyProvider, Principal, TargetFacts};
 use crate::sources::{connection_facts, Live};
@@ -58,6 +59,9 @@ pub struct StmtCtx {
     /// The live database connections — what a write into a remote relation goes through,
     /// and what says whether one accepts writes at all.
     pub(crate) sources: Live,
+    /// The file formats this engine reads — what `STORED AS` may name, and what builds the
+    /// reader a table registers with.
+    pub(crate) formats: Formats,
     /// The `SET` overlay and the prepared-statement mirror.
     pub scope: SessionScope,
     /// The function catalog and the names this session created.

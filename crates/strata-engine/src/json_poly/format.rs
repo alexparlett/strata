@@ -15,6 +15,7 @@
 //! nothing that matters — every record goes through serde either way, so this format was never
 //! going to be the fast path. Correctness over a parallelism win we cannot spend.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -23,9 +24,10 @@ use datafusion::arrow::json::reader::Decoder;
 use datafusion::arrow::json::ReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
+use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{not_impl_err, DataFusionError, GetExt, Result, Statistics};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
     FileOpenFuture, FileOpener, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
@@ -40,7 +42,9 @@ use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan};
 use futures::{StreamExt, TryStreamExt};
 use serde_json::Value;
-use strata_model::{JsonRead, JsonShape};
+use strata_model::{FileCompression, JsonRead, JsonShape};
+
+use crate::formats::compression_type;
 
 use super::infer::{absorb, kind_word, schema_of, Tree};
 use super::normalize::fit_record;
@@ -56,10 +60,10 @@ impl PolyJsonFormat {
         Self { opts }
     }
 
-    /// The def's compression, through the catalog's one mapping — a second copy of those five
-    /// arms is how JSON and CSV end up disagreeing about a newly added variant.
+    /// The def's compression, through the formats layer's one mapping — a second copy of those
+    /// five arms is how JSON and CSV end up disagreeing about a newly added variant.
     fn compression(&self) -> FileCompressionType {
-        super::super::catalog::compression(self.opts.compression)
+        compression_type(self.opts.compression)
     }
 }
 
@@ -425,5 +429,75 @@ impl FileOpener for PolyJsonOpener {
             })
             .boxed())
         }))
+    }
+}
+
+/// A [`FileFormatFactory`] over [`PolyJsonFormat`], for a session that is not this engine's.
+///
+/// **The engine does not use it**, and that is a decision rather than an omission: registering a
+/// factory under `json` replaces the one DataFusion resolves `COPY … STORED AS JSON` against, so a
+/// session holding this one would read JSON through the union-tolerant reader *and write it*
+/// through whatever this returns. Strata selects the reader per table instead
+/// ([`formats`](crate::formats)), which leaves the writer alone.
+///
+/// It is offered because an embedder composing their own `SessionContext` may well want the
+/// reader everywhere — `CREATE EXTERNAL TABLE … STORED AS JSON` in a plain DataFusion session
+/// resolves through this map, and there is no per-table seam there to select on. The trade is the
+/// one above: take it knowing the writer moves with it.
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use datafusion::prelude::SessionContext;
+/// use strata_engine::json_poly::PolyJsonFormatFactory;
+///
+/// let mut ctx = SessionContext::new();
+/// ctx.state_ref()
+///     .write()
+///     .register_file_format(Arc::new(PolyJsonFormatFactory::default()), true)
+///     .unwrap();
+/// ```
+#[derive(Debug, Default)]
+pub struct PolyJsonFormatFactory {
+    /// What the reader is built with when `COPY`'s own `format.*` options say nothing.
+    pub defaults: JsonRead,
+}
+
+impl GetExt for PolyJsonFormatFactory {
+    fn get_ext(&self) -> String {
+        "json".to_string()
+    }
+}
+
+impl FileFormatFactory for PolyJsonFormatFactory {
+    /// Reads the two options this reader has beyond the defaults it was built with —
+    /// `format.compression` and `format.schema_infer_max_rec`, in DataFusion's own spelling.
+    /// A key it does not take is left to whatever else reads the map, because a factory that
+    /// refused one would refuse a session-level setting it has no business judging.
+    fn create(
+        &self,
+        _state: &dyn Session,
+        format_options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let mut opts = self.defaults.clone();
+        if let Some(raw) = format_options.get("format.compression") {
+            opts.compression = match raw.parse::<FileCompressionType>()?.get_variant() {
+                CompressionTypeVariant::UNCOMPRESSED => FileCompression::None,
+                CompressionTypeVariant::GZIP => FileCompression::Gzip,
+                CompressionTypeVariant::BZIP2 => FileCompression::Bzip2,
+                CompressionTypeVariant::XZ => FileCompression::Xz,
+                CompressionTypeVariant::ZSTD => FileCompression::Zstd,
+            };
+        }
+        if let Some(raw) = format_options.get("format.schema_infer_max_rec") {
+            let rows: usize = raw
+                .parse()
+                .map_err(|_| json_error("format.schema_infer_max_rec takes a number of records"))?;
+            opts.infer_rows = (rows > 0).then_some(rows);
+        }
+        Ok(Arc::new(PolyJsonFormat::new(opts)))
+    }
+
+    fn default(&self) -> Arc<dyn FileFormat> {
+        Arc::new(PolyJsonFormat::new(self.defaults.clone()))
     }
 }

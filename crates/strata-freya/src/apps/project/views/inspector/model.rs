@@ -69,7 +69,7 @@ impl FormatBadge {
             F::Csv(_) => FormatBadge::Csv,
             F::Json(_) => FormatBadge::Json,
             F::Arrow => FormatBadge::Arrow,
-            F::Unknown(name) => FormatBadge::Other(name.clone()),
+            F::Extension { format, .. } => FormatBadge::Other(format.clone()),
         }
     }
 

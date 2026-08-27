@@ -80,30 +80,40 @@ impl<T: UdfPackage + ?Sized> UdfPackage for Box<T> {
 /// that will not register is warned about rather than fatal — it names itself on the first query
 /// that wanted it, and refusing to open the project over one is the worse trade.
 pub(crate) fn register_packages(ctx: &SessionContext, packages: &[Arc<dyn UdfPackage>]) {
+    for package in packages {
+        register(ctx, package.as_ref());
+    }
+}
+
+/// Register one package's functions on a session — the engine's own rule, without an engine.
+///
+/// The à la carte entry: an embedder taking [`StrataFunctions`](crate::udfs::StrataFunctions) into
+/// a `SessionContext` of their own gets the same replacement warning
+/// [`EngineBuilder::with_udfs`](crate::EngineBuilder::with_udfs) applies, rather than
+/// `register_udf`'s silence.
+pub fn register(ctx: &SessionContext, package: &dyn UdfPackage) {
     let state = ctx.state_ref();
     let mut state = state.write();
-    for package in packages {
-        for udf in package.scalar() {
-            let name = udf.name().to_string();
-            note_registered(
-                &name,
-                state.register_udf(Arc::new(udf)).map(|old| old.is_some()),
-            );
-        }
-        for udaf in package.aggregate() {
-            let name = udaf.name().to_string();
-            note_registered(
-                &name,
-                state.register_udaf(Arc::new(udaf)).map(|old| old.is_some()),
-            );
-        }
-        for udwf in package.window() {
-            let name = udwf.name().to_string();
-            note_registered(
-                &name,
-                state.register_udwf(Arc::new(udwf)).map(|old| old.is_some()),
-            );
-        }
+    for udf in package.scalar() {
+        let name = udf.name().to_string();
+        note_registered(
+            &name,
+            state.register_udf(Arc::new(udf)).map(|old| old.is_some()),
+        );
+    }
+    for udaf in package.aggregate() {
+        let name = udaf.name().to_string();
+        note_registered(
+            &name,
+            state.register_udaf(Arc::new(udaf)).map(|old| old.is_some()),
+        );
+    }
+    for udwf in package.window() {
+        let name = udwf.name().to_string();
+        note_registered(
+            &name,
+            state.register_udwf(Arc::new(udwf)).map(|old| old.is_some()),
+        );
     }
 }
 

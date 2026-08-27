@@ -17,11 +17,14 @@
 //! the draft remembers; the engine spec must not be able to name a delimiter on a Parquet
 //! export, so [`ExportDraft::spec`] projects only the format in play.
 
+use std::collections::BTreeMap;
+
 use strata_core::util::one_char;
 use strata_engine::export::{
     Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
     WriterVersion,
 };
+use strata_engine::formats::FormatInfo;
 use strata_model::{Cell, ColumnInfo, Kind, SnapshotId};
 
 use crate::components::form::{self, Make};
@@ -78,23 +81,52 @@ impl ExportTarget {
 /// Which format's card is selected. Separate from
 /// [`Format`](strata_engine::export::Format) because this one is a *choice* — it has no
 /// options attached, and it round-trips through the format cards.
+///
+/// The four named arms wear the canvas's own dress; [`Extension`](Self::Extension) is any other
+/// format the engine was built with, which this window can offer and cannot draw options for.
+/// `Copy` still, because a registered format's word is its registrant's `NAME`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FormatId {
     Csv,
     Json,
     Parquet,
     Arrow,
+    /// A format registered with `EngineBuilder::with_format`, by the word it is registered under.
+    Extension(&'static str),
 }
 
 impl FormatId {
-    pub const ALL: [FormatId; 4] = [Self::Csv, Self::Json, Self::Parquet, Self::Arrow];
+    /// The formats **this engine** can write, as cards, in the order it was built with them.
+    ///
+    /// Derived from the registry rather than listed, so a format an embedder registered appears
+    /// here the moment it declares that `COPY` can write it — and one that cannot be written
+    /// never does.
+    pub fn offered(formats: &[FormatInfo]) -> Vec<FormatId> {
+        formats
+            .iter()
+            .filter(|f| f.copy_to)
+            .map(|f| Self::of(f.name))
+            .collect()
+    }
 
-    pub fn name(self) -> &'static str {
+    /// The card for a registered format's word.
+    fn of(name: &'static str) -> Self {
+        match name {
+            "csv" => Self::Csv,
+            "json" => Self::Json,
+            "parquet" => Self::Parquet,
+            "arrow" => Self::Arrow,
+            other => Self::Extension(other),
+        }
+    }
+
+    pub fn name(self) -> String {
         match self {
-            Self::Csv => "CSV",
-            Self::Json => "JSON",
-            Self::Parquet => "Parquet",
-            Self::Arrow => "Arrow IPC",
+            Self::Csv => "CSV".into(),
+            Self::Json => "JSON".into(),
+            Self::Parquet => "Parquet".into(),
+            Self::Arrow => "Arrow IPC".into(),
+            Self::Extension(word) => word.to_uppercase(),
         }
     }
 
@@ -104,6 +136,7 @@ impl FormatId {
             Self::Json => "Newline-delimited (NDJSON)",
             Self::Parquet => "Columnar, compressed",
             Self::Arrow => "Zero-copy Feather",
+            Self::Extension(_) => "Registered format",
         }
     }
 
@@ -114,6 +147,7 @@ impl FormatId {
             Self::Json => "json",
             Self::Parquet => "parquet",
             Self::Arrow => "arrow",
+            Self::Extension(word) => word,
         }
     }
 }
@@ -334,6 +368,14 @@ impl ExportDraft {
                      options for it.",
                 ),
             }),
+            FormatId::Extension(_) => groups.push(Group {
+                label: "FORMAT".into(),
+                hint: None,
+                control: Control::Note(
+                    "This format is written by the writer it was registered with. Its options \
+                     are set on a COPY statement in the editor.",
+                ),
+            }),
         }
         groups
     }
@@ -539,7 +581,7 @@ impl ExportDraft {
         match self.format {
             FormatId::Csv => self.csv_compression.extension(),
             FormatId::Json => self.json_compression.extension(),
-            FormatId::Parquet | FormatId::Arrow => "",
+            FormatId::Parquet | FormatId::Arrow | FormatId::Extension(_) => "",
         }
     }
 
@@ -610,6 +652,10 @@ impl ExportDraft {
                 dictionary: self.pq_dictionary,
             }),
             FormatId::Arrow => Format::Arrow,
+            FormatId::Extension(word) => Format::Extension {
+                format: word.to_string(),
+                options: BTreeMap::new(),
+            },
         };
 
         Ok(ExportSpec {
@@ -671,6 +717,63 @@ mod tests {
     use strata_arrow::column_info;
 
     use super::*;
+
+    fn registered(name: &'static str, copy_to: bool) -> FormatInfo {
+        FormatInfo {
+            name,
+            copy_to,
+            options: Vec::new(),
+        }
+    }
+
+    /// **The card list is the engine's registry**, filtered on what `COPY` can write: a format an
+    /// embedder registered gets a card, a read-only one gets none, and the shipped four keep the
+    /// canvas's own dress.
+    #[test]
+    fn the_format_cards_are_the_writable_registrants() {
+        let offered = FormatId::offered(&[
+            registered("parquet", true),
+            registered("csv", true),
+            registered("json", true),
+            registered("arrow", true),
+            registered("testfmt", true),
+            registered("readonlyfmt", false),
+        ]);
+        assert_eq!(
+            offered,
+            vec![
+                FormatId::Parquet,
+                FormatId::Csv,
+                FormatId::Json,
+                FormatId::Arrow,
+                FormatId::Extension("testfmt"),
+            ],
+            "a format that cannot be written has no card"
+        );
+        assert_eq!(FormatId::Extension("testfmt").name(), "TESTFMT");
+        assert_eq!(FormatId::Extension("testfmt").extension(), "testfmt");
+    }
+
+    /// A registered format writes through **its own** writer, with no options of ours attached:
+    /// this window draws none for it, so the spec must name none.
+    #[test]
+    fn a_registered_format_exports_with_no_options_of_ours() {
+        let draft = ExportDraft {
+            format: FormatId::Extension("testfmt"),
+            ..Default::default()
+        };
+        let spec = draft
+            .spec(&target(), "/tmp/out.testfmt".into())
+            .expect("a spec");
+        assert_eq!(
+            spec.format,
+            Format::Extension {
+                format: "testfmt".into(),
+                options: BTreeMap::new(),
+            }
+        );
+        assert_eq!(draft.suggested_name(&target()), "cross-file_join.testfmt");
+    }
 
     fn target() -> ExportTarget {
         ExportTarget {

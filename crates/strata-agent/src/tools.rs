@@ -60,8 +60,8 @@ use crate::host::{
     self, Agent, AgentId, AgentIdentity, Described, Host, Project, QuerySessionId, RunMode, Settled,
 };
 use crate::wire::{
-    cells, columns, functions_result, plan_result, rows_result, tables_result, Columns,
-    DescribeResult, DescribeTableParams, DiagnosticWire, ExportResult, ExportResultParams,
+    cells, columns, export_format, functions_result, plan_result, rows_result, tables_result,
+    Columns, DescribeResult, DescribeTableParams, DiagnosticWire, ExportResult, ExportResultParams,
     FunctionsResult, ListFunctionsParams, ListTablesParams, PageResult, ProjectParams,
     ProjectsResult, QuerySessionParams, QuerySessionResult, QuerySessionsResult, ReadPageParams,
     RunParams, RunResult, TablesResult, ValidateParams, ValidateResult,
@@ -990,9 +990,10 @@ impl<H: Host> StrataTools<H> {
                 params.query_session
             )));
         };
+        let format = export_format(&params.format, &engine.formats())?;
         match engine
             .snapshot(snapshot)
-            .export_to(params.path, params.format.into())
+            .export_to(params.path, format)
             .await
         {
             Ok(report) => Ok(ExportResult::from((params.query_session, report))),
@@ -1242,7 +1243,7 @@ mod tests {
     use crate::assistant::SYSTEM;
     use crate::host::{CatalogEntry, Described, QuerySessionState, RegState};
     use crate::mock::{MockHost, MockProject};
-    use crate::wire::{EntryWire, ExportFormat, Mode, QuerySessionStateWire, Sort, StateWire};
+    use crate::wire::{EntryWire, Mode, QuerySessionStateWire, Sort, StateWire};
 
     use super::*;
 
@@ -2255,7 +2256,7 @@ mod tests {
         let csv = root.join("people.csv2");
         tools
             .export_result(ExportResultParams {
-                format: ExportFormat::Csv,
+                format: "csv".into(),
                 ..export_params(&session, &csv)
             })
             .await
@@ -2383,7 +2384,7 @@ mod tests {
         ExportResultParams {
             query_session: session.into(),
             path: path.display().to_string(),
-            format: ExportFormat::Parquet,
+            format: "parquet".into(),
             project: None,
         }
     }

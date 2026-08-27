@@ -1,7 +1,9 @@
-//! The FORMAT row — the four output formats as cards.
+//! The FORMAT row — the formats this engine can write, as cards.
 //!
-//! Four, not five: the canvas dropped the Clipboard tile (2026-07-12) once the grid grew its
-//! own copy controls, so "export" here always means a file on disk.
+//! The list is the engine's own format registry filtered on what `COPY` can write, so a format
+//! an embedder registered has a card here and one that is read-only does not. No Clipboard tile:
+//! the canvas dropped it (2026-07-12) once the grid grew its own copy controls, so "export" here
+//! always means a file on disk.
 //!
 //! Each card is its own press target rather than a [`SegmentedToggle`]: they carry a glyph, a
 //! name and a description on three lines, which is a card, not a segment.
@@ -32,14 +34,14 @@ impl Component for Formats {
             .horizontal()
             .content(Content::Flex)
             .spacing(SP_3);
-        for format in FormatId::ALL {
+        for format in ctx.formats.read().iter().copied() {
             row = row.child(
                 FormatCard {
                     format,
                     selected: format == selected,
                     key: DiffKey::None,
                 }
-                .key(format.name()),
+                .key(format.extension()),
             );
         }
 
@@ -83,6 +85,7 @@ impl Component for FormatCard {
             FormatId::Json => kind_color(Kind::Ts, &palette),
             FormatId::Parquet => accent,
             FormatId::Arrow => kind_color(Kind::Struct, &palette),
+            FormatId::Extension(_) => accent,
         };
 
         let (background, border) = if selected {

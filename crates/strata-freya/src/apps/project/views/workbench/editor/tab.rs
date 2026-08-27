@@ -103,6 +103,7 @@ impl Component for EditorTab {
                     }),
                     engine.lang().functions(),
                     engine.lang().prepared(),
+                    engine.formats(),
                     dialect,
                 )
                 .with_databases(engine.sources().database_syms());
