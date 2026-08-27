@@ -226,8 +226,13 @@ impl Live {
             .collect()
     }
 
-    /// The enumeration a connection registered, or `None` if it is not live — what
-    /// [`snapshot`] reads, and what tells it a connection is live at all.
+    /// The enumeration a connection registered, or `None` if it is not live.
+    ///
+    /// **[`snapshot`]'s one read of this map per connection**, answering both halves at once:
+    /// whether it is live, and what it enumerated. Asking twice — once for the flag, once for the
+    /// schemas — is two moments, and a teardown landing between them produces a row that claims
+    /// to be live over nothing, which no state of this map ever held. `scoped` takes the
+    /// enumeration rather than the map so that a second read is not expressible.
     fn listing(&self, name: &str) -> Option<Arc<Listing>> {
         let held = self.0.lock().unwrap();
         Some(Arc::clone(&held.get(name)?.listing))
@@ -489,14 +494,19 @@ pub(crate) fn snapshot(
         .map(|def| {
             let name = def.named();
             match def.provider.source() {
-                Some(source) => SourceListing {
-                    live: live.listing(&name).is_some(),
-                    detail: SourceDetail::Catalog {
-                        catalog: name.clone(),
-                        schemas: listing(live, def, source).unwrap_or_default(),
-                    },
-                    name,
-                },
+                Some(source) => {
+                    let enumerated = live.listing(&name);
+                    SourceListing {
+                        live: enumerated.is_some(),
+                        detail: SourceDetail::Catalog {
+                            catalog: name.clone(),
+                            schemas: enumerated
+                                .map(|listing| scoped(&listing, source))
+                                .unwrap_or_default(),
+                        },
+                        name,
+                    }
+                }
                 None => SourceListing {
                     live: store::registered(ctx, &def.identity()),
                     detail: SourceDetail::Store,
@@ -650,15 +660,14 @@ pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
     take_back(ctx, sources, name);
 }
 
-/// One live source's namespaces, scoped and tagged against the def's own
-/// [`SourceDef::schemas`] — the [`SourceDetail::Catalog`] half of a [`snapshot`], and `None` for
-/// a connection that holds no live catalog.
-fn listing(
-    sources: &Live,
-    conn: &ConnectionDef,
-    source: &SourceDef,
-) -> Option<Vec<SchemaListingView>> {
-    let listing = sources.listing(&conn.named())?;
+/// One connection's namespaces, scoped and tagged against the def's own
+/// [`SourceDef::schemas`] — the [`SourceDetail::Catalog`] half of a [`snapshot`].
+///
+/// Takes the **enumeration**, not the map that holds it, so it cannot reach [`Live`] a second
+/// time. A snapshot is one moment, and a connection torn down between two lock acquisitions would
+/// otherwise leave a row claiming `live: true` over no schemas — a state `Live` never held, and
+/// one that reports a just-forgotten catalog to `catalog_names` as reachable.
+fn scoped(listing: &Listing, source: &SourceDef) -> Vec<SchemaListingView> {
     let enabled: BTreeSet<String> = shown_of(source);
     let mut views: Vec<SchemaListingView> = listing
         .schemas()
@@ -692,7 +701,7 @@ fn listing(
             }),
     );
     views.sort_by(|a, b| a.name.cmp(&b.name));
-    Some(views)
+    views
 }
 
 /// Whether the connection registered as `catalog` accepts writes — the inverse of
