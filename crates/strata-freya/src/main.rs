@@ -20,7 +20,6 @@ use strata_agent::serve_stdio;
 use strata_core::config::AppConfig;
 use strata_core::project as project_io;
 use strata_core::secret::open_keystore;
-use strata_engine::purge_snapshot_root;
 use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::agent::create_global_agent;
@@ -56,7 +55,6 @@ fn main() {
     if let Err(err) = open_keystore() {
         tracing::error!("{err}");
     }
-    purge_snapshot_root();
     let themes = ThemesCtx::discover();
     let (config, reopen) = create_global_config();
     let windows = create_global_windows();
@@ -208,7 +206,6 @@ fn cli<A: IntoIterator<Item = String>>(args: A) -> Cli {
 /// (the spec's "The headless host"; a `--config` flag can arrive when somebody wants one).
 fn headless(folder: &str) {
     let _guard = init_logging(Log::Stderr);
-    purge_snapshot_root();
     let Some(root) = platform::resolve_project_folder(Path::new(folder)) else {
         process::exit(1);
     };

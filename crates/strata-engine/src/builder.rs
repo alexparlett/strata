@@ -14,14 +14,13 @@ use crate::formats::{FileFormatKind, FormatProvider, Formats};
 use crate::functions::Functions;
 use crate::generation::GenClock;
 use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
-use crate::query::claim_snapshot_dir;
 use crate::secrets::{KeystoreSecrets, SecretProvider};
+use crate::snapshots::{LocalIpcSnapshotStore, SnapshotStore};
 use crate::sources::source::{DataSource, SourceKind, Sources};
 use crate::sources::Live;
 use crate::udf_package::UdfPackage;
 use crate::{
-    build_context, query, runtime_subset, Connections, Dependencies, Engine, InternalTables,
-    SessionScope,
+    build_context, runtime_subset, Connections, Dependencies, Engine, InternalTables, SessionScope,
 };
 
 /// The engine-id allocator — see [`Engine::id`].
@@ -56,6 +55,7 @@ pub struct EngineBuilder {
     policy: Arc<dyn PolicyProvider>,
     sources: Sources,
     formats: Formats,
+    snapshots: Option<Arc<dyn SnapshotStore>>,
 }
 
 /// The shipped sources and formats are registered here, through the same public calls an embedder
@@ -72,6 +72,7 @@ impl Default for EngineBuilder {
             policy: Arc::new(CapabilityPolicyProvider::new(Capability::full())),
             sources: Sources::default(),
             formats: Formats::shipped(),
+            snapshots: None,
         };
         #[cfg(feature = "postgres")]
         let builder = builder.with_source(crate::sources::postgres::Pg);
@@ -168,6 +169,19 @@ impl EngineBuilder {
         self
     }
 
+    /// Sets where this engine's results live, defaults to [`LocalIpcSnapshotStore`]
+    ///
+    /// The default spools each result to an Arrow IPC file in a directory it claims under the
+    /// machine's temp root, which is what keeps RAM to one page however large a result is;
+    /// [`MemSnapshotStore`](crate::snapshots::MemSnapshotStore) holds them in RAM instead, and an
+    /// embedder that wants them somewhere else implements [`SnapshotStore`]. The store is built
+    /// here rather than by [`build`](Self::build) so that a builder that is never built claims
+    /// nothing.
+    pub fn with_snapshot_store(mut self, store: impl SnapshotStore) -> Self {
+        self.snapshots = Some(Arc::new(store));
+        self
+    }
+
     /// Sets the memory pool DataFusion allocates from
     ///
     /// Takes precedence over `datafusion.runtime.memory_limit`, which otherwise builds one.
@@ -190,17 +204,9 @@ impl EngineBuilder {
             .expect("tokio runtime");
         let ctx = build_context(&self.config, &self.udfs, &self.formats, self.memory_pool);
         let functions = Functions::new(&ctx);
-        let snapshot_lock = match claim_snapshot_dir(engine_id) {
-            Ok(lock) => Some(lock),
-            Err(why) => {
-                tracing::warn!(
-                    "engine {engine_id}: could not claim {} ({why}); its snapshots are \
-                     unprotected against another instance's startup purge",
-                    query::snapshot_dir(engine_id)
-                );
-                None
-            }
-        };
+        let snapshots = self
+            .snapshots
+            .unwrap_or_else(|| Arc::new(LocalIpcSnapshotStore::new()));
         Arc::new_cyclic(|self_ref| Engine {
             engine_id,
             self_ref: self_ref.clone(),
@@ -210,7 +216,7 @@ impl EngineBuilder {
             overrides: Mutex::new(self.config),
             snap_seq: AtomicU64::new(1),
             dispatch_seq: AtomicU64::new(1),
-            _snapshot_lock: snapshot_lock,
+            snapshots,
             lifecycle: Mutex::default(),
             inflight_flag: Arc::new(AtomicBool::new(false)),
             functions,

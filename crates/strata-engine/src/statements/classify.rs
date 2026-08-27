@@ -16,7 +16,8 @@ use datafusion::sql::sqlparser::ast::{
 };
 
 use crate::policy::{DenyCode, GrantFamily};
-use crate::query::{is_snapshot_name, is_snapshot_ref, ReadPolicy};
+use crate::query::ReadPolicy;
+use crate::snapshots::{is_snapshot_name, is_snapshot_ref};
 use crate::sql::unwrap_statement;
 
 /// A statement the engine implements itself.

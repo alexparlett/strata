@@ -20,7 +20,7 @@ use strata_model::{ColumnInfo, JsonShape, SourceFormat, Stat, StatKey};
 use crate::formats::Formats;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::providers::{in_workspace, replace_table};
-use crate::query::is_snapshot_name;
+use crate::snapshots::is_snapshot_name;
 use crate::sql::qualified;
 use crate::statements::Fault;
 use crate::{fold_ident, quote_ident, CATALOG, SCHEMA};

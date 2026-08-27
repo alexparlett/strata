@@ -71,17 +71,22 @@ the app around it.
 
 Raw SQL is never a cache key — the same SQL over the same tables can read different files a
 second later. So a **Run executes exactly once** and spools the full result to an immutable
-on-disk **Arrow IPC** snapshot (LZ4-compressed; Arrow rather than parquet so a result's type
-always survives — parquet cannot write a union at all). Every later read — page, sort, chart,
-export — is a bounded read of that snapshot. Immutability is what makes the page cache sound and
-paging stable.
+snapshot. Every later read — page, sort, chart, export — is a bounded read of that snapshot.
+Immutability is what makes the page cache sound and paging stable.
+
+Where those bytes live is a seam (`snapshots::SnapshotStore`, `EngineBuilder::with_snapshot_store`):
+the contract is immutability, typed fidelity, the row-order ordinal and exact null counts from
+the write pass, and the format and location are the store's own. The default is
+`LocalIpcSnapshotStore` — one LZ4-compressed **Arrow IPC** file per snapshot, Arrow rather than
+parquet so a result's type always survives (parquet cannot write a union at all) — beside
+`MemSnapshotStore`, which keeps them in RAM.
 
 ```mermaid
 sequenceDiagram
     participant U as Editor (Run ⌘↵)
     participant Q as freya-query<br/>(per-press cache entry)
     participant E as Engine<br/>(private Tokio runtime)
-    participant S as Snapshot store<br/>(Arrow IPC on disk)
+    participant S as Snapshot store<br/>(Arrow IPC on disk, by default)
 
     U->>Q: QuerySpec { run: fresh nonce, sql, … }
     Q->>E: engine.ws(ws).run(tag, sql)

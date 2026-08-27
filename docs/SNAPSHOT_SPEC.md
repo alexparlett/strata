@@ -20,11 +20,44 @@ Keying results by raw SQL is unsafe and insufficient:
   files compacted) and show row 101 twice or never.
 - **Sort / filter / export** must operate over a *fixed set*, not re-run the query each time.
 
-So a **Run executes the SQL exactly once** and spools the full result to an on-disk **Arrow IPC
-snapshot** (LZ4-compressed). Every later read —
-page, sort, filter, export — is a bounded read *of that snapshot*, and the snapshot is
-**immutable**: once materialized it is never rewritten. Immutability is what makes downstream
+So a **Run executes the SQL exactly once** and spools the full result to a **snapshot**. Every
+later read — page, sort, filter, export — is a bounded read *of that snapshot*, and the snapshot
+is **immutable**: once materialized it is never rewritten. Immutability is what makes downstream
 caching sound.
+
+## 1a. The contract and the store
+
+Where those bytes live is a seam (`strata_engine::snapshots`), injected at construction with
+`EngineBuilder::with_snapshot_store`. A store is asked for three things — open a write pass
+(`begin` → `write` → `settle`), hand back a provider that reads what settled (`open`), and
+discard what it holds (`retire`, `purge_orphans`) — and what it does in between, format and
+location both, is its own.
+
+What every store owes its readers, whatever it is made of:
+
+| Contract | Why it is contract and not habit |
+|---|---|
+| Immutable once settled | every read of a snapshot is cached by its arguments (§1) |
+| **Typed fidelity** — a result round-trips as itself, a union included | the snapshot is the boundary every result crosses, so its type system is the whole app's |
+| The **ordinal** written when minted | a snapshot read has no order of its own (§9) |
+| **Exact null counts** from the write pass (`SnapshotStats`) | the partitioned-export gate reads them instead of scanning |
+| `open()` is an immutable read, never a re-list | pages, chart and export must all see one fixed set |
+
+What a store is **not** asked about is lifecycle: pins, retire-on-dispatch, liveness and the
+claim on wherever the bytes go stay engine bookkeeping (§4). The store moves bytes and is told
+when they stop being wanted.
+
+Two ship. **`LocalIpcSnapshotStore` is the default** — one LZ4-compressed **Arrow IPC** file per
+snapshot, in a directory it claims under the machine's temp root (§2). IPC rather than parquet
+*is the default's choice, made to keep the contract's fidelity clause*: parquet's type system is
+narrower than Arrow's — it cannot write a union at all — so results had to be coerced on the way
+in and the record view, `cell_preview_json` and JSON/CSV export all then read the coerced form.
+**`MemSnapshotStore`** keeps settled
+results in a DataFusion `MemTable` instead: fully honest rather than a test double, since a
+snapshot is session-scoped by construction anyway, and what it trades is the one thing the spool
+buys — RAM holds one page under the default and the whole result under this one. Both run one
+contract-conformance module (`snapshots::conformance`), which is what keeps the trait's law from
+quietly becoming whatever the default happens to do.
 
 ## 2. Identity
 
@@ -35,26 +68,30 @@ SnapshotId(u64)        — strata-model::results
 A snapshot's id comes from the engine's own monotonic allocator — unique per engine for the life
 of the process. It is the snapshot's identity and its storage name:
 
-- table: `__snap_{id}` (registered in the engine's `strata.public` schema)
-- file: `<tmp>/strata_snapshots/e_{pid}_{engine_id}/s_{id}.arrow` (pid-scoped: engine ids
-  are only process-unique, and the temp root is machine-shared)
-- lock: `<tmp>/strata_snapshots/e_{pid}_{engine_id}.lock` — a **sibling** of the directory,
-  opened and exclusively locked by `EngineBuilder::build` and held open for the engine's whole life
+- table: `__snap_{id}` — registered in the engine's `strata.public` schema by the **engine**,
+  from the provider `SnapshotStore::open` answered, so the name is engine law rather than a
+  store's;
+- the rest is the **default store's**, and a store that keeps results elsewhere answers none of
+  it:
+- file: `<tmp>/strata_snapshots/e_{pid}_{n}/s_{id}.arrow` (pid-scoped: `n` is a process-local
+  counter and the temp root is machine-shared)
+- lock: `<tmp>/strata_snapshots/e_{pid}_{n}.lock` — a **sibling** of the directory,
+  opened and exclusively locked when the store is constructed and held open for its whole life
 
 Because every *execution* allocates a fresh id, snapshot ids are never reused — a re-run of
 identical SQL produces a **new** snapshot. There is deliberately no sharing between two tabs
 running the same SQL: sharing by SQL identity is exactly the freshness bug in §1.
 
-Each window's engine only ever touches its own subdirectory. The **lock file** is what makes that
+Each store only ever touches its own subdirectory. The **lock file** is what makes that
 survive a *second process*: a pid can be recycled, so the directory name alone never proves its
 owner is alive, but an advisory lock is released by the OS on exit or crash and by nothing else.
-So the startup sweep is **selective**, not a `remove_dir_all` of the root:
+So the sweep is **selective**, not a `remove_dir_all` of the root:
 
 - claim order is lock-then-`mkdir`, so any directory a concurrent sweep can see already has a
-  held lock — a starting engine never looks abandoned (a lock file *inside* the directory would
+  held lock — a starting store never looks abandoned (a lock file *inside* the directory would
   have exactly that window);
-- `purge_snapshot_root()` deletes a directory only when it can *take* that directory's lock.
-  A lock held by a live engine (another instance, a parallel test binary) means skip. A lock it
+- the sweep deletes a directory only when it can *take* that directory's lock.
+  A lock held by a live store (another instance, a parallel test binary) means skip. A lock it
   can neither take nor find held — an unwritable root, a filesystem with no working advisory
   locking — also means skip, but is logged: nothing is deleted on a guess, because deleting a
   running instance's results is worse than leaking temp files, and a sweep that can never resolve
@@ -62,8 +99,17 @@ So the startup sweep is **selective**, not a `remove_dir_all` of the root:
 - anything under the root that is neither an `e_*` directory nor its `e_*.lock` file is a stray
   and is removed.
 
-An engine whose own claim fails still runs (the directory is created on demand) but is
-unprotected against another instance's sweep — `EngineBuilder::build` warns with the reason.
+**The sweep runs where the spool is understood, not where the process starts.** The *first*
+`LocalIpcSnapshotStore` under a root sweeps it, before claiming anything of its own — the moment
+this process first has somewhere to put a snapshot, and so the last moment at which it has none
+of its own to lose. Once per root, and never beside a claim: sweeping and claiming are serialized
+in-process, because a sweep landing between a concurrent claim's `open` and its `try_lock` takes
+the lock that claimer is about to hold and leaves a live directory undefended. The app calls
+nothing — an app asked to remember to sweep a spool only the store knows the shape of would be
+the seam leaking back out of the engine.
+
+A store whose own claim fails still works (the directory is created on demand) but is
+unprotected against another instance's sweep — it warns with the reason.
 
 ## 3. The handle
 
@@ -90,7 +136,8 @@ A snapshot belongs to the **workspace** (`WsId` — the query tab that ran it; t
 converts directly, so the tab *is* the workspace). The engine keeps the only bookkeeping, under
 one lock: `current: HashMap<WsId, SnapshotId>` + the in-flight run per workspace.
 
-Retirement (deregister the table + delete the file) happens at exactly these points:
+Retirement — the engine deregisters the table, the store discards the bytes
+(`SnapshotStore::retire`) — happens at exactly these points:
 
 | Trigger | What retires |
 |---|---|
@@ -98,9 +145,9 @@ Retirement (deregister the table + delete the file) happens at exactly these poi
 | **`ws(id).cancel(tag)`** | the aborted run's partial file; the previous snapshot is already gone (retire-on-dispatch) |
 | **Run fails** | the failed run's partial file (cleaned by the run itself) |
 | **`ws(id).cleanup()`** (tab close) | the ws's current snapshot + any in-flight partial |
-| **engine drop** (window close) | the engine's whole `e_{pid}_{engine_id}` directory + its `.lock` sibling |
+| **engine drop** (window close) | `SnapshotStore::purge_orphans` with an empty live set — everything the store holds; the default's claim goes with the store's own drop, right after |
 | **last `SnapshotPin` released** | a snapshot whose retire arrived while it was pinned (see below) |
-| **process start** | `purge_snapshot_root()` — every *dead* engine's leftovers (§2: lock-gated, live directories spared) |
+| **first store under a root** | every *dead* store's leftovers (§2: lock-gated, live directories spared) |
 
 **Retire-on-dispatch**: the previous snapshot is dropped when the new Run *starts*, not when it
 succeeds — one lock owns the whole lifecycle, never held across an await. During the run — and

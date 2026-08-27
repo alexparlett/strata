@@ -43,8 +43,8 @@ use datafusion::prelude::{SQLOptions, SessionContext};
 
 use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
 use crate::export::copy_row_count;
+use crate::ipc::ipc_write_options;
 use crate::policy::Principal;
-use crate::query::ipc_write_options;
 use crate::sink::append_rows;
 use crate::sources::{create_table_as, insert_into, writable, Live};
 use crate::statements::ctx::{DataRoot, StmtCtx};

@@ -30,7 +30,8 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::dialect::Dialect;
 
-use super::query::{snapshot_name, snapshots_root};
+use super::snapshots::local_ipc::snapshots_root;
+use super::snapshots::snapshot_name;
 use crate::sql;
 use strata_core::project::strata_dir;
 use strata_model::SnapshotId;
@@ -302,7 +303,7 @@ pub async fn run_export(
     ctx: &SessionContext,
     snapshot: SnapshotId,
     spec: ExportSpec,
-    stats: &crate::query::SnapshotStats,
+    stats: &crate::snapshots::SnapshotStats,
 ) -> Result<(String, usize), String> {
     let snap = snapshot_name(snapshot);
     let Ok(table) = ctx.table(snap.as_str()).await else {
@@ -510,7 +511,7 @@ pub(super) fn partition_null_refusal(name: &str) -> String {
 /// snapshot is Arrow IPC, which carries no column statistics at all — but nothing was ever gained
 /// by asking the file. `query::materialize` streams every batch to write it, and
 /// `Array::null_count` is a stored field, so the exact per-column count is a running sum over
-/// data already in hand ([`query::SnapshotStats`], held for the snapshot's lifetime in
+/// data already in hand ([`snapshots::SnapshotStats`], held for the snapshot's lifetime in
 /// `Lifecycle`). Free to produce, and a slice index to read.
 ///
 /// The rule is "proceed only on an exact zero". `stats` is exact by construction — it counted
@@ -519,7 +520,7 @@ pub(super) fn partition_null_refusal(name: &str) -> String {
 fn partition_columns_have_no_nulls(
     columns: &[String],
     schema: &Schema,
-    stats: &crate::query::SnapshotStats,
+    stats: &crate::snapshots::SnapshotStats,
 ) -> Result<(), String> {
     for name in columns {
         let index = schema

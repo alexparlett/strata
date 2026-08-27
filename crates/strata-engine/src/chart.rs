@@ -35,7 +35,8 @@ use strata_model::{
 use strata_arrow::MAX_BINS;
 use strata_core::util::{clip, DISPLAY_CHARS};
 
-use super::query::{snapshot_name, CellFormat};
+use super::query::CellFormat;
+use super::snapshots::snapshot_name;
 
 /// What a NULL reads as on an axis or in a legend (spec §5). Only ever a *label*: categories
 /// and series are keyed by the value itself, so this never merges with a real `(null)`
