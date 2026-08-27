@@ -370,18 +370,17 @@ const INSERT_EXTERNAL: &str =
 /// unchanged — the column list, the source query, and the schema check, which is the planner's:
 /// it casts and renames the source onto the registered schema and refuses in its own words what
 /// cannot be coerced. What lands is one unit per statement through
-/// [`InternalTableStore::append`] — under the default store, the single LZ4-frame IPC file the
-/// sink has always appended.
+/// [`InternalTableStore::append`] — under the default store, one LZ4-frame IPC file.
 ///
 /// **The `Dml` node itself never executes**, on either branch: the local one hands the input's
 /// stream to the store ([`insert_stream`]), the remote one drives the input through the
 /// connection's own sink — so a source inside a database connection reaches a workspace table
 /// rather than a `Dml` reaching the unparser ([`crate::sink`]). The arm is the only writer;
-/// the provider registration serves is read through, never written through.
+/// the registered provider is read through, never written through.
 ///
 /// **One unit per statement, and no compaction.** A table inserted into a thousand times is a
-/// thousand units and every scan lists them all. `DROP TABLE` plus a
-/// `CREATE TABLE AS SELECT * FROM t` is the compaction story until a task owns one.
+/// thousand units and every scan lists them all; rewriting them smaller is `DROP TABLE` plus a
+/// `CREATE TABLE AS SELECT * FROM t`.
 ///
 /// The gate is in two halves and the **catalog** is the first: a relation inside a database
 /// connection is not a table whose data Strata could ever own, so [`resolve_target`] answers for

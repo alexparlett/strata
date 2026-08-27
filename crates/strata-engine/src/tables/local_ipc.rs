@@ -148,10 +148,10 @@ impl InternalTableStore for LocalIpcTableStore {
         Ok(count)
     }
 
-    /// The `ListingTable` the engine has always registered an internal table as: the Arrow
-    /// reader with footer row counts ([`StrataArrowFormat`]), the session's config, and the
-    /// runtime's per-file statistics cache handed over by name — a hand-built listing opts into
-    /// every default `register_listing_table` would have applied.
+    /// A `ListingTable` over the slug's directory: the Arrow reader with footer row counts
+    /// ([`StrataArrowFormat`]), the session's config, and the runtime's per-file statistics
+    /// cache handed over by name — a hand-built listing opts into every default
+    /// `register_listing_table` would have applied.
     ///
     /// It re-`LIST`s per scan (this engine runs no list-files cache), which is the
     /// append-visibility rule the module contract states.

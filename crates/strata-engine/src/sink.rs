@@ -1,14 +1,14 @@
-//! **Executing an `INSERT`'s input without letting the `Dml` node reach a planner** — the rows
-//! a remote arm drives through a provider's own sink ([`append_rows`], DB-10) and the stream
-//! the local arm hands its table store ([`insert_stream`], ED-05 over the EA-08 seam).
+//! Executing an `INSERT`'s input without letting the `Dml` node reach a planner: the rows the
+//! remote arm drives through a provider's own sink ([`append_rows`]), and the stream the local
+//! arm hands its table store ([`insert_stream`]).
 //!
 //! **The `Dml` node never reaches a planner.** DataFusion's physical planner answers a
 //! `WriteOp::Insert` by resolving the target's provider and calling `insert_into` on it — exactly
-//! what this does — but the node has to survive the *optimizer* first, and
+//! what [`append_rows`] does — but the node has to survive the *optimizer* first, and
 //! `datafusion-federation`'s rule federates any plan whose scans all belong to one remote source,
 //! a `Dml` above them included. A federated node writes itself down as SQL to execute, and
 //! `plan_to_sql` has no arm for a write: `INSERT INTO <workspace table> SELECT … FROM pg.…` came
-//! back as `LogicalPlan` debug (DB-12). Driving the input is the same plan, the same resolved
+//! back as `LogicalPlan` debug. Driving the input is the same plan, the same resolved
 //! target, one node fewer.
 //!
 //! A `CopyTo` cannot be driven this way — its sink is the file format's, built by DataFusion's own

@@ -16,8 +16,8 @@
 //!   table: the rows are visible entire under the slug, or not at all. The shipped default spools
 //!   aside and renames in.
 //! - **An append is one unit per statement, and there is no compaction.** A table inserted into a
-//!   thousand times holds a thousand units; `DROP TABLE` plus a `CREATE TABLE AS SELECT * FROM t`
-//!   is the compaction story until a task owns one.
+//!   thousand times holds a thousand units; rewriting them smaller is `DROP TABLE` plus a
+//!   `CREATE TABLE AS SELECT * FROM t`.
 //! - **The provider re-lists per scan.** A scan through a provider handed out at registration
 //!   sees every unit appended since, which is what lets an `INSERT`'s fold re-read the table's
 //!   facts without re-registering it — the whole reason the views above it survive a write
@@ -35,10 +35,10 @@
 //! qualify or the dialect rewrite. The engine registers what the store answers with; the store
 //! moves bytes.
 //!
-//! And the store's provider is **read through, never written through**: the local `INSERT` arm
-//! drives [`append`](InternalTableStore::append) directly, so the arm remains the only writer
-//! and the gate in front of it (`Catalog::is_internal`, off the *parsed* target) remains the
-//! only gate.
+//! And the store's provider is **read through, never written through**: the engine's `INSERT`
+//! path drives [`append`](InternalTableStore::append) directly, so it remains the only writer
+//! and the gate in front of it (`Catalog::is_internal`, asked of the *parsed* target) remains
+//! the only gate.
 
 use std::sync::Arc;
 
@@ -71,9 +71,9 @@ pub trait InternalTableStore: Send + Sync + 'static {
     /// `CREATE TABLE t (a INT)` arrives here as an empty stream carrying that schema, and what
     /// is published still describes its columns on every later read.
     ///
-    /// Whether the slug may be created, replaced or must be refused is the **arm's** question,
-    /// answered against the registered namespace before this is called; the store only moves
-    /// bytes.
+    /// Whether the slug may be created, replaced or must be refused is the **engine's**
+    /// question, answered against the registered namespace before this is called; the store
+    /// only moves bytes.
     async fn create(&self, slug: &str, rows: SendableRecordBatchStream) -> Result<u64, String>;
 
     /// Add `rows` to the table `slug` as **one unit**, and answer with how many landed.
@@ -95,8 +95,8 @@ pub trait InternalTableStore: Send + Sync + 'static {
     ///
     /// `Ok(None)` means the store holds **nothing** under the slug — a def replayed against a
     /// store whose data is gone — and registration then falls back to the def's own resolved
-    /// paths, which is what turns it into the honest failed row rather than a fault. `Err` means
-    /// the store holds something it could not serve, in the underlying reader's own words.
+    /// paths, which is what reports the table as missing data rather than as a fault. `Err`
+    /// means the store holds something it could not serve, in the underlying reader's own words.
     async fn provider(
         &self,
         ctx: &SessionContext,
@@ -106,7 +106,7 @@ pub trait InternalTableStore: Send + Sync + 'static {
     /// Destroy what is held under `slug`. Interruption-safe (module docs), and safe on a slug
     /// holding nothing — a def whose data never reached this machine still drops cleanly.
     ///
-    /// Deregistration is the engine's, not this; so is the order (deregister first), the confirm
-    /// in front of a drop, and the report behind it.
+    /// Deregistration is the engine's, not this — and it comes first, so nothing can plan
+    /// against a table whose data is going.
     async fn discard(&self, slug: &str) -> Result<(), String>;
 }

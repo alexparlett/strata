@@ -3,8 +3,8 @@
 //!
 //! **Tests and ephemeral workspaces only, and the caveat is durability**: an internal table's
 //! *def* is written into `project.json` and outlives the process, while everything this store
-//! holds dies with it — so a restart replays defs against data that is gone, and each lands as
-//! an honest `Failed` row naming the missing data rather than a fault. The shipped default
+//! holds dies with it — so a restart replays defs against data that is gone, and each such
+//! registration fails by naming the missing data rather than faulting. The shipped default
 //! ([`LocalIpcTableStore`](super::LocalIpcTableStore)) is what makes the def's promise true
 //! across restarts. (A def whose data an *earlier* engine spooled to disk still replays from
 //! those files: this store answers nothing for the slug, and registration falls back to the
@@ -113,7 +113,7 @@ async fn drained(mut rows: SendableRecordBatchStream) -> Result<(Vec<RecordBatch
 /// A read of whatever the slot holds **now**: each scan builds a fresh `MemTable` over the
 /// current units and delegates to it, so a provider handed out at registration sees every unit
 /// appended since. Read-only by construction — `insert_into` is the trait's own refusal — which
-/// is the module contract's rule that the arm remains the only writer.
+/// keeps the engine the only writer, as the module contract requires.
 #[derive(Debug)]
 struct MemProvider {
     slug: String,

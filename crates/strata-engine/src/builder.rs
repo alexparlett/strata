@@ -193,7 +193,7 @@ impl EngineBuilder {
     /// said, which is what keeps a table's def portable and its data with the project;
     /// [`MemTableStore`](crate::tables::MemTableStore) holds tables in RAM instead — tests and
     /// ephemeral workspaces only, because the defs outlive the process while the data does not,
-    /// so a restart re-registers against vanished data and lands honest failed rows — and an
+    /// so a restart re-registers against vanished data — and an
     /// embedder that wants Strata-owned tables somewhere else implements
     /// [`InternalTableStore`].
     pub fn with_table_store(mut self, store: impl InternalTableStore) -> Self {

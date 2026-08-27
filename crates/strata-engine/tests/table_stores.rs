@@ -81,11 +81,9 @@ async fn a_mem_table_store_engine_runs_the_statements_with_nothing_on_disk() {
     let control_root = scratch("control");
     let control = Engine::builder().with_data_dir(&control_root).build();
     statements(&control).await;
-    // The drop removed the table again; the directory it worked in is the proof the default
-    // store writes under the project.
     assert!(
         tables_dir(&control_root).is_dir(),
-        "the default store put the spool under the project"
+        "the default store worked under the project: the directory outlives the dropped table"
     );
 
     let mem_root = scratch("mem");

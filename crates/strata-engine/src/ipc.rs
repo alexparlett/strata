@@ -18,8 +18,8 @@ use datafusion::arrow::ipc::CompressionType;
 ///
 /// The one place it does not reach is DataFusion's own `ArrowFileSink`, which a typed
 /// `COPY … STORED AS ARROW` drives and which hardcodes `LZ4_FRAME` — so that sink and this agree
-/// by coincidence rather than by construction. And turning this dial would leave every existing
-/// internal table's files behind on the old codec, so it is not a dial to turn casually.
+/// by coincidence rather than by construction — and turning this dial would leave every
+/// existing internal table's files behind on the old codec.
 pub(crate) fn ipc_write_options() -> Result<IpcWriteOptions, String> {
     IpcWriteOptions::default()
         .try_with_compression(Some(CompressionType::LZ4_FRAME))

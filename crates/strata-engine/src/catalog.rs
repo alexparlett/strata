@@ -123,8 +123,8 @@ pub async fn register_external(
 /// fallthrough is load-bearing twice over: an engine that was never told its project folder
 /// still replays defs whose paths the caller already resolved (the contract
 /// [`Engine::set_data_dir`](crate::Engine::set_data_dir) states), and a def replayed against a
-/// store whose data is gone fails on the resolved paths with the no-data sentence — the honest
-/// failed row the ephemeral store's caveat promises — rather than as a fault about the store.
+/// store whose data is gone fails on the resolved paths with the no-data sentence rather than
+/// as a fault about the store.
 async fn build_provider(
     ctx: &SessionContext,
     formats: &Formats,
