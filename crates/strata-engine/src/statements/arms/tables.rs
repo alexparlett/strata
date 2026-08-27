@@ -189,7 +189,7 @@ async fn create(
         connection: None,
         internal: true,
     };
-    let meta = match register_external(ctx, &spec).await {
+    let meta = match register_external(ctx, &cx.formats, &spec).await {
         Ok(meta) => meta,
         Err(e) if !replacing => {
             let _ = fs::remove_dir_all(&dir);

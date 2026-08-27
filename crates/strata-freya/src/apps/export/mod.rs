@@ -148,6 +148,9 @@ pub struct ExportCtx {
     pub draft: State<ExportDraft>,
     /// The run being exported. A `State` only so the context stays `Copy` — nothing writes it.
     pub target: State<ExportTarget>,
+    /// The formats this engine can write, read once at the root — the format row's whole list.
+    /// A `State` for the same reason as [`target`](Self::target).
+    pub formats: State<Vec<FormatId>>,
     pub status: State<Status>,
 }
 
@@ -261,9 +264,11 @@ impl App for ExportApp {
 
         let ctx = use_provide_context({
             let target = self.target.clone();
+            let formats = FormatId::offered(&self.engine.formats());
             move || ExportCtx {
                 draft: State::create(ExportDraft::default()),
                 target: State::create(target),
+                formats: State::create(formats),
                 status: State::create(Status::Idle),
             }
         });

@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use crate::formats::FormatInfo;
 use crate::sql::FunctionCatalog;
 use strata_model::ColumnInfo;
 
@@ -135,6 +136,10 @@ pub struct Catalog {
     /// snapshot for the same reason: a completion pass reached from a keystroke has no engine to
     /// ask.
     pub prepared: Vec<PreparedSym>,
+    /// The file formats the engine reads — the `STORED AS` word pool and, per word, the
+    /// `OPTIONS` keys its reader takes. Engine state like [`functions`](Self::functions), riding
+    /// the same snapshot for the same reason.
+    pub formats: Vec<FormatInfo>,
     /// The engine's `datafusion.sql_parser.dialect`, for [`lex`](super::lex::lex).
     ///
     /// It rides here because this is already the language service's one snapshot of engine
@@ -155,6 +160,7 @@ impl Catalog {
         views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
         functions: Arc<FunctionCatalog>,
         prepared: Vec<PreparedSym>,
+        formats: Vec<FormatInfo>,
         dialect: String,
     ) -> Self {
         let mut out = Vec::new();
@@ -169,8 +175,16 @@ impl Catalog {
             databases: Vec::new(),
             functions,
             prepared,
+            formats,
             dialect,
         }
+    }
+
+    /// The format the `STORED AS` word `name` names, as SQL resolves it.
+    pub fn format(&self, name: &str) -> Option<&FormatInfo> {
+        self.formats
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(name))
     }
 
     /// The project's database connections — see [`DatabaseSym`].

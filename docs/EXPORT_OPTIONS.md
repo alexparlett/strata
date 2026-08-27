@@ -71,8 +71,10 @@ re-ordered afterwards. `NULLS LAST` in both directions, matching the grid.
 
 ## JSON
 
-Newline-delimited only (one object per line). DataFusion's writer can also emit a JSON array;
-Strata offers NDJSON alone, so the spec doesn't spell the option.
+Newline-delimited only (one object per line) — not a choice Strata makes, but the only shape
+DataFusion writes: its `JsonSerializer` is an `arrow::json::LineDelimitedWriter` with no array
+mode, so there is no shape option to spell. `format.newline_delimited` is a **read** option
+(`IMPORT_OPTIONS.md`), and `STORED AS JSON` is how this shape is written.
 
 | Group | Control | Values | Default | `OPTIONS` key |
 |---|---|---|---|---|
@@ -101,6 +103,20 @@ Strata offers NDJSON alone, so the spec doesn't spell the option.
 No write options exist, so `Format::Arrow` carries no fields and the window shows a
 [`Note`](../crates/strata-freya/src/components/form/row.rs) saying so. An empty row would read as
 "still loading". (Arrow IPC *can* carry LZ4/ZSTD at the format level; DataFusion doesn't expose it.)
+
+## Registered formats
+
+**The card list is the engine's format registry, filtered on what `COPY` can write** — not a
+fixed four. The shipped formats are ordinary registrants (`docs/IMPORT_OPTIONS.md`), so a format
+an embedder added with `EngineBuilder::with_format` gets a card here the moment it declares
+`copy_to`, and a read-only one never does. `FormatId::offered` is the whole rule.
+
+A registered format's card carries its own word and **no options section** — just a `Note` saying
+the writer it was registered with decides how it is written. There is no options panel to draw:
+this build knows nothing about that format's settings. A caller who needs them writes the `COPY`
+in the editor, where `OPTIONS ('format.…' '…')` reaches the writer directly. The spec such a card
+produces is `Format::Extension { format, options }` with the options empty, so nothing of ours is
+attached to somebody else's writer.
 
 ---
 

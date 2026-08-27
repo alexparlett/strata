@@ -28,10 +28,9 @@
 //!
 //! A refused statement is not recorded, so a pasted key does not outlive its buffer.
 
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::logical_expr::TableType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::{CreateExternalTable, Statement as DFStatement};
@@ -40,6 +39,7 @@ use datafusion::sql::TableReference;
 
 use crate::catalog::register_external;
 use crate::export::partition_columns_are_bare_words;
+use crate::formats::Formats;
 use crate::policy::Principal;
 use crate::register::table_spec;
 use crate::statements::ctx::StmtCtx;
@@ -51,10 +51,8 @@ use crate::store::store_identity;
 use crate::Connections;
 use strata_arrow::client::client_key;
 use strata_core::project::{relativize, split_remote};
-use strata_core::util::{one_char, plural};
-use strata_model::{
-    CsvRead, FileCompression, JsonRead, JsonShape, SourceFormat, TableDef, TableOrigin,
-};
+use strata_core::util::plural;
+use strata_model::{SourceFormat, TableDef, TableOrigin};
 
 use super::existing;
 
@@ -119,7 +117,7 @@ pub async fn create(
     cx.require_target(who, StmtKind::CreateExternalTable, &target)
         .await?;
     let name = target.workspace(WHAT)?;
-    let format = read_format(&file_type, &name, &options)?;
+    let format = read_format(&cx.formats, &file_type, &name, &options)?;
     let (connection, source) = source_of(root, &location, &cx.connections)?;
     let partitions = partition_cols(ctx, &columns, &table_partition_cols)?;
 
@@ -149,7 +147,8 @@ pub async fn create(
         partition_cols: partitions,
         origin: TableOrigin::External,
     };
-    let meta = register_external(ctx, &table_spec(root, &def, &cx.connections)).await?;
+    let meta =
+        register_external(ctx, &cx.formats, &table_spec(root, &def, &cx.connections)).await?;
 
     let verb = if replacing { "replaced" } else { "created" };
     Ok(StatementOutcome {
@@ -162,233 +161,32 @@ pub async fn create(
     })
 }
 
-/// The format words `STORED AS` takes — [`read_format`]'s own match arms as data, for
-/// completion's format-word pool (ED-11). One table, owned by the module whose arms it
-/// mirrors, kept honest by `stored_as_formats_parse_through_read_format`: every entry
-/// parses through [`read_format`] and a non-member does not.
-pub(crate) const STORED_AS_FORMATS: &[&str] = &["PARQUET", "CSV", "JSON", "NDJSON", "ARROW"];
-
-/// The value shape of one `OPTIONS` key — what completion may offer at the key's value
-/// position (ED-11), mirroring the `SET` value design: `Bool` offers `true` / `false`,
-/// `Enum` its words, and `Char` / `Int` nothing (the values are the user's own).
-#[derive(Clone, Copy)]
-pub(crate) enum OptionKind {
-    Bool,
-    Char,
-    Int,
-    Enum(&'static [&'static str]),
-}
-
-/// The compression spellings [`compression`] parses — DataFusion's own vocabulary,
-/// stated once for the refusal message, the value offer and the coercion alike.
-const COMPRESSION_WORDS: &[&str] = &["uncompressed", "gzip", "bzip2", "xz", "zstd"];
-
-/// One `OPTIONS` key of a format: the DataFusion spelling, its value shape, the short
-/// detail completion shows, and the coercion-and-def-field its value lands on. The
-/// table **is** [`apply`]'s arm set — one vocabulary, consumed by the arm and by the
-/// offer, never a copy kept honest by test.
-pub(crate) struct OptionKey<T: 'static> {
-    pub(crate) key: &'static str,
-    pub(crate) kind: OptionKind,
-    pub(crate) what: &'static str,
-    pub(crate) set: fn(&mut T, &str, &Value) -> Result<(), String>,
-}
-
-/// The keys completion may offer for the format word `STORED AS` names — the same
-/// tables [`apply`] consumes, projected per format: NDJSON drops
-/// `format.newline_delimited` (which [`read_format`] refuses toward `STORED AS
-/// JSON`), and a format with no options — or no format written yet — answers empty,
-/// matching the arm's refusal by name. Owned here, beside the arms it mirrors, so
-/// the offer cannot drift from dispatch; `option_keys_for_agrees_with_apply` holds
-/// the projection and each key's declared kind against the arms themselves.
-pub(crate) fn option_keys_for(format_word: &str) -> Vec<(&'static str, OptionKind, &'static str)> {
-    fn rows<T>(keys: &'static [OptionKey<T>]) -> Vec<(&'static str, OptionKind, &'static str)> {
-        keys.iter().map(|k| (k.key, k.kind, k.what)).collect()
-    }
-    match format_word {
-        "CSV" => rows(CSV_OPTION_KEYS),
-        "JSON" => rows(JSON_OPTION_KEYS),
-        "NDJSON" => rows(JSON_OPTION_KEYS)
-            .into_iter()
-            .filter(|(k, ..)| *k != "format.newline_delimited")
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// The CSV reader's keys — every field of [`CsvRead`] and nothing else, which is what
-/// `docs/IMPORT_OPTIONS.md` documents from the other side. The three CSV options
-/// DataFusion has and this deliberately lacks (`format.null_regex`, `format.terminator`,
-/// `format.double_quote`) reach [`apply`]'s by-name refusal like any other key.
-pub(crate) const CSV_OPTION_KEYS: &[OptionKey<CsvRead>] = &[
-    OptionKey {
-        key: "format.has_header",
-        kind: OptionKind::Bool,
-        what: "header row",
-        set: |o, k, v| {
-            o.header = boolean(k, v)?;
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.delimiter",
-        kind: OptionKind::Char,
-        what: "delimiter character",
-        set: |o, k, v| {
-            o.delimiter = character(k, "delimiter", v)?;
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.quote",
-        kind: OptionKind::Char,
-        what: "quote character",
-        set: |o, k, v| {
-            o.quote = character(k, "quote character", v)?;
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.escape",
-        kind: OptionKind::Char,
-        what: "escape character",
-        set: |o, k, v| {
-            o.escape = Some(character(k, "escape character", v)?);
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.comment",
-        kind: OptionKind::Char,
-        what: "comment character",
-        set: |o, k, v| {
-            o.comment = Some(character(k, "comment character", v)?);
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.newlines_in_values",
-        kind: OptionKind::Bool,
-        what: "newlines in quoted values",
-        set: |o, k, v| {
-            o.newlines_in_values = boolean(k, v)?;
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.truncated_rows",
-        kind: OptionKind::Bool,
-        what: "tolerate short rows",
-        set: |o, k, v| {
-            o.truncated_rows = boolean(k, v)?;
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.schema_infer_max_rec",
-        kind: OptionKind::Int,
-        what: "rows read to infer the schema",
-        set: |o, k, v| {
-            o.infer_rows = Some(count(k, v)?);
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.compression",
-        kind: OptionKind::Enum(COMPRESSION_WORDS),
-        what: "whole-file compression",
-        set: |o, k, v| {
-            o.compression = compression(k, v)?;
-            Ok(())
-        },
-    },
-];
-
-/// The JSON reader's keys — [`JsonRead`]'s fields exactly, as above. Completion drops
-/// `format.newline_delimited` from the NDJSON offer itself, because [`read_format`]
-/// refuses it there toward `STORED AS JSON`.
-pub(crate) const JSON_OPTION_KEYS: &[OptionKey<JsonRead>] = &[
-    OptionKey {
-        key: "format.newline_delimited",
-        kind: OptionKind::Bool,
-        what: "newline-delimited shape",
-        set: |o, k, v| {
-            o.shape = match boolean(k, v)? {
-                true => JsonShape::NewlineDelimited,
-                false => JsonShape::Array,
-            };
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.schema_infer_max_rec",
-        kind: OptionKind::Int,
-        what: "rows read to infer the schema",
-        set: |o, k, v| {
-            let rows = count(k, v)?;
-            o.infer_rows = (rows > 0).then_some(rows);
-            Ok(())
-        },
-    },
-    OptionKey {
-        key: "format.compression",
-        kind: OptionKind::Enum(COMPRESSION_WORDS),
-        what: "whole-file compression",
-        set: |o, k, v| {
-            o.compression = compression(k, v)?;
-            Ok(())
-        },
-    },
-];
-
-/// The reader `STORED AS` names, dressed in the options that reader takes.
+/// The `format.*` options a statement wrote, as the format's own reader takes them.
 ///
-/// **Exhaustive by name, never a fallthrough** (P4-11): a format with no reader in this build has
-/// to fail here rather than reach [`SourceFormat::Unknown`], which exists to keep a *legacy def*
-/// loading and is not something a statement may mint. `AVRO` is DataFusion's own table factory
-/// name and lands here for exactly that reason.
-///
-/// `NDJSON` and `JSON` are both DataFusion spellings of the one reader Strata has, and the shape
-/// is [`JsonRead::shape`]. `NDJSON` therefore *states* the shape, which is why
-/// `format.newline_delimited` is refused on it rather than allowed to contradict it.
+/// The three things this decides are true of every format, which is why they are decided here
+/// rather than by each reader: a key written twice, a key that belongs to the object store, and
+/// the shape of a value the parser produced. What each key then *means* is the registered
+/// format's own ([`Formats::read`]).
 fn read_format(
+    formats: &Formats,
     file_type: &str,
     name: &str,
     options: &[(String, Value)],
 ) -> Result<SourceFormat, String> {
-    let (mut format, ndjson) = match file_type {
-        "PARQUET" => (SourceFormat::Parquet, false),
-        "ARROW" => (SourceFormat::Arrow, false),
-        "CSV" => (SourceFormat::Csv(CsvRead::default()), false),
-        "JSON" => (SourceFormat::Json(JsonRead::default()), false),
-        "NDJSON" => (SourceFormat::Json(JsonRead::default()), true),
-        other => {
-            return Err(format!(
-                "STORED AS {other} is not a format Strata reads. Use PARQUET, CSV, JSON or ARROW"
-            ))
-        }
-    };
-    let mut seen = HashSet::new();
+    let mut read = BTreeMap::new();
     for (key, value) in options {
         let key = key.to_ascii_lowercase();
-        if !seen.insert(key.clone()) {
-            return Err(format!("The option '{key}' is set twice"));
-        }
         if let Some(surface) = store_key(&key) {
             return Err(format!(
                 "'{key}' is an object store setting, not a table read option. {surface}"
             ));
         }
-        if ndjson && key == "format.newline_delimited" {
-            return Err(
-                "STORED AS NDJSON is newline-delimited JSON. Use STORED AS JSON to set \
-                 'format.newline_delimited'"
-                    .into(),
-            );
+        let value = text(&key, value)?;
+        if read.insert(key.clone(), value).is_some() {
+            return Err(format!("The option '{key}' is set twice"));
         }
-        apply(&mut format, name, &key, value)?;
     }
-    Ok(format)
+    formats.read(file_type, name, &read)
 }
 
 /// Which surface owns `key`, when it is one the object store takes rather than the reader — and
@@ -406,43 +204,6 @@ fn store_key(key: &str) -> Option<&'static str> {
     None
 }
 
-/// Read one `OPTIONS` entry onto the def's own field, refusing by name where there is none.
-///
-/// The arm set **is** the table ([`CSV_OPTION_KEYS`] / [`JSON_OPTION_KEYS`]) and the table is
-/// the def: every field of [`CsvRead`] and [`JsonRead`] has a DataFusion key there and nothing
-/// else does, which is what `docs/IMPORT_OPTIONS.md` documents from the other side — and what
-/// lets completion offer the same set with zero drift. The three CSV options DataFusion has and
-/// this deliberately lacks (`format.null_regex`, `format.terminator`, `format.double_quote`)
-/// reach the by-name refusal like any other key — [`CsvRead`]'s doc comment is why they are
-/// absent, and it is the read path's asymmetry rather than an oversight.
-fn apply(format: &mut SourceFormat, name: &str, key: &str, value: &Value) -> Result<(), String> {
-    match format {
-        SourceFormat::Csv(o) => match CSV_OPTION_KEYS.iter().find(|k| k.key == key) {
-            Some(k) => (k.set)(o, key, value),
-            None => Err(unsupported(key, format, name)),
-        },
-        SourceFormat::Json(o) => match JSON_OPTION_KEYS.iter().find(|k| k.key == key) {
-            Some(k) => (k.set)(o, key, value),
-            None => Err(unsupported(key, format, name)),
-        },
-        SourceFormat::Parquet | SourceFormat::Arrow | SourceFormat::Unknown(_) => Err(format!(
-            "Table '{name}' is STORED AS {}, which takes no read options",
-            format.name().to_uppercase()
-        )),
-    }
-}
-
-/// A key with no field on the format in play. Names the format, because the commonest way to
-/// reach this is a CSV option on a parquet table — which is the state [`SourceFormat`] exists to
-/// make unwritable.
-fn unsupported(key: &str, format: &SourceFormat, name: &str) -> String {
-    format!(
-        "'{key}' is not a read option for a {} table. Table '{name}' is STORED AS {}",
-        format.name(),
-        format.name().to_uppercase()
-    )
-}
-
 /// An option's value as text. The parser produces exactly these four
 /// (`DFParser::parse_option_value`); anything else is a sqlparser variant it cannot reach.
 fn text(key: &str, value: &Value) -> Result<String, String> {
@@ -453,46 +214,6 @@ fn text(key: &str, value: &Value) -> Result<String, String> {
         Value::Number(n, _) => Ok(n.clone()),
         _ => Err(format!("The option '{key}' needs a string or number value")),
     }
-}
-
-fn boolean(key: &str, value: &Value) -> Result<bool, String> {
-    match text(key, value)?.to_ascii_lowercase().as_str() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        other => Err(format!(
-            "The option '{key}' is '{other}'. It takes true or false"
-        )),
-    }
-}
-
-/// A single-character option, through the rule the two windows publish — so `\t` is a tab here
-/// exactly as it is in a delimiter box, and a longer string is reported rather than truncated.
-fn character(key: &str, what: &str, value: &Value) -> Result<char, String> {
-    one_char(what, &text(key, value)?)?.ok_or_else(|| format!("The option '{key}' has no value"))
-}
-
-fn count(key: &str, value: &Value) -> Result<usize, String> {
-    text(key, value)?
-        .parse()
-        .map_err(|_| format!("The option '{key}' takes a number of rows"))
-}
-
-/// Whole-file compression, in **DataFusion's own spelling** — there is no second vocabulary for
-/// it, so the statement takes the words `format.compression` takes everywhere else and the
-/// message lists them rather than restating a Strata enum.
-fn compression(key: &str, value: &Value) -> Result<FileCompression, String> {
-    use datafusion::common::parsers::CompressionTypeVariant as V;
-    let raw = text(key, value)?;
-    let parsed: FileCompressionType = raw.parse().map_err(|_| {
-        format!("The option '{key}' is '{raw}'. It takes uncompressed, gzip, bzip2, xz or zstd")
-    })?;
-    Ok(match parsed.get_variant() {
-        V::UNCOMPRESSED => FileCompression::None,
-        V::GZIP => FileCompression::Gzip,
-        V::BZIP2 => FileCompression::Bzip2,
-        V::XZ => FileCompression::Xz,
-        V::ZSTD => FileCompression::Zstd,
-    })
 }
 
 /// The def's `(connection, source)` for a `LOCATION`, which is the pair
@@ -633,10 +354,15 @@ mod tests {
     use std::sync::Arc;
     use std::{env, process};
 
-    use strata_model::{ConnectionDef, Provider, S3Auth, S3Store};
+    use strata_model::{
+        ConnectionDef, CsvRead, FileCompression, JsonRead, JsonShape, Provider, S3Auth, S3Store,
+    };
 
+    use crate::formats::fake::TestFormat;
     use crate::register::CatalogSpec;
-    use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
+    use crate::sql::complete::complete;
+    use crate::sql::symbols::Catalog;
+    use crate::{Engine, EngineBuilder, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
     use super::*;
@@ -676,9 +402,19 @@ mod tests {
 
     /// A project folder with one CSV in it, and an engine pointed at it.
     fn project(tag: &str, file: &str, body: &str) -> (PathBuf, Arc<Engine>) {
+        project_with(tag, file, body, |builder| builder)
+    }
+
+    /// The same, for a test whose engine is built with something extra on it.
+    fn project_with(
+        tag: &str,
+        file: &str,
+        body: &str,
+        with: impl FnOnce(EngineBuilder) -> EngineBuilder,
+    ) -> (PathBuf, Arc<Engine>) {
         let root = scratch(tag);
         fs::write(root.join(file), body).unwrap();
-        let eng = Engine::builder().build();
+        let eng = with(Engine::builder()).build();
         eng.set_data_dir(&root);
         (root, eng)
     }
@@ -776,11 +512,69 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// **A format with no reader fails by name** (P4-11) rather than falling through onto
-    /// parquet or minting a `SourceFormat::Unknown`, which exists to keep a legacy *def* loading
-    /// and is not something a statement may write.
+    /// **An embedder's format, end to end through the app's own funnels.** Registered with one
+    /// builder call, named by a typed statement with options of its own, landed on a def that
+    /// carries them verbatim, registered through `register_external` like any other table, and
+    /// read back through its name — no arm, no store path and no surface knows the format exists.
     #[tokio::test]
-    async fn a_format_strata_cannot_read_is_refused_by_name() {
+    async fn a_registered_format_is_named_by_a_statement_and_read_back_through_it() {
+        let (root, eng) = project_with(
+            "extension",
+            "places.testfmt",
+            "id,name\n1,here\n2,there\n",
+            |builder| builder.with_format(TestFormat),
+        );
+        let report = statement(
+            &eng,
+            "CREATE EXTERNAL TABLE places STORED AS testfmt LOCATION 'places.testfmt' \
+             OPTIONS ('format.crs' 'EPSG:4326')",
+        )
+        .await
+        .expect("the registered format is named");
+
+        assert_eq!(
+            def_of(&report).format,
+            SourceFormat::Extension {
+                format: "testfmt".into(),
+                options: BTreeMap::from([("format.crs".into(), "EPSG:4326".into())]),
+            },
+            "the def carries the format's own options verbatim"
+        );
+        assert_eq!(
+            read(&eng, "SELECT name FROM places ORDER BY id").await,
+            [["here"], ["there"]]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **The `STORED AS` offer is the registry**, so a format appears in completion exactly when
+    /// it is registered — the offer-mirrors-arm rule, now with nothing to keep in step by hand.
+    #[test]
+    fn a_registered_format_appears_in_the_stored_as_offer() {
+        let eng = Engine::builder().with_format(TestFormat).build();
+        let catalog = Catalog::build(
+            [],
+            [],
+            Arc::default(),
+            Vec::new(),
+            eng.formats(),
+            String::new(),
+        );
+        let offered: Vec<String> =
+            complete("CREATE EXTERNAL TABLE t STORED AS ", 34, &catalog, true)
+                .into_iter()
+                .map(|c| c.label)
+                .collect();
+        assert!(offered.contains(&"TESTFMT".to_string()), "{offered:?}");
+        assert!(offered.contains(&"PARQUET".to_string()), "{offered:?}");
+    }
+
+    /// **A format nothing is registered for fails by name** (P4-11) rather than falling through
+    /// onto parquet or minting an extension def a registration would then have to refuse. The
+    /// words it offers instead are the registry's own, so an embedder's format appears there the
+    /// moment it is registered.
+    #[tokio::test]
+    async fn a_format_with_no_registrant_is_refused_by_name() {
         let (root, eng) = project("avro", "t.csv", "id\n1\n");
         let err = statement(
             &eng,
@@ -1228,10 +1022,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// `STORED AS NDJSON` **is** a shape, so the option that would contradict it is refused —
-    /// two statements of one fact that can disagree. `STORED AS JSON` is where the shape is set.
+    /// **The shape is an option, not a format.** DataFusion has one JSON format whose
+    /// `newline_delimited` defaults to true, so `NDJSON` is refused like any other word nothing
+    /// is registered for, and `STORED AS JSON` is where the layout is chosen.
     #[tokio::test]
-    async fn ndjson_states_the_shape_it_cannot_then_be_told() {
+    async fn the_json_shape_is_an_option_and_ndjson_is_not_a_format() {
         let root = scratch("json_shape");
         fs::write(root.join("a.json"), "[{\"id\":1},{\"id\":2}]").unwrap();
         let eng = Engine::builder().build();
@@ -1245,8 +1040,7 @@ mod tests {
             )
             .await
             .expect_err("refused"),
-            "STORED AS NDJSON is newline-delimited JSON. Use STORED AS JSON to set \
-             'format.newline_delimited'"
+            "STORED AS NDJSON is not a format Strata reads. Use PARQUET, CSV, JSON or ARROW"
         );
 
         let report = statement(
@@ -1266,79 +1060,5 @@ mod tests {
         );
         assert_eq!(read(&eng, "SELECT count(*) FROM t").await, [["2"]]);
         let _ = fs::remove_dir_all(&root);
-    }
-
-    /// **The per-format key projection and each key's declared kind agree with the arms.**
-    /// For every format word, every key [`option_keys_for`] offers must land through [`apply`]
-    /// with a value of its declared kind — which catches both a projection drift (a key
-    /// offered that the format's arm refuses) and a kind/coercion drift (a `Bool` row whose
-    /// setter actually wants a character). The NDJSON drop is asserted against
-    /// [`read_format`]'s own refusal, and the no-options formats answer empty.
-    #[test]
-    fn option_keys_for_agrees_with_apply() {
-        let plausible = |kind: OptionKind| match kind {
-            OptionKind::Bool => "true",
-            OptionKind::Char => "x",
-            OptionKind::Int => "10",
-            OptionKind::Enum(words) => words[0],
-        };
-        for format_word in STORED_AS_FORMATS {
-            let mut format = read_format(format_word, "t", &[]).expect("a format Strata reads");
-            for (key, kind, _) in option_keys_for(format_word) {
-                let value = Value::SingleQuotedString(plausible(kind).into());
-                apply(&mut format, "t", key, &value).unwrap_or_else(|e| {
-                    panic!("{format_word} offers '{key}' but apply refuses: {e}")
-                });
-            }
-        }
-        assert!(
-            option_keys_for("NDJSON")
-                .iter()
-                .all(|(k, ..)| *k != "format.newline_delimited"),
-            "NDJSON must not offer the shape key read_format refuses there"
-        );
-        assert!(
-            read_format(
-                "NDJSON",
-                "t",
-                &[(
-                    "format.newline_delimited".into(),
-                    Value::SingleQuotedString("true".into())
-                )]
-            )
-            .is_err(),
-            "the premise: read_format refuses the shape key on NDJSON"
-        );
-        assert!(option_keys_for("PARQUET").is_empty());
-        assert!(option_keys_for("ARROW").is_empty());
-        assert!(
-            option_keys_for("AVRO").is_empty(),
-            "an unknown word offers nothing"
-        );
-    }
-
-    /// **The completion vocabulary is this module's own arms.** Every entry of
-    /// [`STORED_AS_FORMATS`] parses through [`read_format`] and a non-member does not, so the
-    /// offer at `STORED AS |` can never name a format the arm then refuses; and every word an
-    /// `Enum` option offers parses through its own coercion.
-    #[test]
-    fn stored_as_formats_parse_through_read_format() {
-        for format in STORED_AS_FORMATS {
-            assert!(read_format(format, "t", &[]).is_ok(), "{format}");
-        }
-        assert!(
-            read_format("AVRO", "t", &[]).is_err(),
-            "a format with no reader is not offered"
-        );
-        for word in COMPRESSION_WORDS {
-            assert!(
-                compression(
-                    "format.compression",
-                    &Value::SingleQuotedString(word.to_string())
-                )
-                .is_ok(),
-                "{word}"
-            );
-        }
     }
 }

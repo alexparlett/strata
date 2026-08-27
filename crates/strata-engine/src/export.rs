@@ -20,6 +20,7 @@
 //! own copy of a rule the user reads as one.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{is_separator, Component, Path, PathBuf};
 
@@ -75,22 +76,34 @@ pub enum Scope {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Format {
     Csv(Csv),
-    /// Newline-delimited JSON. DataFusion's writer can also emit a JSON array
-    /// (`newline_delimited`), but the canvas offers NDJSON only, so the option isn't spelled.
+    /// Newline-delimited JSON, which is the only shape DataFusion writes: its `JsonSerializer`
+    /// is an `arrow::json::LineDelimitedWriter` with no array mode, so there is no shape option
+    /// to spell. `newline_delimited` is a *read* option.
     Json(Json),
     Parquet(Parquet),
     /// Arrow IPC — **no write options exist**, which is why this variant carries nothing.
     Arrow,
+    /// A format registered with [`EngineBuilder::with_format`](crate::EngineBuilder::with_format),
+    /// written through the writer it brought.
+    ///
+    /// Its options are strings because they are its own writer's, not ours: there is no options
+    /// panel to draw for a format this build does not know the settings of, so they travel in the
+    /// `format.*` spelling a typed `COPY` writes them in.
+    Extension {
+        format: String,
+        options: BTreeMap<String, String>,
+    },
 }
 
 impl Format {
     /// The `STORED AS` keyword.
-    fn stored_as(&self) -> &'static str {
+    fn stored_as(&self) -> &str {
         match self {
             Self::Csv(_) => "CSV",
             Self::Json(_) => "JSON",
             Self::Parquet(_) => "PARQUET",
             Self::Arrow => "ARROW",
+            Self::Extension { format, .. } => format,
         }
     }
 }
@@ -307,7 +320,7 @@ pub async fn run_export(
         String::new()
     } else {
         options.push((
-            KEEP_PARTITION_COLUMNS,
+            KEEP_PARTITION_COLUMNS.to_string(),
             spec.partition.keep_columns.to_string(),
         ));
         format!(" PARTITIONED BY ({})", spec.partition.columns.join(", "))
@@ -395,8 +408,8 @@ const KEEP_PARTITION_COLUMNS: &str = "execution.keep_partition_by_columns";
 /// `format.` prefix itself, so these resolve onto `CsvOptions` / `JsonOptions` /
 /// `TableParquetOptions` field names. A key that carries its own namespace
 /// ([`KEEP_PARTITION_COLUMNS`]) keeps it — the planner only prefixes a key with no dot in it.
-fn format_pairs(format: &Format) -> Result<Vec<(&'static str, String)>, String> {
-    let pairs: Vec<(&'static str, String)> = match format {
+fn format_pairs(format: &Format) -> Result<Vec<(String, String)>, String> {
+    let pairs: Vec<(&str, String)> = match format {
         Format::Csv(csv) => {
             let mut pairs = vec![
                 ("HAS_HEADER", csv.header.to_string()),
@@ -423,12 +436,21 @@ fn format_pairs(format: &Format) -> Result<Vec<(&'static str, String)>, String> 
             ("DICTIONARY_ENABLED", pq.dictionary.to_string()),
         ],
         Format::Arrow => vec![],
+        Format::Extension { options, .. } => {
+            return Ok(options
+                .iter()
+                .map(|(key, value)| (key.clone(), quote_literal(value)))
+                .collect())
+        }
     };
-    Ok(pairs)
+    Ok(pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect())
 }
 
 /// The ` OPTIONS (…)` clause for a set of pairs, or an empty string for none.
-fn options_clause(pairs: &[(&str, String)]) -> String {
+fn options_clause(pairs: &[(String, String)]) -> String {
     if pairs.is_empty() {
         return String::new();
     }
@@ -936,7 +958,7 @@ mod tests {
     #[test]
     fn keeping_partition_columns_is_a_copy_option_in_its_own_namespace() {
         let mut pairs = format_pairs(&Format::Arrow).expect("arrow");
-        pairs.push((KEEP_PARTITION_COLUMNS, true.to_string()));
+        pairs.push((KEEP_PARTITION_COLUMNS.to_string(), true.to_string()));
         assert_eq!(
             options_clause(&pairs),
             " OPTIONS ('execution.keep_partition_by_columns' 'true')"

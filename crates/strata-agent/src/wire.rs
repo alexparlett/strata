@@ -13,6 +13,7 @@
 //! - **A query-session handle is its `QuerySessionId` as text** — the session's own `Uuid`, the
 //!   same one the engine uses as its `WsId`, never a parallel id scheme.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use schemars::JsonSchema;
@@ -20,9 +21,11 @@ use serde::{Deserialize, Serialize};
 use strata_arrow::plan::QueryPlan;
 use strata_core::util::{clip, collapse_sql};
 use strata_engine::export::{Csv, ExportReport, Format, Json, Parquet};
+use strata_engine::formats::FormatInfo;
 use strata_engine::sql::{FunctionCatalog, FunctionSym};
 use strata_model::{Cell, ColumnInfo, Diagnostic, Kind, QueryOutput, Severity, Stat, StatKey};
 
+use crate::error::AgentError;
 use crate::host::{CatalogEntry, Project, QuerySessionInfo, QuerySessionState, RegState, RunMode};
 
 /// A result's columns, shared rather than copied.
@@ -183,38 +186,56 @@ pub struct ExportResultParams {
     /// Absolute path of the file to write, with a file extension. It must not exist, and the
     /// folder above it must.
     pub path: String,
-    /// What to write. Each format is written with its own defaults: a CSV carries a header row
-    /// and comma-separated fields, none of them are compressed.
-    pub format: ExportFormat,
+    /// What to write, by the format's own name: `csv`, `json` (newline-delimited), `parquet`,
+    /// `arrow`, or any other format this build can write. Each is written with its own defaults:
+    /// a CSV carries a header row and comma-separated fields, none of them are compressed.
+    pub format: String,
     #[serde(default)]
     pub project: Option<String>,
 }
 
-/// What an export writes — the four the engine's writer supports, named as a reader would ask
-/// for them (`ndjson` rather than DataFusion's `JSON`, which is what its JSON writer actually
-/// emits here).
+/// What an export writes, resolved against **the engine's own format registry** — so a format an
+/// embedder registered can be written by name, and one that is read-only is refused by name.
 ///
-/// No write options ride with the choice: the tool writes each format's self-describing
-/// defaults ([`Format`]'s own), because a caller with no dialog in front of it has nothing to
-/// preview an unusual delimiter against. The Export window is where those are chosen.
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ExportFormat {
-    Csv,
-    Ndjson,
-    Parquet,
-    Arrow,
-}
-
-impl From<ExportFormat> for Format {
-    fn from(format: ExportFormat) -> Format {
-        match format {
-            ExportFormat::Csv => Format::Csv(Csv::default()),
-            ExportFormat::Ndjson => Format::Json(Json::default()),
-            ExportFormat::Parquet => Format::Parquet(Parquet::default()),
-            ExportFormat::Arrow => Format::Arrow,
-        }
-    }
+/// A free word rather than a fixed set, because the set is not fixed: it is whatever this engine
+/// was built with. The refusal names every word that would have worked, which is what a caller
+/// with no listing tool for formats needs.
+///
+/// No write options ride with the choice: the tool writes each format's self-describing defaults
+/// ([`Format`]'s own), because a caller with no dialog in front of it has nothing to preview an
+/// unusual delimiter against. The Export window is where those are chosen.
+///
+/// # Errors
+///
+/// If nothing this engine can write is registered under `word`.
+pub fn export_format(word: &str, registered: &[FormatInfo]) -> Result<Format, AgentError> {
+    let writable = || {
+        registered
+            .iter()
+            .filter(|f| f.copy_to)
+            .map(|f| format!("'{}'", f.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let Some(found) = registered
+        .iter()
+        .find(|f| f.copy_to && f.name.eq_ignore_ascii_case(word))
+    else {
+        return Err(AgentError::NotFound(format!(
+            "'{word}' is not a format this build writes. Use one of: {}.",
+            writable()
+        )));
+    };
+    Ok(match found.name {
+        "csv" => Format::Csv(Csv::default()),
+        "json" => Format::Json(Json::default()),
+        "parquet" => Format::Parquet(Parquet::default()),
+        "arrow" => Format::Arrow,
+        other => Format::Extension {
+            format: other.to_string(),
+            options: BTreeMap::new(),
+        },
+    })
 }
 
 /// What `export_result` wrote. Every figure is the engine's own: `rows` is what `COPY` counted
@@ -921,6 +942,49 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    fn registered(name: &'static str, copy_to: bool) -> FormatInfo {
+        FormatInfo {
+            name,
+            copy_to,
+            options: Vec::new(),
+        }
+    }
+
+    /// **An export names a format the engine actually writes.** The shipped words land on the
+    /// shipped write options; an embedder's lands on its own writer with none of ours; and a
+    /// format that is read-only — or absent — is refused naming every word that would work.
+    #[test]
+    fn an_export_format_is_resolved_against_the_registry() {
+        let registry = [
+            registered("parquet", true),
+            registered("csv", true),
+            registered("json", true),
+            registered("testfmt", true),
+            registered("readonlyfmt", false),
+        ];
+        assert_eq!(
+            export_format("csv", &registry),
+            Ok(Format::Csv(Csv::default()))
+        );
+        assert_eq!(
+            export_format("TestFmt", &registry),
+            Ok(Format::Extension {
+                format: "testfmt".into(),
+                options: BTreeMap::new(),
+            }),
+            "a format word resolves the way SQL resolves it"
+        );
+        for word in ["readonlyfmt", "avro"] {
+            assert_eq!(
+                export_format(word, &registry),
+                Err(AgentError::NotFound(format!(
+                    "'{word}' is not a format this build writes. Use one of: 'parquet', 'csv', \
+                     'json', 'testfmt'."
+                )))
+            );
+        }
+    }
 
     #[test]
     fn a_null_cell_is_json_null_not_the_null_rendering() {

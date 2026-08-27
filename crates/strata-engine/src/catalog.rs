@@ -15,10 +15,9 @@ use datafusion::sql::TableReference;
 
 use strata_arrow::column_info;
 use strata_arrow::profile::Profiled;
-use strata_model::{ColumnInfo, CsvRead, FileCompression, JsonShape, SourceFormat, Stat, StatKey};
+use strata_model::{ColumnInfo, JsonShape, SourceFormat, Stat, StatKey};
 
-use crate::arrow_stats::StrataArrowFormat;
-use crate::json_poly::PolyJsonFormat;
+use crate::formats::Formats;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::providers::{in_workspace, replace_table};
 use crate::query::is_snapshot_name;
@@ -103,12 +102,13 @@ pub struct ViewMeta {
 /// answers with the files that were there last time.
 pub async fn register_external(
     ctx: &SessionContext,
+    formats: &Formats,
     spec: &TableSpec,
 ) -> Result<TableMeta, String> {
     if is_snapshot_name(&spec.name) {
         return Err(Fault::ReservedName.message());
     }
-    let built = build_listing(ctx, spec).await;
+    let built = build_listing(ctx, formats, spec).await;
     swap_in(ctx, &spec.name, built)?;
     table_meta(ctx, spec.name.as_str()).await
 }
@@ -120,10 +120,9 @@ pub async fn register_external(
 /// name being replaced still answers.
 async fn build_listing(
     ctx: &SessionContext,
+    formats: &Formats,
     spec: &TableSpec,
 ) -> Result<Arc<dyn TableProvider>, String> {
-    use datafusion::datasource::file_format::parquet::ParquetFormat;
-    use datafusion::datasource::file_format::FileFormat;
     use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 
     let mut urls = Vec::new();
@@ -134,19 +133,8 @@ async fn build_listing(
         return Err("No source paths".into());
     }
 
-    let fmt: Arc<dyn FileFormat> = match &spec.format {
-        SourceFormat::Csv(o) => Arc::new(csv_format(o)?),
-        SourceFormat::Json(o) => Arc::new(PolyJsonFormat::new(o.clone())),
-        SourceFormat::Arrow => Arc::new(StrataArrowFormat::default()),
-        SourceFormat::Parquet => Arc::new(ParquetFormat::default().with_skip_metadata(true)),
-        SourceFormat::Unknown(name) => {
-            return Err(format!(
-                "Table '{}' is defined as '{name}', which Strata cannot read.",
-                spec.name
-            ))
-        }
-    };
-    let ext = spec.format.extension();
+    let fmt = formats.build(&spec.name, &spec.format)?;
+    let ext = formats.extension(&spec.format);
     let ext = ext.as_str();
     let mut opts = ListingOptions::new(fmt)
         .with_session_config_options(&ctx.copied_config())
@@ -347,58 +335,6 @@ fn partition_key(segment: &str) -> Option<&str> {
     (first.is_ascii_alphabetic() || first == '_')
         .then_some(key)
         .filter(|_| chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
-}
-
-/// One CSV option that has to be a **byte**, because that is what DataFusion's reader takes.
-///
-/// Reported rather than truncated: a delimiter the user typed as `→` is not `\xe2`, and a
-/// reader configured with the first byte of a multi-byte character splits fields in the middle
-/// of the next one.
-fn ascii_byte(what: &str, c: char) -> Result<u8, String> {
-    c.is_ascii()
-        .then_some(c as u8)
-        .ok_or_else(|| format!("The CSV {what} has to be a single-byte character, not '{c}'."))
-}
-
-/// Dress a `CsvFormat` in the def's options.
-///
-/// Every option set here reaches **both** halves of the read — `infer_schema` and the scan. The
-/// ones DataFusion only wires into one of the two are deliberately absent; [`CsvRead`] records
-/// which and why.
-fn csv_format(o: &CsvRead) -> Result<datafusion::datasource::file_format::csv::CsvFormat, String> {
-    use datafusion::datasource::file_format::csv::CsvFormat;
-
-    let mut fmt = CsvFormat::default()
-        .with_has_header(o.header)
-        .with_delimiter(ascii_byte("delimiter", o.delimiter)?)
-        .with_quote(ascii_byte("quote character", o.quote)?)
-        .with_newlines_in_values(o.newlines_in_values)
-        .with_truncated_rows(o.truncated_rows)
-        .with_file_compression_type(compression(o.compression));
-    if let Some(escape) = o.escape {
-        fmt = fmt.with_escape(Some(ascii_byte("escape character", escape)?));
-    }
-    if let Some(comment) = o.comment {
-        fmt = fmt.with_comment(Some(ascii_byte("comment character", comment)?));
-    }
-    if let Some(rows) = o.infer_rows {
-        fmt = fmt.with_schema_infer_max_rec(rows);
-    }
-    Ok(fmt)
-}
-
-/// Our compression vocabulary as DataFusion's.
-pub(super) fn compression(
-    c: FileCompression,
-) -> datafusion::datasource::file_format::file_compression_type::FileCompressionType {
-    use datafusion::datasource::file_format::file_compression_type::FileCompressionType as F;
-    match c {
-        FileCompression::None => F::UNCOMPRESSED,
-        FileCompression::Gzip => F::GZIP,
-        FileCompression::Bzip2 => F::BZIP2,
-        FileCompression::Xz => F::XZ,
-        FileCompression::Zstd => F::ZSTD,
-    }
 }
 
 /// The spec's non-blank source paths.

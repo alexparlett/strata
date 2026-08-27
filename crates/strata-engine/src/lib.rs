@@ -30,7 +30,7 @@
 //! The underlying logic lives in the sibling modules (`query`, `explain`, `catalog`, `export`,
 //! `profile`) as plain async functions over `&SessionContext`.
 
-mod arrow_stats;
+pub mod arrow_stats;
 #[cfg(test)]
 mod boundaries;
 pub mod builder;
@@ -41,6 +41,7 @@ mod connect;
 mod explain;
 pub mod export;
 mod facade;
+pub mod formats;
 mod functions;
 mod generation;
 pub mod json_poly;
@@ -56,7 +57,7 @@ pub mod sql;
 pub mod statements;
 mod store;
 pub mod udf_package;
-mod udfs;
+pub mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
 pub use facade::{Catalog, Lang, SnapshotReads, Sources, Work, Workspace};
@@ -127,6 +128,7 @@ use datafusion_federation::FederatedQueryPlanner;
 use tokio::runtime::Runtime;
 use tokio::task::AbortHandle;
 
+use formats::Formats;
 use functions::Functions;
 use generation::GenClock;
 use providers::{StrataCatalogList, StrataCatalogProvider};
@@ -478,6 +480,9 @@ pub struct Engine {
     /// ([`EngineBuilder::with_source`]) — a def's kind is looked up here, and a kind nothing
     /// answers to is a failed row naming the fix.
     sources: SourceRegistry,
+    /// Which file formats this engine can read ([`EngineBuilder::with_format`]) — a def's format
+    /// is looked up here, and a format nothing answers to is a failed row naming the fix.
+    formats: Formats,
     /// The `SET` overlay and the prepared-statement mirror — see [`SessionScope`].
     /// Default on a fresh engine, which is what makes a restart clear the session.
     session: SessionScope,
@@ -915,6 +920,16 @@ impl Engine {
     /// until the engine is actually rebuilt, so a declined restart can be offered again.
     pub fn restart_owed(&self) -> bool {
         runtime_subset(&self.overrides.lock().unwrap()) != self.built_runtime
+    }
+
+    /// The file formats this engine was built with, in registration order.
+    ///
+    /// About the engine itself rather than about its catalog: a format is something an embedder
+    /// said at construction ([`EngineBuilder::with_format`]), and this is the one read every
+    /// surface that offers a format shares — the `STORED AS` completion, the export format list,
+    /// and the agent's export.
+    pub fn formats(&self) -> Vec<formats::FormatInfo> {
+        self.formats.registrants()
     }
 
     /// The `datafusion.*` overrides this engine is running with.
@@ -1451,6 +1466,7 @@ pub fn quote_ident(name: &str) -> String {
 fn build_context(
     overrides: &BTreeMap<String, String>,
     packages: &[Arc<dyn UdfPackage>],
+    formats: &Formats,
     pool: Option<Arc<dyn MemoryPool>>,
 ) -> SessionContext {
     let mut config = SessionConfig::new().with_information_schema(true);
@@ -1488,6 +1504,7 @@ fn build_context(
         tracing::warn!("engine: JSON functions unavailable: {e}");
     }
     udf_package::register_packages(&ctx, packages);
+    formats.register_writers(&ctx);
     ctx.with_function_factory(Arc::new(StrataFunctionFactory))
 }
 
@@ -3333,27 +3350,24 @@ mod read_options_tests {
         assert_eq!(names(&meta), vec!["a"]);
     }
 
-    /// A def naming a reader this build does not have fails **by name**. The arm this
-    /// replaces was a fallthrough onto parquet, so such a table registered as parquet and
-    /// said nothing — the register's one job is to be the check.
+    /// A def naming a format nothing is registered for fails **by name**, and names the fix.
+    /// The arm this replaces was a fallthrough onto parquet, so such a table registered as
+    /// parquet and said nothing — the register's one job is to be the check.
     #[tokio::test]
-    async fn an_unreadable_format_fails_by_name_rather_than_being_read_as_parquet() {
+    async fn a_format_with_no_registrant_fails_by_name_rather_than_being_read_as_parquet() {
         let d = dir("unknown");
         let path = write(&d, "s.avro", "not really avro");
         let eng = Engine::builder().build();
 
         let err = eng
             .catalog()
-            .register(spec(
-                "legacy",
-                vec![path],
-                SourceFormat::Unknown("avro".into()),
-            ))
+            .register(spec("legacy", vec![path], SourceFormat::from_name("avro")))
             .await
             .expect_err("no reader");
         assert_eq!(
             err,
-            "Table 'legacy' is defined as 'avro', which Strata cannot read."
+            "Table 'legacy' is defined as 'avro', which no reader is registered for. Register \
+             one with EngineBuilder::with_format, or change the table's format."
         );
     }
 

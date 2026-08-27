@@ -4,6 +4,8 @@
 //! What registration *learns* about a def (columns, row counts, status, profiles) is runtime state
 //! and lives in the project store wrapped around these, never here as skipped fields.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
@@ -278,9 +280,12 @@ pub struct JsonRead {
 /// **A table's reader, and the options that reader takes** — one field, not a format string beside
 /// an options bag, so a delimiter set on a parquet table is a state that cannot be written down.
 ///
-/// [`Unknown`](Self::Unknown) is not a fallback: it is a def naming a reader this build does not
-/// have, kept so one such row cannot stop the whole project file loading, and failing loudly at its
-/// own registration rather than being read as something else.
+/// The four named arms are the first-party vocabulary, closed on purpose: their options are what
+/// the Configure window edits, so each is a struct with fields rather than a bag of strings.
+/// [`Extension`](Self::Extension) is every other format — one an embedder registered, or one no
+/// build of this app has ever had a reader for. It is not a fallback: nothing reads it as
+/// anything else, and a def naming a format this engine holds no reader for fails loudly at its
+/// own registration rather than stopping the whole project file from loading.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SourceFormat {
@@ -289,79 +294,120 @@ pub enum SourceFormat {
     Csv(CsvRead),
     Json(JsonRead),
     Arrow,
-    /// A format string with no reader in this build, kept verbatim.
-    Unknown(String),
+    /// A format named by the word its reader is registered under, with that reader's own
+    /// `format.*` options kept verbatim.
+    Extension {
+        format: String,
+        options: BTreeMap<String, String>,
+    },
 }
 
 impl SourceFormat {
-    /// The format's own name — what the catalog labels a row with, and what a legacy
-    /// `"format": "csv"` held.
+    /// The format's own name — what the catalog labels a row with, what a legacy
+    /// `"format": "csv"` held, and the word its reader is registered under.
     pub fn name(&self) -> &str {
         match self {
             Self::Parquet => "parquet",
             Self::Csv(_) => "csv",
             Self::Json(_) => "json",
             Self::Arrow => "arrow",
-            Self::Unknown(name) => name,
+            Self::Extension { format, .. } => format,
         }
     }
 
-    /// The default options for a named format. An unrecognised name becomes
-    /// [`Unknown`](Self::Unknown) rather than parquet — reading one format's files as another
-    /// is the silent failure this enum exists to prevent.
+    /// The default options for a named format. A name outside the first-party four becomes an
+    /// [`Extension`](Self::Extension) with no options rather than parquet — reading one format's
+    /// files as another is the silent failure this enum exists to prevent.
     pub fn from_name(name: &str) -> Self {
+        Self::of(name, BTreeMap::new())
+    }
+
+    /// The def a format word and its `format.*` options describe.
+    ///
+    /// The first-party words keep their typed arms, so a `csv` def written this way is the same
+    /// value a Configure save writes; every other word is kept verbatim for whichever reader is
+    /// registered under it.
+    pub fn of(name: &str, options: BTreeMap<String, String>) -> Self {
         match name {
             "parquet" => Self::Parquet,
             "csv" => Self::Csv(CsvRead::default()),
             "json" => Self::Json(JsonRead::default()),
             "arrow" => Self::Arrow,
-            other => Self::Unknown(other.to_string()),
+            other => Self::Extension {
+                format: other.to_string(),
+                options,
+            },
         }
     }
 
-    /// The file extension a listing filters on — the format's own **plus** any compression
-    /// suffix, because that is what the files are actually called (`events.csv.gz`).
-    pub fn extension(&self) -> String {
-        let compression = match self {
+    /// The compression wrapping the whole file, which the first-party text readers offer and
+    /// nothing else does.
+    ///
+    /// It is a property of the def rather than of the reader because the *file name* carries it:
+    /// a gzipped CSV is `events.csv.gz`, and the extension a listing filters on has to say so.
+    pub fn compression(&self) -> FileCompression {
+        match self {
             Self::Csv(o) => o.compression,
             Self::Json(o) => o.compression,
-            Self::Parquet | Self::Arrow | Self::Unknown(_) => FileCompression::None,
-        };
-        format!(".{}{}", self.name(), compression.extension())
+            Self::Parquet | Self::Arrow | Self::Extension { .. } => FileCompression::None,
+        }
     }
 }
 
 /// Write a format the way it will read back.
 ///
-/// The four readers emit the tagged form; [`Unknown`](SourceFormat::Unknown) emits the **bare
-/// string** it arrived as. Serde cannot serialize an internally tagged newtype variant holding a
-/// string at all, so the derived impl would fail every `save_defs` of a project containing one —
-/// and it is the honest form anyway, so a Strata save never mangles a table another tool wrote.
+/// The four typed readers emit the tagged form. An [`Extension`](SourceFormat::Extension) with no
+/// options emits the **bare string** it arrived as: serde cannot serialize an internally tagged
+/// struct variant whose tag is data, and the bare form is the honest one anyway, so a Strata save
+/// never mangles a table another tool wrote. One carrying options emits its own two-key object,
+/// which [`de_format`] reads back.
 fn se_format<S>(format: &SourceFormat, s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
+    use serde::ser::SerializeMap;
     match format {
-        SourceFormat::Unknown(name) => s.serialize_str(name),
+        SourceFormat::Extension { format, options } if options.is_empty() => {
+            s.serialize_str(format)
+        }
+        SourceFormat::Extension { format, options } => {
+            let mut map = s.serialize_map(Some(2))?;
+            map.serialize_entry("type", format)?;
+            map.serialize_entry("options", options)?;
+            map.end()
+        }
         known => known.serialize(s),
     }
 }
 
-/// Accept a format as either the legacy bare `"csv"` (→ that reader's defaults) or the current
-/// tagged `{"type":"csv", …}` form, so old project files keep loading.
+/// Accept a format as the legacy bare `"csv"` (→ that reader's defaults), the tagged
+/// `{"type":"csv", …}` form, or an extension format's `{"type":"geojson","options":{…}}`, so old
+/// project files keep loading and a format this build has no reader for still round-trips.
 fn de_format<'de, D>(d: D) -> Result<SourceFormat, D::Error>
 where
     D: Deserializer<'de>,
 {
+    /// An extension format's object form. Tried after the typed arms, so a first-party tag never
+    /// reaches it.
+    #[derive(Deserialize)]
+    struct Extension {
+        #[serde(rename = "type")]
+        format: String,
+        #[serde(default)]
+        options: BTreeMap<String, String>,
+    }
+
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Raw {
         Named(String),
         Typed(SourceFormat),
+        Extension(Extension),
     }
     Ok(match Raw::deserialize(d)? {
         Raw::Named(name) => SourceFormat::from_name(&name),
         Raw::Typed(format) => format,
+        Raw::Extension(ext) => SourceFormat::of(&ext.format, ext.options),
     })
 }
 
@@ -519,46 +565,70 @@ mod format_tests {
     }
 
     #[test]
-    fn an_unreadable_format_survives_a_save_as_the_string_it_arrived_as() {
+    fn an_extension_format_with_no_options_survives_a_save_as_the_string_it_arrived_as() {
         let def = TableDef {
             name: "legacy".into(),
-            format: SourceFormat::Unknown("avro".into()),
+            format: SourceFormat::from_name("avro"),
             connection: None,
             sources: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
-        let json = serde_json::to_string(&def).expect("an unreadable format still serializes");
+        let json = serde_json::to_string(&def).expect("an extension format still serializes");
         assert!(json.contains(r#""format":"avro""#), "{json}");
         assert_eq!(parse(&json).format, def.format, "and reads back unchanged");
     }
 
     #[test]
-    fn an_unreadable_format_is_kept_verbatim_rather_than_read_as_parquet() {
-        let def = parse(r#"{"name":"t","format":"avro","sources":["/data"]}"#);
-        assert_eq!(def.format, SourceFormat::Unknown("avro".into()));
-        assert_eq!(def.format.name(), "avro");
+    fn an_extension_format_keeps_its_options_across_a_save() {
+        let format = SourceFormat::of(
+            "geojson",
+            BTreeMap::from([("format.crs".to_string(), "EPSG:4326".to_string())]),
+        );
+        let def = TableDef {
+            name: "places".into(),
+            format: format.clone(),
+            connection: None,
+            sources: vec!["/data".into()],
+            partition_cols: vec![],
+            origin: TableOrigin::External,
+        };
+        let json = serde_json::to_string(&def).expect("an extension format still serializes");
+        assert!(json.contains(r#""type":"geojson""#), "{json}");
+        assert_eq!(parse(&json).format, format, "and reads back unchanged");
     }
 
     #[test]
-    fn the_listing_extension_carries_the_compression_suffix() {
-        assert_eq!(SourceFormat::Parquet.extension(), ".parquet");
-        assert_eq!(SourceFormat::Csv(CsvRead::default()).extension(), ".csv");
+    fn a_format_with_no_reader_here_is_kept_verbatim_rather_than_read_as_parquet() {
+        let def = parse(r#"{"name":"t","format":"avro","sources":["/data"]}"#);
+        assert_eq!(def.format, SourceFormat::from_name("avro"));
+        assert_eq!(def.format.name(), "avro");
+    }
+
+    /// The compression a def carries is the text readers' own; everything else wraps its
+    /// compression inside the file, so the name a listing filters on picks up no suffix.
+    #[test]
+    fn only_the_text_readers_carry_whole_file_compression() {
+        assert_eq!(SourceFormat::Parquet.compression(), FileCompression::None);
+        assert_eq!(
+            SourceFormat::from_name("geojson").compression(),
+            FileCompression::None
+        );
         assert_eq!(
             SourceFormat::Csv(CsvRead {
                 compression: FileCompression::Gzip,
                 ..Default::default()
             })
-            .extension(),
-            ".csv.gz"
+            .compression(),
+            FileCompression::Gzip
         );
         assert_eq!(
             SourceFormat::Json(JsonRead {
                 compression: FileCompression::Zstd,
                 ..Default::default()
             })
-            .extension(),
-            ".json.zst"
+            .compression(),
+            FileCompression::Zstd
         );
     }
 }

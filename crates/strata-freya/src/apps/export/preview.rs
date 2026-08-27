@@ -31,7 +31,24 @@ pub fn build(draft: &ExportDraft, target: &ExportTarget) -> String {
         FormatId::Json => json(target),
         FormatId::Parquet => parquet(draft, target),
         FormatId::Arrow => arrow(target),
+        FormatId::Extension(word) => extension(word, target),
     }
+}
+
+/// What a registered format's file will hold, which is all this window can say about it: the
+/// columns, in order. Nothing here knows the format's own layout — that is the point of it being
+/// registered — so the preview names the writer rather than drawing bytes it would be guessing.
+fn extension(word: &str, target: &ExportTarget) -> String {
+    let body: Vec<String> = target
+        .columns
+        .iter()
+        .map(|c| format!("  {}: {}", c.name, arrow_type(c.kind)))
+        .collect();
+    format!(
+        "{} file, written by the writer it was registered with\ncolumns {{\n{}\n}}",
+        word.to_uppercase(),
+        body.join("\n")
+    )
 }
 
 /// The rows the preview draws — the page in hand, capped.

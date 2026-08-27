@@ -751,7 +751,10 @@ like any other. `DROP VIEW |` offers the views alone.
 
 **DataFusion's own write, behind the two checks the Export window used to stand in for**
 (`engine/statements/arms/copy.rs`). Nothing about the write is Strata's: `COPY` is DataFusion's statement, its
-`OPTIONS` are DataFusion's, and every format Strata reads it can write. The statement is planned
+`OPTIONS` are DataFusion's, and the words it takes are the registry's — the shipped four
+DataFusion writes itself, plus any registered format that brought a `FileFormatFactory`, which
+`with_format` puts on the session under that format's own name (novel names only: DataFusion
+refuses an occupied one, and that refusal **is** the writer-swap ruling holding). The statement is planned
 once — planning a `COPY` executes nothing — and that one value is what the gate counts over and
 what is then driven, so **the plan that was judged is the plan that runs**, the rule the `INSERT`
 arm already keeps. Driving it is `ctx.sql` minus the re-parse: `execute_logical_plan` special-cases
@@ -1017,7 +1020,7 @@ clause sqlparser learns later is a compile error rather than a promise quietly b
 
 | Clause | Answer |
 |---|---|
-| `STORED AS` | `PARQUET` / `CSV` / `JSON` / `NDJSON` / `ARROW`; anything else — `AVRO` included — is refused **by name**, never falling through onto a reader (P4-11) and never minting a `SourceFormat::Unknown`, which exists to keep a legacy *def* loading |
+| `STORED AS` | any word the engine has a **registered format** for — the shipped four (`PARQUET` / `CSV` / `JSON` / `ARROW`) plus whatever an embedder added with `EngineBuilder::with_format`. Anything else — `AVRO`, and `NDJSON`, which names a *layout* of JSON rather than a format — is refused **by name**, listing the words that would have worked, never falling through onto a reader (P4-11) and never minting an extension def a registration would then have to refuse |
 | `LOCATION` | a path takes the local rule (`project::relativize`, stored portable inside the project folder); a URL is a **connection** (below) |
 | `PARTITIONED BY` | the def's partition columns, typed. Bare names are `Utf8` — what DataFusion infers and what Configure defaults to, with the same cast warning behind it. A name repeated in the list is refused, because Arrow's `Schema` permits duplicate fields: the table would register carrying the column twice and every read would resolve the second onto the first |
 | a column list | refused: "Schemas are inferred. Remove the column list" — unless every entry is a partition column's *definition*, which is how a partition states its type (`VARCHAR`, `INT`, `BIGINT`, `DATE`, the four Configure offers, so a def cannot carry a type its picker can't show) |
@@ -1040,15 +1043,16 @@ never a credential — so the list is split by namespace:
 
 | Key | Answer |
 |---|---|
-| a `format.` key the def has a field for | read onto it. The key set **is** the def: every `CsvRead` / `JsonRead` field has a DataFusion name and nothing else does (`docs/IMPORT_OPTIONS.md` is the same table from the other side) |
+| a `format.` key the format's own reader takes | read onto the def by that format's `FormatProvider::read`. For the first-party four the key set **is** the def: every `CsvRead` / `JsonRead` field has a DataFusion name and nothing else does (`docs/IMPORT_OPTIONS.md` is the same table from the other side). A registered format keeps its own keys verbatim on `SourceFormat::Extension`, its reader being the only thing that knows what they mean |
 | a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or a client option (`strata_arrow::client::CLIENT_KEYS`, shared rather than re-listed) | refused toward Connections, **on the key alone** — the value is never read and never echoed, because it may be a secret and a refusal is a sentence the user then reads and copies. (A refused statement is also never recorded: history keeps successful runs only, so a pasted key does not outlive the buffer) |
-| anything else | refused **by name**, which is what keeps the mechanism total rather than a list of the keys we thought of — a CSV option on a parquet table lands here, naming the format, which is the state `SourceFormat` exists to make unwritable |
+| anything else | refused **by name** by the format that was asked for, which is what keeps the mechanism total rather than a list of the keys we thought of — a CSV option on a parquet table lands here, naming the format, which is the state `SourceFormat` exists to make unwritable |
 
 The three CSV options DataFusion has and the def deliberately lacks (`format.null_regex`,
 `format.terminator`, `format.double_quote`) reach the by-name refusal like any other key;
-`CsvRead`'s doc comment is why they are absent. `STORED AS NDJSON` **states** a shape, so
-`format.newline_delimited` is refused on it and belongs to `STORED AS JSON` — two statements of one
-fact that could otherwise disagree. A single-character option resolves through
+`CsvRead`'s doc comment is why they are absent. The JSON layout is `format.newline_delimited` on
+`STORED AS JSON` and nothing else — there is no `NDJSON` word to state it a second way, which is
+DataFusion's own model and removes a pair of statements that could disagree. A single-character
+option resolves through
 `util::one_char` — the rule the export and Configure windows already publish, moved into the engine
 for this third surface — rather than through DataFusion's `u8` config parse, which reads a numeric
 string as the byte *value* (so `'format.delimiter' '9'` would silently mean tab) and has no escape
@@ -1095,12 +1099,14 @@ The report is "Table 't' created, 4 columns" (or `replaced`), and `count` is `No
 reads a schema, it does not move rows. The catalog row's count is the free statistic
 `register_external` already answered with.
 
-Completion (ED-11): `STORED AS |` offers exactly `arms::external::STORED_AS_FORMATS` — the
-module's own arms as data, held against `read_format` by test. The `OPTIONS ('…')` keys complete
-**inside their quotes** (the one exception to the string guard, terminated and unterminated
-literals both), from the same `CSV_OPTION_KEYS` / `JSON_OPTION_KEYS` tables `apply` consumes —
-format-aware, NDJSON minus the shape key, empty for Parquet/Arrow/unwritten — with `Bool` and
-`Enum` value offers. Store-namespace and client keys are never offered: the arm refuses them
+Completion (ED-11): `STORED AS |` offers exactly the engine's **registered formats**, in the order
+it was built with them — one read (`Engine::formats`) riding the language service's own catalog
+snapshot, so a format an embedder registers is offered without a second list to keep in step. The
+`OPTIONS ('…')` keys complete **inside their quotes** (the one exception to the string guard,
+terminated and unterminated literals both), from each format's own `reader_options`, which is the
+table its `read` consumes projected — format-aware, empty for Parquet/Arrow/unwritten, for a
+format that offers none, and for a word nothing is registered for (which is what the arm's own
+by-name refusal means) — with `Bool` and `Enum` value offers. Store-namespace and client keys are never offered: the arm refuses them
 toward Connections, and absence from the offer is the same policy. `LOCATION '…'` stays silent —
 a path, the user's filesystem.
 

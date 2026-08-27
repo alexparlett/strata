@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 
+use crate::formats::Formats;
 use crate::sql::FunctionCatalog;
 use strata_arrow::column_info;
 use strata_model::ColumnInfo;
@@ -41,6 +42,7 @@ fn catalog() -> Catalog {
             window: vec!["row_number".into()],
         }),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     )
 }
@@ -269,6 +271,7 @@ fn a_column_named_execute_does_not_govern_its_clause() {
         [],
         Arc::default(),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     for sql in ["SELECT execute, ", "SELECT deallocate, "] {
@@ -468,6 +471,7 @@ fn weird_identifiers_insert_quoted() {
         [],
         Arc::default(),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     let items = complete("SELECT  FROM t", 7, &cat, false);
@@ -599,6 +603,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
         [],
         Arc::default(),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     let items = complete("SELECT  FROM t", 7, &cat, false);
@@ -836,6 +841,7 @@ fn drop_and_insert_operands_filter_by_statement() {
         [("spenders", &cols[..])],
         Arc::default(),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     let items = complete("DROP TABLE ", 11, &cat, false);
@@ -863,6 +869,7 @@ fn drop_and_insert_operands_filter_by_statement() {
         [],
         Arc::default(),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     let sql = "INSERT INTO v (\"values\", ";
@@ -910,7 +917,14 @@ fn deallocate_prepare_still_offers_prepared_names() {
         name: "spend".into(),
         params: Vec::new(),
     }];
-    let cat = Catalog::build([], [], Arc::default(), prepared, "generic".into());
+    let cat = Catalog::build(
+        [],
+        [],
+        Arc::default(),
+        prepared,
+        Formats::shipped().registrants(),
+        "generic".into(),
+    );
     let items = complete("DEALLOCATE PREPARE ", 19, &cat, false);
     assert_eq!(labels(&items), vec!["spend"]);
 }
@@ -934,6 +948,7 @@ fn lead_named_columns_never_govern() {
         [],
         Arc::default(),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     for lead in ["set", "copy", "drop", "insert", "create", "prepare"] {
@@ -947,14 +962,13 @@ fn lead_named_columns_never_govern() {
     }
 }
 
+/// Exactly the registered formats, in the order the engine was built with them — no spellings
+/// beside them, because a word that is not a format is a word the arm then refuses.
 #[test]
-fn stored_as_offers_exactly_the_formats() {
+fn stored_as_offers_exactly_the_registered_formats() {
     let sql = "CREATE EXTERNAL TABLE t STORED AS ";
     let items = complete(sql, sql.len(), &catalog(), false);
-    assert_eq!(
-        labels(&items),
-        vec!["PARQUET", "CSV", "JSON", "NDJSON", "ARROW"]
-    );
+    assert_eq!(labels(&items), vec!["PARQUET", "CSV", "JSON", "ARROW"]);
     assert_eq!(items[0].insert, "PARQUET ");
 }
 
@@ -989,10 +1003,11 @@ fn options_keys_follow_the_written_format() {
     let items = at_open("CREATE EXTERNAL TABLE t STORED AS JSON OPTIONS ('");
     pos(&items, "format.newline_delimited");
     absent(&items, "format.has_header");
-    let items = at_open("CREATE EXTERNAL TABLE t STORED AS NDJSON OPTIONS ('");
-    pos(&items, "format.schema_infer_max_rec");
-    absent(&items, "format.newline_delimited");
     assert!(at_open("CREATE EXTERNAL TABLE t STORED AS PARQUET OPTIONS ('").is_empty());
+    assert!(
+        at_open("CREATE EXTERNAL TABLE t STORED AS NDJSON OPTIONS ('").is_empty(),
+        "a word no format is registered for offers nothing, matching the arm's refusal"
+    );
     assert!(at_open("CREATE EXTERNAL TABLE t OPTIONS ('").is_empty());
     let items = at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('");
     absent(&items, "aws.region");
@@ -1045,6 +1060,7 @@ fn drop_function_offers_only_created_functions() {
             window: Vec::new(),
         }),
         Vec::new(),
+        Formats::shipped().registrants(),
         "generic".into(),
     );
     let items = complete("DROP FUNCTION ", 14, &cat, false);

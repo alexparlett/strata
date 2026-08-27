@@ -30,7 +30,7 @@ pub mod format;
 pub mod infer;
 pub mod normalize;
 
-pub use format::PolyJsonFormat;
+pub use format::{PolyJsonFormat, PolyJsonFormatFactory, PolyJsonSource};
 pub use infer::{infer, Inferred};
 pub use normalize::{fit, fit_record};
 

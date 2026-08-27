@@ -52,7 +52,6 @@ use crate::statements::report::{StatementOutcome, StatementReport};
 use crate::statements::StmtKind;
 use strata_core::util::plural;
 
-pub(crate) use external::{option_keys_for, OptionKind, STORED_AS_FORMATS};
 pub(crate) use functions::StrataFunctionFactory;
 pub(crate) use remote::dispatched;
 pub(crate) use session::refuse_reserved_key;

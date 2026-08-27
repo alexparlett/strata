@@ -16,6 +16,7 @@ use std::ops::Range;
 use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
 
 use crate::fold_ident;
+use crate::formats::OptionKind;
 use crate::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
     Clause, ColumnList, Context, ListSource, Role,
@@ -26,9 +27,7 @@ use crate::sql::lex::{
 };
 use crate::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym, TableSym};
 use crate::sql::FunctionSym;
-use crate::statements::arms::{
-    option_keys_for, refuse_reserved_key, OptionKind, STORED_AS_FORMATS,
-};
+use crate::statements::arms::refuse_reserved_key;
 use strata_arrow::config::{key_def, Kind as KeyKind, ENGINE_KEYS};
 use strata_model::Kind;
 
@@ -126,8 +125,9 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             }
         },
         Context::At(Clause::CreateExternal, Role::Operand) => {
-            for (i, &f) in STORED_AS_FORMATS.iter().enumerate() {
-                pool.ordered(f, T_PRIMARY, i, || keyword(f, &replace, kw_space));
+            for (i, format) in catalog.formats.iter().enumerate() {
+                let word = format.name.to_uppercase();
+                pool.ordered(&word, T_PRIMARY, i, || keyword(&word, &replace, kw_space));
             }
         }
         Context::At(Clause::DropFunction, Role::Operand) => {
@@ -705,7 +705,11 @@ fn options_literal_completions(
         })
         .and_then(|(i, _)| stmt.get(i + 2))
         .map(|t| t.text.to_ascii_uppercase());
-    let keys = option_keys_for(format_word.as_deref().unwrap_or(""));
+    let keys = format_word
+        .as_deref()
+        .and_then(|word| catalog.format(word))
+        .map(|format| format.options.as_slice())
+        .unwrap_or_default();
 
     let content = open + 1;
     if caret < content {
@@ -720,20 +724,20 @@ fn options_literal_completions(
     let pred = stmt.iter().rev().find(|t| t.span.end <= open)?;
     let mut pool = Pool::new(&partial, manual);
     if pred.kind == TokKind::Punct && (pred.text == "(" || pred.text == ",") {
-        for (i, (key, _, what)) in keys.iter().enumerate() {
-            pool.ordered(key, T_PRIMARY, i, || Completion {
-                label: key.to_string(),
-                insert: key.to_string(),
+        for (i, offer) in keys.iter().enumerate() {
+            pool.ordered(offer.key, T_PRIMARY, i, || Completion {
+                label: offer.key.to_string(),
+                insert: offer.key.to_string(),
                 kind: CompletionKind::Column,
-                detail: Some(what.to_string()),
+                detail: Some(offer.what.to_string()),
                 replace: replace.clone(),
             });
         }
     } else if pred.kind == TokKind::Str {
         let kind = keys
             .iter()
-            .find(|(k, ..)| k.eq_ignore_ascii_case(&pred.text))
-            .map(|(_, kind, _)| *kind);
+            .find(|offer| offer.key.eq_ignore_ascii_case(&pred.text))
+            .map(|offer| offer.kind);
         let values: &[&str] = match kind {
             Some(OptionKind::Bool) => &["true", "false"],
             Some(OptionKind::Enum(words)) => words,

@@ -175,6 +175,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::{env, process};
 
+    use crate::formats::fake::TestFormat;
     use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
@@ -240,6 +241,46 @@ mod tests {
             assert_eq!(report.effect, None, "a COPY changes no catalog state");
             assert!(out.exists(), "{name} was written");
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **An embedder's format writes through DataFusion's own COPY.** A registrant that brings a
+    /// writer has it registered on the session under its own name, so `STORED AS <name>` plans and
+    /// writes with nothing here knowing the format exists — and the file it wrote reads back
+    /// through the same registrant.
+    #[tokio::test]
+    async fn a_registered_format_that_brought_a_writer_is_copied_to() {
+        let root = scratch("extension");
+        let eng = Engine::builder().with_format(TestFormat).build();
+        eng.set_data_dir(&root);
+        let out = root.join("out.testfmt");
+
+        let report = statement(
+            &eng,
+            &format!(
+                "COPY (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(n, s)) TO '{}' \
+                 STORED AS testfmt",
+                out.display()
+            ),
+        )
+        .await
+        .expect("exported");
+        assert_eq!(report.count, Some(2));
+        assert!(out.exists(), "the registrant's writer wrote the file");
+
+        statement(
+            &eng,
+            &format!(
+                "CREATE EXTERNAL TABLE back STORED AS testfmt LOCATION '{}'",
+                out.display()
+            ),
+        )
+        .await
+        .expect("registered");
+        assert_eq!(
+            read(&eng, "SELECT s FROM back ORDER BY n").await,
+            [["a"], ["b"]]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

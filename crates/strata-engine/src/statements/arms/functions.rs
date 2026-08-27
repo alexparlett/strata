@@ -671,6 +671,7 @@ mod tests {
             [],
             eng.lang().functions(),
             eng.lang().prepared(),
+            eng.formats(),
             "generic".into(),
         );
         complete(prefix, prefix.len(), &catalog, false)
@@ -728,6 +729,7 @@ mod tests {
                 [],
                 eng.lang().functions(),
                 eng.lang().prepared(),
+                eng.formats(),
                 "generic".into(),
             );
             complete("DROP FUNCTION ", 14, &catalog, false)
