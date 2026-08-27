@@ -1,7 +1,10 @@
-//! **Internal tables** — `CREATE TABLE` and CTAS, spooled into the project's own
-//! `.strata/tables/` and registered through the funnel every other table goes through, plus the
-//! two statements that then write over them: `INSERT` and `DROP TABLE`.
-//! `docs/STATEMENTS_SPEC.md` §6.1 + §7.
+//! **Internal tables** — `CREATE TABLE` and CTAS, published into the engine's
+//! [`InternalTableStore`] and registered through the funnel every other table goes through, plus
+//! the two statements that then write over them: `INSERT` and `DROP TABLE`.
+//! `docs/STATEMENTS_SPEC.md` §6.1 + §7. Under the default store that is the project's own
+//! `.strata/tables/` ([`LocalIpcTableStore`](crate::tables::LocalIpcTableStore)); where the
+//! bytes go is the store's, and everything about *names* — the slug, the def, the namespace
+//! semantics, the gates — stays here.
 //!
 //! `DROP TABLE` works on **both** origins and is the one place a table is dropped: the catalog
 //! pane's confirm and a typed statement reach [`drop_table`] through
@@ -20,41 +23,34 @@
 //! construction rather than by fidelity of a round trip. Planning a `CREATE TABLE` executes
 //! nothing, and it buys two things — the planner already refuses every clause it does not
 //! implement, fifty-odd of them each with its own message, and already resolves a declared column
-//! list against the query. And the *write*: a `CopyTo` node over that plan, `STORED AS ARROW`,
-//! which streams, writes the snapshot codec and reports the exact row count.
+//! list against the query, casting and renaming onto it. The plan's input is then executed to a
+//! stream and handed to the store, which streams it to wherever it keeps tables and reports the
+//! exact row count.
 //!
-//! Ours is the part no hook can carry: where the files go, that they are published by rename, what
-//! the def says, and the name semantics against the one namespace tables and views share.
+//! Ours is the part no hook can carry: what the def says, the slug the store is keyed by, and
+//! the name semantics against the one namespace tables and views share.
 
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use datafusion::arrow::ipc::writer::FileWriter;
-use datafusion::catalog::TableProvider;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
-use datafusion::datasource::file_format::format_as_file_type;
-use datafusion::datasource::DefaultTableSource;
-use datafusion::logical_expr::dml::{DmlStatement, InsertOp, WriteOp};
+use datafusion::logical_expr::dml::{InsertOp, WriteOp};
 use datafusion::logical_expr::{CreateMemoryTable, DdlStatement, LogicalPlan, TableType};
 use datafusion::prelude::{SQLOptions, SessionContext};
 
 use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
-use crate::export::copy_row_count;
-use crate::ipc::ipc_write_options;
 use crate::policy::Principal;
-use crate::sink::append_rows;
+use crate::sink::insert_stream;
 use crate::sources::{create_table_as, insert_into, writable, Live};
 use crate::statements::ctx::{DataRoot, StmtCtx};
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::target::{elsewhere, read_only, resolve_target, Remote, Target};
 use crate::statements::{Fault, StmtKind};
+use crate::tables::local_ipc::dir_path;
+use crate::tables::InternalTableStore;
 use crate::{fold_ident, InternalTables};
 use strata_core::project::{internal_source, tables_dir};
-use strata_core::util::{plural, temp_dir_name};
+use strata_core::util::plural;
 use strata_model::{SourceFormat, TableDef, TableOrigin};
 
 use super::{existing, left_invalid, remote};
@@ -171,7 +167,11 @@ async fn create(
 
     let slug = table_slug(&name);
     let dir = tables_dir(&root).join(&slug);
-    let rows = spool(ctx, &input, &tables_dir(&root), &slug).await?;
+    let stream = DataFrame::new(ctx.state(), input.as_ref().clone())
+        .execute_stream()
+        .await
+        .map_err(|e| e.to_string())?;
+    let rows = cx.tables.create(&slug, stream).await?;
 
     let def = TableDef {
         name: name.clone(),
@@ -189,10 +189,10 @@ async fn create(
         connection: None,
         internal: true,
     };
-    let meta = match register_external(ctx, &cx.formats, &spec).await {
+    let meta = match register_external(ctx, &cx.formats, cx.tables.as_ref(), &spec).await {
         Ok(meta) => meta,
         Err(e) if !replacing => {
-            let _ = fs::remove_dir_all(&dir);
+            let _ = cx.tables.discard(&slug).await;
             return Err(e);
         }
         Err(e) => return Err(e),
@@ -364,27 +364,28 @@ const INSERT_EXTERNAL: &str =
 
 /// Append rows to an internal table from an `INSERT`.
 ///
-/// **Native execution behind a target gate.** The only thing intercepted is *where* the write
-/// lands, because that is the one question DataFusion has no opinion about: a `ListingTable`
-/// writes into whatever directory it was registered over, and Strata's rule is that a statement
-/// may only write files Strata owns. Everything else is DataFusion's own INSERT path unchanged —
-/// the column list, the source query, the schema check
-/// (`logically_equivalent_names_and_types`, which surfaces a mismatch in its own words), and the
-/// single LZ4-frame IPC file the Arrow sink appends.
+/// **Native planning behind a target gate.** The only thing intercepted is *where* the write
+/// lands, because that is the one question DataFusion has no opinion about: Strata's rule is
+/// that a statement may only write data Strata owns. The plan is DataFusion's own INSERT path
+/// unchanged — the column list, the source query, and the schema check, which is the planner's:
+/// it casts and renames the source onto the registered schema and refuses in its own words what
+/// cannot be coerced. What lands is one unit per statement through
+/// [`InternalTableStore::append`] — under the default store, one LZ4-frame IPC file.
 ///
-/// **The sink is driven rather than the node executed**, on both branches — over the
-/// provider the plan already resolved, so a source inside a database connection reaches a
-/// workspace table rather than a `Dml` reaching the unparser ([`crate::sink`]).
+/// **The `Dml` node itself never executes**, on either branch: the local one hands the input's
+/// stream to the store ([`insert_stream`]), the remote one drives the input through the
+/// connection's own sink — so a source inside a database connection reaches a workspace table
+/// rather than a `Dml` reaching the unparser ([`crate::sink`]). The arm is the only writer;
+/// the registered provider is read through, never written through.
 ///
-/// **One file per statement, and no compaction.** The sink appends rather than rewrites, so a
-/// table inserted into a thousand times is a thousand files and every scan lists them all.
-/// `DROP TABLE` plus a `CREATE TABLE AS SELECT * FROM t` is the compaction story until a task
-/// owns one.
+/// **One unit per statement, and no compaction.** A table inserted into a thousand times is a
+/// thousand units and every scan lists them all; rewriting them smaller is `DROP TABLE` plus a
+/// `CREATE TABLE AS SELECT * FROM t`.
 ///
 /// The gate is in two halves and the **catalog** is the first: a relation inside a database
-/// connection is not a table whose data Strata could ever own, so [`remote_target`] answers for it
-/// before [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about it,
-/// and the connection's own gate — is it writable — is the honest one there.
+/// connection is not a table whose data Strata could ever own, so [`resolve_target`] answers for
+/// it before [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about
+/// it, and the connection's own gate — is it writable — is the honest one there.
 ///
 /// **The remote branch builds the provider it drives**, because the one the catalog serves is the
 /// federated *read* provider, whose `insert_into` is the trait's own `not_impl_err`. The writer
@@ -437,27 +438,16 @@ pub async fn insert(
         return Err(INSERT_EXTERNAL.into());
     }
     verify_insert(&plan)?;
-    let rows = append_rows(ctx, target_provider(dml)?, &dml.input).await?;
+    let rows = cx
+        .tables
+        .append(&table_slug(&name), insert_stream(ctx, &dml.input).await?)
+        .await?;
 
     Ok(StatementOutcome {
         message: format!("Inserted {} into '{name}'", plural(rows as usize, "row")),
         count: Some(rows),
         effect: Some(StoreEffect::RescanTable { name }),
     })
-}
-
-/// The provider the plan's own target resolved to — asked of the plan rather than of the catalog
-/// a second time, so what was gated is what is written to.
-///
-/// The SQL planner wraps a registered provider in a `DefaultTableSource` on the way into a plan,
-/// so the downcast holds for anything a typed statement can reach; stated rather than unwrapped
-/// because a hand-built plan could carry another `TableSource`, which DataFusion's own arm
-/// answers too.
-fn target_provider(dml: &DmlStatement) -> Result<Arc<dyn TableProvider>, String> {
-    dml.target
-        .downcast_ref::<DefaultTableSource>()
-        .map(|source| Arc::clone(&source.table_provider))
-        .ok_or_else(|| format!("'{}' cannot be written to", dml.table_name))
 }
 
 /// The `SQLOptions` floor an `INSERT` runs under — one call, so the local arm and the remote one
@@ -498,7 +488,15 @@ pub async fn drop_statement(
     let target = resolve_target(ctx, &drop.name);
     cx.require_target(who, StmtKind::DropTable, &target).await?;
     let name = target.workspace(WHAT)?;
-    drop_table(ctx, &cx.root, &cx.internal, &name, drop.if_exists).await
+    drop_table(
+        ctx,
+        &cx.root,
+        &cx.internal,
+        cx.tables.as_ref(),
+        &name,
+        drop.if_exists,
+    )
+    .await
 }
 
 /// Drop the registered table `name`: deregister the provider, delete the data **if the data is
@@ -518,6 +516,7 @@ pub async fn drop_table(
     ctx: &SessionContext,
     root: &DataRoot,
     internal: &InternalTables,
+    tables: &dyn InternalTableStore,
     name: &str,
     if_exists: bool,
 ) -> Result<StatementOutcome, String> {
@@ -534,20 +533,16 @@ pub async fn drop_table(
         }
         None => return Err(format!("Table '{name}' does not exist")),
     };
-    let data = match origin {
-        TableOrigin::Internal => {
-            let root = root.as_ref().ok_or_else(|| {
-                format!("Table '{name}' has no project folder to delete its data from")
-            })?;
-            Some((tables_dir(root), table_dir(root, name)))
-        }
-        TableOrigin::External => None,
-    };
+    if origin.is_internal() && root.is_none() {
+        return Err(format!(
+            "Table '{name}' has no project folder to delete its data from"
+        ));
+    }
     let dependents = dependent_views(ctx, name).await;
 
     let provider = ctx.deregister_table(name).map_err(|e| e.to_string())?;
-    if let Some((tables, dir)) = data.filter(|(_, dir)| dir.exists()) {
-        if let Err(e) = discard(&tables, &dir) {
+    if origin.is_internal() {
+        if let Err(e) = tables.discard(&table_slug(name)).await {
             if let Some(provider) = provider {
                 if let Err(put_back) = ctx.register_table(name, provider) {
                     tracing::error!(
@@ -567,32 +562,6 @@ pub async fn drop_table(
             dependents,
         }),
     })
-}
-
-/// Destroy the internal table directory `dir`, a child of `tables` — **by rename first**.
-///
-/// The spool publishes by rename; this discards by rename, and for the mirror-image reason. A
-/// `remove_dir_all` walks the directory in place, so anything that interrupts it — a killed
-/// process, a permission failure partway down, a window torn down while the delete runs on a
-/// background thread — leaves a half-emptied directory under the table's *real* name, which
-/// nothing collects: the def naming it is already gone, and `project::tidy_strata_dir` sweeps
-/// only `.tmp-…`. The rename is a single atomic step within one directory, so the moment it
-/// returns the data is unreachable under that name whatever happens next, and whatever is left
-/// is exactly what the sweep already exists to collect.
-///
-/// **The rename is the operation; the delete is housekeeping.** A failure to remove the moved
-/// directory is litter, not a failed drop — the table is gone either way — so it is logged and
-/// not reported, or the app would tell the user a drop failed that plainly succeeded.
-fn discard(tables: &Path, dir: &Path) -> Result<(), String> {
-    let aside = tables.join(temp_dir_name());
-    fs::rename(dir, &aside).map_err(|e| format!("{}: {e}", dir.display()))?;
-    if let Err(e) = fs::remove_dir_all(&aside) {
-        tracing::warn!(
-            "could not remove {} after dropping its table ({e}); the .strata sweep will",
-            aside.display()
-        );
-    }
-    Ok(())
 }
 
 /// What dropping a table of this origin **will** do — the catalog confirm's body copy.
@@ -625,146 +594,10 @@ fn drop_report(name: &str, origin: TableOrigin, dependents: &[String]) -> String
     message + &left_invalid(dependents)
 }
 
-/// The directory name `name`'s data lives in — the name→directory mapping, in one place so a
-/// create and a drop cannot disagree about where a table's files are.
+/// The directory name `name`'s data lives in — the name→slug mapping, in one place so a create,
+/// an insert and a drop cannot disagree about which slug a table's data is held under.
 fn table_slug(name: &str) -> String {
     slug(&fold_ident(name))
-}
-
-/// The directory holding `name`'s data, absolute — [`table_slug`] under the project's `tables/`.
-/// What a drop deletes, reached from a name because that is all a `DROP TABLE` carries.
-fn table_dir(root: &Path, name: &str) -> PathBuf {
-    tables_dir(root).join(table_slug(name))
-}
-
-/// Write `input`'s result under `tables/<slug>/`, returning the rows written.
-///
-/// **Published by rename**, the discipline the snapshot writer already keeps: the files are
-/// spooled into a `.tmp-…` sibling and the whole directory is moved into place in one step, so a
-/// crash mid-spool leaves nothing but a temp directory the next `.strata` write sweeps
-/// (`project::tidy_strata_dir`) rather than a half-written table registered under a real name.
-///
-/// The destination is a **slug under `tables`** rather than a path of the caller's choosing,
-/// because that is what makes the publish a rename at all: the staging directory is a sibling, so
-/// the move is within one filesystem and atomic. A caller free to name any destination could ask
-/// for one across a mount point and lose the whole spool to `EXDEV` at the last step.
-async fn spool(
-    ctx: &SessionContext,
-    input: &Arc<LogicalPlan>,
-    tables: &Path,
-    slug: &str,
-) -> Result<u64, String> {
-    fs::create_dir_all(tables).map_err(|e| format!("{}: {e}", tables.display()))?;
-    let mut staging = Staging::open(tables)?;
-
-    let rows = publish(ctx, input, &staging.dir, &tables.join(slug)).await?;
-    staging.published();
-    Ok(rows)
-}
-
-/// The `.tmp-…` directory a spool fills, removed on **every** way out that is not a successful
-/// rename — an error, and a **cancel**.
-///
-/// The cancel is why this is a guard rather than an `if published.is_err()`: a CTAS is registered
-/// as the workspace's in-flight call, so `Workspace::cancel` and a re-press both abort the task, and
-/// an aborted task's future is *dropped* at its next await — no error path runs. Without this,
-/// every cancelled CTAS would leave its partial spool behind, and
-/// [`sweep_stale_temp_dirs`](strata_core::util::sweep_stale_temp_dirs) deliberately never touches this
-/// process's own directories, so nothing would clear them for the life of the window. Cancelling
-/// a large CTAS twice is enough to notice. The snapshot writer has the same rule from the other
-/// side (`Workspace::query` retires again once its handle reports cancelled).
-struct Staging {
-    dir: PathBuf,
-    armed: bool,
-}
-
-impl Staging {
-    fn open(tables: &Path) -> Result<Staging, String> {
-        let dir = tables.join(temp_dir_name());
-        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(Staging { dir, armed: true })
-    }
-
-    /// The directory was renamed into place, so it is no longer ours to remove.
-    fn published(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for Staging {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = fs::remove_dir_all(&self.dir);
-        }
-    }
-}
-
-/// Fill `tmp` and move it onto `dest`.
-async fn publish(
-    ctx: &SessionContext,
-    input: &Arc<LogicalPlan>,
-    tmp: &Path,
-    dest: &Path,
-) -> Result<u64, String> {
-    let rows = write_into(ctx, input, tmp).await?;
-    if dest.exists() {
-        fs::remove_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    }
-    fs::rename(tmp, dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    Ok(rows)
-}
-
-/// Drive the `COPY … TO <dir> STORED AS ARROW` that does the writing, and guarantee the
-/// directory holds a file afterwards.
-///
-/// The sink creates a file per output partition **when a batch arrives**, so a query that
-/// produces no rows — and a `CREATE TABLE t (a INT)`, whose plan is an empty relation — writes
-/// nothing at all, and a `ListingTable` over an empty directory cannot infer a schema. One empty
-/// IPC file closes that: Arrow IPC self-describes, so the table's columns come back on replay
-/// from the file rather than from a schema copied into the def.
-async fn write_into(
-    ctx: &SessionContext,
-    input: &Arc<LogicalPlan>,
-    dir: &Path,
-) -> Result<u64, String> {
-    use datafusion::logical_expr::dml::CopyTo;
-
-    let copy = CopyTo::new(
-        Arc::clone(input),
-        dir_path(dir),
-        Vec::new(),
-        format_as_file_type(Arc::new(ArrowFormatFactory::new())),
-        HashMap::new(),
-    );
-    let batches = DataFrame::new(ctx.state(), LogicalPlan::Copy(copy))
-        .collect()
-        .await
-        .map_err(|e| e.to_string())?;
-    let rows = copy_row_count(&batches) as u64;
-
-    if !holds_a_file(dir) {
-        let path = dir.join("part-0.arrow");
-        let file = fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let schema = input.schema().inner().clone();
-        let mut writer = FileWriter::try_new_with_options(file, &schema, ipc_write_options()?)
-            .map_err(|e| e.to_string())?;
-        writer.finish().map_err(|e| e.to_string())?;
-    }
-    Ok(rows)
-}
-
-/// Whether the spool wrote anything into `dir`.
-fn holds_a_file(dir: &Path) -> bool {
-    fs::read_dir(dir)
-        .map(|mut entries| entries.any(|e| e.is_ok_and(|e| e.path().is_file())))
-        .unwrap_or(false)
-}
-
-/// A directory as the writer and the reader both have to name it: with a trailing separator.
-/// Without it `ListingTableUrl::parse` reads the path as a single **file**, which turns a
-/// directory sink into one file called `<slug>` and a directory listing into a miss.
-fn dir_path(dir: &Path) -> String {
-    format!("{}/", dir.display())
 }
 
 /// The directory name that holds `name`'s data — the folded table name where that is already a
@@ -779,8 +612,8 @@ fn dir_path(dir: &Path) -> String {
 /// `sales_eu-<hash>`, and a table literally named `sales_eu-<that same hash>` is all legal
 /// characters, so it takes the shortcut and lands in the same directory. Hashing safe names that
 /// *look* hashed would close that, and it is deliberately not done — this function's answer is
-/// the directory an **existing** table's data is already in, and `table_dir` re-derives it from
-/// the name on every drop. Changing the rule would therefore move the slug of tables already on
+/// the slug an **existing** table's data is already held under, and [`table_slug`] re-derives it
+/// from the name on every drop. Changing the rule would therefore move the slug of tables already on
 /// disk, whose drop would then delete a path that does not exist and orphan the real one forever
 /// (the failure the one-drop funnel exists to prevent). A collision that needs a user to
 /// name one table the hash of another is the smaller hazard, and it is the one that stays.
@@ -814,6 +647,8 @@ fn hash32(s: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::{env, process};
 
     use crate::builder::test_context;
@@ -1279,45 +1114,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// **A cancelled CTAS takes its staging directory with it.** A cancel aborts the task, so the
-    /// future is *dropped* mid-await and no error path runs — and the sweep never touches this
-    /// process's own `.tmp-` directories, so anything left here would sit under `.strata/tables`
-    /// for the life of the window. Cancelling a large CTAS a few times is all it takes.
-    ///
-    /// Driven by dropping the future rather than by racing a real cancel, because that is exactly
-    /// what `tokio`'s abort does to it and it is the state under test.
-    #[tokio::test]
-    async fn a_cancelled_spool_takes_its_staging_directory_with_it() {
-        let root = scratch("cancelled");
-        let ctx = test_context(&BTreeMap::new());
-        let tables = tables_dir(&root);
-        fs::create_dir_all(&tables).unwrap();
-
-        let plan = Arc::new(
-            ctx.sql("SELECT * FROM generate_series(1, 5000000)")
-                .await
-                .expect("plan")
-                .logical_plan()
-                .clone(),
-        );
-        let mut spooling = Box::pin(spool(&ctx, &plan, &tables, "big"));
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        assert!(
-            std::future::Future::poll(spooling.as_mut(), &mut cx).is_pending(),
-            "the spool has started and not finished"
-        );
-        assert_eq!(entries(&tables).len(), 1, "its staging directory is there");
-
-        drop(spooling);
-
-        assert!(
-            entries(&tables).is_empty(),
-            "and dropping the future removed it: {:?}",
-            entries(&tables)
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
     /// A directory's entries, sorted.
     fn entries(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(dir)
@@ -1487,41 +1283,6 @@ mod tests {
         );
         assert!(eng.catalog().is_internal("t"), "…and still a write target");
         assert!(tables.join("t").exists(), "…with its data where it was");
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// Driven at [`discard`] directly, with the *removal* made to fail while the rename can
-    /// still land — a read-only directory refuses `unlink` of what it holds, and the rename
-    /// needs write on `tables/` only. That is the shape of every interruption this exists for:
-    /// the rename landed, the walk did not.
-    #[cfg(unix)]
-    #[test]
-    fn a_discard_that_cannot_finish_still_takes_the_table_out_of_the_way() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = scratch("discard");
-        let tables = tables_dir(&root);
-        let dir = tables.join("t");
-        let locked = dir.join("locked");
-        fs::create_dir_all(&locked).unwrap();
-        fs::write(locked.join("part-0.arrow"), b"x").unwrap();
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
-
-        discard(&tables, &dir).expect("the rename is the operation, and it landed");
-
-        let left = entries(&tables);
-        for name in &left {
-            let _ = fs::set_permissions(
-                tables.join(name).join("locked"),
-                fs::Permissions::from_mode(0o700),
-            );
-        }
-
-        assert!(!dir.exists(), "gone from under the table's own name");
-        assert!(
-            !left.is_empty() && left.iter().all(|name| name.starts_with(".tmp-")),
-            "and what survives is only ever a temp the sweep collects: {left:?}"
-        );
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -84,6 +84,7 @@ impl Workspace<'_> {
                     sql,
                     root,
                     internal: engine.internal.clone(),
+                    tables: engine.tables.clone(),
                     connections: engine.connections.clone(),
                     sources: engine.live.clone(),
                     formats: engine.formats.clone(),

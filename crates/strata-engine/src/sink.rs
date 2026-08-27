@@ -1,13 +1,14 @@
-//! **Appending a plan's rows through a table provider's own sink** — the body both `INSERT` arms
-//! drive (ED-05 into an internal table, DB-10 into a database connection).
+//! Executing an `INSERT`'s input without letting the `Dml` node reach a planner: the rows the
+//! remote arm drives through a provider's own sink ([`append_rows`]), and the stream the local
+//! arm hands its table store ([`insert_stream`]).
 //!
 //! **The `Dml` node never reaches a planner.** DataFusion's physical planner answers a
 //! `WriteOp::Insert` by resolving the target's provider and calling `insert_into` on it — exactly
-//! what this does — but the node has to survive the *optimizer* first, and
+//! what [`append_rows`] does — but the node has to survive the *optimizer* first, and
 //! `datafusion-federation`'s rule federates any plan whose scans all belong to one remote source,
 //! a `Dml` above them included. A federated node writes itself down as SQL to execute, and
 //! `plan_to_sql` has no arm for a write: `INSERT INTO <workspace table> SELECT … FROM pg.…` came
-//! back as `LogicalPlan` debug (DB-12). Driving the input is the same plan, the same resolved
+//! back as `LogicalPlan` debug. Driving the input is the same plan, the same resolved
 //! target, one node fewer.
 //!
 //! A `CopyTo` cannot be driven this way — its sink is the file format's, built by DataFusion's own
@@ -17,6 +18,8 @@
 use std::sync::Arc;
 
 use datafusion::catalog::TableProvider;
+use datafusion::dataframe::DataFrame;
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::optimizer::optimize_projections::OptimizeProjections;
@@ -56,6 +59,24 @@ pub(crate) async fn append_rows(
         .await
         .map_err(|e| e.to_string())?;
     Ok(copy_row_count(&batches) as u64)
+}
+
+/// Execute an `INSERT`'s input into the single stream the internal-table store appends —
+/// [`append_rows`] minus the provider sink, for the arm whose writer is
+/// [`InternalTableStore::append`](crate::tables::InternalTableStore::append).
+///
+/// The same [`collapse_projections`] runs first and for the same reason: what decides whether
+/// anything is unparsed is where the rows are read from, and an input scanning a database
+/// connection federates here exactly as it does under a provider sink. One stream rather than a
+/// coalesce, because `execute_stream` already merges the partitions.
+pub(crate) async fn insert_stream(
+    ctx: &SessionContext,
+    input: &LogicalPlan,
+) -> Result<SendableRecordBatchStream, String> {
+    DataFrame::new(ctx.state(), collapse_projections(input)?)
+        .execute_stream()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Collapse the redundant projection DataFusion's `INSERT` planner leaves, **before** the

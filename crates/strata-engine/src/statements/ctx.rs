@@ -18,6 +18,7 @@ use crate::sources::{connection_facts, Live};
 use crate::statements::classify::{denied, Form};
 use crate::statements::target::Target;
 use crate::statements::StmtKind;
+use crate::tables::InternalTableStore;
 use crate::{Connections, InternalTables};
 
 use super::arms::session::SessionScope;
@@ -53,6 +54,9 @@ pub struct StmtCtx {
     pub root: DataRoot,
     /// Which registered tables Strata owns the data of.
     pub internal: InternalTables,
+    /// Where those tables' bytes live ([`EngineBuilder::with_table_store`](crate::EngineBuilder::with_table_store))
+    /// — what a CTAS publishes into and an `INSERT` appends through.
+    pub(crate) tables: Arc<dyn InternalTableStore>,
     /// Which object stores this project has a connection to — what a typed
     /// `CREATE EXTERNAL TABLE`'s `LOCATION` may name.
     pub connections: Connections,

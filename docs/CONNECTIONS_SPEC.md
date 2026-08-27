@@ -654,7 +654,9 @@ federated read provider, so the node a plan sees would be the writer rather than
 provider would silently forfeit pushdown on **every read** — exactly the failure the
 own-provider decision exists to prevent — so the catalog goes on serving read providers, and a
 write statement builds a writer over the one it resolved, drives the sink once and drops it. The
-drive itself is `sink::append_rows`, shared with the workspace `INSERT` since DB-12. The input plan
+drive itself is `sink::append_rows` (the workspace `INSERT` shared it from DB-12 until the EA-08
+seam gave that arm its own writer, `InternalTableStore::append` over `sink::insert_stream` — the
+same input handling, minus the provider sink). The input plan
 is coalesced to a single partition first, because `DataSinkExec` reads partition 0 and nothing
 else, and its redundant projection is collapsed first (`sink::collapse_projections`): DataFusion's
 `INSERT` planner leaves a renaming projection over the query's own, and the unparser renders that

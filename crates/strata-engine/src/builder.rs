@@ -18,6 +18,7 @@ use crate::secrets::{KeystoreSecrets, SecretProvider};
 use crate::snapshots::{LocalIpcSnapshotStore, SnapshotStore};
 use crate::sources::source::{DataSource, SourceKind, Sources};
 use crate::sources::Live;
+use crate::tables::{InternalTableStore, LocalIpcTableStore};
 use crate::udf_package::UdfPackage;
 use crate::{
     build_context, runtime_subset, Connections, Dependencies, Engine, InternalTables, SessionScope,
@@ -56,6 +57,7 @@ pub struct EngineBuilder {
     sources: Sources,
     formats: Formats,
     snapshots: Option<Arc<dyn SnapshotStore>>,
+    tables: Option<Arc<dyn InternalTableStore>>,
 }
 
 /// The shipped sources and formats are registered here, through the same public calls an embedder
@@ -73,6 +75,7 @@ impl Default for EngineBuilder {
             sources: Sources::default(),
             formats: Formats::shipped(),
             snapshots: None,
+            tables: None,
         };
         #[cfg(feature = "postgres")]
         let builder = builder.with_source(crate::sources::postgres::Pg);
@@ -182,6 +185,22 @@ impl EngineBuilder {
         self
     }
 
+    /// Sets where this engine's internal tables live, defaults to a [`LocalIpcTableStore`]
+    /// following the project folder
+    ///
+    /// The default spools each table into `.strata/tables/<slug>/` under whatever
+    /// [`with_data_dir`](Self::with_data_dir) or [`Engine::set_data_dir`](crate::Engine::set_data_dir)
+    /// said, which is what keeps a table's def portable and its data with the project;
+    /// [`MemTableStore`](crate::tables::MemTableStore) holds tables in RAM instead — tests and
+    /// ephemeral workspaces only, because the defs outlive the process while the data does not,
+    /// so a restart re-registers against vanished data — and an
+    /// embedder that wants Strata-owned tables somewhere else implements
+    /// [`InternalTableStore`].
+    pub fn with_table_store(mut self, store: impl InternalTableStore) -> Self {
+        self.tables = Some(Arc::new(store));
+        self
+    }
+
     /// Sets the memory pool DataFusion allocates from
     ///
     /// Takes precedence over `datafusion.runtime.memory_limit`, which otherwise builds one.
@@ -207,6 +226,10 @@ impl EngineBuilder {
         let snapshots = self
             .snapshots
             .unwrap_or_else(|| Arc::new(LocalIpcSnapshotStore::new()));
+        let data_root = Arc::new(Mutex::new(self.data_dir));
+        let tables = self
+            .tables
+            .unwrap_or_else(|| Arc::new(LocalIpcTableStore::following(Arc::clone(&data_root))));
         Arc::new_cyclic(|self_ref| Engine {
             engine_id,
             self_ref: self_ref.clone(),
@@ -220,7 +243,8 @@ impl EngineBuilder {
             lifecycle: Mutex::default(),
             inflight_flag: Arc::new(AtomicBool::new(false)),
             functions,
-            data_root: Mutex::new(self.data_dir),
+            data_root,
+            tables,
             internal: InternalTables::default(),
             dependencies: Dependencies::default(),
             connections: Connections::default(),

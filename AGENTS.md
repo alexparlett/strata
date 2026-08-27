@@ -73,9 +73,13 @@ request ids, no UI-side runtime, no worker loop. A Run materializes an immutable
 every later read — page, sort, chart, export — is a bounded read of that
 snapshot, which is what makes paging stable and caching sound. Where a snapshot's bytes live is a
 `SnapshotStore`, held to typed fidelity, the row-order ordinal, exact null counts and
-immutability but never to a format; the default writes Arrow IPC. It is built one way, by
+immutability but never to a format; the default writes Arrow IPC. Where a Strata-owned table's
+bytes live is an `InternalTableStore`, held to atomic publish, one appended unit per statement,
+a provider that re-lists per scan and an interruption-safe discard; the default keeps the
+project's `.strata/tables/` spool, and the def machinery never learns which store answered. It
+is built one way, by
 `Engine::builder()`, which is where an embedder's choices go — config, secrets, SQL functions, data
-sources, file formats, the snapshot store, the memory pool — and every method on the built engine takes `&self`, so a
+sources, file formats, the snapshot store, the table store, the memory pool — and every method on the built engine takes `&self`, so a
 handle reaches all of them through `Deref` and no wrapper needs forwarders. Those methods are
 reached through six borrowed **group handles** naming what the call is about — `ws(id)`, `snapshot(id)`, `catalog()`,
 `sources()`, `lang()`, `work()` — plus a short root set for the engine itself; the mapping is
