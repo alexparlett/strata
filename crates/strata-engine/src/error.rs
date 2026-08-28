@@ -48,7 +48,7 @@ pub enum EngineError {
     #[error("{0}")]
     Failed(String),
     /// The runtime dropped or panicked the task carrying the call — a different fault from the
-    /// call's own, and named as one.
+    /// call's own, which is why the message names the call rather than the work.
     #[error("{what} task failed: {why}")]
     Task { what: String, why: String },
 }
@@ -79,8 +79,8 @@ mod tests {
     use crate::statements::Reason;
 
     /// Every surface that shows a settled error renders these, and the two supersedes are the
-    /// ones that must not read as a fault: the event log once mapped one to a red row saying
-    /// "superseded by a newer run", a failure the user never had.
+    /// ones that must not read as a fault: a consumer that recognised only the first would
+    /// report a supersede as a failure the user never had.
     #[test]
     fn a_stop_reads_as_the_sentence_the_user_sees() {
         assert_eq!(StopReason::Cancelled.to_string(), "cancelled");

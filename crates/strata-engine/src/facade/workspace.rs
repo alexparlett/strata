@@ -136,10 +136,15 @@ impl Workspace<'_> {
             .await
     }
 
-    /// Cancel the in-flight run/explain **iff** it is still run `tag` (a stale
-    /// cancel can't abort a just-started newer run). Returns the elapsed time when
-    /// something was actually cancelled; the awaiting [`query`](Self::query) /
-    /// [`explain`](Self::explain) settles [`StopReason::Cancelled`](crate::StopReason::Cancelled).
+    /// Cancel the in-flight run/explain — or the statement still being classified — **iff** it
+    /// is still run `tag` (a stale cancel can't abort a just-started newer run). Returns the
+    /// elapsed time when something was actually cancelled; the awaiting [`run`](Self::run) /
+    /// [`query`](Self::query) / [`explain`](Self::explain) settles
+    /// [`StopReason::Cancelled`](crate::StopReason::Cancelled).
+    ///
+    /// A press can land in the window in front of dispatch, before anything is registered and
+    /// before a snapshot is minted, so stopping one there is dropping the entry and aborting its
+    /// task — the same settle a dispatched run gets.
     ///
     /// The `tag` — the UI's per-press nonce — is exactly right here, and the one place it
     /// is: the caller is asking to stop *the run it can see*, so if a repeat dispatch
@@ -154,10 +159,6 @@ impl Workspace<'_> {
             self.engine.publish_inflight(&lc);
             return Some(elapsed);
         }
-        // A press can also land while the statement is still being **classified**, before
-        // anything is dispatched — see `Classifying`. Nothing has been registered and no
-        // snapshot minted, so stopping it is dropping the entry and aborting its task; the
-        // awaiting `run` settles `StopReason::Cancelled` exactly as a dispatched one does.
         if lc.classifying.get(&self.ws).map(|c| c.tag) == Some(tag) {
             let c = lc.classifying.remove(&self.ws).unwrap();
             let elapsed = c.start.elapsed().as_millis();
