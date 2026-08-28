@@ -115,9 +115,10 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
 /// the rows, so this is the whole key.
 #[derive(Clone, PartialEq)]
 pub enum PageKey {
-    /// The Run's own page 1 — page 1 at the Run's page size, unsorted.
+    /// The Run's own page 1 — page 1 at the Run's page size, unsorted, and still under the
+    /// display config it was rendered with.
     Run,
-    /// A read of the snapshot: `(snapshot, page, page size, sort)`.
+    /// A read of the snapshot: `(snapshot, query, display)`.
     Snapshot(PageSpec),
 }
 
