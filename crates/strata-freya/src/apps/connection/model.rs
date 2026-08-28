@@ -1063,6 +1063,7 @@ mod tests {
             .sources()
             .check_address(&kind, &def.address)
             .err()
+            .map(|why| why.to_string())
     }
 
     /// **A pasted `postgres://` URL loses its scheme like every other non-HTTP address**: the

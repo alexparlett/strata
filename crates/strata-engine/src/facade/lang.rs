@@ -9,7 +9,7 @@ use crate::sql::{self, FunctionCatalog, PreparedSym};
 use crate::statements::arms;
 use crate::statements::pipeline::{self, Pipeline};
 use crate::statements::PolicyRefusal;
-use crate::Engine;
+use crate::{Engine, EngineError};
 
 /// This engine's language service, from [`Engine::lang`].
 ///
@@ -44,7 +44,7 @@ impl Lang<'_> {
     /// The same pipeline [`validate`](Self::validate) and
     /// [`Workspace::run`](crate::Workspace::run) use, one capability apart. An empty answer is
     /// a clean pass; a caller refuses dispatch on any other answer, including an `Err`.
-    pub async fn policy_verdicts(self, sql: String) -> Result<Vec<PolicyRefusal>, String> {
+    pub async fn policy_verdicts(self, sql: String) -> Result<Vec<PolicyRefusal>, EngineError> {
         let ctx = self.engine.ctx.clone();
         let policy = self.engine.policy.clone();
         self.engine
@@ -55,7 +55,8 @@ impl Lang<'_> {
                 pipeline::policy_verdicts(&pipeline, policy.as_ref(), &who, &sql).await
             })
             .await
-            .map_err(|e| format!("policy task failed: {e}"))?
+            .map_err(|e| EngineError::task("policy", e))?
+            .map_err(EngineError::from)
     }
 
     /// What this session's planner makes of one **SQL column type** — the empty-table panel's
@@ -64,13 +65,14 @@ impl Lang<'_> {
     ///
     /// A plan and nothing more, so it is as cheap as a diagnostics pass and has no more effect
     /// than one — see [`column_type`](crate::statements::arms::column_type) for why the offer cannot be authored instead.
-    pub async fn column_type(self, sql_type: String) -> Result<String, String> {
+    pub async fn column_type(self, sql_type: String) -> Result<String, EngineError> {
         let ctx = self.engine.ctx.clone();
         self.engine
             .rt()
             .spawn(async move { arms::column_type(&ctx, &sql_type).await })
             .await
-            .map_err(|e| format!("column type task failed: {e}"))?
+            .map_err(|e| EngineError::task("column type", e))?
+            .map_err(EngineError::from)
     }
 
     /// The registered SQL functions (the editor's language catalog), as they stand.

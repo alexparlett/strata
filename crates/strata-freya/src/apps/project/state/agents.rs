@@ -372,6 +372,8 @@ pub fn use_init_agents() -> AgentsCtx {
 
 #[cfg(test)]
 mod tests {
+    use strata_engine::StopReason;
+
     use super::*;
 
     fn agent(name: &str) -> Agent {
@@ -456,7 +458,7 @@ mod tests {
             who.id,
             session,
             first,
-            RunOutcome::Stopped("superseded by a newer run".into()),
+            RunOutcome::Stopped(StopReason::SupersededRun),
         );
 
         let runs = &agents.held().next().unwrap().sessions[0].runs;

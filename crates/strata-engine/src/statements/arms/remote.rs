@@ -566,7 +566,7 @@ mod tests {
     /// `sql` through the one parse every surface enters, then spliced for `pg`.
     fn rewritten(sql: &str) -> Result<String, String> {
         let ctx = session();
-        let stmt = resolved_one(&ctx, sql)?;
+        let stmt = resolved_one(&ctx, sql).map_err(|e| e.message())?;
         let named = Named::of(&stmt);
         named.check(&ctx, "pg")?;
         splice(sql, &named.names, "pg", &Live::default())
@@ -714,7 +714,8 @@ mod tests {
     fn only_a_statement_bound_for_the_server_is_left_unjudged() {
         let ctx = session();
         let asks = |sql: &str, kind| {
-            let stmt = resolved_one(&ctx, sql).unwrap_or_else(|e| panic!("'{sql}': {e}"));
+            let stmt =
+                resolved_one(&ctx, sql).unwrap_or_else(|e| panic!("'{sql}': {}", e.message()));
             dispatched(&ctx, kind, &stmt)
         };
         for (sql, kind) in [

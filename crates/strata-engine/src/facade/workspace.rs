@@ -1,15 +1,13 @@
 //! One workspace's runs: dispatch, supersede, cancel, tear down.
 
 use strata_arrow::plan::QueryPlan;
-use strata_arrow::RecordBatch;
-use strata_model::QueryOutput;
 
 use crate::policy::{Capability, Principal};
 use crate::query::ReadPolicy;
 use crate::statements::arms;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::{accept, Admitted, Pipeline};
-use crate::{explain, Engine, RunOutcome, RunTag, WsId};
+use crate::{explain, Engine, EngineError, RunOutcome, RunRows, RunTag, WsId};
 
 /// One workspace's runs, from [`Engine::ws`].
 ///
@@ -54,7 +52,7 @@ impl Workspace<'_> {
         tag: RunTag,
         sql: String,
         page_size: usize,
-    ) -> Result<RunOutcome, String> {
+    ) -> Result<RunOutcome, EngineError> {
         let ws = self.ws;
         let engine = self.engine;
         let who = Principal::new(Capability::full()).in_session(ws);
@@ -68,7 +66,7 @@ impl Workspace<'_> {
                     let pipeline = Pipeline::new(&ctx);
                     accept(&pipeline, &sql, policy.as_ref(), &who)
                         .await
-                        .map_err(|r| r.message())
+                        .map_err(EngineError::Refused)
                 })
                 .await?
         };
@@ -76,7 +74,7 @@ impl Workspace<'_> {
             Admitted::Query { stmt, policy, .. } => engine
                 .read(ws, tag, stmt.into_statement(), page_size, policy)
                 .await
-                .map(|(output, batch)| RunOutcome::Rows(output, batch)),
+                .map(RunOutcome::Rows),
             Admitted::Statement { kind, stmt, .. } => {
                 let root = engine.data_root.lock().unwrap().clone();
                 let cx = StmtCtx {
@@ -118,7 +116,7 @@ impl Workspace<'_> {
         tag: RunTag,
         sql: String,
         page_size: usize,
-    ) -> Result<(QueryOutput, RecordBatch), String> {
+    ) -> Result<RunRows, EngineError> {
         let stmt = self.engine.parse_one(&sql)?;
         self.engine
             .read(self.ws, tag, stmt, page_size, ReadPolicy::default())
@@ -128,7 +126,7 @@ impl Workspace<'_> {
     /// Run an `EXPLAIN [ANALYZE]` statement — a parsed plan tree, no snapshot.
     /// Supersedes the workspace's in-flight run (mutually exclusive, like a re-run) but
     /// leaves its settled snapshot alone (spec §4: explains materialize nothing).
-    pub async fn explain(self, tag: RunTag, sql: String) -> Result<QueryPlan, String> {
+    pub async fn explain(self, tag: RunTag, sql: String) -> Result<QueryPlan, EngineError> {
         let stmt = self.engine.parse_one(&sql)?;
         let ctx = self.engine.ctx.clone();
         self.engine
@@ -138,10 +136,15 @@ impl Workspace<'_> {
             .await
     }
 
-    /// Cancel the in-flight run/explain **iff** it is still run `tag` (a stale
-    /// cancel can't abort a just-started newer run). Returns the elapsed time when
-    /// something was actually cancelled; the awaiting [`query`](Self::query) /
-    /// [`explain`](Self::explain) settles `Err("cancelled")`.
+    /// Cancel the in-flight run/explain — or the statement still being classified — **iff** it
+    /// is still run `tag` (a stale cancel can't abort a just-started newer run). Returns the
+    /// elapsed time when something was actually cancelled; the awaiting [`run`](Self::run) /
+    /// [`query`](Self::query) / [`explain`](Self::explain) settles
+    /// [`StopReason::Cancelled`](crate::StopReason::Cancelled).
+    ///
+    /// A press can land in the window in front of dispatch, before anything is registered and
+    /// before a snapshot is minted, so stopping one there is dropping the entry and aborting its
+    /// task — the same settle a dispatched run gets.
     ///
     /// The `tag` — the UI's per-press nonce — is exactly right here, and the one place it
     /// is: the caller is asking to stop *the run it can see*, so if a repeat dispatch
@@ -156,10 +159,6 @@ impl Workspace<'_> {
             self.engine.publish_inflight(&lc);
             return Some(elapsed);
         }
-        // A press can also land while the statement is still being **classified**, before
-        // anything is dispatched — see `Classifying`. Nothing has been registered and no
-        // snapshot minted, so stopping it is dropping the entry and aborting its task; the
-        // awaiting `run` settles `Err("cancelled")` exactly as a dispatched one does.
         if lc.classifying.get(&self.ws).map(|c| c.tag) == Some(tag) {
             let c = lc.classifying.remove(&self.ws).unwrap();
             let elapsed = c.start.elapsed().as_millis();

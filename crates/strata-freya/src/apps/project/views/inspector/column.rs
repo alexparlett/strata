@@ -25,7 +25,7 @@ use freya::query::QueryStateData;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_arrow::profile::stats_footnote;
 use strata_core::util::iso8601;
-use strata_engine::stopped_on_purpose;
+use strata_engine::EngineError;
 use strata_model::{CatalogProfile, Origin};
 
 use super::model::{
@@ -484,7 +484,7 @@ impl Component for ScannedStatistics {
 enum Scan {
     Running,
     Done(CatalogProfile),
-    Failed(String),
+    Failed(EngineError),
 }
 
 /// What the zone actually puts on screen.
@@ -499,7 +499,7 @@ enum Shown<'a> {
     /// be worth announcing.
     Facts(&'a CatalogProfile),
     /// The scan failed, over whatever was on screen before it ran.
-    Failed(&'a str, Option<&'a CatalogProfile>),
+    Failed(&'a EngineError, Option<&'a CatalogProfile>),
     /// Nothing to show and nothing running — offer the scan.
     Offer,
 }
@@ -518,7 +518,7 @@ fn shown<'a>(scan: &'a Scan, held: Option<&'a CatalogProfile>, announced: bool) 
             Some(previous) if announced => Shown::ReScan(previous),
             Some(previous) => Shown::Facts(previous),
         },
-        Scan::Failed(e) if stopped_on_purpose(e) => match held {
+        Scan::Failed(EngineError::Stopped(_)) => match held {
             Some(previous) => Shown::Facts(previous),
             None => Shown::Offer,
         },
@@ -779,6 +779,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
+    use strata_engine::StopReason;
+
     use super::*;
 
     fn profile(rows: u64) -> CatalogProfile {
@@ -840,14 +842,13 @@ mod tests {
     }
 
     /// A scan **stopped on purpose** is not a failure to report: it falls back to whatever was on
-    /// screen, or to offering the scan again where there was nothing. Both strings are the
-    /// engine's, and this is the arm a re-registration's abort lands in for the moment before the
-    /// store drops the request.
+    /// screen, or to offering the scan again where there was nothing. This is the arm a
+    /// re-registration's abort lands in for the moment before the store drops the request.
     #[test]
     fn a_scan_stopped_on_purpose_reports_nothing() {
         let previous = profile(5);
-        for stopped in ["cancelled", "superseded by a newer scan"] {
-            let scan = Scan::Failed(stopped.to_string());
+        for stopped in [StopReason::Cancelled, StopReason::SupersededScan] {
+            let scan = Scan::Failed(EngineError::Stopped(stopped));
             assert_eq!(shown(&scan, Some(&previous), true), Shown::Facts(&previous));
             assert_eq!(shown(&scan, None, true), Shown::Offer);
         }
@@ -859,14 +860,15 @@ mod tests {
     #[test]
     fn a_failure_says_why_and_keeps_whatever_it_was_replacing() {
         let previous = profile(5);
-        let scan = Scan::Failed("Schema error: No field named x".to_string());
+        let why = EngineError::Failed("Schema error: No field named x".to_string());
+        let scan = Scan::Failed(why.clone());
         assert_eq!(
             shown(&scan, Some(&previous), true),
-            Shown::Failed("Schema error: No field named x", Some(&previous))
+            Shown::Failed(&why, Some(&previous))
         );
         assert_eq!(
             shown(&scan, None, true),
-            Shown::Failed("Schema error: No field named x", None),
+            Shown::Failed(&why, None),
             "a failed first scan has nothing to fall back to, so it offers the retry"
         );
     }

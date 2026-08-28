@@ -198,17 +198,17 @@ obvious home (`crates/strata-engine/src/facade/`):
 // The editor's entry point: classify the statement, then run a query (delegating to
 // `query` byte-for-byte), execute an intercepted statement, or refuse it — the
 // statement router, docs/STATEMENTS_SPEC.md.
-async fn Workspace::run(tag: RunTag, sql, page_size) -> Result<RunOutcome, String>
+async fn Workspace::run(tag: RunTag, sql, page_size) -> Result<RunOutcome, EngineError>
 
 // Run's Query arm: execute once → spool a fresh snapshot → page 1 + handle back.
-async fn Workspace::query(tag: RunTag, sql, page_size) -> Result<(QueryOutput, RecordBatch), String>
+async fn Workspace::query(tag: RunTag, sql, page_size) -> Result<RunRows, EngineError>
 
 // Read: bounded LIMIT/OFFSET (+ optional whole-snapshot ORDER BY) over one snapshot.
 async fn SnapshotReads::page(page, page_size, sort: Option<(String, bool)>)
-    -> Result<(Vec<Vec<Cell>>, RecordBatch), String>
+    -> Result<SnapshotPage, EngineError>
 
 // Explain: parsed plan tree, no snapshot.
-async fn Workspace::explain(tag: RunTag, sql) -> Result<QueryPlan, String>
+async fn Workspace::explain(tag: RunTag, sql) -> Result<QueryPlan, EngineError>
 
 // Lifecycle: cancel is scoped to the run `tag`, so a stale cancel can't abort a
 // just-started newer run; cleanup is the tab-close hook; Drop clears everything.
@@ -257,9 +257,9 @@ QuerySpec {
     mode: QueryMode,    // Run | Explain { analyze } — Explain returns a plan, materializes nothing
     page_size: usize,
 }
-RunQuery(Captured<EngineCtx>): QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = String>
+RunQuery(Captured<EngineCtx>): QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = EngineError>
 
-QueryOutcome::Rows(QueryPage { output: QueryOutput, batch: RecordBatch })   // mode: Run
+QueryOutcome::Rows(RunRows { output: QueryOutput, batch: RecordBatch })    // mode: Run
 QueryOutcome::Plan(QueryPlan)                                               // mode: Explain
 QueryOutcome::Statement(StatementReport)   // mode: Run, intercepted statement — no snapshot,
                                            // and none retired (docs/STATEMENTS_SPEC.md)
@@ -271,7 +271,7 @@ PageSpec {
     page_size: usize,
     sort: Option<(String, bool)>,
 }
-FetchSnapshotPage(Captured<EngineCtx>): QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = String>
+FetchSnapshotPage(Captured<EngineCtx>): QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = EngineError>
 ```
 
 Why the nonce: a Run is an **action**, not a fetch — pressing Run must execute, and *only*

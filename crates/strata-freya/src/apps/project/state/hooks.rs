@@ -456,7 +456,11 @@ async fn register_defs(
         }
         ScanWork::Table { spec, views } => {
             let name = spec.name.clone();
-            let result = engine.catalog().register(spec).await;
+            let result = engine
+                .catalog()
+                .register(spec)
+                .await
+                .map_err(|e| e.to_string());
             settle_reg(&mut station, log, RegOutcome::Table { name, result });
             engine
                 .catalog()

@@ -52,7 +52,8 @@ use strata_engine::sources::{
     migrate_secrets, put_secret, SchemaListingView, SchemaVisibility, SourceDetail,
 };
 use strata_engine::{
-    sql, stopped_on_purpose, Connections, Engine, RunOutcome, RunTag, StoreEffect, ViewMeta, WsId,
+    sql, Connections, Engine, EngineError, RunOutcome, RunTag, StopReason, StoreEffect, ViewMeta,
+    WsId,
 };
 use strata_model::{
     Cell, ConnectionDef, CsvRead, Provider, SourceDef, SourceFormat, StatKey, TableDef,
@@ -198,12 +199,12 @@ fn store_password(conn: &ConnectionDef, value: &str) {
 
 /// Run `sql` and hand back its first page as text, row by row.
 async fn rows(engine: &Engine, tag: u128, sql: &str) -> Vec<Vec<String>> {
-    let (output, _) = engine
+    engine
         .ws(WsId(1))
         .query(RunTag(tag), sql.to_string(), 200)
         .await
-        .unwrap_or_else(|e| panic!("run '{sql}': {e}"));
-    output
+        .unwrap_or_else(|e| panic!("run '{sql}': {e}"))
+        .output
         .rows
         .iter()
         .map(|row| row.iter().map(|cell: &Cell| cell.text.clone()).collect())
@@ -241,7 +242,8 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .sources()
         .connect(missing.clone())
         .await
-        .expect_err("no password is stored for it");
+        .expect_err("no password is stored for it")
+        .to_string();
     assert!(
         why.contains("No password is stored on this machine") && why.contains(&missing.named()),
         "the refusal names the machine and the connection: {why}"
@@ -259,7 +261,8 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .sources()
         .connect(elsewhere)
         .await
-        .expect_err("nothing is listening there");
+        .expect_err("nothing is listening there")
+        .to_string();
     assert!(
         why.contains(&format!("127.0.0.1:{closed}")),
         "the refusal names the address to fix: {why}"
@@ -271,7 +274,8 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .sources()
         .connect(wrong_password)
         .await
-        .expect_err("the password is wrong");
+        .expect_err("the password is wrong")
+        .to_string();
     assert!(why.contains(USER), "the refusal names the user: {why}");
 
     let reserved = connection(port, "strata", &["public"]);
@@ -280,7 +284,8 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .sources()
         .connect(reserved)
         .await
-        .expect_err("'strata' is the workspace's own catalog");
+        .expect_err("'strata' is the workspace's own catalog")
+        .to_string();
     assert!(why.contains("strata"), "{why}");
 
     assert!(
@@ -708,7 +713,7 @@ async fn unsplit_expression_set_fails_on_the_server(engine: &Engine, name: &str)
         .await
         .expect_err("the workspace set must not survive a trip to PostgreSQL");
     assert!(
-        !stopped_on_purpose(&why),
+        !matches!(why, EngineError::Stopped(_)),
         "a real failure, not a cancel: {why}"
     );
 }
@@ -839,7 +844,10 @@ async fn exotic_types_and_refusals(engine: &Engine) {
     else {
         panic!("v1 is read-only against a database");
     };
-    assert!(!why.is_empty(), "the refusal says something: {why}");
+    assert!(
+        !why.to_string().is_empty(),
+        "the refusal says something: {why}"
+    );
 }
 
 /// **JSON accessors over a remote column** (DB-08) — a phase of the test above.
@@ -924,6 +932,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     else {
         panic!("'->' returns a union type no PostgreSQL expression produces");
     };
+    let why = why.to_string();
     assert!(
         why.contains("'json_get'")
             && why.contains("'->>'")
@@ -945,6 +954,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     else {
         panic!("'json_get_str' is NULL for a non-string, where '->>' stringifies one");
     };
+    let why = why.to_string();
     assert!(
         why.contains("'json_get_str'") && why.contains("CREATE TABLE"),
         "an unmapped member names itself and the way out: {why}"
@@ -1093,7 +1103,8 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
             panic!("'{sql}' was not refused");
         };
         assert!(
-            why.contains(&format!("database connection '{CATALOG}'")),
+            why.to_string()
+                .contains(&format!("database connection '{CATALOG}'")),
             "'{sql}' must name the connection: {why}"
         );
     }
@@ -1105,6 +1116,7 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         let Err(why) = engine.ws(WsId(1)).run(RunTag(25), sql.clone(), 200).await else {
             panic!("'{sql}' was not refused");
         };
+        let why = why.to_string();
         assert!(
             why.contains("read-only") && why.contains("Read only"),
             "'{sql}' must name the setting that would allow it: {why}"
@@ -1128,7 +1140,7 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
     else {
         panic!("the workspace's snapshot namespace is reserved");
     };
-    assert!(why.contains("__snap_"), "{why}");
+    assert!(why.to_string().contains("__snap_"), "{why}");
     let Err(why) = engine
         .ws(WsId(1))
         .run(
@@ -1141,7 +1153,7 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         panic!("the server has no such relation");
     };
     assert!(
-        !why.contains("reserved"),
+        !why.to_string().contains("reserved"),
         "a remote relation is not in Strata's reserved namespace: {why}"
     );
 }
@@ -1213,7 +1225,8 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         panic!("a write to a bare name that resolves remote was accepted");
     };
     assert!(
-        why.contains(&format!("database connection '{CATALOG}'")),
+        why.to_string()
+            .contains(&format!("database connection '{CATALOG}'")),
         "a write target is refused as remote, not as missing: {why}"
     );
 
@@ -1308,6 +1321,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
     else {
         panic!("two relations of that name and one of them was picked");
     };
+    let why = why.to_string();
     assert!(
         why.contains(&format!("{CATALOG}.public.orders"))
             && why.contains(&format!("{CATALOG}.analytics.orders")),
@@ -1435,7 +1449,7 @@ async fn remote_writes(engine: &Engine, port: u16) {
     else {
         panic!("the toggle is what allows the write, and it is off again");
     };
-    assert!(why.contains("read-only"), "{why}");
+    assert!(why.to_string().contains("read-only"), "{why}");
 }
 
 /// **The statements the server runs** — a phase of the test above, and the one only a server can
@@ -1516,7 +1530,7 @@ async fn remote_statements(engine: &Engine, port: u16) {
     else {
         panic!("the toggle is what allows the statement, and it is off again");
     };
-    assert!(why.contains("read-only"), "{why}");
+    assert!(why.to_string().contains("read-only"), "{why}");
 }
 
 /// **The clause Strata does not model reaches the server intact** — the whole claim of splicing
@@ -1661,6 +1675,7 @@ async fn workspace_dml_says_where_it_works(engine: &Engine) {
         else {
             panic!("'{sql}' is not something a workspace table can take");
         };
+        let why = why.to_string();
         assert!(
             why.contains("database connection") && why.contains("CREATE TABLE AS"),
             "'{sql}': {why}"
@@ -1751,7 +1766,7 @@ async fn remote_bodies_stay_inside_the_connection(engine: &Engine) {
         let Err(why) = engine.ws(WsId(1)).run(RunTag(105), sql.clone(), 200).await else {
             panic!("'{sql}' reaches outside the connection");
         };
-        assert!(why.contains(named), "'{sql}': {why}");
+        assert!(why.to_string().contains(named), "'{sql}': {why}");
     }
 }
 
@@ -1857,7 +1872,7 @@ async fn inserts_land(engine: &Engine) {
     else {
         panic!("a statement that empties a server table is not v1");
     };
-    assert!(why.contains("replaces rows"), "{why}");
+    assert!(why.to_string().contains("replaces rows"), "{why}");
 }
 
 /// **A remote CTAS answers about a name the way the local one does**, against the server as it is
@@ -1875,7 +1890,7 @@ async fn ctas_name_semantics(engine: &Engine) {
     else {
         panic!("the relation is already there");
     };
-    assert_eq!(why, "Table 'pg.public.loaded' already exists");
+    assert_eq!(why.to_string(), "Table 'pg.public.loaded' already exists");
 
     let RunOutcome::Statement(report) = engine
         .ws(WsId(1))
@@ -1903,7 +1918,10 @@ async fn ctas_name_semantics(engine: &Engine) {
     else {
         panic!("replacing a server table is not v1 either");
     };
-    assert!(why.contains("Drop it on the server first"), "{why}");
+    assert!(
+        why.to_string().contains("Drop it on the server first"),
+        "{why}"
+    );
 
     let RunOutcome::Statement(report) = engine
         .ws(WsId(1))
@@ -1945,7 +1963,7 @@ async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
     else {
         panic!("'acme' is not an integer");
     };
-    assert!(!why.contains("already exists"), "{why}");
+    assert!(!why.to_string().contains("already exists"), "{why}");
 
     let listing = schemas_of(engine, &conn.named());
     assert!(
@@ -2019,7 +2037,10 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
     let Err(why) = settled else {
         panic!("a cancelled run does not report success");
     };
-    assert!(stopped_on_purpose(&why), "{why}");
+    assert!(
+        matches!(why, EngineError::Stopped(StopReason::Cancelled)),
+        "{why}"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(30);
     while relation_exists(&client, "abandoned").await {

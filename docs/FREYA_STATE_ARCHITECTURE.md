@@ -350,11 +350,13 @@ pub struct QuerySpec {              // one Run press
     pub page_size: usize,
 }
 pub enum QueryOutcome {
-    Rows(QueryPage),                // QueryOutput + the page-1 RecordBatch
+    Rows(RunRows),                  // the engine's own answer: QueryOutput + the page-1 batch
     Plan(QueryPlan),                // Explain — no snapshot
     Statement(StatementReport),     // an intercepted statement — no rows, no handle
 }
-RunQuery : QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = String>
+RunQuery : QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = EngineError>
+// EngineError is Clone, so the cache retains it and a settled Err is still asked by variant
+// (EngineError::Stopped) rather than by its wording
 // dispatches Workspace::run — the statement router decides Rows vs Statement
 
 pub struct PageSpec {
@@ -363,7 +365,7 @@ pub struct PageSpec {
     pub page_size: usize,
     pub sort: Option<(String, bool)>,
 }
-FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = String>
+FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = EngineError>
 ```
 
 **The `Query` is built in one place per capability** — `QuerySpec::query(engine)` and
@@ -460,7 +462,7 @@ does. It follows the Run's division exactly:
 ScanId       // a nonce, fresh per request (a first profile, or a ↻ re-scan)
 ProfileTarget  Workspace { kind, name } | Remote { kind, relation: RemoteRef }   // where it is
 ProfileSpec  { target: ProfileTarget, scan: ScanId }
-ProfileEntry : QueryCapability<Keys = ProfileSpec, Ok = CatalogProfile, Err = String>
+ProfileEntry : QueryCapability<Keys = ProfileSpec, Ok = CatalogProfile, Err = EngineError>
 use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place the Query is built
 ```
 
@@ -513,7 +515,8 @@ engine.catalog()       // register · deregister · table_meta · create_view ·
 engine.sources()       // connect · disconnect · listing · show_schemas · database_syms · …
 engine.lang()          // validate(sql) -> Vec<Diagnostic> (the §9 dry-plan) · functions · …
 engine.work()          // flag() -> Arc<AtomicBool> (T2) · background()
-// Root: builder() · id() · set_data_dir() · set_config() · restart_owed() · overrides() · Drop
+// Root: builder() · id() · set_data_dir() · set_config() -> ConfigOutcome · restart_owed()
+//       · overrides() · formats() · Drop
 
 // apps/project/contexts/engine_ctx.rs — the thin per-window wrapper:
 #[derive(Clone)]

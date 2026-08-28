@@ -11,6 +11,7 @@ use freya::prelude::*;
 use freya::query::{use_query, QueryStateData};
 use freya::radio::use_radio;
 use strata_arrow::plan::PlanTab;
+use strata_engine::RunRows;
 use strata_model::{ResultsView, SnapshotId, TabId};
 
 mod cell_view;
@@ -43,7 +44,7 @@ use status_bar::StatusBar;
 
 use crate::apps::export::{ExportLaunch, ExportTarget};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{PageSpec, QueryOutcome, QueryPage, QuerySpec, RunId};
+use crate::apps::project::query::{PageSpec, QueryOutcome, QuerySpec, RunId};
 use crate::apps::project::state::{Chan, LogCtx, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
@@ -243,7 +244,7 @@ impl Component for ResultsBody {
         let export_log = use_consume::<LogCtx>();
         let export_engine = engine;
         let export_subtree = use_consume::<Subtree>();
-        let export_target = |rows: &QueryPage| -> Option<ExportLaunch> {
+        let export_target = |rows: &RunRows| -> Option<ExportLaunch> {
             rows.output.snapshot.map(|snapshot| ExportLaunch {
                 target: ExportTarget {
                     snapshot,
@@ -263,7 +264,7 @@ impl Component for ResultsBody {
         };
 
         let shape_sql = self.spec.sql.clone();
-        let shape_target = |rows: &QueryPage| -> Option<ShapeTarget> {
+        let shape_target = |rows: &RunRows| -> Option<ShapeTarget> {
             rows.output.snapshot.map(|_| ShapeTarget {
                 tab: ws,
                 sql: shape_sql.clone(),
@@ -333,7 +334,7 @@ impl Component for ResultsBody {
                             (PageRead::Ready(fv.data), fv.row_nums)
                         }
                         QueryStateData::Settled { res: Err(err), .. } => {
-                            (PageRead::Failed(err.clone()), None)
+                            (PageRead::Failed(err.to_string()), None)
                         }
                         QueryStateData::Pending | QueryStateData::Loading { .. } => {
                             (PageRead::Loading, None)
@@ -384,7 +385,7 @@ impl Component for ResultsBody {
                 StatusBar::new(ResultsState::Statement).statement(report.kind, report.elapsed_ms),
             ),
             QueryStateData::Settled { res: Err(err), .. } => (
-                ErrorState::new(err.clone(), self.spec.tab).into(),
+                ErrorState::new(err.to_string(), self.spec.tab).into(),
                 StatusBar::new(ResultsState::Error),
             ),
         };

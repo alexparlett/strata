@@ -848,8 +848,8 @@ pub struct QuerySessionResult {
 }
 
 /// What a `run` settled as. **A stop is a status, not an error**: a cancel in the app or a
-/// supersede by a newer press is news the user already has, and the only thing that knows a
-/// stop from a fault is `strata_engine::stopped_on_purpose`.
+/// supersede by a newer press is news the user already has, and the engine's own
+/// `EngineError::Stopped` is what tells one from a fault.
 ///
 /// **`extend` is load-bearing, not decoration.** This is the vocabulary's one `outputSchema`
 /// that is a sum rather than a struct, and schemars emits an internally-tagged enum as a bare

@@ -28,15 +28,15 @@ use strata_agent::{
     Agent, AgentError, AgentId, CatalogEntry, Described, QuerySessionId, QuerySessionInfo,
     RunSettle, Settled,
 };
-use strata_engine::stopped_on_purpose;
+use strata_engine::{EngineError, StopReason};
 use tokio::sync::oneshot;
 
 /// What one of an agent's runs came to.
 ///
-/// A stop is its own arm rather than an error string, because it is the one distinction the
-/// pane must not get wrong: `strata_engine::stopped_on_purpose` settles three strings
-/// that are news the user already has, and painting one red would report a fault nobody had.
-/// The driver asks that predicate once, on the way in.
+/// A stop is its own arm rather than an error, because it is the one distinction the pane must
+/// not get wrong: the engine settles three stop reasons that are news the user already has, and
+/// painting one red would report a fault nobody had. The driver matches the variant once, on the
+/// way in.
 #[derive(Clone, PartialEq, Debug)]
 pub enum RunOutcome {
     /// Dispatched, still in flight.
@@ -53,20 +53,16 @@ pub enum RunOutcome {
     Plan {
         analyze: bool,
     },
-    /// Cancelled or superseded — the engine's own wording.
-    Stopped(String),
+    /// Cancelled or superseded.
+    Stopped(StopReason),
     Failed(String),
 }
 
 impl RunOutcome {
     /// What a settled run reads as in the pane.
     ///
-    /// The **only** judgement here is `stopped_on_purpose`, and it is asked rather than
-    /// re-derived: the engine settles three such strings (`cancelled`, and two supersedes),
-    /// and the event log already learned once what a hand-rolled `== "cancelled"` costs — a
-    /// red row reading "superseded by a newer run", a fault the user never had. Everything
-    /// else `Err` keeps the engine's own message, which is the same text the results pane
-    /// would frame if this query were promoted into a tab and re-run.
+    /// Everything but a stop keeps the engine's own message, which is the same text the results
+    /// pane would frame if this query were promoted into a tab and re-run.
     pub fn of(settled: &RunSettle) -> RunOutcome {
         match settled {
             Ok(Settled::Rows(output)) => RunOutcome::Rows {
@@ -77,8 +73,8 @@ impl RunOutcome {
             Ok(Settled::Plan(plan)) => RunOutcome::Plan {
                 analyze: plan.analyze,
             },
-            Err(e) if stopped_on_purpose(e) => RunOutcome::Stopped(e.clone()),
-            Err(e) => RunOutcome::Failed(e.clone()),
+            Err(EngineError::Stopped(stop)) => RunOutcome::Stopped(*stop),
+            Err(e) => RunOutcome::Failed(e.to_string()),
         }
     }
 }
@@ -138,8 +134,8 @@ pub enum AgentAsk {
 /// A fact about an agent, with no answer — see the module note on why these need a channel
 /// of their own.
 pub enum AgentNotice {
-    /// The run started under `seq` settled. Judged already: the driver never re-reads
-    /// `stopped_on_purpose`, which is asked in one place in the whole system.
+    /// The run started under `seq` settled. Judged already: the driver reads the engine's
+    /// error once, and nothing downstream asks again.
     RunSettled {
         agent: AgentId,
         session: QuerySessionId,

@@ -34,7 +34,7 @@ use freya::query::{QueryStateData, UseQuery};
 use crate::apps::project::query::{QueryOutcome, RunQuery};
 use strata_core::util::fmt_int;
 use strata_core::util::now_hms;
-use strata_engine::{stopped_on_purpose, CANCELLED};
+use strata_engine::{EngineError, StopReason};
 
 /// How many events are kept, newest-first. The log is a scrollback, not an audit trail — old
 /// enough to answer "what did the scan say", short enough that it can't grow without bound in a
@@ -161,21 +161,19 @@ pub fn use_run_logging(query: UseQuery<RunQuery>) {
 
 /// What a settled Run reads as in the log.
 ///
-/// A run that was **stopped** is a warning, not an error, and `engine::stopped_on_purpose` is the
-/// one place that knows which settles those are — deliberately not a string compare here. The
-/// engine has *three* such strings, not one: `cancelled` (an abort), `superseded by a newer run` (a
-/// press that finished after a newer one replaced it) and `superseded by a newer scan` (the profile
-/// equivalent). This used to test `e == "cancelled"`, which mapped a supersede to a red `Error` row
-/// reading "superseded by a newer run" — a fault the user never had, and precisely the string
-/// that must never read as a problem. Everything else `Err` is the engine's own
-/// message, the same text the results pane frames.
+/// A run that was **stopped** is a warning, not an error, and the arm matches
+/// [`EngineError::Stopped`] rather than any wording. There are *three* stops, not one: a cancel,
+/// a press that finished after a newer one replaced it, and the profile equivalent. A `==
+/// "cancelled"` test here caught only the first, and logged a supersede as a red `Error` row
+/// reading "superseded by a newer run" — a fault the user never had. Everything else `Err` is the
+/// engine's own message, the same text the results pane frames.
 ///
 /// `None` means **somebody else records this settle**, which today is exactly one case: an
 /// intercepted statement (ED-02) is logged by `state::statement`'s fold, because its message
 /// claims something durable ("Table 't' created") and only the fold knows whether the def
 /// reached `project.json`. Logging it here as well would be two rows arguing about one action —
 /// the `save_view` lesson, which is where that gate came from.
-fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
+fn run_event(res: &Result<QueryOutcome, EngineError>) -> Option<(LogLevel, String)> {
     let event = match res {
         Ok(QueryOutcome::Statement(_)) => return None,
         Ok(QueryOutcome::Rows(page)) => (
@@ -193,14 +191,14 @@ fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
                 false => "Explained query".into(),
             },
         ),
-        Err(e) if stopped_on_purpose(e) => (
+        Err(EngineError::Stopped(stop)) => (
             LogLevel::Warning,
-            match e.as_str() {
-                CANCELLED => "Query cancelled".into(),
+            match stop {
+                StopReason::Cancelled => "Query cancelled".into(),
                 stopped => format!("Query {stopped}"),
             },
         ),
-        Err(e) => (LogLevel::Error, e.clone()),
+        Err(e) => (LogLevel::Error, e.to_string()),
     };
     Some(event)
 }
@@ -208,7 +206,6 @@ fn run_event(res: &Result<QueryOutcome, String>) -> Option<(LogLevel, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strata_engine::{SUPERSEDED_RUN, SUPERSEDED_SCAN};
 
     /// Newest first, and bounded: the log is a scrollback, so the oldest event is what goes.
     #[test]
@@ -254,21 +251,20 @@ mod tests {
     /// A cancel is a warning, not a failure — the distinction the results pane also makes.
     #[test]
     fn a_cancelled_run_logs_as_a_warning() {
-        let (level, message) = run_event(&Err(CANCELLED.to_string())).expect("logged here");
+        let (level, message) =
+            run_event(&Err(EngineError::Stopped(StopReason::Cancelled))).expect("logged here");
         assert_eq!(level, LogLevel::Warning);
         assert_eq!(message, "Query cancelled");
     }
 
     /// **And so is a supersede.** A press that finished after a newer one replaced it settles a
-    /// *different* string from a cancel (`superseded by a newer run`), which an `e == "cancelled"`
-    /// test missed — logging it as a red `Error` reading "superseded by a newer run", a fault the
-    /// user never had. Every string the engine calls `stopped_on_purpose` maps to a warning; the
-    /// arm is reached through that predicate, so a fourth one can't quietly fall through to
-    /// `Error` again.
+    /// *different* stop from a cancel, and the arm matches the variant rather than its wording —
+    /// so a fourth reason cannot quietly fall through to `Error`.
     #[test]
     fn a_superseded_run_logs_as_a_warning_too() {
-        for stopped in [SUPERSEDED_RUN, SUPERSEDED_SCAN] {
-            let (level, message) = run_event(&Err(stopped.to_string())).expect("logged here");
+        for stopped in [StopReason::SupersededRun, StopReason::SupersededScan] {
+            let (level, message) =
+                run_event(&Err(EngineError::Stopped(stopped))).expect("logged here");
             assert_eq!(level, LogLevel::Warning, "{stopped}");
             assert_eq!(message, format!("Query {stopped}"));
         }
@@ -278,8 +274,10 @@ mod tests {
     /// frames, so the two can't describe one run differently.
     #[test]
     fn a_failed_run_logs_the_engines_message() {
-        let (level, message) = run_event(&Err("Schema error: No field named 'amont'".to_string()))
-            .expect("logged here");
+        let (level, message) = run_event(&Err(EngineError::Failed(
+            "Schema error: No field named 'amont'".to_string(),
+        )))
+        .expect("logged here");
         assert_eq!(level, LogLevel::Error);
         assert_eq!(message, "Schema error: No field named 'amont'");
     }

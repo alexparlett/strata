@@ -487,8 +487,9 @@ mod tests {
             order: ShapeOrder::ByMeasureDesc,
         };
         let sql = compose(&form, FIXTURE).expect("has output");
-        let (out, _) = block_on(engine.ws(WsId(90)).query(RunTag(1), sql.clone(), 10))
-            .unwrap_or_else(|e| panic!("composed SQL failed to run: {e}\n{sql}"));
+        let out = block_on(engine.ws(WsId(90)).query(RunTag(1), sql.clone(), 10))
+            .unwrap_or_else(|e| panic!("composed SQL failed to run: {e}\n{sql}"))
+            .output;
         let names: Vec<&str> = out.columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
             names,

@@ -22,6 +22,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::env;
+use std::fs::{self, Metadata};
 use std::path::{is_separator, Component, Path, PathBuf};
 
 use datafusion::arrow::array::Array;
@@ -50,18 +51,31 @@ pub struct ExportSpec {
     pub partition: Partition,
 }
 
-/// What one finished export wrote, for a caller with no window to show it in
-/// ([`SnapshotReads::export_to`](crate::SnapshotReads::export_to)).
+/// What one finished export wrote.
 ///
 /// Every figure is read rather than derived: `rows` is the count `COPY` itself returns and
-/// `bytes` is the written file's own size. `bytes` is optional because the size is read back
-/// *after* a write that has already succeeded — a stat that fails is a fact this call could not
-/// learn, never a failed export.
+/// `bytes` is the written file's own size.
+///
+/// `bytes` is `None` for two reasons. A partitioned export writes a Hive directory, whose own
+/// metadata is not the size of the data under it. And the size is read back *after* a write that
+/// has already succeeded, so a stat that fails is a fact this call could not learn, never a
+/// failed export.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportReport {
     pub path: String,
     pub rows: usize,
     pub bytes: Option<u64>,
+}
+
+impl ExportReport {
+    /// Reads back what the write at `path` left on disk.
+    pub(crate) fn of(path: String, rows: usize) -> Self {
+        let bytes = fs::metadata(&path)
+            .ok()
+            .filter(Metadata::is_file)
+            .map(|written| written.len());
+        ExportReport { path, rows, bytes }
+    }
 }
 
 /// How much of the snapshot to write.
@@ -847,7 +861,7 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
 
-    use crate::{Engine, RunTag, WsId};
+    use crate::{Engine, RunRows, RunTag, WsId};
 
     use super::*;
 
@@ -1232,13 +1246,19 @@ mod tests {
         };
 
         let sneaky = root.join(".strata/tables/../tables/sales/rows.csv");
-        let owned = export(sneaky).await.expect_err("inside .strata");
+        let owned = export(sneaky)
+            .await
+            .expect_err("inside .strata")
+            .to_string();
         assert!(owned.contains("holds this project's own data"), "{owned}");
 
         let out = root.join("once.csv");
         export(out.clone()).await.expect("the user's own folder");
         let written = fs::read_to_string(&out).unwrap();
-        let again = export(out.clone()).await.expect_err("already there");
+        let again = export(out.clone())
+            .await
+            .expect_err("already there")
+            .to_string();
         assert!(again.contains("never overwrites"), "{again}");
         assert_eq!(fs::read_to_string(&out).unwrap(), written);
         let _ = fs::remove_dir_all(&root);
@@ -1246,7 +1266,7 @@ mod tests {
 
     /// The snapshot one run settled, which is what an export reads.
     async fn settled(eng: &Engine, sql: &str) -> SnapshotId {
-        let (output, _) = eng
+        let RunRows { output, .. } = eng
             .ws(WsId(1))
             .query(RunTag(1), sql.into(), 10)
             .await

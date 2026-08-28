@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use strata_arrow::plan::as_explain;
-use strata_engine::{Engine, RunTag, WsId};
+use strata_engine::{Engine, EngineError, RunRows, RunTag, WsId};
 
 use crate::error::AgentError;
 use crate::host::{
@@ -38,7 +38,7 @@ pub struct MockProject {
     pub catalog: Vec<CatalogEntry>,
     pub described: Vec<Described>,
     sessions: Vec<MockSession>,
-    settle: Option<String>,
+    settle: Option<EngineError>,
 }
 
 impl MockProject {
@@ -71,10 +71,9 @@ impl MockProject {
         self
     }
 
-    /// Make every run in this project settle with `error` instead of executing — the engine
-    /// strings a cancel or a supersede produces.
-    pub fn settling(mut self, error: &str) -> MockProject {
-        self.settle = Some(error.into());
+    /// Make every run in this project settle with `error` instead of executing.
+    pub fn settling(mut self, error: EngineError) -> MockProject {
+        self.settle = Some(error);
         self
     }
 }
@@ -265,7 +264,7 @@ impl Host for MockHost {
                 .ws(ws)
                 .query(run, sql, page_size)
                 .await
-                .map(|(output, _)| Settled::Rows(output)),
+                .map(|RunRows { output, .. }| Settled::Rows(output)),
             RunMode::Explain => engine
                 .ws(ws)
                 .explain(run, as_explain(&sql, false))

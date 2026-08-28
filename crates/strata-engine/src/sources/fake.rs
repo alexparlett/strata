@@ -431,7 +431,7 @@ mod tests {
             )
             .await
             .expect("a read through the source's own provider")
-            .0;
+            .output;
         assert_eq!(
             rows.rows
                 .iter()
@@ -526,7 +526,8 @@ mod tests {
             .sources()
             .connect(fake_def::<TestDoc>("docs", "docs"))
             .await
-            .expect_err("nothing serves 'test-doc'");
+            .expect_err("nothing serves 'test-doc'")
+            .to_string();
         assert!(
             why.contains("'test-doc'") && why.contains("with_source"),
             "{why}"
@@ -551,7 +552,10 @@ mod tests {
         assert_eq!(doc.mode, SourceMode::Catalog);
         assert_eq!(doc.keys, DOC_KEYS, "the form draws the source's own keys");
         assert_eq!(
-            engine.sources().check_address(TestDoc::NAME, ""),
+            engine
+                .sources()
+                .check_address(TestDoc::NAME, "")
+                .map_err(|e| e.to_string()),
             Err("This connection has no address.".into()),
             "the default address rule is reached through the registry"
         );

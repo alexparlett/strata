@@ -183,6 +183,7 @@ mod tests {
             .run(RunTag(1), sql.into(), 10)
             .await
             .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// A capability scoped to one backend kind refuses a write to a connection of another —

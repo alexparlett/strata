@@ -25,7 +25,7 @@
 //!   policy — the editor simply never dispatches what validation flagged, and an agent cannot be
 //!   trusted with that discipline. `run` asks `Lang::policy_verdicts` and refuses on any
 //!   non-clean answer, an unjudgeable one included: the gate fails closed.
-//! - **A stop is not a fault.** `strata_engine::stopped_on_purpose` is asked once, here.
+//! - **A stop is not a fault.** `EngineError::Stopped` is matched once, here.
 //! - **`run` never rewrites SQL.** No injected `LIMIT`; the *response* is bounded by `page_size`
 //!   plus `read_page`.
 //!
@@ -50,7 +50,7 @@ use rmcp::model::{JsonObject, ProtocolVersion};
 use rmcp::service::Peer;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
-use strata_engine::{stopped_on_purpose, Engine};
+use strata_engine::{Engine, EngineError};
 use strata_model::SnapshotId;
 use uuid::Uuid;
 
@@ -726,7 +726,7 @@ impl<H: Host> StrataTools<H> {
                     .sources()
                     .describe_remote(params.name.clone())
                     .await
-                    .map_err(AgentError::Query)?;
+                    .map_err(|e| AgentError::Query(e.to_string()))?;
                 match remote {
                     Some(remote) => Described::Remote {
                         name: format!("{}.{}", remote.connection, remote.relation),
@@ -847,7 +847,7 @@ impl<H: Host> StrataTools<H> {
         }
 
         match engine.lang().policy_verdicts(params.sql.clone()).await {
-            Err(e) => return Err(AgentError::Query(e)),
+            Err(e) => return Err(AgentError::Query(e.to_string())),
             Ok(refusals) if !refusals.is_empty() => return Err(AgentError::Policy(refusals)),
             Ok(_) => {}
         }
@@ -879,11 +879,11 @@ impl<H: Host> StrataTools<H> {
                 Ok(rows_result(handle, cols, output))
             }
             Ok(Settled::Plan(plan)) => Ok(plan_result(handle, plan)),
-            Err(e) if stopped_on_purpose(&e) => Ok(RunResult::Stopped {
+            Err(EngineError::Stopped(stop)) => Ok(RunResult::Stopped {
                 query_session: handle,
-                reason: e,
+                reason: stop.to_string(),
             }),
-            Err(e) => Err(AgentError::Query(e)),
+            Err(e) => Err(AgentError::Query(e.to_string())),
         }
     }
 
@@ -924,17 +924,17 @@ impl<H: Host> StrataTools<H> {
             .page(page, last.page_size, sort)
             .await
         {
-            Ok((rows, _)) => Ok(PageResult {
+            Ok(read) => Ok(PageResult {
                 query_session: params.query_session,
                 columns: last.columns,
-                rows: cells(&rows),
+                rows: cells(&read.rows),
                 total: last.total,
                 page,
                 page_size: last.page_size,
             }),
             Err(e) => {
                 if engine.snapshot(snapshot).live() {
-                    Err(AgentError::Query(e))
+                    Err(AgentError::Query(e.to_string()))
                 } else {
                     self.forget(agent, &project.root, session);
                     Err(AgentError::ResultMoved)
@@ -997,7 +997,7 @@ impl<H: Host> StrataTools<H> {
             .await
         {
             Ok(report) => Ok(ExportResult::from((params.query_session, report))),
-            Err(e) if engine.snapshot(snapshot).live() => Err(AgentError::Query(e)),
+            Err(e) if engine.snapshot(snapshot).live() => Err(AgentError::Query(e.to_string())),
             Err(_) => {
                 self.forget(agent, &project.root, session);
                 Err(AgentError::ResultMoved)
@@ -1237,7 +1237,7 @@ mod tests {
     use std::{env, process};
 
     use strata_engine::{DenyCode, Form, Reason, StmtKind};
-    use strata_engine::{RunTag, TableSpec, WsId, CANCELLED};
+    use strata_engine::{EngineError, RunTag, StopReason, TableSpec, WsId};
     use strata_model::SourceFormat;
 
     use crate::assistant::SYSTEM;
@@ -2109,9 +2109,9 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_run_is_an_outcome_not_an_error() {
         let root = scratch("stopped");
-        let tools = StrataTools::new(MockHost::new(vec![
-            MockProject::new("sales", &root).settling(CANCELLED)
-        ]));
+        let tools =
+            StrataTools::new(MockHost::new(vec![MockProject::new("sales", &root)
+                .settling(EngineError::Stopped(StopReason::Cancelled))]));
         let session = open(&tools).await;
         let result = tools
             .run(run_params(&session, "SELECT 1"))
@@ -2120,7 +2120,7 @@ mod tests {
         let RunResult::Stopped { reason, .. } = result else {
             panic!("{result:?}");
         };
-        assert_eq!(reason, CANCELLED);
+        assert_eq!(reason, StopReason::Cancelled.to_string());
     }
 
     #[tokio::test]

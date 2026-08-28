@@ -86,11 +86,12 @@ async fn fixture_project_registers_and_queries() {
         assert!(!meta.tables.is_empty(), "'{name}' reads base tables");
     }
 
-    let (output, _) = eng
+    let output = eng
         .ws(WsId(1))
         .query(RunTag(1), "SELECT * FROM active_users".into(), 50)
         .await
-        .expect("query the view");
+        .expect("query the view")
+        .output;
     assert!(output.total > 0, "the view yields rows");
 
     eng.catalog()

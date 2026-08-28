@@ -36,7 +36,7 @@ use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, 
 use std::collections::BTreeMap;
 use std::time::Duration;
 use strata_engine::sql::qualified;
-use strata_engine::{CatalogGen, RemoteRelation};
+use strata_engine::{CatalogGen, EngineError, RemoteRelation};
 use strata_model::RemoteRef;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -72,7 +72,7 @@ pub struct RemoteColumns(pub Captured<EngineCtx>);
 
 impl QueryCapability for RemoteColumns {
     type Ok = RemoteSchemas;
-    type Err = String;
+    type Err = EngineError;
     type Keys = ColumnsSpec;
 
     /// One `describe_remote` per relation, in order.
@@ -83,7 +83,7 @@ impl QueryCapability for RemoteColumns {
     /// would have to invent a sentence for. An `Err` is the server refusing an introspection of a
     /// relation it does list, which is a fault about the connection and already carries the
     /// engine's own reading of it.
-    async fn run(&self, spec: &ColumnsSpec) -> Result<RemoteSchemas, String> {
+    async fn run(&self, spec: &ColumnsSpec) -> Result<RemoteSchemas, EngineError> {
         let mut out = RemoteSchemas::new();
         for relation in &spec.relations {
             let name = qualified([
@@ -94,7 +94,7 @@ impl QueryCapability for RemoteColumns {
             let answer = match self.0.sources().describe_remote(name).await {
                 Ok(Some(found)) => Ok(found),
                 Ok(None) => Err(gone(relation)),
-                Err(why) => Err(why),
+                Err(why) => Err(why.to_string()),
             };
             out.insert(relation.clone(), answer);
         }

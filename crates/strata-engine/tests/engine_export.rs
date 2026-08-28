@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use strata_engine::export::{
-    Codec, Compression, Csv, ExportSpec, Format, Json, Parquet, Partition, Scope, Statistics,
-    WriterVersion,
+    Codec, Compression, Csv, ExportReport, ExportSpec, Format, Json, Parquet, Partition, Scope,
+    Statistics, WriterVersion,
 };
-use strata_engine::{Engine, RunOutcome, RunTag, WsId};
+use strata_engine::{Engine, RunOutcome, RunRows, RunTag, WsId};
 
 /// Five rows, three columns, unsorted on `column1` so a sorted export is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
@@ -55,7 +55,7 @@ fn spec(path: &Path, format: Format) -> ExportSpec {
 
 /// Run `SQL` and hand back the engine plus its snapshot.
 async fn snapshot(eng: &Engine) -> strata_model::SnapshotId {
-    let (output, _) = eng
+    let RunRows { output, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -70,7 +70,7 @@ async fn csv_writes_every_option_the_window_offers() {
     let eng = engine();
     let snap = snapshot(&eng).await;
 
-    let (path, rows) = eng
+    let ExportReport { path, rows, .. } = eng
         .snapshot(snap)
         .export(spec(
             &out,
@@ -175,7 +175,12 @@ async fn a_page_scope_writes_only_that_window_of_the_sorted_order() {
         page: 2,
         page_size: 2,
     };
-    let (_, rows) = eng.snapshot(snap).export(s).await.expect("page export");
+    let rows = eng
+        .snapshot(snap)
+        .export(s)
+        .await
+        .expect("page export")
+        .rows;
     assert_eq!(rows, 2);
 
     let text = fs::read_to_string(&out).expect("read back");
@@ -200,7 +205,7 @@ async fn parquet_accepts_the_full_tuning_surface() {
     let eng = engine();
     let snap = snapshot(&eng).await;
 
-    let (_, rows) = eng
+    let rows = eng
         .snapshot(snap)
         .export(spec(
             &out,
@@ -213,7 +218,8 @@ async fn parquet_accepts_the_full_tuning_surface() {
             }),
         ))
         .await
-        .expect("parquet export");
+        .expect("parquet export")
+        .rows;
     assert_eq!(rows, 5);
 
     let bytes = fs::read(&out).expect("read back");
@@ -407,7 +413,7 @@ async fn keeping_partition_columns_puts_them_back_in_the_files() {
 /// The engine's live value for `datafusion.execution.keep_partition_by_columns`, read the way a
 /// user would — a typed `SHOW`, through the same `Workspace::run` the editor uses.
 async fn keep_partition_by_columns(eng: &Engine) -> String {
-    let RunOutcome::Rows(output, _) = eng
+    let RunOutcome::Rows(RunRows { output, .. }) = eng
         .ws(WsId(9))
         .run(
             RunTag(9),
@@ -444,7 +450,8 @@ async fn a_partition_column_that_isnt_a_bare_word_fails_before_planning() {
         .snapshot(snap)
         .export(err)
         .await
-        .expect_err("bad partition name");
+        .expect_err("bad partition name")
+        .to_string();
     assert!(err.contains("single plain word"), "{err}");
 
     let _ = fs::remove_dir_all(&dir);
@@ -459,7 +466,7 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
     let out = dir.join("out.csv");
     let eng = engine();
 
-    let (first, _) = eng
+    let RunRows { output: first, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -468,7 +475,7 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
 
     let pin = eng.snapshot(snap).pin();
 
-    let (second, _) = eng
+    let RunRows { output: second, .. } = eng
         .ws(WsId(1))
         .query(RunTag(2), SQL.into(), 2)
         .await
@@ -479,11 +486,12 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
         .page(1, 2, None)
         .await
         .expect("the pinned snapshot survived the re-run");
-    let (_, rows) = eng
+    let rows = eng
         .snapshot(snap)
         .export(spec(&out, Format::Csv(csv())))
         .await
-        .expect("export of the pinned snapshot");
+        .expect("export of the pinned snapshot")
+        .rows;
     assert_eq!(rows, 5, "the rows that were on screen, not the new run's");
 
     drop(pin);
@@ -498,7 +506,7 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
 #[tokio::test]
 async fn an_unpinned_snapshot_still_retires_at_the_rerun() {
     let eng = engine();
-    let (first, _) = eng
+    let RunRows { output: first, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -519,7 +527,7 @@ async fn an_unpinned_snapshot_still_retires_at_the_rerun() {
 #[tokio::test]
 async fn the_last_hold_is_the_one_that_retires() {
     let eng = engine();
-    let (first, _) = eng
+    let RunRows { output: first, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -552,7 +560,7 @@ async fn the_last_hold_is_the_one_that_retires() {
 #[tokio::test]
 async fn a_pin_survives_the_owning_tab_closing() {
     let eng = engine();
-    let (first, _) = eng
+    let RunRows { output: first, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -578,7 +586,7 @@ async fn a_pin_survives_the_owning_tab_closing() {
 #[tokio::test]
 async fn releasing_a_pin_alone_retires_nothing() {
     let eng = engine();
-    let (first, _) = eng
+    let RunRows { output: first, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -611,7 +619,7 @@ async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
 
     let flag = eng.work().flag();
 
-    let (first, _) = eng
+    let RunRows { output: first, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 2)
         .await
@@ -670,7 +678,8 @@ async fn exporting_without_a_snapshot_says_so_plainly() {
         .snapshot(strata_model::SnapshotId(999))
         .export(spec(&out, Format::Csv(csv())))
         .await
-        .expect_err("no such snapshot");
+        .expect_err("no such snapshot")
+        .to_string();
     assert!(err.contains("No results to export"), "{err}");
 
     let _ = fs::remove_dir_all(&dir);
@@ -692,7 +701,7 @@ async fn a_partition_column_with_nulls_is_refused() {
     let out = dir.join("tree");
     let eng = engine();
 
-    let (output, _) = eng
+    let RunRows { output, .. } = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -712,7 +721,8 @@ async fn a_partition_column_with_nulls_is_refused() {
         .snapshot(snap)
         .export(s)
         .await
-        .expect_err("region contains a NULL");
+        .expect_err("region contains a NULL")
+        .to_string();
     assert!(err.contains("Can't partition by 'region'"), "{err}");
     assert!(err.contains("NULL"), "{err}");
     assert!(
@@ -730,7 +740,7 @@ async fn a_partition_column_without_nulls_is_allowed() {
     let out = dir.join("tree");
     let eng = engine();
 
-    let (output, _) = eng
+    let RunRows { output, .. } = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -746,11 +756,12 @@ async fn a_partition_column_without_nulls_is_allowed() {
         columns: vec!["region".into()],
         keep_columns: false,
     };
-    let (_, rows) = eng
+    let rows = eng
         .snapshot(snap)
         .export(s)
         .await
-        .expect("no NULLs, so it writes");
+        .expect("no NULLs, so it writes")
+        .rows;
     assert_eq!(rows, 3);
 
     let mut levels: Vec<String> = fs::read_dir(&out)

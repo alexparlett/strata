@@ -372,7 +372,7 @@ mod tests {
 
     use serde_json::json;
     use strata_engine::{DenyCode, Form, Reason, StmtKind};
-    use strata_engine::{TableSpec, CANCELLED};
+    use strata_engine::{EngineError, StopReason as EngineStop, TableSpec};
     use strata_model::SourceFormat;
 
     use crate::host::{CatalogEntry, RegState};
@@ -578,7 +578,8 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_run_is_not_a_failure() {
         let root = scratch("stopped");
-        let project = MockProject::new("sales", &root).settling(CANCELLED);
+        let project =
+            MockProject::new("sales", &root).settling(EngineError::Stopped(EngineStop::Cancelled));
         let tools = StrataTools::new(MockHost::new(vec![project]));
         let scope = Scope {
             project: Some(root.display().to_string()),
@@ -594,6 +595,9 @@ mod tests {
         )
         .await;
         assert!(!ran.failed);
-        assert_eq!(ran.facts.stopped.as_deref(), Some(CANCELLED));
+        assert_eq!(
+            ran.facts.stopped.as_deref(),
+            Some(EngineStop::Cancelled.to_string().as_str())
+        );
     }
 }

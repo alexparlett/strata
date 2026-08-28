@@ -9277,6 +9277,7 @@ dependencies = [
  "strata-model",
  "testcontainers",
  "testcontainers-modules",
+ "thiserror 2.0.19",
  "tokio",
  "tokio-postgres",
  "tracing",

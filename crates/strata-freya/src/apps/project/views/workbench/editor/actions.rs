@@ -283,7 +283,9 @@ fn save_view(
                     LogLevel::Error,
                     format!("View '{name}' failed to register: {e}"),
                 );
-                project.write_channel(ProjChan::Views).view_failed(&name, e);
+                project
+                    .write_channel(ProjChan::Views)
+                    .view_failed(&name, e.to_string());
             }
         }
         catalog_settled(catalog, &engine);

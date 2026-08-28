@@ -23,6 +23,7 @@
 use std::sync::Arc;
 
 use freya::prelude::*;
+use strata_engine::ConfigOutcome;
 
 use crate::apps::project::close::{CloseGuard, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
@@ -70,7 +71,7 @@ pub fn use_engine_config(engine: &EngineCtx, confirm: State<Option<CloseTarget>>
 
     use_side_effect(move || {
         let overrides = config.read().settings.engine.clone();
-        if !engine.set_config(overrides) {
+        if engine.set_config(overrides) == ConfigOutcome::Applied {
             return;
         }
         let running = guard.running();

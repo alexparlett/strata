@@ -15,5 +15,5 @@ pub use chart::{ChartSpec, TrendSpec};
 pub use profile::{use_profile, ProfileTarget, ScanId};
 pub use relation::{use_remote_schemas, RemoteSchemas};
 pub use run_query::{
-    PageSpec, QueryMode, QueryOutcome, QueryPage, QuerySpec, RunId, RunQuery, DEFAULT_PAGE_SIZE,
+    PageSpec, QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery, DEFAULT_PAGE_SIZE,
 };

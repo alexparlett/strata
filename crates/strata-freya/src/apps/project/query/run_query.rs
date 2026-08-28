@@ -22,9 +22,8 @@ use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
 use strata_arrow::plan::{as_explain, QueryPlan};
-use strata_arrow::RecordBatch;
-use strata_engine::{RunOutcome, RunTag, StatementReport};
-use strata_model::{Cell, QueryOutput, SnapshotId};
+use strata_engine::{EngineError, RunOutcome, RunRows, RunTag, SnapshotPage, StatementReport};
+use strata_model::SnapshotId;
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -84,20 +83,13 @@ impl QuerySpec {
     }
 }
 
-/// A settled Run: the snapshot handle + page 1 (`output`) and the page-1 batch (the
-/// type-aware source for Copy/Export).
-pub struct QueryPage {
-    pub output: QueryOutput,
-    pub batch: RecordBatch,
-}
-
 /// What a Run press settled to.
 ///
 /// Three, not two, and the third is not a mode: `Explain` is something the *press* asked for,
 /// while whether a Run produces rows or performs a statement is a property of what was typed
 /// — the engine's router decides it, and this enum carries its answer through.
 pub enum QueryOutcome {
-    Rows(QueryPage),
+    Rows(RunRows),
     Plan(QueryPlan),
     /// An intercepted statement's report — no rows and no snapshot handle, so the tab's
     /// previous result stays readable. The keeper folds its `StoreEffect` into the project
@@ -112,10 +104,10 @@ pub struct RunQuery(pub Captured<EngineCtx>);
 
 impl QueryCapability for RunQuery {
     type Ok = QueryOutcome;
-    type Err = String;
+    type Err = EngineError;
     type Keys = QuerySpec;
 
-    async fn run(&self, spec: &QuerySpec) -> Result<QueryOutcome, String> {
+    async fn run(&self, spec: &QuerySpec) -> Result<QueryOutcome, EngineError> {
         let engine = &self.0;
         match spec.mode {
             QueryMode::Run => engine
@@ -123,9 +115,7 @@ impl QueryCapability for RunQuery {
                 .run(spec.run.into(), spec.sql.clone(), spec.page_size)
                 .await
                 .map(|outcome| match outcome {
-                    RunOutcome::Rows(output, batch) => {
-                        QueryOutcome::Rows(QueryPage { output, batch })
-                    }
+                    RunOutcome::Rows(rows) => QueryOutcome::Rows(rows),
                     RunOutcome::Statement(report) => QueryOutcome::Statement(report),
                 }),
             QueryMode::Explain { analyze } => engine
@@ -161,27 +151,20 @@ impl PageSpec {
     }
 }
 
-/// A settled page read: display rows + the page batch.
-pub struct SnapshotPage {
-    pub rows: Vec<Vec<Cell>>,
-    pub batch: RecordBatch,
-}
-
 /// The page-read capability.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FetchSnapshotPage(pub Captured<EngineCtx>);
 
 impl QueryCapability for FetchSnapshotPage {
     type Ok = SnapshotPage;
-    type Err = String;
+    type Err = EngineError;
     type Keys = PageSpec;
 
-    async fn run(&self, spec: &PageSpec) -> Result<SnapshotPage, String> {
+    async fn run(&self, spec: &PageSpec) -> Result<SnapshotPage, EngineError> {
         self.0
             .snapshot(spec.snapshot)
             .page(spec.page, spec.page_size, spec.sort.clone())
             .await
-            .map(|(rows, batch)| SnapshotPage { rows, batch })
     }
 }
 
@@ -252,7 +235,7 @@ mod tests {
         spec.sql = "CREATE DATABASE d".into();
 
         let err = block_on(run.run(&spec)).err().expect("refused");
-        assert_eq!(err, Fault::CreateDatabase.message());
+        assert_eq!(err.to_string(), Fault::CreateDatabase.message());
     }
 
     #[test]

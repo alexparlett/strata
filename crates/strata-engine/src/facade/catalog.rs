@@ -13,8 +13,8 @@ use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
-    fold_ident, profile, store, BackgroundGuard, CatalogGen, Engine, ProfileRun, Scans, CANCELLED,
-    SUPERSEDED_SCAN,
+    fold_ident, profile, store, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun,
+    Scans, StopReason,
 };
 
 /// This engine's workspace catalog, from [`Engine::catalog`].
@@ -59,7 +59,7 @@ impl Catalog<'_> {
     ///
     /// Moves the [`generation`](Self::generation) on either arm: a failed registration takes the
     /// old provider out, so a name that resolved no longer does.
-    pub async fn register(self, spec: TableSpec) -> Result<TableMeta, String> {
+    pub async fn register(self, spec: TableSpec) -> Result<TableMeta, EngineError> {
         self.cancel_profile(&spec.name);
         let ctx = self.engine.ctx.clone();
         let formats = self.engine.formats.clone();
@@ -71,12 +71,12 @@ impl Catalog<'_> {
             .rt()
             .spawn(async move { catalog::register_external(&ctx, &formats, &*tables, &spec).await })
             .await
-            .map_err(|e| format!("register task failed: {e}"))?;
+            .map_err(|e| EngineError::task("register", e))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
         self.engine
             .note_scans(&name, Some(Scans::Table(connection)));
         self.engine.generation.bump();
-        meta
+        meta.map_err(EngineError::from)
     }
 
     /// Drops a registered table. Its data is untouched; deleting an internal table's files is
@@ -104,13 +104,14 @@ impl Catalog<'_> {
     ///
     /// The count is still *read*, never added up from what a statement claimed: this re-LISTs
     /// the sources and totals the footers, of which only the appended file's is uncached.
-    pub async fn table_meta(self, name: String) -> Result<TableMeta, String> {
+    pub async fn table_meta(self, name: String) -> Result<TableMeta, EngineError> {
         let ctx = self.engine.ctx.clone();
         self.engine
             .rt()
             .spawn(async move { catalog::table_meta(&ctx, &name).await })
             .await
-            .map_err(|e| format!("table meta task failed: {e}"))?
+            .map_err(|e| EngineError::task("table meta", e))?
+            .map_err(EngineError::from)
     }
 
     /// The Hive partition keys under `paths`, outermost first — what the Configure window's
@@ -151,7 +152,7 @@ impl Catalog<'_> {
     ///
     /// Moves the [`generation`](Self::generation) on either arm: a failed `CREATE OR REPLACE`
     /// leaves the name resolving to a definition the caller has just been told is wrong.
-    pub async fn create_view(self, name: String, sql: String) -> Result<ViewMeta, String> {
+    pub async fn create_view(self, name: String, sql: String) -> Result<ViewMeta, EngineError> {
         self.cancel_profile(&name);
         let ctx = self.engine.ctx.clone();
         let created_as = name.clone();
@@ -160,7 +161,7 @@ impl Catalog<'_> {
             .rt()
             .spawn(async move { arms::create_view(&ctx, &name, &sql).await })
             .await
-            .map_err(|e| format!("create view task failed: {e}"))?;
+            .map_err(|e| EngineError::task("create view", e))?;
         if let Ok(meta) = &created {
             self.engine.note_scans(
                 &created_as,
@@ -171,7 +172,7 @@ impl Catalog<'_> {
             );
         }
         self.engine.generation.bump();
-        created
+        created.map_err(EngineError::from)
     }
 
     /// Creates (or redefines) each of `views`, handing `settled` each one's final answer.
@@ -193,7 +194,7 @@ impl Catalog<'_> {
     /// shape, so a surface that folds one gesture's outcome folds the other's. The dependents a
     /// typed `DROP VIEW` names are the *statement's* — this gesture's confirm has already shown
     /// them from the store, before anything was destroyed.
-    pub async fn drop_view(self, name: String) -> Result<StatementReport, String> {
+    pub async fn drop_view(self, name: String) -> Result<StatementReport, EngineError> {
         self.cancel_profile(&name);
         let start = Instant::now();
         let ctx = self.engine.ctx.clone();
@@ -202,7 +203,7 @@ impl Catalog<'_> {
             .rt()
             .spawn(async move { arms::drop_view(&ctx, &dropped).await })
             .await
-            .map_err(|e| format!("drop view task failed: {e}"))??;
+            .map_err(|e| EngineError::task("drop view", e))??;
         let outcome = StatementOutcome {
             message: format!("View '{name}' dropped"),
             count: None,
@@ -230,7 +231,7 @@ impl Catalog<'_> {
         self,
         name: String,
         if_exists: bool,
-    ) -> Result<StatementReport, String> {
+    ) -> Result<StatementReport, EngineError> {
         let _deleting = BackgroundGuard::new(self.engine);
         let start = Instant::now();
         let ctx = self.engine.ctx.clone();
@@ -244,7 +245,7 @@ impl Catalog<'_> {
                 arms::drop_table(&ctx, &root, &internal, &*tables, &name, if_exists).await
             })
             .await
-            .map_err(|e| format!("drop table task failed: {e}"))??;
+            .map_err(|e| EngineError::task("drop table", e))??;
         let report = stamped(StmtKind::DropTable, start, outcome);
         self.engine.settle_effect(report.effect.as_ref());
         Ok(report)
@@ -267,10 +268,10 @@ impl Catalog<'_> {
     ///
     /// Superseded-by-dispatch like [`Workspace::query`](crate::Workspace::query): a re-scan
     /// aborts the scan it replaces, and the older call settles
-    /// `Err("superseded by a newer scan")` rather than tearing down the entry the newer one now
-    /// owns. Dedup is the *caller's* (freya-query keys the cache by the request), which is why
-    /// two arrivals here mean two real requests.
-    pub async fn profile(self, name: String) -> Result<profile::CatalogProfile, String> {
+    /// [`StopReason::SupersededScan`](crate::StopReason::SupersededScan) rather than tearing
+    /// down the entry the newer one now owns. Dedup is the *caller's* (freya-query keys the
+    /// cache by the request), which is why two arrivals here mean two real requests.
+    pub async fn profile(self, name: String) -> Result<profile::CatalogProfile, EngineError> {
         let engine = self.engine;
         let key = fold_ident(&name);
         let dispatch = engine.dispatch_seq.fetch_add(1, Ordering::Relaxed);
@@ -304,15 +305,16 @@ impl Catalog<'_> {
         }
         engine.publish_inflight(&lc);
         match joined {
-            Ok(res) if latest => res,
-            Ok(_) => Err(SUPERSEDED_SCAN.into()),
-            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
-            Err(join) => Err(format!("profile task failed: {join}")),
+            Ok(res) if latest => res.map_err(EngineError::from),
+            Ok(_) => Err(EngineError::Stopped(StopReason::SupersededScan)),
+            Err(join) if join.is_cancelled() => Err(EngineError::Stopped(StopReason::Cancelled)),
+            Err(join) => Err(EngineError::task("profile", join)),
         }
     }
 
     /// Abort the profile scan of `name`, if one is running — `true` when something was
-    /// actually cancelled. The awaiting [`profile`](Self::profile) settles `Err("cancelled")`.
+    /// actually cancelled. The awaiting [`profile`](Self::profile) settles
+    /// [`StopReason::Cancelled`](crate::StopReason::Cancelled).
     ///
     /// Unguarded by any nonce, unlike [`Workspace::cancel`](crate::Workspace::cancel): a scan
     /// is keyed by the entry, and every caller — the inspector's Cancel, and every catalog

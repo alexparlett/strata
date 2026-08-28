@@ -316,7 +316,9 @@ mod tests {
     use super::{DIALECT, DISPLAY, OWNED, RESTART};
     use crate::sql::{complete, Catalog, CompletionKind};
     use crate::statements::Fault;
-    use crate::{Engine, RunOutcome, RunTag, StatementReport, StoreEffect, WsId, CATALOG, SCHEMA};
+    use crate::{
+        Engine, RunOutcome, RunRows, RunTag, StatementReport, StoreEffect, WsId, CATALOG, SCHEMA,
+    };
 
     /// An engine whose Settings baseline is `overrides` — a `(key, value)` list, because that is
     /// how a Settings row reads.
@@ -333,7 +335,12 @@ mod tests {
 
     /// Run one statement and take its report — anything else is a test asking the wrong question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
+        match eng
+            .ws(WsId(1))
+            .run(RunTag(1), sql.into(), 10)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -343,7 +350,7 @@ mod tests {
     /// so the success arm is named rather than unwrapped.
     async fn run_err(eng: &Engine, sql: &str) -> String {
         match eng.ws(WsId(1)).run(RunTag(9), sql.into(), 10).await {
-            Err(e) => e,
+            Err(e) => e.to_string(),
             Ok(_) => panic!("{sql} succeeded"),
         }
     }
@@ -351,7 +358,7 @@ mod tests {
     /// What the **session** says a key is now — `SHOW`, which reads the live `ConfigOptions` the
     /// planner reads, not anything this module remembers.
     async fn live(eng: &Engine, key: &str) -> String {
-        let RunOutcome::Rows(output, _) = eng
+        let RunOutcome::Rows(RunRows { output, .. }) = eng
             .ws(WsId(2))
             .run(RunTag(2), format!("SHOW {key}"), 10)
             .await
@@ -398,7 +405,7 @@ mod tests {
         /// The Arrow type `now()` reports — which carries the zone the UDF captured when it was
         /// registered, and so is the only thing that can tell a written option from an applied one.
         async fn zone_of(eng: &Engine) -> String {
-            let RunOutcome::Rows(output, _) = eng
+            let RunOutcome::Rows(RunRows { output, .. }) = eng
                 .ws(WsId(3))
                 .run(RunTag(3), "SELECT arrow_typeof(now())".into(), 1)
                 .await
@@ -422,7 +429,7 @@ mod tests {
             .expect("reset");
         assert_eq!(zone_of(&eng).await, "Timestamp(ns, \"+00:00\")");
 
-        eng.set_config(
+        let _ = eng.set_config(
             [(
                 "datafusion.execution.time_zone".to_string(),
                 "+09:00".to_string(),
@@ -451,7 +458,7 @@ mod tests {
             .await
             .expect("prepared");
 
-        let RunOutcome::Rows(output, _) = eng
+        let RunOutcome::Rows(RunRows { output, .. }) = eng
             .ws(WsId(1))
             .run(RunTag(2), "EXPLAIN EXECUTE p(1)".into(), 10)
             .await
@@ -466,6 +473,7 @@ mod tests {
             .explain(RunTag(3), "EXPLAIN EXECUTE p(1)".into())
             .await
             .expect_err("the gesture cannot build a physical plan for a Statement node")
+            .to_string()
             .contains("Execute"));
     }
 
@@ -555,7 +563,7 @@ mod tests {
             .await
             .expect("set");
 
-        eng.set_config(
+        let _ = eng.set_config(
             [(
                 "datafusion.execution.batch_size".to_string(),
                 "2048".to_string(),
@@ -572,7 +580,7 @@ mod tests {
             .await
             .expect("reset");
         assert_eq!(live(&eng, "datafusion.execution.batch_size").await, "2048");
-        eng.set_config(
+        let _ = eng.set_config(
             [(
                 "datafusion.execution.batch_size".to_string(),
                 "512".to_string(),
@@ -621,7 +629,7 @@ mod tests {
         assert_eq!(report.message, "Prepared 'p' for this session");
         assert_eq!(report.effect, Some(StoreEffect::PreparedChanged));
 
-        let RunOutcome::Rows(output, _) = eng
+        let RunOutcome::Rows(RunRows { output, .. }) = eng
             .ws(WsId(1))
             .run(RunTag(2), "EXECUTE p(41)".into(), 10)
             .await

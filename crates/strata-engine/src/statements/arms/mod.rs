@@ -181,7 +181,7 @@ mod tests {
     use crate::providers::fake_source;
     use crate::statements::target::{elsewhere, in_database, read_only};
     use crate::statements::Remote;
-    use crate::{Engine, RunOutcome, RunTag, WsId};
+    use crate::{Engine, EngineError, RunOutcome, RunTag, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
     use super::*;
@@ -211,14 +211,14 @@ mod tests {
         dir
     }
 
-    async fn run(eng: &Engine, sql: &str) -> Result<RunOutcome, String> {
+    async fn run(eng: &Engine, sql: &str) -> Result<RunOutcome, EngineError> {
         eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await
     }
 
     /// The refusal `sql` came back with, or a failure naming what it did instead.
     async fn refusal(eng: &Engine, sql: &str) -> String {
         match run(eng, sql).await {
-            Err(why) => why,
+            Err(why) => why.to_string(),
             Ok(_) => panic!("'{sql}' was not refused"),
         }
     }

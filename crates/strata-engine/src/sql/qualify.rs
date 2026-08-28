@@ -455,7 +455,9 @@ mod tests {
     /// `sql` through the one funnel every surface enters, rendered back — the statement as the
     /// planner will receive it.
     fn resolved(ctx: &SessionContext, sql: &str) -> Result<String, String> {
-        resolved_one(ctx, sql).map(|stmt| stmt.to_string())
+        resolved_one(ctx, sql)
+            .map(|stmt| stmt.to_string())
+            .map_err(|e| e.message())
     }
 
     /// The point of the task: a name only a database connection has is reached without the

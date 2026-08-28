@@ -69,7 +69,7 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         return Err(Fault::ReservedName.message());
     }
     let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    let stmt = resolved_one(ctx, &stmt).map_err(|e| view_error(ctx, &e))?;
+    let stmt = resolved_one(ctx, &stmt).map_err(|e| view_error(ctx, &e.message()))?;
     let plan = ctx
         .state()
         .statement_to_plan(stmt)
@@ -298,7 +298,7 @@ mod tests {
 
     use crate::register::{CatalogSpec, RegOutcome};
     use crate::statements::Fault;
-    use crate::{Engine, RunOutcome, RunTag, StatementReport, WsId};
+    use crate::{Engine, RunOutcome, RunRows, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
     use super::*;
@@ -306,7 +306,12 @@ mod tests {
     /// Run one statement and take its report — anything else is a test that asked the wrong
     /// question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
+        match eng
+            .ws(WsId(1))
+            .run(RunTag(1), sql.into(), 10)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -314,7 +319,7 @@ mod tests {
 
     /// The values a query returns, as text — a view has to be readable the way anything else is.
     async fn read(eng: &Engine, sql: &str) -> Vec<Vec<String>> {
-        let RunOutcome::Rows(output, _) = eng
+        let RunOutcome::Rows(RunRows { output, .. }) = eng
             .ws(WsId(2))
             .run(RunTag(2), sql.into(), 100)
             .await
