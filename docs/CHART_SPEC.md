@@ -137,11 +137,14 @@ flowchart LR
 ```
 
 **Cache identity is `(snapshot, query, display config)`** — `ChartSpec` in `query/chart.rs`,
-`stale_time(MAX)`. The third key is not optional: axis labels render through the engine's live
+`stale_time(MAX)`. The third key is not optional: axis labels render through the
 `datafusion.format.*` overrides (`CellFormat`), which Settings changes with no restart and no new
 snapshot, so an entry keyed on the first two alone would serve labels rendered under a format the
 user has since changed. `ChartSpec.display` carries `config::display_subset` of the app's engine
-overrides, which makes a format change a new entry rather than a stale one.
+overrides, which makes a format change a new entry rather than a stale one — and that same
+`DisplayStamp` is handed to the read, so what came out is what is in the key rather than whatever
+the engine happened to hold when the read ran (`docs/SNAPSHOT_SPEC.md` §5). The grid's page read
+is keyed and rendered the same way.
 
 **Vocabulary (`strata_model::chart`).** All hash/eq-able — `ChartQuery` is cache identity, built
 in exactly one place (§6).

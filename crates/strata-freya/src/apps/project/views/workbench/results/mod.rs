@@ -4,15 +4,24 @@
 //! **running**; settled rows → **grid**; a settled plan → **explain**; a settled statement
 //! report → **statement**; a settled `Err` → **error**. Every state sits over the same **status
 //! bar** footer (the results-pane footer, themed by `status_bar`).
+//!
+//! **Page 1 is the Run's own rows only while it still renders the way a fresh read would.** The
+//! Run returns page 1 with its result, so the pane serves that entry rather than re-reading what
+//! it already has — but its cells were formatted under the display config of the moment the
+//! press was dispatched, and the Run entry is keyed by a nonce, so a later `datafusion.format.*`
+//! change cannot re-key it the way it re-keys a page read. The pane therefore compares the stamp
+//! the run reports against the app's current one, and reads page 1 through [`PageSpec`] like any
+//! other page when they differ.
 
 use std::rc::Rc;
 
 use freya::prelude::*;
 use freya::query::{use_query, QueryStateData};
 use freya::radio::use_radio;
+use strata_arrow::config::display_subset;
 use strata_arrow::plan::PlanTab;
 use strata_engine::RunRows;
-use strata_model::{ResultsView, SnapshotId, TabId};
+use strata_model::{PageQuery, ResultsView, SnapshotId, TabId};
 
 mod cell_view;
 mod chart;
@@ -22,6 +31,8 @@ mod empty;
 mod error;
 mod explain_plan;
 mod find;
+#[cfg(test)]
+mod interaction;
 mod record_view;
 mod running;
 mod selection;
@@ -50,7 +61,7 @@ use crate::apps::project::views::workbench::editor::actions;
 use crate::apps::project::views::workbench::results::explain_plan::ExplainPlan;
 use crate::apps::project::views::workbench::results::selection::Selection;
 use crate::platform::Subtree;
-use crate::state::AppCtx;
+use crate::state::{use_config, AppCtx, ConfigChan};
 pub use cell_view::CellViewThemePreference;
 pub use chart::ChartThemePreference;
 pub use datagrid::DataGridThemePreference;
@@ -207,7 +218,7 @@ impl Component for ResultsBody {
             }
         });
 
-        let (snapshot, sort_key) = match &*query.read().state() {
+        let (snapshot, sort_key, run_display) = match &*query.read().state() {
             QueryStateData::Settled {
                 res: Ok(QueryOutcome::Rows(rows)),
                 ..
@@ -216,17 +227,26 @@ impl Component for ResultsBody {
                 (*sort.by.read()).and_then(|(ci, asc)| {
                     rows.output.columns.get(ci).map(|c| (c.name.clone(), asc))
                 }),
+                Some(rows.display.clone()),
             ),
-            _ => (None, None),
+            _ => (None, None, None),
         };
+        let settings = use_config(ConfigChan::Settings);
+        let display = display_subset(&settings.read().settings.engine);
         let cur_page = *page.read();
         let cur_size = *page_size.read();
-        let native_page1 = cur_page == 1 && cur_size == run_size && sort_key.is_none();
+        let native_page1 = cur_page == 1
+            && cur_size == run_size
+            && sort_key.is_none()
+            && run_display.as_ref() == Some(&display);
         let page_spec = PageSpec {
             snapshot: snapshot.unwrap_or(SnapshotId(0)),
-            page: cur_page,
-            page_size: cur_size,
-            sort: sort_key,
+            query: PageQuery {
+                page: cur_page,
+                page_size: cur_size,
+                sort: sort_key,
+            },
+            display,
         };
         let fetch = use_query(page_spec.query(&engine, snapshot.is_some() && !native_page1));
 
@@ -239,7 +259,7 @@ impl Component for ResultsBody {
         };
 
         let tab_name = session.read().name(ws);
-        let export_sort = page_spec.sort.clone();
+        let export_sort = page_spec.query.sort.clone();
         let export_app = use_consume::<AppCtx>();
         let export_log = use_consume::<LogCtx>();
         let export_engine = engine;

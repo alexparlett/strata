@@ -8,8 +8,11 @@
 //! applies, types surviving IPC, the chart and the grid agreeing on the same result, and a
 //! retired snapshot failing cleanly.
 
+use std::collections::BTreeMap;
+
+use strata_arrow::config::{display_subset, DisplayStamp};
 use strata_engine::{Engine, RunRows, RunTag, WsId};
-use strata_model::{CapUnit, ChartData, ChartPoint, ChartQuery, SnapshotId};
+use strata_model::{CapUnit, ChartData, ChartPoint, ChartQuery, PageQuery, SnapshotId};
 
 /// A result the user shaped themselves — ordered DESC by amount, the exact case the
 /// renderer-first design exists for: the chart must draw it in *this* order.
@@ -46,7 +49,10 @@ async fn the_chart_draws_the_result_in_its_own_order() {
 
     let data = eng
         .snapshot(snap)
-        .chart(rows_q(Some("region"), &["amount"], None))
+        .chart(
+            rows_q(Some("region"), &["amount"], None),
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     let ChartData::Table { axis, series } = data else {
@@ -60,7 +66,18 @@ async fn the_chart_draws_the_result_in_its_own_order() {
     assert_eq!(series[0].name, "amount");
     assert_eq!(series[0].values, vec![Some(30.0), Some(20.0), Some(10.0)]);
 
-    let page = eng.snapshot(snap).page(1, 10, None).await.expect("page");
+    let page = eng
+        .snapshot(snap)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 10,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
+        .await
+        .expect("page");
     let grid: Vec<&str> = page.rows.iter().map(|r| r[0].text.as_str()).collect();
     assert_eq!(grid, vec!["eu", "us", "ap"], "chart and grid agree");
 }
@@ -73,7 +90,10 @@ async fn several_ys_split_into_series_over_a_real_snapshot() {
 
     let data = eng
         .snapshot(snap)
-        .chart(rows_q(Some("region"), &["amount", "qty"], None))
+        .chart(
+            rows_q(Some("region"), &["amount", "qty"], None),
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     let ChartData::Table { series, .. } = data else {
@@ -104,7 +124,10 @@ async fn a_series_column_pivots_over_a_real_snapshot() {
 
     let data = eng
         .snapshot(snap)
-        .chart(rows_q(Some("m"), &["v"], Some("region")))
+        .chart(
+            rows_q(Some("m"), &["v"], Some("region")),
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     let ChartData::Table { axis, series } = data else {
@@ -125,11 +148,14 @@ async fn scatter_returns_points_and_refuses_over_cap() {
 
     let data = eng
         .snapshot(snap)
-        .chart(ChartQuery::Raw {
-            x: "qty".into(),
-            y: "amount".into(),
-            cap: 6_000,
-        })
+        .chart(
+            ChartQuery::Raw {
+                x: "qty".into(),
+                y: "amount".into(),
+                cap: 6_000,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     let ChartData::Points(mut points) = data else {
@@ -147,11 +173,14 @@ async fn scatter_returns_points_and_refuses_over_cap() {
 
     let data = eng
         .snapshot(snap)
-        .chart(ChartQuery::Raw {
-            x: "qty".into(),
-            y: "amount".into(),
-            cap: 2,
-        })
+        .chart(
+            ChartQuery::Raw {
+                x: "qty".into(),
+                y: "amount".into(),
+                cap: 2,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     assert_eq!(
@@ -171,10 +200,13 @@ async fn a_histogram_bins_the_snapshot() {
 
     let data = eng
         .snapshot(snap)
-        .chart(ChartQuery::Histogram {
-            col: "amount".into(),
-            bins: Some(2),
-        })
+        .chart(
+            ChartQuery::Histogram {
+                col: "amount".into(),
+                bins: Some(2),
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     let ChartData::Bins(bins) = data else {
@@ -234,8 +266,53 @@ async fn charting_a_retired_snapshot_fails_like_any_other_read() {
 
     let err = eng
         .snapshot(snap)
-        .chart(rows_q(Some("region"), &["amount"], None))
+        .chart(
+            rows_q(Some("region"), &["amount"], None),
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("a retired snapshot has nothing to chart");
     assert!(!err.to_string().is_empty());
+}
+
+/// **The axis renders through the stamp too**: a chart's labels come out of the same cell
+/// formatter, so the read answers under the stamp it was handed.
+#[tokio::test]
+async fn the_axis_renders_through_the_stamp_it_was_handed() {
+    async fn axis_under(eng: &Engine, snap: SnapshotId, display: DisplayStamp) -> Vec<String> {
+        let q = rows_q(Some("day"), &["amount"], None);
+        match eng.snapshot(snap).chart(q, display).await.expect("chart") {
+            ChartData::Table { axis, .. } => axis.labels,
+            other => panic!("expected a table, got {other:?}"),
+        }
+    }
+
+    let eng = Engine::builder().build();
+    let RunRows { output, .. } = eng
+        .ws(WsId(1))
+        .query(
+            RunTag(1),
+            "SELECT DATE '2026-08-28' AS day, 1.0 AS amount".into(),
+            10,
+        )
+        .await
+        .expect("run");
+    let snap = output.snapshot.expect("a row is a snapshot");
+
+    assert_eq!(
+        axis_under(&eng, snap, DisplayStamp::default()).await,
+        vec!["2026-08-28"]
+    );
+
+    let overrides: BTreeMap<String, String> = [(
+        "datafusion.format.date_format".to_string(),
+        "%d/%m/%Y".to_string(),
+    )]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        axis_under(&eng, snap, display_subset(&overrides)).await,
+        vec!["28/08/2026"],
+        "the stamp is what the labels render through"
+    );
 }

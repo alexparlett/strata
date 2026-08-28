@@ -539,13 +539,13 @@ fn strings(col: &ArrayRef, fmt: &CellFormat) -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::future::Future;
     use std::sync::Arc;
 
     use datafusion::arrow::array::{
         Float64Array, Int64Array, StringArray, Time64NanosecondArray, TimestampMillisecondArray,
     };
+    use strata_arrow::config::DisplayStamp;
 
     use super::*;
 
@@ -571,7 +571,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_batch(snapshot_name(SnapshotId(1)).as_str(), batch)
             .expect("register fixture");
-        let fmt = CellFormat::new(&BTreeMap::new());
+        let fmt = CellFormat::new(&DisplayStamp::default());
         on_runtime(run_chart(&ctx, SnapshotId(1), &q, &fmt, None))
     }
 

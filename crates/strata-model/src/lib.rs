@@ -32,7 +32,7 @@ pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
-pub use results::{Cell, QueryOutput, SnapshotId};
+pub use results::{Cell, PageQuery, QueryOutput, SnapshotId};
 pub use schema::{ChartRole, ColumnInfo, Kind, Stat, StatKey};
 pub use session::{
     expanded_drawer_h, DrawerTab, Layout, Origin, ProblemsTab, ResultsView, RightPane,

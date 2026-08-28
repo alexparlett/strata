@@ -96,7 +96,7 @@ sequenceDiagram
     Note over Q: settled — cached under the press's nonce
 
     U->>Q: page / sort
-    Q->>E: engine.snapshot(id).page(page, sort)
+    Q->>E: engine.snapshot(id).page(PageQuery, DisplayStamp)
     E->>S: bounded read, ORDER BY __strata_ord
     E-->>Q: page rows (cached per key, forever sound)
 ```

@@ -209,8 +209,9 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_arrow::config::DisplayStamp;
     use strata_arrow::{column_info, RecordBatch, Schema};
-    use strata_model::{Cell, SnapshotId};
+    use strata_model::{Cell, PageQuery, SnapshotId};
 
     use super::*;
 
@@ -313,9 +314,12 @@ mod tests {
     fn spec(page: usize) -> PageSpec {
         PageSpec {
             snapshot: SnapshotId(1),
-            page,
-            page_size: 100,
-            sort: None,
+            query: PageQuery {
+                page,
+                page_size: 100,
+                sort: None,
+            },
+            display: DisplayStamp::default(),
         }
     }
 

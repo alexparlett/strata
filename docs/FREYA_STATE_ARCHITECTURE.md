@@ -350,7 +350,7 @@ pub struct QuerySpec {              // one Run press
     pub page_size: usize,
 }
 pub enum QueryOutcome {
-    Rows(RunRows),                  // the engine's own answer: QueryOutput + the page-1 batch
+    Rows(RunRows),                  // QueryOutput + the page-1 batch + the stamp it rendered under
     Plan(QueryPlan),                // Explain — no snapshot
     Statement(StatementReport),     // an intercepted statement — no rows, no handle
 }
@@ -361,9 +361,8 @@ RunQuery : QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = EngineErro
 
 pub struct PageSpec {
     pub snapshot: SnapshotId,
-    pub page: usize,
-    pub page_size: usize,
-    pub sort: Option<(String, bool)>,
+    pub query: PageQuery,           // page, page_size, sort
+    pub display: DisplayStamp,      // the datafusion.format.* subset the cells render through
 }
 FetchSnapshotPage : QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = EngineError>
 ```
@@ -397,7 +396,10 @@ holds each tab's own spec exactly where the tab's buffer already lives — specs
    zero engine traffic (sound because the snapshot is immutable). Explain is the same Run
    pattern with `mode: Explain`. The chart read is `FetchChart` (`query/chart.rs`), keyed by
    `ChartSpec { snapshot, query, display }` — the display-config subset is part of the key
-   because axis labels render through `datafusion.format.*` (see `CHART_SPEC.md` §5).
+   because axis labels render through `datafusion.format.*` (see `CHART_SPEC.md` §5), exactly as
+   it is on `PageSpec`. Page 1 rides the Run entry, which is nonce-keyed and so cannot re-key on
+   a format change: the pane compares `RunRows::display` against the app's current stamp and
+   reads page 1 through `PageSpec` when they differ (`SNAPSHOT_SPEC.md` §6).
 5. **Loading / cancel**: the body reads `query.read().state()`
    (`Pending | Loading{res} | Settled{res}`); cancel is `engine.cancel(tab.into(), run.into())`
    plus `clear_request(tab)` on `Chan::Request(tab)`. A settled `Err` renders the results

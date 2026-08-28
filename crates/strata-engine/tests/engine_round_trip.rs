@@ -6,9 +6,12 @@
 //! freya-query capability calls it. The test runtime awaits the engine's `JoinHandle`s
 //! across runtimes, which is the same executor-agnostic await the Freya executor does.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use strata_engine::{Engine, RunRows, RunTag, WsId};
+use strata_arrow::config::{display_subset, DisplayStamp};
+use strata_engine::{ConfigOutcome, Engine, RunRows, RunTag, WsId};
+use strata_model::PageQuery;
 
 /// Five rows, three columns, unsorted on `column1` so the sort read is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
@@ -29,7 +32,7 @@ fn tag(n: u128) -> RunTag {
 async fn run_materializes_a_snapshot_and_pages_read_it() {
     let eng = engine();
 
-    let RunRows { output, batch } = eng
+    let RunRows { output, batch, .. } = eng
         .ws(ws(1))
         .query(tag(1), SQL.into(), 2)
         .await
@@ -45,14 +48,28 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
 
     let rows = eng
         .snapshot(snapshot)
-        .page(2, 2, None)
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 2")
         .rows;
     assert_eq!(rows.len(), 2);
     let rows = eng
         .snapshot(snapshot)
-        .page(3, 2, None)
+        .page(
+            PageQuery {
+                page: 3,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 3")
         .rows;
@@ -60,7 +77,14 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
 
     let again = eng
         .snapshot(snapshot)
-        .page(3, 2, None)
+        .page(
+            PageQuery {
+                page: 3,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 3 again")
         .rows;
@@ -68,7 +92,14 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
 
     let sorted = eng
         .snapshot(snapshot)
-        .page(1, 2, Some(("column1".into(), false)))
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: Some(("column1".into(), false)),
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("sorted page")
         .rows;
@@ -101,11 +132,25 @@ async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
         "identical SQL still materializes a distinct snapshot"
     );
     eng.snapshot(new)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("new snapshot readable");
     eng.snapshot(old)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("old snapshot is retired on re-run dispatch");
 }
@@ -131,11 +176,25 @@ async fn workspaces_are_independent_and_cleanup_retires() {
 
     eng.ws(ws(1)).cleanup();
     eng.snapshot(snap_a)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("ws 1 retired");
     eng.snapshot(snap_b)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("ws 2 untouched");
 }
@@ -183,4 +242,58 @@ async fn cancel_is_scoped_to_the_dispatched_run() {
         .output;
     assert!(output.snapshot.is_some());
     assert!(eng.ws(ws(1)).cancel(tag(1)).is_none());
+}
+
+/// **A page renders through the stamp it was handed, not through the engine's live config.**
+///
+/// Two reads of the same page differing only in the stamp come back differently, and the one
+/// handed the run's own stamp is unmoved by the config change between them.
+#[tokio::test]
+async fn a_page_renders_through_the_stamp_it_was_handed() {
+    let eng = engine();
+    let run = eng
+        .ws(ws(1))
+        .query(tag(1), "SELECT CAST(NULL AS INT) AS n".into(), 10)
+        .await
+        .expect("run");
+    let snapshot = run.output.snapshot.expect("a row is a snapshot");
+    assert_eq!(run.output.rows[0][0].text, "NULL", "the built-in default");
+
+    let overrides: BTreeMap<String, String> =
+        [("datafusion.format.null".to_string(), "∅".to_string())]
+            .into_iter()
+            .collect();
+    assert_eq!(eng.set_config(overrides.clone()), ConfigOutcome::Applied);
+
+    let window = || PageQuery {
+        page: 1,
+        page_size: 10,
+        sort: None,
+    };
+    let unmoved = eng
+        .snapshot(snapshot)
+        .page(window(), run.display.clone())
+        .await
+        .expect("page under the run's own stamp");
+    assert_eq!(
+        unmoved.rows[0][0].text, "NULL",
+        "the config moved under the engine; the stamp did not"
+    );
+
+    let restamped = eng
+        .snapshot(snapshot)
+        .page(window(), display_subset(&overrides))
+        .await
+        .expect("page under the new stamp");
+    assert_eq!(restamped.rows[0][0].text, "∅");
+    assert!(
+        restamped.rows[0][0].null,
+        "only the text changes — the flag the grid dims on stays"
+    );
+
+    assert_ne!(
+        run.display,
+        eng.display(),
+        "and the two stamps differ, which is what tells a surface its page 1 has aged"
+    );
 }

@@ -5,8 +5,8 @@
 //!   nonce → fresh snapshot) and nothing else ever re-executes it (raw-SQL identity is
 //!   never a cache key — same SQL ≠ same data).
 //! - [`FetchSnapshotPage`] — a page read of one **immutable** snapshot. Keyed by
-//!   [`PageSpec`] — `(snapshot, page, page_size, sort)` — which is sound to cache
-//!   forever: a revisited page renders with zero engine traffic.
+//!   [`PageSpec`] — `(snapshot, query, display)` — which is sound to cache forever: a
+//!   revisited page renders with zero engine traffic.
 //!
 //! Subscribe with `stale_time(Duration::MAX)` on both: freya-query re-runs *stale*
 //! entries on resubscribe, and an uncontrolled re-execution would silently
@@ -21,9 +21,10 @@
 use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
+use strata_arrow::config::DisplayStamp;
 use strata_arrow::plan::{as_explain, QueryPlan};
 use strata_engine::{EngineError, RunOutcome, RunRows, RunTag, SnapshotPage, StatementReport};
-use strata_model::SnapshotId;
+use strata_model::{PageQuery, SnapshotId};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -132,11 +133,15 @@ impl QueryCapability for RunQuery {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PageSpec {
     pub snapshot: SnapshotId,
-    pub page: usize,
-    pub page_size: usize,
-    /// `(column name, ascending)` — an `ORDER BY` over the whole snapshot before the
-    /// page window; `None` = snapshot order.
-    pub sort: Option<(String, bool)>,
+    pub query: PageQuery,
+    /// The `datafusion.format.*` overrides the cells are rendered through. In the key because
+    /// Settings moves them on a live engine with no restart and no new snapshot, so an entry
+    /// keyed on `(snapshot, query)` alone would keep serving cells formatted under a config the
+    /// user has since changed.
+    ///
+    /// Read from the app config rather than from the engine's own copy, for the reason
+    /// [`ChartSpec`](super::ChartSpec)'s module note gives.
+    pub display: DisplayStamp,
 }
 
 impl PageSpec {
@@ -163,7 +168,7 @@ impl QueryCapability for FetchSnapshotPage {
     async fn run(&self, spec: &PageSpec) -> Result<SnapshotPage, EngineError> {
         self.0
             .snapshot(spec.snapshot)
-            .page(spec.page, spec.page_size, spec.sort.clone())
+            .page(spec.query.clone(), spec.display.clone())
             .await
     }
 }
@@ -208,18 +213,24 @@ mod tests {
         let pages = FetchSnapshotPage(engine.captured());
         let read = PageSpec {
             snapshot,
-            page: 2,
-            page_size: 2,
-            sort: None,
+            query: PageQuery {
+                page: 2,
+                page_size: 2,
+                sort: None,
+            },
+            display: DisplayStamp::default(),
         };
         let tail = block_on(pages.run(&read)).expect("page 2");
         assert_eq!(tail.rows.len(), 1);
 
         let sorted = PageSpec {
             snapshot,
-            page: 1,
-            page_size: 2,
-            sort: Some(("column1".into(), false)),
+            query: PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: Some(("column1".into(), false)),
+            },
+            display: DisplayStamp::default(),
         };
         let sorted = block_on(pages.run(&sorted)).expect("sorted page");
         assert_eq!(sorted.rows[0][0].text, "3");

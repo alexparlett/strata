@@ -4,7 +4,8 @@
 //! always a read of the fixed set. Nothing here re-runs the query and nothing mutates the
 //! snapshot, which is what makes every read safely cacheable by its arguments.
 
-use strata_model::{ChartData, ChartQuery, SnapshotId, Trend};
+use strata_arrow::config::DisplayStamp;
+use strata_model::{ChartData, ChartQuery, PageQuery, SnapshotId, Trend};
 
 use crate::query::{self, CellFormat};
 use crate::{
@@ -22,25 +23,27 @@ pub struct SnapshotReads<'a> {
 }
 
 impl SnapshotReads<'_> {
-    /// Read one page — `sort` = `(column, ascending)` applied as an `ORDER BY` over the whole
-    /// snapshot before the page window (Rz6). Reads are snapshot-scoped and side-effect free:
-    /// safely cacheable by `(snapshot, page, page_size, sort)`.
+    /// Read one page of the snapshot, its cells rendered through `display`.
+    ///
+    /// `q.sort` applies an `ORDER BY` over the whole snapshot before the page window (Rz6). Reads
+    /// are snapshot-scoped and side-effect free: safely cacheable by `(snapshot, q, display)`.
+    ///
+    /// The rendering is an argument rather than something read off the engine because
+    /// [`set_config`](Engine::set_config) moves it with no restart and no new snapshot: a caller
+    /// that caches this answer has to be able to key it on the rendering it got.
     pub async fn page(
         self,
-        page: usize,
-        page_size: usize,
-        sort: Option<(String, bool)>,
+        q: PageQuery,
+        display: DisplayStamp,
     ) -> Result<SnapshotPage, EngineError> {
         let snapshot = self.snapshot;
         let ctx = self.engine.ctx.clone();
-        let fmt = CellFormat::new(&self.engine.overrides.lock().unwrap());
+        let fmt = CellFormat::new(&display);
         let ord = self.engine.ordinal(snapshot);
         let (rows, batch) = self
             .engine
             .rt()
-            .spawn(async move {
-                query::fetch_page(&ctx, snapshot, page, page_size, sort, ord, &fmt).await
-            })
+            .spawn(async move { query::fetch_page(&ctx, snapshot, q, ord, &fmt).await })
             .await
             .map_err(|e| EngineError::task("page", e))??;
         Ok(SnapshotPage { rows, batch })
@@ -52,23 +55,23 @@ impl SnapshotReads<'_> {
     /// (`Histogram`). No aggregation, no bucketing, no imposed order — the withdrawn
     /// pipeline's grouped reads must not come back here.
     ///
-    /// Snapshot-scoped and side-effect free like [`page`](Self::page). Cache
-    /// identity is `(snapshot, q)` **plus the engine's display config**: axis labels render
-    /// through the live `datafusion.format.*` overrides, which
-    /// [`Engine::set_config`] changes without a restart — so a UI cache keyed on
-    /// `(snapshot, q)` alone serves stale labels after a Settings change, and the chart
-    /// surface must re-render (not merely re-key) when those overrides move, exactly as the
-    /// grid's pages do. Deliberately no lifecycle bookkeeping and no confirm in front of it —
+    /// Snapshot-scoped and side-effect free like [`page`](Self::page), and keyed the same way:
+    /// its axis labels render through `display`, out of the same cell formatter.
+    /// Deliberately no lifecycle bookkeeping and no confirm in front of it —
     /// a projected, capped read of a local snapshot is [`page`](Self::page)-tier work, not
     /// [`Catalog::profile`](crate::Catalog::profile)'s tier.
     ///
     /// The chart never re-reads the source files: it charts the result the grid is paging,
     /// which is what makes the two agree when the data underneath has since moved.
-    pub async fn chart(self, q: ChartQuery) -> Result<ChartData, EngineError> {
+    pub async fn chart(
+        self,
+        q: ChartQuery,
+        display: DisplayStamp,
+    ) -> Result<ChartData, EngineError> {
         let _reading = self.pin();
         let snapshot = self.snapshot;
         let ctx = self.engine.ctx.clone();
-        let fmt = CellFormat::new(&self.engine.overrides.lock().unwrap());
+        let fmt = CellFormat::new(&display);
         let ord = self.engine.ordinal(snapshot);
         self.engine
             .rt()
@@ -84,7 +87,9 @@ impl SnapshotReads<'_> {
     /// query: templating it into SQL would rewrite the user's query on every encoder gesture.
     ///
     /// [`chart`](Self::chart)'s tier exactly — snapshot-scoped, side-effect free, pinned
-    /// for the length of the call — and deliberately **not** a [`ChartQuery`] arm, so a UI
+    /// for the length of the call — and **numbers only**, which is why it takes no
+    /// [`DisplayStamp`]: a slope and an intercept render through nothing.
+    /// Deliberately **not** a [`ChartQuery`] arm, so a UI
     /// cache can key the fit by the two columns alone and toggling the overlay never
     /// re-reads the points. `Ok(None)` is a fit the data cannot support (fewer than two
     /// pairs, or no x-variance): the overlay simply does not draw, never an error the user
