@@ -654,7 +654,7 @@ mod tests {
     use crate::builder::test_context;
     use crate::register::{table_spec, CatalogSpec, RegOutcome};
     use crate::statements::Fault;
-    use crate::{Connections, Engine, RunOutcome, RunTag, StatementReport, WsId};
+    use crate::{Connections, Engine, RunOutcome, RunRows, RunTag, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
 
     use super::*;
@@ -679,7 +679,12 @@ mod tests {
     /// Run one statement and take its report — anything else is a test that asked the wrong
     /// question.
     async fn statement(eng: &Engine, sql: &str) -> Result<StatementReport, String> {
-        match eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await? {
+        match eng
+            .ws(WsId(1))
+            .run(RunTag(1), sql.into(), 10)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             RunOutcome::Statement(report) => Ok(report),
             RunOutcome::Rows(..) => panic!("{sql} ran as a query"),
         }
@@ -688,7 +693,7 @@ mod tests {
     /// The values `name` holds now, as text, through an ordinary query — which is the point:
     /// a created table has to be readable the way any other table is.
     async fn read(eng: &Engine, sql: &str) -> Vec<Vec<String>> {
-        let RunOutcome::Rows(output, _) = eng
+        let RunOutcome::Rows(RunRows { output, .. }) = eng
             .ws(WsId(2))
             .run(RunTag(2), sql.into(), 100)
             .await
@@ -974,7 +979,8 @@ mod tests {
                     internal: true,
                 })
                 .await
-                .expect_err("refused"),
+                .expect_err("refused")
+                .to_string(),
             reserved
         );
         let _ = fs::remove_dir_all(&root);
@@ -1051,7 +1057,7 @@ mod tests {
             .expect_err("no data");
 
         assert_eq!(
-            error,
+            error.to_string(),
             "Table 'gone' has no data in this copy of the project. An internal table's data is \
              local to the machine that created it."
         );

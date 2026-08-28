@@ -413,12 +413,12 @@ pub async fn policy_verdicts(
 /// (a view's body, a statement bound for a server) or a read the facade limits to reading. What
 /// they need is the resolution, because a resolved statement cannot be rendered back to text
 /// without losing the buffer the user wrote.
-pub(crate) fn resolved_one(ctx: &SessionContext, sql: &str) -> Result<DFStatement, String> {
+pub(crate) fn resolved_one(ctx: &SessionContext, sql: &str) -> Result<DFStatement, Refusal> {
     let p = Pipeline::new(ctx);
-    let parsed = parse_one(&p, sql).map_err(|r| r.message())?;
+    let parsed = parse_one(&p, sql)?;
     qualify(&p, parsed)
         .map(Qualified::into_statement)
-        .map_err(|refusals| first(refusals).message())
+        .map_err(first)
 }
 
 /// The first of a stage's refusals — what a caller judging one statement reports.

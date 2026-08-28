@@ -38,6 +38,7 @@ mod catalog;
 mod chart;
 /// The all-or-nothing contract a connection registers under, shared by [`store`] and [`sources`].
 mod connect;
+mod error;
 mod explain;
 pub mod export;
 mod facade;
@@ -63,6 +64,7 @@ pub mod udf_package;
 pub mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
+pub use error::{EngineError, StopReason};
 pub use facade::{Catalog, Lang, SnapshotReads, Sources, Work, Workspace};
 pub use generation::CatalogGen;
 pub use policy::{
@@ -80,8 +82,8 @@ pub use sources::source::{
 pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
 pub use statements::{
-    Fault, Form, Mechanism, PolicyRefusal, Reason, Remote, StatementReport, StmtKind, StoreEffect,
-    Target,
+    Fault, Form, Mechanism, PolicyRefusal, Reason, Refusal, Remote, StatementReport, StmtKind,
+    StoreEffect, Target,
 };
 pub use tables::{InternalTableStore, LocalIpcTableStore, MemTableStore};
 
@@ -91,30 +93,6 @@ pub use udf_package::UdfPackage;
 use secrets::SecretProvider;
 
 use strata_arrow::{config, RecordBatch};
-
-/// A call the caller (or the app on their behalf) **stopped**: [`Workspace::cancel`] aborted it, or
-/// [`Catalog::cancel_profile`] did.
-pub const CANCELLED: &str = "cancelled";
-/// A run that finished but was no longer the latest dispatch for its workspace — a newer press
-/// replaced it, so its result is discarded and its snapshot retired ([`Workspace::query`]).
-pub const SUPERSEDED_RUN: &str = "superseded by a newer run";
-/// The scan equivalent: a re-scan replaced this one ([`Catalog::profile`]).
-pub const SUPERSEDED_SCAN: &str = "superseded by a newer scan";
-
-/// Did this `Err` mean the call was **stopped**, rather than that it *failed*?
-///
-/// The three strings above are one concept with three causes, and the distinction matters at every
-/// surface that shows a settled error: a stopped call is news the user already has (they cancelled,
-/// or they pressed Run again), so it must never be presented as a fault.
-///
-/// **A named predicate rather than a literal at each call site**, because the consumers used to
-/// match the engine's own prose: `state::log::run_event` compared against `"cancelled"` (and so
-/// mapped a *supersede* to a red `Error` row reading "superseded by a newer run"), while the
-/// inspector's scan zone did `== "cancelled" || starts_with("superseded")`. Two copies of one rule,
-/// each able to drift from the strings this module actually produces — and one of them already had.
-pub fn stopped_on_purpose(error: &str) -> bool {
-    matches!(error, CANCELLED | SUPERSEDED_RUN | SUPERSEDED_SCAN)
-}
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[cfg(test)]
@@ -145,7 +123,7 @@ use snapshots::snapshot_name;
 use sources::source::Sources as SourceRegistry;
 use sources::Live;
 use statements::arms::StrataFunctionFactory;
-use strata_model::{ConnectionDef, QueryOutput, SnapshotId, TabId};
+use strata_model::{Cell, ConnectionDef, QueryOutput, SnapshotId, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -172,6 +150,39 @@ impl From<TabId> for WsId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RunTag(pub u128);
 
+/// A settled query: the snapshot handle with page 1, and the page-1 batch.
+///
+/// Two views of the same rows. `output` holds them as display cells, formatted under the engine's
+/// live `datafusion.format.*` config; `batch` holds them still typed, for a caller that copies or
+/// exports them rather than showing them.
+#[derive(Debug)]
+pub struct RunRows {
+    pub output: QueryOutput,
+    pub batch: RecordBatch,
+}
+
+/// One page of a settled snapshot: the cells, and the same rows still typed.
+///
+/// [`RunRows`]'s shape, for a page after the first.
+#[derive(Debug)]
+pub struct SnapshotPage {
+    pub rows: Vec<Vec<Cell>>,
+    pub batch: RecordBatch,
+}
+
+/// Whether a config change took effect, or is waiting on a restart.
+///
+/// A `datafusion.runtime.*` key configures the `RuntimeEnv`, which is fixed when the engine is
+/// built, so it is recorded rather than applied and the caller owes the user a restart.
+#[must_use]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConfigOutcome {
+    /// Every changed key is live on the session.
+    Applied,
+    /// At least one changed key needs a new engine to take effect.
+    RestartOwed,
+}
+
 /// What a **Run** settled to ([`Workspace::run`]) — the two things a press can produce.
 ///
 /// The split is the router's, not a mode the caller picks: a Run is one press, and whether it
@@ -179,7 +190,7 @@ pub struct RunTag(pub u128);
 pub enum RunOutcome {
     /// Exactly [`Workspace::query`]'s answer — the snapshot handle + page 1. Byte-for-byte the
     /// path that shipped: same supersede, same retire-on-dispatch, same pins.
-    Rows(QueryOutput, RecordBatch),
+    Rows(RunRows),
     /// An intercepted statement's report. **No snapshot**, and none retired: a tab that
     /// creates a table can still page the result it already had
     /// (`docs/SNAPSHOT_SPEC.md` §4 — DDL does not retire snapshots).
@@ -397,11 +408,12 @@ struct Lifecycle {
 /// engine itself. The mapping is total: nothing public sits outside it.
 ///
 /// ```no_run
-/// # use strata_engine::{Engine, RunTag, WsId};
-/// # async fn read(engine: &Engine, ws: WsId, tag: RunTag) -> Result<(), String> {
-/// let (output, _page_1) = engine.ws(ws).query(tag, "SELECT 1".into(), 100).await?;
-/// let snapshot = output.snapshot.expect("a query settles a snapshot");
-/// let (_rows, _batch) = engine.snapshot(snapshot).page(2, 100, None).await?;
+/// # use strata_engine::{Engine, EngineError, RunTag, WsId};
+/// # async fn read(engine: &Engine, ws: WsId, tag: RunTag) -> Result<(), EngineError> {
+/// let run = engine.ws(ws).query(tag, "SELECT 1".into(), 100).await?;
+/// let snapshot = run.output.snapshot.expect("a query settles a snapshot");
+/// let page_2 = engine.snapshot(snapshot).page(2, 100, None).await?;
+/// # let _ = (run.batch, page_2.rows, page_2.batch);
 /// # Ok(())
 /// # }
 /// ```
@@ -897,14 +909,14 @@ impl Engine {
     ///
     /// `datafusion.runtime.*` is the exception, and the reason this returns anything: those
     /// configure the `RuntimeEnv`, which is fixed when the `SessionContext` is built. They
-    /// are recorded, not applied, and `true` means the caller owes the user a restart.
+    /// are recorded, not applied, and answered as [`ConfigOutcome::RestartOwed`].
     ///
     /// A key the **session overlay** holds is recorded and not applied either: a typed
     /// `SET` wins for its key until `RESET` or restart, so the new value becomes the baseline a
     /// `RESET` will land on rather than something that quietly overwrites what the user just
     /// typed. That is the whole precedence rule, and it lives here because this is the only place
     /// the two writers meet.
-    pub fn set_config(&self, overrides: BTreeMap<String, String>) -> bool {
+    pub fn set_config(&self, overrides: BTreeMap<String, String>) -> ConfigOutcome {
         let mut current = self.overrides.lock().unwrap();
         if *current != overrides {
             let state = self.ctx.state_ref();
@@ -932,7 +944,10 @@ impl Engine {
             refresh_config_dependent_udfs(&mut state);
             *current = overrides;
         }
-        runtime_subset(&current) != self.built_runtime
+        match runtime_subset(&current) != self.built_runtime {
+            true => ConfigOutcome::RestartOwed,
+            false => ConfigOutcome::Applied,
+        }
     }
 
     /// Whether this engine's `datafusion.runtime.*` overrides have moved on from the ones its
@@ -1024,9 +1039,9 @@ impl Engine {
     /// [`Classifying`], and `a_refused_statement_leaves_the_workspaces_run_alone`, which pins
     /// exactly that. Nothing is registered, planned or spooled in this window, so there is no
     /// snapshot to retire and nothing to abort but the classification itself.
-    async fn classify_bracket<F, T>(&self, ws: WsId, tag: RunTag, work: F) -> Result<T, String>
+    async fn classify_bracket<F, T>(&self, ws: WsId, tag: RunTag, work: F) -> Result<T, EngineError>
     where
-        F: Future<Output = Result<T, String>> + Send + 'static,
+        F: Future<Output = Result<T, EngineError>> + Send + 'static,
         T: Send + 'static,
     {
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
@@ -1058,8 +1073,8 @@ impl Engine {
         drop(lc);
         match joined {
             Ok(res) => res,
-            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
-            Err(join) => Err(format!("policy task failed: {join}")),
+            Err(join) if join.is_cancelled() => Err(EngineError::Stopped(StopReason::Cancelled)),
+            Err(join) => Err(EngineError::task("policy", join)),
         }
     }
 
@@ -1079,7 +1094,13 @@ impl Engine {
     /// `what` names the call in the one message a *runtime* failure can produce — a task that
     /// panicked or was dropped by the runtime, which is a different fault from the call's own
     /// `Err` and reads as one.
-    async fn bookkeep<F, T>(&self, ws: WsId, tag: RunTag, what: &str, work: F) -> Result<T, String>
+    async fn bookkeep<F, T>(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        what: &str,
+        work: F,
+    ) -> Result<T, EngineError>
     where
         F: Future<Output = Result<T, String>> + Send + 'static,
         T: Send + 'static,
@@ -1115,9 +1136,9 @@ impl Engine {
         }
         self.publish_inflight(&lc);
         match joined {
-            Ok(res) => res,
-            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
-            Err(join) => Err(format!("{what} task failed: {join}")),
+            Ok(res) => res.map_err(EngineError::from),
+            Err(join) if join.is_cancelled() => Err(EngineError::Stopped(StopReason::Cancelled)),
+            Err(join) => Err(EngineError::task(what, join)),
         }
     }
 
@@ -1129,8 +1150,8 @@ impl Engine {
     /// **Not spawned onto the runtime**, unlike every call that touches the context to *do*
     /// something: it has to land before the first await, or `query` stops publishing its in-flight
     /// entry on the first poll and `DispatchGuard` has nothing to retract.
-    fn parse_one(&self, sql: &str) -> Result<DFStatement, String> {
-        statements::pipeline::resolved_one(&self.ctx, sql)
+    fn parse_one(&self, sql: &str) -> Result<DFStatement, EngineError> {
+        statements::pipeline::resolved_one(&self.ctx, sql).map_err(EngineError::Refused)
     }
 
     /// [`query`](Workspace::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
@@ -1146,7 +1167,7 @@ impl Engine {
         stmt: DFStatement,
         page_size: usize,
         policy: ReadPolicy,
-    ) -> Result<(QueryOutput, RecordBatch), String> {
+    ) -> Result<RunRows, EngineError> {
         let snapshot = SnapshotId(self.snap_seq.fetch_add(1, Ordering::Relaxed));
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
         let fmt = CellFormat::new(&self.overrides.lock().unwrap());
@@ -1194,20 +1215,20 @@ impl Engine {
                         lc.current.insert(ws, snap);
                         lc.stats.insert(snap, stats);
                     }
-                    Ok((output, batch))
+                    Ok(RunRows { output, batch })
                 } else {
                     self.retire_snapshot(snapshot);
-                    Err(SUPERSEDED_RUN.into())
+                    Err(EngineError::Stopped(StopReason::SupersededRun))
                 }
             }
-            Ok(Err(e)) => Err(e),
+            Ok(Err(e)) => Err(EngineError::from(e)),
             Err(join) if join.is_cancelled() => {
                 self.retire_snapshot(snapshot);
-                Err(CANCELLED.into())
+                Err(EngineError::Stopped(StopReason::Cancelled))
             }
             Err(join) => {
                 self.retire_snapshot(snapshot);
-                Err(format!("query task failed: {join}"))
+                Err(EngineError::task("query", join))
             }
         }
     }
@@ -1794,7 +1815,7 @@ mod tests {
             .await
             .err()
             .expect("refused");
-        assert_eq!(refused, Fault::CreateDatabase.message());
+        assert_eq!(refused.to_string(), Fault::CreateDatabase.message());
         assert!(
             engine.ws(ws).is_running(),
             "a statement the engine refuses must not take the scan with it"
@@ -1828,7 +1849,10 @@ mod tests {
             "the press is visible while it classifies"
         );
         assert!(stopped.is_some(), "and the cancel found it");
-        assert_eq!(settled.err().as_deref(), Some(CANCELLED));
+        assert!(matches!(
+            settled.err(),
+            Some(EngineError::Stopped(StopReason::Cancelled))
+        ));
         assert!(!engine.ws(ws).is_running());
         assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
     }
@@ -1901,10 +1925,13 @@ mod tests {
             .build();
         assert_eq!(live(&engine, BATCH), "4096", "built with the override");
 
-        assert!(!engine.set_config(overrides(&[(BATCH, "1024")])));
+        assert_eq!(
+            engine.set_config(overrides(&[(BATCH, "1024")])),
+            ConfigOutcome::Applied
+        );
         assert_eq!(live(&engine, BATCH), "1024", "applied without a restart");
 
-        assert!(!engine.set_config(BTreeMap::new()));
+        assert_eq!(engine.set_config(BTreeMap::new()), ConfigOutcome::Applied);
         assert_eq!(
             live(&engine, BATCH),
             config::key_def(BATCH).expect("catalogued").default,
@@ -1917,13 +1944,15 @@ mod tests {
         let engine = Engine::builder().build();
         assert!(!engine.restart_owed());
 
-        assert!(
+        assert_eq!(
             engine.set_config(overrides(&[(MEMORY, "2G")])),
+            ConfigOutcome::RestartOwed,
             "the RuntimeEnv is fixed at build, so this is owed"
         );
         assert!(engine.restart_owed());
-        assert!(
+        assert_eq!(
             engine.set_config(overrides(&[(MEMORY, "2G"), (BATCH, "1024")])),
+            ConfigOutcome::RestartOwed,
             "a second write still owes the same restart"
         );
 
@@ -1973,7 +2002,7 @@ mod tests {
         let eng = Engine::builder().build();
         let doc = r#"'{"s": "x", "n": 7, "b": true, "o": {"k": 1}, "a": [1,2], "z": null}'"#;
 
-        let (out, _) = eng
+        let RunRows { output: out, .. } = eng
             .ws(WsId(1))
             .query(
                 RunTag(1),
@@ -2019,7 +2048,7 @@ mod tests {
     #[tokio::test]
     async fn a_json_value_nested_in_a_struct_round_trips() {
         let eng = Engine::builder().build();
-        let (out, _) = eng
+        let RunRows { output: out, .. } = eng
             .ws(WsId(1))
             .query(
                 RunTag(1),
@@ -2137,7 +2166,7 @@ mod tests {
     #[test]
     fn set_config_leaves_the_catalog_names_alone() {
         let engine = Engine::builder().build();
-        engine.set_config(overrides(&[(
+        let _ = engine.set_config(overrides(&[(
             "datafusion.catalog.default_schema",
             "elsewhere",
         )]));
@@ -2196,7 +2225,7 @@ mod tests {
 
             let ws = WsId(1);
             let select = format!("SELECT * FROM {}", quote_ident(name));
-            let (out, _) = eng
+            let RunRows { output: out, .. } = eng
                 .ws(ws)
                 .query(RunTag(i as u128 * 2), select.clone(), 10)
                 .await
@@ -2233,7 +2262,7 @@ mod tests {
         assert_eq!(meta.columns.len(), 1, "…and planned against it");
 
         for sql in ["SELECT * FROM dailysales", "SELECT * FROM DailySales"] {
-            let (out, _) = eng
+            let RunRows { output: out, .. } = eng
                 .ws(WsId(1))
                 .query(RunTag(1), sql.into(), 10)
                 .await
@@ -2476,8 +2505,8 @@ mod tests {
         assert!(flagged, "a running scan is work in flight");
         assert!(cancelled, "…and the cancel found it");
         assert_eq!(
-            settled.as_ref().err().map(String::as_str),
-            Some("cancelled")
+            settled.as_ref().err(),
+            Some(&EngineError::Stopped(StopReason::Cancelled))
         );
         assert!(!flag.load(Ordering::Relaxed), "cleared once it settled");
         assert!(
@@ -2548,7 +2577,10 @@ mod tests {
         };
         let (scan, ()) = tokio::join!(scan, replace);
 
-        assert_eq!(scan.as_ref().err().map(String::as_str), Some("cancelled"));
+        assert_eq!(
+            scan.as_ref().err(),
+            Some(&EngineError::Stopped(StopReason::Cancelled))
+        );
     }
 
     /// The close-while-running guard's two probes (T2). Both are answered from the
@@ -2618,14 +2650,18 @@ mod tests {
         };
         let (first, second) = tokio::join!(first, second);
 
-        let (out, _) = second.expect("the newer dispatch settles Ok");
+        let out = second.expect("the newer dispatch settles Ok").output;
         let snap = out.snapshot.expect("…owning a snapshot of its own");
         eng.snapshot(snap)
             .page(1, 10, None)
             .await
             .expect("…which the older dispatch did not retire");
         if let Err(e) = &first {
-            assert_eq!(e, "cancelled", "the superseded dispatch settles cancelled");
+            assert_eq!(
+                e,
+                &EngineError::Stopped(StopReason::Cancelled),
+                "the superseded dispatch settles cancelled"
+            );
         }
         assert!(
             eng.ws(ws).cancel(tag).is_none(),
@@ -2641,7 +2677,7 @@ mod tests {
         let eng = Engine::builder().build();
         let sql = "SELECT * FROM (VALUES (2), (1), (3)) AS t";
 
-        let RunOutcome::Rows(routed, _) = eng
+        let RunOutcome::Rows(RunRows { output: routed, .. }) = eng
             .ws(WsId(1))
             .run(RunTag(1), sql.into(), 2)
             .await
@@ -2649,7 +2685,7 @@ mod tests {
         else {
             panic!("a SELECT settles rows");
         };
-        let (direct, _) = eng
+        let RunRows { output: direct, .. } = eng
             .ws(WsId(2))
             .query(RunTag(2), sql.into(), 2)
             .await
@@ -2659,7 +2695,8 @@ mod tests {
         assert_eq!(routed.rows, direct.rows);
         assert_eq!(routed.columns.len(), direct.columns.len());
         let snap = routed.snapshot.expect("a snapshot handle");
-        let (page2, _) = eng.snapshot(snap).page(2, 2, None).await.expect("page 2");
+        let SnapshotPage { rows: page2, .. } =
+            eng.snapshot(snap).page(2, 2, None).await.expect("page 2");
         assert_eq!(page2.len(), 1);
     }
 
@@ -2674,7 +2711,8 @@ mod tests {
             .run(RunTag(1), "CREATE DATABASE d".into(), 10)
             .await
             .err()
-            .expect("refused");
+            .expect("refused")
+            .to_string();
         assert_eq!(err, Fault::CreateDatabase.message());
     }
 
@@ -2703,7 +2741,8 @@ mod tests {
                 .run(RunTag(1), sql.into(), 10)
                 .await
                 .err()
-                .expect("nowhere to store it");
+                .expect("nowhere to store it")
+                .to_string();
             assert_eq!(err, expected);
         }
     }
@@ -2717,7 +2756,7 @@ mod tests {
         let eng = Engine::builder().build();
         let (ws, sql) = (WsId(1), "SELECT * FROM (VALUES (1), (2)) AS t");
 
-        let (out, _) = eng
+        let RunRows { output: out, .. } = eng
             .ws(ws)
             .query(RunTag(1), sql.into(), 10)
             .await
@@ -2750,7 +2789,8 @@ mod tests {
             .run(RunTag(1), "SELECT 1; SELECT 2".into(), 10)
             .await
             .err()
-            .expect("a batch");
+            .expect("a batch")
+            .to_string();
         assert_eq!(err, "Run executes one statement at a time");
     }
 
@@ -2774,7 +2814,7 @@ mod tests {
         ] {
             let outcome = eng.ws(WsId(1)).run(RunTag(1), sql.into(), 10).await;
             assert!(
-                matches!(outcome, Ok(RunOutcome::Rows(_, _))),
+                matches!(outcome, Ok(RunOutcome::Rows(_))),
                 "{sql:?} must run, not refuse as a batch"
             );
         }
@@ -2790,7 +2830,8 @@ mod tests {
             .run(RunTag(1), "-- just thinking out loud\n".into(), 10)
             .await
             .err()
-            .expect("nothing to run");
+            .expect("nothing to run")
+            .to_string();
         assert_eq!(err, "Nothing to run");
     }
 }
@@ -2907,11 +2948,9 @@ mod read_options_tests {
 
         let err = read("OPTIONS('format.null_regex' 'NAN')")
             .await
-            .expect_err("the scan cannot parse what inference called null");
-        assert!(
-            err.to_string().contains("Error while parsing value 'NAN'"),
-            "{err}"
-        );
+            .expect_err("the scan cannot parse what inference called null")
+            .to_string();
+        assert!(err.contains("Error while parsing value 'NAN'"), "{err}");
     }
 
     #[tokio::test]
@@ -2981,7 +3020,8 @@ mod read_options_tests {
                 SourceFormat::Csv(CsvRead::default()),
             ))
             .await
-            .expect_err("the comment line is taken as the header");
+            .expect_err("the comment line is taken as the header")
+            .to_string();
         assert!(err.contains("unequal lengths"), "{err}");
 
         let meta = eng
@@ -3029,7 +3069,8 @@ mod read_options_tests {
             .ws(WsId(1))
             .query(RunTag(1), "SELECT * FROM strict".into(), 100)
             .await
-            .expect_err("the short file cannot be read against the merged schema");
+            .expect_err("the short file cannot be read against the merged schema")
+            .to_string();
         assert!(err.contains("incorrect number of fields"), "{err}");
 
         let meta = eng
@@ -3137,7 +3178,8 @@ mod read_options_tests {
                 SourceFormat::Csv(CsvRead::default()),
             ))
             .await
-            .expect_err("the extension filter excludes it");
+            .expect_err("the extension filter excludes it")
+            .to_string();
         assert!(err.contains("not one"), "{err}");
 
         let meta = eng
@@ -3198,7 +3240,7 @@ mod read_options_tests {
             .expect("content column");
         assert_eq!(content.dtype, "Utf8", "the conflicted field is text");
 
-        let (out, _) = eng
+        let RunRows { output: out, .. } = eng
             .ws(WsId(1))
             .query(RunTag(1), "SELECT content FROM poly ORDER BY id".into(), 10)
             .await
@@ -3247,7 +3289,7 @@ mod read_options_tests {
             tags.dtype
         );
 
-        let (out, _) = eng
+        let RunRows { output: out, .. } = eng
             .ws(WsId(1))
             .query(RunTag(1), "SELECT * FROM t".into(), 10)
             .await
@@ -3304,7 +3346,8 @@ mod read_options_tests {
                 }),
             ))
             .await
-            .expect_err("zero is not a sample size");
+            .expect_err("zero is not a sample size")
+            .to_string();
         assert!(err.contains("at least 1"), "{err}");
     }
 
@@ -3337,7 +3380,7 @@ mod read_options_tests {
                 .await
                 .expect("register");
 
-            let (out, _) = eng
+            let RunRows { output: out, .. } = eng
                 .ws(WsId(1))
                 .query(RunTag(1), "SELECT count(*) AS n FROM rows".into(), 10)
                 .await
@@ -3362,7 +3405,8 @@ mod read_options_tests {
                 SourceFormat::Json(JsonRead::default()),
             ))
             .await
-            .expect_err("an array is not newline-delimited");
+            .expect_err("an array is not newline-delimited")
+            .to_string();
         assert!(err.contains("Set the JSON shape to array"), "{err}");
 
         let meta = eng
@@ -3393,7 +3437,8 @@ mod read_options_tests {
             .catalog()
             .register(spec("legacy", vec![path], SourceFormat::from_name("avro")))
             .await
-            .expect_err("no reader");
+            .expect_err("no reader")
+            .to_string();
         assert_eq!(
             err,
             "Table 'legacy' is defined as 'avro', which no reader is registered for. Register \
@@ -3420,7 +3465,8 @@ mod read_options_tests {
                 }),
             ))
             .await
-            .expect_err("not a byte");
+            .expect_err("not a byte")
+            .to_string();
         assert!(err.contains("single-byte character"), "{err}");
 
         let err = eng
@@ -3434,7 +3480,8 @@ mod read_options_tests {
                 }),
             ))
             .await
-            .expect_err("not one byte in UTF-8");
+            .expect_err("not one byte in UTF-8")
+            .to_string();
         assert!(err.contains("single-byte character"), "{err}");
     }
 }

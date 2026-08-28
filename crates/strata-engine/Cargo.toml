@@ -33,6 +33,7 @@ async-trait = "0.1"
 regex = "1"
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 chrono = "0.4"
+thiserror = "2"
 tracing = "0.1.44"
 
 [dev-dependencies]

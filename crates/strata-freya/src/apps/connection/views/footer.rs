@@ -145,7 +145,11 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
 fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
     let def = ctx.draft.read().def();
     let kind = def.provider.source()?.kind.clone();
-    engine.sources().check_address(&kind, &def.address).err()
+    engine
+        .sources()
+        .check_address(&kind, &def.address)
+        .err()
+        .map(|why| why.to_string())
 }
 
 /// The blocker the draft cannot see: a name another connection already holds.

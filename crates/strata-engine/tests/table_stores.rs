@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
-use strata_engine::{Engine, MemTableStore, RunOutcome, RunTag, StatementReport, WsId};
+use strata_engine::{Engine, MemTableStore, RunOutcome, RunRows, RunTag, StatementReport, WsId};
 
 /// A scratch project folder of our own, per engine.
 fn scratch(tag: &str) -> PathBuf {
@@ -32,7 +32,7 @@ async fn statement(eng: &Engine, sql: &str) -> StatementReport {
 }
 
 async fn read_n(eng: &Engine, sql: &str) -> Vec<String> {
-    let RunOutcome::Rows(output, _) = eng
+    let RunOutcome::Rows(RunRows { output, .. }) = eng
         .ws(WsId(2))
         .run(RunTag(2), sql.into(), 100)
         .await

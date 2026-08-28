@@ -4,13 +4,12 @@
 //! always a read of the fixed set. Nothing here re-runs the query and nothing mutates the
 //! snapshot, which is what makes every read safely cacheable by its arguments.
 
-use std::fs;
-
-use strata_arrow::RecordBatch;
-use strata_model::{Cell, ChartData, ChartQuery, SnapshotId, Trend};
+use strata_model::{ChartData, ChartQuery, SnapshotId, Trend};
 
 use crate::query::{self, CellFormat};
-use crate::{chart, export, Engine, ExportHold, SnapshotPin, CANCELLED};
+use crate::{
+    chart, export, Engine, EngineError, ExportHold, SnapshotPage, SnapshotPin, StopReason,
+};
 
 /// The reads of one immutable snapshot, from [`Engine::snapshot`].
 ///
@@ -31,18 +30,20 @@ impl SnapshotReads<'_> {
         page: usize,
         page_size: usize,
         sort: Option<(String, bool)>,
-    ) -> Result<(Vec<Vec<Cell>>, RecordBatch), String> {
+    ) -> Result<SnapshotPage, EngineError> {
         let snapshot = self.snapshot;
         let ctx = self.engine.ctx.clone();
         let fmt = CellFormat::new(&self.engine.overrides.lock().unwrap());
         let ord = self.engine.ordinal(snapshot);
-        self.engine
+        let (rows, batch) = self
+            .engine
             .rt()
             .spawn(async move {
                 query::fetch_page(&ctx, snapshot, page, page_size, sort, ord, &fmt).await
             })
             .await
-            .map_err(|e| format!("page task failed: {e}"))?
+            .map_err(|e| EngineError::task("page", e))??;
+        Ok(SnapshotPage { rows, batch })
     }
 
     /// Read the snapshot as a chart (Rz2, `docs/CHART_SPEC.md` §5) — the
@@ -63,7 +64,7 @@ impl SnapshotReads<'_> {
     ///
     /// The chart never re-reads the source files: it charts the result the grid is paging,
     /// which is what makes the two agree when the data underneath has since moved.
-    pub async fn chart(self, q: ChartQuery) -> Result<ChartData, String> {
+    pub async fn chart(self, q: ChartQuery) -> Result<ChartData, EngineError> {
         let _reading = self.pin();
         let snapshot = self.snapshot;
         let ctx = self.engine.ctx.clone();
@@ -73,7 +74,8 @@ impl SnapshotReads<'_> {
             .rt()
             .spawn(async move { chart::run_chart(&ctx, snapshot, &q, &fmt, ord.as_deref()).await })
             .await
-            .map_err(|e| format!("chart task failed: {e}"))?
+            .map_err(|e| EngineError::task("chart", e))?
+            .map_err(EngineError::from)
     }
 
     /// The least-squares fit over the snapshot's finite `(x, y)` pairs (Chart 11) — the
@@ -87,7 +89,7 @@ impl SnapshotReads<'_> {
     /// re-reads the points. `Ok(None)` is a fit the data cannot support (fewer than two
     /// pairs, or no x-variance): the overlay simply does not draw, never an error the user
     /// must dismiss.
-    pub async fn trend(self, x: String, y: String) -> Result<Option<Trend>, String> {
+    pub async fn trend(self, x: String, y: String) -> Result<Option<Trend>, EngineError> {
         let _reading = self.pin();
         let snapshot = self.snapshot;
         let ctx = self.engine.ctx.clone();
@@ -95,11 +97,12 @@ impl SnapshotReads<'_> {
             .rt()
             .spawn(async move { chart::run_trend(&ctx, snapshot, &x, &y).await })
             .await
-            .map_err(|e| format!("trend task failed: {e}"))?
+            .map_err(|e| EngineError::task("trend", e))?
+            .map_err(EngineError::from)
     }
 
     /// Write the snapshot to disk per `spec` — one file, or a Hive directory when the
-    /// spec carries partition columns. Returns `(path, rows_written)`.
+    /// spec carries partition columns.
     ///
     /// **The snapshot is the source, not the SQL.** An export never re-runs the query: it
     /// streams the very table the grid is paging, in the sort the grid is showing, so the
@@ -115,7 +118,10 @@ impl SnapshotReads<'_> {
     /// tab can't deregister the table this `COPY` is streaming. The export window holds a pin
     /// of its own for its whole life; this one makes the call correct on its own terms, for a
     /// caller that has no window.
-    pub async fn export(self, spec: export::ExportSpec) -> Result<(String, usize), String> {
+    pub async fn export(
+        self,
+        spec: export::ExportSpec,
+    ) -> Result<export::ExportReport, EngineError> {
         let snapshot = self.snapshot;
         let holding = ExportHold::new(self.engine, snapshot);
         let stats = self
@@ -137,11 +143,14 @@ impl SnapshotReads<'_> {
 
         let joined = task.await;
 
-        match joined {
-            Ok(res) => res,
-            Err(join) if join.is_cancelled() => Err(CANCELLED.into()),
-            Err(join) => Err(format!("export task failed: {join}")),
-        }
+        let (path, rows) = match joined {
+            Ok(res) => res?,
+            Err(join) if join.is_cancelled() => {
+                return Err(EngineError::Stopped(StopReason::Cancelled))
+            }
+            Err(join) => return Err(EngineError::task("export", join)),
+        };
+        Ok(export::ExportReport::of(path, rows))
     }
 
     /// Write the snapshot to a **caller-named** file — [`export`](Self::export)'s funnel
@@ -159,20 +168,17 @@ impl SnapshotReads<'_> {
         self,
         path: String,
         format: export::Format,
-    ) -> Result<export::ExportReport, String> {
+    ) -> Result<export::ExportReport, EngineError> {
         let root = self.engine.data_root.lock().unwrap().clone();
         export::check_destination(&path, root.as_deref())?;
-        let (path, rows) = self
-            .export(export::ExportSpec {
-                path,
-                scope: export::Scope::All,
-                sort: None,
-                format,
-                partition: export::Partition::default(),
-            })
-            .await?;
-        let bytes = fs::metadata(&path).ok().map(|m| m.len());
-        Ok(export::ExportReport { path, rows, bytes })
+        self.export(export::ExportSpec {
+            path,
+            scope: export::Scope::All,
+            sort: None,
+            format,
+            partition: export::Partition::default(),
+        })
+        .await
     }
 
     /// Hold the snapshot open for as long as the returned [`SnapshotPin`] lives: while a pin is
@@ -207,7 +213,7 @@ impl SnapshotReads<'_> {
     /// retired snapshot's table is deregistered, so [`page`](Self::page)
     /// answers with DataFusion's own "table not found" prose — and matching that prose at a
     /// call site is exactly the copy-of-a-rule this crate keeps refusing to hand out
-    /// ([`stopped_on_purpose`](crate::stopped_on_purpose) is the same lesson). A reader that
+    /// ([`EngineError::Stopped`](crate::EngineError::Stopped) is the same lesson). A reader that
     /// outlived its snapshot asks **after** its read fails, so the answer cannot race the
     /// dispatch that retired it.
     ///

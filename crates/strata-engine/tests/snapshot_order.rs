@@ -10,7 +10,7 @@
 //! below it, which is why no test ever saw it.
 
 use strata_engine::export::{Compression, Csv, ExportSpec, Format, Partition, Scope};
-use strata_engine::{Engine, RunTag, WsId};
+use strata_engine::{Engine, RunRows, RunTag, SnapshotPage, WsId};
 use strata_model::{Cell, SnapshotId};
 
 /// Wide enough (an md5 column) that 3M rows cross 10 MB many times over. `ORDER BY i` makes
@@ -20,11 +20,12 @@ use strata_model::{Cell, SnapshotId};
 const BIG: &str = "SELECT i, md5(i::text) AS h FROM generate_series(1, 3000000) t(i) ORDER BY i";
 
 async fn snapshot(eng: &Engine, sql: &str) -> SnapshotId {
-    let (out, _) = eng
+    let out = eng
         .ws(WsId(1))
         .query(RunTag(1), sql.into(), 10)
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     out.snapshot.expect("snapshot")
 }
 
@@ -41,16 +42,18 @@ async fn pages_over_the_split_threshold_are_stable_and_in_result_order() {
 
     let page_size = 100usize;
     for page in [1usize, 2, 15_000, 30_000] {
-        let (first, _) = eng
+        let first = eng
             .snapshot(snap)
             .page(page, page_size, None)
             .await
-            .expect("page");
-        let (again, _) = eng
+            .expect("page")
+            .rows;
+        let again = eng
             .snapshot(snap)
             .page(page, page_size, None)
             .await
-            .expect("page again");
+            .expect("page again")
+            .rows;
         let a = ints(&first, 0);
         let b = ints(&again, 0);
         assert_eq!(a, b, "page {page} must read the same twice");
@@ -73,21 +76,24 @@ async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
     .await;
 
     let sort = Some(("k".to_string(), true));
-    let (one, _) = eng
+    let one = eng
         .snapshot(snap)
         .page(1, 100, sort.clone())
         .await
-        .expect("sorted page 1");
-    let (two, _) = eng
+        .expect("sorted page 1")
+        .rows;
+    let two = eng
         .snapshot(snap)
         .page(2, 100, sort.clone())
         .await
-        .expect("sorted page 2");
-    let (two_again, _) = eng
+        .expect("sorted page 2")
+        .rows;
+    let two_again = eng
         .snapshot(snap)
         .page(2, 100, sort)
         .await
-        .expect("sorted page 2 again");
+        .expect("sorted page 2 again")
+        .rows;
     assert_eq!(ints(&two, 1), ints(&two_again, 1), "re-reads agree");
     let mut both = ints(&one, 1);
     both.extend(ints(&two, 1));
@@ -106,7 +112,7 @@ async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
 #[tokio::test]
 async fn an_unordered_query_pages_the_order_the_spool_froze() {
     let eng = Engine::builder().build();
-    let (out, _) = eng
+    let out = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -114,23 +120,35 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
             100,
         )
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     let snap = out.snapshot.expect("snapshot");
 
     let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
-    let (fetched, _) = eng.snapshot(snap).page(1, 100, None).await.expect("page 1");
+    let fetched = eng
+        .snapshot(snap)
+        .page(1, 100, None)
+        .await
+        .expect("page 1")
+        .rows;
     let read: Vec<String> = fetched.iter().map(|r| r[0].text.clone()).collect();
     assert_eq!(
         read, spooled,
         "fetch_page's page 1 is the page the run delivered"
     );
 
-    let (p2a, _) = eng.snapshot(snap).page(2, 100, None).await.expect("page 2");
-    let (p2b, _) = eng
+    let p2a = eng
         .snapshot(snap)
         .page(2, 100, None)
         .await
-        .expect("page 2 again");
+        .expect("page 2")
+        .rows;
+    let p2b = eng
+        .snapshot(snap)
+        .page(2, 100, None)
+        .await
+        .expect("page 2 again")
+        .rows;
     assert_eq!(ints(&p2a, 0), ints(&p2b, 0), "re-reads agree");
     assert!(
         !ints(&p2a, 0).iter().any(|v| read.contains(&v.to_string())),
@@ -143,7 +161,10 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
 #[tokio::test]
 async fn the_ordinal_is_bookkeeping_and_never_leaks() {
     let eng = Engine::builder().build();
-    let (out, page1) = eng
+    let RunRows {
+        output: out,
+        batch: page1,
+    } = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -158,7 +179,12 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
     assert_eq!(names, vec!["i", "d"], "the result schema is the user's");
     assert_eq!(page1.schema().fields().len(), 2, "page 1 batch too");
 
-    let (_, batch) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
+    let batch = eng
+        .snapshot(snap)
+        .page(1, 10, None)
+        .await
+        .expect("page")
+        .batch;
     let schema = batch.schema();
     let fetched: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(fetched, vec!["i", "d"], "a fetched page projects it away");
@@ -199,7 +225,7 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
 #[tokio::test]
 async fn a_user_column_named_like_the_ordinal_survives() {
     let eng = Engine::builder().build();
-    let (out, _) = eng
+    let out = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -207,11 +233,12 @@ async fn a_user_column_named_like_the_ordinal_survives() {
             10,
         )
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     let snap = out.snapshot.expect("snapshot");
     assert_eq!(out.columns[0].name, "__strata_ord");
 
-    let (rows, batch) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
+    let SnapshotPage { rows, batch } = eng.snapshot(snap).page(1, 10, None).await.expect("page");
     assert_eq!(batch.schema().fields().len(), 1, "only the user's column");
     assert_eq!(
         ints(&rows, 0),
@@ -240,16 +267,18 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
     .await;
 
     for page in [1usize, 15_000] {
-        let (first, _) = eng
+        let first = eng
             .snapshot(snap)
             .page(page, 100, None)
             .await
-            .expect("page");
-        let (again, _) = eng
+            .expect("page")
+            .rows;
+        let again = eng
             .snapshot(snap)
             .page(page, 100, None)
             .await
-            .expect("page again");
+            .expect("page again")
+            .rows;
         let i = ints(&first, 0);
         assert_eq!(i, ints(&again, 0), "page {page} reads the same twice");
         let start = ((page - 1) * 100 + 1) as i64;
@@ -268,7 +297,7 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
 #[tokio::test]
 async fn an_unordered_partitioned_window_stays_row_consistent() {
     let eng = Engine::builder().build();
-    let (out, _) = eng
+    let out = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -279,25 +308,33 @@ async fn an_unordered_partitioned_window_stays_row_consistent() {
             100,
         )
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     let snap = out.snapshot.expect("snapshot");
 
     let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
-    let (fetched, _) = eng.snapshot(snap).page(1, 100, None).await.expect("page 1");
+    let fetched = eng
+        .snapshot(snap)
+        .page(1, 100, None)
+        .await
+        .expect("page 1")
+        .rows;
     let read: Vec<String> = fetched.iter().map(|r| r[0].text.clone()).collect();
     assert_eq!(read, spooled, "page 1 is the page the run delivered");
 
     for page in [1usize, 20_000] {
-        let (rows, _) = eng
+        let rows = eng
             .snapshot(snap)
             .page(page, 100, None)
             .await
-            .expect("page");
-        let (again, _) = eng
+            .expect("page")
+            .rows;
+        let again = eng
             .snapshot(snap)
             .page(page, 100, None)
             .await
-            .expect("page again");
+            .expect("page again")
+            .rows;
         assert_eq!(ints(&rows, 0), ints(&again, 0), "page {page} stable");
         for (i, rn) in ints(&rows, 0).iter().zip(ints(&rows, 2)) {
             assert_eq!(rn, (i - 1) / 4 + 1, "user rn for i={i}");
@@ -319,7 +356,7 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
     )
     .await;
 
-    let (rows, batch) = eng.snapshot(snap).page(2, 100, None).await.expect("page 2");
+    let SnapshotPage { rows, batch } = eng.snapshot(snap).page(2, 100, None).await.expect("page 2");
     let schema = batch.schema();
     let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
@@ -345,14 +382,16 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
 async fn explain_runs_and_pages_without_an_ordinal() {
     let eng = Engine::builder().build();
     for sql in ["EXPLAIN SELECT 1", "EXPLAIN ANALYZE SELECT 1"] {
-        let (out, _) = eng
+        let out = eng
             .ws(WsId(1))
             .query(RunTag(1), sql.into(), 10)
             .await
-            .unwrap_or_else(|e| panic!("{sql} must run: {e}"));
+            .unwrap_or_else(|e| panic!("{sql} must run: {e}"))
+            .output;
         assert!(out.total > 0, "{sql} returns plan rows");
         let snap = out.snapshot.expect("plan rows materialize");
-        let (rows, batch) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
+        let SnapshotPage { rows, batch } =
+            eng.snapshot(snap).page(1, 10, None).await.expect("page");
         assert!(!rows.is_empty());
         let schema = batch.schema();
         assert!(
@@ -368,7 +407,7 @@ async fn explain_runs_and_pages_without_an_ordinal() {
 #[tokio::test]
 async fn duplicate_named_columns_still_read() {
     let eng = Engine::builder().build();
-    let (out, _) = eng
+    let out = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -378,7 +417,8 @@ async fn duplicate_named_columns_still_read() {
             10,
         )
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     assert_eq!(out.total, 3);
     let names: Vec<&str> = out.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
@@ -387,11 +427,12 @@ async fn duplicate_named_columns_still_read() {
         "both columns survive in the result schema"
     );
     let snap = out.snapshot.expect("snapshot");
-    let (rows, _) = eng
+    let rows = eng
         .snapshot(snap)
         .page(1, 10, None)
         .await
-        .expect("a duplicate-named result must stay readable");
+        .expect("a duplicate-named result must stay readable")
+        .rows;
     assert_eq!(rows.len(), 3);
 }
 
@@ -401,7 +442,7 @@ async fn duplicate_named_columns_still_read() {
 #[tokio::test]
 async fn a_partitioned_export_never_writes_the_ordinal() {
     let eng = Engine::builder().build();
-    let (out, _) = eng
+    let out = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -409,7 +450,8 @@ async fn a_partitioned_export_never_writes_the_ordinal() {
             10,
         )
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     let snap = out.snapshot.expect("snapshot");
 
     let dir = std::env::temp_dir().join(format!("strata_ord_part_{}", std::process::id()));

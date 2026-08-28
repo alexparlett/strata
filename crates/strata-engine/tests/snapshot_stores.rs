@@ -37,18 +37,24 @@ fn entries(root: &Path) -> Vec<String> {
 }
 
 async fn run(eng: &Engine) -> SnapshotId {
-    let (output, _) = eng
+    let output = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 10)
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     output.snapshot.expect("a non-empty result settles one")
 }
 
 /// The three reads a frontend makes of a settled result, each asserted on its answer rather
 /// than on its succeeding — a store that lost the ordinal or the types would still return `Ok`.
 async fn reads(eng: &Engine, snap: SnapshotId) {
-    let (rows, _) = eng.snapshot(snap).page(1, 10, None).await.expect("page 1");
+    let rows = eng
+        .snapshot(snap)
+        .page(1, 10, None)
+        .await
+        .expect("page 1")
+        .rows;
     let regions: Vec<&str> = rows.iter().map(|r| r[0].text.as_str()).collect();
     assert_eq!(
         regions,
@@ -56,11 +62,12 @@ async fn reads(eng: &Engine, snap: SnapshotId) {
         "a page reads the result in the order it was spooled"
     );
 
-    let (sorted, _) = eng
+    let sorted = eng
         .snapshot(snap)
         .page(2, 2, Some(("region".into(), true)))
         .await
-        .expect("a sorted page");
+        .expect("a sorted page")
+        .rows;
     assert_eq!(sorted.len(), 1, "the sort is over the whole snapshot");
     assert_eq!(sorted[0][0].text, "us");
 

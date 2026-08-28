@@ -41,7 +41,7 @@ use serde_json::Value;
 use strata_agent::assistant::{Conversation, Facts, Settle, TurnEvent};
 use strata_core::ai::{Effort, ProviderKind, CHATS_MIN};
 use strata_core::util::{now_hms, now_ms};
-use strata_engine::CANCELLED;
+use strata_engine::StopReason;
 use strata_model::{CatalogKind, TabId};
 use uuid::Uuid;
 
@@ -699,7 +699,7 @@ impl Chats {
                 if let Block::Step(step) = block {
                     if step.failed.is_none() {
                         step.failed = Some(false);
-                        step.facts.stopped = Some(CANCELLED.to_string());
+                        step.facts.stopped = Some(StopReason::Cancelled.to_string());
                     }
                 }
             }

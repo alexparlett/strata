@@ -34,7 +34,7 @@ use strata_agent::{
     QuerySessionInfo, RunMode, RunSettle, Settled,
 };
 use strata_arrow::plan::as_explain;
-use strata_engine::{Engine, RunTag, WsId, CANCELLED};
+use strata_engine::{Engine, RunRows, RunTag, StopReason, WsId};
 use tokio::sync::{mpsc, oneshot};
 
 use super::ask::{AgentAsk, AgentNotice, RunOutcome};
@@ -308,7 +308,7 @@ impl Host for AgentDirectory {
                 .ws(ws)
                 .query(tag, sql, page_size)
                 .await
-                .map(|(output, _)| Settled::Rows(output)),
+                .map(|RunRows { output, .. }| Settled::Rows(output)),
             RunMode::Explain => engine
                 .ws(ws)
                 .explain(tag, as_explain(&sql, false))
@@ -356,7 +356,7 @@ impl Drop for SettleOnDrop {
             agent: self.agent,
             session: self.session,
             seq: self.seq,
-            outcome: RunOutcome::Stopped(CANCELLED.to_string()),
+            outcome: RunOutcome::Stopped(StopReason::Cancelled),
         });
     }
 }

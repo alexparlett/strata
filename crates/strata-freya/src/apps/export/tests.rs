@@ -55,7 +55,9 @@ fn col(name: &str, dtype: DataType) -> ColumnInfo {
 /// Run `SQL` and build the [`ExportTarget`] the results pane would hand the window — the real
 /// snapshot, the real schema and row count, the real page-1 rows.
 fn open_on_a_result(engine: &Engine, sort: Option<(String, bool)>) -> ExportTarget {
-    let (output, _) = block_on(engine.ws(WsId(1)).query(RunTag(1), SQL.into(), 100)).expect("run");
+    let output = block_on(engine.ws(WsId(1)).query(RunTag(1), SQL.into(), 100))
+        .expect("run")
+        .output;
     ExportTarget {
         snapshot: output.snapshot.expect("a non-empty result snapshots"),
         columns: output.columns.clone(),
@@ -73,8 +75,9 @@ fn export_to(engine: &Engine, draft: &ExportDraft, target: &ExportTarget, path: 
     let spec = draft
         .spec(target, path.to_string_lossy().into_owned())
         .expect("the draft builds a spec");
-    let (_, rows) = block_on(engine.snapshot(target.snapshot).export(spec)).expect("export");
-    rows
+    block_on(engine.snapshot(target.snapshot).export(spec))
+        .expect("export")
+        .rows
 }
 
 fn lines(path: &Path) -> Vec<String> {
@@ -436,6 +439,7 @@ fn partitioning_on_a_column_with_nulls_is_refused() {
         .expect("the draft itself is fine");
     let err =
         block_on(engine.snapshot(target.snapshot).export(spec)).expect_err("region has a NULL");
+    let err = err.to_string();
     assert!(err.contains("Can't partition by 'region'"), "{err}");
     assert!(!out.exists(), "nothing written");
 
@@ -563,6 +567,7 @@ fn exporting_a_snapshot_that_is_gone_writes_nothing_and_says_why() {
         .expect("the draft is fine; the snapshot is not");
     let err =
         block_on(engine.snapshot(target.snapshot).export(spec)).expect_err("no such snapshot");
+    let err = err.to_string();
     assert!(err.contains("No results to export"), "{err}");
     assert!(!out.exists(), "nothing was created");
 

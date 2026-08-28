@@ -39,7 +39,9 @@ use std::{env, fs, process};
 
 use strata_core::project::{save_defs, ProjectDefs};
 use strata_engine::register::table_spec;
-use strata_engine::{Connections, Engine, RunOutcome, RunTag, StoreEffect, TableSpec, WsId};
+use strata_engine::{
+    Connections, Engine, EngineError, RunOutcome, RunTag, StoreEffect, TableSpec, WsId,
+};
 use strata_model::{
     ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat, TableDef, TableOrigin,
 };
@@ -356,11 +358,12 @@ async fn typed_registration(engine: &Engine, project: &Path) {
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(columns, ["id", "region"], "the schema came off the objects");
 
-    let (output, _) = engine
+    let output = engine
         .ws(WsId(1))
         .query(RunTag(11), "SELECT * FROM typed".into(), 50)
         .await
-        .expect("query the typed table");
+        .expect("query the typed table")
+        .output;
     assert_eq!(output.total, 3, "and it reads through the same store");
 }
 
@@ -411,14 +414,14 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
                             10,
                         )
                         .await
-                        .map(|(output, _)| output.rows[0][0].text.clone()),
+                        .map(|run| run.output.rows[0][0].text.clone()),
                 );
             }
             answered
         }
     );
     registered.expect("the re-registration reads the same objects");
-    let refused: Vec<&String> = reads.iter().filter_map(|r| r.as_ref().err()).collect();
+    let refused: Vec<&EngineError> = reads.iter().filter_map(|r| r.as_ref().err()).collect();
     assert!(
         refused.is_empty(),
         "{} of {} reads racing the re-registration were refused: {refused:?}",
@@ -440,14 +443,15 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
         .await
         .expect_err("nothing is under that prefix");
     assert_eq!(
-        failed,
+        failed.to_string(),
         format!("No files matched 's3://{BUCKET}/nothing-here/'.")
     );
     let gone = engine
         .ws(WsId(9))
         .query(RunTag(200), "SELECT count(*) FROM raced".into(), 10)
         .await
-        .expect_err("a failed re-registration leaves no provider");
+        .expect_err("a failed re-registration leaves no provider")
+        .to_string();
     assert!(
         gone.contains("raced"),
         "the refusal names the table that is no longer registered: {gone}"
@@ -498,10 +502,11 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(columns, ["id", "region"], "the schema came off the object");
 
-    let (output, _) = ws
+    let output = ws
         .query(RunTag(1), "SELECT * FROM regions".into(), 50)
         .await
-        .expect("query the remote table");
+        .expect("query the remote table")
+        .output;
     assert_eq!(output.total, 3, "every seeded row came back");
 
     let found = catalog
@@ -533,14 +538,15 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the file's columns, then the folder tree's — as the types the def asked for"
     );
 
-    let (output, _) = ws
+    let output = ws
         .query(
             RunTag(2),
             "SELECT year, month, tally FROM tallies ORDER BY year, tally".into(),
             50,
         )
         .await
-        .expect("query the partitioned table");
+        .expect("query the partitioned table")
+        .output;
     let cells: Vec<Vec<&str>> = output
         .rows
         .iter()
@@ -556,14 +562,15 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "every partition's rows came back carrying its folder's values"
     );
 
-    let (pruned, _) = ws
+    let pruned = ws
         .query(
             RunTag(3),
             "SELECT tally FROM tallies WHERE year = 2025".into(),
             50,
         )
         .await
-        .expect("query one partition");
+        .expect("query one partition")
+        .output;
     assert_eq!(pruned.total, 1, "only the 2025 partition was read");
     assert_eq!(pruned.rows[0][0].text, "30");
 
@@ -575,7 +582,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let refused = catalog
         .register(unkeyed)
         .await
-        .expect_err("an unkeyed level matches no partition column");
+        .expect_err("an unkeyed level matches no partition column")
+        .to_string();
     assert_eq!(
         refused,
         format!(
@@ -593,7 +601,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let refused = catalog
         .register(empty)
         .await
-        .expect_err("a prefix with nothing under it");
+        .expect_err("a prefix with nothing under it")
+        .to_string();
     assert_eq!(
         refused,
         format!("No files matched 's3://{BUCKET}/nothing/'."),
@@ -613,7 +622,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     };
     let refused = catalog.register(orphan).await.expect_err("no object store");
     assert!(
-        refused.to_lowercase().contains("object store"),
+        refused.to_string().to_lowercase().contains("object store"),
         "the failure names the missing store: {refused}"
     );
 
@@ -628,10 +637,11 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(columns, ["id", "region"], "the schema came off the object");
 
-    let (output, _) = ws
+    let output = ws
         .query(RunTag(4), "SELECT * FROM regions_http".into(), 50)
         .await
-        .expect("query the remote table");
+        .expect("query the remote table")
+        .output;
     assert_eq!(output.total, 3, "every seeded row came back over HTTP");
 
     let orphan = TableSpec {
@@ -641,7 +651,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     };
     let refused = catalog.register(orphan).await.expect_err("no object store");
     assert!(
-        refused.to_lowercase().contains("object store"),
+        refused.to_string().to_lowercase().contains("object store"),
         "the failure names the missing store: {refused}"
     );
 
@@ -655,7 +665,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .await
         .expect_err("the store is gone");
     assert!(
-        refused.to_lowercase().contains("object store"),
+        refused.to_string().to_lowercase().contains("object store"),
         "a forgotten bucket is unreachable, exactly as one that was never connected: {refused}"
     );
 
@@ -672,7 +682,8 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         .catalog()
         .register(table(&endpoint))
         .await
-        .expect_err("MinIO rejects the signature");
+        .expect_err("MinIO rejects the signature")
+        .to_string();
     let lower = refused.to_lowercase();
     assert!(
         lower.contains("403")

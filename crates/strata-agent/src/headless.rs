@@ -36,7 +36,7 @@ use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
 use strata_engine::register::{CatalogSpec, RegOutcome};
-use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunTag, WsId};
+use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunRows, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::error::AgentError;
@@ -371,7 +371,7 @@ impl Host for HeadlessHost {
                 .ws(ws)
                 .query(tag, sql, page_size)
                 .await
-                .map(|(output, _)| Settled::Rows(output)),
+                .map(|RunRows { output, .. }| Settled::Rows(output)),
             RunMode::Explain => self
                 .engine
                 .ws(ws)
@@ -557,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn a_replay_over_a_shrunk_catalog_leaves_no_ghost() {
         let (root, host) = project("shrunk").await;
-        let (before, _) = host
+        let RunRows { output: before, .. } = host
             .engine
             .ws(WsId(1))
             .query(RunTag(1), "SELECT id FROM adults".into(), 10)
@@ -591,6 +591,7 @@ mod tests {
             .query(RunTag(2), "SELECT id FROM people".into(), 10)
             .await
             .expect_err("a table no def names is not queryable");
+        let refused = refused.to_string();
         assert!(refused.contains("people"), "{refused}");
 
         let _ = fs::remove_dir_all(&root);
@@ -629,7 +630,7 @@ mod tests {
             "{outcomes:?}"
         );
         assert_eq!(report.generation, host.engine.catalog().generation());
-        let (output, _) = host
+        let RunRows { output, .. } = host
             .engine
             .ws(WsId(1))
             .query(RunTag(1), "SELECT id FROM people".into(), 10)

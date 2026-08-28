@@ -109,7 +109,7 @@ DataFusion:
 
 ```rust
 pub enum RunOutcome {
-    Rows(QueryOutput, RecordBatch),   // exactly query()'s result
+    Rows(RunRows),                    // exactly query()'s result
     Statement(StatementReport),       // no snapshot
 }
 

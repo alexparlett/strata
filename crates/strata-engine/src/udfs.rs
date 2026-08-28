@@ -905,7 +905,7 @@ mod tests {
             .query(RunTag(1), sql.into(), 50)
             .await
             .unwrap_or_else(|e| panic!("{sql}\n{e}"))
-            .0
+            .output
     }
 
     async fn fails(engine: &Engine, sql: &str) -> String {
@@ -915,6 +915,7 @@ mod tests {
             .await
             .err()
             .unwrap_or_else(|| panic!("{sql} was expected to fail"))
+            .to_string()
     }
 
     /// One column of a result as display text, nulls as `NULL` so an absent answer is visible.

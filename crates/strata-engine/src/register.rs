@@ -240,7 +240,10 @@ async fn register_pass(
     for conn in connections {
         let name = conn.named();
         let result = engine.sources().connect(conn).await;
-        settled(RegOutcome::Connection { name, result });
+        settled(RegOutcome::Connection {
+            name,
+            result: result.map_err(|e| e.to_string()),
+        });
     }
 
     let mut registrations = stream::iter(tables)
@@ -248,7 +251,10 @@ async fn register_pass(
             let name = spec.name.clone();
             async move {
                 let result = engine.catalog().register(spec).await;
-                RegOutcome::Table { name, result }
+                RegOutcome::Table {
+                    name,
+                    result: result.map_err(|e| e.to_string()),
+                }
             }
         })
         .buffer_unordered(TABLE_CONCURRENCY);
@@ -296,7 +302,7 @@ pub(crate) async fn create_views(
             for (def, e) in failed {
                 settled(RegOutcome::View {
                     name: def.name,
-                    result: Err(e),
+                    result: Err(e.to_string()),
                 });
             }
             break;

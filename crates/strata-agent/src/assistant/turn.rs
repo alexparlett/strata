@@ -35,7 +35,7 @@ use serde_json::{from_value, json, to_string, to_value, Error as JsonError, Valu
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use strata_engine::CANCELLED;
+use strata_engine::StopReason as EngineStop;
 
 use crate::host::Host;
 use crate::tools::StrataTools;
@@ -240,7 +240,7 @@ pub enum Settle {
     /// could not make a client, in which case nothing was sent.
     Failed(String),
     /// The user stopped it. Never [`Settle::Failed`]: a stop is not a fault, here for the same
-    /// reason `stopped_on_purpose` exists one layer down.
+    /// reason `EngineError::Stopped` is a variant one layer down.
     Cancelled,
     /// The model was still calling tools after [`MAX_TOOL_ROUNDS`] rounds.
     StoppedAtCap { rounds: usize },
@@ -644,7 +644,10 @@ async fn drive<H: Host>(
                             call: call.call_id.clone(),
                             tool: call.fn_name.clone(),
                             failed: false,
-                            facts: Facts { stopped: Some(CANCELLED.into()), ..Facts::default() },
+                            facts: Facts {
+                                stopped: Some(EngineStop::Cancelled.to_string()),
+                                ..Facts::default()
+                            },
                         });
                     }
                     return Settle::Cancelled;

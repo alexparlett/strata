@@ -224,9 +224,12 @@ impl Component for ChartView {
                     .center()
                     .child(CircularLoader::new().size(22.))
                     .into(),
-                QueryStateData::Settled { res: Err(err), .. } => {
-                    Notice::new("The chart could not be read", err.clone(), theme.note_color).into()
-                }
+                QueryStateData::Settled { res: Err(err), .. } => Notice::new(
+                    "The chart could not be read",
+                    err.to_string(),
+                    theme.note_color,
+                )
+                .into(),
                 QueryStateData::Settled { res: Ok(data), .. } => {
                     let sorted = sort::sorted(data.clone(), encoding.sort);
                     let all_hidden = hide::all_hidden(&sorted, &encoding.hidden);

@@ -11,7 +11,7 @@ use crate::catalog;
 use crate::sources::source::SourceInfo;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, store, Dependents, Engine, CATALOG};
+use crate::{fold_ident, store, Dependents, Engine, EngineError, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -47,7 +47,7 @@ impl Sources<'_> {
     /// Moves the [`generation`](crate::Catalog::generation) on either arm: a refused connect
     /// takes back whatever this connection last registered, so a three-part name that resolved
     /// no longer does.
-    pub async fn connect(self, conn: ConnectionDef) -> Result<(), String> {
+    pub async fn connect(self, conn: ConnectionDef) -> Result<(), EngineError> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
         let name = conn.named();
@@ -64,12 +64,12 @@ impl Sources<'_> {
                 }
             })
             .await
-            .map_err(|e| format!("connect task failed: {e}"))?;
+            .map_err(|e| EngineError::task("connect", e))?;
         if engine.connections.resolve(&name).is_none() {
             self.disconnect(&name);
         }
         engine.generation.bump();
-        settled
+        settled.map_err(EngineError::from)
     }
 
     /// Forget what the connection called `name` registered — the Forget gesture's engine half.
@@ -229,8 +229,11 @@ impl Sources<'_> {
     /// # Errors
     ///
     /// The address's own refusal, or the sentence saying nothing is registered for `kind`.
-    pub fn check_address(self, kind: &str, address: &str) -> Result<(), String> {
-        self.engine.sources.check_address(kind, address)
+    pub fn check_address(self, kind: &str, address: &str) -> Result<(), EngineError> {
+        self.engine
+            .sources
+            .check_address(kind, address)
+            .map_err(EngineError::from)
     }
 
     /// One relation inside a database connection's catalog, from what the session already
@@ -248,7 +251,10 @@ impl Sources<'_> {
     ///
     /// Existence is asked of `table_exist`, which reads the connect-time listing and costs nothing,
     /// where `table` is the round trip. So the common miss never dials out.
-    pub async fn describe_remote(self, name: String) -> Result<Option<RemoteRelation>, String> {
+    pub async fn describe_remote(
+        self,
+        name: String,
+    ) -> Result<Option<RemoteRelation>, EngineError> {
         let engine = self.engine;
         let reference = TableReference::parse_str(&name);
         let TableReference::Full { catalog, .. } = &reference else {
@@ -294,14 +300,14 @@ impl Sources<'_> {
                 async move { schema.table_type(&table).await }
             })
             .await
-            .map_err(|e| format!("Reading '{name}' failed: {e}"))?
-            .map_err(|e| catalog::readable(&e.to_string()))?;
+            .map_err(|e| EngineError::Failed(format!("Reading '{name}' failed: {e}")))?
+            .map_err(|e| EngineError::Failed(catalog::readable(&e.to_string())))?;
         let provider = engine
             .rt()
             .spawn(async move { schema.table(&table).await })
             .await
-            .map_err(|e| format!("Reading '{name}' failed: {e}"))?
-            .map_err(|e| catalog::readable(&e.to_string()))?;
+            .map_err(|e| EngineError::Failed(format!("Reading '{name}' failed: {e}")))?
+            .map_err(|e| EngineError::Failed(catalog::readable(&e.to_string())))?;
         Ok(provider.map(|provider| RemoteRelation {
             connection,
             relation,

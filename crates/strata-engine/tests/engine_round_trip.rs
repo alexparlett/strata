@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use strata_engine::{Engine, RunTag, WsId};
+use strata_engine::{Engine, RunRows, RunTag, WsId};
 
 /// Five rows, three columns, unsorted on `column1` so the sort read is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
@@ -29,7 +29,7 @@ fn tag(n: u128) -> RunTag {
 async fn run_materializes_a_snapshot_and_pages_read_it() {
     let eng = engine();
 
-    let (output, batch) = eng
+    let RunRows { output, batch } = eng
         .ws(ws(1))
         .query(tag(1), SQL.into(), 2)
         .await
@@ -43,31 +43,35 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
     assert_eq!(output.columns.len(), 3);
     assert_eq!(batch.num_rows(), 2);
 
-    let (rows, _) = eng
+    let rows = eng
         .snapshot(snapshot)
         .page(2, 2, None)
         .await
-        .expect("page 2");
+        .expect("page 2")
+        .rows;
     assert_eq!(rows.len(), 2);
-    let (rows, _) = eng
+    let rows = eng
         .snapshot(snapshot)
         .page(3, 2, None)
         .await
-        .expect("page 3");
+        .expect("page 3")
+        .rows;
     assert_eq!(rows.len(), 1);
 
-    let (again, _) = eng
+    let again = eng
         .snapshot(snapshot)
         .page(3, 2, None)
         .await
-        .expect("page 3 again");
+        .expect("page 3 again")
+        .rows;
     assert_eq!(rows[0][0].text, again[0][0].text);
 
-    let (sorted, _) = eng
+    let sorted = eng
         .snapshot(snapshot)
         .page(1, 2, Some(("column1".into(), false)))
         .await
-        .expect("sorted page");
+        .expect("sorted page")
+        .rows;
     assert_eq!(sorted[0][0].text, "5");
     assert_eq!(sorted[1][0].text, "4");
 }
@@ -76,18 +80,20 @@ async fn run_materializes_a_snapshot_and_pages_read_it() {
 async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
     let eng = engine();
 
-    let (first, _) = eng
+    let first = eng
         .ws(ws(1))
         .query(tag(1), SQL.into(), 2)
         .await
-        .expect("run 1");
+        .expect("run 1")
+        .output;
     let old = first.snapshot.unwrap();
 
-    let (second, _) = eng
+    let second = eng
         .ws(ws(1))
         .query(tag(2), SQL.into(), 2)
         .await
-        .expect("run 2");
+        .expect("run 2")
+        .output;
     let new = second.snapshot.unwrap();
 
     assert_ne!(
@@ -108,16 +114,18 @@ async fn a_rerun_makes_a_new_snapshot_and_retires_the_old() {
 async fn workspaces_are_independent_and_cleanup_retires() {
     let eng = engine();
 
-    let (a, _) = eng
+    let a = eng
         .ws(ws(1))
         .query(tag(1), SQL.into(), 2)
         .await
-        .expect("ws 1");
-    let (b, _) = eng
+        .expect("ws 1")
+        .output;
+    let b = eng
         .ws(ws(2))
         .query(tag(2), SQL.into(), 2)
         .await
-        .expect("ws 2");
+        .expect("ws 2")
+        .output;
     let (snap_a, snap_b) = (a.snapshot.unwrap(), b.snapshot.unwrap());
     assert_ne!(snap_a, snap_b);
 
@@ -135,11 +143,12 @@ async fn workspaces_are_independent_and_cleanup_retires() {
 #[tokio::test]
 async fn an_empty_result_materializes_nothing() {
     let eng = engine();
-    let (output, _) = eng
+    let output = eng
         .ws(ws(1))
         .query(tag(1), format!("{SQL} WHERE column1 > 100"), 2)
         .await
-        .expect("empty run");
+        .expect("empty run")
+        .output;
     assert_eq!(output.total, 0);
     assert!(
         output.snapshot.is_none(),
@@ -166,11 +175,12 @@ async fn cancel_is_scoped_to_the_dispatched_run() {
     let eng = engine();
     assert!(eng.ws(ws(1)).cancel(tag(99)).is_none());
 
-    let (output, _) = eng
+    let output = eng
         .ws(ws(1))
         .query(tag(1), SQL.into(), 2)
         .await
-        .expect("run");
+        .expect("run")
+        .output;
     assert!(output.snapshot.is_some());
     assert!(eng.ws(ws(1)).cancel(tag(1)).is_none());
 }

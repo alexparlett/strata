@@ -22,6 +22,7 @@ use std::time::Duration;
 use freya::query::{use_query, Captured, Query, QueryCapability, UseQuery};
 use strata_arrow::profile::Profiled;
 use strata_engine::sql::qualified;
+use strata_engine::EngineError;
 use strata_model::{CatalogKind, CatalogProfile, RemoteRef};
 use uuid::Uuid;
 
@@ -122,10 +123,10 @@ pub struct ProfileEntry(pub Captured<EngineCtx>);
 
 impl QueryCapability for ProfileEntry {
     type Ok = CatalogProfile;
-    type Err = String;
+    type Err = EngineError;
     type Keys = ProfileSpec;
 
-    async fn run(&self, spec: &ProfileSpec) -> Result<CatalogProfile, String> {
+    async fn run(&self, spec: &ProfileSpec) -> Result<CatalogProfile, EngineError> {
         self.0.catalog().profile(spec.target.sql_name()).await
     }
 }

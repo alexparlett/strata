@@ -314,7 +314,7 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
                 ctx.status
                     .set(Status::Failed("The statement ran as a query.".into()));
             }
-            Err(why) => ctx.status.set(Status::Failed(why)),
+            Err(why) => ctx.status.set(Status::Failed(why.to_string())),
         }
     });
 }

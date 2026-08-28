@@ -8,7 +8,7 @@
 //! applies, types surviving IPC, the chart and the grid agreeing on the same result, and a
 //! retired snapshot failing cleanly.
 
-use strata_engine::{Engine, RunTag, WsId};
+use strata_engine::{Engine, RunRows, RunTag, WsId};
 use strata_model::{CapUnit, ChartData, ChartPoint, ChartQuery, SnapshotId};
 
 /// A result the user shaped themselves — ordered DESC by amount, the exact case the
@@ -18,7 +18,7 @@ const SQL: &str = "SELECT column1 AS region, column2 AS amount, column3 AS qty \
      ORDER BY column2 DESC";
 
 async fn snapshot(eng: &Engine) -> SnapshotId {
-    let (output, _) = eng
+    let RunRows { output, .. } = eng
         .ws(WsId(1))
         .query(RunTag(1), SQL.into(), 10)
         .await
@@ -60,8 +60,8 @@ async fn the_chart_draws_the_result_in_its_own_order() {
     assert_eq!(series[0].name, "amount");
     assert_eq!(series[0].values, vec![Some(30.0), Some(20.0), Some(10.0)]);
 
-    let (rows, _) = eng.snapshot(snap).page(1, 10, None).await.expect("page");
-    let grid: Vec<&str> = rows.iter().map(|r| r[0].text.as_str()).collect();
+    let page = eng.snapshot(snap).page(1, 10, None).await.expect("page");
+    let grid: Vec<&str> = page.rows.iter().map(|r| r[0].text.as_str()).collect();
     assert_eq!(grid, vec!["eu", "us", "ap"], "chart and grid agree");
 }
 
@@ -89,7 +89,7 @@ async fn several_ys_split_into_series_over_a_real_snapshot() {
 #[tokio::test]
 async fn a_series_column_pivots_over_a_real_snapshot() {
     let eng = Engine::builder().build();
-    let (out, _) = eng
+    let RunRows { output: out, .. } = eng
         .ws(WsId(1))
         .query(
             RunTag(1),
@@ -204,7 +204,7 @@ async fn a_trendline_fits_a_real_snapshot_and_degenerate_data_is_absent() {
     assert!((fit.r2 - 1.).abs() < 1e-9, "{fit:?}");
     assert_eq!(fit.n, 3);
 
-    let (out, _) = eng
+    let RunRows { output: out, .. } = eng
         .ws(WsId(2))
         .query(RunTag(1), "SELECT 1.0 AS x, 2.0 AS y".into(), 10)
         .await
@@ -237,5 +237,5 @@ async fn charting_a_retired_snapshot_fails_like_any_other_read() {
         .chart(rows_q(Some("region"), &["amount"], None))
         .await
         .expect_err("a retired snapshot has nothing to chart");
-    assert!(!err.is_empty());
+    assert!(!err.to_string().is_empty());
 }

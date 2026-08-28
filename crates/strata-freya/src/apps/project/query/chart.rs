@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
+use strata_engine::EngineError;
 use strata_model::{ChartData, ChartQuery, SnapshotId, Trend};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -60,10 +61,10 @@ pub struct FetchChart(pub Captured<EngineCtx>);
 
 impl QueryCapability for FetchChart {
     type Ok = ChartData;
-    type Err = String;
+    type Err = EngineError;
     type Keys = ChartSpec;
 
-    async fn run(&self, spec: &ChartSpec) -> Result<ChartData, String> {
+    async fn run(&self, spec: &ChartSpec) -> Result<ChartData, EngineError> {
         self.0
             .snapshot(spec.snapshot)
             .chart(spec.query.clone())
@@ -103,10 +104,10 @@ pub struct FetchTrend(pub Captured<EngineCtx>);
 
 impl QueryCapability for FetchTrend {
     type Ok = Option<Trend>;
-    type Err = String;
+    type Err = EngineError;
     type Keys = TrendSpec;
 
-    async fn run(&self, spec: &TrendSpec) -> Result<Option<Trend>, String> {
+    async fn run(&self, spec: &TrendSpec) -> Result<Option<Trend>, EngineError> {
         self.0
             .snapshot(spec.snapshot)
             .trend(spec.x.clone(), spec.y.clone())
