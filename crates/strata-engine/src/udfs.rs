@@ -891,7 +891,7 @@ mod tests {
                 paths: vec![path.to_string_lossy().into_owned()],
                 format: SourceFormat::Json(JsonRead::default()),
                 partitions: Vec::new(),
-                connection: None,
+                source: None,
                 internal: false,
             })
             .await

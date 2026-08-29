@@ -16,9 +16,9 @@
 //! An [`AgentNotice`] is a fact with no answer, and it exists because [`AgentAsk`]'s bounded
 //! channel cannot serve every producer. A `send().await` is right for a tool call — a caller
 //! that fills the queue simply waits, which is honest backpressure — but the most important
-//! notice of all is sent from a `Drop`: an MCP connection ending, which has nothing to await
+//! notice of all is sent from a `Drop`: an MCP data source ending, which has nothing to await
 //! on and nowhere to report a failure to. So notices ride an **unbounded** channel, whose
-//! bound is really the client's own rate (one notice per run settled, one per connection
+//! bound is really the client's own rate (one notice per run settled, one per data source
 //! ended) and which a synchronous producer can always reach.
 //!
 //! Both are drained by the same serial loop, asks first, so a settle can never overtake the

@@ -2,12 +2,12 @@
 //! DB-05).
 //!
 //! One pane, because there is one question: what data do I have. The tree answers it for the
-//! project's own catalog and for every connection beside it, so the Connections pane that used to
+//! project's own catalog and for every data source beside it, so the Data sources pane that used to
 //! sit next to this one is gone and the rail has one fewer toggle.
 //!
 //! The shell owns the header row and the collapse (×); what sits to the left of the × is the
 //! pane's, per the design canvas — there is no "CATALOG" label, the filter field *is* the header,
-//! and the `+` (a new connection) and ↻ (a re-scan) follow it. The body below the divider is the
+//! and the `+` (a new data source) and ↻ (a re-scan) follow it. The body below the divider is the
 //! tree itself.
 
 mod catalog;
@@ -20,11 +20,11 @@ use self::catalog::Catalog;
 pub use self::catalog::CatalogThemePreference;
 /// The catalog's actions, on through to the command palette — see the catalog's own module.
 pub use self::catalog::{open_saved_query, use_catalog_actions, view_row, CatalogActions};
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::state::{
     refresh_catalog, use_catalog, use_catalog_rescan, Chan, SessionState,
 };
-use crate::apps::project::views::ConnectionRequest;
+use crate::apps::project::views::SourceRequest;
+use crate::apps::source::SourceTarget;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{HEADER_CONTROL, SIDEBAR_HEADER_HEIGHT, SP_3, SP_4};
@@ -139,7 +139,7 @@ impl Component for Sidebar {
                     )
                     .item(ToolbarItem::Custom {
                         width: HEADER_CONTROL,
-                        inline: AddConnectionButton.into_element(),
+                        inline: AddSourceButton.into_element(),
                         folded: None,
                     })
                     .item(ToolbarItem::Custom {
@@ -165,18 +165,18 @@ impl Component for Sidebar {
     }
 }
 
-/// The header's **+** — a new connection, which is now a top-level node of this tree.
+/// The header's **+** — a new data source, which is now a top-level node of this tree.
 ///
 /// **It folds under panel pressure** (`ToolbarItem::Custom { folded: None }`, the ↻'s terms). Its
 /// two other entry points are the tree's own empty state and the command palette's *New
-/// connection…*, which is what makes the fold cost nothing.
+/// data source…*, which is what makes the fold cost nothing.
 #[derive(PartialEq)]
-struct AddConnectionButton;
+struct AddSourceButton;
 
-impl Component for AddConnectionButton {
+impl Component for AddSourceButton {
     fn render(&self) -> impl IntoElement {
-        let editor = use_consume::<ConnectionRequest>();
-        TooltipContainer::new(Tooltip::new_text("Add connection"))
+        let editor = use_consume::<SourceRequest>();
+        TooltipContainer::new(Tooltip::new_text("Add data source"))
             .position(AttachedPosition::Bottom)
             .child(
                 Button::new()
@@ -185,16 +185,16 @@ impl Component for AddConnectionButton {
                     .height(Size::px(HEADER_CONTROL))
                     .on_press(move |_: Event<PressEventData>| {
                         let mut editor = editor;
-                        editor.set(Some(ConnectionTarget::New));
+                        editor.set(Some(SourceTarget::New));
                     })
                     .child(Icon::new(IconName::Plus).size(14.)),
             )
     }
 }
 
-/// The header's **↻ re-scan** (P3-03): ask for a re-connect of every connection, a re-infer of
+/// The header's **↻ re-scan** (P3-03): ask for a re-connect of every data source, a re-infer of
 /// every table's schema from its def, and a re-create of the views over what that found — see
-/// [`refresh_catalog`]. On a database connection the re-connect *is* the refresh: its schemas and
+/// [`refresh_catalog`]. On a data source the re-connect *is* the refresh: its schemas and
 /// relations are the connect-time enumeration.
 ///
 /// Its own component so the scan flag's subscription lives here rather than on the sidebar shell,
@@ -275,8 +275,8 @@ mod tests {
             tables: vec![TableDef {
                 name: "orders".into(),
                 format: SourceFormat::Parquet,
-                connection: None,
-                sources: vec!["orders.parquet".into()],
+                source: None,
+                paths: vec!["orders.parquet".into()],
                 partition_cols: vec![],
                 origin: TableOrigin::External,
             }],
@@ -311,7 +311,7 @@ mod tests {
                     State::create(std::collections::BTreeMap::<RemoteRef, ScanId>::new())
                 });
                 r.provide_root_context(|| State::create(None::<ConfigureTarget>));
-                r.provide_root_context(|| State::create(None::<ConnectionTarget>));
+                r.provide_root_context(|| State::create(None::<SourceTarget>));
                 r.provide_root_context(|| State::create(None::<String>) as SchemasRequest);
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(PersistFaults::default()));

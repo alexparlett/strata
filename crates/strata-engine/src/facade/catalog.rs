@@ -67,7 +67,7 @@ impl Catalog<'_> {
         let formats = self.engine.formats.clone();
         let tables = self.engine.tables.clone();
         let (name, internal) = (spec.name.clone(), spec.internal);
-        let connection = spec.connection.clone();
+        let source = spec.source.clone();
         let meta = self
             .engine
             .rt()
@@ -75,8 +75,7 @@ impl Catalog<'_> {
             .await
             .map_err(|e| EngineError::task("register", e))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
-        self.engine
-            .note_scans(&name, Some(Scans::Table(connection)));
+        self.engine.note_scans(&name, Some(Scans::Table(source)));
         self.engine.generation.bump();
         meta.map_err(EngineError::from)
     }
@@ -120,7 +119,7 @@ impl Catalog<'_> {
     /// Hive section offers. Listed through the session's object store, so it answers for a bucket
     /// as readily as for a local folder.
     ///
-    /// `paths` are as a table def stores them: relative to `connection` where one is named, and to
+    /// `paths` are as a table def stores them: relative to `data source` where one is named, and to
     /// `root` otherwise. **Composing the address is this side's**, because the scheme a store is
     /// registered under is the registry's answer and a caller that composed one would be keeping a
     /// second copy of it.
@@ -143,13 +142,15 @@ impl Catalog<'_> {
 
     pub async fn detect_partitions(
         self,
-        connection: Option<String>,
+        source: Option<String>,
         root: Option<PathBuf>,
         paths: Vec<String>,
     ) -> Vec<String> {
-        let prefix = connection
-            .as_deref()
-            .and_then(|named| self.engine.connections.prefix(&self.engine.sources, named));
+        let prefix = source.as_deref().and_then(|named| {
+            self.engine
+                .source_defs
+                .prefix(&self.engine.registrants, named)
+        });
         let root = root.unwrap_or_default();
         let resolved: Vec<String> = paths
             .iter()

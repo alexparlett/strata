@@ -1,10 +1,10 @@
-//! The connection editor driven the way a user drives it: which controls a provider has, and
+//! The data source editor driven the way a user drives it: which controls a provider has, and
 //! what Save actually writes.
 //!
 //! **Every form here is driven through a source that exists nowhere in the app.** `TestSource` is
 //! declared in this file, registered on this test's own engine, and the editor draws its whole
 //! form from that registration — which is the deliverable: a `DataSource` an embedder writes gets
-//! a working editor with no code named after it. Nothing in `apps/connection` mentions a kind, so
+//! a working editor with no code named after it. Nothing in `apps/data source` mentions a kind, so
 //! there is no shipped source to drive these tests with that would prove anything weaker.
 //!
 //! The window **root** is not mounted — it needs the app-globals, a menubar scope and an owner
@@ -31,8 +31,8 @@ use strata_engine::{
 };
 use strata_model::SourceDef;
 
-use super::views::{ConnectionBody, Footer};
-use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, SecretProbe, Status};
+use super::views::{Footer, SourceBody};
+use super::{SecretProbe, SourceCtx, SourceDraft, SourceTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{CatalogState, Log, PersistFaults, ProjChan, ProjectState, ScanRequest};
 use crate::theme::strata_theme;
@@ -159,10 +159,10 @@ fn registrant() -> SourceInfo {
 /// that really writes `.strata/project.json` follows, because the OS temp dir is machine-shared
 /// and a hardcoded path collides between parallel test binaries.
 fn temp_root(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("strata-connection-{tag}-{}", std::process::id()))
+    std::env::temp_dir().join(format!("strata-data source-{tag}-{}", std::process::id()))
 }
 
-/// One connection already in the project, so a name clash has something to clash with.
+/// One data source already in the project, so a name clash has something to clash with.
 ///
 /// An **object store**, deliberately: it is a def this editor has no form for, and it still has
 /// to be listed, keyed and clashed against exactly as before — nothing about withholding its
@@ -170,7 +170,7 @@ fn temp_root(tag: &str) -> PathBuf {
 fn project(root: &Path) -> ProjectState {
     let defs = ProjectDefs {
         name: "test".into(),
-        connections: vec![SourceDef {
+        sources: vec![SourceDef {
             kind: "s3".into(),
             name: "old_lake".into(),
             config: [("region", "eu-west-2")]
@@ -190,12 +190,12 @@ fn app() -> impl IntoElement {
         .expanded()
         .vertical()
         .content(Content::Flex)
-        .child(ConnectionBody)
+        .child(SourceBody)
         .child(Footer)
 }
 
 type Handles = (
-    ConnectionCtx,
+    SourceCtx,
     RadioStation<ProjectState, ProjChan>,
     State<ScanRequest>,
 );
@@ -205,11 +205,7 @@ type Handles = (
 /// No keystore is opened: the window's secret probes are a root `use_hook` and the root is not
 /// mounted, so `secret_probes` starts empty, which reads as the answer that read would have
 /// parked for a key nothing is stored for.
-fn runner(
-    tag: &'static str,
-    target: ConnectionTarget,
-    draft: ConnectionDraft,
-) -> (TestingRunner, Handles) {
+fn runner(tag: &'static str, target: SourceTarget, draft: SourceDraft) -> (TestingRunner, Handles) {
     let root = temp_root(tag);
     TestingRunner::new(
         app,
@@ -223,7 +219,7 @@ fn runner(
             let project = r.provide_root_context(|| {
                 RadioStation::<ProjectState, ProjChan>::create(project(&root))
             });
-            let ctx = r.provide_root_context(|| ConnectionCtx {
+            let ctx = r.provide_root_context(|| SourceCtx {
                 secret_expected: State::create(draft.secrets.clone()),
                 draft: State::create(draft.clone()),
                 target: State::create(target.clone()),
@@ -276,8 +272,8 @@ fn click_lowest(runner: &mut TestingRunner, text: &str) {
 }
 
 /// A draft on [`TestSource`], as the picker would have left it.
-fn source_draft() -> ConnectionDraft {
-    ConnectionDraft {
+fn source_draft() -> SourceDraft {
+    SourceDraft {
         kind: TestSource::NAME.into(),
         settings: TEST_SETTINGS,
         name: "warehouse".into(),
@@ -296,15 +292,14 @@ fn source_draft() -> ConnectionDraft {
 /// row is back to `Loading`.
 #[test]
 fn saving_writes_the_def_and_waits_for_the_pass() {
-    let (mut runner, (ctx, project, rescan)) =
-        runner("save", ConnectionTarget::New, source_draft());
+    let (mut runner, (ctx, project, rescan)) = runner("save", SourceTarget::New, source_draft());
     settle(&mut runner);
 
     click_lowest(&mut runner, "Save");
 
     let names: Vec<String> = project
         .peek()
-        .connections
+        .sources
         .iter()
         .map(|c| c.def.named())
         .collect();
@@ -315,23 +310,20 @@ fn saving_writes_the_def_and_waits_for_the_pass() {
         "the window is waiting on its own row, not claiming it connected"
     );
     assert_eq!(rescan.peek().seq, 1, "one pass asked for");
-    assert_eq!(
-        *ctx.target.peek(),
-        ConnectionTarget::Edit("warehouse".into())
-    );
+    assert_eq!(*ctx.target.peek(), SourceTarget::Edit("warehouse".into()));
 }
 
-/// **An edit that renames a connection leaves no row behind** — otherwise the project keeps a def
+/// **An edit that renames a data source leaves no row behind** — otherwise the project keeps a def
 /// under the old name and the pass registers both.
 #[test]
 fn an_edit_that_renames_leaves_no_row_behind() {
     let mut draft = source_draft();
     draft.name = "depot".into();
     let (mut runner, (_, mut project, _)) =
-        runner("moved", ConnectionTarget::Edit("warehouse".into()), draft);
+        runner("moved", SourceTarget::Edit("warehouse".into()), draft);
     {
-        let mut p = project.write_channel(ProjChan::Connections);
-        p.upsert_connection(SourceDef {
+        let mut p = project.write_channel(ProjChan::Sources);
+        p.upsert_source(SourceDef {
             config: [("address".to_string(), "db.internal/analytics".into())]
                 .into_iter()
                 .collect(),
@@ -346,7 +338,7 @@ fn an_edit_that_renames_leaves_no_row_behind() {
 
     let names: Vec<String> = project
         .peek()
-        .connections
+        .sources
         .iter()
         .map(|c| c.def.named())
         .collect();
@@ -356,15 +348,15 @@ fn an_edit_that_renames_leaves_no_row_behind() {
 /// **A registered source's rows are the ones it declared, and there are no others.**
 ///
 /// This is the deliverable in one test: `TestSource` exists only in this file, nothing in
-/// `apps/connection` names it, and the form is a name, an address, a box per declared key in the
+/// `apps/data source` names it, and the form is a name, an address, a box per declared key in the
 /// dress its `Field` asks for, and the read-only switch its `MODE` earns. There is no
 /// object-store vocabulary to be absent, because there is no object-store dress.
 #[test]
 fn a_registered_sources_rows_are_the_ones_it_declared() {
     let (mut runner, (ctx, ..)) = runner(
         "declared-rows",
-        ConnectionTarget::New,
-        ConnectionDraft::new(&[registrant()]),
+        SourceTarget::New,
+        SourceDraft::new(&[registrant()]),
     );
     settle(&mut runner);
 
@@ -418,7 +410,7 @@ fn a_registered_sources_rows_are_the_ones_it_declared() {
 /// which asks the declaration.
 #[test]
 fn a_declared_condition_is_what_puts_a_row_on_screen() {
-    let (mut runner, (ctx, ..)) = runner("conditional", ConnectionTarget::New, source_draft());
+    let (mut runner, (ctx, ..)) = runner("conditional", SourceTarget::New, source_draft());
     settle(&mut runner);
     assert!(!shows(&runner, "ROOT CERTIFICATE"));
 
@@ -436,7 +428,7 @@ fn a_declared_condition_is_what_puts_a_row_on_screen() {
 /// the kind is prose only the kind could write.
 #[test]
 fn a_sources_form_ends_with_its_last_row() {
-    let (mut runner, ..) = runner("no-note", ConnectionTarget::New, source_draft());
+    let (mut runner, ..) = runner("no-note", SourceTarget::New, source_draft());
     settle(&mut runner);
 
     let said = texts(&runner);
@@ -456,7 +448,7 @@ fn a_sources_form_ends_with_its_last_row() {
 /// declaration's own conditions.
 #[test]
 fn a_group_heading_rides_the_rows_that_survive() {
-    let (mut runner, (ctx, ..)) = runner("groups", ConnectionTarget::New, source_draft());
+    let (mut runner, (ctx, ..)) = runner("groups", SourceTarget::New, source_draft());
     settle(&mut runner);
 
     let headings = |runner: &TestingRunner| {
@@ -488,7 +480,7 @@ fn a_group_heading_rides_the_rows_that_survive() {
 fn an_address_is_refused_in_the_kinds_own_words() {
     let mut draft = source_draft();
     draft.set("address", "db.internal".into());
-    let (mut runner, (ctx, _, rescan)) = runner("address", ConnectionTarget::New, draft);
+    let (mut runner, (ctx, _, rescan)) = runner("address", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert!(
@@ -511,16 +503,16 @@ fn an_address_is_refused_in_the_kinds_own_words() {
 fn a_required_declared_key_blocks_the_save() {
     let mut draft = source_draft();
     draft.set("user", String::new());
-    let (mut runner, (ctx, project, rescan)) = runner("required", ConnectionTarget::New, draft);
+    let (mut runner, (ctx, project, rescan)) = runner("required", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert!(
-        shows(&runner, "This connection has no user."),
+        shows(&runner, "This data source has no user."),
         "{:?}",
         texts(&runner)
     );
     click_lowest(&mut runner, "Save");
-    assert_eq!(project.peek().connections.len(), 1, "nothing was written");
+    assert_eq!(project.peek().sources.len(), 1, "nothing was written");
     assert_eq!(rescan.peek().seq, 0);
 
     ctx.edit(|draft| draft.set("user", "reader".into()));
@@ -533,14 +525,14 @@ fn a_required_declared_key_blocks_the_save() {
     );
 }
 
-/// **A name another connection already holds is refused, and a blank box is not blank.** The
+/// **A name another data source already holds is refused, and a blank box is not blank.** The
 /// address mints the handle, so a source with no name typed still saves under a name every
 /// surface can address it by.
 #[test]
 fn a_name_clash_is_explained_beside_the_button() {
     let mut draft = source_draft();
     draft.name = String::new();
-    let (mut runner, (ctx, mut project, rescan)) = runner("name", ConnectionTarget::New, draft);
+    let (mut runner, (ctx, mut project, rescan)) = runner("name", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert_eq!(
@@ -550,8 +542,8 @@ fn a_name_clash_is_explained_beside_the_button() {
     );
 
     {
-        let mut p = project.write_channel(ProjChan::Connections);
-        p.upsert_connection(SourceDef {
+        let mut p = project.write_channel(ProjChan::Sources);
+        p.upsert_source(SourceDef {
             config: [("address".to_string(), "other/sales".into())]
                 .into_iter()
                 .collect(),
@@ -576,21 +568,21 @@ fn a_name_clash_is_explained_beside_the_button() {
     assert_eq!(rescan.peek().seq, 1, "and it saves once the name is free");
 }
 
-/// **Editing a source connection's settings does not make it clash with itself.**
+/// **Editing a source data source's settings does not make it clash with itself.**
 ///
 /// `check_catalog_name` skips the candidate by comparing identities, so a change to a declared
 /// key must leave the row this window opened on out of the clash set — otherwise the footer
-/// quotes that connection's own name back and Save never re-enables.
+/// quotes that data source's own name back and Save never re-enables.
 #[test]
-fn editing_a_source_connection_does_not_clash_with_the_row_it_replaces() {
+fn editing_a_source_does_not_clash_with_the_row_it_replaces() {
     let (mut runner, (ctx, mut project, _)) = runner(
         "self-clash",
-        ConnectionTarget::Edit("warehouse".into()),
+        SourceTarget::Edit("warehouse".into()),
         source_draft(),
     );
     {
-        let mut p = project.write_channel(ProjChan::Connections);
-        p.upsert_connection(SourceDef {
+        let mut p = project.write_channel(ProjChan::Sources);
+        p.upsert_source(SourceDef {
             name: "warehouse".into(),
             kind: TestSource::NAME.into(),
             config: [("user".to_string(), "reader".to_string())]
@@ -616,17 +608,17 @@ fn editing_a_source_connection_does_not_clash_with_the_row_it_replaces() {
     assert_eq!(ctx.draft.peek().blocker(), None);
 }
 
-/// **A secret typed into a new connection reaches the def as an expectation and nothing more.**
+/// **A secret typed into a new data source reaches the def as an expectation and nothing more.**
 /// The value is bound for this machine's keystore, which no test opens; what is asserted is the
 /// half that is the def's.
 #[test]
 fn a_declared_secret_is_an_expectation_in_the_def_and_a_value_on_this_machine() {
-    let (mut runner, (ctx, ..)) = runner("secret", ConnectionTarget::New, source_draft());
+    let (mut runner, (ctx, ..)) = runner("secret", SourceTarget::New, source_draft());
     settle(&mut runner);
 
     assert!(ctx.draft.peek().secrets.is_empty());
     assert!(
-        shows(&runner, "This connection signs in without a password."),
+        shows(&runner, "This data source signs in without a password."),
         "{:?}",
         texts(&runner)
     );
@@ -658,16 +650,16 @@ fn a_declared_secret_is_an_expectation_in_the_def_and_a_value_on_this_machine() 
 }
 
 /// **The two clearing gestures are two presses, and only one of them edits the def.** Made
-/// casually on a machine with no entry, "this connection uses no password" breaks the colleague
+/// casually on a machine with no entry, "this data source uses no password" breaks the colleague
 /// who has one, so it is never what a removal does. The press names the key, off its declared
 /// label, so a source with two credentials offers two distinguishable presses.
 #[test]
-fn removing_a_secret_from_this_machine_is_not_declaring_the_connection_has_none() {
+fn removing_a_secret_from_this_machine_is_not_declaring_the_source_has_none() {
     let mut draft = source_draft();
     draft.secrets.insert("password".into());
     let (mut runner, (ctx, ..)) = runner(
         "secret-forget",
-        ConnectionTarget::Edit("warehouse".into()),
+        SourceTarget::Edit("warehouse".into()),
         draft,
     );
     {
@@ -692,11 +684,11 @@ fn removing_a_secret_from_this_machine_is_not_declaring_the_connection_has_none(
     click_lowest(&mut runner, "Remove from this machine");
     assert!(
         ctx.draft.peek().secrets.contains("password"),
-        "the connection still expects one, so other machines keep theirs"
+        "the data source still expects one, so other machines keep theirs"
     );
     assert!(ctx.secret_removed.peek().contains("password"));
 
-    click_lowest(&mut runner, "This connection uses no password");
+    click_lowest(&mut runner, "This data source uses no password");
     assert!(
         !ctx.draft.peek().secrets.contains("password"),
         "this one is a def edit, and it is the only one that is"
@@ -713,7 +705,7 @@ fn removing_a_secret_from_this_machine_is_not_declaring_the_connection_has_none(
 fn a_secret_row_says_what_this_machine_holds() {
     let mut draft = source_draft();
     draft.secrets.insert("password".into());
-    let (mut runner, (ctx, ..)) = runner("secret-probe", ConnectionTarget::New, draft);
+    let (mut runner, (ctx, ..)) = runner("secret-probe", SourceTarget::New, draft);
     let mut probes = ctx.secret_probes;
 
     for (answer, said) in [
@@ -724,7 +716,7 @@ fn a_secret_row_says_what_this_machine_holds() {
         ),
         (
             SecretProbe::Absent,
-            "This connection expects a password and none is stored on this machine. Enter it \
+            "This data source expects a password and none is stored on this machine. Enter it \
              here.",
         ),
     ] {
@@ -738,7 +730,7 @@ fn a_secret_row_says_what_this_machine_holds() {
 /// unreachable — and a key nothing has touched is written as the key declares it.
 #[test]
 fn a_declared_choice_writes_the_kinds_own_word() {
-    let (mut runner, (ctx, ..)) = runner("choice", ConnectionTarget::New, source_draft());
+    let (mut runner, (ctx, ..)) = runner("choice", SourceTarget::New, source_draft());
     settle(&mut runner);
 
     let def = ctx.draft.peek().def();
@@ -773,12 +765,9 @@ fn a_stored_source_def_survives_the_form_untouched() {
         schemas: vec!["public".into()],
         read_only: false,
     };
-    let draft = ConnectionDraft::of(&stored, &[registrant()]);
-    let (mut runner, (ctx, ..)) = runner(
-        "round-trip",
-        ConnectionTarget::Edit("warehouse".into()),
-        draft,
-    );
+    let draft = SourceDraft::of(&stored, &[registrant()]);
+    let (mut runner, (ctx, ..)) =
+        runner("round-trip", SourceTarget::Edit("warehouse".into()), draft);
     settle(&mut runner);
 
     assert_eq!(
@@ -788,31 +777,27 @@ fn a_stored_source_def_survives_the_form_untouched() {
     );
 }
 
-/// **A name another connection already holds is refused**, because `upsert_connection` replaces
-/// on it — so without this the save would silently take that connection's def out from under it.
+/// **A name another data source already holds is refused**, because `upsert_source` replaces
+/// on it — so without this the save would silently take that data source's def out from under it.
 ///
-/// The connection it clashes with is an **object store**, which this editor has no form for: what
+/// The data source it clashes with is an **object store**, which this editor has no form for: what
 /// a def is keyed by has nothing to do with whether this window can draw it.
 #[test]
-fn a_name_another_connection_holds_blocks_the_save() {
+fn a_name_another_source_holds_blocks_the_save() {
     let mut draft = source_draft();
     draft.name = "old_lake".into();
-    let (mut runner, (_, project, _)) = runner("clash", ConnectionTarget::New, draft);
+    let (mut runner, (_, project, _)) = runner("clash", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert!(
         shows(
             &runner,
-            "'old_lake' is already a connection in this project."
+            "'old_lake' is already a data source in this project."
         ),
         "{:?}",
         texts(&runner)
     );
 
     click_lowest(&mut runner, "Save");
-    assert_eq!(
-        project.peek().connections.len(),
-        1,
-        "and nothing was written"
-    );
+    assert_eq!(project.peek().sources.len(), 1, "and nothing was written");
 }

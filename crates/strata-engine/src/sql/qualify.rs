@@ -20,7 +20,7 @@
 //!    the snapshot spool — so `__snap_3` is the workspace's whether or not a run has minted it.
 //! 2. Exactly one relation of that name across the connected catalogs: the name is rewritten
 //!    whole. Views and materialized views included — the search asks the providers, and a
-//!    database connection's listing is `relkind IN ('r','p','v','m','f')`.
+//!    data source's listing is `relkind IN ('r','p','v','m','f')`.
 //! 3. More than one: [`Refusal::ambiguous`], naming every candidate. Never a coin flip between
 //!    two servers.
 //! 4. None: left bare, which is the error DataFusion already gives.
@@ -28,7 +28,7 @@
 //! **Resolvable positions: everything but a create target.** A target that addresses a relation
 //! which already exists resolves like a read, so `INSERT INTO orders`, `DROP TABLE orders`,
 //! `UPDATE orders` and `DELETE FROM orders` all reach the relation `SELECT * FROM orders` reads.
-//! Three things make that safe with no second gate here: a connection is **read-only by default**
+//! Three things make that safe with no second gate here: a data source is **read-only by default**
 //! and the user opted this one in, an ambiguous name still refuses by name so a write never picks
 //! between two servers, and the arm is reached with a qualified name — so `statements::resolve_target`
 //! answers identically whether or not the qualifier was typed.
@@ -119,7 +119,7 @@ fn table_functions(ctx: &SessionContext) -> HashSet<String> {
 }
 
 /// One relation, addressed the way the thing that holds it spells it: the catalog as the
-/// connection registered it, the schema and the relation as the server does.
+/// data source registered it, the schema and the relation as the server does.
 struct Qualified {
     catalog: String,
     schema: String,
@@ -162,7 +162,7 @@ impl Qualified {
 ///
 /// Read from the config rather than the crate's `CATALOG`/`SCHEMA`, because the question is
 /// "would the planner have found it" and the planner asks the config — so a context built any
-/// other way cannot have its own default read as a database connection.
+/// other way cannot have its own default read as a source.
 struct Home {
     catalog: String,
     schema: String,
@@ -213,7 +213,7 @@ impl<'a> Names<'a> {
     /// Where a bare name resolves outside the workspace — `None` when the workspace has it (it
     /// wins) or when nothing does.
     ///
-    /// **Scoped to the schemas each connection shows** ([`shown_schemas`]): a schema switched
+    /// **Scoped to the schemas each data source shows** ([`shown_schemas`]): a schema switched
     /// off neither captures a bare name nor collides with one in a schema left on, where a name
     /// written in full still resolves into any of them. `table_exist` throughout, so only a hit
     /// pays for `table_names` — and only to recover the server's spelling.
@@ -436,7 +436,7 @@ mod tests {
     use crate::statements::pipeline::resolved_one;
     use crate::{Engine, RunTag, WsId};
 
-    /// A session with one workspace table (`events`) and whichever database connections the test
+    /// A session with one workspace table (`events`) and whichever data sources the test
     /// names, each holding the relations it lists.
     fn session(databases: &[(&str, &[&str])]) -> SessionContext {
         let ctx = test_context(&BTreeMap::new());
@@ -460,7 +460,7 @@ mod tests {
             .map_err(|e| e.message())
     }
 
-    /// The point of the task: a name only a database connection has is reached without the
+    /// The point of the task: a name only a data source has is reached without the
     /// qualifier, and the statement that goes on to plan says which relation that was.
     #[test]
     fn a_name_only_the_database_has_is_qualified() {
@@ -528,7 +528,7 @@ mod tests {
 
     /// **A write target resolves exactly as a read does**, so `INSERT INTO orders`
     /// dispatches to the relation `SELECT * FROM orders` reads. What is refused about it — a
-    /// read-only connection — is the arm's, reached with the qualified name this produced.
+    /// read-only data source — is the arm's, reached with the qualified name this produced.
     #[test]
     fn a_write_target_resolves_like_a_read() {
         let ctx = session(&[("pg", &["orders"])]);
@@ -578,7 +578,7 @@ mod tests {
     }
 
     /// And the other half of that rule: the prefix reserves nothing inside a database
-    /// connection, so a relation a server happens to call `__snap_9` is an ordinary read.
+    /// data source, so a relation a server happens to call `__snap_9` is an ordinary read.
     #[test]
     fn the_snapshot_prefix_reserves_nothing_on_a_server() {
         let ctx = session(&[("pg", &["__snap_9"])]);
@@ -588,9 +588,9 @@ mod tests {
         );
     }
 
-    /// A project with no database connection pays nothing and reads exactly as it did.
+    /// A project with no data source pays nothing and reads exactly as it did.
     #[test]
-    fn a_project_with_no_connection_is_untouched() {
+    fn a_project_with_no_source_is_untouched() {
         let ctx = session(&[]);
         assert_eq!(
             resolved(&ctx, "SELECT * FROM orders").expect("parses"),

@@ -137,7 +137,7 @@ impl CheckboxRow {
         self
     }
 
-    /// A mark at the row's trailing edge — the schemas picker's "not in the connection" warning.
+    /// A mark at the row's trailing edge — the schemas picker's "not in the data source" warning.
     pub fn trailing(mut self, trailing: impl IntoElement) -> Self {
         self.trailing = Some(trailing.into_element());
         self

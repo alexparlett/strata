@@ -1,6 +1,6 @@
 //! Secret storage.
 //!
-//! Opening a connection that expects a secret requires reading it from somewhere.
+//! Opening a data source that expects a secret requires reading it from somewhere.
 //! [`KeystoreSecrets`] reads the operating system keystore, [`EnvSecrets`] reads the process
 //! environment and [`MemSecrets`] holds values in memory; [`ChainSecrets`] asks several in turn.
 //! Any other source is a [`SecretProvider`] implementation, set with
@@ -17,7 +17,7 @@ use strata_core::secret::{Secret, SecretRef};
 /// What one secret is wanted for.
 ///
 /// A request rather than a bare key, because where a secret may be found is the asking source's
-/// vocabulary: the keystore slot is derived from the family and the connection, and a source that
+/// vocabulary: the keystore slot is derived from the family and the data source, and a source that
 /// has a conventional environment variable states its own
 /// ([`env`](Self::env) — `PGPASSWORD`, `MYSQL_PWD`). A provider answers from whichever of them it
 /// reads and ignores the rest.
@@ -25,9 +25,9 @@ use strata_core::secret::{Secret, SecretRef};
 pub struct SecretRequest {
     /// Which slot this is: `"{kind}-{key}"`, one per secret-typed key a source declares.
     pub family: String,
-    /// The connection the secret belongs to, by its own name — which is what a fix asks the
+    /// The data source the secret belongs to, by its own name — which is what a fix asks the
     /// user to open, and what moving the name has to move the entry to.
-    pub connection: String,
+    pub source: String,
     /// The environment variables this source conventionally reads, in the order it reads them.
     pub env: &'static [&'static str],
 }
@@ -35,23 +35,23 @@ pub struct SecretRequest {
 impl SecretRequest {
     /// The keystore slot this request addresses.
     ///
-    /// Derived from the family and the connection rather than stored, so the committed
+    /// Derived from the family and the data source rather than stored, so the committed
     /// `project.json` carries no machine-local id and each machine's keystore holds its own entry.
     pub fn key(&self) -> SecretRef {
-        SecretRef::derived(&self.family, &self.connection)
+        SecretRef::derived(&self.family, &self.source)
     }
 
     /// Both places this secret could have come from, for the sentence a miss produces.
     pub fn fixes(&self) -> String {
         match self.env {
-            [] => format!("Open the connection '{}' and enter it.", self.connection),
+            [] => format!("Open the data source '{}' and enter it.", self.source),
             [one] => format!(
-                "Open the connection '{}' and enter it, or set {one}.",
-                self.connection
+                "Open the data source '{}' and enter it, or set {one}.",
+                self.source
             ),
             many => format!(
-                "Open the connection '{}' and enter it, or set one of {}.",
-                self.connection,
+                "Open the data source '{}' and enter it, or set one of {}.",
+                self.source,
                 many.join(", ")
             ),
         }
@@ -218,7 +218,7 @@ mod tests {
     fn request() -> SecretRequest {
         SecretRequest {
             family: "postgres-password".into(),
-            connection: "orders".into(),
+            source: "orders".into(),
             env: &["STRATA_TEST_PGPASSWORD"],
         }
     }
@@ -274,7 +274,7 @@ mod tests {
     fn a_filed_secret_comes_back_under_its_own_request_and_no_other() {
         let ask = request();
         let other = SecretRequest {
-            connection: "events".into(),
+            source: "events".into(),
             ..request()
         };
         let held = MemSecrets::new().with(ask.key(), Secret::new("hunter2").unwrap());
@@ -285,14 +285,14 @@ mod tests {
         assert_eq!(held.secret(&other), Ok(None));
     }
 
-    /// **The family is per key, so one connection's two secrets are two slots.** A source that
+    /// **The family is per key, so one data source's two secrets are two slots.** A source that
     /// declares an access key and a secret key files them separately, and neither answers for the
     /// other.
     #[test]
-    fn two_keys_of_one_connection_are_two_slots() {
+    fn two_keys_of_one_source_are_two_slots() {
         let id = SecretRequest {
             family: "s3-access_key_id".into(),
-            connection: "acme-lake".into(),
+            source: "acme-lake".into(),
             env: &[],
         };
         let secret = SecretRequest {

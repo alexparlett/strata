@@ -173,7 +173,7 @@ impl SecretRef {
     /// `Uuid::new_v5` over `"{kind}:{name}"`: deterministic, so the same def addresses the same
     /// keystore slot on every machine, while each machine's keystore holds its own entry (or
     /// none). `kind` is the family of secret (`"postgres-password"`), `name` the thing's own
-    /// identity within it (a connection's name).
+    /// identity within it (a data source's name).
     ///
     /// **The contract, which is not optional.** A minted [`SecretRef`] in a *committed* file
     /// would be rewritten by every colleague who entered their own password — two machines
@@ -246,7 +246,7 @@ impl SecretRef {
 /// old entry is still where it was.
 ///
 /// Beside the type rather than in whichever surface needed it first, so an identity move from
-/// the connection editor, a future palette gesture or a project merge all clean up the same way.
+/// the data source editor, a future palette gesture or a project merge all clean up the same way.
 pub fn migrate_derived(old: &SecretRef, new: &SecretRef) -> Result<(), SecretError> {
     if old == new {
         return Ok(());
@@ -463,7 +463,7 @@ mod tests {
 
     /// An identity move carries the secret with it: the new ref reads what the old one held,
     /// and the old entry is gone. Absence is not a failure — a machine that never held this
-    /// connection's password must still be able to edit the connection.
+    /// data source's password must still be able to edit the source.
     #[test]
     fn migrating_a_derived_secret_moves_the_entry_and_tolerates_absence() {
         mocked();

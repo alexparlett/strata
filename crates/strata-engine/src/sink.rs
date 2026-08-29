@@ -67,7 +67,7 @@ pub(crate) async fn append_rows(
 ///
 /// The same [`collapse_projections`] runs first and for the same reason: what decides whether
 /// anything is unparsed is where the rows are read from, and an input scanning a database
-/// connection federates here exactly as it does under a provider sink. One stream rather than a
+/// data source federates here exactly as it does under a provider sink. One stream rather than a
 /// coalesce, because `execute_stream` already merges the partitions.
 pub(crate) async fn insert_stream(
     ctx: &SessionContext,

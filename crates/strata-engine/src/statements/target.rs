@@ -2,7 +2,7 @@
 //!
 //! One resolution in front of the arms, so the question "whose catalog is this name in" is asked
 //! once and answered once. The workspace catalog has exactly one schema, so a qualified name is a
-//! longer spelling of the same place, a relation inside a database connection's catalog, or
+//! longer spelling of the same place, a relation inside a data source's catalog, or
 //! nowhere at all — and registration takes a bare name, so an unrecognised qualifier would
 //! otherwise be dropped and the object created somewhere else.
 //!
@@ -27,7 +27,7 @@ use crate::{fold_ident, CATALOG, SCHEMA};
 pub enum Target {
     /// The workspace catalog's one schema, under the bare name registration takes.
     Workspace { name: String },
-    /// A relation inside a live database connection's catalog.
+    /// A relation inside a live data source's catalog.
     Remote(Remote),
     /// A qualifier that resolves to no catalog at all — [`elsewhere`]'s wording.
     Nowhere { qualifier: String },
@@ -55,21 +55,21 @@ impl Target {
     ///
     /// # Errors
     ///
-    /// The name is a relation inside a database connection, or a qualifier that resolves to no
+    /// The name is a relation inside a source, or a qualifier that resolves to no
     /// catalog at all.
     pub fn workspace(self, what: &str) -> Result<String, String> {
         match self {
             Target::Workspace { name } => Ok(name),
-            Target::Remote(at) => Err(in_database(&at.address(), &at.connection)),
+            Target::Remote(at) => Err(in_database(&at.address(), &at.source)),
             Target::Nowhere { .. } => Err(elsewhere(what)),
         }
     }
 }
 
-/// One relation inside a database connection.
+/// One relation inside a source.
 ///
-/// `connection` is the catalog name in the spelling it was registered under — the registered
-/// spelling rather than the folded key, because that is what the connection is called everywhere
+/// `data source` is the catalog name in the spelling it was registered under — the registered
+/// spelling rather than the folded key, because that is what the data source is called everywhere
 /// else the user meets it.
 ///
 /// `reference` is the **recorded** form: the resolved [`TableReference`] itself, which is what a
@@ -79,12 +79,12 @@ impl Target {
 /// and a `DROP` then reported a destructive action as consequence-free.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Remote {
-    pub connection: String,
+    pub source: String,
     pub reference: TableReference,
 }
 
 impl Remote {
-    /// The namespace inside the connection, as the statement named it.
+    /// The namespace inside the data source, as the statement named it.
     ///
     /// [`resolve_target`] mints a `Remote` only from a three-part reference, so the fallback is
     /// unreachable through it; it is the workspace's one schema rather than a panic because a
@@ -103,7 +103,7 @@ impl Remote {
     ///
     /// **Output only.** Never a lookup key: see [`recorded`](Self::recorded).
     pub fn address(&self) -> String {
-        qualified([self.connection.as_str(), self.schema(), self.table()])
+        qualified([self.source.as_str(), self.schema(), self.table()])
     }
 
     /// The reference as everything that *resolves* one holds it — what a match against a
@@ -113,14 +113,14 @@ impl Remote {
     }
 
     /// The address as the **source** knows it, `schema.relation` — what a report about a
-    /// statement the server ran names, the catalog being Strata's word for the connection and
+    /// statement the server ran names, the catalog being Strata's word for the data source and
     /// already in that report's other half ("on 'pg'").
     pub fn server_address(&self) -> String {
         qualified([self.schema(), self.table()])
     }
 
     /// How the **source** is addressed: `schema.table`, never the catalog, which is Strata's own
-    /// prefix for the connection and means nothing to the server. A full reference would render
+    /// prefix for the data source and means nothing to the server. A full reference would render
     /// `"pg"."public"."orders"` into a statement the server then refuses.
     pub fn relation(&self) -> TableReference {
         TableReference::partial(self.schema().to_string(), self.table().to_string())
@@ -131,13 +131,13 @@ impl Remote {
 ///
 /// **The one choke point in front of every arm.** Every intercepted statement that manages a
 /// target comes through here, so one sentence covers them all and no arm grows its own copy of
-/// the check. The catalog list is asked rather than a list of connections, because it is what
-/// *resolves* the name: a catalog is registered exactly while its connection is live, which is
+/// the check. The catalog list is asked rather than a list of data sources, because it is what
+/// *resolves* the name: a catalog is registered exactly while its data source is live, which is
 /// the window in which the user can address it.
 ///
 /// A pure function of the session, deliberately: the editor asks it of a statement it is only
 /// judging (`arms::remote::dispatched`), where no dispatch state exists. The
-/// connection's own gates — is it writable, may this caller reach it — are asked of the resolved
+/// data source's own gates — is it writable, may this caller reach it — are asked of the resolved
 /// answer, not folded into it.
 pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
     if in_workspace(name) {
@@ -151,8 +151,8 @@ pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
         };
     };
     match source_catalog(ctx, catalog) {
-        Some(connection) => Target::Remote(Remote {
-            connection,
+        Some(source) => Target::Remote(Remote {
+            source,
             reference: name.clone(),
         }),
         None => Target::Nowhere {
@@ -176,14 +176,14 @@ pub fn resolve_named(ctx: &SessionContext, name: &ObjectName) -> Target {
     }
 }
 
-/// The database connection's catalog `catalog` names, in the spelling it was registered under —
+/// The data source's catalog `catalog` names, in the spelling it was registered under —
 /// `None` for the workspace catalog, and for a qualifier that resolves to nothing.
 ///
 /// **Folded on both sides, the workspace's own name included.** The catalog list resolves by
 /// [`fold_ident`], so a quoted `"STRATA"` names the workspace catalog — and compared raw it
 /// would slip past the guard below and then *match* the workspace's own entry in the search,
-/// telling the user their project's catalog is a connection. No real connection can produce that
-/// (`check_catalog` refuses `strata` case-insensitively), so the sentence would name a connection
+/// telling the user their project's catalog is a source. No real data source can produce that
+/// (`check_catalog` refuses `strata` case-insensitively), so the sentence would name a data source
 /// that cannot exist.
 fn source_catalog(ctx: &SessionContext, catalog: &str) -> Option<String> {
     let folded = fold_ident(catalog);
@@ -195,26 +195,26 @@ fn source_catalog(ctx: &SessionContext, catalog: &str) -> Option<String> {
         .find(|registered| fold_ident(registered) == folded)
 }
 
-/// The wording for a statement that will **not** touch a name inside a database connection's
+/// The wording for a statement that will **not** touch a name inside a data source's
 /// catalog — registering a table externally, which declares files and a format for a relation the
 /// server already describes itself, and the view and drop statements the server owns instead.
 pub fn in_database(name: &str, catalog: &str) -> String {
     format!(
-        "'{name}' is in the database connection '{catalog}', which describes its own relations. \
+        "'{name}' is in the data source '{catalog}', which describes its own relations. \
          Tables cannot be registered inside one"
     )
 }
 
-/// The wording for a write into a connection that has not been opted in — **minted once**, beside
+/// The wording for a write into a data source that has not been opted in — **minted once**, beside
 /// [`in_database`], because both arms that can reach it must say the same thing.
 ///
-/// It names the setting rather than the rule: a connection is read-only by default, so the
+/// It names the setting rather than the rule: a data source is read-only by default, so the
 /// user is one toggle away and the sentence is only useful if it says which.
 pub fn read_only(at: &Remote) -> String {
     format!(
-        "The database connection '{}' is read-only, so '{}' cannot be written. Turn off 'Read \
-         only' in the connection's settings",
-        at.connection,
+        "The data source '{}' is read-only, so '{}' cannot be written. Turn off 'Read \
+         only' in the source's settings",
+        at.source,
         at.address()
     )
 }
@@ -234,7 +234,7 @@ mod tests {
 
     use super::*;
 
-    /// A session holding the workspace catalog and one database connection called `pg`.
+    /// A session holding the workspace catalog and one data source called `pg`.
     fn session() -> SessionContext {
         let ctx = crate::builder::test_context(&std::collections::BTreeMap::new());
         fake_source(&ctx, "pg", &["orders"]);
@@ -267,15 +267,15 @@ mod tests {
         }
     }
 
-    /// A relation inside a connection resolves to it under the connection's **registered**
+    /// A relation inside a data source resolves to it under the data source's **registered**
     /// spelling, whatever case the statement wrote — that being what every other surface calls it.
     #[test]
-    fn a_connections_relation_resolves_under_its_registered_spelling() {
+    fn a_sources_relation_resolves_under_its_registered_spelling() {
         let ctx = session();
         let Target::Remote(at) = resolved(&ctx, "PG.public.orders") else {
-            panic!("'PG.public.orders' did not resolve to the connection");
+            panic!("'PG.public.orders' did not resolve to the data source");
         };
-        assert_eq!(at.connection, "pg");
+        assert_eq!(at.source, "pg");
         assert_eq!(at.recorded().to_string(), "pg.public.orders");
     }
 
@@ -339,7 +339,7 @@ mod tests {
         for (relation, printed) in [("Orders", "\"Orders\""), ("order", "\"order\"")] {
             let Target::Remote(at) = resolved(&ctx, &format!("quoted.public.\"{relation}\""))
             else {
-                panic!("'{relation}' did not resolve to the connection");
+                panic!("'{relation}' did not resolve to the data source");
             };
             assert_eq!(
                 at.recorded().to_string(),

@@ -2,11 +2,11 @@
 //!
 //! Every intercepted kind is one of three, keyed wildcard-free on [`StmtKind`] so a kind the
 //! engine gains has to answer here before it compiles — and the answer decides whether a target
-//! inside a database connection is something that kind can act on at all.
+//! inside a data source is something that kind can act on at all.
 
 use crate::statements::StmtKind;
 
-/// What a kind does with a target inside a database connection.
+/// What a kind does with a target inside a source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mechanism {
     /// DataFusion plans it and the arm drives the source's own sink — the input is an ordinary

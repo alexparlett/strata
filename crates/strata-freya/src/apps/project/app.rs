@@ -27,7 +27,6 @@ use std::time::Duration;
 
 use crate::agent::use_agent_server;
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::close::{
     close_bridge, close_project, CloseBridge, CloseGuard, CloseTarget, Veto,
 };
@@ -41,10 +40,12 @@ use crate::apps::project::state::{
     SessionState,
 };
 use crate::apps::project::views::{
-    ChatConfirm, ChatDrop, CloseConfirm, CommandPalette, ConfigureLauncher, ConnectionLauncher,
-    DropConfirm, DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProjectLoadFailed,
+    ChatConfirm, ChatDrop, CloseConfirm, CommandPalette, ConfigureLauncher, DropConfirm,
+    DropTarget, HeaderBar, OpenPrompt, PaletteOpen, ProfileConfirm, ProjectLoadFailed,
     ProjectLoading, RequestKeepers, SchemasPicker, SchemasRequest, ShapeDialog, ShapeTarget, Shell,
+    SourceLauncher,
 };
+use crate::apps::source::SourceTarget;
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
 use crate::platform::{
@@ -511,7 +512,7 @@ impl Component for ProjectLoaded {
         let profile_target = use_provide_context(|| State::create(None::<ProfileTarget>));
         let shape_target = use_provide_context(|| State::create(None::<ShapeTarget>));
         use_provide_context(|| State::create(None::<ConfigureTarget>));
-        use_provide_context(|| State::create(None::<ConnectionTarget>));
+        use_provide_context(|| State::create(None::<SourceTarget>));
         let schemas_target: SchemasRequest = use_provide_context(|| State::create(None::<String>));
         let palette_open: PaletteOpen = use_provide_context(|| State::create(false));
 
@@ -551,7 +552,7 @@ impl Component for ProjectLoaded {
             })
             .child(CommandPalette { open: palette_open })
             .child(ConfigureLauncher)
-            .child(ConnectionLauncher)
+            .child(SourceLauncher)
             .child(RequestKeepers)
             .child(HeaderBar::new(self.filled_by_app))
             .child(Shell::new())

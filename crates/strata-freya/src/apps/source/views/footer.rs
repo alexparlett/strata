@@ -3,26 +3,26 @@
 //! **This is the only thing in the window that writes anything.** Cancel just closes; nothing is
 //! committed until Save.
 //!
-//! A source connection has a fifth step, and it comes **first**: whatever this machine's keystore
+//! A source data source has a fifth step, and it comes **first**: whatever this machine's keystore
 //! owes the secrets its kind declares ([`secret_ops`]). A def that expects one over a keystore
-//! that refused the write is a connection nothing can log in with.
+//! that refused the write is a data source nothing can log in with.
 //!
 //! 1. writes the def onto the shared project store — removing the row it is **moving from**
-//!    first, when the edit changed the bucket or the provider and therefore the connection's
+//!    first, when the edit changed the bucket or the provider and therefore the data source's
 //!    identity;
-//! 2. persists through the funnel and **gates on the answer** — a connection the project file
+//! 2. persists through the funnel and **gates on the answer** — a data source the project file
 //!    never heard about is gone on the next open, which is what P4-15 exists to stop being
 //!    silent;
 //! 3. drops the object store the old URL registered, the one call the scan driver cannot make:
 //!    `engine::sources::store::connect` only ever sees the def it is given, so nothing else would ever
-//!    take that store back out (`Connections::disconnect` — the same call Forget makes);
+//!    take that store back out (`Sources::disconnect` — the same call Forget makes);
 //! 4. asks the project window's one scan driver for a whole-catalog pass, and leaves this window
-//!    watching its row ([`super::use_watch_connection`]).
+//!    watching its row ([`super::use_watch_data source`]).
 //!
-//! **A whole-catalog pass, not a connection-shaped one.** `plan_scan` puts connections in
+//! **A whole-catalog pass, not a data source-shaped one.** `plan_scan` puts data sources in
 //! `ScanScope::All` alone, deliberately: the case that needs a re-connect is a region corrected
 //! or an `aws sso login` run, which is exactly this window — and every table over the bucket was
-//! registered against the store this save replaces, so re-registering the connection alone would
+//! registered against the store this save replaces, so re-registering the data source alone would
 //! leave them answering from a store that is no longer there. Save is the ↻ the user would
 //! otherwise press, with the def written first.
 
@@ -34,12 +34,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_engine::sources::{forget_secret, forget_secrets, migrate_secrets, put_secret};
 use strata_model::{check_catalog_name, SourceDef};
 
-use crate::apps::connection::{ConnectionCtx, ConnectionTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
 use crate::apps::project::{
     persisted_defs, refresh_catalog, Catalog, CatalogRescan, ProjChan, ProjectState,
 };
+use crate::apps::source::{SourceCtx, SourceTarget, Status};
 use crate::components::divider::Divider;
 use crate::components::form::form_theme;
 use crate::components::metrics::ACTION_HEIGHT;
@@ -58,7 +58,7 @@ impl Component for Footer {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
         let form = form_theme();
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let rescan = use_consume::<CatalogRescan>();
         let catalog = use_consume::<Catalog>();
@@ -143,7 +143,7 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
 /// re-stated here — the same reason the two clash checks below are the store's question rather
 /// than the draft's. A kind nothing is registered for says so, which is the honest answer for a
 /// def naming a source this build does not have.
-fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
+fn address_refusal(ctx: SourceCtx, engine: &EngineCtx) -> Option<String> {
     let def = ctx.draft.read().def();
     let kind = def.kind.clone();
     engine
@@ -153,50 +153,47 @@ fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
         .map(|why| why.to_string())
 }
 
-/// The blocker the draft cannot see: a name another connection already holds.
+/// The blocker the draft cannot see: a name another data source already holds.
 ///
-/// `upsert_connection` replaces on the name, so without this an edit that renamed one connection
-/// onto another's would silently take that connection's def out from under it — the same hazard
-/// the Configure window's name clash guards, one section along. On an edit the connection's own
+/// `upsert_source` replaces on the name, so without this an edit that renamed one data source
+/// onto another's would silently take that data source's def out from under it — the same hazard
+/// the Configure window's name clash guards, one section along. On an edit the data source's own
 /// name does not clash with itself.
 ///
-/// Matched case-**sensitively**, unlike [`catalog_clash`] below: a connection is addressed by
+/// Matched case-**sensitively**, unlike [`catalog_clash`] below: a data source is addressed by
 /// gesture, and the spelling the user typed is the one every surface shows back.
-fn name_clash(ctx: ConnectionCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
+fn name_clash(ctx: SourceCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
     let name = ctx.draft.read().def().named();
     if ctx.target.read().editing() == Some(name.as_str()) {
         return None;
     }
     project
         .peek()
-        .connections
+        .sources
         .iter()
         .any(|c| c.def.named() == name)
-        .then(|| format!("'{name}' is already a connection in this project."))
+        .then(|| format!("'{name}' is already a data source in this project."))
 }
 
-/// The other blocker the draft cannot see: a **catalog name** another database connection in this
+/// The other blocker the draft cannot see: a **catalog name** another data source in this
 /// project already registers under.
 ///
 /// [`check_catalog_name`] rather than a comparison written here, so the field refuses what
 /// registration refuses, in the same words. It folds, unlike [`name_clash`] beside it,
 /// because a catalog name is a SQL identifier. The set is the project's *stored* defs where the
-/// engine's is what is live — a connection that failed to connect reserves nothing.
+/// engine's is what is live — a data source that failed to connect reserves nothing.
 ///
 /// **The row this window opened on is dropped first**, exactly as [`name_clash`] drops it.
-/// `check_catalog_name` skips the candidate by comparing URLs, and a database connection's URL
+/// `check_catalog_name` skips the candidate by comparing URLs, and a data source's URL
 /// carries its user — so editing the USER, the URL or the DATABASE moves the identity, the stale
-/// row stops matching, and the draft clashes with the connection it is replacing. The footer then
-/// quotes that connection's own old URL back and Save never re-enables.
-fn catalog_clash(
-    ctx: ConnectionCtx,
-    project: RadioStation<ProjectState, ProjChan>,
-) -> Option<String> {
+/// row stops matching, and the draft clashes with the data source it is replacing. The footer then
+/// quotes that data source's own old URL back and Save never re-enables.
+fn catalog_clash(ctx: SourceCtx, project: RadioStation<ProjectState, ProjChan>) -> Option<String> {
     let def = ctx.draft.read().def();
     let editing = ctx.target.read().editing().map(str::to_string);
     let existing: Vec<SourceDef> = project
         .peek()
-        .connections
+        .sources
         .iter()
         .filter(|c| editing.as_deref() != Some(c.def.named().as_str()))
         .map(|c| c.def.clone())
@@ -211,13 +208,13 @@ fn catalog_clash(
 /// the engine's — this says only which of these things happened to which box.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum SecretOp {
-    /// The connection was renamed, so its secrets move with it.
+    /// The data source was renamed, so its secrets move with it.
     Rename,
     /// A value was typed into `key`'s box.
     Put { key: String, value: String },
     /// *Remove from this machine*, or the "uses no …" edit, for one declared key.
     Forget { key: String },
-    /// Everything the **previous** def kept here: a connection that is no longer a source, or one
+    /// Everything the **previous** def kept here: a data source that is no longer a source, or one
     /// whose kind moved — in which case nothing would ever name the old slots again, since the
     /// family is the kind.
     ForgetAll,
@@ -237,7 +234,7 @@ fn secret_ops(
     removed: &BTreeSet<String>,
 ) -> Vec<SecretOp> {
     // Only a def that actually **holds** something has anything to move or forget. A rename or a
-    // dropped provider is a keystore operation for a connection with secrets and nothing at all
+    // dropped provider is a keystore operation for a data source with secrets and nothing at all
     // for one without — and planning it anyway sends every such save down the worker path, which
     // on macOS is a Keychain prompt raised over an empty slot.
     let was = previous.filter(|def| !def.secrets.is_empty());
@@ -294,7 +291,7 @@ fn run_secret_ops(
 /// module doc.
 ///
 /// **The bucket is not probed here**, and that is a decision with a measurement behind it. A
-/// Save-time `Engine::check_connection` was built first, to refuse an unreachable bucket before
+/// Save-time `Engine::check_source` was built first, to refuse an unreachable bucket before
 /// anything was written. It was withdrawn for two reasons that only showed up once it existed.
 ///
 /// It is **redundant**: `store::connect` now asks the bucket itself, so the pass this Save asks
@@ -308,7 +305,7 @@ fn run_secret_ops(
 /// seconds to 308. A UI test that dials out to a bucket nobody owns is a bad trade for a refusal
 /// arriving a second earlier.
 fn save(
-    mut ctx: ConnectionCtx,
+    mut ctx: SourceCtx,
     project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
     engine: EngineCtx,
@@ -318,7 +315,7 @@ fn save(
     let previous = ctx.target.peek().editing().and_then(|name| {
         project
             .peek()
-            .connections
+            .sources
             .iter()
             .find(|c| c.def.named() == name)
             .map(|row| row.def.clone())
@@ -357,7 +354,7 @@ fn save(
 /// synchronous: made asynchronous for everyone, the interaction tests that press this button
 /// would assert a frame that has not happened yet.
 fn commit(
-    mut ctx: ConnectionCtx,
+    mut ctx: SourceCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
     engine: EngineCtx,
@@ -373,16 +370,16 @@ fn commit(
         .map(str::to_string);
 
     let landed = {
-        let mut p = project.write_channel(ProjChan::Connections);
+        let mut p = project.write_channel(ProjChan::Sources);
         match &moved_from {
-            Some(old) => p.rename_connection(old, def),
-            None => p.upsert_connection(def),
+            Some(old) => p.rename_source(old, def),
+            None => p.upsert_source(def),
         }
         persisted_defs(&p, report)
     };
     if !landed {
         ctx.status.set(Status::Failed(
-            "The connection is registered, but the project file could not be written, so it will \
+            "The data source is registered, but the project file could not be written, so it will \
              be gone when this project is reopened."
                 .into(),
         ));
@@ -391,7 +388,7 @@ fn commit(
     }
     {
         let mut target = ctx.target;
-        target.set(ConnectionTarget::Edit(name.clone()));
+        target.set(SourceTarget::Edit(name.clone()));
     }
 
     if let Some(old) = &moved_from {
@@ -399,7 +396,7 @@ fn commit(
         log_event(
             report.log,
             LogLevel::Info,
-            format!("Moved connection '{old}' to '{name}'"),
+            format!("Moved data source '{old}' to '{name}'"),
         );
     }
 
@@ -449,10 +446,10 @@ mod tests {
         keys.iter().map(|k| (*k).to_string()).collect()
     }
 
-    /// **A connection that holds no secret is never a keystore call**, whatever moved — so
+    /// **A data source that holds no secret is never a keystore call**, whatever moved — so
     /// renaming one, or changing its kind, raises no Keychain prompt and keeps Save synchronous.
     #[test]
-    fn a_connection_with_no_secrets_is_never_a_keystore_call() {
+    fn a_source_with_no_secrets_is_never_a_keystore_call() {
         let bare = |name: &str, kind: &str| SourceDef {
             config: [("address".to_string(), "db:5432/analytics".into())]
                 .into_iter()
@@ -496,7 +493,7 @@ mod tests {
     }
 
     /// **A rename moves the entries, and the move comes before the put.** The slot is derived from
-    /// the connection's name, so renaming one moves it; run the other way round, a save that
+    /// the data source's name, so renaming one moves it; run the other way round, a save that
     /// renamed *and* typed a new value would carry the old one over it.
     #[test]
     fn a_rename_moves_the_entries_before_anything_lands_on_the_new_slots() {
@@ -595,7 +592,7 @@ mod tests {
                     value: "t-1".into()
                 }
             ],
-            "one op per box, never one for the connection"
+            "one op per box, never one for the data source"
         );
     }
 
@@ -626,19 +623,19 @@ mod tests {
             [SecretOp::Forget {
                 key: "password".into()
             }],
-            "this connection uses no password"
+            "this data source uses no password"
         );
 
         assert_eq!(
             secret_ops(Some(&def), &store(), &BTreeMap::new(), &BTreeSet::new()),
             [SecretOp::ForgetAll],
-            "and a connection that is no longer a source keeps none of them"
+            "and a data source that is no longer a source keeps none of them"
         );
     }
 
     #[test]
     fn an_actionable_blocker_outranks_the_re_scan() {
-        let blocker = || Some("This connection has no user.".to_string());
+        let blocker = || Some("This data source has no user.".to_string());
         assert_eq!(save_note(blocker(), true), blocker());
         assert_eq!(save_note(blocker(), false), blocker());
     }

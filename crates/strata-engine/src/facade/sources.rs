@@ -1,4 +1,4 @@
-//! The connections this engine can serve, and what the live ones hold.
+//! The data sources this engine can serve, and what the live ones hold.
 
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use crate::{fold_ident, Dependents, Engine, EngineError, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
-/// The registrants it can connect with, the connections it has been told about, and what a live
+/// The registrants it can connect with, the data sources it has been told about, and what a live
 /// one enumerated. Every read answers from the connect-time enumeration rather than asking the
 /// server, which is what makes them free; re-running the registration pass is the refresh.
 #[derive(Clone, Copy)]
@@ -33,11 +33,11 @@ impl Sources<'_> {
     /// without this, a source path under `s3://acme-lake` fails its registration with "No
     /// suitable object store found" no matter how well-formed the def is. That ordering is
     /// [`Catalog::sync`](crate::Catalog::sync)'s, so every replay of a project gets
-    /// it — and a database connection needs exactly the same phase for a different reason, since
+    /// it — and a data source needs exactly the same phase for a different reason, since
     /// a view over `pg.public.orders` cannot be created before the catalog exists.
     ///
     /// **The provider decides the arm, and there is one spawn either way**, so the two cannot
-    /// drift apart on which runtime they ride: a pool may spawn a driver task per connection, and
+    /// drift apart on which runtime they ride: a pool may spawn a driver task per data source, and
     /// those have to land on the engine's own runtime or the engine's `Drop` does not end them.
     ///
     /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
@@ -46,29 +46,29 @@ impl Sources<'_> {
     /// the **one** path now: a bucket and a server are both a registrant answering `connect`.
     ///
     /// Moves the [`generation`](crate::Catalog::generation) on either arm: a refused connect
-    /// takes back whatever this connection last registered, so a three-part name that resolved
+    /// takes back whatever this data source last registered, so a three-part name that resolved
     /// no longer does.
     pub async fn connect(self, conn: SourceDef) -> Result<(), EngineError> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
         let name = conn.named();
-        engine.connections.note(&conn);
+        engine.source_defs.note(&conn);
         let live = engine.live.clone();
-        let registrants = engine.sources.clone();
+        let registrants = engine.registrants.clone();
         let secrets = Arc::clone(&engine.secrets);
         let settled = engine
             .rt()
             .spawn(async move { sources::connect(&ctx, &registrants, &live, &conn, secrets).await })
             .await
             .map_err(|e| EngineError::task("connect", e))?;
-        if engine.connections.resolve(&name).is_none() {
+        if engine.source_defs.resolve(&name).is_none() {
             self.disconnect(&name);
         }
         engine.generation.bump();
         settled.map_err(EngineError::from)
     }
 
-    /// Forget what the connection called `name` registered — the Forget gesture's engine half.
+    /// Forget what the data source called `name` registered — the Forget gesture's engine half.
     ///
     /// Synchronous, like [`Catalog::deregister`](crate::Catalog::deregister) and for the same
     /// reason: DataFusion just drops the entry from its registry, so there is no work to spawn
@@ -77,69 +77,69 @@ impl Sources<'_> {
     ///
     /// **Both a store and a catalog are taken back**, because a name is all this is given — which
     /// is why the def an object store registered under is kept beside the name until now. Neither
-    /// is a fault when it does nothing: a connection that never worked registered nothing, and a
+    /// is a fault when it does nothing: a data source that never worked registered nothing, and a
     /// catalog kind put no store on the session at all. See [`sources::disconnect`].
     pub fn disconnect(self, name: &str) {
         let engine = self.engine;
-        let def = engine.connections.def(name);
+        let def = engine.source_defs.def(name);
         sources::disconnect(
             &engine.ctx,
-            &engine.sources,
+            &engine.registrants,
             &engine.live,
             def.as_ref(),
             name,
         );
-        engine.connections.forget(name);
+        engine.source_defs.forget(name);
         engine.generation.bump();
     }
 
-    /// Every connection this engine holds, read as of one moment — see [`SourcesSnapshot`].
+    /// Every data source this engine holds, read as of one moment — see [`SourcesSnapshot`].
     ///
     /// Answers from the connect-time enumeration rather than from any source, so it costs no I/O
     /// and every surface that reads it describes the same instant. Re-running the registration
     /// pass is the refresh.
     ///
-    /// A connection this engine was told about is listed whether or not it could be reached: one
-    /// whose credentials this machine cannot resolve today is still a connection, and
+    /// A data source this engine was told about is listed whether or not it could be reached: one
+    /// whose credentials this machine cannot resolve today is still a data source, and
     /// [`SourceListing::live`](crate::sources::SourceListing::live) says so.
     pub fn listing(self) -> SourcesSnapshot {
         let engine = self.engine;
         sources::snapshot(
             &engine.ctx,
-            &engine.sources,
+            &engine.registrants,
             &engine.live,
-            &engine.connections.all(),
+            &engine.source_defs.all(),
             engine.generation.current(),
         )
     }
 
-    /// Sets which schemas the connection called `name` shows, without reconnecting.
+    /// Sets which schemas the data source called `name` shows, without reconnecting.
     ///
-    /// An unqualified name is searched for in the schemas a connection shows, so the session has
+    /// An unqualified name is searched for in the schemas a data source shows, so the session has
     /// to be told as the choice is made. Silent for a name this engine holds nothing for, and for
     /// one that registered an object store, which has no namespaces.
     ///
     /// Takes the set rather than a def, so the caller's own copy and this one cannot disagree
-    /// about a connection's scoping; [`listing`](Self::listing) answers the new set on the next
+    /// about a data source's scoping; [`listing`](Self::listing) answers the new set on the next
     /// read.
     ///
     /// Moves the [`generation`](crate::Catalog::generation) whether or not this engine held the
-    /// connection: over-invalidating once is cheaper than leaving a caller answering about a
+    /// data source: over-invalidating once is cheaper than leaving a caller answering about a
     /// scoping that has moved.
     pub fn show_schemas(self, name: &str, schemas: &[String]) {
         let engine = self.engine;
-        if let Some(mut def) = engine.connections.def(name) {
+        if let Some(mut def) = engine.source_defs.def(name) {
             def.schemas = schemas.to_vec();
-            engine.connections.note(&def);
+            engine.source_defs.note(&def);
             engine.live.show(&def);
         }
         engine.generation.bump();
     }
 
-    /// The qualified names completion may offer — one [`DatabaseSym`] per connection that
+    /// The qualified names completion may offer — one [`DatabaseSym`] per data source that
     /// registers a catalog, with its schemas and their relations.
     ///
-    /// Every catalog, live or not: the name comes from the def, so a connection that has never
+    /// Every catalog, live or not: the name comes from the def, so a data source that has never
     /// answered still offers the name a query would have to write. Only a
     /// [`Live`](SchemaVisibility::Live) schema is offered under it, a schema the source does not
     /// have being a name that cannot resolve.
@@ -176,9 +176,9 @@ impl Sources<'_> {
             .collect()
     }
 
-    /// What forgetting the connection called `name` would leave invalid.
+    /// What forgetting the data source called `name` would leave invalid.
     ///
-    /// Which half of the answer is empty follows from the kind of connection, so the caller does
+    /// Which half of the answer is empty follows from the kind of data source, so the caller does
     /// not say. Nothing reads an object store by name, so what it holds up is the table defs that
     /// name it and then everything reading one of those; no def can name a source, its relations
     /// being discovered rather than declared, so what it holds up is the views whose plans scan
@@ -209,13 +209,13 @@ impl Sources<'_> {
     }
 
     /// Every data source this engine can connect to — what a picker offers, what a catalog row
-    /// badges, and what a connection form draws its rows from.
+    /// badges, and what a data source form draws its rows from.
     ///
     /// One read for all three, off the registry itself, so a source an embedder registered is
     /// offered on the same terms as a shipped one and nothing keeps a second list of them.
     /// Synchronous and free.
     pub fn registrants(self) -> Vec<SourceInfo> {
-        self.engine.sources.registrants()
+        self.engine.registrants.registrants()
     }
 
     /// What the source registered as `kind` makes of `address`.
@@ -229,7 +229,7 @@ impl Sources<'_> {
     /// The address's own refusal, or the sentence saying nothing is registered for `kind`.
     pub fn check_address(self, kind: &str, address: &str) -> Result<(), EngineError> {
         self.engine
-            .sources
+            .registrants
             .check_address(kind, address)
             .map_err(EngineError::from)
     }
@@ -252,12 +252,12 @@ impl Sources<'_> {
         existing: &[SourceDef],
     ) -> Result<(), EngineError> {
         self.engine
-            .sources
+            .registrants
             .check_unique(candidate, existing)
             .map_err(EngineError::from)
     }
 
-    /// One relation inside a database connection's catalog, from what the session already
+    /// One relation inside a data source's catalog, from what the session already
     /// holds.
     ///
     /// The columns come from the provider the catalog caches per relation, so this costs one remote
@@ -265,7 +265,7 @@ impl Sources<'_> {
     /// behind it, by design: a database answers for itself.
     ///
     /// **The three answers are kept apart, which is why this is not an `Option`.** `Ok(None)` is an
-    /// *expected absence* and the caller's own not-found stands; `Err` is a relation the connection
+    /// *expected absence* and the caller's own not-found stands; `Err` is a relation the data source
     /// **does** list whose introspection failed, which is a fault about the server rather than a
     /// fact about the name — reporting it absent would tell an agent a relation does not exist when
     /// it does.
@@ -285,7 +285,7 @@ impl Sources<'_> {
         if folded == CATALOG {
             return Ok(None);
         }
-        let Some(connection) = engine
+        let Some(source) = engine
             .ctx
             .catalog_names()
             .into_iter()
@@ -298,7 +298,7 @@ impl Sources<'_> {
         };
         let Some(schema) = engine
             .ctx
-            .catalog(&connection)
+            .catalog(&source)
             .and_then(|catalog| catalog.schema(schema_name))
         else {
             return Ok(None);
@@ -330,7 +330,7 @@ impl Sources<'_> {
             .map_err(|e| EngineError::Failed(format!("Reading '{name}' failed: {e}")))?
             .map_err(|e| EngineError::Failed(catalog::readable(&e.to_string())))?;
         Ok(provider.map(|provider| RemoteRelation {
-            connection,
+            source,
             relation,
             view: kind == Some(TableType::View),
             columns: provider
@@ -342,7 +342,7 @@ impl Sources<'_> {
         }))
     }
 
-    /// The AWS profile names this machine's own configuration defines — what the connection
+    /// The AWS profile names this machine's own configuration defines — what the data source
     /// editor's **Named profile** picker offers (W7 · 03). See `store::s3::aws_profiles`; no
     /// profile's *contents* are read.
     ///

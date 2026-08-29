@@ -31,11 +31,11 @@ use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick}
 use super::entry::watched_scan;
 use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
 use super::*;
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{ProfileTarget, ScanId};
 use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
 use crate::apps::project::views::{DropTarget, SchemasRequest};
+use crate::apps::source::SourceTarget;
 use crate::components::metrics::PROGRESS_HOLD;
 use crate::components::metrics::ROW_ACTION;
 use crate::state::ConfigStation;
@@ -64,8 +64,8 @@ fn table(name: &str, partition_cols: Vec<(String, String)>) -> TableDef {
     TableDef {
         name: name.into(),
         format: SourceFormat::Parquet,
-        connection: None,
-        sources: vec![format!("{name}.parquet")],
+        source: None,
+        paths: vec![format!("{name}.parquet")],
         partition_cols,
         origin: TableOrigin::External,
     }
@@ -80,8 +80,8 @@ fn internal(name: &str) -> TableDef {
     TableDef {
         name: name.into(),
         format: SourceFormat::Arrow,
-        connection: None,
-        sources: vec![format!(".strata/tables/{name}/")],
+        source: None,
+        paths: vec![format!(".strata/tables/{name}/")],
         partition_cols: Vec::new(),
         origin: TableOrigin::Internal,
     }
@@ -237,7 +237,7 @@ struct Handles {
     drop_target: State<Option<DropTarget>>,
     rescan: State<ScanRequest>,
     profile_target: State<Option<ProfileTarget>>,
-    editor: State<Option<ConnectionTarget>>,
+    editor: State<Option<SourceTarget>>,
     schemas: SchemasRequest,
 }
 
@@ -292,7 +292,7 @@ fn runner_shaped(
             r.provide_root_context(|| {
                 State::create(std::collections::BTreeMap::<RemoteRef, ScanId>::new())
             });
-            let editor = r.provide_root_context(|| State::create(None::<ConnectionTarget>));
+            let editor = r.provide_root_context(|| State::create(None::<SourceTarget>));
             let schemas =
                 r.provide_root_context(|| State::create(None::<String>)) as SchemasRequest;
             r.provide_root_context(|| State::create(Log::default()));
@@ -1728,15 +1728,15 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
     );
 }
 
-/// The connection half of the tree (W7 · DB-05) — what the retired Connections pane's own suite
+/// The data source half of the tree (W7 · DB-05) — what the retired Data sources pane's own suite
 /// asserted, re-expressed against the nodes that replaced it.
 ///
-/// A **database** connection can be listed no further than this without a server: `Connections::listing`
+/// A **database** data source can be listed no further than this without a server: `Sources::listing`
 /// reads the connect-time enumeration, so an unconnected database has no schemas and the node is
 /// a leaf. What its subtree looks like over a real server is
 /// `strata-engine/tests/postgres_federation.rs`, which drives the same scoped-and-tagged answer this
 /// tree reads.
-mod connections {
+mod data_sources {
     use super::*;
 
     pub fn s3(bucket: &str) -> SourceDef {
@@ -1767,29 +1767,29 @@ mod connections {
         }
     }
 
-    /// A table read **through** a connection — what an object-store node's children link to.
+    /// A table read **through** a data source — what an object-store node's children link to.
     fn over(name: &str, url: &str) -> TableDef {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
-            connection: Some(url.into()),
-            sources: vec![format!("{name}/")],
+            source: Some(url.into()),
+            paths: vec![format!("{name}/")],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }
     }
 
-    /// One connection of each kind, plus a table over the bucket so the object-store node has a
+    /// One data source of each kind, plus a table over the bucket so the object-store node has a
     /// child to link with. `lake` has answered; the database has not been asked yet.
     fn project() -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
             tables: vec![over("events", "lake")],
-            connections: vec![s3("lake"), postgres("analytics")],
+            sources: vec![s3("lake"), postgres("analytics")],
             ..Default::default()
         };
-        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-connections"));
-        p.connection_registered("lake");
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-data sources"));
+        p.source_registered("lake");
         p.table_registered(
             "events",
             TableMeta {
@@ -1806,7 +1806,7 @@ mod connections {
         (runner, handles)
     }
 
-    /// Every connection is a top-level node, badged with its provider and named by its address —
+    /// Every data source is a top-level node, badged with its provider and named by its address —
     /// both kinds, in one tree, which is the whole point of the merge. A database also carries
     /// the catalog it is addressed by, from its **def**, so a collapsed row says it without the
     /// listing a collapsed row has not fetched.
@@ -1814,9 +1814,9 @@ mod connections {
     /// Laid out wide, because the row's marks fold: the database's address is 26 characters, and
     /// at the default 300px both its badge and its catalog label are correctly given up for the
     /// name. What that fold does at width is
-    /// [`a_connection_row_folds_its_badge_before_its_address`].
+    /// [`a_data source_row_folds_its_badge_before_its_address`].
     #[test]
-    fn each_connection_is_a_node_badged_with_its_provider() {
+    fn each_source_is_a_node_badged_with_its_kind() {
         let (mut runner, _) = runner_sized(project, 460.);
         settle(&mut runner);
 
@@ -1834,12 +1834,12 @@ mod connections {
         );
     }
 
-    /// **A connection row folds on the same policy every row does**, and its mark is the catalog
+    /// **A data source row folds on the same policy every row does**, and its mark is the catalog
     /// label rather than an icon — so the plan has to budget that label's own width. Budgeting a
     /// glyph's 22px for it (the first version) ellipsized the address while the plan believed
     /// nothing more needed to fold, having already given up the badge to pay for it.
     #[test]
-    fn a_connection_row_folds_its_badge_before_its_address() {
+    fn a_source_row_folds_its_badge_before_its_address() {
         let (mut runner, _) = runner_sized(project, 460.);
         settle(&mut runner);
         assert!(shows(&runner, "PG"), "a wide pane keeps the badge");
@@ -1871,16 +1871,16 @@ mod connections {
         );
         assert!(
             text_area(&runner, "test").min_y() < text_area(&runner, "lake").min_y(),
-            "the workspace comes before the connections"
+            "the workspace comes before the data sources"
         );
     }
 
     /// A refusal reaches the row as the **engine's own words**, clipped to what a tooltip holds.
-    /// The Connections pane used to show a fixed "see Problems" pointer instead; the catalog
+    /// The Data sources pane used to show a fixed "see Problems" pointer instead; the catalog
     /// rows' rule (a limit belongs to the surface that has it) is the one that survives, so both
     /// kinds of row now say as much as they can and name Problems only for the rest.
     #[test]
-    fn a_refused_connection_carries_the_engines_reason() {
+    fn a_refused_source_carries_the_engines_reason() {
         let (mut runner, h) = tree();
         let mut store = h.store;
 
@@ -1888,17 +1888,15 @@ mod connections {
             !status_labels(&runner)
                 .iter()
                 .any(|l| l.contains("Received redirect")),
-            "a settled connection wears no glyph"
+            "a settled data source wears no glyph"
         );
 
-        store
-            .write_channel(ProjChan::Connections)
-            .connection_failed(
-                "lake",
-                "Received redirect without LOCATION, this normally indicates an incorrectly \
+        store.write_channel(ProjChan::Sources).source_failed(
+            "lake",
+            "Received redirect without LOCATION, this normally indicates an incorrectly \
              configured region"
-                    .into(),
-            );
+                .into(),
+        );
         settle(&mut runner);
 
         assert!(
@@ -1910,10 +1908,10 @@ mod connections {
         );
     }
 
-    /// An unanswered connection says nothing until the wait outlasts the hold — the same slot
+    /// An unanswered data source says nothing until the wait outlasts the hold — the same slot
     /// semantics the catalog rows have, and now literally the same hook.
     #[test]
-    fn an_unanswered_connection_states_nothing_until_the_hold_expires() {
+    fn an_unanswered_source_states_nothing_until_the_hold_expires() {
         let (mut runner, _) = tree();
 
         assert!(
@@ -1930,7 +1928,7 @@ mod connections {
         );
     }
 
-    /// Forget sets the shared confirm slot by the connection's **URL**, and says which kind of
+    /// Forget sets the shared confirm slot by the data source's **URL**, and says which kind of
     /// thing it is — the confirm's copy turns on that, and a database's line must not promise
     /// nothing in the *bucket* is deleted.
     #[test]
@@ -1938,20 +1936,20 @@ mod connections {
         let (mut runner, h) = tree();
 
         right_click_row(&mut runner, "lake");
-        click_text(&mut runner, "Forget connection");
+        click_text(&mut runner, "Forget data source");
         assert_eq!(
             *h.drop_target.peek(),
-            Some(DropTarget::Connection {
+            Some(DropTarget::Source {
                 name: "lake".into(),
                 mode: SourceMode::Store
             })
         );
 
         right_click_row(&mut runner, "db.internal:5432/analytics");
-        click_text(&mut runner, "Forget connection");
+        click_text(&mut runner, "Forget data source");
         assert_eq!(
             *h.drop_target.peek(),
-            Some(DropTarget::Connection {
+            Some(DropTarget::Source {
                 name: "analytics".into(),
                 mode: SourceMode::Catalog
             })
@@ -1964,21 +1962,21 @@ mod connections {
     /// draws every form from what its kind declared. Asserted by what the press *does*, because
     /// the slot is the whole contract.
     #[test]
-    fn edit_asks_for_the_editor_by_the_connections_name() {
+    fn edit_asks_for_the_editor_by_the_sources_name() {
         let (mut runner, h) = tree();
 
         right_click_row(&mut runner, "db.internal:5432/analytics");
-        click_text(&mut runner, "Edit connection");
+        click_text(&mut runner, "Edit data source");
         assert_eq!(
             *h.editor.peek(),
-            Some(ConnectionTarget::Edit("analytics".into()))
+            Some(SourceTarget::Edit("analytics".into()))
         );
 
         right_click_row(&mut runner, "lake");
-        click_text(&mut runner, "Edit connection");
+        click_text(&mut runner, "Edit data source");
         assert_eq!(
             *h.editor.peek(),
-            Some(ConnectionTarget::Edit("lake".into())),
+            Some(SourceTarget::Edit("lake".into())),
             "and a bucket opens the editor too, on the same terms"
         );
     }
@@ -1995,7 +1993,7 @@ mod connections {
         assert_eq!(
             *h.schemas.peek(),
             Some("analytics".into()),
-            "the picker is asked for by the connection's name"
+            "the picker is asked for by the data source's name"
         );
 
         right_click_row(&mut runner, "lake");
@@ -2006,15 +2004,15 @@ mod connections {
         );
     }
 
-    /// The ⋮ opens the same menu as a right-click, on a connection row too — the two triggers
+    /// The ⋮ opens the same menu as a right-click, on a data source row too — the two triggers
     /// share one builder so they cannot drift.
     #[test]
     fn the_actions_button_opens_the_same_menu_as_a_right_click() {
         let (mut runner, _) = tree();
 
         press_row_actions(&mut runner, "lake");
-        assert!(shows(&runner, "Edit connection"));
-        assert!(shows(&runner, "Forget connection"));
+        assert!(shows(&runner, "Edit data source"));
+        assert!(shows(&runner, "Forget data source"));
     }
 
     /// An object-store node opens onto the workspace defs reading through it, as **links** — and
@@ -2030,7 +2028,7 @@ mod connections {
         let link = text_area(&runner, "events");
         assert!(
             link.min_y() > text_area(&runner, "lake").min_y(),
-            "the link sits under the connection"
+            "the link sits under the data source"
         );
 
         click_text(&mut runner, "events");
@@ -2076,9 +2074,9 @@ mod connections {
 
     /// **A node kept by a descendant match opens itself.** Keeping the container and then hiding
     /// the thing that saved it is worse than not keeping it: the user types a table name and gets
-    /// a collapsed connection row with no indication of which of its children matched.
+    /// a collapsed data source row with no indication of which of its children matched.
     ///
-    /// Connections start collapsed, so this is the only way a filter reaches them at all.
+    /// Data sources start collapsed, so this is the only way a filter reaches them at all.
     /// `events` is both a workspace table and the bucket's link to it, so this counts the runs
     /// rather than asking whether the name is on screen at all.
     fn drawn(runner: &TestingRunner, text: &str) -> usize {
@@ -2180,10 +2178,10 @@ mod connections {
         assert!(!shows(&runner, "events"), "and put away again afterwards");
     }
 
-    /// A filter narrows a connection away when neither it nor anything under it matched — the
+    /// A filter narrows a data source away when neither it nor anything under it matched — the
     /// tree's general rule, where the workspace's three groups are the stated exception.
     #[test]
-    fn a_filter_narrows_connections_away_but_keeps_the_workspace_groups() {
+    fn a_filter_narrows_sources_away_but_keeps_the_workspace_groups() {
         let (mut runner, h) = tree();
         let mut filter = h.filter;
 
@@ -2202,27 +2200,27 @@ mod connections {
         );
     }
 
-    /// A project with no connections says what one is for and offers to add one. The header's `+`
-    /// is the same gesture and the palette's *New connection…* is the third, which is what lets
+    /// A project with no data sources says what one is for and offers to add one. The header's `+`
+    /// is the same gesture and the palette's *New data source…* is the third, which is what lets
     /// the header control fold under pressure.
     #[test]
-    fn an_empty_project_offers_to_add_a_connection() {
-        fn no_connections() -> ProjectState {
+    fn an_empty_project_offers_to_add_a_source() {
+        fn no_sources() -> ProjectState {
             ProjectState::from_defs(
                 ProjectDefs {
                     name: "test".into(),
                     ..Default::default()
                 },
-                PathBuf::from("/tmp/strata-tree-no-connections"),
+                PathBuf::from("/tmp/strata-tree-no-data sources"),
             )
         }
 
-        let (mut runner, h) = runner_over(no_connections);
+        let (mut runner, h) = runner_over(no_sources);
         settle(&mut runner);
 
-        assert!(shows(&runner, "Add a connection"));
-        click_text(&mut runner, "Add a connection");
-        assert_eq!(*h.editor.peek(), Some(ConnectionTarget::New));
+        assert!(shows(&runner, "Add a data source"));
+        click_text(&mut runner, "Add a data source");
+        assert_eq!(*h.editor.peek(), Some(SourceTarget::New));
     }
 }
 
@@ -2298,16 +2296,16 @@ mod virtualization {
                 .map(|i| table(&format!("t{i:04}"), vec![]))
                 .collect();
             let mut last = table("zz_last", vec![]);
-            last.connection = Some("lake".into());
+            last.source = Some("lake".into());
             tables.push(last);
             let defs = ProjectDefs {
                 name: "test".into(),
                 tables,
-                connections: vec![connections::s3("lake")],
+                sources: vec![data_sources::s3("lake")],
                 ..Default::default()
             };
             let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-jump"));
-            p.connection_registered("lake");
+            p.source_registered("lake");
             p
         }
 
@@ -2364,7 +2362,7 @@ fn the_tree_lays_out_within_its_panel_at_stub_width() {
 /// **The remote-relation gestures** (DB-06) — the statements they compose.
 ///
 /// Unit tests rather than driven ones, and that is a limit of the fixture rather than a choice: a
-/// relation row exists only while `Connections::listing` answers, and that answer is the connect-time
+/// relation row exists only while `Sources::listing` answers, and that answer is the connect-time
 /// enumeration held beside a live pool, so the rendered pane cannot reach one without a server.
 /// What a real server does with these names is
 /// `strata-engine/tests/postgres_federation.rs`, which runs the same

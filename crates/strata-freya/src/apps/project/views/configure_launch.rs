@@ -20,7 +20,7 @@ use crate::apps::configure::{ConfigureLaunch, ConfigureTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{use_catalog, use_catalog_rescan, ProjChan, ProjectState};
 use crate::apps::project::use_report;
-use crate::apps::project::views::ConnectionRequest;
+use crate::apps::project::views::SourceRequest;
 use crate::platform::{open_configure, Subtree};
 use crate::state::AppCtx;
 
@@ -41,7 +41,7 @@ impl Component for ConfigureLauncher {
         let rescan = use_catalog_rescan();
         let catalog = use_catalog();
         let subtree = use_consume::<Subtree>();
-        let connections = use_consume::<ConnectionRequest>();
+        let editor = use_consume::<SourceRequest>();
         let platform = use_hook(Platform::get);
 
         use_side_effect(move || {
@@ -60,7 +60,7 @@ impl Component for ConfigureLauncher {
                     catalog,
                     engine: engine.clone(),
                     report,
-                    connections,
+                    editor,
                 },
             );
         });

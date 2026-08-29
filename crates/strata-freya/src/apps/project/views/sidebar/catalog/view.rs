@@ -19,18 +19,18 @@
 use freya::prelude::*;
 use freya::radio::{use_radio, Radio};
 
-use super::connection::{
-    add_connection_row, connection_row, link_row, rel_group_row, relation_note_row, relation_row,
-    schema_row,
-};
 use super::entry::{column_row, entry_row, saved_query_row};
-use super::menu::{use_catalog_actions, use_connection_actions, CatalogActions, ConnectionActions};
+use super::menu::{use_catalog_actions, use_source_actions, CatalogActions, SourceActions};
 use super::node::{Node, NodeKind};
 use super::row::{mono_advance, use_status, StatusMark};
+use super::source::{
+    add_source_row, link_row, rel_group_row, relation_note_row, relation_row, schema_row,
+    source_row,
+};
 use super::workspace::{group_row, no_queries_row, workspace_row};
 use super::{CatalogTheme, TreeCtx};
 use crate::apps::project::state::{use_catalog_selection, CatalogSelection, Chan, SessionState};
-use crate::apps::project::views::ConnectionRequest;
+use crate::apps::project::views::SourceRequest;
 use crate::components::type_palette::{type_palette, TypePaletteTheme};
 
 /// What a row's scope resolved before it knew which row it was.
@@ -41,19 +41,19 @@ pub struct RowCtx {
     pub tree: TreeCtx,
     /// The workspace rows' menus and the TABLES group's `+`.
     pub catalog: CatalogActions,
-    /// A connection row's Edit / Schemas… / Forget.
-    pub connections: ConnectionActions,
+    /// A data source row's Edit / Schemas… / Forget.
+    pub sources: SourceActions,
     /// The inspected column, which a column row both reads and writes.
     pub selection: CatalogSelection,
     /// The window's layout, so selecting a column can reveal the inspector.
     pub layout: Radio<SessionState, Chan>,
-    /// Where the empty state's press asks for the connection editor.
-    pub editor: ConnectionRequest,
+    /// Where the empty state's press asks for the data source editor.
+    pub editor: SourceRequest,
     /// The width of this row's measured run, for the rows that fold (see `row::fold_plan`).
     ///
     /// A fact about the **slot**, which is why it may be shared with whatever scrolls into it. Not
     /// quite a constant one, since the run is what the row's indent leaves and a slot's depth
-    /// changes: a slot that hands a depth-0 connection row to a depth-2 entry folds on the old
+    /// changes: a slot that hands a depth-0 data source row to a depth-2 entry folds on the old
     /// width for the pass before `on_sized` reports the new one. The fold is a chrome decision on a
     /// row about to be re-laid-out either way, so the frame it costs is the honest price of not
     /// re-deriving the layout here.
@@ -81,19 +81,17 @@ impl Component for TreeRow {
             NodeKind::Entry(entry) => {
                 (Some(at.path.as_str()), entry.waiting, entry.problem.clone())
             }
-            NodeKind::Connection(conn) => {
-                (Some(at.path.as_str()), conn.waiting, conn.problem.clone())
-            }
+            NodeKind::Source(conn) => (Some(at.path.as_str()), conn.waiting, conn.problem.clone()),
             _ => (None, false, None),
         };
 
         let cx = RowCtx {
             tree: use_consume::<TreeCtx>(),
             catalog: use_catalog_actions(),
-            connections: use_connection_actions(),
+            sources: use_source_actions(),
             selection: use_catalog_selection(),
             layout: use_radio::<SessionState, Chan>(Chan::Layout),
-            editor: use_consume::<ConnectionRequest>(),
+            editor: use_consume::<SourceRequest>(),
             measured: use_state(|| f32::INFINITY),
             status: use_status(owner, waiting, problem),
             advance: mono_advance(),
@@ -108,13 +106,13 @@ impl Component for TreeRow {
             NodeKind::Entry(entry) => entry_row(&at, entry, &cx),
             NodeKind::Column(column) => column_row(&at, column, &cx),
             NodeKind::SavedQuery { id, name } => saved_query_row(&at, *id, name, &cx),
-            NodeKind::Connection(connection) => connection_row(&at, connection, &cx),
+            NodeKind::Source(source) => source_row(&at, source, &cx),
             NodeKind::Link { name } => link_row(&at, name, &cx),
             NodeKind::Schema { name, missing } => schema_row(&at, name, *missing, &cx),
             NodeKind::RelGroup { views, count } => rel_group_row(&at, *views, *count, &cx),
             NodeKind::Relation(relation) => relation_row(&at, relation, &cx),
             NodeKind::RelationNote { text, problem } => relation_note_row(&at, text, *problem, &cx),
-            NodeKind::AddConnection => add_connection_row(&at, &cx),
+            NodeKind::AddSource => add_source_row(&at, &cx),
         };
 
         rect().width(Size::fill()).vertical().children(body)

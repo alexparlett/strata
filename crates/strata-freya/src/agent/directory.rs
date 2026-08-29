@@ -154,7 +154,7 @@ impl AgentDirectory {
             .map(take)
     }
 
-    /// Tell **every** window a fact. An agent's connection is not project-scoped: it may
+    /// Tell **every** window a fact. An agent's data source is not project-scoped: it may
     /// hold query sessions in several windows and none of them outlives it.
     fn notify_all(&self, notice: impl Fn() -> AgentNotice) {
         for window in self.windows.lock().unwrap().iter() {
@@ -627,7 +627,7 @@ mod tests {
         );
     }
 
-    /// A connection ending is broadcast to **every** window, because an agent may hold query
+    /// A data source ending is broadcast to **every** window, because an agent may hold query
     /// sessions in several and none of them outlives it. Sync and non-blocking, which is what
     /// a `Drop` on the transport's runtime can afford.
     #[test]

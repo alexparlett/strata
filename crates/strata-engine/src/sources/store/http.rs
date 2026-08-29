@@ -1,10 +1,10 @@
-//! **A plain HTTP origin.** The store over a whole origin URL, which is what an HTTP connection's
+//! **A plain HTTP origin.** The store over a whole origin URL, which is what an HTTP data source's
 //! address is.
 //!
 //! The registrant with no authorisation at all, and the one exempt from the reachability probe:
 //! its store lists over WebDAV `PROPFIND`, which most file origins do not implement (MinIO
-//! included), so probing one would refuse working connections for a verb their server was never
-//! going to answer. An HTTP connection names a whole origin and its table names the object, so the
+//! included), so probing one would refuse working data sources for a verb their server was never
+//! going to answer. An HTTP data source names a whole origin and its table names the object, so the
 //! table's own registration tests its reachability.
 //!
 //! Its address is already a URL, so the scheme it was typed with is the answer to whether plain

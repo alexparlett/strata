@@ -121,7 +121,7 @@ fn new_session() -> SessionState {
 }
 
 /// Initialise this window's Project store from the `defs` [`open_project`] already loaded,
-/// and drive engine registration of them (connections, then tables, then views). Also
+/// and drive engine registration of them (data sources, then tables, then views). Also
 /// provides the window's [`Catalog`](super::catalog::Catalog) state and [`CatalogRescan`]
 /// counter, since this is where the scans run. Call once in the window root, after the
 /// engine is in context.
@@ -203,7 +203,7 @@ enum ScanWork {
 /// plans captured the old provider by `Arc` and would go on scanning the files the pass just
 /// replaced, with the old schema.
 ///
-/// **Connections belong to `All` only** (W7). A table's Refresh does not re-connect: the store
+/// **Data sources belong to `All` only** (W7). A table's Refresh does not re-connect: the store
 /// its bucket needs is already registered from the open, and re-resolving a credential chain
 /// per row Refresh would put a network round trip behind a gesture that is about one table's
 /// files. The case that needs a re-connect — the user fixes a region, or runs `aws sso login`
@@ -212,15 +212,10 @@ enum ScanWork {
 /// Takes the state rather than the station, because it only reads it — and because that is what
 /// lets the name reconciliation below be pinned by a test that needs no window.
 fn plan_scan(engine: &EngineCtx, p: &ProjectState, scope: &ScanScope) -> ScanWork {
-    let known = SourceDefs::of(
-        &p.connections
-            .iter()
-            .map(|c| c.def.clone())
-            .collect::<Vec<_>>(),
-    );
+    let known = SourceDefs::of(&p.sources.iter().map(|c| c.def.clone()).collect::<Vec<_>>());
     match scope {
         ScanScope::All => ScanWork::Catalog(CatalogSpec {
-            connections: p.connections.iter().map(|c| c.def.clone()).collect(),
+            sources: p.sources.iter().map(|c| c.def.clone()).collect(),
             tables: p
                 .tables
                 .iter()
@@ -258,9 +253,7 @@ fn plan_scan(engine: &EngineCtx, p: &ProjectState, scope: &ScanScope) -> ScanWor
 fn reset_rows(mut station: RadioStation<ProjectState, ProjChan>, work: &ScanWork) {
     match work {
         ScanWork::Catalog(_) => {
-            station
-                .write_channel(ProjChan::Connections)
-                .reload_connections();
+            station.write_channel(ProjChan::Sources).reload_sources();
             station.write_channel(ProjChan::Tables).reload_tables();
             station.write_channel(ProjChan::Views).reload_views();
         }
@@ -484,23 +477,23 @@ fn settle_reg(
     outcome: RegOutcome,
 ) {
     match outcome {
-        RegOutcome::Connection { name, result } => match result {
+        RegOutcome::Source { name, result } => match result {
             Ok(()) => {
                 log_event(log, LogLevel::Ok, format!("Connected '{name}'"));
                 station
-                    .write_channel(ProjChan::Connections)
-                    .connection_registered(&name);
+                    .write_channel(ProjChan::Sources)
+                    .source_registered(&name);
             }
             Err(e) => {
                 tracing::error!("connect '{name}' failed: {e}");
                 log_event(
                     log,
                     LogLevel::Error,
-                    format!("Connection '{name}' failed: {e}"),
+                    format!("Data source '{name}' failed: {e}"),
                 );
                 station
-                    .write_channel(ProjChan::Connections)
-                    .connection_failed(&name, e);
+                    .write_channel(ProjChan::Sources)
+                    .source_failed(&name, e);
             }
         },
         RegOutcome::Table { name, result } => match result {
@@ -905,8 +898,8 @@ mod tests {
                 tables: vec![TableDef {
                     name: "MyTable".into(),
                     format: SourceFormat::Arrow,
-                    connection: None,
-                    sources: vec![".strata/tables/mytable/".into()],
+                    source: None,
+                    paths: vec![".strata/tables/mytable/".into()],
                     partition_cols: Vec::new(),
                     origin: TableOrigin::Internal,
                 }],
@@ -1010,8 +1003,8 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::from_name("csv"),
-            connection: None,
-            sources: vec!["t.csv".into()],
+            source: None,
+            paths: vec!["t.csv".into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }

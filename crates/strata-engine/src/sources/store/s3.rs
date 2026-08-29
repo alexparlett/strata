@@ -46,7 +46,7 @@ const STATIC: &[&str] = &["keys"];
 /// set.
 pub const SECRET_KEY: &str = "secret_access_key";
 pub const SESSION_TOKEN: &str = "session_token";
-/// What a static-credentials connection reads from the environment when this machine's keystore
+/// What a static-credentials data source reads from the environment when this machine's keystore
 /// holds nothing — AWS's own conventions, stated here because they are this source's vocabulary.
 const SECRET_ENV: &[&str] = &["AWS_SECRET_ACCESS_KEY"];
 const TOKEN_ENV: &[&str] = &["AWS_SESSION_TOKEN"];
@@ -54,7 +54,7 @@ const TOKEN_ENV: &[&str] = &["AWS_SESSION_TOKEN"];
 const BUCKET: Option<&str> = Some("BUCKET");
 const AUTH_GROUP: Option<&str> = Some("AUTHENTICATION");
 
-/// What an S3 connection is described by, beyond the client options every store shares.
+/// What an S3 data source is described by, beyond the client options every store shares.
 const OWN: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
@@ -214,7 +214,7 @@ impl DataSource for S3 {
         let value = |key: &str| def.config.get(key).map(|v| v.trim()).unwrap_or_default();
         let region = value("region");
         if region.is_empty() {
-            return Err("This S3 connection needs a region.".into());
+            return Err("This S3 data source needs a region.".into());
         }
         let mut builder = AmazonS3Builder::new()
             .with_bucket_name(def.setting("address"))
@@ -234,21 +234,21 @@ impl DataSource for S3 {
             "profile" => {
                 let profile = value("profile");
                 if profile.is_empty() {
-                    return Err("This S3 connection needs a profile name.".into());
+                    return Err("This S3 data source needs a profile name.".into());
                 }
                 builder.with_credentials(profile_credentials(region, profile).await?)
             }
             "keys" => {
                 let id = value("access_key_id");
                 if id.is_empty() {
-                    return Err("This S3 connection needs an access key id.".into());
+                    return Err("This S3 data source needs an access key id.".into());
                 }
                 let secret = read(&secrets, def, SECRET_KEY, SECRET_ENV)
                     .await?
                     .ok_or_else(|| {
                         let request = secret_slot(def, SECRET_KEY, SECRET_ENV);
                         format!(
-                            "This S3 connection has no secret access key on this machine. {}",
+                            "This S3 data source has no secret access key on this machine. {}",
                             request.fixes()
                         )
                     })?;
@@ -280,7 +280,7 @@ impl DataSource for S3 {
     }
 }
 
-/// Read one of this connection's secrets **off the render-free worker**, the way every keystore
+/// Read one of this data source's secrets **off the render-free worker**, the way every keystore
 /// read is: the store is a blocking platform call, and `connect` is on the engine's runtime.
 ///
 /// `Ok(None)` for a key nothing is stored for, which is the ordinary case for an optional one.
@@ -297,7 +297,7 @@ async fn read(
         .map_err(|e| format!("Reading a secret failed: {e}"))?
 }
 
-/// Every profile named in this machine's own AWS configuration, sorted — what the connection
+/// Every profile named in this machine's own AWS configuration, sorted — what the data source
 /// editor's **Named profile** picker offers (W7 · 03, spec §6).
 ///
 /// A *name*, and nothing else: this reads the section headers of `~/.aws/config` and
@@ -312,7 +312,7 @@ async fn read(
 ///
 /// **Empty means empty**, and a parse failure is empty too. There is nothing to report: the file
 /// belongs to the user's own AWS setup rather than to Strata, and the editor says so where the
-/// list would have been. What the *connection* does with a name it cannot resolve is
+/// list would have been. What the *data source* does with a name it cannot resolve is
 /// [`profile_credentials`]'s answer, which is the one that reaches a row.
 pub async fn aws_profiles() -> Vec<String> {
     let profiles = aws_config::profile::load(&Fs::real(), &Env::real(), &Default::default(), None)
@@ -339,7 +339,7 @@ pub async fn aws_profiles() -> Vec<String> {
 /// already do" is not something it can express.
 ///
 /// The region is handed to the SDK as well as to the store builder: a profile may name a
-/// different one, and the connection's own region is the answer the user gave.
+/// different one, and the data source's own region is the answer the user gave.
 async fn ambient_credentials(region: &str) -> Result<AwsCredentialProvider, String> {
     let config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.to_string()))
@@ -359,7 +359,7 @@ async fn ambient_credentials(region: &str) -> Result<AwsCredentialProvider, Stri
 /// `DefaultCredentialsChain::build` is unconditionally `Environment → Profile → WebIdentity →
 /// ECS → IMDS`. So a Strata launched from a shell exporting `AWS_ACCESS_KEY_ID` signed as the
 /// *environment* identity while the row showed the profile the user had chosen — Ambient and
-/// Profile were the same connection wherever ambient credentials existed, and a misspelled
+/// Profile were the same data source wherever ambient credentials existed, and a misspelled
 /// profile name still registered green, which is precisely the state the probe below exists to
 /// catch. Selecting a profile has to mean that profile is the only thing consulted.
 ///
@@ -444,7 +444,7 @@ mod tests {
 
     use super::*;
 
-    /// One S3 connection over `name`, signed by the named profile `readonly`.
+    /// One S3 data source over `name`, signed by the named profile `readonly`.
     fn bucket(name: &str) -> SourceDef {
         SourceDef {
             kind: S3::NAME.into(),

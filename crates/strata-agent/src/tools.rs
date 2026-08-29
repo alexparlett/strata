@@ -777,7 +777,7 @@ impl<H: Host> StrataTools<H> {
     /// The project's catalog, plus the database catalogs its connections registered.
     ///
     /// **The entries are the store's defs and only those** (introspection
-    /// would hide exactly the failed rows an agent most needs to see). A database connection has
+    /// would hide exactly the failed rows an agent most needs to see). A connection has
     /// no defs to show — the whole catalog comes through the connection — so listing its
     /// relations here would mean an unbounded remote enumeration inside a paged listing of
     /// something else. Naming the catalogs is the honest middle: the answer says the databases
@@ -794,7 +794,7 @@ impl<H: Host> StrataTools<H> {
         ))
     }
 
-    /// One table or view in full — **or one relation in a database connection's catalog**.
+    /// One table or view in full — **or one relation in a connection's catalog**.
     ///
     /// The store is asked first and wins: a def is the project's own row, failure states included,
     /// and only a def can be addressed by a bare name. A **qualified** name the store has no row
@@ -822,8 +822,8 @@ impl<H: Host> StrataTools<H> {
                     .map_err(|e| AgentError::Query(e.to_string()))?;
                 match remote {
                     Some(remote) => Described::Remote {
-                        name: format!("{}.{}", remote.connection, remote.relation),
-                        connection: remote.connection,
+                        name: format!("{}.{}", remote.source, remote.relation),
+                        source: remote.source,
                         view: remote.view,
                         columns: remote.columns,
                     },
@@ -1153,7 +1153,7 @@ impl<H: Host> StrataTools<H> {
     /// The answer states its total; a large catalog is paged (50 per page, 'page' reads on)
     /// and 'matching' narrows by name substring. A view row carries a one-line SQL preview;
     /// describe_table returns the full text. 'databases' names the catalogs the project's
-    /// database connections registered: their relations are not entries here, are read with a
+    /// connections registered: their relations are not entries here, are read with a
     /// three-part name ('pg.public.orders'), are listed by SHOW TABLES, and are described one
     /// at a time by describe_table.
     #[tool(name = "list_tables", annotations(read_only_hint = true))]
@@ -1181,7 +1181,7 @@ impl<H: Host> StrataTools<H> {
     /// likewise one row, with 'matched_keys' saying how many fields it stands for. Every field
     /// name here is spelled the way the file spells it, and SQL lowercases an unquoted
     /// identifier by default, so a mixed-case name has to be quoted to resolve. A
-    /// three-part name describes a relation in a database connection's catalog instead: its
+    /// three-part name describes a relation in a connection's catalog instead: its
     /// columns and types, and the connection it is in, with no def facts because it has none.
     #[tool(name = "describe_table", annotations(read_only_hint = true))]
     async fn describe_table_tool(
@@ -1369,7 +1369,7 @@ mod tests {
                 paths: vec![root.join("people.csv").display().to_string()],
                 format: SourceFormat::from_name("csv"),
                 partitions: Vec::new(),
-                connection: None,
+                source: None,
                 internal: false,
             })
             .await
@@ -1591,7 +1591,7 @@ mod tests {
         assert!(message.contains("'pg.public.orders'"), "{message}");
     }
 
-    /// A project with no database connection says so by omission, and the field is what a
+    /// A project with no connection says so by omission, and the field is what a
     /// later one will appear in — pinned so the listing cannot start inventing catalogs.
     #[tokio::test]
     async fn list_tables_names_no_databases_when_there_are_none() {
@@ -2074,7 +2074,7 @@ mod tests {
                     paths: vec![root.join("people.csv").display().to_string()],
                     format: SourceFormat::from_name("csv"),
                     partitions: Vec::new(),
-                    connection: None,
+                    source: None,
                     internal: false,
                 })
                 .await

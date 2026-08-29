@@ -1,5 +1,5 @@
 //! The **data-sources tree** (DB-05) — one tree answering "what data do I have", replacing both
-//! the flat TABLES · VIEWS · QUERIES catalog pane and the Connections pane beside it.
+//! the flat TABLES · VIEWS · QUERIES catalog pane and the Data sources pane beside it.
 //!
 //! ## What the top level is
 //!
@@ -8,7 +8,7 @@
 //! internal tables, views and saved queries all live under it, and so does a **cross-source** view
 //! joining workspace files to `pg.…`, since a node for a database groups by what it *defines*
 //! rather than where the bytes live (the DataGrip/FDW precedent — a Postgres view over a foreign
-//! table lives under Postgres). Then one node per connection: a **database** opens onto its enabled
+//! table lives under Postgres). Then one node per data source: a **database** opens onto its enabled
 //! schemas, and an **object store** onto the workspace defs that read through it, as links rather
 //! than a second editable copy of those rows.
 //!
@@ -27,17 +27,17 @@
 //! each ([`Reg`](crate::apps::project::state::Reg)). **Not** an introspection query against
 //! DataFusion, which would be wrong where it matters most: a def whose registration *failed* has no
 //! engine presence at all yet is exactly the row the tree must keep showing. Everything under a
-//! database connection is the opposite — there are no defs, because a database answers for itself,
-//! so it is [`Connections::listing`](strata_engine::Connections::listing), which reads the
+//! data source is the opposite — there are no defs, because a database answers for itself,
+//! so it is [`Sources::listing`](strata_engine::Sources::listing), which reads the
 //! connect-time enumeration held beside the pool rather than the network. A ↻ re-connects, and
 //! *that* is the refresh.
 //!
-//! **The two are joined once, before the walk** ([`assemble`]), so every connection row is drawn
+//! **The two are joined once, before the walk** ([`assemble`]), so every data source row is drawn
 //! from the same moment. It is a `use_side_effect_value` rather than a line in the render, which
 //! is what keeps the join off the keystroke path: a schema's relation list is the *server's* and
 //! can be enormous, and this re-runs only when one of the three things it reads moves — `Tables`,
-//! `Connections`, the catalog generation. **Value**, not a plain effect writing a slot: it
-//! computes once at mount, so there is no pass where the pane has a project full of connections
+//! `Sources`, the catalog generation. **Value**, not a plain effect writing a slot: it
+//! computes once at mount, so there is no pass where the pane has a project full of data sources
 //! and nothing to draw for them. The walk it feeds reaches no engine at all, which is what makes
 //! it the plain function of its inputs it is supposed to be.
 //!
@@ -47,7 +47,7 @@
 //! then `Tables`, `Views` and `Queries`. That is what virtualizing costs: one registration landing
 //! re-walks the tree, where the nested pane woke the one group it belonged to. The list is
 //! exhaustive on purpose, because a walk input nothing subscribes to is a row that goes stale until
-//! something unrelated happens to wake the pane. `Connections` is subscribed by the **join** rather
+//! something unrelated happens to wake the pane. `Sources` is subscribed by the **join** rather
 //! than here, beside the catalog epoch and `Tables`, because those three are exactly what the join
 //! reads — and a write to any of them has to re-run it, not merely redraw what it last produced.
 //!
@@ -80,13 +80,13 @@
 //! would then be remembered about the wrong one.
 
 mod columns;
-mod connection;
 mod entry;
 #[cfg(test)]
 mod interaction;
 mod menu;
 mod node;
 mod row;
+mod source;
 mod view;
 mod workspace;
 
@@ -138,7 +138,7 @@ define_theme!(
         internal_color: Color,
         view_color: Color,
         query_color: Color,
-        /// A connection's provider badge (`S3` · `PG`), and the workspace node's own glyph.
+        /// A data source's provider badge (`S3` · `PG`), and the workspace node's own glyph.
         provider_color: Color,
         part_color: Color,
         part_background: Color,
@@ -163,7 +163,7 @@ const BODY_PAD: Gaps = Gaps::new(SP_3, SP_3, SP_4, SP_3);
 /// database on every walk.
 ///
 /// The filter spans **names at any depth the tree can enumerate for free** — defs, saved queries,
-/// connections, schemas and relations — and deliberately not columns: a column name surfacing its
+/// data sources, schemas and relations — and deliberately not columns: a column name surfacing its
 /// table was never this filter's job, and a remote relation's columns are an introspection the pane
 /// will not run to answer a keystroke.
 pub fn matches(name: &str, needle: &str) -> bool {
@@ -242,7 +242,7 @@ fn stranded_rename(nodes: &[Node], renaming: Option<Uuid>) -> Option<Uuid> {
 }
 
 /// The node paths open on a fresh pane: the workspace and its three groups, so a project opens on
-/// its own catalog exactly as the flat pane did. Connections open on a press, because a database's
+/// its own catalog exactly as the flat pane did. Data sources open on a press, because a database's
 /// schemas are a listing and the user came here for their tables.
 fn seeded() -> HashSet<String> {
     seeded_paths().into_iter().collect()
@@ -300,7 +300,7 @@ impl Component for Catalog {
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let queries = use_radio::<ProjectState, ProjChan>(ProjChan::Queries);
-        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+        let sources = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         drop(meta.read());
         drop(views.read());
         drop(queries.read());
@@ -312,7 +312,7 @@ impl Component for Catalog {
 
         let sources = use_side_effect_value(move || {
             drop(catalog.read());
-            drop(connections.read());
+            drop(sources.read());
             assemble(&tables.read(), &engine.sources().listing())
         });
 

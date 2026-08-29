@@ -1,9 +1,9 @@
-//! **A connection, against a real S3 server** (W7) — the half no unit test can reach.
+//! **A data source, against a real S3 server** (W7) — the half no unit test can reach.
 //!
 //! `engine::store`'s unit tests stop at the registry: they prove a `SourceDef` produces a store
 //! under the right key, never that anything can be *read* through it. So this drives MinIO in a
-//! container and asserts the whole chain — connection → registered object store → a table def
-//! naming that connection → `register_external`'s listing and inference → rows. It is the only
+//! container and asserts the whole chain — data source → registered object store → a table def
+//! naming that data source → `register_external`'s listing and inference → rows. It is the only
 //! thing that exercises **`SigV4` signing through the `aws-config` bridge**, where a server that
 //! verifies signatures is the only witness that the credential triple is right.
 //!
@@ -46,20 +46,20 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
 
-/// The bucket the fixture is seeded into, and the connection's authority.
+/// The bucket the fixture is seeded into, and the data source's authority.
 const BUCKET: &str = "strata-lake";
 
-/// What the two connections are **called** — the name a table def carries, and what
+/// What the two data sources are **called** — the name a table def carries, and what
 /// `table_spec` resolves back to a store prefix. Written down rather than minted, so the
 /// composition under test is driven by the same string a user would have typed.
 const LAKE: &str = "lake";
 const ORIGIN: &str = "origin";
 /// MinIO's own root credentials (`testcontainers_modules::minio` starts it with the image
-/// defaults). The test puts these in the **environment**, which is where an ambient connection
+/// defaults). The test puts these in the **environment**, which is where an ambient data source
 /// looks — see [`ambient`].
 const KEY_ID: &str = "minioadmin";
 const SECRET: &str = "minioadmin";
-/// MinIO does not care which region it is told, but S3 connections must name one
+/// MinIO does not care which region it is told, but S3 data sources must name one
 /// (`engine::store` refuses a blank one), so the test names the conventional default.
 const REGION: &str = "us-east-1";
 
@@ -99,14 +99,14 @@ const CAPACITY_RETRY_GAP: Duration = Duration::from_secs(10);
 /// a generic `CreateContainer` either way. Two spellings, one fault: Testcontainers Cloud
 /// answers `Failed to get a worker: ErrValidator: too many concurrent requests` when it can
 /// answer at all, and drops the response mid-flight (`hyper` calls that `IncompleteMessage`)
-/// when it cannot. Anything else — no endpoint, a bad image, a refused connection — is not a
+/// when it cannot. Anything else — no endpoint, a bad image, a refused data source — is not a
 /// capacity signal and falls straight through to the panic.
 fn at_capacity(err: &impl Display) -> bool {
     let msg = err.to_string();
     msg.contains("too many concurrent requests") || msg.contains("IncompleteMessage")
 }
 
-/// A running MinIO, and the `http://` endpoint an S3 connection reaches it on.
+/// A running MinIO, and the `http://` endpoint an S3 data source reaches it on.
 ///
 /// The container is returned alongside the endpoint and must be held for the test's duration —
 /// dropping it stops the server.
@@ -187,7 +187,7 @@ async fn seed(endpoint: &str, objects: &[(&str, &str)]) {
         .expect("make the bucket world-readable");
 }
 
-/// Put MinIO's credentials where an **Ambient** connection will find them: the environment is
+/// Put MinIO's credentials where an **Ambient** data source will find them: the environment is
 /// the first arm of `aws-config`'s default chain, and it is the arm a developer's shell
 /// actually carries.
 ///
@@ -199,9 +199,9 @@ fn ambient() {
     env::set_var("AWS_SESSION_TOKEN", "");
 }
 
-/// The connection under test: S3-compatible, reached over plain HTTP at `endpoint`, signing
+/// The data source under test: S3-compatible, reached over plain HTTP at `endpoint`, signing
 /// with whatever the host's chain resolves.
-fn connection(endpoint: &str, auth: &str) -> SourceDef {
+fn source(endpoint: &str, auth: &str) -> SourceDef {
     let mut config = client_options();
     config.insert("address".into(), BUCKET.into());
     config.insert("region".into(), REGION.into());
@@ -215,7 +215,7 @@ fn connection(endpoint: &str, auth: &str) -> SourceDef {
     }
 }
 
-/// The two options both connections carry: one `object_store` must parse into a duration, and one
+/// The two options both data sources carry: one `object_store` must parse into a duration, and one
 /// it must accept as a header value.
 fn client_options() -> BTreeMap<String, String> {
     [("timeout", "30s"), ("user_agent", "strata-integration")]
@@ -225,13 +225,13 @@ fn client_options() -> BTreeMap<String, String> {
 }
 
 /// The **same server, reached as a plain HTTP origin**: no bucket, no signing, the address is the
-/// whole URL. What an `http(s)://` connection is for — a public data drop rather than a store you
+/// whole URL. What an `http(s)://` data source is for — a public data drop rather than a store you
 /// hold credentials to.
 ///
-/// It carries the same **client options** the S3 connection does, so `with_config` is proved
+/// It carries the same **client options** the S3 data source does, so `with_config` is proved
 /// through both routes into `ClientOptions`: `HttpBuilder`'s direct one here, and
 /// `AmazonS3ConfigKey::Client(..)` there.
-fn http_connection(endpoint: &str) -> SourceDef {
+fn http_source(endpoint: &str) -> SourceDef {
     let mut config = client_options();
     config.insert("address".into(), endpoint.into());
     SourceDef {
@@ -242,7 +242,7 @@ fn http_connection(endpoint: &str) -> SourceDef {
     }
 }
 
-/// A table def **as Table Config writes one over a connection** (W7 · 04): the connection's URL,
+/// A table def **as Table Config writes one over a data source** (W7 · 04): the data source's URL,
 /// and a source relative to its bucket. Composed into the spec by `register::table_spec`, which
 /// is the app's own mapping — so what registers below is the string a def really produces rather
 /// than one this test wrote out by hand.
@@ -251,15 +251,15 @@ fn http_connection(endpoint: &str) -> SourceDef {
 /// (`engine::catalog::listing_url` only adds one for a local directory, which a bucket prefix is
 /// not).
 fn known(endpoint: &str) -> SourceDefs {
-    SourceDefs::of(&[connection(endpoint, "ambient"), http_connection(endpoint)])
+    SourceDefs::of(&[source(endpoint, "ambient"), http_source(endpoint)])
 }
 
 fn table(endpoint: &str) -> TableSpec {
     let def = TableDef {
         name: "regions".into(),
         format: SourceFormat::Csv(CsvRead::default()),
-        connection: Some(LAKE.into()),
-        sources: vec!["data/".into()],
+        source: Some(LAKE.into()),
+        paths: vec!["data/".into()],
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
@@ -280,8 +280,8 @@ fn hive_table(endpoint: &str) -> TableSpec {
     let def = TableDef {
         name: "tallies".into(),
         format: SourceFormat::Csv(CsvRead::default()),
-        connection: Some(LAKE.into()),
-        sources: vec![HIVE_PREFIX.into()],
+        source: Some(LAKE.into()),
+        paths: vec![HIVE_PREFIX.into()],
         partition_cols: vec![
             ("year".into(), "Int32".into()),
             ("month".into(), "Int32".into()),
@@ -294,19 +294,19 @@ fn hive_table(endpoint: &str) -> TableSpec {
         .table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
-/// The same object over the **HTTP** connection: one file, and deliberately no trailing slash.
+/// The same object over the **HTTP** data source: one file, and deliberately no trailing slash.
 /// `object_store`'s HTTP store lists through WebDAV PROPFIND, which MinIO does not implement,
 /// so a prefix-shaped source could not be read here — a single object is what this provider is
 /// for, and it is read through `head` + `get` like any other.
 ///
-/// An HTTP connection's URL is a whole origin, so the bucket is part of the *table's* source —
+/// An HTTP data source's URL is a whole origin, so the bucket is part of the *table's* source —
 /// the same composition, over an address the provider does not supply a scheme for.
 fn http_table(endpoint: &str) -> TableSpec {
     let def = TableDef {
         name: "regions_http".into(),
         format: SourceFormat::Csv(CsvRead::default()),
-        connection: Some(ORIGIN.into()),
-        sources: vec![format!("{BUCKET}/data/regions.csv")],
+        source: Some(ORIGIN.into()),
+        paths: vec![format!("{BUCKET}/data/regions.csv")],
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
@@ -322,12 +322,12 @@ fn http_table(endpoint: &str) -> TableSpec {
 /// doc comment for why a second `#[tokio::test]` would race them).
 ///
 /// What only a live store can show. A typed `LOCATION` arrives as one composed string, so the arm
-/// has to take it apart into the pair every other path holds — the connection's URL and a
-/// bucket-relative source — land it on a connection this project actually has, compose it back
+/// has to take it apart into the pair every other path holds — the data source's URL and a
+/// bucket-relative source — land it on a data source this project actually has, compose it back
 /// through `resolve_source`, and read the objects. Everything up to that last step is asserted in
 /// `ddl::external`'s own tests; this is the step that needs a bucket.
 ///
-/// The project folder is real but empty: it is never consulted for a source over a connection, and
+/// The project folder is real but empty: it is never consulted for a source over a data source, and
 /// it is here because a def is durable and the arm refuses to write one with nowhere to put it. It
 /// is **not** cleaned up here — the engine goes on pointing at it for the phases that follow, and
 /// removing a live data root would leave a later phase spooling into a directory that is gone.
@@ -356,9 +356,9 @@ async fn typed_registration(engine: &Engine, project: &Path) {
         panic!("{report:?}");
     };
     assert_eq!(
-        (def.connection.as_deref(), def.sources.as_slice()),
+        (def.source.as_deref(), def.paths.as_slice()),
         (Some(LAKE), &["data/".to_string()][..]),
-        "the LOCATION split into the connection it names and a source relative to its bucket"
+        "the LOCATION split into the data source it names and a source relative to its bucket"
     );
     let columns: Vec<&str> = meta.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(columns, ["id", "region"], "the schema came off the objects");
@@ -465,13 +465,13 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
 
 /// **The whole chain, against a server that verifies signatures.**
 ///
-/// Connection → registered store → schema inference over a real listing → a query that returns
+/// Data source → registered store → schema inference over a real listing → a query that returns
 /// the rows. The signing is the part worth the container: `S3Auth::Ambient` resolves through
 /// `aws-config` and is wrapped by `engine::store::SdkCredentials`, so a bridge that handed over
 /// the wrong fields would produce a store that registers perfectly and then gets a 403 from
 /// every request — which is exactly the failure mode the unit tests cannot see.
 ///
-/// **One test, deliberately, rather than one per assertion.** An ambient connection reads its
+/// **One test, deliberately, rather than one per assertion.** An ambient data source reads its
 /// credentials from the process environment, and cargo runs tests in parallel threads of one
 /// process — so a second test setting a different `AWS_ACCESS_KEY_ID` races this one's and
 /// either may win. That is not hypothetical: it was two tests first, and the good path failed
@@ -479,7 +479,7 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
 /// single test are the fix that does not depend on `--test-threads=1` being remembered, and
 /// they cost one container instead of two.
 #[tokio::test]
-async fn a_table_over_a_connection_reads_through_the_object_store() {
+async fn a_table_over_a_source_reads_through_the_object_store() {
     let (_minio, endpoint) = minio().await;
     seed(
         &endpoint,
@@ -496,9 +496,9 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let engine = Engine::builder().build();
     let (ws, catalog, sources) = (engine.ws(WsId(1)), engine.catalog(), engine.sources());
     sources
-        .connect(connection(&endpoint, "ambient"))
+        .connect(source(&endpoint, "ambient"))
         .await
-        .expect("the connection registers its object store");
+        .expect("the data source registers its object store");
 
     let meta = catalog
         .register(table(&endpoint))
@@ -632,9 +632,9 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     );
 
     sources
-        .connect(http_connection(&endpoint))
+        .connect(http_source(&endpoint))
         .await
-        .expect("the HTTP connection registers its object store");
+        .expect("the HTTP data source registers its object store");
     let meta = catalog
         .register(http_table(&endpoint))
         .await
@@ -660,7 +660,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    sources.disconnect(&connection(&endpoint, "ambient").named());
+    sources.disconnect(&source(&endpoint, "ambient").named());
     let forgotten = TableSpec {
         name: "forgotten".into(),
         ..table(&endpoint)
@@ -680,7 +680,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let engine = Engine::builder().build();
     engine
         .sources()
-        .connect(connection(&endpoint, "ambient"))
+        .connect(source(&endpoint, "ambient"))
         .await
         .expect("a 403 is an authorization answer, not a description fault");
     let refused = engine

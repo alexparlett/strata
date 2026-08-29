@@ -1,4 +1,4 @@
-//! **Writing into a `PostgreSQL` connection** — the two statements DataFusion can plan against a
+//! **Writing into a `PostgreSQL` data source** — the two statements DataFusion can plan against a
 //! remote relation (`INSERT INTO pg.public.events SELECT …` and `CREATE TABLE pg.public.report AS
 //! SELECT …`), and the rollback that makes the second one safe.
 //!
@@ -49,7 +49,7 @@ fn server_relation(catalog: &PgCatalog, at: &Remote) -> String {
 }
 
 /// The sink `PostgresTableWriter` drives — `at` as the server knows it (`schema.relation`, never
-/// the catalog, which is Strata's own prefix for the connection and means nothing to Postgres),
+/// the catalog, which is Strata's own prefix for the data source and means nothing to Postgres),
 /// over `schema`.
 pub(super) fn target(
     pool: &Arc<PostgresConnectionPool>,
@@ -81,7 +81,7 @@ pub(super) fn target(
 /// same builder and go into the same schema for the same reason.
 ///
 /// The transaction is a real one rather than a `BEGIN` in a batch, because its `Drop` is the
-/// rollback: a statement failing halfway through a batched `BEGIN` would hand a connection back
+/// rollback: a statement failing halfway through a batched `BEGIN` would hand a data source back
 /// to the pool inside an aborted transaction.
 pub(super) async fn create(
     catalog: &PgCatalog,

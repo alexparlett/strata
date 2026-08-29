@@ -245,10 +245,10 @@ fn push_list_columns(
 /// list. (`DESCRIBE` and `COPY` have no projection before the caret, so the boost is
 /// a no-op there.)
 ///
-/// The database connections' **catalog names** ride at the end of the pool (DB-06): they are the
+/// The data sources' **catalog names** ride at the end of the pool (DB-06): they are the
 /// first segment of a three-part name rather than a relation, so they rank behind everything that
-/// can stand alone, and a connection offers its name whether or not it is live — the name is the
-/// def's, and a connection nobody has reached is still what the query has to say.
+/// can stand alone, and a data source offers its name whether or not it is live — the name is the
+/// def's, and a data source nobody has reached is still what the query has to say.
 fn push_relation_targets(
     pool: &mut Pool,
     ca: &CaretAnalysis,
@@ -372,8 +372,8 @@ fn remote_relation_item(
 /// The `Dot(chain)` pool — what is *inside* the qualifier the caret sits behind.
 ///
 /// Two namespaces, and the chain's **head** decides which, because only one of them
-/// can be addressed by a catalog name at all. A head naming a database connection
-/// (DB-06) makes the whole chain remote: one segment offers that connection's
+/// can be addressed by a catalog name at all. A head naming a data source
+/// (DB-06) makes the whole chain remote: one segment offers that data source's
 /// enabled schemas, two offers the relations in a schema, and three offers
 /// **nothing** — a remote relation's columns are an introspection round trip, and
 /// the completion path does no I/O (§7). Anything else is the workspace, where the
@@ -384,7 +384,7 @@ fn remote_relation_item(
 /// answering with a *workspace* table that happens to be called `orders`.
 ///
 /// The one place the workspace goes first is a **single** segment that names something
-/// in scope: `orders.` is that relation's columns even on a project whose connection
+/// in scope: `orders.` is that relation's columns even on a project whose data source
 /// is also called `orders`, because a one-segment qualifier is what a relation or an
 /// alias is written as and a catalog never is (DataFusion resolves a two-part name
 /// inside the default catalog, so a remote relation is always spelled with three).
@@ -764,7 +764,7 @@ fn table_item(t: &TableSym, replace: &Range<usize>) -> Completion {
     }
 }
 
-/// A **database connection's catalog** at a relation-target position (DB-06) — the first segment
+/// A **data source's catalog** at a relation-target position (DB-06) — the first segment
 /// of a qualified name, which is why its detail says what it is rather than what it holds:
 /// accepting it leaves a name that needs a `.` after it, and the row should say so.
 ///
@@ -780,8 +780,8 @@ fn database_item(db: &DatabaseSym, replace: &Range<usize>) -> Completion {
     }
 }
 
-/// One remote schema, offered after `catalog.` — the detail names the connection, because a
-/// schema called `public` is otherwise indistinguishable from every other connection's.
+/// One remote schema, offered after `catalog.` — the detail names the data source, because a
+/// schema called `public` is otherwise indistinguishable from every other data source's.
 fn schema_item(database: &str, name: &str, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),

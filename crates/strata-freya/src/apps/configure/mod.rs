@@ -16,7 +16,7 @@
 //! **A table reads from the local disk or from one of the project's object stores.** That is the
 //! LOCATION toggle, and behind its second answer the TYPE / CONNECTION pair (`views::location`) —
 //! an explicit choice, never inferred from a typed path. It changes the source list below to one
-//! bucket-relative path. The def records the connection's URL and nothing else about it, and
+//! bucket-relative path. The def records the data source's URL and nothing else about it, and
 //! `register::table_spec` composes the two.
 //!
 //! **No theme of its own.** A window is not a component: its chrome is the app's role vocabulary
@@ -49,8 +49,8 @@ use strata_core::config::Command;
 
 use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::ConnectionRequest;
 use crate::apps::project::ReportCtx;
+use crate::apps::project::SourceRequest;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
 use crate::components::window::window_theme;
 use crate::keymap::on_commands;
@@ -100,14 +100,14 @@ pub struct ConfigureLaunch {
     /// this is not a subtle bug — `use_report` consumes both halves and **panics** when one is
     /// missing, which is how the first version of this crashed the moment Configure opened.
     pub report: ReportCtx,
-    /// The project window's **connection-editor request** (W7 · 04) — what the CONNECTION
-    /// picker's *New connection…* sets.
+    /// The project window's **data source-editor request** (W7 · 04) — what the CONNECTION
+    /// picker's *New data source…* sets.
     ///
-    /// The slot rather than a second `open_connection` call: that window needs the project
+    /// The slot rather than a second `open_source` call: that window needs the project
     /// window's handles and belongs to *its* lifetime, and there is deliberately one open path
-    /// (`project::views::connection_launch`). A `State` carries a press across the window
+    /// (`project::views::source_launch`). A `State` carries a press across the window
     /// boundary exactly as [`rescan`](Self::rescan) already does.
-    pub connections: ConnectionRequest,
+    pub editor: SourceRequest,
 }
 
 /// Compares on the **target** alone. Everything else is fixed for the window's life — one store,
@@ -233,8 +233,8 @@ pub struct ConfigureApp {
     pub engine: EngineCtx,
     pub target: ConfigureTarget,
     pub report: ReportCtx,
-    /// The project window's connection-editor request — see [`ConfigureLaunch::connections`].
-    pub connections: ConnectionRequest,
+    /// The project window's data source-editor request — see [`ConfigureLaunch::editor`].
+    pub editor: SourceRequest,
     /// The window this one belongs to. Carried rather than looked up because the root's own
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop
     /// this window closing with the project window it configures.
@@ -262,7 +262,7 @@ impl ConfigureApp {
         engine: EngineCtx,
         target: ConfigureTarget,
         report: ReportCtx,
-        connections: ConnectionRequest,
+        editor: SourceRequest,
         owner: WindowId,
     ) -> WindowConfig {
         let background = {
@@ -281,7 +281,7 @@ impl ConfigureApp {
             engine,
             target,
             report,
-            connections,
+            editor,
             owner,
             close_hold,
         })
@@ -326,8 +326,8 @@ impl App for ConfigureApp {
         let report = self.report;
         use_provide_context(move || report.log);
         use_provide_context(move || report.faults);
-        let connections = self.connections;
-        use_provide_context(move || connections);
+        let editor = self.editor;
+        use_provide_context(move || editor);
 
         let owner = self.owner;
         let target = self.target.clone();
@@ -351,13 +351,12 @@ impl App for ConfigureApp {
                     None => ConfigureDraft::default(),
                     Some(name) => {
                         let store = project.peek();
-                        let connections: Vec<_> =
-                            store.connections.iter().map(|c| c.def.clone()).collect();
+                        let sources: Vec<_> = store.sources.iter().map(|c| c.def.clone()).collect();
                         store
                             .tables
                             .iter()
                             .find(|t| ProjectState::same_name(&t.def.name, name))
-                            .map(|row| ConfigureDraft::of(&row.def, &connections))
+                            .map(|row| ConfigureDraft::of(&row.def, &sources))
                             .unwrap_or_else(|| {
                                 panic!("configure '{name}': no such table in this project")
                             })

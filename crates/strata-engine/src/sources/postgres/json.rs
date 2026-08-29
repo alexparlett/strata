@@ -17,8 +17,8 @@
 //! function returns — never a lossy approximation, because a query that answers differently
 //! depending on where it ran is worse than one that refuses.
 //!
-//! *Where* the translation happens is [`dialect`](super::dialect)'s: the connection's own unparser
-//! dialect, so it is the same answer wherever the connection's SQL is written down.
+//! *Where* the translation happens is [`dialect`](super::dialect)'s: the data source's own unparser
+//! dialect, so it is the same answer wherever the data source's SQL is written down.
 
 use datafusion::common::{DataFusionError, Result as DfResult};
 use datafusion::logical_expr::Expr;
@@ -121,11 +121,11 @@ const UNDEFINED_FUNCTION: &str = "SQLSTATE: 42883";
 /// path is the whole of what either operator form is built from.
 ///
 /// Its own sentence rather than [`unsupported_function`]'s, because that one says the function
-/// cannot run on this connection at all, which the same accessor with a key would immediately
+/// cannot run on this data source at all, which the same accessor with a key would immediately
 /// disprove.
-fn pathless_refusal(function: &str, connection: &str) -> String {
+fn pathless_refusal(function: &str, source: &str) -> String {
     format!(
-        "'{function}' cannot run on the database connection '{connection}' without a key to look \
+        "'{function}' cannot run on the source '{source}' without a key to look \
          up. {MATERIALIZE}"
     )
 }
@@ -144,14 +144,14 @@ pub(super) fn lacks_the_name(raw: &str) -> bool {
 /// them — the server lacks the name — and keeps the server's own sentence, which is the only thing
 /// that can say *which* name. On a line of its own, because that sentence is already several and
 /// ends in the provider crate's documentation URL.
-pub(super) fn remote_refusal(raw: &str, connection: &str) -> String {
+pub(super) fn remote_refusal(raw: &str, source: &str) -> String {
     format!(
-        "{raw}\nThe database connection '{connection}' does not have it, so this query cannot run \
+        "{raw}\nThe data source '{source}' does not have it, so this query cannot run \
          on the server. {MATERIALIZE}"
     )
 }
 
-/// How `connection` spells a call to `function`, or `None` where [`FAMILY`] has no opinion about
+/// How `data source` spells a call to `function`, or `None` where [`FAMILY`] has no opinion about
 /// the name — which is the caller's cue to fall through to `PostgreSqlDialect`'s own overrides.
 ///
 /// The two answers it does give come from one table because they are one question: a family name
@@ -160,15 +160,15 @@ pub(super) fn override_call(
     unparser: &Unparser,
     function: &str,
     args: &[Expr],
-    connection: &str,
+    source: &str,
 ) -> Option<DfResult<SqlExpr>> {
     let &(name, spelling, why) = FAMILY.iter().find(|(known, ..)| *known == function)?;
     let Some(spelling) = spelling else {
-        return Some(refused(unsupported_function(name, connection, why)));
+        return Some(refused(unsupported_function(name, source, why)));
     };
     Some(
         spelled(unparser, spelling, args)
-            .unwrap_or_else(|| refused(pathless_refusal(name, connection))),
+            .unwrap_or_else(|| refused(pathless_refusal(name, source))),
     )
 }
 
@@ -275,10 +275,7 @@ mod tests {
     #[test]
     fn the_wrapper_starts_its_own_line() {
         let wrapped = remote_refusal("ERROR: …\nhttps://example.invalid/docs", "pg");
-        assert!(
-            wrapped.contains("docs\nThe database connection 'pg'"),
-            "{wrapped}"
-        );
+        assert!(wrapped.contains("docs\nThe data source 'pg'"), "{wrapped}");
         assert!(wrapped.contains("CREATE TABLE"), "{wrapped}");
     }
 }

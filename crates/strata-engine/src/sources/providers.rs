@@ -13,7 +13,7 @@
 //!
 //! Read-only *of its own shape* — schemas and tables are not created or dropped through the
 //! provider traits — and it says so rather than leaning on the trait's default refusal, because
-//! the sentence a user gets should name the connection they are addressing rather than "catalog
+//! the sentence a user gets should name the data source they are addressing rather than "catalog
 //! provider". A write statement does not come through here: it resolves its target through this
 //! catalog and then asks the source for a writer of its own.
 
@@ -34,9 +34,9 @@ use crate::fold_ident;
 /// One source's catalog: the namespaces the latest enumeration found, each a
 /// [`SourceSchemaProvider`].
 pub struct SourceCatalogProvider {
-    /// The name this connection registered under — Strata's own word for it.
+    /// The name this data source registered under — Strata's own word for it.
     catalog: String,
-    /// The connection's identity, carried down to every provider built under it as the fusion key.
+    /// The data source's identity, carried down to every provider built under it as the fusion key.
     identity: String,
     source: Arc<dyn SourceCatalog>,
     /// Behind a lock because a statement that changes what the source holds re-enumerates and
@@ -68,7 +68,7 @@ impl SourceCatalogProvider {
         provider
     }
 
-    /// The namespaces this connection **shows**, for the resolver that scopes a bare name.
+    /// The namespaces this data source **shows**, for the resolver that scopes a bare name.
     pub(crate) fn shown(&self) -> BTreeSet<String> {
         self.shown.read().unwrap().clone()
     }
@@ -162,7 +162,7 @@ impl CatalogProvider for SourceCatalogProvider {
 /// `TableProvider` per relation.
 ///
 /// **Building a provider can cost a round trip**, so it happens on first *use* and is then kept
-/// for the life of the connection. Diagnostics validate a buffer on every catalog epoch, so
+/// for the life of the data source. Diagnostics validate a buffer on every catalog epoch, so
 /// without the cache a query mentioning a remote table would introspect it per keystroke. A ↻
 /// re-runs the registration pass, which re-connects — that, and nothing else, is the refresh.
 pub struct SourceSchemaProvider {
@@ -225,7 +225,7 @@ impl SchemaProvider for SourceSchemaProvider {
             return Ok(Some(Arc::clone(built)));
         }
         let at = Located {
-            connection: self.catalog.clone(),
+            source: self.catalog.clone(),
             identity: self.identity.clone(),
             relation: TableReference::partial(self.schema.clone(), relation.name.clone()),
         };
@@ -252,7 +252,7 @@ impl SchemaProvider for SourceSchemaProvider {
     ///
     /// With it, `information_schema.tables` and `SHOW TABLES` cost **zero** remote calls.
     /// `information_schema.columns` still builds providers, because a column list is genuinely
-    /// the schema; that is bounded by the cache above (once per relation per connection) and
+    /// the schema; that is bounded by the cache above (once per relation per data source) and
     /// accepted.
     async fn table_type(&self, name: &str) -> DfResult<Option<TableType>> {
         Ok(self.relation(name).map(|relation| match relation.view {

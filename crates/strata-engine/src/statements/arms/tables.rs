@@ -133,7 +133,7 @@ async fn create(
     cx.require_target(who, kind, &target).await?;
     let name = match target {
         Target::Remote(at) => {
-            return materialize(ctx, &at, &cx.sources, &input, if_not_exists, or_replace).await
+            return materialize(ctx, &at, &cx.live, &input, if_not_exists, or_replace).await
         }
         Target::Nowhere { .. } => return Err(elsewhere(WHAT)),
         Target::Workspace { name } => name,
@@ -176,8 +176,8 @@ async fn create(
     let def = TableDef {
         name: name.clone(),
         format: SourceFormat::Arrow,
-        connection: None,
-        sources: vec![internal_source(&slug)],
+        source: None,
+        paths: vec![internal_source(&slug)],
         partition_cols: Vec::new(),
         origin: TableOrigin::Internal,
     };
@@ -186,7 +186,7 @@ async fn create(
         paths: vec![dir_path(&dir)],
         format: SourceFormat::Arrow,
         partitions: Vec::new(),
-        connection: None,
+        source: None,
         internal: true,
     };
     let meta = match register_external(ctx, &cx.formats, cx.tables.as_ref(), &spec).await {
@@ -231,7 +231,7 @@ async fn materialize(
     or_replace: bool,
 ) -> Result<StatementOutcome, String> {
     let address = at.address();
-    if !writable(sources, &at.connection) {
+    if !writable(sources, &at.source) {
         return Err(read_only(at));
     }
 
@@ -374,7 +374,7 @@ const INSERT_EXTERNAL: &str =
 ///
 /// **The `Dml` node itself never executes**, on either branch: the local one hands the input's
 /// stream to the store ([`insert_stream`]), the remote one drives the input through the
-/// connection's own sink — so a source inside a database connection reaches a workspace table
+/// data source's own sink — so a source inside a data source reaches a workspace table
 /// rather than a `Dml` reaching the unparser ([`crate::sink`]). The arm is the only writer;
 /// the registered provider is read through, never written through.
 ///
@@ -383,9 +383,9 @@ const INSERT_EXTERNAL: &str =
 /// `CREATE TABLE AS SELECT * FROM t`.
 ///
 /// The gate is in two halves and the **catalog** is the first: a relation inside a database
-/// connection is not a table whose data Strata could ever own, so [`resolve_target`] answers for
+/// data source is not a table whose data Strata could ever own, so [`resolve_target`] answers for
 /// it before [`InternalTables`] is consulted at all. Ownership is the wrong question to ask about
-/// it, and the connection's own gate — is it writable — is the honest one there.
+/// it, and the data source's own gate — is it writable — is the honest one there.
 ///
 /// **The remote branch builds the provider it drives**, because the one the catalog serves is the
 /// federated *read* provider, whose `insert_into` is the trait's own `not_impl_err`. The writer
@@ -416,11 +416,11 @@ pub async fn insert(
     cx.require_target(who, StmtKind::Insert, &target).await?;
     let name = match &target {
         Target::Remote(at) => {
-            if !writable(&cx.sources, &at.connection) {
+            if !writable(&cx.live, &at.source) {
                 return Err(read_only(at));
             }
             verify_insert(&plan)?;
-            let rows = insert_into(ctx, &cx.sources, at, &dml.input).await?;
+            let rows = insert_into(ctx, &cx.live, at, &dml.input).await?;
             return Ok(StatementOutcome {
                 message: format!(
                     "Inserted {} into '{}'",
@@ -462,7 +462,7 @@ fn verify_insert(plan: &LogicalPlan) -> Result<(), String> {
 }
 
 /// The table a typed `DROP TABLE` names, dropped — the statement half of [`drop_table`], or
-/// [`remote::drop_relation`]'s dispatch for a name inside a database connection.
+/// [`remote::drop_relation`]'s dispatch for a name inside a source.
 pub async fn drop_statement(
     cx: &StmtCtx,
     who: &Principal,
@@ -731,7 +731,7 @@ mod tests {
         };
         assert_eq!(def.origin, TableOrigin::Internal);
         assert_eq!(def.format, SourceFormat::Arrow);
-        assert_eq!(def.sources, vec![".strata/tables/daily/".to_string()]);
+        assert_eq!(def.paths, vec![".strata/tables/daily/".to_string()]);
         assert_eq!(meta.rows, Some(3), "read from the IPC footer");
         assert_eq!(
             meta.columns
@@ -975,7 +975,7 @@ mod tests {
                     paths: vec![root.display().to_string()],
                     format: SourceFormat::Arrow,
                     partitions: Vec::new(),
-                    connection: None,
+                    source: None,
                     internal: true,
                 })
                 .await
@@ -1174,7 +1174,7 @@ mod tests {
                 paths: vec![dir_path(dir)],
                 format: SourceFormat::Arrow,
                 partitions: Vec::new(),
-                connection: None,
+                source: None,
                 internal: false,
             })
             .await

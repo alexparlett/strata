@@ -1,9 +1,9 @@
 //! **A remote relation's columns** as a freya-query capability (DB-07) — the one introspection a
-//! database connection does not do at connect time.
+//! data source does not do at connect time.
 //!
 //! ## Why this is a query at all
 //!
-//! Everything else the data-sources tree draws under a database is free: `Connections::listing` reads
+//! Everything else the data-sources tree draws under a database is free: `Sources::listing` reads
 //! the connect-time enumeration held beside the pool, so schemas and relation names cost nothing.
 //! A relation's **columns** are the exception — DB-02 builds a relation's `TableProvider` lazily
 //! precisely so that connecting to a database with a thousand tables is one round trip rather than
@@ -20,7 +20,7 @@
 //! reaching into a pane it does not belong to.
 //!
 //! That is two entries over one relation, and it costs one extra *call* and no extra work:
-//! `Connections::describe_remote` answers from the provider the connection caches per relation, so
+//! `Sources::describe_remote` answers from the provider the data source caches per relation, so
 //! every read after the first is local.
 //!
 //! ## Why the catalog generation is in the key
@@ -29,7 +29,7 @@
 //! server-side `ALTER TABLE`, so the bound on that staleness is the same one the rest of the tree
 //! carries: a ↻ re-connects, which builds new providers and moves the engine's catalog generation.
 //! Keying on that number is what makes the refresh reach these columns too — without it a settled
-//! entry would outlive the connection that answered it.
+//! entry would outlive the data source that answered it.
 
 use freya::prelude::{use_side_effect, use_state};
 use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, UseQuery};
@@ -51,7 +51,7 @@ use crate::apps::project::contexts::EngineCtx;
 /// construction).
 ///
 /// A `Result` per relation rather than one for the whole read, because the relations in a key are
-/// independent: one that the connection no longer lists must not blank the columns of the three
+/// independent: one that the data source no longer lists must not blank the columns of the three
 /// beside it.
 pub type RemoteSchemas = BTreeMap<RemoteRef, Result<RemoteRelation, String>>;
 
@@ -77,17 +77,17 @@ impl QueryCapability for RemoteColumns {
 
     /// One `describe_remote` per relation, in order.
     ///
-    /// The three answers it keeps apart stay apart here. `Ok(None)` is the connection not listing
+    /// The three answers it keeps apart stay apart here. `Ok(None)` is the data source not listing
     /// this relation — which after a re-connect means it is **gone from what the server last told
     /// us**, so it is worded as the reconciliation it is rather than left as an absence a surface
     /// would have to invent a sentence for. An `Err` is the server refusing an introspection of a
-    /// relation it does list, which is a fault about the connection and already carries the
+    /// relation it does list, which is a fault about the data source and already carries the
     /// engine's own reading of it.
     async fn run(&self, spec: &ColumnsSpec) -> Result<RemoteSchemas, EngineError> {
         let mut out = RemoteSchemas::new();
         for relation in &spec.relations {
             let name = qualified([
-                relation.connection.as_str(),
+                relation.source.as_str(),
                 relation.schema.as_str(),
                 relation.relation.as_str(),
             ]);
@@ -102,12 +102,12 @@ impl QueryCapability for RemoteColumns {
     }
 }
 
-/// A relation the connection does not list. "Not in the connection" means "not in what it last
+/// A relation the data source does not list. "Not in the data source" means "not in what it last
 /// told us" — the enumeration is the connect-time one — so the sentence names the refresh, exactly
 /// as the tree's missing-schema row does.
 fn gone(relation: &RemoteRef) -> String {
     format!(
-        "'{}' is not in this connection. Refresh the catalog if it has since been created.",
+        "'{}' is not in this data source. Refresh the catalog if it has since been created.",
         relation.label()
     )
 }
@@ -120,7 +120,7 @@ fn gone(relation: &RemoteRef) -> String {
 /// default, so entries for generations and sets nobody is watching any more are swept — a re-read
 /// of a swept entry
 /// is one hop onto the engine runtime and no network, since the provider it reads is cached for
-/// the life of the connection.
+/// the life of the data source.
 ///
 /// The list is **canonicalized here** rather than by each caller, because it is part of the key:
 /// the tree hands over what its walk drew open and the inspector one relation, and two orderings of
@@ -194,7 +194,7 @@ mod tests {
 
     fn relation(name: &str) -> RemoteRef {
         RemoteRef {
-            connection: "pg".into(),
+            source: "pg".into(),
             schema: "public".into(),
             relation: name.into(),
         }
@@ -202,7 +202,7 @@ mod tests {
 
     /// **The generation is what bounds the staleness.** The same relations at a moved generation
     /// are a new entry, so a ↻ — which re-connects, rebuilds every provider and moves the engine's
-    /// number — re-reads these columns instead of serving what the connection answered before it.
+    /// number — re-reads these columns instead of serving what the data source answered before it.
     ///
     /// Both come from an engine because nothing else can mint one — opacity is what stops a
     /// window claiming a catalog moved when it did not.
@@ -235,13 +235,13 @@ mod tests {
         );
     }
 
-    /// A relation the connection does not list is named as the reconciliation it is, and only that
+    /// A relation the data source does not list is named as the reconciliation it is, and only that
     /// relation is affected — the others in the same read keep their columns.
     #[test]
-    fn a_relation_the_connection_no_longer_lists_names_the_refresh() {
+    fn a_relation_the_source_no_longer_lists_names_the_refresh() {
         let why = gone(&relation("orders"));
         assert!(
-            why.contains("'pg.public.orders' is not in this connection"),
+            why.contains("'pg.public.orders' is not in this data source"),
             "{why}"
         );
         assert!(why.contains("Refresh the catalog"), "{why}");

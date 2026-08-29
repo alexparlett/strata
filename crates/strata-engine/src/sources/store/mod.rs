@@ -7,7 +7,7 @@
 //!
 //! **DataFusion core resolves nothing.** There is no built-in "read `s3://…`": the embedder builds
 //! a store and calls `register_object_store` **per bucket**, or every scan of that bucket fails
-//! with *"No suitable object store found"*. That call is the whole of what a store connection
+//! with *"No suitable object store found"*. That call is the whole of what a store data source
 //! *does*, which is why the registration URL is exactly `SCHEME://address` and why a bucket with a
 //! path in it is refused rather than registered under a key nothing looks up.
 //!
@@ -68,11 +68,11 @@ pub(super) fn client_settings() -> Vec<SourceSetting> {
         .collect()
 }
 
-/// Resolve a connection's client options into `object_store`'s own keys, in a stable order.
+/// Resolve a data source's client options into `object_store`'s own keys, in a stable order.
 ///
 /// A name the crate does not parse is **skipped rather than refused**: the declaration is built
 /// from `CLIENT_KEYS`, so a value under any other key came from a hand-edited `project.json` and
-/// is not a thing to fail a connection over.
+/// is not a thing to fail a data source over.
 pub(super) fn client_options(def: &SourceDef) -> Vec<(ClientConfigKey, String)> {
     CLIENT_KEYS
         .iter()
@@ -89,7 +89,7 @@ pub(super) fn client_options(def: &SourceDef) -> Vec<(ClientConfigKey, String)> 
 /// One built store, or why the description it was built from is wrong.
 ///
 /// The sentence is the shell's rather than each registrant's, because it says the same thing about
-/// all three and names the connection the user gave rather than anything about the provider.
+/// all three and names the data source the user gave rather than anything about the provider.
 pub(super) fn built<S: ObjectStore + 'static>(
     def: &SourceDef,
     built: Result<S, Error>,
@@ -99,14 +99,14 @@ pub(super) fn built<S: ObjectStore + 'static>(
         .map_err(|e| format!("Cannot reach '{}': {e}", def.named()))
 }
 
-/// **Does this bucket actually answer?** One request, on the connection's own store, and the
+/// **Does this bucket actually answer?** One request, on the data source's own store, and the
 /// difference between a row that means something and a row that means a struct was built.
 ///
-/// This was deliberately absent once, on the grounds that a probe is a round trip per connection on
+/// This was deliberately absent once, on the grounds that a probe is a round trip per data source on
 /// every project open. That traded away too much: `AmazonS3Builder` constructs a store for a bucket
 /// that does not exist in the region it was given, so a mistyped region registered **green** and
 /// every table over it failed with `object_store`'s bare-redirect message, which names no bucket,
-/// no region and no connection.
+/// no region and no data source.
 ///
 /// **The first page of a listing, not a HEAD and not a whole listing.** `ObjectStore` has no
 /// head-bucket call. It has to be `list`'s *stream* taken once: `list_with_delimiter` reads like
@@ -141,7 +141,7 @@ pub(super) async fn probe(
     }
 }
 
-/// The one listing failure that says the *connection* is wrong rather than the caller's rights.
+/// The one listing failure that says the *data source* is wrong rather than the caller's rights.
 ///
 /// S3 answers a cross-region request with a 301 carrying no `Location` header; `object_store` has
 /// a dedicated error for it whose `Display` is this literal (`client/retry.rs`,
@@ -171,7 +171,7 @@ const GCS_DOTTED_MAX: usize = 222;
 /// least this strict, so applying AWS's rules to them refuses nothing they would have accepted.
 pub(super) fn check_bucket(bucket: &str) -> Result<(), String> {
     if bucket.is_empty() {
-        return Err("This connection has no bucket.".into());
+        return Err("This data source has no bucket.".into());
     }
     if !bucket
         .chars()
@@ -204,7 +204,7 @@ pub(super) fn check_bucket(bucket: &str) -> Result<(), String> {
 /// Left to the store: "close misspellings" of `google`, and a dotted name's ownership verification.
 pub(super) fn check_gcs_bucket(bucket: &str) -> Result<(), String> {
     if bucket.is_empty() {
-        return Err("This connection has no bucket.".into());
+        return Err("This data source has no bucket.".into());
     }
     if !bucket
         .chars()
@@ -257,17 +257,17 @@ pub(super) fn check_gcs_bucket(bucket: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// An HTTP connection's address is a **whole origin URL** — `http://aserver:8484` — and it is
+/// An HTTP data source's address is a **whole origin URL** — `http://aserver:8484` — and it is
 /// written in one box, scheme included, because `http` and `https` are two different origins and
 /// only the person typing knows which their server speaks.
 ///
 /// Everything after the authority is refused rather than trimmed away. The object-store registry
 /// keys on scheme and authority, so a path here would register under a key nothing looks up while
 /// the field went on showing it; and a path is not lost by being refused — it belongs to the
-/// source of whatever table reads through this connection.
+/// source of whatever table reads through this data source.
 pub(super) fn check_http_url(url: &str) -> Result<(), String> {
     if url.is_empty() {
-        return Err("This connection has no URL.".into());
+        return Err("This data source has no URL.".into());
     }
     if url.chars().any(char::is_whitespace) {
         return Err("An HTTP URL can't contain spaces.".into());
@@ -277,24 +277,24 @@ pub(super) fn check_http_url(url: &str) -> Result<(), String> {
         .find_map(|scheme| url.strip_prefix(scheme))
     else {
         return Err(
-            "An HTTP connection needs a scheme: write 'https://aserver' or 'http://aserver'."
+            "An HTTP data source needs a scheme: write 'https://aserver' or 'http://aserver'."
                 .into(),
         );
     };
     if authority.is_empty() {
-        return Err("An HTTP connection needs a host after its scheme.".into());
+        return Err("An HTTP data source needs a host after its scheme.".into());
     }
     let host = &authority[..authority.find(['/', '?', '#']).unwrap_or(authority.len())];
     if let Some(at) = host.find('@') {
         return Err(format!(
-            "An HTTP connection can't carry a username or password. Drop '{}' from the URL.",
+            "An HTTP data source can't carry a username or password. Drop '{}' from the URL.",
             &host[..=at],
         ));
     }
     if let Some(at) = authority.find(['/', '?', '#']) {
         return Err(format!(
-            "An HTTP connection is an origin, not a path. Drop '{}' and give it to the table \
-             that reads through this connection.",
+            "An HTTP data source is an origin, not a path. Drop '{}' and give it to the table \
+             that reads through this source.",
             &authority[at..]
         ));
     }

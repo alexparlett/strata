@@ -155,29 +155,29 @@ pub struct ConfigureDraft {
     /// read, `Internal` in whether the user brings any. Two bools would make "remote and internal"
     /// expressible, and every reader would have to know which one wins.
     ///
-    /// Its own field rather than "is a connection chosen": the toggle has to be operable before
-    /// there is anything to choose, and a project with no connections for the picked provider is
+    /// Its own field rather than "is a data source chosen": the toggle has to be operable before
+    /// there is anything to choose, and a project with no data sources for the picked provider is
     /// exactly where the picker's empty line has something to say. It is also what makes the
-    /// def's own [`TableDef::connection`] unambiguous — see [`store`](Self::store).
+    /// def's own [`TableDef::data source`] unambiguous — see [`store`](Self::store).
     pub location: Where,
     /// **TYPE** — which provider the CONNECTION picker is filtered to. Only meaningful while
-    /// [`remote`](Self::remote), and kept in step with the chosen connection by
+    /// [`remote`](Self::remote), and kept in step with the chosen data source by
     /// [`set_provider`](Self::set_provider).
     ///
     /// **A filter, never the table's provider.** The two agree by construction while the chosen
-    /// connection is one the project has — which is the only state the picker can *produce* — but
-    /// a def naming a connection that has since been forgotten opens on the first provider
+    /// data source is one the project has — which is the only state the picker can *produce* — but
+    /// a def naming a data source that has since been forgotten opens on the first provider
     /// whatever its URL says, so a forgotten `gs://` bucket shows the S3 segment ([`of`](Self::of)
     /// says why it is not re-derived from the scheme). Nothing may read this as a fact about the
     /// table: what the table reads through is [`store`](Self::store), and while the two disagree
     /// Save is blocked naming the missing URL (`views::footer`).
     pub kind: String,
-    /// The chosen connection, by its [`name`](SourceDef::named) — how the project addresses one.
+    /// The chosen data source, by its [`name`](SourceDef::named) — how the project addresses one.
     ///
     /// Kept across a flip back to Local, like every format's options are kept across a
     /// format switch: looking at the local arm and coming back must not forget which bucket was
     /// picked.
-    pub connection: Option<String>,
+    pub source: Option<String>,
     /// The **local disk's** source paths, in the order they were added — never seeded, and a
     /// blank row is a row being typed.
     pub local_sources: Vec<String>,
@@ -204,7 +204,7 @@ pub struct ConfigureDraft {
     /// The partition columns and the type each is read as, outermost first.
     pub partitions: Vec<(String, String)>,
     /// The declared columns of a table Strata will store (IT-01) — only meaningful on
-    /// [`Where::Internal`], and kept across a flip away from it exactly as a connection and a
+    /// [`Where::Internal`], and kept across a flip away from it exactly as a data source and a
     /// format's options are.
     ///
     /// Position-addressed like [`local_sources`](Self::local_sources), and edited through the same
@@ -283,7 +283,7 @@ impl Default for ConfigureDraft {
             format: FormatId::Parquet,
             location: Where::Local,
             kind: String::new(),
-            connection: None,
+            source: None,
             local_sources: Vec::new(),
             remote_source: String::new(),
             csv_header: csv.header,
@@ -312,23 +312,23 @@ impl ConfigureDraft {
     /// The formats it *isn't* in keep their defaults, and so does the location it is not in: a
     /// def's sources belong to the one it names, and the other opens empty.
     ///
-    /// `connections` is here for one field: which provider serves a connection is the connection's
+    /// `data sources` is here for one field: which provider serves a data source is the data source's
     /// fact rather than the table's, so the TYPE segment is resolved from it rather than re-derived
-    /// from the URL's scheme. A def naming a connection this project no longer has keeps the
+    /// from the URL's scheme. A def naming a data source this project no longer has keeps the
     /// reference and opens on the first provider, with `Save` blocked until it is re-pointed —
     /// the same treatment a format with no reader gets.
     ///
-    /// A def naming a **database** connection gets that treatment through the filter below: a table
+    /// A def naming a **database** data source gets that treatment through the filter below: a table
     /// reads files, so the TYPE pill offers only [`ProviderId::OBJECT_STORES`], and a draft opening
     /// on a provider the pill cannot render would show no segment selected.
-    pub fn of(def: &TableDef, connections: &[SourceDef]) -> Self {
+    pub fn of(def: &TableDef, sources: &[SourceDef]) -> Self {
         let kind = def
-            .connection
+            .source
             .as_deref()
-            .and_then(|name| connections.iter().find(|c| c.named() == name))
+            .and_then(|name| sources.iter().find(|c| c.named() == name))
             .map(|c| c.kind.trim().to_string())
             .unwrap_or_default();
-        let remote = def.connection.is_some();
+        let remote = def.source.is_some();
         let mut draft = Self {
             name: def.name.clone(),
             format: FormatId::of(&def.format),
@@ -337,13 +337,13 @@ impl ConfigureDraft {
                 false => Where::Local,
             },
             kind,
-            connection: def.connection.clone(),
+            source: def.source.clone(),
             local_sources: match remote {
                 true => Vec::new(),
-                false => def.sources.clone(),
+                false => def.paths.clone(),
             },
             remote_source: match remote {
-                true => def.sources.first().cloned().unwrap_or_default(),
+                true => def.paths.first().cloned().unwrap_or_default(),
                 false => String::new(),
             },
             hive_on: !def.partition_cols.is_empty(),
@@ -390,15 +390,15 @@ impl ConfigureDraft {
         }
     }
 
-    /// The connection this draft's sources are relative to, or `None` for the local disk —
-    /// exactly what [`TableDef::connection`] records.
+    /// The data source this draft's sources are relative to, or `None` for the local disk —
+    /// exactly what [`TableDef::data source`] records.
     ///
     /// **The one place the two fields combine**, so nothing downstream has to remember that a
-    /// connection kept across a flip back to Local is not the location: `remote` says where
-    /// the table reads from, `connection` says which bucket that would be.
+    /// data source kept across a flip back to Local is not the location: `remote` says where
+    /// the table reads from, `data source` says which bucket that would be.
     pub fn store(&self) -> Option<&str> {
         match self.location {
-            Where::Remote => self.connection.as_deref(),
+            Where::Remote => self.source.as_deref(),
             Where::Local | Where::Internal => None,
         }
     }
@@ -415,7 +415,7 @@ impl ConfigureDraft {
     }
 
     /// Flip **LOCATION**, and settle what that means for the rest of the draft: a move to the
-    /// object store picks the provider's first connection when none is chosen yet, and either
+    /// object store picks the provider's first data source when none is chosen yet, and either
     /// direction clears the detected partition columns, exactly as every other path mutator does
     /// — they describe the layout of a location this draft no longer points at.
     ///
@@ -425,7 +425,7 @@ impl ConfigureDraft {
     /// `/data/events.parquet` under a bucket that had nothing to do with it — or, from an empty
     /// list, put a blank row in the one section whose toolbar is absent, so the path a remote
     /// table has was a row nobody added and nobody could remove.
-    pub fn set_location(&mut self, location: Where, connections: &[SourceDef]) {
+    pub fn set_location(&mut self, location: Where, sources: &[SourceDef]) {
         if self.location == location {
             return;
         }
@@ -439,13 +439,13 @@ impl ConfigureDraft {
             }
             Where::Local => {}
             Where::Remote => {
-                if self.connection.is_none() {
-                    self.connection = first_connection(connections, &self.kind);
+                if self.source.is_none() {
+                    self.source = first_source(sources, &self.kind);
                     // With no kind chosen yet there is nothing for the TYPE pill to light, so the
-                    // first connection the project has decides it — better than defaulting to a
+                    // first data source the project has decides it — better than defaulting to a
                     // kind written down here, which is the knowledge this window stopped holding.
-                    if let Some(named) = self.connection.as_deref() {
-                        if let Some(def) = connections.iter().find(|c| c.named() == named) {
+                    if let Some(named) = self.source.as_deref() {
+                        if let Some(def) = sources.iter().find(|c| c.named() == named) {
                             self.kind = def.kind.trim().to_string();
                         }
                     }
@@ -580,22 +580,22 @@ impl ConfigureDraft {
         ))
     }
 
-    /// Pick a **TYPE**, and with it a connection that provider actually serves — its first,
+    /// Pick a **TYPE**, and with it a data source that provider actually serves — its first,
     /// unless the one already chosen is one of them. The picker below only ever offers this
-    /// provider's connections, so leaving a foreign one selected would be a selection with no
+    /// provider's data sources, so leaving a foreign one selected would be a selection with no
     /// row to show it.
-    pub fn set_provider(&mut self, kind: &str, connections: &[SourceDef]) {
+    pub fn set_provider(&mut self, kind: &str, sources: &[SourceDef]) {
         if self.kind == kind {
             return;
         }
         self.kind = kind.to_string();
         let serves = self
-            .connection
+            .source
             .as_deref()
-            .and_then(|name| connections.iter().find(|c| c.named() == name))
+            .and_then(|name| sources.iter().find(|c| c.named() == name))
             .is_some_and(|c| c.kind.trim() == kind);
         if !serves {
-            self.connection = first_connection(connections, kind);
+            self.source = first_source(sources, kind);
         }
     }
 
@@ -625,7 +625,7 @@ impl ConfigureDraft {
     }
 
     /// The paths that are actually paths, for the LOCATION in play — the one place the two source
-    /// fields are projected, as [`store`](Self::store) is for the connection.
+    /// fields are projected, as [`store`](Self::store) is for the data source.
     pub fn nonblank_sources(&self) -> Vec<String> {
         match self.location {
             Where::Local => self
@@ -644,7 +644,7 @@ impl ConfigureDraft {
     }
 
     /// How many rows the path list holds — the local list's length, and always one on a
-    /// connection, that arm being a single box rather than a list anything adds to.
+    /// data source, that arm being a single box rather than a list anything adds to.
     ///
     /// Whether the section draws them is `views::paths`'s question, which is why an internal
     /// table answers here as the local one it will be again if the LOCATION moves back.
@@ -815,15 +815,15 @@ impl ConfigureDraft {
     /// `resolve_source` assumes when reading them back. Without it a project that is moved,
     /// synced, or opened on another machine loses every table the picker wrote.
     ///
-    /// A def over a **connection** stores its source exactly as typed: it is already relative —
+    /// A def over a **data source** stores its source exactly as typed: it is already relative —
     /// to that bucket rather than to this folder — and `relativize` measures against a path the
     /// bucket has nothing to do with.
     pub fn def(&self, root: &Path) -> TableDef {
         TableDef {
             name: self.name.trim().to_string(),
             format: self.source_format(),
-            connection: self.store().map(str::to_string),
-            sources: match self.store() {
+            source: self.store().map(str::to_string),
+            paths: match self.store() {
                 Some(_) => self.nonblank_sources(),
                 None => self
                     .nonblank_sources()
@@ -851,8 +851,8 @@ impl ConfigureDraft {
                 .is_none()
                 .then(|| "A table needs at least one column.".into());
         }
-        if self.remote() && self.connection.is_none() {
-            return Some("A remote table needs a connection to read through.".into());
+        if self.remote() && self.source.is_none() {
+            return Some("A remote table needs a data source to read through.".into());
         }
         if self.nonblank_sources().is_empty() {
             return Some("A table needs at least one source path.".into());
@@ -1040,28 +1040,28 @@ impl ConfigureDraft {
     }
 }
 
-/// The connections one provider serves, by name and in the order the project
+/// The data sources one provider serves, by name and in the order the project
 /// keeps them — what the CONNECTION picker offers, and where "this provider has none" is
 /// answered.
 ///
-/// The URL is both the value and the label: it is the project's identity for a connection (the
+/// The URL is both the value and the label: it is the project's identity for a data source (the
 /// pane, the registration outcome and the forget confirm all name one this way), and a bucket
 /// alone cannot tell `s3://lake` from `gs://lake`.
 ///
 /// `provider` is always one of [`ProviderId::OBJECT_STORES`] here, because the TYPE pill above
 /// this picker is the only thing that sets it and that is what it offers: a table reads *files*,
-/// and a database connection registers no object store to read them from.
-pub fn connections_for(connections: &[SourceDef], kind: &str) -> Vec<String> {
-    connections
+/// and a data source registers no object store to read them from.
+pub fn sources_for(sources: &[SourceDef], kind: &str) -> Vec<String> {
+    sources
         .iter()
         .filter(|c| kind.trim().is_empty() || c.kind.trim() == kind.trim())
         .map(SourceDef::named)
         .collect()
 }
 
-/// The connection a provider is picked *on* — its first, or none at all.
-fn first_connection(connections: &[SourceDef], kind: &str) -> Option<String> {
-    connections_for(connections, kind).into_iter().next()
+/// The data source a provider is picked *on* — its first, or none at all.
+fn first_source(sources: &[SourceDef], kind: &str) -> Option<String> {
+    sources_for(sources, kind).into_iter().next()
 }
 
 /// The compression dropdown, shared by CSV and JSON — the same whole-file wrapping, and the same
@@ -1126,7 +1126,7 @@ mod tests {
     /// Two S3 buckets and one GCS, in the order a project keeps them — enough for the picker's
     /// three questions: which this provider serves, which is first, and what a switch does to a
     /// choice the new provider does not serve.
-    fn connections() -> Vec<SourceDef> {
+    fn sources() -> Vec<SourceDef> {
         ["acme-lake", "cold-store"]
             .into_iter()
             .map(|address| SourceDef {
@@ -1214,8 +1214,8 @@ mod tests {
                 delimiter: '\t',
                 ..Default::default()
             }),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -1286,8 +1286,8 @@ mod tests {
                 infer_rows: Some(50),
                 compression: FileCompression::Gzip,
             }),
-            connection: None,
-            sources: vec!["/data/a".into(), "/data/b".into()],
+            source: None,
+            paths: vec!["/data/a".into(), "/data/b".into()],
             partition_cols: vec![("year".into(), "Int32".into())],
             origin: TableOrigin::External,
         };
@@ -1303,8 +1303,8 @@ mod tests {
         let def = TableDef {
             name: "t".into(),
             format: SourceFormat::Csv(CsvRead::default()),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -1326,8 +1326,8 @@ mod tests {
         let def = TableDef {
             name: "places".into(),
             format: format.clone(),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -1383,8 +1383,8 @@ mod tests {
         let def = TableDef {
             name: "t".into(),
             format: SourceFormat::Json(JsonRead::default()),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -1418,8 +1418,8 @@ mod tests {
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::Parquet,
-            connection: None,
-            sources: vec!["data/events".into()],
+            source: None,
+            paths: vec!["data/events".into()],
             partition_cols: vec![("year".into(), "Int32".into())],
             origin: TableOrigin::External,
         };
@@ -1532,22 +1532,22 @@ mod tests {
         );
     }
 
-    /// **The headline**: a table over a connection writes the connection's URL and a
+    /// **The headline**: a table over a data source writes the data source's URL and a
     /// bucket-relative source, and that pair resolves to the address the engine reads.
     ///
     /// The source is stored **as typed** — `relativize` measures against the project folder,
     /// which a bucket has nothing to do with, and a path it happened to mangle would register as
     /// a different object.
     #[test]
-    fn a_table_over_a_connection_stores_the_url_and_a_bucket_relative_path() {
+    fn a_table_over_a_source_stores_the_name_and_a_relative_path() {
         let root = Path::new("/project");
         let mut draft = csv_draft();
-        draft.set_location(Where::Remote, &connections());
+        draft.set_location(Where::Remote, &sources());
         draft.set_path(0, "events/2024/**/*.parquet".into());
 
         let def = draft.def(root);
-        assert_eq!(def.connection.as_deref(), Some("acme_lake"));
-        assert_eq!(def.sources, ["events/2024/**/*.parquet"]);
+        assert_eq!(def.source.as_deref(), Some("acme_lake"));
+        assert_eq!(def.paths, ["events/2024/**/*.parquet"]);
         assert_eq!(
             draft.resolved_sources(root),
             ["events/2024/**/*.parquet"],
@@ -1557,7 +1557,7 @@ mod tests {
     }
 
     /// **Each location keeps its own paths, and neither is written for the user** — the flip
-    /// picks the provider's first connection and settles nothing else, so an empty box is what
+    /// picks the provider's first data source and settles nothing else, so an empty box is what
     /// blocks Save.
     #[test]
     fn each_location_keeps_its_own_paths_and_neither_is_seeded() {
@@ -1565,9 +1565,9 @@ mod tests {
             local_sources: vec!["   ".into(), "/data/a.csv".into(), "/data/b.csv".into()],
             ..csv_draft()
         };
-        draft.set_location(Where::Remote, &connections());
+        draft.set_location(Where::Remote, &sources());
 
-        assert_eq!(draft.connection.as_deref(), Some("acme_lake"));
+        assert_eq!(draft.source.as_deref(), Some("acme_lake"));
         assert_eq!(
             draft.path_count(),
             1,
@@ -1587,103 +1587,100 @@ mod tests {
             "the disk's list is whole, blank row and all"
         );
 
-        draft.set_location(Where::Local, &connections());
+        draft.set_location(Where::Local, &sources());
         assert_eq!(draft.nonblank_sources(), ["/data/a.csv", "/data/b.csv"]);
         assert_eq!(draft.remote_source, "events/");
     }
 
-    /// Picking a **TYPE** re-points the connection unless that provider already serves the one
+    /// Picking a **TYPE** re-points the data source unless that provider already serves the one
     /// chosen — the picker only offers its own, so a foreign selection would be a choice with no
     /// row to show it.
     #[test]
-    fn picking_a_provider_lands_on_one_of_its_connections() {
-        let connections = connections();
+    fn picking_a_kind_lands_on_one_of_its_sources() {
+        let sources = sources();
         let mut draft = csv_draft();
-        draft.set_location(Where::Remote, &connections);
-        assert_eq!(draft.connection.as_deref(), Some("acme_lake"));
+        draft.set_location(Where::Remote, &sources);
+        assert_eq!(draft.source.as_deref(), Some("acme_lake"));
 
-        draft.set_provider("gcs", &connections);
-        assert_eq!(draft.connection.as_deref(), Some("warehouse"));
+        draft.set_provider("gcs", &sources);
+        assert_eq!(draft.source.as_deref(), Some("warehouse"));
 
-        draft.set_provider("s3", &connections);
-        draft.connection = Some("cold_store".into());
-        draft.set_provider("s3", &connections);
-        assert_eq!(draft.connection.as_deref(), Some("cold_store"));
+        draft.set_provider("s3", &sources);
+        draft.source = Some("cold_store".into());
+        draft.set_provider("s3", &sources);
+        assert_eq!(draft.source.as_deref(), Some("cold_store"));
 
-        draft.set_provider("http", &connections);
-        assert_eq!(draft.connection, None);
+        draft.set_provider("http", &sources);
+        assert_eq!(draft.source, None);
         assert!(draft
             .blocker()
-            .is_some_and(|why| why.contains("needs a connection")));
+            .is_some_and(|why| why.contains("needs a data source")));
     }
 
-    /// A connection is **remembered** across a flip back to the local disk, and does not reach
+    /// A data source is **remembered** across a flip back to the local disk, and does not reach
     /// the def while it is not the table's location — the two fields say different things.
     #[test]
-    fn a_remembered_connection_is_not_a_location() {
-        let connections = connections();
+    fn a_remembered_source_is_not_a_location() {
+        let sources = sources();
         let mut draft = csv_draft();
-        draft.set_location(Where::Remote, &connections);
-        draft.set_location(Where::Local, &connections);
+        draft.set_location(Where::Remote, &sources);
+        draft.set_location(Where::Local, &sources);
 
         assert_eq!(
-            draft.connection.as_deref(),
+            draft.source.as_deref(),
             Some("acme_lake"),
             "coming back must not have to pick it again"
         );
         assert_eq!(draft.store(), None, "but the table reads from disk");
-        assert_eq!(draft.def(Path::new("/project")).connection, None);
+        assert_eq!(draft.def(Path::new("/project")).source, None);
     }
 
-    /// A def naming a connection opens on it, **on that connection's provider** — which is the
-    /// connection's fact, read off the project's list rather than parsed out of the URL.
+    /// A def naming a data source opens on it, **on that data source's provider** — which is the
+    /// data source's fact, read off the project's list rather than parsed out of the URL.
     #[test]
-    fn a_remote_def_opens_on_its_connections_provider() {
+    fn a_remote_def_opens_on_its_sources_kind() {
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::Parquet,
-            connection: Some("warehouse".into()),
-            sources: vec!["events/".into()],
+            source: Some("warehouse".into()),
+            paths: vec!["events/".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
-        let draft = ConfigureDraft::of(&def, &connections());
+        let draft = ConfigureDraft::of(&def, &sources());
         assert!(draft.remote());
         assert_eq!(draft.kind, "gcs");
-        assert_eq!(draft.connection.as_deref(), Some("warehouse"));
+        assert_eq!(draft.source.as_deref(), Some("warehouse"));
         assert_eq!(draft.def(Path::new("/project")), def);
     }
 
-    /// A def whose connection this project no longer has **keeps the reference**: rewriting it to
+    /// A def whose data source this project no longer has **keeps the reference**: rewriting it to
     /// "local disk" would silently re-point the table at a relative path on the user's own machine.
     /// The window says so and blocks Save instead (`views::footer`).
     #[test]
-    fn a_def_over_a_forgotten_connection_keeps_naming_it() {
+    fn a_def_over_a_forgotten_source_keeps_naming_it() {
         let def = TableDef {
             name: "events".into(),
             format: SourceFormat::Parquet,
-            connection: Some("s3://gone".into()),
-            sources: vec!["events/".into()],
+            source: Some("s3://gone".into()),
+            paths: vec!["events/".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
-        let draft = ConfigureDraft::of(&def, &connections());
+        let draft = ConfigureDraft::of(&def, &sources());
         assert!(draft.remote());
-        assert_eq!(draft.connection.as_deref(), Some("s3://gone"));
+        assert_eq!(draft.source.as_deref(), Some("s3://gone"));
         assert_eq!(draft.def(Path::new("/project")), def);
     }
 
-    /// The picker offers one provider's connections, by URL and in the project's order — and
+    /// The picker offers one provider's data sources, by URL and in the project's order — and
     /// answers "none" for a provider with none, which is what the empty line under it says.
     #[test]
-    fn the_picker_offers_one_providers_connections() {
-        let connections = connections();
-        assert_eq!(
-            connections_for(&connections, "s3"),
-            ["acme_lake", "cold_store"]
-        );
-        assert_eq!(connections_for(&connections, "gcs"), ["warehouse"]);
-        assert!(connections_for(&connections, "http").is_empty());
+    fn the_picker_offers_one_kinds_sources() {
+        let sources = sources();
+        assert_eq!(sources_for(&sources, "s3"), ["acme_lake", "cold_store"]);
+        assert_eq!(sources_for(&sources, "gcs"), ["warehouse"]);
+        assert!(sources_for(&sources, "http").is_empty());
     }
 }
 

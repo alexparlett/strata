@@ -71,8 +71,8 @@ fn table(name: &str, format: &str) -> TableDef {
     TableDef {
         name: name.into(),
         format: SourceFormat::from_name(format),
-        connection: None,
-        sources: vec![format!("{name}.{format}")],
+        source: None,
+        paths: vec![format!("{name}.{format}")],
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     }
@@ -195,7 +195,7 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
                     paths: vec![SCAN_FIXTURE.into()],
                     format: SourceFormat::from_name("csv"),
                     partitions: Vec::new(),
-                    connection: None,
+                    source: None,
                     internal: false,
                 }))
                 .expect("the fixture registers");

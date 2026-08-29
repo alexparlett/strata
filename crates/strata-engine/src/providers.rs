@@ -11,11 +11,11 @@
 //!   even with the router bypassed. `CREATE DATABASE` cannot be stopped here — `register_catalog`
 //!   returns an `Option` and has no way to refuse — so the classifier's `Fault::CreateDatabase` is
 //!   its only gate. The scoping is load-bearing since the DB workstream: the session holds one
-//!   catalog per database connection too, and it is the *workspace* whose flat bare-name namespace
+//!   catalog per data source too, and it is the *workspace* whose flat bare-name namespace
 //!   is one-catalog-one-schema.
 //! * **Removability** — [`StrataCatalogList`] exists for the one thing DataFusion cannot serve:
 //!   `CatalogProviderList` has `register_catalog` and no counterpart. Forgetting a database
-//!   connection has to make its catalog stop resolving, or a removed source stays queryable until
+//!   data source has to make its catalog stop resolving, or a removed source stays queryable until
 //!   the window is re-opened.
 //! * **Replaceability** — [`StrataSchemaProvider::replace`] is the other operation the traits do
 //!   not have. `register_table` refuses a name that is already there, so a re-registration needs
@@ -27,7 +27,7 @@
 //!   snapshot **by name**, so none notices. The prefix is [`is_snapshot_name`], beside the function
 //!   that mints the names, so the hiding rule and the naming rule cannot drift.
 //!
-//! That filter is **this** provider's, and a source connection's
+//! That filter is **this** provider's, and a source data source's
 //! ([`SourceSchemaProvider`](super::sources::providers::SourceSchemaProvider)) deliberately has
 //! none: the namespace is the workspace
 //! catalog's, so a remote relation a server happens to call `__snap_x` is an ordinary table — the
@@ -82,7 +82,7 @@ pub(super) fn in_workspace(name: &TableReference) -> bool {
 /// The engine's **catalog list**: DataFusion's, plus the one operation it does not have.
 ///
 /// `MemoryCatalogProviderList` can register a catalog and never remove one, so a database
-/// connection could be forgotten and go on answering `pg.public.orders` for the life of the
+/// data source could be forgotten and go on answering `pg.public.orders` for the life of the
 /// window. This is the same map with [`deregister`](Self::deregister) on it — installed at
 /// [`build_context`](super::build_context) time via `SessionStateBuilder::with_catalog_list`,
 /// so the builder registers the workspace catalog into *this* list and nothing else moves.
@@ -101,7 +101,7 @@ pub struct StrataCatalogList {
     /// and stamps whatever it answers into `information_schema.tables.table_catalog` and every
     /// `SHOW` form, so folding the *enumeration* — which `MemoryCatalogProviderList` does not do
     /// — would print a catalog name no def, no surface and no user ever wrote. A database
-    /// connection deliberately registers the user's own spelling.
+    /// data source deliberately registers the user's own spelling.
     catalogs: RwLock<BTreeMap<String, Registered>>,
 }
 
@@ -111,7 +111,7 @@ type Registered = (String, Arc<dyn CatalogProvider>);
 impl StrataCatalogList {
     /// Take the catalog registered under `name` back out — the half `CatalogProviderList` is
     /// missing. `None` when nothing was registered under it, which is the ordinary case for a
-    /// connection that never connected and is not a fault.
+    /// data source that never connected and is not a fault.
     pub fn deregister(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.catalogs
             .write()
@@ -181,7 +181,7 @@ pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn Ca
 /// Register a catalog shaped the way a live source's is — one namespace, some relations — so a
 /// test can ask what the app does about a name inside one without a server.
 ///
-/// The providers are the real pair a connection registers, over a source that speaks no SQL, so
+/// The providers are the real pair a data source registers, over a source that speaks no SQL, so
 /// what these tests drive is the thing itself rather than a stand-in for it. The connect is
 /// skipped because their subject is the **catalog list**: each asks whether a catalog of that
 /// name is registered and then works off the resolved reference.

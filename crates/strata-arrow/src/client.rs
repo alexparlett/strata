@@ -1,5 +1,5 @@
-//! The **client-option catalogue**: every tunable of the HTTP client an object store connection
-//! may set, and the check the connection editor and the store build both make against it.
+//! The **client-option catalogue**: every tunable of the HTTP client an object store data source
+//! may set, and the check the data source editor and the store build both make against it.
 //!
 //! Building the store is the engine's (`strata_engine::store`); the catalogue is here because the
 //! editor's picker offers from it and the refusal it shows has to be the same one the build makes.
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 /// One tunable of the HTTP client every object store is built on — `object_store`'s
 /// [`ClientConfigKey`](object_store::ClientConfigKey), with the sentence the editor's picker shows beside it.
 ///
-/// The **name** is `ClientConfigKey`'s own (`AsRef<str>`), so what a connection stores is what
+/// The **name** is `ClientConfigKey`'s own (`AsRef<str>`), so what a data source stores is what
 /// `from_str` reads back; the description is ours, because the crate's is a doc comment and not a
 /// value.
 #[derive(PartialEq, Eq, Debug)]
@@ -18,7 +18,7 @@ pub struct ClientKey {
     pub what: &'static str,
 }
 
-/// Every client option a connection may set, in the order the picker offers them.
+/// Every client option a data source may set, in the order the picker offers them.
 ///
 /// A written-down table, because `ClientConfigKey` has no enumeration of itself — the same shape
 /// and the same reason as [`ENGINE_KEYS`](crate::config::ENGINE_KEYS) for DataFusion's settings. It
@@ -29,7 +29,7 @@ pub struct ClientKey {
 /// Two of `object_store`'s keys are deliberately **absent**, and for the same reason in both
 /// halves: they are already said elsewhere, and a second control for one setting is two controls
 /// that can disagree. `allow_http` is the S3 provider's own
-/// [`S3Store::allow_http`](strata_model::S3Store::allow_http) toggle, and on an HTTP connection it
+/// [`S3Store::allow_http`](strata_model::S3Store::allow_http) toggle, and on an HTTP data source it
 /// is the **scheme the user typed** (the store's build derives it); `default_content_type`
 /// describes an upload, and nothing here writes.
 pub const CLIENT_KEYS: &[ClientKey] = &[
@@ -99,13 +99,13 @@ pub const CLIENT_KEYS: &[ClientKey] = &[
     },
 ];
 
-/// The catalogue entry for `name`, if this is a client option a connection may set.
+/// The catalogue entry for `name`, if this is a client option a data source may set.
 pub fn client_key(name: &str) -> Option<&'static ClientKey> {
     CLIENT_KEYS.iter().find(|k| k.name == name)
 }
 
-/// Whether a connection's client options are ones the store will accept — **the same call the
-/// connection editor makes**, so an option refused at the field is refused here in the same words.
+/// Whether a data source's client options are ones the store will accept — **the same call the
+/// data source editor makes**, so an option refused at the field is refused here in the same words.
 ///
 /// Two failures, and neither is `object_store`'s to report: a name it has never heard of would be
 /// dropped on the floor by `from_str` at build time with nothing said, and a blank value would be
@@ -114,7 +114,7 @@ pub fn check_client_config(config: &BTreeMap<String, String>) -> Result<(), Stri
     for (name, value) in config {
         if client_key(name).is_none() {
             return Err(format!(
-                "'{name}' is not a client option Strata can set on a connection."
+                "'{name}' is not a client option Strata can set on a data source."
             ));
         }
         if value.trim().is_empty() {

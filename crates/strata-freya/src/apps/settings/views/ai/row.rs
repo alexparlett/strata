@@ -65,7 +65,7 @@ fn row_rule() -> BorderWidth {
 /// design keeps: the *token* is shared, the *artwork* belongs to whoever draws. Exhaustive, so a
 /// kind added to the table without a mark is a build error rather than a blank tile.
 ///
-/// The OpenAI-compatible kind has no brand to carry, so it takes the app's own connection glyph —
+/// The OpenAI-compatible kind has no brand to carry, so it takes the app's own data source glyph —
 /// which is what it is: a remote endpoint the user pointed at.
 pub fn mark(kind: ProviderKind) -> IconName {
     match kind {
@@ -76,7 +76,7 @@ pub fn mark(kind: ProviderKind) -> IconName {
         ProviderKind::Groq => IconName::ProviderGroq,
         ProviderKind::Xai => IconName::ProviderXai,
         ProviderKind::Ollama => IconName::ProviderOllama,
-        ProviderKind::OpenAiCompatible => IconName::Connections,
+        ProviderKind::OpenAiCompatible => IconName::Sources,
     }
 }
 

@@ -16,7 +16,7 @@
 //!
 //! A selected column belongs either to a **workspace** table or view — resolved against the
 //! project store, which is where its registration answer lives — or to a **relation inside a
-//! database connection's catalog** (DB-07), which has no store row at all: a database answers for
+//! data source's catalog** (DB-07), which has no store row at all: a database answers for
 //! itself, so its columns are an introspection this panel subscribes to. Both arms produce the
 //! same [`ColumnFacts`](model::ColumnFacts), so everything below the resolution — the title, the
 //! nested-fields box, the STATISTICS zone and the scan — is written once.
@@ -103,8 +103,8 @@ define_theme!(
         format_json_color: Color,
         format_arrow_color: Color,
         format_view_color: Color,
-        /// The same slot on a column read through a **database connection**, where the badge names
-        /// the connection rather than a format — Strata has no reader for it at all. It wears the
+        /// The same slot on a column read through a **data source**, where the badge names
+        /// the data source rather than a format — Strata has no reader for it at all. It wears the
         /// tone the tree's provider badge wears, because it says the same thing in the same words.
         format_database_color: Color,
     }

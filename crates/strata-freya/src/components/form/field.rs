@@ -37,7 +37,7 @@ const BROWSE_ICON: f32 = 15.;
 pub struct ValueField {
     value: State<String>,
     /// A `String` rather than a `&'static str`, because a placeholder can be **derived**: the
-    /// connection editor's name box shows the name its address would mint.
+    /// data source editor's name box shows the name its address would mint.
     placeholder: Option<String>,
     width: Size,
     height: Size,

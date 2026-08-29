@@ -12,7 +12,7 @@ use strata_model::{Kind, StatKey};
 /// because both halves turn on the same fact.
 ///
 /// A workspace entry's aggregate is executed by DataFusion over files it read itself, so every
-/// expression DataFusion has is available. A relation inside a database connection's catalog is
+/// expression DataFusion has is available. A relation inside a data source's catalog is
 /// the opposite: `datafusion-federation` sweeps the aggregate into **one remote statement**, the
 /// unparser renders it into SQL, and the server runs it — so an expression the server does not
 /// have is not a slower plan but a failed one, and there is no per-expression fallback to catch it.

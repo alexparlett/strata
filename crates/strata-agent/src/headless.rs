@@ -148,14 +148,14 @@ impl HeadlessHost {
             catalog.push(CatalogEntry::Table {
                 name: def.name.clone(),
                 format: def.format.name().to_string(),
-                sources: def.sources.clone(),
+                sources: def.paths.clone(),
                 reg: reg_state(result),
             });
             described.push(match result {
                 Some(Ok(meta)) => Described::Table {
                     name: def.name.clone(),
                     format: def.format.name().to_string(),
-                    sources: def.sources.clone(),
+                    sources: def.paths.clone(),
                     partitions: def.partition_cols.clone(),
                     rows: meta.rows,
                     columns: meta.columns.clone(),
@@ -474,8 +474,8 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::from_name("csv"),
-            connection: None,
-            sources: vec![source.into()],
+            source: None,
+            paths: vec![source.into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }
@@ -490,7 +490,7 @@ mod tests {
             &root,
             &ProjectDefs {
                 name: "sales".into(),
-                connections: Vec::new(),
+                sources: Vec::new(),
                 tables: vec![table("people", "people.csv"), table("gone", "missing.csv")],
                 views: vec![ViewDef {
                     name: "adults".into(),
@@ -603,9 +603,9 @@ mod tests {
     async fn a_replay_registers_what_the_spec_still_names() {
         let (root, host) = project("replay").await;
         let defs = load_defs(&root).expect("defs");
-        let known = SourceDefs::of(&defs.connections);
+        let known = SourceDefs::of(&defs.sources);
         let desired = CatalogSpec {
-            connections: defs.connections.clone(),
+            sources: defs.sources.clone(),
             tables: defs
                 .tables
                 .iter()

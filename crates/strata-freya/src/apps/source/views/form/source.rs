@@ -9,15 +9,15 @@
 //! What a value may **be** is never asked here. Per-key validation is what the `Field` implies —
 //! a choice is a `Select`, so an illegal word is unreachable; a required box is refused empty —
 //! and every other rule belongs to the kind, asked by
-//! [`connect`](strata_engine::DataSource::connect), whose refusal lands on the connection's own
+//! [`connect`](strata_engine::DataSource::connect), whose refusal lands on the data source's own
 //! row. An address is the same bargain one row up: the kind's rule, reached through
 //! `sources().check_address` and said in the footer.
 
 use freya::prelude::*;
 use strata_engine::{Field, SourceInfo, SourceSetting};
 
-use crate::apps::connection::model::{noun, SecretProbe, SecretRow};
-use crate::apps::connection::ConnectionCtx;
+use crate::apps::source::model::{noun, SecretProbe, SecretRow};
+use crate::apps::source::SourceCtx;
 use crate::components::form::{
     form_theme, Form, PathField, Row, Section, ValueField, FIELD_HEIGHT,
 };
@@ -48,7 +48,7 @@ const TOOL_GAP: f32 = SP_3;
 /// hooks at all.
 pub(super) fn rows(
     form: Form,
-    ctx: ConnectionCtx,
+    ctx: SourceCtx,
     keys: &'static [SourceSetting],
     registrant: &Option<SourceInfo>,
     scope: &str,
@@ -78,7 +78,7 @@ pub(super) fn rows(
     }
 }
 
-/// **NAME** — the handle: what every surface calls this connection, and the catalog its relations
+/// **NAME** — the handle: what every surface calls this data source, and the catalog its relations
 /// are addressed under (`lake.public.orders`).
 ///
 /// One field for both, because they are one thing: a second "display name" beside the identifier
@@ -106,7 +106,7 @@ impl Component for NameField {
     }
 
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let text = use_state({
             let initial = ctx.draft.peek().name.clone();
             move || initial
@@ -118,7 +118,7 @@ impl Component for NameField {
         Row::new("NAME")
             .required()
             .hint(
-                "What this connection is called, and the catalog its tables are queried by: \
+                "What this data source is called, and the catalog its tables are queried by: \
                  'lake' makes a table 'lake.public.orders'",
             )
             .child(ValueField::new(text).width(Size::px(NARROW_WIDTH)))
@@ -149,7 +149,7 @@ impl Component for KeyField {
     }
 
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let declared = self.declared;
         let name = declared.key;
         let value = ctx.draft.read().value(name);
@@ -240,7 +240,7 @@ impl Component for TextKey {
     }
 
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let name = self.declared.key;
         let text = use_state({
             let initial = ctx.draft.peek().value(name);
@@ -263,7 +263,7 @@ impl Component for TextKey {
 /// The settings window's API-key marker is honest because it minted the reference when it stored
 /// one; a committed expectation says nothing about the machine reading it, so this row reports
 /// the mount probe ([`SecretRow`]) instead. The two clearing gestures are kept apart for the
-/// same reason: *remove from this machine* is local, while *this connection uses no …* edits the
+/// same reason: *remove from this machine* is local, while *this data source uses no …* edits the
 /// shared def and would break the colleague who has one.
 ///
 /// They stack rather than sitting side by side, because both are offered at once and their two
@@ -294,7 +294,7 @@ impl Component for SecretField {
 
     fn render(&self) -> impl IntoElement {
         let form = form_theme();
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let mut revealed = use_state(|| false);
         let name = self.declared.key;
         let noun = noun(&self.declared);
@@ -411,19 +411,19 @@ impl Component for SecretField {
                                     .on_press(move |_: Event<PressEventData>| {
                                         ctx.disuse_secret(name);
                                     })
-                                    .child(Control::new(format!("This connection uses no {noun}")))
+                                    .child(Control::new(format!("This data source uses no {noun}")))
                             })),
                     ),
             ))
     }
 }
 
-/// **READ ONLY** — whether statements may change what this connection holds (DB-10). Every other
+/// **READ ONLY** — whether statements may change what this data source holds (DB-10). Every other
 /// client calls it that, and it is **on** unless someone turns it off.
 ///
-/// That default is the whole safety story: a connection is a read-only view until this says
+/// That default is the whole safety story: a data source is a read-only view until this says
 /// otherwise, so shipping the write path changed nothing about any project already on disk. On
-/// the **def** rather than beside it, because a connection is committed and shared and the answer
+/// the **def** rather than beside it, because a data source is committed and shared and the answer
 /// should be the same for a colleague.
 ///
 /// **The editor's own row, not a declared one**, and the split is the point: the sentence beside
@@ -450,12 +450,12 @@ impl Component for ReadOnly {
     }
 
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let read_only = ctx.draft.read().read_only;
 
         Row::new("READ ONLY")
             .hint(
-                "Strata never changes what this connection holds. Turn it off to allow INSERT \
+                "Strata never changes what this data source holds. Turn it off to allow INSERT \
                  and CREATE TABLE AS SELECT",
             )
             .child(Switch::new().toggled(read_only).on_toggle(move |()| {

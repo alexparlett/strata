@@ -79,7 +79,7 @@ pub use persist::{
 pub use project::{FaultKind, ProjChan, ProjectState, Reg};
 /// The catalog rows themselves. A test that builds a store **inline** names these, which is what
 /// this codebase asks for instead of bending a signature to be testable (the command palette's
-/// index is tested exactly this way). A connection's row is not among them: nothing outside the
+/// index is tested exactly this way). A data source's row is not among them: nothing outside the
 /// store reads one directly any more, the data-sources tree having moved onto [`SourceNode`].
 #[cfg(test)]
 pub use project::{TableRow, ViewInfo, ViewRow};

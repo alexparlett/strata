@@ -7,7 +7,6 @@
 
 mod catalog;
 mod chart;
-mod connection;
 mod diagnostics;
 mod history;
 mod profile;
@@ -15,6 +14,7 @@ mod query_error;
 mod results;
 mod schema;
 mod session;
+mod source;
 
 pub use catalog::{
     CatalogKind, ColOwner, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoteRef,
@@ -24,7 +24,6 @@ pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
     ChartSeries, ChartSort, ChartX, Trend,
 };
-pub use connection::{check_catalog, check_catalog_name, SourceDef, WORKSPACE_CATALOG};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
@@ -35,3 +34,4 @@ pub use session::{
     expanded_drawer_h, DrawerTab, Layout, Origin, ProblemsTab, ResultsView, RightPane,
     SessionSnapshot, SidebarPane, TabId, TabSnapshot, WindowGeom,
 };
+pub use source::{check_catalog, check_catalog_name, SourceDef, WORKSPACE_CATALOG};

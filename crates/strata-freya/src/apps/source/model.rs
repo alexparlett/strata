@@ -1,7 +1,7 @@
-//! The connection editor's data: what is being edited ([`ConnectionTarget`]), what the user has
-//! chosen ([`ConnectionDraft`]), and why a draft cannot be saved yet.
+//! The data source editor's data: what is being edited ([`SourceTarget`]), what the user has
+//! chosen ([`Data sourceDraft`]), and why a draft cannot be saved yet.
 //!
-//! **A draft is a source and nothing else, and this module names no source.** [`ConnectionDraft`]
+//! **A draft is a source and nothing else, and this module names no source.** [`Data sourceDraft`]
 //! is a key-to-value map beside the keys the registry handed over ([`SourceSetting`]), so a kind
 //! the engine gains is a kind this form already edits, and a kind it does not serve has no shape
 //! here at all. The same rule the flat `SourceDef` follows one layer down: what a source is
@@ -19,34 +19,34 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_engine::{Field, SourceInfo, SourceSetting, When};
 use strata_model::{check_catalog, SourceDef};
 
-/// What this window is editing: a new connection, or an existing one by
+/// What this window is editing: a new data source, or an existing one by
 /// [`named`](SourceDef::named).
 ///
-/// The name is the handle — the one thing every surface addresses a connection by — and it is
+/// The name is the handle — the one thing every surface addresses a data source by — and it is
 /// also what makes this window single-instance per target: two windows on one def would both
-/// `upsert_connection` and both persist.
+/// `upsert_data source` and both persist.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ConnectionTarget {
+pub enum SourceTarget {
     New,
     Edit(String),
 }
 
-impl ConnectionTarget {
+impl SourceTarget {
     /// The window's title.
     pub fn title(&self) -> &'static str {
         match self {
-            Self::New => "New connection",
-            Self::Edit(_) => "Edit connection",
+            Self::New => "New data source",
+            Self::Edit(_) => "Edit data source",
         }
     }
 
-    /// The line under the title: the connection this window opened on. A new one has nothing to
+    /// The line under the title: the data source this window opened on. A new one has nothing to
     /// say there yet — its name is being typed.
     pub fn subtitle(&self) -> Option<&str> {
         self.editing()
     }
 
-    /// The connection this window opened on, if any — what a rename is measured against.
+    /// The data source this window opened on, if any — what a rename is measured against.
     pub fn editing(&self) -> Option<&str> {
         match self {
             Self::New => None,
@@ -124,21 +124,21 @@ impl SecretRow {
                 format!("This {noun} goes into this machine's keystore when you save.")
             }
             Self::Unused { forgetting: false } => {
-                format!("This connection signs in without a {noun}.")
+                format!("This data source signs in without a {noun}.")
             }
             Self::Unused { forgetting: true } => format!(
-                "This connection signs in without a {noun}. The one stored on this machine is \
+                "This data source signs in without a {noun}. The one stored on this machine is \
                  removed when you save."
             ),
             Self::Stored => {
                 format!("A {noun} is stored on this machine. Type a new one to replace it.")
             }
             Self::Missing => format!(
-                "This connection expects a {noun} and none is stored on this machine. Enter it \
+                "This data source expects a {noun} and none is stored on this machine. Enter it \
                  here."
             ),
             Self::Removing => format!(
-                "The {noun} stored on this machine is removed when you save. This connection \
+                "The {noun} stored on this machine is removed when you save. This data source \
                  still expects one, so other machines keep theirs."
             ),
             Self::Asking => "Checking this machine's keystore…".into(),
@@ -151,7 +151,7 @@ impl SecretRow {
         matches!(self, Self::Stored)
     }
 
-    /// Whether **This connection uses no …** is offered — wherever one is still expected,
+    /// Whether **This data source uses no …** is offered — wherever one is still expected,
     /// including while the keystore is asked or refusing, since the press edits the def rather
     /// than this machine.
     pub fn offers_disuse(&self) -> bool {
@@ -168,10 +168,10 @@ pub fn noun(key: &SourceSetting) -> String {
     key.label.to_lowercase()
 }
 
-/// Everything the user has chosen: which registered kind serves this connection, and a value per
+/// Everything the user has chosen: which registered kind serves this data source, and a value per
 /// key that kind declared.
 ///
-/// **One type, because a connection is one thing.** The address is a declared key like the rest
+/// **One type, because a data source is one thing.** The address is a declared key like the rest
 /// ([`Slot::Address`]); it simply lands on a typed field rather than in the open map, which is
 /// what [`value`](Self::value) and [`set`](Self::set) route. This is the shape the *def* takes
 /// when `SourceDef` and `SourceDef` collapse (EA-25) — the draft gets there first because it
@@ -183,8 +183,8 @@ pub fn noun(key: &SourceSetting) -> String {
 /// play declares. That is what makes registering a `DataSource` put a working form in front of it
 /// with no code here.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct ConnectionDraft {
-    /// Which registered kind serves this connection — the picker's answer, and the registry key.
+pub struct SourceDraft {
+    /// Which registered kind serves this data source — the picker's answer, and the registry key.
     pub kind: String,
     /// What that kind declares it takes, as the registry handed it over. Set with
     /// [`kind`](Self::kind) and never apart from it, so the rows drawn and the values written
@@ -195,20 +195,20 @@ pub struct ConnectionDraft {
     ///
     /// **The editor's own row, not a declared one**: the store keys by it, the catalog is named
     /// by it and `check_catalog` judges it, and a source has no opinion about any of that. A kind
-    /// that could omit it could produce an unnameable connection.
+    /// that could omit it could produce an unnameable data source.
     pub name: String,
     /// A value per declared [`Slot::Config`] key, as typed. Trimmed into the def, never on the
     /// way in. **No [`Field::Secret`] value is ever here** — those go to this machine's keystore.
     pub config: BTreeMap<String, String>,
-    /// Which of the kind's secret-typed keys this connection has a value for — the def's
+    /// Which of the kind's secret-typed keys this data source has a value for — the def's
     /// expectation, which no control writes directly (the window's own slots derive it).
     pub secrets: BTreeSet<String>,
     pub schemas: Vec<String>,
     pub read_only: bool,
 }
 
-impl ConnectionDraft {
-    /// A new connection, on the first source the engine serves.
+impl SourceDraft {
+    /// A new data source, on the first source the engine serves.
     ///
     /// Picking one rather than opening blank: the picker is a list of registrants, so "none
     /// chosen" is a state only a build with no sources can be in, and a form with no rows and no
@@ -232,7 +232,7 @@ impl ConnectionDraft {
     ///
     /// `registrants` is what the engine can serve, which is where the declaration comes from: a
     /// def naming a kind nothing answers to opens with no rows, which is the honest form for a
-    /// connection this build cannot describe.
+    /// data source this build cannot describe.
     ///
     pub fn of(def: &SourceDef, registrants: &[SourceInfo]) -> Self {
         let settings = registrants
@@ -337,7 +337,7 @@ impl ConnectionDraft {
     /// the kind's own rule, asked by [`connect`](strata_engine::DataSource::connect), which is
     /// the real gate.
     ///
-    /// What a **kind** makes of an address, and whether another connection already holds this
+    /// What a **kind** makes of an address, and whether another data source already holds this
     /// name, are the footer's: both need something this value does not have — the registry, and
     /// the project's other rows.
     pub fn blocker(&self) -> Option<String> {
@@ -351,7 +351,7 @@ impl ConnectionDraft {
                 Field::Secret => !self.secrets.contains(declared.key),
                 _ => self.value(declared.key).trim().is_empty(),
             })
-            .map(|declared| format!("This connection has no {}.", noun(declared)))
+            .map(|declared| format!("This data source has no {}.", noun(declared)))
     }
 }
 
@@ -451,8 +451,8 @@ mod tests {
         }
     }
 
-    fn source_draft() -> ConnectionDraft {
-        ConnectionDraft {
+    fn source_draft() -> SourceDraft {
+        SourceDraft {
             kind: "test".into(),
             settings: TEST_SETTINGS,
             name: "warehouse".into(),
@@ -484,7 +484,7 @@ mod tests {
             schemas: vec!["public".into(), "analytics".into()],
             read_only: false,
         };
-        assert_eq!(ConnectionDraft::of(&def, &[info(TEST_SETTINGS)]).def(), def);
+        assert_eq!(SourceDraft::of(&def, &[info(TEST_SETTINGS)]).def(), def);
     }
 
     /// **The address is an ordinary setting.** No routing, no typed field, no normalising: it is
@@ -511,15 +511,15 @@ mod tests {
         );
     }
 
-    /// **A new connection opens on the first source the engine serves**, because the picker is a
+    /// **A new data source opens on the first source the engine serves**, because the picker is a
     /// list of registrants: "none chosen" is a state only a build with no sources can reach.
     #[test]
     fn a_new_draft_adopts_the_first_registrant() {
-        let draft = ConnectionDraft::new(&[info(TEST_SETTINGS)]);
+        let draft = SourceDraft::new(&[info(TEST_SETTINGS)]);
         assert_eq!(draft.kind, "test");
         assert_eq!(draft.settings, TEST_SETTINGS);
 
-        let bare = ConnectionDraft::new(&[]);
+        let bare = SourceDraft::new(&[]);
         assert!(bare.kind.is_empty(), "nothing to offer, nothing set");
         assert!(bare.settings.is_empty());
     }
@@ -537,7 +537,7 @@ mod tests {
             kind: "mongo".into(),
             ..Default::default()
         };
-        let draft = ConnectionDraft::of(&def, &[info(TEST_SETTINGS)]);
+        let draft = SourceDraft::of(&def, &[info(TEST_SETTINGS)]);
         assert_eq!(draft.kind, "mongo");
         assert!(draft.settings.is_empty(), "nothing declares its rows");
     }
@@ -587,14 +587,14 @@ mod tests {
         userless.set("user", "  ".into());
         assert_eq!(
             userless.blocker(),
-            Some("This connection has no user.".into())
+            Some("This data source has no user.".into())
         );
 
         let mut addressless = good;
         addressless.set("address", String::new());
         assert_eq!(
             addressless.blocker(),
-            Some("This connection has no address.".into())
+            Some("This data source has no address.".into())
         );
     }
 
@@ -624,7 +624,7 @@ mod tests {
         assert!(draft.shows(cert));
         assert_eq!(
             draft.blocker(),
-            Some("This connection has no root certificate.".into()),
+            Some("This data source has no root certificate.".into()),
             "now it is asked, so now it blocks"
         );
 
@@ -646,7 +646,7 @@ mod tests {
         );
     }
 
-    /// **A blank name box is not a nameless connection**: the address mints one, which is what
+    /// **A blank name box is not a nameless data source**: the address mints one, which is what
     /// **A blank name is refused, not filled in.** A source is what the user called it, so there
     /// is no address to mint one from and no silent name to be surprised by later.
     #[test]
@@ -759,10 +759,10 @@ mod tests {
     }
 
     /// **The two clearing gestures are not the same gesture.** *Remove from this machine* leaves
-    /// the expectation standing so a colleague keeps their own secret; *this connection uses no
+    /// the expectation standing so a colleague keeps their own secret; *this data source uses no
     /// …* edits the shared def.
     #[test]
-    fn removing_a_secret_locally_is_not_declaring_the_connection_has_none() {
+    fn removing_a_secret_locally_is_not_declaring_the_source_has_none() {
         let removing = SecretRow::of(true, false, true, &SecretProbe::Stored);
         assert_eq!(removing, SecretRow::Removing);
         assert!(

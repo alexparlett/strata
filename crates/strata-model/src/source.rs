@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-/// One project-scoped data source: which kind serves it, what it is called, and how that kind was
+/// One project-scoped source: which kind serves it, what it is called, and how that kind was
 /// configured.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
@@ -126,7 +126,7 @@ pub fn check_catalog_name(existing: &[SourceDef], candidate: &SourceDef) -> Resu
 }
 
 /// Whether `name` is one a data source may register under, on its own terms — the half of
-/// [`check_catalog_name`] that needs no other connection.
+/// [`check_catalog_name`] that needs no other data source.
 ///
 /// A **bare** SQL identifier, narrower than what DataFusion could resolve, because every surface
 /// that renders `pg.public.orders` would otherwise have to quote it. Case-folded against the
@@ -134,7 +134,7 @@ pub fn check_catalog_name(existing: &[SourceDef], candidate: &SourceDef) -> Resu
 pub fn check_catalog(catalog: &str) -> Result<(), String> {
     let name = catalog.trim();
     if name.is_empty() {
-        return Err("This connection has no catalog name.".into());
+        return Err("This data source has no catalog name.".into());
     }
     let mut chars = name.chars();
     let head = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_');
@@ -146,7 +146,7 @@ pub fn check_catalog(catalog: &str) -> Result<(), String> {
     }
     if name.eq_ignore_ascii_case(WORKSPACE_CATALOG) {
         return Err(format!(
-            "'{WORKSPACE_CATALOG}' is this project's own catalog. Give this connection a \
+            "'{WORKSPACE_CATALOG}' is this project's own catalog. Give this data source a \
              different name."
         ));
     }

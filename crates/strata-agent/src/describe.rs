@@ -159,7 +159,7 @@ pub fn describe_result(
         }),
         Described::Remote {
             name,
-            connection,
+            source,
             view,
             columns,
         } => Ok(DescribeResult {
@@ -167,7 +167,7 @@ pub fn describe_result(
                 true => EntryKindWire::View,
                 false => EntryKindWire::Table,
             }),
-            connection: Some(connection),
+            source: Some(source),
             ..schema_view(name, &columns, params)?
         }),
         Described::Failed { name, error } => Ok(DescribeResult {
@@ -186,7 +186,7 @@ fn blank(name: String, state: StateWire) -> DescribeResult {
         state,
         kind: None,
         error: None,
-        connection: None,
+        source: None,
         format: None,
         sources: Vec::new(),
         sources_total: None,
@@ -1152,7 +1152,7 @@ mod tests {
         }
     }
 
-    /// **A relation in a database connection's catalog** (DB-03): its columns, the connection
+    /// **A relation in a connection's catalog** (DB-03): its columns, the connection
     /// it is in, and the server's own word for what it is — and none of the def facts, because
     /// there is no def. A `not found` here would be false about something the agent can query.
     ///
@@ -1161,13 +1161,13 @@ mod tests {
     fn a_remote_relation_describes_as_itself() {
         let described = Described::Remote {
             name: "pg.public.orders".into(),
-            connection: "pg".into(),
+            source: "pg".into(),
             view: false,
             columns: vec![leaf("id"), leaf("total")],
         };
         let result = describe_result(described, &ask()).unwrap();
         assert_eq!(result.name, "pg.public.orders");
-        assert_eq!(result.connection.as_deref(), Some("pg"));
+        assert_eq!(result.source.as_deref(), Some("pg"));
         assert!(matches!(result.kind, Some(EntryKindWire::Table)));
         assert_eq!(result.columns.len(), 2);
         assert!(
@@ -1177,7 +1177,7 @@ mod tests {
 
         let remote_view = Described::Remote {
             name: "pg.public.big_orders".into(),
-            connection: "pg".into(),
+            source: "pg".into(),
             view: true,
             columns: vec![leaf("id")],
         };

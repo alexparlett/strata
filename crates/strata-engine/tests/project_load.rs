@@ -39,15 +39,15 @@ async fn fixture_project_registers_and_queries() {
         .await;
     assert_eq!(
         outcomes.len(),
-        defs.connections.len() + defs.tables.len() + defs.views.len(),
+        defs.sources.len() + defs.tables.len() + defs.views.len(),
         "one outcome per def: {outcomes:?}"
     );
 
-    let after_connections = defs.connections.len();
+    let after_sources = defs.sources.len();
 
     let mut failed = Vec::new();
     let mut settled = Vec::new();
-    for outcome in &outcomes[after_connections..after_connections + defs.tables.len()] {
+    for outcome in &outcomes[after_sources..after_sources + defs.tables.len()] {
         match outcome {
             RegOutcome::Table { name, result } => {
                 settled.push(name.clone());
@@ -75,7 +75,7 @@ async fn fixture_project_registers_and_queries() {
         .expect("events table");
     assert_eq!(events.partition_cols.len(), 2);
 
-    for outcome in &outcomes[after_connections + defs.tables.len()..] {
+    for outcome in &outcomes[after_sources + defs.tables.len()..] {
         let RegOutcome::View { name, result } = outcome else {
             panic!("a table settled after a view: {outcome:?}");
         };

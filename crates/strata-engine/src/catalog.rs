@@ -44,14 +44,14 @@ pub struct TableSpec {
     /// delimiter cannot be named on a parquet table.
     pub format: SourceFormat,
     pub partitions: Vec<(String, String)>,
-    /// The connection this table reads through, by name. `None` over local files.
+    /// The data source this table reads through, by name. `None` over local files.
     ///
     /// The one field registration does not use: [`table_spec`](crate::register::table_spec) has
-    /// already spent it composing [`paths`](Self::paths) onto that connection's store. It is
+    /// already spent it composing [`paths`](Self::paths) onto that data source's store. It is
     /// carried so [`Sources::dependents`](crate::Sources::dependents) can answer, a path being
-    /// something a connection was composed into rather than something one can be read back out
+    /// something a data source was composed into rather than something one can be read back out
     /// of.
-    pub connection: Option<String>,
+    pub source: Option<String>,
     /// [`TableOrigin::Internal`](strata_model::TableOrigin::Internal) — the data under
     /// [`paths`](Self::paths) is Strata's, spooled into the project's `.strata/tables/` by a
     /// `CREATE TABLE`.
@@ -73,7 +73,7 @@ pub struct ViewMeta {
     pub columns: Vec<ColumnInfo>,
     /// Workspace base tables the view scans, by bare name (see [`PlanDeps::tables`]).
     pub tables: Vec<String>,
-    /// Base relations it scans in a database connection's catalog, qualified
+    /// Base relations it scans in a data source's catalog, qualified
     /// (see [`PlanDeps::remote`]).
     pub remote: Vec<String>,
     /// Every `SubqueryAlias` name in its plan (see [`PlanDeps::aliases`]).
@@ -282,7 +282,7 @@ const MAX_PARTITION_DEPTH: usize = 8;
 ///
 /// The listing goes through the session's **object store**, not `std::fs`. That is the whole
 /// reason this lives in the engine: a source is a `ListingTableUrl`, and the store behind it is
-/// a local disk today and an S3 or GCS bucket once connections land (W7). `list_with_delimiter`
+/// a local disk today and an S3 or GCS bucket once data sources land (W7). `list_with_delimiter`
 /// is the same call for both, and `common_prefixes` is what "a directory" means to a store that
 /// has no directories. A `std::fs::read_dir` walk would have had to be rewritten from scratch
 /// for the first remote table.
@@ -331,7 +331,7 @@ fn keys_in_pattern(path: &str) -> Vec<String> {
 /// store refused, and a genuine "nothing here is `key=value`" — and the Hive toggle renders all
 /// four as "not partitioned". That is the right *answer* (there is nothing to offer either way)
 /// and a terrible *diagnosis*: a user whose lake is sitting right there gets no way to tell a
-/// broken connection from a layout this does not recognise. So each exit says which it was, at
+/// broken data source from a layout this does not recognise. So each exit says which it was, at
 /// `info` because detection runs on a toggle press rather than in any loop.
 async fn keys_in_store(ctx: &SessionContext, path: &str) -> Vec<String> {
     let Ok(url) = listing_url(path) else {
@@ -423,7 +423,7 @@ const LAYERS: &[&str] = &["External error", "Object Store error", "Execution err
 /// Matched as the pattern it is, because enumerating it is how the list goes stale: the first
 /// version of this file *did* enumerate, and shipped `GoogleCloudStorage` (the crate says `GCS`)
 /// while omitting `HTTP` — one of Strata's three providers, and the one whose tables are the only
-/// place an HTTP connection's reachability is tested at all, since `store::reachable` exempts it.
+/// place an HTTP data source's reachability is tested at all, since `store::reachable` exempts it.
 ///
 /// [`STORE_WORDS`] is what keeps the pattern from being greedy: a store name is one word, or two
 /// where the crate writes `HTTP client`, never a sentence. Without it a message that merely opens
@@ -557,11 +557,11 @@ const MISSING_SUFFIX: &str = "' not found";
 /// Exactly one diagnosis, because a **cross-source view** is the one def whose dependency can
 /// disappear with nothing on our side to observe it: a relation on a database server can be
 /// renamed by somebody else, and DataFusion's `table 'pg.public.orders' not found` reads like a bug
-/// in the SQL when the connection simply no longer has it.
+/// in the SQL when the data source simply no longer has it.
 ///
 /// **The staleness reported is bounded by the last connect**, which is the whole reconciliation: a
-/// connection's relation list is the connect-time enumeration, so this means "not in what the
-/// connection last told us" and the fix it names is a refresh. Nothing polls and nothing asks the
+/// data source's relation list is the connect-time enumeration, so this means "not in what the
+/// data source last told us" and the fix it names is a refresh. Nothing polls and nothing asks the
 /// server — a ↻ re-runs the pass, which re-connects.
 pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
     match missing_relation(ctx, raw) {
@@ -570,7 +570,7 @@ pub(crate) fn view_error(ctx: &SessionContext, raw: &str) -> String {
     }
 }
 
-/// The relation `raw` says is missing, when it is one inside a **live database connection's**
+/// The relation `raw` says is missing, when it is one inside a **live data source's**
 /// catalog — `None` for every other failure, workspace names included, where DataFusion's own
 /// wording already names something the user can look at in the catalog pane.
 ///
@@ -587,12 +587,12 @@ fn missing_relation(ctx: &SessionContext, raw: &str) -> Option<String> {
     if folded == CATALOG {
         return None;
     }
-    let connection = ctx
+    let source = ctx
         .catalog_names()
         .into_iter()
         .find(|registered| fold_ident(registered) == folded)?;
     Some(format!(
-        "'{name}' is not in the database connection '{connection}'. Refresh the catalog to \
+        "'{name}' is not in the data source '{source}'. Refresh the catalog to \
          re-read the database"
     ))
 }
@@ -844,13 +844,13 @@ fn holds_ext(dir: &Path, ext: &str) -> Option<bool> {
 /// - **`.table()`, not `to_string()` — for a workspace scan.** A `TableReference` renders as
 ///   written — `t` here, `public.t` there — so `to_string()` would yield two keys for one
 ///   thing, and the workspace catalog has a single schema, which makes the bare name the
-///   identity. A scan of a **database connection's** catalog is the opposite case and is
+///   identity. A scan of a **data source's** catalog is the opposite case and is
 ///   recorded whole, in [`remote`](PlanDeps::remote).
 pub struct PlanDeps {
     /// Workspace base tables scanned, by bare name — for profile invalidation and the
     /// table-drop warning.
     pub tables: Vec<String>,
-    /// Base relations scanned in a database connection's catalog, **qualified**
+    /// Base relations scanned in a data source's catalog, **qualified**
     /// (`pg.public.orders`).
     ///
     /// A second list rather than more entries in [`tables`](PlanDeps::tables), because the two
@@ -859,7 +859,7 @@ pub struct PlanDeps {
     /// the DB workstream — makes `pg.public.orders` indistinguishable from a workspace table
     /// called `orders`: dropping that table then names a view that never read it, the view's own
     /// missing-dependency check cries wolf over a relation the store has no row for, and a
-    /// forget of the connection matches nothing anywhere.
+    /// forget of the data source matches nothing anywhere.
     pub remote: Vec<String>,
     /// Every `SubqueryAlias` name, which for an inlined sub-view is the view's own name.
     /// Raw: also includes plain table aliases (`FROM t AS x`) and CTE names, since those
@@ -910,7 +910,7 @@ pub async fn dependent_views(ctx: &SessionContext, name: &str) -> Vec<String> {
 }
 
 /// The registered views whose plans read `at` — `pg.public.orders` — inside a database
-/// connection, so a `DROP` that runs on the server can name what it strands.
+/// data source, so a `DROP` that runs on the server can name what it strands.
 ///
 /// The `remote` half of [`PlanDeps`], compared case-insensitively over the whole dotted address,
 /// which over-reports in the same direction the aliases half does: a spare name is one the user
@@ -1000,7 +1000,7 @@ async fn readers(
 /// **Whose name it is decides both the expressions and the renderer**, and that is one decision
 /// made once: a workspace name executes here, so it gets the whole expression set and the
 /// fold-preserving [`quote_ident`] its registered identity needs; a name in a database
-/// connection's catalog federates into one statement on the server, so it gets [`Profiled`]'s
+/// data source's catalog federates into one statement on the server, so it gets [`Profiled`]'s
 /// restricted set and the case-preserving [`qualified`], which prints the segments the server
 /// itself spells. Reaching for either one alone is silently wrong in opposite directions.
 pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProfile, String> {
@@ -1138,7 +1138,7 @@ mod tests {
             paths: paths.iter().map(ToString::to_string).collect(),
             format: SourceFormat::from_name(format),
             partitions: Vec::new(),
-            connection: None,
+            source: None,
             internal: false,
         }
     }
@@ -1533,7 +1533,7 @@ mod tests {
 
     /// A request that never had to be retried omits the retry clause entirely (`RetryError`
     /// writes it only when `retries != 0`), so the bookkeeping still has to come off the short
-    /// form — this is the shape a first-attempt 403 or a refused connection takes.
+    /// form — this is the shape a first-attempt 403 or a refused data source takes.
     ///
     /// Note the fixture's **trailing space**: `RequestError::Status` interpolates an absent body
     /// as `""` after `{status}: `, so this is genuinely what the crate emits. It is kept, and the
@@ -1626,7 +1626,7 @@ mod tests {
 }
 
 /// **Dependency recording across sources** — the half of `plan_deps` a database
-/// connection changed, and the collision it exists to prevent.
+/// data source changed, and the collision it exists to prevent.
 #[cfg(test)]
 mod cross_source_tests {
     use std::collections::BTreeMap;
@@ -1641,7 +1641,7 @@ mod cross_source_tests {
     use crate::fold_ident;
     use crate::providers::fake_source;
 
-    /// A session with a workspace table `orders`, a connection `pg` whose catalog holds its own
+    /// A session with a workspace table `orders`, a data source `pg` whose catalog holds its own
     /// `orders`, and nothing else. The shared bare name is the fixture's whole point.
     ///
     /// A **registered batch**, never a view standing in for one: the planner inlines a view at
@@ -1688,7 +1688,7 @@ mod cross_source_tests {
     }
 
     /// And the reader question keys off the split: dropping the workspace `orders` names the
-    /// view that reads it and not the one that reads the connection's.
+    /// view that reads it and not the one that reads the data source's.
     #[tokio::test]
     async fn a_remote_reader_is_not_a_dependent_of_the_workspace_table() {
         let ctx = session().await;
@@ -1713,16 +1713,16 @@ mod cross_source_tests {
     /// The one diagnosis [`view_error`] makes, and the two it declines to: a workspace name
     /// keeps DataFusion's words, because the catalog pane has a row for it and that is a better
     /// thing to be pointed at than a refresh, and so does a catalog nothing registered, where
-    /// there is no connection to name.
+    /// there is no data source to name.
     #[tokio::test]
-    async fn a_missing_remote_relation_names_its_connection() {
+    async fn a_missing_remote_relation_names_its_source() {
         let ctx = session().await;
         assert_eq!(
             view_error(
                 &ctx,
                 "Error during planning: table 'pg.public.gone' not found"
             ),
-            "'pg.public.gone' is not in the database connection 'pg'. Refresh the catalog to \
+            "'pg.public.gone' is not in the data source 'pg'. Refresh the catalog to \
              re-read the database"
         );
         assert_eq!(
@@ -1744,7 +1744,7 @@ mod cross_source_tests {
     /// The catalog list answers case-insensitively and prints the spelling it was registered
     /// under — the same rule `StrataCatalogList` keeps for resolution, applied to the sentence.
     #[tokio::test]
-    async fn the_connection_is_named_as_it_was_registered() {
+    async fn the_source_is_named_as_it_was_registered() {
         let ctx = test_context(&BTreeMap::new());
         fake_source(&ctx, "Sales", &["orders"]);
         assert_eq!(fold_ident("Sales"), "sales");

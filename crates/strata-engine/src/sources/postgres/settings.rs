@@ -1,4 +1,4 @@
-//! What a `PostgreSQL` connection is described by: the keys it declares, and how a def's config map
+//! What a `PostgreSQL` data source is described by: the keys it declares, and how a def's config map
 //! reads as them.
 //!
 //! The address is one of those keys ([`Slot::Address`]), so the whole form is here — including
@@ -7,7 +7,7 @@
 //!
 //! The declaration is the only place these names are written. The editor draws its rows from it,
 //! [`PgSettings::read`] parses a def by it, and the conformance tests check the two agree — so a
-//! key added here reaches the form and the connection together.
+//! key added here reaches the form and the data source together.
 //!
 //! **Nothing here holds a secret value.** The password is a declared key like any other, and what
 //! that means is that its *value* goes to the keystore or comes from the environment; the def
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use crate::sources::source::{Field, SourceSetting, When};
 
-/// The key a `PostgreSQL` connection's password is filed under, in the keystore and in the def's
+/// The key a `PostgreSQL` data source's password is filed under, in the keystore and in the def's
 /// expectation set.
 pub const PASSWORD: &str = "password";
 
@@ -27,7 +27,7 @@ pub const PASSWORD_ENV: &[&str] = &["PGPASSWORD"];
 /// The SSL modes libpq names, in libpq's spellings and in its own order — weakest first, which
 /// reads as a dial rather than a list.
 ///
-/// The value is handed to the driver as written, so a rename here is a connection that fails with
+/// The value is handed to the driver as written, so a rename here is a data source that fails with
 /// 'Invalid parameter: sslmode'.
 pub const SSL_MODES: &[&str] = &["disable", "prefer", "require", "verify-ca", "verify-full"];
 
@@ -40,11 +40,11 @@ pub const SSL_VERIFYING: &[&str] = &["verify-ca", "verify-full"];
 const CONNECTION: Option<&str> = Some("CONNECTION");
 const SSL: Option<&str> = Some("SSL");
 
-/// Every row a `PostgreSQL` connection has, in the order it has them.
+/// Every row a `PostgreSQL` data source has, in the order it has them.
 ///
 /// The address is a declared key like the rest ([`Slot::Address`]) — its value lands on the def's
 /// own field rather than in `config`, and everything else about the row is stated here, so
-/// nothing about a `PostgreSQL` connection is written down in the editor.
+/// nothing about a `PostgreSQL` data source is written down in the editor.
 pub const SETTINGS: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
@@ -66,8 +66,8 @@ pub const SETTINGS: &[SourceSetting] = &[
         default: None,
         when: None,
         hint: Some(
-            "The role to log in as. Part of the connection's identity, so changing it is a \
-             different connection",
+            "The role to log in as. Part of the data source's identity, so changing it is a \
+             different source",
         ),
         placeholder: None,
     },
@@ -109,13 +109,13 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
 ];
 
-/// One connection's settings, read off the def's config map.
+/// One data source's settings, read off the def's config map.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PgSettings {
-    /// The role this connection logs in as. Half its identity in practice: two roles over one
+    /// The role this data source logs in as. Half its identity in practice: two roles over one
     /// database see two sets of schemas.
     pub user: String,
-    /// libpq's own word for how the connection is encrypted.
+    /// libpq's own word for how the data source is encrypted.
     pub sslmode: String,
     /// A root-certificate file path, for the two verifying modes. The path, never the contents.
     pub sslrootcert: String,
@@ -154,13 +154,13 @@ impl PgSettings {
         })
     }
 
-    /// Whether this connection's mode reads [`sslrootcert`](Self::sslrootcert).
+    /// Whether this data source's mode reads [`sslrootcert`](Self::sslrootcert).
     pub fn verifies(&self) -> bool {
         verifies(&self.sslmode)
     }
 }
 
-/// Whether `user` is a role this connection can actually log in as.
+/// Whether `user` is a role this data source can actually log in as.
 ///
 /// **Refused by name, because the layer below refuses it namelessly.** A role holding a space or
 /// an `=` produces `user=read only dbname=…`, which the parser rejects in words naming neither the
@@ -168,7 +168,7 @@ impl PgSettings {
 pub fn check_user(user: &str) -> Result<(), String> {
     let user = user.trim();
     if user.is_empty() {
-        return Err("This connection has no user.".into());
+        return Err("This data source has no user.".into());
     }
     if user.contains('@') {
         return Err("A PostgreSQL user can't contain '@'.".into());
@@ -176,7 +176,7 @@ pub fn check_user(user: &str) -> Result<(), String> {
     check_conn_value("user", user)
 }
 
-/// A database connection's address, taken apart — the **one** parse of `host:port/database`.
+/// A data source's address, taken apart — the **one** parse of `host:port/database`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PgAddress<'a> {
     /// Unbracketed: `[::1]` arrives here as `::1`, which is what a driver's `host=` takes.
@@ -192,12 +192,12 @@ pub struct PgAddress<'a> {
 /// `db.internal/analytics` while it means `:5432` shows one thing and connects to another.
 /// Userinfo is refused because the role is its own declared key.
 ///
-/// The **connection-string** rules ([`check_conn_value`]) apply to the host and the database for
+/// The **data source-string** rules ([`check_conn_value`]) apply to the host and the database for
 /// the same reason they apply to the user: all three are interpolated into a libpq string with no
 /// quoting.
 pub fn parse_address(address: &str) -> Result<PgAddress<'_>, String> {
     if address.is_empty() {
-        return Err("This connection has no server.".into());
+        return Err("This data source has no server.".into());
     }
     if address.chars().any(char::is_whitespace) {
         return Err("A PostgreSQL address can't contain spaces.".into());
@@ -217,12 +217,12 @@ pub fn parse_address(address: &str) -> Result<PgAddress<'_>, String> {
     }
     let Some((server, database)) = address.split_once('/') else {
         return Err(
-            "A PostgreSQL connection needs a database: write 'host:5432/analytics'.".into(),
+            "A PostgreSQL data source needs a database: write 'host:5432/analytics'.".into(),
         );
     };
     if database.is_empty() {
         return Err(
-            "A PostgreSQL connection needs a database: write 'host:5432/analytics'.".into(),
+            "A PostgreSQL data source needs a database: write 'host:5432/analytics'.".into(),
         );
     }
     if database.contains('/') {
@@ -231,7 +231,7 @@ pub fn parse_address(address: &str) -> Result<PgAddress<'_>, String> {
     check_conn_value("database", database)?;
     let Some((host, port)) = server.rsplit_once(':') else {
         return Err(format!(
-            "A PostgreSQL connection needs a port: write '{server}:5432/{database}'."
+            "A PostgreSQL data source needs a port: write '{server}:5432/{database}'."
         ));
     };
     let host = host
@@ -239,7 +239,7 @@ pub fn parse_address(address: &str) -> Result<PgAddress<'_>, String> {
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(host);
     if host.is_empty() {
-        return Err("A PostgreSQL connection needs a host.".into());
+        return Err("A PostgreSQL data source needs a host.".into());
     }
     check_conn_value("host", host)?;
     let port = match port.parse::<u16>() {
@@ -284,7 +284,7 @@ mod tests {
 
     /// **A database address is `host:port/database`**, and every part is required: the port
     /// because a `PostgreSQL` off 5432 is the ordinary case for a container or a pooler, the
-    /// database because there is no server-wide connection to make.
+    /// database because there is no server-wide data source to make.
     #[test]
     fn an_address_is_a_server_and_a_database() {
         for good in [
@@ -318,7 +318,7 @@ mod tests {
     /// **A role is checked on the same terms as an address**: a space or an `=` in the user fails
     /// not as "that user is wrong" but as a connection string the parser cannot read.
     #[test]
-    fn a_user_is_one_the_connection_string_can_carry() {
+    fn a_user_is_one_the_libpq_string_can_carry() {
         for good in ["reader", "app_user", "analytics-ro", "READER"] {
             assert_eq!(check_user(good), Ok(()), "{good}");
         }
@@ -351,7 +351,7 @@ mod tests {
             ("sslmode", "verify-full"),
             ("sslrootcert", "/certs/rds.pem"),
         ]))
-        .expect("a verifying connection");
+        .expect("a verifying data source");
         assert!(verifying.verifies());
         assert_eq!(verifying.sslrootcert, "/certs/rds.pem");
 

@@ -2,8 +2,8 @@
 
 use freya::prelude::*;
 
-use crate::apps::connection::ConnectionCtx;
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::source::SourceCtx;
 use crate::components::form::Row;
 use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 
@@ -13,7 +13,7 @@ use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
 /// One segment per **registered source**, and nothing else — which is the engine's answer, not
 /// this crate's, so a source an embedder registered is offered on exactly the terms a shipped one
 /// is: badged in its own word, and carrying its own declaration into the draft. A build serving
-/// no source offers nothing, which is the honest form of "this build cannot make a connection".
+/// no source offers nothing, which is the honest form of "this build cannot make a data source".
 #[derive(PartialEq)]
 pub(super) struct ProviderPicker {
     pub(super) key: DiffKey,
@@ -31,7 +31,7 @@ impl Component for ProviderPicker {
     }
 
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let engine = use_consume::<EngineCtx>();
         let kind = ctx.draft.read().kind.clone();
 

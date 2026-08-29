@@ -1,6 +1,6 @@
 //! **Statements the server runs** — `CREATE VIEW` (materialized or not), `DROP VIEW`,
 //! `DROP TABLE`, a column-list `CREATE TABLE`, `UPDATE` and `DELETE`, each against a relation
-//! inside a database connection. `docs/STATEMENTS_SPEC.md` §6.9.
+//! inside a source. `docs/STATEMENTS_SPEC.md` §6.9.
 //!
 //! What DataFusion can plan against a remote catalog is planned; what only the server can run is
 //! **dispatched** — the statement the user typed, with the catalog qualifier cut out. Splicing the
@@ -35,7 +35,7 @@ use strata_core::util::plural;
 
 use super::left_invalid;
 
-/// The relation `kind` addresses, when it is one inside a database connection **and** the kind's
+/// The relation `kind` addresses, when it is one inside a data source **and** the kind's
 /// [`Mechanism`] is to hand the statement to the server as text — the one answer every arm and
 /// the editor read, so the two cannot disagree about which statements the server owns.
 ///
@@ -88,14 +88,14 @@ pub(crate) fn dispatched(ctx: &SessionContext, kind: StmtKind, stmt: &DFStatemen
 /// refusal must never have reached the server, and the splice must never run over a statement the
 /// body check would have stopped.
 async fn dispatch(cx: &StmtCtx, at: &Remote, stmt: &DFStatement) -> Result<u64, String> {
-    let sources = &cx.sources;
-    if !writable(sources, &at.connection) {
+    let sources = &cx.live;
+    if !writable(sources, &at.source) {
         return Err(read_only(at));
     }
     let named = Named::of(stmt);
-    named.check(&cx.ctx, &at.connection)?;
-    let sql = splice(&cx.sql, &named.names, &at.connection, sources)?;
-    execute_text(sources, &at.connection, &sql).await
+    named.check(&cx.ctx, &at.source)?;
+    let sql = splice(&cx.sql, &named.names, &at.source, sources)?;
+    execute_text(sources, &at.source, &sql).await
 }
 
 /// [`dispatch`], plus the re-enumeration a statement that changed what the server holds owes: it
@@ -108,7 +108,7 @@ async fn changed(
     message: String,
 ) -> Result<StatementOutcome, String> {
     dispatch(cx, at, stmt).await?;
-    relist_at(&cx.sources, &at.connection).await;
+    relist_at(&cx.live, &at.source).await;
     Ok(StatementOutcome {
         message,
         count: None,
@@ -116,7 +116,7 @@ async fn changed(
     })
 }
 
-/// `CREATE VIEW` / `CREATE MATERIALIZED VIEW` inside a database connection — the only arm that
+/// `CREATE VIEW` / `CREATE MATERIALIZED VIEW` inside a data source — the only arm that
 /// accepts `MATERIALIZED`, the workspace having no such concept.
 pub(super) async fn create_view(
     cx: &StmtCtx,
@@ -131,29 +131,25 @@ pub(super) async fn create_view(
     let message = format!(
         "{what} '{}' created on '{}'",
         at.server_address(),
-        at.connection
+        at.source
     );
     changed(cx, at, stmt, message).await
 }
 
-/// A **column-list** `CREATE TABLE` inside a database connection, whose types are the server's own
+/// A **column-list** `CREATE TABLE` inside a source, whose types are the server's own
 /// vocabulary (`jsonb`, `serial`) and only the server's to judge.
 pub(super) async fn create_table(
     cx: &StmtCtx,
     at: &Remote,
     stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
-    let message = format!(
-        "Table '{}' created on '{}'",
-        at.server_address(),
-        at.connection
-    );
+    let message = format!("Table '{}' created on '{}'", at.server_address(), at.source);
     changed(cx, at, stmt, message).await
 }
 
-/// `DROP TABLE` / `DROP VIEW` inside a database connection, naming the workspace views left
+/// `DROP TABLE` / `DROP VIEW` inside a source, naming the workspace views left
 /// reading the relation without cascading — existence is the server's question, the listing being
-/// only what the connection last told us and `IF EXISTS` travelling in the statement.
+/// only what the data source last told us and `IF EXISTS` travelling in the statement.
 pub(super) async fn drop_relation(
     cx: &StmtCtx,
     at: &Remote,
@@ -168,7 +164,7 @@ pub(super) async fn drop_relation(
     let message = format!(
         "{what} '{}' dropped on '{}'{}",
         at.server_address(),
-        at.connection,
+        at.source,
         left_invalid(&dependents)
     );
     changed(cx, at, stmt, message).await
@@ -222,7 +218,7 @@ async fn dml(
             "{verb} {} {preposition} '{}' on '{}'",
             plural(rows as usize, "row"),
             at.server_address(),
-            at.connection
+            at.source
         ),
         count: Some(rows),
         effect: None,
@@ -270,15 +266,15 @@ fn one_relation() -> String {
 /// qualifier away.
 fn workspace_dml(kind: StmtKind) -> String {
     format!(
-        "{} works on a relation in a database connection. A table in this project is stored as \
+        "{} works on a relation in a data source. A table in this project is stored as \
          files that cannot be changed in place; drop it and recreate it with CREATE TABLE AS",
         kind.label()
     )
 }
 
 /// Every relation name a statement carries, and the names it binds or calls rather than reads —
-/// one collection for both gates, since the check asks whether each name is the connection's and
-/// the splice cuts that connection's qualifier out of each.
+/// one collection for both gates, since the check asks whether each name is the data source's and
+/// the splice cuts that data source's qualifier out of each.
 ///
 /// A CTE name is held back because the server binds it identically, and a table factor carrying an
 /// argument list because it is a function call (`FROM generate_series(1, 10)`) rather than a
@@ -402,16 +398,16 @@ fn workspace_holds(ctx: &SessionContext, name: &ObjectName) -> bool {
             .is_some_and(|schema| schema.table_exist(reference.table()))
 }
 
-/// What a name outside the target connection is refused with — the workspace's own relations,
-/// another connection's, and a qualifier that names nothing.
+/// What a name outside the target data source is refused with — the workspace's own relations,
+/// another data source's, and a qualifier that names nothing.
 fn elsewhere(name: &ObjectName, catalog: &str) -> String {
     format!(
-        "'{name}' is not in the database connection '{catalog}'. A statement that runs on the \
-         server can only name relations in that connection"
+        "'{name}' is not in the data source '{catalog}'. A statement that runs on the \
+         server can only name relations in that source"
     )
 }
 
-/// What a name missing the connection's qualifier is refused with; a two-part `public.orders` is
+/// What a name missing the data source's qualifier is refused with; a two-part `public.orders` is
 /// the same fault as a bare one, since the editor reads it as the workspace's single schema.
 fn not_qualified(name: &ObjectName, catalog: &str) -> String {
     format!(
@@ -548,7 +544,7 @@ mod tests {
 
     use super::*;
 
-    /// A session holding a workspace table `local` and two connections, `pg` and `warehouse`.
+    /// A session holding a workspace table `local` and two sources, `pg` and `warehouse`.
     fn session() -> SessionContext {
         let ctx = test_context(&BTreeMap::new());
         ctx.register_table(
@@ -624,11 +620,11 @@ mod tests {
         );
     }
 
-    /// A body naming the workspace, another connection, or nothing at all is refused **by name**:
+    /// A body naming the workspace, another source, or nothing at all is refused **by name**:
     /// a statement the server runs can only reach that server. The workspace table is named as the
     /// outsider it is even though the resolution pass left it bare.
     #[test]
-    fn a_body_reaching_outside_the_connection_is_refused_by_name() {
+    fn a_body_reaching_outside_the_source_is_refused_by_name() {
         for (sql, named) in [
             ("CREATE VIEW pg.public.v AS SELECT * FROM local", "'local'"),
             (
@@ -646,7 +642,7 @@ mod tests {
         }
     }
 
-    /// A name the connection does not have stays bare through the resolution pass, and a bare
+    /// A name the data source does not have stays bare through the resolution pass, and a bare
     /// name would resolve by the server's search path — so it is refused, saying so.
     #[test]
     fn an_unqualified_name_is_refused() {
@@ -664,14 +660,14 @@ mod tests {
     /// **A binding holds back the bare name and nothing else.** Matching a held name on its last
     /// part alone exempted `warehouse.public.orders` from the check whenever the statement bound a
     /// CTE called `orders` — and since the splice skips a name outside the target catalog, that
-    /// out-of-connection relation went to the `pg` server verbatim.
+    /// out-of-data source relation went to the `pg` server verbatim.
     #[test]
     fn a_binding_does_not_exempt_a_qualified_name_that_ends_in_it() {
         let why = rewritten(
             "CREATE VIEW pg.public.leak AS WITH orders AS (SELECT 1 AS id) SELECT * FROM \
              orders, warehouse.public.orders",
         )
-        .expect_err("the other connection is still refused");
+        .expect_err("the other data source is still refused");
         assert!(why.contains("warehouse.public.orders"), "{why}");
         assert!(why.contains("'pg'"), "{why}");
     }
@@ -693,7 +689,7 @@ mod tests {
         );
     }
 
-    /// A CTE and a table function are the statement's own, not the connection's, so neither is
+    /// A CTE and a table function are the statement's own, not the data source's, so neither is
     /// refused and neither is rewritten.
     #[test]
     fn a_cte_and_a_function_call_are_left_alone() {
@@ -759,7 +755,7 @@ mod tests {
     fn workspace_dml_names_where_it_works() {
         let why = workspace_dml(StmtKind::Update);
         assert!(
-            why.starts_with("UPDATE works on a relation in a database connection"),
+            why.starts_with("UPDATE works on a relation in a data source"),
             "{why}"
         );
         assert!(why.contains("CREATE TABLE AS"), "{why}");
@@ -777,9 +773,9 @@ mod tests {
     }
 
     /// The folded compare the body check runs is the same one the catalog list resolves by, so a
-    /// quoted spelling of the connection is still the connection.
+    /// quoted spelling of the data source is still the source.
     #[test]
-    fn the_connections_own_name_folds() {
+    fn the_sources_own_name_folds() {
         assert_eq!(fold_ident("PG"), "pg");
         assert_eq!(
             rewritten("DROP TABLE \"pg\".public.orders").expect("spliced"),
@@ -832,7 +828,7 @@ mod tests {
     #[tokio::test]
     async fn a_drop_names_its_readers_for_a_quoted_and_a_reserved_name() {
         let at = Remote {
-            connection: "pg".into(),
+            source: "pg".into(),
             reference: TableReference::full("pg", "public", "Orders"),
         };
         assert_eq!(at.recorded().to_string(), "pg.public.Orders");
@@ -851,7 +847,7 @@ mod tests {
 
         for (relation, reader) in [("Orders", "quoted_reader"), ("order", "reserved_reader")] {
             let at = Remote {
-                connection: "quoted".into(),
+                source: "quoted".into(),
                 reference: TableReference::full("quoted", "public", relation),
             };
             assert_eq!(

@@ -117,7 +117,7 @@ pub async fn create(
         .await?;
     let name = target.workspace(WHAT)?;
     let format = read_format(&cx.formats, &file_type, &name, &options)?;
-    let (connection, source) = source_of(root, &location, &cx.connections, &cx.registrants)?;
+    let (data_source, path) = source_of(root, &location, &cx.sources, &cx.registrants)?;
     let partitions = partition_cols(ctx, &columns, &table_partition_cols)?;
 
     let replacing = match existing(ctx, &name).await {
@@ -141,8 +141,8 @@ pub async fn create(
     let def = TableDef {
         name: name.clone(),
         format,
-        connection,
-        sources: vec![source],
+        source: data_source,
+        paths: vec![path],
         partition_cols: partitions,
         origin: TableOrigin::External,
     };
@@ -150,7 +150,7 @@ pub async fn create(
         ctx,
         &cx.formats,
         cx.tables.as_ref(),
-        &table_spec(root, &def, &cx.connections, &cx.registrants),
+        &table_spec(root, &def, &cx.sources, &cx.registrants),
     )
     .await?;
 
@@ -203,7 +203,7 @@ fn read_format(
 fn store_key(key: &str) -> Option<&'static str> {
     const STORE_NAMESPACES: [&str; 5] = ["aws.", "s3.", "gcp.", "google.", "azure."];
     if STORE_NAMESPACES.iter().any(|ns| key.starts_with(ns)) || client_key(key).is_some() {
-        return Some("A bucket, its region and where its credentials come from belong to a connection. Add one in Sources");
+        return Some("A bucket, its region and where its credentials come from belong to a data source. Add one in Sources");
     }
     None
 }
@@ -220,16 +220,16 @@ fn text(key: &str, value: &Value) -> Result<String, String> {
     }
 }
 
-/// The def's `(connection, source)` for a `LOCATION`, which is the pair
+/// The def's `(data source, source)` for a `LOCATION`, which is the pair
 /// [`resolve_source`](strata_core::project::resolve_source) composes, arrived at from the composed
 /// string.
 ///
-/// A location with a scheme names an object store, and that store has to be a **connection this
-/// project has**: a connection carries a provider, a region and where its credentials come from,
+/// A location with a scheme names an object store, and that store has to be a **data source this
+/// project has**: a data source carries a provider, a region and where its credentials come from,
 /// none of which a `CREATE EXTERNAL TABLE` says and one of which it must never carry. So the
-/// statement *references* one, exactly as `TableDef::connection` does, and a bucket with no
-/// connection is refused on the terms Configure's Save is blocked on rather than left to fail at
-/// registration with "No suitable object store found" — the message the connections-first phase
+/// statement *references* one, exactly as `TableDef::data source` does, and a bucket with no
+/// data source is refused on the terms Configure's Save is blocked on rather than left to fail at
+/// registration with "No suitable object store found" — the message the data sources-first phase
 /// exists to keep off a table row.
 ///
 /// A location with no scheme is a path, and takes the local rule: stored project-relative where
@@ -237,7 +237,7 @@ fn text(key: &str, value: &Value) -> Result<String, String> {
 fn source_of(
     root: &Path,
     location: &str,
-    connections: &SourceDefs,
+    sources: &SourceDefs,
     registrants: &crate::sources::source::Registrants,
 ) -> Result<(Option<String>, String), String> {
     let location = location.trim();
@@ -250,9 +250,9 @@ fn source_of(
     if url.starts_with("file:") {
         return Err("LOCATION takes a path, not a file:// URL".into());
     }
-    let Some(url) = connections.by_prefix(registrants, &url) else {
+    let Some(url) = sources.by_prefix(registrants, &url) else {
         return Err(format!(
-            "'{url}' is not a connection in this project. Add it in Sources"
+            "'{url}' is not a data source in this project. Add it in Sources"
         ));
     };
     if source.trim().is_empty() {
@@ -469,8 +469,8 @@ mod tests {
                     infer_rows: Some(500),
                     compression: FileCompression::None,
                 }),
-                connection: None,
-                sources: vec!["events.csv".into()],
+                source: None,
+                paths: vec!["events.csv".into()],
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             }
@@ -620,7 +620,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// **The collision this statement family has with connections**, both halves.
+    /// **The collision this statement family has with data sources**, both halves.
     ///
     /// `OPTIONS` is where `datafusion-cli` writes an object store's credentials, its region and
     /// its endpoint — Strata keeps every one of those on a `SourceDef` instead, so they are
@@ -628,10 +628,10 @@ mod tests {
     /// the arm answers off the key alone, because the sentence it produces is one the user then
     /// reads, copies and pastes.
     #[tokio::test]
-    async fn an_object_store_option_is_refused_toward_connections_without_its_value() {
+    async fn an_object_store_option_is_refused_toward_sources_without_its_value() {
         let (root, eng) = project("store_opts", "t.csv", "id\n1\n");
         let surface = "A bucket, its region and where its credentials come from belong to a \
-                       connection. Add one in Sources";
+                       data source. Add one in Sources";
         for key in [
             "aws.access_key_id",
             "aws.secret_access_key",
@@ -662,12 +662,12 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// A `LOCATION` naming a bucket is a **reference to a connection**, and one the project does
+    /// A `LOCATION` naming a bucket is a **reference to a data source**, and one the project does
     /// not have is refused here rather than at registration — where it would arrive as
-    /// DataFusion's "No suitable object store found", the message the connections-first phase
+    /// DataFusion's "No suitable object store found", the message the data sources-first phase
     /// exists to keep off a table row.
     #[tokio::test]
-    async fn a_location_over_a_bucket_with_no_connection_is_refused_naming_it() {
+    async fn a_location_over_a_bucket_with_no_source_is_refused_naming_it() {
         let (root, eng) = project("no_conn", "t.csv", "id\n1\n");
         let err = statement(
             &eng,
@@ -677,19 +677,19 @@ mod tests {
         .expect_err("refused");
         assert_eq!(
             err,
-            "'s3://acme-lake' is not a connection in this project. Add it in Sources"
+            "'s3://acme-lake' is not a data source in this project. Add it in Sources"
         );
         let _ = fs::remove_dir_all(&root);
     }
 
     /// And one the project **does** have splits into the pair `resolve_source` composes: the
-    /// connection's URL, and a source relative to its bucket. Asserted through `source_of`
+    /// data source's URL, and a source relative to its bucket. Asserted through `source_of`
     /// directly, because everything past it is a listing of a bucket that has to be real — the
     /// end-to-end version is `tests/object_store_minio.rs`.
     #[test]
-    fn a_location_over_a_connection_splits_into_the_url_and_a_bucket_relative_source() {
+    fn a_location_over_a_source_splits_into_the_address_and_a_relative_path() {
         let registrants = Engine::builder().build();
-        let connections = SourceDefs::of(&[SourceDef {
+        let sources = SourceDefs::of(&[SourceDef {
             config: [("address".to_string(), "acme-lake".into())]
                 .into_iter()
                 .collect(),
@@ -703,7 +703,7 @@ mod tests {
             source_of(
                 root,
                 "s3://acme-lake/events/2024/**/*.parquet",
-                &connections,
+                &sources,
                 registrants.registry()
             ),
             Ok((
@@ -712,7 +712,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            source_of(root, "s3://acme-lake", &connections, registrants.registry()),
+            source_of(root, "s3://acme-lake", &sources, registrants.registry()),
             Err(
                 "LOCATION 's3://acme-lake' names the bucket. Add the path inside it that holds \
                  the files"
@@ -723,40 +723,35 @@ mod tests {
             source_of(
                 root,
                 "file:///data/events/",
-                &connections,
+                &sources,
                 registrants.registry()
             ),
             Err("LOCATION takes a path, not a file:// URL".into())
         );
         assert_eq!(
-            source_of(
-                root,
-                "/elsewhere/events/",
-                &connections,
-                registrants.registry()
-            ),
+            source_of(root, "/elsewhere/events/", &sources, registrants.registry()),
             Ok((None, "/elsewhere/events/".to_string()))
         );
         assert_eq!(
-            source_of(root, "/proj/events/", &connections, registrants.registry()),
+            source_of(root, "/proj/events/", &sources, registrants.registry()),
             Ok((None, "events".to_string()))
         );
         assert_eq!(
             source_of(
                 root,
                 "S3://ACME-LAKE/events/",
-                &connections,
+                &sources,
                 registrants.registry()
             ),
             Ok((Some("acme_lake".to_string()), "events/".to_string()))
         );
     }
 
-    /// **A connection this project has is a connection whether or not it connected.** The set is
+    /// **A data source this project has is a data source whether or not it connected.** The set is
     /// membership, not liveness: a def whose region is wrong or whose SSO session has expired is
     /// still one the user can point a table at, and the fix happens afterwards.
     #[tokio::test]
-    async fn a_connection_that_failed_to_connect_is_still_one_a_statement_may_name() {
+    async fn a_source_that_failed_to_connect_is_still_one_a_statement_may_name() {
         let eng = Engine::builder().build();
         let conn = SourceDef {
             kind: "s3".into(),
@@ -772,11 +767,11 @@ mod tests {
             "the def cannot describe a store"
         );
         assert_eq!(
-            eng.connections.resolve("acme_lake").as_deref(),
+            eng.source_defs.resolve("acme_lake").as_deref(),
             Some("acme_lake")
         );
         eng.sources().disconnect("acme_lake");
-        assert_eq!(eng.connections.resolve("acme_lake"), None);
+        assert_eq!(eng.source_defs.resolve("acme_lake"), None);
     }
 
     /// The schema is inferred, so a **data** column list is refused — while a list that is

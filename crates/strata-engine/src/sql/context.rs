@@ -84,7 +84,7 @@ pub enum Context {
     /// After `alias.` / `relation.` / `catalog.schema.` — the whole qualifier chain
     /// before the caret, outermost segment first. A **single** segment is resolved
     /// through the statement's aliases here (FROM/JOIN alias → CTE → catalog name);
-    /// the longer chains are a qualified name, and only a database connection's
+    /// the longer chains are a qualified name, and only a data source's
     /// catalog can say what is inside one, so their resolution is the pool's.
     Dot(Vec<String>),
     /// A grammar position: governing clause + expected role.

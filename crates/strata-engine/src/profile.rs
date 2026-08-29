@@ -11,7 +11,7 @@
 //! Built with the `DataFrame` API, not generated SQL: internal logic does not write SQL. Leaf
 //! scalars only — a nested column gets its null count and is never descended into.
 //!
-//! **A relation inside a database connection's catalog is profiled on the same terms, with its own
+//! **A relation inside a data source's catalog is profiled on the same terms, with its own
 //! expression set** ([`Profiled`]): the aggregate federates into one statement the server runs, so
 //! every expression in it has to be one the unparser renders and `PostgreSQL` has.
 //!

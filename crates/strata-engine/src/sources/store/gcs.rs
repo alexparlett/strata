@@ -112,7 +112,7 @@ impl DataSource for Gcs {
             "service-account" => {
                 let path = value("service_account_path");
                 if path.is_empty() {
-                    return Err("This GCS connection needs a service-account file.".into());
+                    return Err("This GCS data source needs a service-account file.".into());
                 }
                 builder.with_service_account_path(path)
             }

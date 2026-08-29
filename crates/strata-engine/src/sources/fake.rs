@@ -53,7 +53,7 @@ pub(crate) fn fake_def<S: SourceKind>(catalog: &str, address: &str) -> SourceDef
     }
 }
 
-/// What a fake connection holds: the relations it was told to have, as batches.
+/// What a fake data source holds: the relations it was told to have, as batches.
 #[derive(Debug)]
 pub(crate) struct Rows(BTreeMap<String, Vec<RecordBatch>>);
 
@@ -109,15 +109,15 @@ impl Rows {
 /// statement would need refuses through the trait's own defaults.
 #[derive(Debug, Default)]
 pub(crate) struct TestDoc {
-    /// What each address holds, so one registered value serves several connections.
-    connections: Mutex<BTreeMap<String, Arc<Rows>>>,
+    /// What each address holds, so one registered value serves several data sources.
+    sources: Mutex<BTreeMap<String, Arc<Rows>>>,
 }
 
 impl TestDoc {
     /// A source that answers `address` with `relations`.
     pub(crate) fn holding(address: &str, relations: &[&str]) -> Self {
         let held = Self::default();
-        held.connections
+        held.sources
             .lock()
             .unwrap()
             .insert(address.to_string(), Arc::new(Rows::of(relations)));
@@ -125,7 +125,7 @@ impl TestDoc {
     }
 
     fn rows(&self, address: &str) -> Result<Arc<Rows>, String> {
-        self.connections
+        self.sources
             .lock()
             .unwrap()
             .get(address.trim())
@@ -164,7 +164,7 @@ const DOC_SETTINGS: &[SourceSetting] = &[
         required: false,
         default: None,
         when: None,
-        hint: Some("What every collection this connection reads is named under"),
+        hint: Some("What every collection this data source reads is named under"),
         placeholder: Some("app_"),
     },
     SourceSetting {
@@ -252,13 +252,13 @@ impl SourceCatalog for DocCatalog {
 /// statement, and that statement is parsed and run here.
 #[derive(Debug, Default)]
 pub(crate) struct TestSql {
-    connections: Mutex<BTreeMap<String, Arc<Rows>>>,
+    sources: Mutex<BTreeMap<String, Arc<Rows>>>,
 }
 
 impl TestSql {
     pub(crate) fn holding(address: &str, relations: &[&str]) -> Self {
         let held = Self::default();
-        held.connections
+        held.sources
             .lock()
             .unwrap()
             .insert(address.to_string(), Arc::new(Rows::of(relations)));
@@ -285,7 +285,7 @@ impl DataSource for TestSql {
         _secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         let rows = self
-            .connections
+            .sources
             .lock()
             .unwrap()
             .get(def.setting("address"))
@@ -425,7 +425,7 @@ mod tests {
             "'{kind}' enumerated nothing to read"
         );
         let at = Remote {
-            connection: "fixture".into(),
+            source: "fixture".into(),
             reference: TableReference::full("fixture", "public", "orders"),
         };
         if let Err(why) = catalog.execute_text("SELECT 1").await {
@@ -442,7 +442,7 @@ mod tests {
             catalog
                 .clone()
                 .table_provider(&Located {
-                    connection: "fixture".into(),
+                    source: "fixture".into(),
                     identity: def.named(),
                     relation: "public.orders".into(),
                 })
@@ -589,15 +589,15 @@ mod tests {
         );
     }
 
-    /// **Two connections of one kind never share plan-cache identity**, which is what stops a
+    /// **Two data sources of one kind never share plan-cache identity**, which is what stops a
     /// statement fused across them being sent to whichever executor won. The assembly stamps it,
     /// so a source that composes it cannot forget.
     #[tokio::test]
-    async fn two_connections_of_one_kind_are_two_compute_contexts() {
+    async fn two_sources_of_one_kind_are_two_compute_contexts() {
         let mut source = TestSql::default();
         for address in ["north", "south"] {
             source
-                .connections
+                .sources
                 .get_mut()
                 .unwrap()
                 .insert(address.to_string(), Arc::new(Rows::of(&["orders"])));
@@ -632,7 +632,7 @@ mod tests {
             .collect();
         assert_ne!(
             contexts[0], contexts[1],
-            "two connections of one kind fused into one"
+            "two data sources of one kind fused into one"
         );
     }
 
@@ -640,7 +640,7 @@ mod tests {
     /// panic, and no parse error either: the def is well-formed, the engine simply has nothing to
     /// serve it with.
     #[tokio::test]
-    async fn an_unregistered_kind_fails_the_connection_and_names_the_fix() {
+    async fn an_unregistered_kind_fails_the_source_and_names_the_fix() {
         let engine = Engine::builder().build();
         let why = engine
             .sources()
@@ -679,7 +679,7 @@ mod tests {
                 .sources()
                 .check_address(TestDoc::NAME, "")
                 .map_err(|e| e.to_string()),
-            Err("This connection has no address.".into()),
+            Err("This data source has no address.".into()),
             "the default address rule is reached through the registry"
         );
     }

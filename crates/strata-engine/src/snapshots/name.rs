@@ -37,7 +37,7 @@ pub fn is_snapshot_name(name: &str) -> bool {
 /// The scoping is the DB workstream's correction and it lives here, beside the naming rule, for
 /// the reason [`is_snapshot_name`] does: the refusal (`sql::validate`) and the hiding
 /// (`engine::providers`) ask one question, so neither can decide on its own where the namespace
-/// ends. Since a session holds a catalog per database connection, the prefix alone stopped being
+/// ends. Since a session holds a catalog per source, the prefix alone stopped being
 /// the whole question: a server may perfectly well have a relation called `__snap_3`, where the
 /// name is an ordinary one that reserves nothing, hides nothing and collides with nothing —
 /// reading it is fine, and refusing it would fence off a table Strata does not own.

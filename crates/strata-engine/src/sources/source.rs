@@ -1,7 +1,7 @@
 //! Data sources the engine can connect to, and the registry it looks one up in.
 //!
 //! [`DataSource`] is the seam: implement it, register it with
-//! [`EngineBuilder::with_source`](crate::EngineBuilder::with_source), and connections naming its
+//! [`EngineBuilder::with_source`](crate::EngineBuilder::with_source), and data sources naming its
 //! [`SourceKind::NAME`] connect, enumerate, resolve and query like the shipped ones. Its
 //! vocabulary is generic — every method is something any source can answer — so a document store
 //! implements it as readily as a SQL server. What is SQL-shaped is [`sql`](super::sql), an
@@ -36,9 +36,9 @@ use strata_model::SourceDef;
 /// dyn-compatible: the consts are read once, where the concrete type is still in hand, so a source
 /// cannot answer differently from the key it was filed under.
 pub trait SourceKind {
-    /// What connection defs call this source.
+    /// What data source defs call this source.
     ///
-    /// A short lowercase word. It is also the URL scheme a connection's identity is composed
+    /// A short lowercase word. It is also the URL scheme a data source's identity is composed
     /// from, and the prefix of the keystore family each of its secrets is filed under.
     const NAME: &'static str;
     /// What a person calls it — `PostgreSQL`, `MySQL`.
@@ -101,7 +101,7 @@ pub enum Sourced {
     Catalog(Arc<dyn SourceCatalog>),
 }
 
-/// One setting a source declares — **a row of the connection form, entire**.
+/// One setting a source declares — **a row of the data source form, entire**.
 ///
 /// The editor renders these rather than knowing any source's fields: what the row is called, what
 /// it explains about itself, what it looks like, where its value lands, which section it sits in,
@@ -124,7 +124,7 @@ pub struct SourceSetting {
     /// are drawn in the order it declares them, so a group's keys are declared together.
     pub group: Option<&'static str>,
     pub required: bool,
-    /// What the value is when the connection says nothing.
+    /// What the value is when the data source says nothing.
     pub default: Option<&'static str>,
     /// When this setting is offered at all — `None` for one that always is.
     pub when: Option<When>,
@@ -173,12 +173,12 @@ pub enum Field {
 /// One relation a source is asked to act on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Located {
-    /// The catalog the connection registered under, which is what a refusal about this relation
+    /// The catalog the data source registered under, which is what a refusal about this relation
     /// names.
-    pub connection: String,
-    /// The connection's identity — its kind and address, as `SourceDef` derives it.
+    pub source: String,
+    /// The data source's identity — its kind and address, as `SourceDef` derives it.
     ///
-    /// Distinct from [`connection`](Self::connection), which a user can rename: this is what says
+    /// Distinct from [`data source`](Self::source), which a user can rename: this is what says
     /// two providers read through the same source.
     pub identity: String,
     /// The relation as the source spells it, `schema.relation`.
@@ -307,17 +307,17 @@ pub fn unsupported(kind: &str, what: &str) -> String {
     format!("A '{kind}' source cannot {what}.")
 }
 
-/// Why `function` cannot be sent to `connection`.
+/// Why `function` cannot be sent to `data source`.
 ///
 /// The frame is the engine's for every source, and `why` is the source's own
 /// ([`Support::Unmapped`]): a source with an alternative to name says so, and one without says
 /// nothing rather than an apology.
-pub fn unsupported_function(function: &str, connection: &str, why: &str) -> String {
+pub fn unsupported_function(function: &str, source: &str, why: &str) -> String {
     let why = match why.is_empty() {
         true => String::new(),
         false => format!(" {why}"),
     };
-    format!("'{function}' cannot run on the connection '{connection}'.{why} {MATERIALIZE}")
+    format!("'{function}' cannot run on the data source '{source}'.{why} {MATERIALIZE}")
 }
 
 /// One data source the engine can connect to.
@@ -336,7 +336,7 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     ///
     /// # Errors
     ///
-    /// If the source cannot be reached or the description is not usable. A connection settles onto
+    /// If the source cannot be reached or the description is not usable. A data source settles onto
     /// one row and the error **is** that row's sentence, so word it as the thing to fix: this is
     /// all-or-nothing, not a handle that fails at the first query.
     async fn connect(
@@ -348,7 +348,7 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     /// Judges an address by this source's own naming rule.
     ///
     /// Reached by the editor before a connect is attempted, so a mistyped address is refused at
-    /// the field rather than by a connection failure. The default refuses only an empty one, which
+    /// the field rather than by a data source failure. The default refuses only an empty one, which
     /// is the single thing no source can dial.
     ///
     /// # Errors
@@ -358,7 +358,7 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     /// the address should look like rather than what went wrong.
     fn check_address(&self, address: &str) -> Result<(), String> {
         match address.trim().is_empty() {
-            true => Err("This connection has no address.".into()),
+            true => Err("This data source has no address.".into()),
             false => Ok(()),
         }
     }
@@ -380,8 +380,8 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
 ///
 /// # Plan-cache identity
 ///
-/// Two connections must never share it. Whatever [`table_provider`](Self::table_provider) hands
-/// back has to be distinguishable per connection by whatever the query engine fuses subplans on,
+/// Two data sources must never share it. Whatever [`table_provider`](Self::table_provider) hands
+/// back has to be distinguishable per data source by whatever the query engine fuses subplans on,
 /// or two sources answer each other's queries. Composing
 /// [`sql::federated`](super::sql::federated) discharges this; a source writing its own provider
 /// carries it itself.
@@ -400,7 +400,7 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
     /// # Errors
     ///
     /// If the source could not be asked what it holds. Connecting is all-or-nothing, so on a
-    /// connect or a catalog refresh this settles the connection's own row and nothing under it is
+    /// connect or a catalog refresh this settles the data source's own row and nothing under it is
     /// registered. The re-read after a statement is the one exception: the previous listing
     /// stands and the failure is logged, because that statement has already succeeded.
     async fn enumerate(&self) -> Result<Listing, String>;
@@ -438,7 +438,7 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
     ///
     /// Recognize it by **code** — a `SQLSTATE`, an errno — never by prose: a wording is the
     /// source's to change, and matching words fires on messages where they merely co-occur.
-    fn remote_refusal(&self, _raw: &str, _connection: &str) -> Option<String> {
+    fn remote_refusal(&self, _raw: &str, _source: &str) -> Option<String> {
         None
     }
 
@@ -510,7 +510,7 @@ pub struct SourceInfo {
     /// The settings the editor draws for it — [`DataSource::settings`].
     pub settings: &'static [SourceSetting],
     /// Whether it can be written to — [`SourceKind::WRITABLE`], and therefore whether a
-    /// connection to it is offered the read-only toggle.
+    /// data source to it is offered the read-only toggle.
     pub writable: bool,
     /// The settings two of its sources may not share — [`SourceKind::UNIQUE`].
     pub unique: &'static [&'static str],
@@ -561,7 +561,7 @@ impl Registrants {
             .ok_or_else(|| {
                 format!(
                     "No source is registered for '{kind}'. Register one with \
-                 EngineBuilder::with_source, or change this connection's kind."
+                 EngineBuilder::with_source, or change this source's kind."
                 )
             })
     }
@@ -630,7 +630,7 @@ impl Registrants {
 
     /// What connecting to `kind` yields, or `None` for a kind nothing is registered for.
     ///
-    /// The registry answers, because the mode is declared on the kind — so "does this connection
+    /// The registry answers, because the mode is declared on the kind — so "does this data source
     /// have a catalog" is a question with a registry behind it rather than a field on the def that
     /// could disagree with the source serving it.
     pub(crate) fn mode(&self, kind: &str) -> Option<SourceMode> {
@@ -704,7 +704,7 @@ mod tests {
             "A 'mongo' source cannot be written to."
         );
         let why = unsupported_function("json_length", "pg", "");
-        assert!(why.starts_with("'json_length' cannot run on the connection 'pg'."));
+        assert!(why.starts_with("'json_length' cannot run on the data source 'pg'."));
         assert!(why.contains("CREATE TABLE"), "and the way out: {why}");
         assert!(
             unsupported_function("json_get", "pg", "Use '->>' instead.")
@@ -714,7 +714,7 @@ mod tests {
     }
 
     /// An unregistered kind is a sentence naming the fix, because that sentence is the whole of
-    /// what the failed connection row shows.
+    /// what the failed data source row shows.
     #[test]
     fn an_unregistered_kind_names_the_fix() {
         let why = Registrants::default()

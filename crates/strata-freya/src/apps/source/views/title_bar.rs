@@ -1,5 +1,5 @@
-//! The connection editor's title bar — **and the window's**: a 50px strip carrying the store
-//! tile, what the window is doing and which connection it is doing it to, with the real OS
+//! The data source editor's title bar — **and the window's**: a 50px strip carrying the store
+//! tile, what the window is doing and which data source it is doing it to, with the real OS
 //! traffic lights floating at its left.
 //!
 //! Nothing here is interactive, so the whole strip is the drag region — the same recipe as the
@@ -7,7 +7,7 @@
 
 use freya::prelude::*;
 
-use crate::apps::connection::ConnectionCtx;
+use crate::apps::source::SourceCtx;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{
@@ -24,7 +24,7 @@ impl Component for TitleBar {
     fn render(&self) -> impl IntoElement {
         let win = window_theme();
         let muted = use_roles().get(Role::TextMuted);
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let target = ctx.target.read();
 
         let mark = rect()
@@ -33,11 +33,7 @@ impl Component for TitleBar {
             .corner_radius(R_1)
             .center()
             .background(win.icon_background)
-            .child(
-                Icon::new(IconName::Connections)
-                    .size(15.)
-                    .color(win.icon_color),
-            );
+            .child(Icon::new(IconName::Sources).size(15.).color(win.icon_color));
 
         let heading = rect()
             .vertical()

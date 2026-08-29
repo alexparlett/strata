@@ -161,7 +161,7 @@ impl ColumnPanel {
             FormatBadge::Json => t.format_json_color,
             FormatBadge::Arrow => t.format_arrow_color,
             FormatBadge::View => t.format_view_color,
-            FormatBadge::Connection(_) => t.format_database_color,
+            FormatBadge::Source(_) => t.format_database_color,
             FormatBadge::Other(_) => t.meta_color,
         }
     }
@@ -173,7 +173,7 @@ impl ColumnPanel {
         let t = &self.theme;
         let copy = match &self.facts.target {
             ProfileTarget::Remote { .. } => {
-                "Read through a database connection. The server reports the column's type; \
+                "Read through a source. The server reports the column's type; \
                  anything more is a scan."
             }
             ProfileTarget::Workspace { .. } => {

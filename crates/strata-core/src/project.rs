@@ -10,7 +10,7 @@
 //! Paths in `sources` are stored **project-relative** where they sit inside the project
 //! folder (portable — the file can be committed and checked out elsewhere), and resolved
 //! to absolute against the project folder when handed to the engine / filesystem:
-//! [`resolve_source`] / [`relativize`]. A def that names a **connection** (W7 · 04) stores
+//! [`resolve_source`] / [`relativize`]. A def that names a **data source** (W7 · 04) stores
 //! its sources relative to that bucket instead, and [`resolve_source`] is where the two
 //! rules meet.
 
@@ -74,12 +74,12 @@ pub struct ProjectDefs {
     pub name: String,
     /// The remote object stores this project reads from (W7). **Committed with the rest**,
     /// which `docs/CONNECTIONS_SPEC.md` §5 had left open between here and the gitignored
-    /// session: a connection carries no secret material at all — a profile *name* and a key
+    /// session: a data source carries no secret material at all — a profile *name* and a key
     /// **file path** are references to the reader's own machine, not credentials — so there
     /// is nothing here a colleague may not have, and a catalog whose tables live in a bucket
     /// is not shareable if the bucket isn't.
     #[serde(default)]
-    pub connections: Vec<SourceDef>,
+    pub sources: Vec<SourceDef>,
     #[serde(default)]
     pub tables: Vec<TableDef>,
     #[serde(default)]
@@ -128,7 +128,7 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     let path = strata_dir(root).join(PROJECT_JSON);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut defs: ProjectDefs = from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    defs.connections.sort_by(|a, b| name_ord(&a.name, &b.name));
+    defs.sources.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.tables.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.saved_queries
@@ -538,22 +538,22 @@ fn ensure_gitignore(dir: &Path) {
 }
 
 /// Resolve one of a table def's sources to what the engine reads: composed onto its
-/// **connection's** bucket when the def names one ([`TableDef::connection`]), and otherwise
+/// **data source's** bucket when the def names one ([`TableDef::data source`]), and otherwise
 /// joined onto `root` (the project folder) where it is relative.
 ///
-/// **One function, taking the connection**, rather than a local rule with a remote one beside
+/// **One function, taking the data source**, rather than a local rule with a remote one beside
 /// it. The two answers are mutually exclusive and every caller has the def in hand, so a
-/// resolver that could not see the connection would silently give the wrong one: `s3://` is not
+/// resolver that could not see the data source would silently give the wrong one: `s3://` is not
 /// an absolute *path*, so a bucket-relative source handed to the local rule comes back as
 /// `<project>/events/2024`, which registers as a missing folder on the user's own disk.
 ///
-/// `connection` is the `scheme://authority` a connection's object store is registered under,
+/// `data source` is the `scheme://authority` a data source's object store is registered under,
 /// composed by the engine, so the composition is that prefix, a separator, and the source. Both
 /// sides are
 /// trimmed of the separator first: a bucket URL never carries one and a path typed with a
 /// leading `/` means the bucket root, not an empty first segment.
-pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String {
-    let Some(url) = connection else {
+pub fn resolve_source(root: &Path, source: Option<&str>, p: &str) -> String {
+    let Some(url) = source else {
         let path = Path::new(p);
         if path.is_absolute() {
             return p.to_string();
@@ -567,7 +567,7 @@ pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String 
     )
 }
 
-/// Split a location that names an object store into `(connection URL, bucket-relative source)` —
+/// Split a location that names an object store into `(data source URL, bucket-relative source)` —
 /// [`resolve_source`]'s remote arm read backwards, for the one caller that arrives with the
 /// composed string rather than with the two halves: a typed
 /// `CREATE EXTERNAL TABLE … LOCATION 's3://acme-lake/events/2024/'` (ED-10).
@@ -576,7 +576,7 @@ pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String 
 /// project folder or absolute. **Not a guess about intent**: the Configure window's LOCATION
 /// toggle is an explicit choice precisely because a *typed path* must never be re-read as remote,
 /// and this is the other case, where the scheme is the only thing the statement says about where
-/// the files are. A caller still has to check the URL against the project's own connections; this
+/// the files are. A caller still has to check the URL against the project's own data sources; this
 /// answers what the location was written as, not whether it can be read.
 ///
 /// Kept beside [`resolve_source`] so the composition rule has one home in both directions — a
@@ -584,7 +584,7 @@ pub fn resolve_source(root: &Path, connection: Option<&str>, p: &str) -> String 
 /// which is exactly where an **object store's** registration URL stops.
 ///
 /// A source that holds relations registers no object store, so nothing here is owed to one: a
-/// location split by this function yields a prefix no object-store connection has, and the
+/// location split by this function yields a prefix no object-store data source has, and the
 /// caller's membership check refuses it by name. Which is the right answer — a table's `LOCATION`
 /// names *files*, and a catalog of relations has none.
 pub fn split_remote(location: &str) -> Option<(String, String)> {
@@ -1174,11 +1174,11 @@ mod tests {
         );
     }
 
-    /// A source over a connection is composed onto that bucket and **never** onto the project
-    /// folder — the whole reason this function takes the connection. `s3://` is not an absolute
+    /// A source over a data source is composed onto that bucket and **never** onto the project
+    /// folder — the whole reason this function takes the data source. `s3://` is not an absolute
     /// path, so the local rule would have turned every one of these into `/proj/…`.
     #[test]
-    fn a_source_over_a_connection_is_composed_onto_its_bucket() {
+    fn a_path_over_a_data_source_is_composed_onto_its_bucket() {
         let root = Path::new("/proj");
         let s3 = Some("s3://acme-lake");
         assert_eq!(

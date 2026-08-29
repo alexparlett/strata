@@ -9,8 +9,8 @@
 //! every one of `datafusion-federation`'s hooks at its `None` default
 //! (`datafusion-federation#129` asks for exactly this pattern). Those hooks are on the executor,
 //! so [`AnalyzedExecutor`] is where the source's recoding reaches the error coming back and the
-//! connection's identity is stamped as the fusion key — stamped here, because a source that forgot
-//! it would federate two connections' relations into one statement sent to whichever executor won.
+//! data source's identity is stamped as the fusion key — stamped here, because a source that forgot
+//! it would federate two data sources' relations into one statement sent to whichever executor won.
 //!
 //! What a source spells differently is its **dialect**'s, not this module's: the statement is
 //! unparsed through `spec.dialect`, so a source that renders a call as an operator expression says
@@ -47,7 +47,7 @@ const FEDERATION_RULE: &str = "federation_optimizer_rule";
 ///
 /// **Panics if the rule is not in the list**, because the alternative is worse: an unwrapped list
 /// is a working engine that has quietly lost the exemption, and what it loses is a CTAS or a
-/// `COPY` over a database connection answering with a page of `LogicalPlan` debug. The crate takes
+/// `COPY` over a data source answering with a page of `LogicalPlan` debug. The crate takes
 /// the same position one level down — `default_optimizer_rules` panics rather than return a list
 /// it could not insert federation into. `the_federation_rule_is_still_named_what_we_look_for`
 /// is what makes a dependency bump fail in CI rather than here.
@@ -69,7 +69,7 @@ pub(crate) fn optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
 /// The federation rule, kept off a node that **writes**: its input is federated and the node is
 /// rebuilt around the result.
 ///
-/// A `CopyTo` or a `Dml` at the root of a plan whose every scan is one connection's is federated
+/// A `CopyTo` or a `Dml` at the root of a plan whose every scan is one data source's is federated
 /// whole by the crate, and then unparsed, and `plan_to_sql` has no arm for a write. What comes
 /// back is several hundred characters of `LogicalPlan` debug where the rows should be.
 ///
@@ -127,7 +127,7 @@ pub struct SqlSpec {
     /// local side reads through.
     ///
     /// It renders its own scan, so a source hands it the **same** dialect it puts in `dialect`, or
-    /// the two paths speak differently about one connection.
+    /// the two paths speak differently about one data source.
     pub provider: Arc<dyn TableProvider>,
 }
 
@@ -143,8 +143,8 @@ pub fn federated(
     let executor = Arc::new(AnalyzedExecutor {
         inner: spec.executor,
         dialect: spec.dialect,
-        source,
-        connection: at.connection.clone(),
+        catalog: source,
+        source: at.source.clone(),
         context: at.identity.clone(),
     });
     let source = Arc::new(SQLTableSource::new_with_schema(
@@ -161,14 +161,14 @@ pub fn federated(
 /// The source's executor, with the things the assembly owes every source that composes it.
 ///
 /// Held as `Arc<dyn SQLExecutor>` rather than a concrete provider type, whose generic parameters
-/// are a pooled connection and a driver's parameter type: a signature naming them would tie this
+/// are a pooled data source and a driver's parameter type: a signature naming them would tie this
 /// module to one driver. Every method delegates but the three that are the point.
 struct AnalyzedExecutor {
     inner: Arc<dyn SQLExecutor>,
     dialect: Arc<dyn Dialect>,
-    source: Arc<dyn SourceCatalog>,
-    /// The catalog the connection registered under — what a refusal names.
-    connection: String,
+    catalog: Arc<dyn SourceCatalog>,
+    /// The catalog the data source registered under — what a refusal names.
+    source: String,
     /// [`Located::identity`], as the fusion key.
     context: String,
 }
@@ -179,8 +179,8 @@ impl SQLExecutor for AnalyzedExecutor {
         self.inner.name()
     }
 
-    /// The connection's identity, which is what decides whether two relations federate into one
-    /// statement. Two connections to one server may authenticate as different roles and see
+    /// The data source's identity, which is what decides whether two relations federate into one
+    /// statement. Two data sources to one server may authenticate as different roles and see
     /// different relations, so fusing across them sends a statement to whichever executor won.
     fn compute_context(&self) -> Option<String> {
         Some(self.context.clone())
@@ -215,13 +215,13 @@ impl SQLExecutor for AnalyzedExecutor {
         schema: SchemaRef,
         filters: &[Arc<dyn PhysicalExpr>],
     ) -> DfResult<SendableRecordBatchStream> {
-        let source = Arc::clone(&self.source);
-        let connection = self.connection.clone();
+        let catalog = Arc::clone(&self.catalog);
+        let source = self.source.clone();
         let stream = self.inner.execute(query, Arc::clone(&schema), filters)?;
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
             stream.map_err(
-                move |e| match source.remote_refusal(&e.to_string(), &connection) {
+                move |e| match catalog.remote_refusal(&e.to_string(), &source) {
                     Some(reworded) => DataFusionError::Execution(reworded),
                     None => e,
                 },
@@ -250,7 +250,7 @@ impl SQLExecutor for AnalyzedExecutor {
 ///
 /// The wrap is found by name, and a name is a dependency's to change. Unwrapped, the engine still
 /// builds and every query still runs — what stops working is a CTAS or a `COPY` over a database
-/// connection, which only `tests/postgres_federation.rs` exercises, twelve minutes and a container
+/// data source, which only `tests/postgres_federation.rs` exercises, twelve minutes and a container
 /// runtime away. This fails in the ordinary suite instead, naming what moved.
 #[cfg(test)]
 mod tests {

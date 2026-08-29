@@ -326,7 +326,7 @@ fn log_dir() -> Option<PathBuf> {
 /// terminal — its stdout goes to the unified log, where it is neither a file a tester can send
 /// nor a stream `RUST_LOG` can be pointed at — so without the file half, the build that most
 /// needs a diagnosis is the build that cannot produce one. This was not hypothetical: an S3
-/// connection failing with a message the panels truncated had no second copy anywhere.
+/// data source failing with a message the panels truncated had no second copy anywhere.
 ///
 /// **The returned guard must be held for the life of the process.** The file writer is
 /// non-blocking — a worker thread owns the actual writes so no `tracing::` call ever waits on

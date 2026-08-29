@@ -6,7 +6,7 @@
 //! pane, `on` *derived* from the layout rather than held here, and a press routing through the
 //! layout store's toggle so pressing the lit one puts the pane away. What differs is only what
 //! the two edges are *about*: the left rail lists the project's **data** surfaces (catalog,
-//! agents, connections) and its diagnostics, and this one lists the surfaces that assist
+//! agents, data sources) and its diagnostics, and this one lists the surfaces that assist
 //! whatever is in the middle. A pane on this edge is therefore a single choice rather than a
 //! group of independent panels — which is what keeps a 1180px window readable with both rails,
 //! a sidebar and the drawer up.

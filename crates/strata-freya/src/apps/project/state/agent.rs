@@ -204,7 +204,7 @@ fn catalog(project: &ProjectState) -> Vec<CatalogEntry> {
     let tables = project.tables.iter().map(|row| CatalogEntry::Table {
         name: row.def.name.clone(),
         format: row.def.format.name().to_string(),
-        sources: row.def.sources.clone(),
+        sources: row.def.paths.clone(),
         reg: reg_state(&row.reg),
     });
     let views = project.views.iter().map(|row| CatalogEntry::View {
@@ -240,7 +240,7 @@ fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError>
             Reg::Ready(meta) => Described::Table {
                 name: row.def.name.clone(),
                 format: row.def.format.name().to_string(),
-                sources: row.def.sources.clone(),
+                sources: row.def.paths.clone(),
                 partitions: row.def.partition_cols.clone(),
                 rows: meta.rows,
                 columns: meta.columns.clone(),
@@ -346,16 +346,16 @@ mod tests {
                     TableDef {
                         name: "orders".into(),
                         format: SourceFormat::from_name("parquet"),
-                        connection: None,
-                        sources: vec!["data/orders".into()],
+                        source: None,
+                        paths: vec!["data/orders".into()],
                         partition_cols: vec![("year".into(), "Int32".into())],
                         origin: TableOrigin::External,
                     },
                     TableDef {
                         name: "gone".into(),
                         format: SourceFormat::from_name("csv"),
-                        connection: None,
-                        sources: vec!["missing.csv".into()],
+                        source: None,
+                        paths: vec!["missing.csv".into()],
                         partition_cols: Vec::new(),
                         origin: TableOrigin::External,
                     },

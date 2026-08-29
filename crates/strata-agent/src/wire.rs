@@ -303,7 +303,7 @@ pub struct TablesResult {
     /// Entries the catalog holds (or 'matching' matched), before paging.
     pub total: usize,
     pub entries: Vec<EntryWire>,
-    /// Catalogs the project's database connections have registered. Nothing in 'entries'
+    /// Catalogs the project's connections have registered. Nothing in 'entries'
     /// describes them and nothing is meant to: a database answers for itself, so its relations
     /// are not defs of this project and 'matching' does not reach them. Read one by three-part
     /// name ('pg.public.orders'), list them with SHOW TABLES, and read one relation's schema
@@ -492,11 +492,11 @@ pub struct DescribeResult {
     pub kind: Option<EntryKindWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// The database connection this relation lives in, for one that is not a def of the
+    /// The data source this relation lives in, for one that is not a def of the
     /// project's — its catalog name, which is also the first part of 'name'. Absent for
     /// everything in the workspace.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connection: Option<String>,
+    pub source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

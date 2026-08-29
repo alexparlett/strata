@@ -14,7 +14,7 @@
 //! would rebuild the whole `TreeItem` and drop its hover and keyboard focus with it.
 //!
 //! [`use_status`] and [`fold_plan`] live here rather than beside one row kind because a workspace
-//! entry, a database connection and an object store all wear the same status slot and the same
+//! entry, a data source and an object store all wear the same status slot and the same
 //! ranked fold.
 //!
 //! **A row takes no reconciliation key**, which is why it offers no way to set one: the tree is a

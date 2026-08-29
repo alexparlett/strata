@@ -1,10 +1,10 @@
-//! **Where the connection editor goes**: above the project window that asked, gone when that
+//! **Where the data source editor goes**: above the project window that asked, gone when that
 //! window goes, and **one per target**.
 //!
 //! [`crate::platform::configure`]'s rules verbatim, because the two windows have the same shape:
 //! each is opened on a **def**, which is shared mutable state, so two windows on one def would
 //! both write it and the second would silently revert the first. "Already open" therefore means
-//! focus, *keyed by the target* — two different connections at once is fine, one connection twice
+//! focus, *keyed by the target* — two different data sources at once is fine, one data source twice
 //! is not. (Export, by contrast, is opened on a *result* and has no such rule at all.)
 //!
 //! How long it lives is not here: this window holds `ProjectRoot`-scoped handles, so it is pinned
@@ -12,15 +12,15 @@
 
 use freya::prelude::*;
 
-use crate::apps::connection::{ConnectionApp, ConnectionLaunch};
+use crate::apps::source::{SourceApp, SourceLaunch};
 use crate::platform::windows::{register, WindowKind};
 
-/// Open a connection editor on `launch.target`, pinned above the window that asked — or focus the
+/// Open a data source editor on `launch.target`, pinned above the window that asked — or focus the
 /// one already open on that target.
 ///
 /// `platform` is taken from the caller's component scope, which is both how the callback learns
 /// *which* window asked and why this can be called from an event handler with no scope of its own.
-pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
+pub fn open_source(platform: Platform, launch: SourceLaunch) {
     drop(platform.post_callback(move |owner, ctx| {
         let open = launch
             .app
@@ -29,7 +29,7 @@ pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
             .by_id()
             .iter()
             .find(|(_, kind)| {
-                matches!(kind, WindowKind::Connection { owner: o, target }
+                matches!(kind, WindowKind::Source { owner: o, target }
                     if *o == owner && *target == launch.target)
             })
             .map(|(id, _)| *id)
@@ -41,7 +41,7 @@ pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
             return;
         }
 
-        let id = ctx.launch_window(ConnectionApp::window(
+        let id = ctx.launch_window(SourceApp::window(
             launch.app.clone(),
             launch.project,
             launch.subtree.clone(),
@@ -55,7 +55,7 @@ pub fn open_connection(platform: Platform, launch: ConnectionLaunch) {
         register(
             launch.app.windows,
             id,
-            WindowKind::Connection {
+            WindowKind::Source {
                 owner,
                 target: launch.target,
             },

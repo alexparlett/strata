@@ -25,8 +25,8 @@ mod source;
 
 use freya::prelude::*;
 
-use crate::apps::connection::ConnectionCtx;
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::source::SourceCtx;
 use crate::components::form::{Form, LABEL_GAP};
 use crate::components::metrics::SP_4;
 
@@ -35,7 +35,7 @@ use crate::components::metrics::SP_4;
 /// answer *means* rather than a second question.
 pub(super) const QUALIFIER_GAP: f32 = SP_4;
 /// A box whose value is a short, known-shaped word rather than free text — a mode, a
-/// connection's name. One number, because it is one judgement about one kind of value.
+/// data source's name. One number, because it is one judgement about one kind of value.
 pub(super) const NARROW_WIDTH: f32 = 180.;
 
 /// Every row the chosen source has, in canvas order.
@@ -50,7 +50,7 @@ pub struct Fields;
 
 impl Component for Fields {
     fn render(&self) -> impl IntoElement {
-        let ctx = use_consume::<ConnectionCtx>();
+        let ctx = use_consume::<SourceCtx>();
         let engine = use_consume::<EngineCtx>();
         let (kind, keys) = {
             let draft = ctx.draft.read();

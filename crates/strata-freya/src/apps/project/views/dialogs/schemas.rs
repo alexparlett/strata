@@ -1,30 +1,30 @@
-//! The database connection's **Schemas…** picker (DB-05) — which of a connection's schemas the
+//! The data source's **Schemas…** picker (DB-05) — which of a data source's schemas the
 //! tree, the inspector and completion show.
 //!
 //! **No reconnect**, and that is what makes this dialog legitimate at all. Registration exposes
-//! every schema the connection can reach; [`SourceDef::schemas`] scopes what Strata *shows*, so a
+//! every schema the data source can reach; [`SourceDef::schemas`] scopes what Strata *shows*, so a
 //! change here rebuilds no pool, invalidates no plan and cannot break a query that already names
 //! a schema this list leaves out.
 //!
 //! It is **not** display only, and has not been since DB-09: an unqualified name searches the
-//! schemas a connection shows, so this press moves what `orders` means. Two things follow, and
+//! schemas a data source shows, so this press moves what `orders` means. Two things follow, and
 //! both are Apply's ([`apply`]) — the session is told
-//! ([`Connections::show_schemas`](strata_engine::Connections::show_schemas)), and the **catalog
+//! ([`Sources::show_schemas`](strata_engine::Sources::show_schemas)), and the **catalog
 //! generation** the window holds is re-read, because diagnostics are a reconciliation against that
 //! number and completion's snapshot
 //! is keyed on it. Without the bump the tree redraws while every open tab keeps the verdict it
 //! had, and the popup goes on offering names that have stopped resolving.
 //!
-//! Which is also why the write is **not** `upsert_connection`: that replaces the row with a fresh
+//! Which is also why the write is **not** `upsert_source`: that replaces the row with a fresh
 //! `Reg::Loading`, and nothing would answer it short of a whole-catalog re-scan — a permanent
 //! spinner over a change that touched no engine state. The store's def-in-place write
-//! ([`ProjectState::update_connection_def`]) keeps the row's verdict, which is still true.
+//! ([`ProjectState::update_data source_def`]) keeps the row's verdict, which is still true.
 //!
-//! The offer is [`Connections::listing`](strata_engine::Connections::listing)'s **scoped and tagged**
+//! The offer is [`Sources::listing`](strata_engine::Sources::listing)'s **scoped and tagged**
 //! answer and nothing derived beside it, so this picker, the tree and completion cannot disagree
-//! about what a connection shows — and this is the one surface that sees a schema the connection
-//! does *not* show, taking one back being what it is for. A connection that is not live has no
-//! enumeration to offer: the picker then lists the def's own schemas with the connection's failure
+//! about what a data source shows — and this is the one surface that sees a schema the data source
+//! does *not* show, taking one back being what it is for. A data source that is not live has no
+//! enumeration to offer: the picker then lists the def's own schemas with the data source's failure
 //! named, rather than an unexplained empty list.
 
 use freya::components::ScrollView;
@@ -48,13 +48,13 @@ use crate::components::typography::{Caption, Control, MonoValue, Prose, Title};
 use crate::theme::{use_roles, Role};
 
 /// What a schema the def enables and the server does not have says on its row.
-const MISSING: &str = "not in the connection";
+const MISSING: &str = "not in the data source";
 
-/// The slot a trigger sets to ask for the picker — a connection's own name.
+/// The slot a trigger sets to ask for the picker — a data source's own name.
 /// Provided at the project root, like every other dialog's.
 pub type SchemasRequest = State<Option<String>>;
 
-/// One row of the picker: a schema, whether it is enabled, and what the connection says about it.
+/// One row of the picker: a schema, whether it is enabled, and what the data source says about it.
 #[derive(Clone, PartialEq)]
 struct Offer {
     name: String,
@@ -63,13 +63,13 @@ struct Offer {
     missing: bool,
 }
 
-/// What the picker offers for the connection called `name`, and whether the offer came from the
-/// connection itself.
+/// What the picker offers for the data source called `name`, and whether the offer came from the
+/// data source itself.
 ///
-/// Live: the connection's own tagged enumeration, off the one snapshot every surface reads —
+/// Live: the data source's own tagged enumeration, off the one snapshot every surface reads —
 /// **including the schemas it does not show**, which is what this dialog is for and what no other
 /// surface may draw. Not live: the def's `schemas`, so the user can still take one off a
-/// connection that is refusing to connect *because* of it.
+/// data source that is refusing to connect *because* of it.
 fn offers(engine: &EngineCtx, name: &str, source: &SourceDef) -> (Vec<Offer>, bool) {
     let listing = engine.sources().listing();
     let live = listing.source(name).filter(|source| source.live);
@@ -96,11 +96,11 @@ fn offers(engine: &EngineCtx, name: &str, source: &SourceDef) -> (Vec<Offer>, bo
     (offers, true)
 }
 
-/// Write `schemas` onto the connection's def, tell the session, persist, and adopt the engine's
+/// Write `schemas` onto the data source's def, tell the session, persist, and adopt the engine's
 /// catalog generation — the whole of what Apply does.
 ///
 /// Both of the last two are because this press moves what an unqualified name resolves to: the
-/// session learns the new set without a reconnect (`Connections::show_schemas`), and the surfaces that
+/// session learns the new set without a reconnect (`Sources::show_schemas`), and the surfaces that
 /// answer about names re-derive on that number and nothing else — every tab's diagnostics through
 /// `stale_tabs`, and the completion snapshot through its key. The discrete catalog mutation
 /// [`catalog_settled`] exists for, exactly as a Forget is.
@@ -114,8 +114,8 @@ fn apply(
 ) {
     let mut project = project;
     {
-        let mut p = project.write_channel(ProjChan::Connections);
-        p.update_connection_def(url, |def| def.schemas.clone_from(&schemas));
+        let mut p = project.write_channel(ProjChan::Sources);
+        p.update_source_def(url, |def| def.schemas.clone_from(&schemas));
         engine.sources().show_schemas(url, &schemas);
         persisted_defs(&p, report);
     }
@@ -127,7 +127,7 @@ fn apply(
 ///
 /// **The draft is seeded when the picker opens, and the seed is dropped when it closes** — which
 /// is what makes Cancel discard. This dialog is mounted for the window's life, so a draft kept
-/// past a close comes back on the next open of the same connection and Apply then commits the
+/// past a close comes back on the next open of the same data source and Apply then commits the
 /// edit the user cancelled. Clearing the *seed* rather than the draft keeps the seeding condition
 /// one comparison, and re-reads the def, so a schema that appeared or vanished server-side since
 /// the last open is picked up too.
@@ -142,7 +142,7 @@ impl Component for SchemasPicker {
         let url = slot.read().clone();
         let engine = use_consume::<EngineCtx>();
         let catalog = use_catalog();
-        let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+        let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let report = use_report();
         let roles = use_roles();
@@ -158,7 +158,7 @@ impl Component for SchemasPicker {
         };
         let Some(source) = radio
             .read()
-            .connections
+            .sources
             .iter()
             .find(|c| c.def.named() == url)
             .map(|c| c.def.clone())
@@ -191,11 +191,11 @@ impl Component for SchemasPicker {
 
         let note = match live {
             true => {
-                "Which schemas this connection shows. Every schema stays queryable by name; \
+                "Which schemas this data source shows. Every schema stays queryable by name; \
                      this scopes what the tree and completion offer."
             }
             false => {
-                "This connection is not connected, so it cannot say which schemas it has. \
+                "This data source is not connected, so it cannot say which schemas it has. \
                       These are the ones it is set to show."
             }
         };
@@ -289,8 +289,8 @@ mod tests {
         std::env::temp_dir().join(format!("strata-schemas-{}", std::process::id()))
     }
 
-    /// One database connection showing both of its schemas.
-    fn connection() -> SourceDef {
+    /// One data source showing both of its schemas.
+    fn source() -> SourceDef {
         SourceDef {
             name: "analytics".into(),
             kind: Pg::NAME.to_string(),
@@ -318,7 +318,7 @@ mod tests {
 
     fn runner() -> (TestingRunner, Handles) {
         let root = temp_root();
-        let conn = connection();
+        let conn = source();
         TestingRunner::new(
             app,
             (900., 700.).into(),
@@ -331,7 +331,7 @@ mod tests {
                 let project = r.provide_root_context(|| {
                     let defs = ProjectDefs {
                         name: "test".into(),
-                        connections: vec![conn.clone()],
+                        sources: vec![conn.clone()],
                         ..ProjectDefs::default()
                     };
                     RadioStation::<ProjectState, ProjChan>::create(ProjectState::from_defs(
@@ -377,7 +377,7 @@ mod tests {
     fn applying_a_schema_change_moves_the_catalog_generation() {
         let (mut runner, (mut target, project, catalog, engine)) = runner();
         runner.sync_and_update();
-        target.set(Some(connection().named()));
+        target.set(Some(source().named()));
         runner.sync_and_update();
         runner.sync_and_update();
 
@@ -385,10 +385,10 @@ mod tests {
         click_text(&mut runner, "Apply");
 
         assert_eq!(
-            project.peek().connections[0].def.clone(),
+            project.peek().sources[0].def.clone(),
             SourceDef {
                 schemas: vec!["public".into()],
-                ..connection()
+                ..source()
             },
             "the def keeps only the schemas still ticked"
         );

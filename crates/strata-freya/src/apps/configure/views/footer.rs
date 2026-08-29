@@ -50,7 +50,7 @@ impl Component for Footer {
         let form = crate::components::form::form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+        let sources = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         let rescan = use_consume::<CatalogRescan>();
         let catalog = use_consume::<Catalog>();
         let engine = use_consume::<EngineCtx>();
@@ -69,7 +69,7 @@ impl Component for Footer {
                 .blocker()
                 .or_else(|| column_fault(ctx))
                 .or_else(|| name_clash(ctx, project))
-                .or_else(|| missing_connection(ctx, connections)),
+                .or_else(|| missing_source(ctx, sources)),
             scanning,
         );
 
@@ -178,33 +178,26 @@ fn name_clash(ctx: ConfigureCtx, project: RadioStation<ProjectState, ProjChan>) 
     project.peek().name_taken(name)
 }
 
-/// The other blocker the draft cannot see: the connection it reads through is **gone** (W7 · 04).
+/// The other blocker the draft cannot see: the data source it reads through is **gone** (W7 · 04).
 ///
-/// A def keeps naming its bucket after that connection is forgotten — the def is the table's, and
+/// A def keeps naming its bucket after that data source is forgotten — the def is the table's, and
 /// nothing rewrites it behind the user's back — so this window can open on one. It says so and
-/// blocks Save rather than letting the reference be re-saved: the picker offers only connections
+/// blocks Save rather than letting the reference be re-saved: the picker offers only data sources
 /// the project has, so the fix is to choose one, and that is exactly the treatment a format with
 /// no reader gets (`ConfigureDraft::blocker`).
 ///
-/// Only while LOCATION is on Remote: a connection kept across a flip back to Local
+/// Only while LOCATION is on Remote: a data source kept across a flip back to Local
 /// is a remembered choice, not the table's location.
 ///
-/// `connections` is a **subscribed** handle, unlike the station [`name_clash`] peeks: the
+/// `data sources` is a **subscribed** handle, unlike the station [`name_clash`] peeks: the
 /// catalog cannot lose a name under this window (only this window writes one), but the
-/// Connections pane next door can forget a bucket while the form sits untouched — and a Save
-/// that stayed enabled would then write a def naming a connection that is gone.
-fn missing_connection(
-    ctx: ConfigureCtx,
-    connections: Radio<ProjectState, ProjChan>,
-) -> Option<String> {
+/// Data sources pane next door can forget a bucket while the form sits untouched — and a Save
+/// that stayed enabled would then write a def naming a data source that is gone.
+fn missing_source(ctx: ConfigureCtx, sources: Radio<ProjectState, ProjChan>) -> Option<String> {
     let url = ctx.draft.read().store()?.to_string();
-    let known = connections
-        .read()
-        .connections
-        .iter()
-        .any(|c| c.def.named() == url);
+    let known = sources.read().sources.iter().any(|c| c.def.named() == url);
     (!known).then(|| {
-        format!("'{url}' is not a connection in this project. Choose one, or add it back.")
+        format!("'{url}' is not a data source in this project. Choose one, or add it back.")
     })
 }
 
