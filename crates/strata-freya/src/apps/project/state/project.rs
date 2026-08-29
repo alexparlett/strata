@@ -32,7 +32,7 @@ use freya::radio::RadioChannel;
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_engine::register::view_order;
 use strata_engine::{TableMeta, ViewMeta};
-use strata_model::{CatalogKind, ColumnInfo, ConnectionDef, SavedQuery, TableDef, ViewDef};
+use strata_model::{CatalogKind, ColumnInfo, SavedQuery, SourceDef, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -97,12 +97,12 @@ impl<T> Reg<T> {
 /// the bucket is reachable, `Failed` with what to fix (no region, a profile the
 /// credential chain does not answer for). That is the sidebar pane's status dot.
 pub struct ConnRow {
-    pub def: ConnectionDef,
+    pub def: SourceDef,
     pub reg: Reg<()>,
 }
 
 impl ConnRow {
-    fn new(def: ConnectionDef) -> Self {
+    fn new(def: SourceDef) -> Self {
         Self {
             def,
             reg: Reg::Loading,
@@ -945,13 +945,13 @@ impl ProjectState {
     ///
     /// It does **not** deregister anything. An edit that moves the address or the kind changes
     /// what the connection registered under, and that store survives this write untouched;
-    /// dropping it is `Sources::disconnect`, owed by the gesture that knows both names.
-    pub fn upsert_connection(&mut self, def: ConnectionDef) {
+    /// dropping it is `Connections::disconnect`, owed by the gesture that knows both names.
+    pub fn upsert_connection(&mut self, def: SourceDef) {
         let name = def.named();
         self.connections.retain(|c| c.def.named() != name);
-        let at = self
-            .connections
-            .partition_point(|c| name_ord(&c.def.address, &def.address).is_lt());
+        let at = self.connections.partition_point(|c| {
+            name_ord(c.def.setting("address"), def.setting("address")).is_lt()
+        });
         self.connections.insert(at, ConnRow::new(def));
     }
 
@@ -966,7 +966,7 @@ impl ProjectState {
     /// **In one settle**, and here rather than in the window that pressed Save: what a rename
     /// costs is a property of how a connection is referenced, and a surface that had to remember
     /// to fix the references would be one that could forget.
-    pub fn rename_connection(&mut self, from: &str, def: ConnectionDef) {
+    pub fn rename_connection(&mut self, from: &str, def: SourceDef) {
         let to = def.named();
         self.remove_connection(from);
         self.upsert_connection(def);
@@ -994,7 +994,7 @@ impl ProjectState {
     /// address change here would leave the list sorted wrong and the engine registered under a
     /// URL no def names. That edit is the connection editor's, and it goes through `upsert`.
     ///
-    pub fn update_connection_def(&mut self, name: &str, edit: impl FnOnce(&mut ConnectionDef)) {
+    pub fn update_connection_def(&mut self, name: &str, edit: impl FnOnce(&mut SourceDef)) {
         let Some(row) = self.connections.iter_mut().find(|c| c.def.named() == name) else {
             return;
         };
@@ -1027,9 +1027,7 @@ mod tests {
     use super::*;
     use strata_engine::sources::postgres::Pg;
     use strata_engine::SourceKind;
-    use strata_model::{
-        GcsAuth, GcsStore, Provider, S3Store, SourceDef, SourceFormat, TableOrigin,
-    };
+    use strata_model::{SourceDef, SourceFormat, TableOrigin};
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
@@ -1792,17 +1790,21 @@ mod tests {
         let defs = ProjectDefs {
             name: "test".into(),
             connections: vec![
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake".into(),
-                    provider: Provider::S3(S3Store::default()),
-                    client_config: Default::default(),
+                    kind: "s3".into(),
+                    ..Default::default()
                 },
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake2".into(),
-                    provider: Provider::Gcs(GcsStore::default()),
-                    client_config: Default::default(),
+                    kind: "gcs".into(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -1860,7 +1862,7 @@ mod tests {
         });
         p.upsert_table(table_def("local"));
 
-        let renamed = ConnectionDef {
+        let renamed = SourceDef {
             name: "depot".into(),
             ..p.connections
                 .iter()
@@ -1892,17 +1894,18 @@ mod tests {
     }
 
     #[test]
-    fn upsert_connection_replaces_the_name_and_sorts_the_address() {
+    fn upsert_connection_replaces_the_name_and_sorts_by_it() {
         let mut p = two_stores_one_bucket();
         p.connection_registered("lake");
 
-        p.upsert_connection(ConnectionDef {
-            address: "lake".into(),
+        p.upsert_connection(SourceDef {
+            kind: "gcs".into(),
             name: "lake2".into(),
-            provider: Provider::Gcs(GcsStore {
-                auth: GcsAuth::Anonymous,
-            }),
-            client_config: Default::default(),
+            config: [("address", "lake"), ("auth", "anonymous")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         });
 
         assert_eq!(
@@ -1915,12 +1918,10 @@ mod tests {
             .iter()
             .find(|c| c.def.named() == "lake2")
             .expect("the GCS connection");
+        assert_eq!(gcs.def.kind, "gcs", "…and it carries what was saved");
         assert_eq!(
-            gcs.def.provider,
-            Provider::Gcs(GcsStore {
-                auth: GcsAuth::Anonymous
-            }),
-            "…and it carries what was saved"
+            gcs.def.config.get("auth").map(String::as_str),
+            Some("anonymous")
         );
         let s3 = p
             .connections
@@ -1928,18 +1929,21 @@ mod tests {
             .find(|c| c.def.named() == "lake")
             .expect("the S3 connection over the same bucket");
         assert!(matches!(s3.reg, Reg::Ready(())));
-        p.upsert_connection(ConnectionDef {
-            address: "acme".into(),
+        p.upsert_connection(SourceDef {
+            config: [("address".to_string(), "acme".into())]
+                .into_iter()
+                .collect(),
             name: "acme".into(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: Default::default(),
+            kind: "s3".into(),
+            ..Default::default()
         });
         assert_eq!(
             p.connections
                 .iter()
-                .map(|c| c.def.address.as_str())
+                .map(|c| c.def.named())
                 .collect::<Vec<_>>(),
-            ["acme", "lake", "lake"]
+            ["acme", "lake2", "lake"],
+            "sorted by the name (`name_ord`'s own order), which is what a source is addressed by"
         );
     }
 
@@ -1950,14 +1954,14 @@ mod tests {
         let mut p = two_stores_one_bucket();
         p.connection_failed("lake", "This S3 connection needs a region.".into());
 
-        p.upsert_connection(ConnectionDef {
-            address: "lake".into(),
+        p.upsert_connection(SourceDef {
+            kind: "s3".into(),
             name: "lake".into(),
-            provider: Provider::S3(S3Store {
-                region: "eu-west-2".into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            config: [("region", "eu-west-2")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         });
 
         let row = p
@@ -2018,19 +2022,19 @@ mod tests {
     }
 
     /// A **database** connection def, for the two questions only a database raises here.
-    fn pg(database: &str, schemas: &[&str]) -> ConnectionDef {
-        ConnectionDef {
-            address: format!("db.internal:5432/{database}"),
-            name: String::new(),
-            provider: Provider::Source(SourceDef {
-                kind: Pg::NAME.to_string(),
-                config: [("user".to_string(), "reader".to_string())]
-                    .into_iter()
-                    .collect(),
-                schemas: schemas.iter().map(ToString::to_string).collect(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+    fn pg(database: &str, schemas: &[&str]) -> SourceDef {
+        SourceDef {
+            kind: Pg::NAME.to_string(),
+            name: database.into(),
+            config: [
+                ("address", format!("db.internal:5432/{database}")),
+                ("user", "reader".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            schemas: schemas.iter().map(ToString::to_string).collect(),
+            ..Default::default()
         }
     }
 
@@ -2052,9 +2056,7 @@ mod tests {
         p.connection_registered(&name);
 
         p.update_connection_def(&name, |def| {
-            if let Provider::Source(store) = &mut def.provider {
-                store.schemas = vec!["public".into(), "warehouse".into()];
-            }
+            def.schemas = vec!["public".into(), "warehouse".into()];
         });
 
         let row = &p.connections[0];
@@ -2062,12 +2064,7 @@ mod tests {
             matches!(row.reg, Reg::Ready(())),
             "the verdict is untouched"
         );
-        match &row.def.provider {
-            Provider::Source(store) => {
-                assert_eq!(store.schemas, ["public", "warehouse"]);
-            }
-            other => panic!("still a database: {other:?}"),
-        }
+        assert_eq!(row.def.schemas, ["public", "warehouse"]);
         assert_eq!(p.connections.len(), 1, "edited in place, not inserted");
     }
 }

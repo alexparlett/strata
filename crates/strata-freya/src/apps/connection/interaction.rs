@@ -27,10 +27,9 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_engine::secrets::SecretProvider;
 use strata_engine::{
-    DataSource, Engine, Field, Slot, SourceInfo, SourceKind, SourceMode, SourceSetting, Sourced,
-    When,
+    DataSource, Engine, Field, SourceInfo, SourceKind, SourceMode, SourceSetting, Sourced, When,
 };
-use strata_model::{ConnectionDef, Provider, S3Store, SourceDef};
+use strata_model::SourceDef;
 
 use super::views::{ConnectionBody, Footer};
 use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, SecretProbe, Status};
@@ -57,7 +56,6 @@ const TEST_SETTINGS: &[SourceSetting] = &[
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
-        slot: Slot::Address,
         group: Some("CONNECTION"),
         required: true,
         default: None,
@@ -69,7 +67,6 @@ const TEST_SETTINGS: &[SourceSetting] = &[
         key: "user",
         label: "USER",
         field: Field::Text,
-        slot: Slot::Config,
         group: Some("CONNECTION"),
         required: true,
         default: None,
@@ -81,7 +78,6 @@ const TEST_SETTINGS: &[SourceSetting] = &[
         key: "password",
         label: "PASSWORD",
         field: Field::Secret,
-        slot: Slot::Config,
         group: Some("CONNECTION"),
         required: false,
         default: None,
@@ -93,7 +89,6 @@ const TEST_SETTINGS: &[SourceSetting] = &[
         key: "mode",
         label: "MODE",
         field: Field::Choice(&["off", "on"]),
-        slot: Slot::Config,
         group: Some("SECURITY"),
         required: false,
         default: Some("off"),
@@ -105,7 +100,6 @@ const TEST_SETTINGS: &[SourceSetting] = &[
         key: "certificate",
         label: "ROOT CERTIFICATE",
         field: Field::Path,
-        slot: Slot::Config,
         group: Some("SECURITY"),
         required: true,
         default: None,
@@ -122,7 +116,7 @@ const TEST_SETTINGS: &[SourceSetting] = &[
 impl DataSource for TestSource {
     async fn connect(
         &self,
-        _def: &ConnectionDef,
+        _def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         Err("This test source has no server.".into())
@@ -156,6 +150,8 @@ fn registrant() -> SourceInfo {
         mode: TestSource::MODE,
         settings: TEST_SETTINGS,
         writable: TestSource::WRITABLE,
+        unique: &[],
+        scheme: TestSource::SCHEME,
     }
 }
 
@@ -174,14 +170,14 @@ fn temp_root(tag: &str) -> PathBuf {
 fn project(root: &Path) -> ProjectState {
     let defs = ProjectDefs {
         name: "test".into(),
-        connections: vec![ConnectionDef {
-            address: "old-lake".into(),
+        connections: vec![SourceDef {
+            kind: "s3".into(),
             name: "old_lake".into(),
-            provider: Provider::S3(S3Store {
-                region: "eu-west-2".into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            config: [("region", "eu-west-2")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -285,10 +281,12 @@ fn source_draft() -> ConnectionDraft {
         kind: TestSource::NAME.into(),
         settings: TEST_SETTINGS,
         name: "warehouse".into(),
-        address: "db.internal/analytics".into(),
-        config: [("user".to_string(), "reader".to_string())]
-            .into_iter()
-            .collect(),
+        config: [
+            ("address".to_string(), "db.internal/analytics".into()),
+            ("user".to_string(), "reader".to_string()),
+        ]
+        .into_iter()
+        .collect(),
         ..Default::default()
     }
 }
@@ -310,7 +308,7 @@ fn saving_writes_the_def_and_waits_for_the_pass() {
         .iter()
         .map(|c| c.def.named())
         .collect();
-    assert_eq!(names, ["warehouse", "old_lake"], "sorted by address");
+    assert_eq!(names, ["old_lake", "warehouse"], "sorted by name");
     assert_eq!(
         *ctx.status.peek(),
         Status::Connecting("warehouse".into()),
@@ -333,14 +331,13 @@ fn an_edit_that_renames_leaves_no_row_behind() {
         runner("moved", ConnectionTarget::Edit("warehouse".into()), draft);
     {
         let mut p = project.write_channel(ProjChan::Connections);
-        p.upsert_connection(ConnectionDef {
-            address: "db.internal/analytics".into(),
+        p.upsert_connection(SourceDef {
+            config: [("address".to_string(), "db.internal/analytics".into())]
+                .into_iter()
+                .collect(),
             name: "warehouse".into(),
-            provider: Provider::Source(SourceDef {
-                kind: TestSource::NAME.into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: TestSource::NAME.into(),
+            ..Default::default()
         });
     }
     settle(&mut runner);
@@ -353,7 +350,7 @@ fn an_edit_that_renames_leaves_no_row_behind() {
         .iter()
         .map(|c| c.def.named())
         .collect();
-    assert_eq!(names, ["depot", "old_lake"], "the old name's row is gone");
+    assert_eq!(names, ["old_lake", "depot"], "the old name's row is gone");
 }
 
 /// **A registered source's rows are the ones it declared, and there are no others.**
@@ -490,7 +487,7 @@ fn a_group_heading_rides_the_rows_that_survive() {
 #[test]
 fn an_address_is_refused_in_the_kinds_own_words() {
     let mut draft = source_draft();
-    draft.address = "db.internal".into();
+    draft.set("address", "db.internal".into());
     let (mut runner, (ctx, _, rescan)) = runner("address", ConnectionTarget::New, draft);
     settle(&mut runner);
 
@@ -513,7 +510,7 @@ fn an_address_is_refused_in_the_kinds_own_words() {
 #[test]
 fn a_required_declared_key_blocks_the_save() {
     let mut draft = source_draft();
-    draft.config.clear();
+    draft.set("user", String::new());
     let (mut runner, (ctx, project, rescan)) = runner("required", ConnectionTarget::New, draft);
     settle(&mut runner);
 
@@ -548,20 +545,19 @@ fn a_name_clash_is_explained_beside_the_button() {
 
     assert_eq!(
         ctx.draft.peek().named(),
-        "analytics",
-        "minted from the address"
+        "",
+        "a blank name is blank — nothing mints one from the address"
     );
 
     {
         let mut p = project.write_channel(ProjChan::Connections);
-        p.upsert_connection(ConnectionDef {
-            address: "other/sales".into(),
+        p.upsert_connection(SourceDef {
+            config: [("address".to_string(), "other/sales".into())]
+                .into_iter()
+                .collect(),
             name: "warehouse".into(),
-            provider: Provider::Source(SourceDef {
-                kind: TestSource::NAME.into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: TestSource::NAME.into(),
+            ..Default::default()
         });
     }
     ctx.edit(|draft| draft.name = "WAREHOUSE".into());
@@ -570,8 +566,8 @@ fn a_name_clash_is_explained_beside_the_button() {
     let said = texts(&runner);
     assert!(
         said.iter()
-            .any(|t| t.contains("is already the catalog name") && t.contains("sales")),
-        "a folded clash against another connection: {said:?}"
+            .any(|t| t.contains("is already the name of another source")),
+        "a folded clash against another source: {said:?}"
     );
 
     ctx.edit(|draft| draft.name = "depot".into());
@@ -594,17 +590,13 @@ fn editing_a_source_connection_does_not_clash_with_the_row_it_replaces() {
     );
     {
         let mut p = project.write_channel(ProjChan::Connections);
-        p.upsert_connection(ConnectionDef {
-            address: "db.internal/analytics".into(),
+        p.upsert_connection(SourceDef {
             name: "warehouse".into(),
-            provider: Provider::Source(SourceDef {
-                kind: TestSource::NAME.into(),
-                config: [("user".to_string(), "reader".to_string())]
-                    .into_iter()
-                    .collect(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: TestSource::NAME.into(),
+            config: [("user".to_string(), "reader".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
         });
     }
     settle(&mut runner);
@@ -649,9 +641,7 @@ fn a_declared_secret_is_an_expectation_in_the_def_and_a_value_on_this_machine() 
         &runner,
         "This password goes into this machine's keystore when you save."
     ));
-    let Provider::Source(def) = ctx.draft.peek().def().provider else {
-        panic!("a source def");
-    };
+    let def = ctx.draft.peek().def();
     assert!(
         !def.config.contains_key("password"),
         "and no secret value reaches the def: {:?}",
@@ -751,9 +741,7 @@ fn a_declared_choice_writes_the_kinds_own_word() {
     let (mut runner, (ctx, ..)) = runner("choice", ConnectionTarget::New, source_draft());
     settle(&mut runner);
 
-    let Provider::Source(def) = ctx.draft.peek().def().provider else {
-        panic!("a source def");
-    };
+    let def = ctx.draft.peek().def();
     assert_eq!(
         def.config.get("mode").map(String::as_str),
         Some("off"),
@@ -762,9 +750,7 @@ fn a_declared_choice_writes_the_kinds_own_word() {
 
     ctx.edit(|draft| draft.set("mode", "on".into()));
     settle(&mut runner);
-    let Provider::Source(def) = ctx.draft.peek().def().provider else {
-        panic!("a source def");
-    };
+    let def = ctx.draft.peek().def();
     assert_eq!(def.config.get("mode").map(String::as_str), Some("on"));
 }
 
@@ -772,24 +758,20 @@ fn a_declared_choice_writes_the_kinds_own_word() {
 /// nothing touched, what reaches the store is the def that was there.
 #[test]
 fn a_stored_source_def_survives_the_form_untouched() {
-    let stored = ConnectionDef {
-        address: "db.internal/analytics".into(),
+    let stored = SourceDef {
         name: "warehouse".into(),
-        provider: Provider::Source(SourceDef {
-            kind: TestSource::NAME.into(),
-            config: [
-                ("user", "reader"),
-                ("mode", "on"),
-                ("certificate", "/c.pem"),
-            ]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
-            secrets: BTreeSet::from(["password".to_string()]),
-            schemas: vec!["public".into()],
-            read_only: false,
-        }),
-        client_config: Default::default(),
+        kind: TestSource::NAME.into(),
+        config: [
+            ("user", "reader"),
+            ("mode", "on"),
+            ("certificate", "/c.pem"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+        secrets: BTreeSet::from(["password".to_string()]),
+        schemas: vec!["public".into()],
+        read_only: false,
     };
     let draft = ConnectionDraft::of(&stored, &[registrant()]);
     let (mut runner, (ctx, ..)) = runner(

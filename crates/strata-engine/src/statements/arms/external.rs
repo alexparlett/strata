@@ -16,11 +16,11 @@
 //! **`OPTIONS` is two vocabularies wearing one syntax.** In `datafusion-cli` it carries both the
 //! reader's settings and the object store's; Strata keeps those in different files, because the
 //! reader's belong to the def ([`SourceFormat`] *is* its options) and the store's to a
-//! [`ConnectionDef`](strata_model::ConnectionDef), which holds a reference to credentials and never
+//! [`SourceDef`](strata_model::SourceDef), which holds a reference to credentials and never
 //! a credential. So the split is by namespace:
 //!
 //! - a `format.` key the def has a field for is **read** onto it;
-//! - a client option or store namespace is **refused toward Connections** on the key alone —
+//! - a client option or store namespace is **refused toward Sources** on the key alone —
 //!   [`store_key`] never looks at the value, because that value may be a secret and a refusal is a
 //!   sentence the user then copies and pastes;
 //! - anything else is refused **by name**, which keeps the mechanism total rather than a list of
@@ -42,13 +42,12 @@ use crate::export::partition_columns_are_bare_words;
 use crate::formats::Formats;
 use crate::policy::Principal;
 use crate::register::table_spec;
-use crate::sources::store::store_identity;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::target::{elsewhere, resolve_target};
 use crate::statements::StmtKind;
-use crate::Connections;
+use crate::SourceDefs;
 use strata_arrow::client::client_key;
 use strata_core::project::{relativize, split_remote};
 use strata_core::util::plural;
@@ -118,7 +117,7 @@ pub async fn create(
         .await?;
     let name = target.workspace(WHAT)?;
     let format = read_format(&cx.formats, &file_type, &name, &options)?;
-    let (connection, source) = source_of(root, &location, &cx.connections)?;
+    let (connection, source) = source_of(root, &location, &cx.connections, &cx.registrants)?;
     let partitions = partition_cols(ctx, &columns, &table_partition_cols)?;
 
     let replacing = match existing(ctx, &name).await {
@@ -151,7 +150,7 @@ pub async fn create(
         ctx,
         &cx.formats,
         cx.tables.as_ref(),
-        &table_spec(root, &def, &cx.connections),
+        &table_spec(root, &def, &cx.connections, &cx.registrants),
     )
     .await?;
 
@@ -204,7 +203,7 @@ fn read_format(
 fn store_key(key: &str) -> Option<&'static str> {
     const STORE_NAMESPACES: [&str; 5] = ["aws.", "s3.", "gcp.", "google.", "azure."];
     if STORE_NAMESPACES.iter().any(|ns| key.starts_with(ns)) || client_key(key).is_some() {
-        return Some("A bucket, its region and where its credentials come from belong to a connection. Add one in Connections");
+        return Some("A bucket, its region and where its credentials come from belong to a connection. Add one in Sources");
     }
     None
 }
@@ -238,7 +237,8 @@ fn text(key: &str, value: &Value) -> Result<String, String> {
 fn source_of(
     root: &Path,
     location: &str,
-    connections: &Connections,
+    connections: &SourceDefs,
+    registrants: &crate::sources::source::Registrants,
 ) -> Result<(Option<String>, String), String> {
     let location = location.trim();
     if location.is_empty() {
@@ -250,17 +250,11 @@ fn source_of(
     if url.starts_with("file:") {
         return Err("LOCATION takes a path, not a file:// URL".into());
     }
-    let Some(named) = store_identity(&url) else {
+    let Some(url) = connections.by_prefix(registrants, &url) else {
         return Err(format!(
-            "'{url}' is not a connection in this project. Add it in Connections"
+            "'{url}' is not a connection in this project. Add it in Sources"
         ));
     };
-    let Some(named) = connections.named(&named) else {
-        return Err(format!(
-            "'{url}' is not a connection in this project. Add it in Connections"
-        ));
-    };
-    let url = named;
     if source.trim().is_empty() {
         return Err(format!(
             "LOCATION '{location}' names the bucket. Add the path inside it that holds the files"
@@ -359,12 +353,9 @@ mod tests {
     use std::sync::Arc;
     use std::{env, process};
 
-    use strata_model::{
-        ConnectionDef, CsvRead, FileCompression, JsonRead, JsonShape, Provider, S3Auth, S3Store,
-    };
+    use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceDef};
 
     use crate::formats::fake::TestFormat;
-    use crate::register::CatalogSpec;
     use crate::sql::complete::complete;
     use crate::sql::symbols::Catalog;
     use crate::{Engine, EngineBuilder, RunOutcome, RunRows, RunTag, StatementReport, WsId};
@@ -515,7 +506,7 @@ mod tests {
         let cold = Engine::builder().build();
         let mut outcomes = Vec::new();
         cold.catalog()
-            .sync(CatalogSpec::of_project(&root, &defs), |o| outcomes.push(o))
+            .sync(cold.catalog().spec(&root, &defs), |o| outcomes.push(o))
             .await;
         assert_eq!(outcomes.len(), 1);
         assert_eq!(read(&cold, "SELECT count(*) FROM t").await, [["3"]]);
@@ -632,7 +623,7 @@ mod tests {
     /// **The collision this statement family has with connections**, both halves.
     ///
     /// `OPTIONS` is where `datafusion-cli` writes an object store's credentials, its region and
-    /// its endpoint — Strata keeps every one of those on a `ConnectionDef` instead, so they are
+    /// its endpoint — Strata keeps every one of those on a `SourceDef` instead, so they are
     /// refused toward the surface that owns them. And the refusal **never carries the value**:
     /// the arm answers off the key alone, because the sentence it produces is one the user then
     /// reads, copies and pastes.
@@ -640,7 +631,7 @@ mod tests {
     async fn an_object_store_option_is_refused_toward_connections_without_its_value() {
         let (root, eng) = project("store_opts", "t.csv", "id\n1\n");
         let surface = "A bucket, its region and where its credentials come from belong to a \
-                       connection. Add one in Connections";
+                       connection. Add one in Sources";
         for key in [
             "aws.access_key_id",
             "aws.secret_access_key",
@@ -686,7 +677,7 @@ mod tests {
         .expect_err("refused");
         assert_eq!(
             err,
-            "'s3://acme-lake' is not a connection in this project. Add it in Connections"
+            "'s3://acme-lake' is not a connection in this project. Add it in Sources"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -697,11 +688,14 @@ mod tests {
     /// end-to-end version is `tests/object_store_minio.rs`.
     #[test]
     fn a_location_over_a_connection_splits_into_the_url_and_a_bucket_relative_source() {
-        let connections = Connections::of(&[ConnectionDef {
-            address: "acme-lake".into(),
+        let registrants = Engine::builder().build();
+        let connections = SourceDefs::of(&[SourceDef {
+            config: [("address".to_string(), "acme-lake".into())]
+                .into_iter()
+                .collect(),
             name: "acme_lake".into(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: Default::default(),
+            kind: "s3".into(),
+            ..Default::default()
         }]);
         let root = Path::new("/proj");
 
@@ -709,7 +703,8 @@ mod tests {
             source_of(
                 root,
                 "s3://acme-lake/events/2024/**/*.parquet",
-                &connections
+                &connections,
+                registrants.registry()
             ),
             Ok((
                 Some("acme_lake".to_string()),
@@ -717,7 +712,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            source_of(root, "s3://acme-lake", &connections),
+            source_of(root, "s3://acme-lake", &connections, registrants.registry()),
             Err(
                 "LOCATION 's3://acme-lake' names the bucket. Add the path inside it that holds \
                  the files"
@@ -725,19 +720,34 @@ mod tests {
             )
         );
         assert_eq!(
-            source_of(root, "file:///data/events/", &connections),
+            source_of(
+                root,
+                "file:///data/events/",
+                &connections,
+                registrants.registry()
+            ),
             Err("LOCATION takes a path, not a file:// URL".into())
         );
         assert_eq!(
-            source_of(root, "/elsewhere/events/", &connections),
+            source_of(
+                root,
+                "/elsewhere/events/",
+                &connections,
+                registrants.registry()
+            ),
             Ok((None, "/elsewhere/events/".to_string()))
         );
         assert_eq!(
-            source_of(root, "/proj/events/", &connections),
+            source_of(root, "/proj/events/", &connections, registrants.registry()),
             Ok((None, "events".to_string()))
         );
         assert_eq!(
-            source_of(root, "S3://ACME-LAKE/events/", &connections),
+            source_of(
+                root,
+                "S3://ACME-LAKE/events/",
+                &connections,
+                registrants.registry()
+            ),
             Ok((Some("acme_lake".to_string()), "events/".to_string()))
         );
     }
@@ -748,14 +758,14 @@ mod tests {
     #[tokio::test]
     async fn a_connection_that_failed_to_connect_is_still_one_a_statement_may_name() {
         let eng = Engine::builder().build();
-        let conn = ConnectionDef {
-            address: "acme-lake".into(),
-            name: String::new(),
-            provider: Provider::S3(S3Store {
-                auth: S3Auth::Anonymous,
-                ..Default::default()
-            }),
-            client_config: BTreeMap::new(),
+        let conn = SourceDef {
+            kind: "s3".into(),
+            name: "acme_lake".into(),
+            config: [("address", "acme-lake"), ("auth", "anonymous")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         };
         assert!(
             eng.sources().connect(conn).await.is_err(),

@@ -22,11 +22,10 @@ use std::fmt;
 use std::path::Path;
 
 use futures::stream::{self, StreamExt};
-use strata_model::{ConnectionDef, TableDef, ViewDef};
+use strata_model::{SourceDef, TableDef, ViewDef};
 
 use crate::catalog::registered;
-use crate::sources::store::store_prefix;
-use crate::{fold_ident, CatalogGen, Connections, Engine, TableMeta, TableSpec, ViewMeta};
+use crate::{fold_ident, CatalogGen, Engine, SourceDefs, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
 /// How many tables register at once ([`sync`]'s table phase).
@@ -100,7 +99,7 @@ impl fmt::Display for RegKind {
 /// [`view_order`] sorts so a view is re-created after everything it reads.
 #[derive(Clone, Debug, Default)]
 pub struct CatalogSpec {
-    pub connections: Vec<ConnectionDef>,
+    pub connections: Vec<SourceDef>,
     pub tables: Vec<TableSpec>,
     pub views: Vec<ViewDef>,
 }
@@ -112,14 +111,18 @@ impl CatalogSpec {
     /// retry finds the dependency order by creating what it can. Replaying onto an engine that
     /// already holds them, sort with [`view_order`] first, or an outer view inlines the
     /// definition the pass is replacing.
-    pub fn of_project(root: &Path, defs: &ProjectDefs) -> CatalogSpec {
+    pub fn of_project(
+        root: &Path,
+        defs: &ProjectDefs,
+        registrants: &crate::sources::source::Registrants,
+    ) -> CatalogSpec {
         let connections = defs.connections.clone();
-        let known = Connections::of(&connections);
+        let known = SourceDefs::of(&connections);
         CatalogSpec {
             tables: defs
                 .tables
                 .iter()
-                .map(|def| table_spec(root, def, &known))
+                .map(|def| table_spec(root, def, &known, registrants))
                 .collect(),
             views: defs.views.clone(),
             connections,
@@ -152,12 +155,16 @@ pub struct PassReport {
 /// already registered under that same URL by the time any table registers (connections are
 /// the pass's first phase), so `s3://acme-lake/events/` is a `ListingTableUrl` the
 /// session can already resolve.
-pub fn table_spec(root: &Path, def: &TableDef, connections: &Connections) -> TableSpec {
+pub fn table_spec(
+    root: &Path,
+    def: &TableDef,
+    connections: &SourceDefs,
+    registrants: &crate::sources::source::Registrants,
+) -> TableSpec {
     let prefix = def
         .connection
         .as_deref()
-        .and_then(|named| connections.identity(named))
-        .and_then(|identity| store_prefix(&identity));
+        .and_then(|named| connections.prefix(registrants, named));
     TableSpec {
         name: def.name.clone(),
         paths: def
@@ -221,7 +228,7 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// [`Sources::connect`](crate::Sources::connect)); then tables (a view's SQL reads tables), **concurrently and in no
 /// particular order** ([`TABLE_CONCURRENCY`]); then views, through [`create_views`].
 ///
-/// Connections need no ordering among themselves and are not retried: each registers one bucket or
+/// Sources need no ordering among themselves and are not retried: each registers one bucket or
 /// one catalog and reads nothing the pass provides. What a failure *costs* differs by kind — an
 /// object store takes the tables over its bucket with it, each saying so on its own row, while a
 /// **database** has no def rows at all and leaves nothing failed but its own row and whatever views
@@ -232,7 +239,7 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// pass.
 async fn register_pass(
     engine: &Engine,
-    connections: Vec<ConnectionDef>,
+    connections: Vec<SourceDef>,
     tables: Vec<TableSpec>,
     views: Vec<ViewDef>,
     mut settled: impl FnMut(RegOutcome),
@@ -324,7 +331,7 @@ pub(crate) async fn create_views(
 /// files is [`Catalog::drop_table`](crate::Catalog::drop_table)'s.
 ///
 /// The diff is against the engine's own registries rather than a list the caller kept: the
-/// workspace catalog for tables and views, and [`Connections`] for connections — **membership,
+/// workspace catalog for tables and views, and [`Sources`] for connections — **membership,
 /// not liveness**, so a def the engine refused is still removed and still reported, which is
 /// what a host holding a row for it needs. A live result snapshot is out of reach, being absent
 /// from what the catalog enumerates and nameable by no def.
@@ -418,7 +425,7 @@ async fn remove_absent(
                     kind: RegKind::Connection,
                 });
             }
-            Some(def) if def.identity() != identity => engine.sources().disconnect(&name),
+            Some(def) if def.named() != identity => engine.sources().disconnect(&name),
             Some(_) => {}
         }
     }
@@ -426,14 +433,11 @@ async fn remove_absent(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};
 
-    use strata_model::{
-        GcsAuth, GcsStore, Provider, S3Auth, S3Store, SourceFormat, TableOrigin, ViewDef,
-    };
+    use strata_model::{SourceFormat, TableOrigin, ViewDef};
 
     use super::*;
 
@@ -473,7 +477,7 @@ mod tests {
         let mut out = Vec::new();
         engine
             .catalog()
-            .sync(CatalogSpec::of_project(root, defs), |o| out.push(o))
+            .sync(engine.catalog().spec(root, defs), |o| out.push(o))
             .await;
         out
     }
@@ -648,7 +652,7 @@ mod tests {
         );
     }
 
-    /// **Connections come first, before any table** — and each is answered under its own
+    /// **Sources come first, before any table** — and each is answered under its own
     /// **URL**, not its bucket.
     ///
     /// Both halves are load-bearing. A source path under a bucket resolves through the object
@@ -675,33 +679,29 @@ mod tests {
         fs::write(root.join("local.csv"), "id\n1\n").unwrap();
         let defs = ProjectDefs {
             connections: vec![
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
                     name: "lake_s3".into(),
-                    provider: Provider::S3(S3Store {
-                        auth: S3Auth::Anonymous,
-                        ..Default::default()
-                    }),
-                    client_config: Default::default(),
+                    kind: "s3".into(),
+                    config: [("auth".to_string(), "anonymous".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
                 },
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
                     name: "lake_gcs".into(),
-                    provider: Provider::Gcs(GcsStore {
-                        auth: GcsAuth::ServiceAccount {
-                            path: String::new(),
-                        },
-                    }),
-                    client_config: Default::default(),
+                    kind: "gcs".into(),
+                    config: [("auth".to_string(), "service-account".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
                 },
-                ConnectionDef {
-                    address: "no-region".into(),
+                SourceDef {
                     name: "elsewhere".into(),
-                    provider: Provider::S3(S3Store {
-                        auth: S3Auth::Anonymous,
-                        ..Default::default()
-                    }),
-                    client_config: Default::default(),
+                    kind: "s3".into(),
+                    config: [("auth".to_string(), "anonymous".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
                 },
             ],
             tables: vec![table("local", "local.csv")],
@@ -737,11 +737,14 @@ mod tests {
     /// that says nothing about a bucket.
     #[test]
     fn a_table_over_a_connection_resolves_against_its_bucket() {
-        let known = Connections::of(&[ConnectionDef {
-            address: "acme-lake".into(),
+        let registrants = Engine::builder().build();
+        let known = SourceDefs::of(&[SourceDef {
+            config: [("address".to_string(), "acme-lake".into())]
+                .into_iter()
+                .collect(),
+            kind: "s3".into(),
             name: "acme_lake".into(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: BTreeMap::new(),
+            ..Default::default()
         }]);
         let def = TableDef {
             name: "events".into(),
@@ -752,7 +755,10 @@ mod tests {
             origin: TableOrigin::External,
         };
         assert_eq!(
-            table_spec(Path::new("/proj"), &def, &known).paths,
+            registrants
+                .catalog()
+                .table_spec(Path::new("/proj"), &def, &known)
+                .paths,
             ["s3://acme-lake/events/2024/**/*.parquet"]
         );
         let stranded = TableDef {
@@ -760,7 +766,10 @@ mod tests {
             ..def.clone()
         };
         assert_eq!(
-            table_spec(Path::new("/proj"), &stranded, &known).paths,
+            registrants
+                .catalog()
+                .table_spec(Path::new("/proj"), &stranded, &known)
+                .paths,
             ["/proj/events/2024/**/*.parquet"],
             "a name the project has no connection for composes nothing remote"
         );
@@ -769,7 +778,10 @@ mod tests {
             ..def
         };
         assert_eq!(
-            table_spec(Path::new("/proj"), &local, &Connections::default()).paths,
+            registrants
+                .catalog()
+                .table_spec(Path::new("/proj"), &local, &SourceDefs::default())
+                .paths,
             ["/proj/events/2024/**/*.parquet"]
         );
     }
@@ -780,7 +792,13 @@ mod tests {
             connections: Vec::new(),
             tables: tables
                 .iter()
-                .map(|name| table_spec(root, &table(name, "t.csv"), &Connections::default()))
+                .map(|name| {
+                    Engine::builder().build().catalog().table_spec(
+                        root,
+                        &table(name, "t.csv"),
+                        &SourceDefs::default(),
+                    )
+                })
                 .collect(),
             views: views
                 .iter()
@@ -876,14 +894,14 @@ mod tests {
     #[tokio::test]
     async fn a_connection_is_diffed_by_name_and_url() {
         let engine = Engine::builder().build();
-        let at = |name: &str, address: &str| ConnectionDef {
-            address: address.into(),
+        let at = |name: &str, address: &str| SourceDef {
+            kind: "s3".into(),
             name: name.into(),
-            provider: Provider::S3(S3Store {
-                auth: S3Auth::Anonymous,
-                ..Default::default()
-            }),
-            client_config: BTreeMap::new(),
+            config: [("address", address), ("auth", "anonymous")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         };
 
         engine
@@ -924,8 +942,8 @@ mod tests {
         );
         assert_eq!(
             engine.connections.held(),
-            vec![("lake".to_string(), at("lake", "moved").identity())],
-            "and the one that moved is held under its new identity, not both"
+            vec![("lake".to_string(), "moved".to_string())],
+            "and the one that moved is held at its new address, not both"
         );
     }
 

@@ -1,4 +1,4 @@
-//! **Data sources**: turning a [`ConnectionDef`] whose provider names a source into a live
+//! **Data sources**: turning a [`SourceDef`] whose provider names a source into a live
 //! connection and registering it on the session as a **catalog** (`docs/CONNECTIONS_SPEC.md`).
 //!
 //! The catalog half of this layer. [`store`] is the other, and neither is a path through the
@@ -45,10 +45,12 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 
-use strata_model::{check_catalog_name, ColumnInfo, ConnectionDef, SourceDef};
+use strata_model::{check_catalog_name, ColumnInfo, SourceDef};
 
 use self::providers::SourceCatalogProvider;
-use self::source::{Listing, Relation, SourceCatalog, SourceInfo, Sourced, Sources};
+use self::source::{
+    Listing, Registrants, Relation, SourceCatalog, SourceInfo, SourceMode, Sourced,
+};
 use super::connect::{self, Registration};
 use super::fold_ident;
 use super::providers::deregister_catalog;
@@ -69,23 +71,18 @@ use strata_core::secret::{migrate_derived, Secret, SecretRef};
 /// needed, which is what keeps a machine-local id out of the committed `project.json`.
 ///
 /// `None` for a provider that is not a source.
-pub fn secret_slot(
-    conn: &ConnectionDef,
-    key: &str,
-    env: &'static [&'static str],
-) -> Option<SecretRequest> {
-    let source = conn.provider.source()?;
-    Some(SecretRequest {
-        family: format!("{}-{key}", source.kind.trim()),
+pub fn secret_slot(conn: &SourceDef, key: &str, env: &'static [&'static str]) -> SecretRequest {
+    SecretRequest {
+        family: format!("{}-{key}", conn.kind.trim()),
         connection: conn.named(),
         env,
-    })
+    }
 }
 
 /// The keystore entry one of `conn`'s secrets is written to and deleted from — [`secret_slot`]'s
 /// key, for the writes this module performs on a save.
-pub(crate) fn secret_ref(conn: &ConnectionDef, key: &str) -> Option<SecretRef> {
-    secret_slot(conn, key, &[]).map(|slot| slot.key())
+pub(crate) fn secret_ref(conn: &SourceDef, key: &str) -> SecretRef {
+    secret_slot(conn, key, &[]).key()
 }
 
 /// Store `value` as one of `conn`'s secrets on this machine, or clear it when it is empty.
@@ -98,10 +95,8 @@ pub(crate) fn secret_ref(conn: &ConnectionDef, key: &str) -> Option<SecretRef> {
 ///
 /// If the keystore refused, in words suitable for display. A caller reports it and does not
 /// save — never answers it by writing the secret somewhere else.
-pub fn put_secret(conn: &ConnectionDef, key: &str, value: &str) -> Result<(), String> {
-    let Some(slot) = secret_ref(conn, key) else {
-        return Ok(());
-    };
+pub fn put_secret(conn: &SourceDef, key: &str, value: &str) -> Result<(), String> {
+    let slot = secret_ref(conn, key);
     match Secret::new(value) {
         Some(secret) => slot.put(&secret).map_err(|e| e.to_string()),
         None => slot.delete().map_err(|e| e.to_string()),
@@ -117,11 +112,8 @@ pub fn put_secret(conn: &ConnectionDef, key: &str, value: &str) -> Result<(), St
 /// # Errors
 ///
 /// If the keystore refused.
-pub fn forget_secret(conn: &ConnectionDef, key: &str) -> Result<(), String> {
-    let Some(slot) = secret_ref(conn, key) else {
-        return Ok(());
-    };
-    slot.delete().map_err(|e| e.to_string())
+pub fn forget_secret(conn: &SourceDef, key: &str) -> Result<(), String> {
+    secret_ref(conn, key).delete().map_err(|e| e.to_string())
 }
 
 /// Forget every secret `conn` holds on this machine — the Forget gesture's keystore half, and
@@ -133,11 +125,8 @@ pub fn forget_secret(conn: &ConnectionDef, key: &str) -> Result<(), String> {
 /// # Errors
 ///
 /// If the keystore refused.
-pub fn forget_secrets(conn: &ConnectionDef) -> Result<(), String> {
-    let Some(source) = conn.provider.source() else {
-        return Ok(());
-    };
-    for key in &source.secrets {
+pub fn forget_secrets(conn: &SourceDef) -> Result<(), String> {
+    for key in &conn.secrets {
         forget_secret(conn, key)?;
     }
     Ok(())
@@ -153,17 +142,12 @@ pub fn forget_secrets(conn: &ConnectionDef) -> Result<(), String> {
 /// # Errors
 ///
 /// If the keystore refused.
-pub fn migrate_secrets(was: &ConnectionDef, now: &ConnectionDef) -> Result<(), String> {
+pub fn migrate_secrets(was: &SourceDef, now: &SourceDef) -> Result<(), String> {
     if was.named() == now.named() {
         return Ok(());
     }
-    let Some(source) = now.provider.source() else {
-        return Ok(());
-    };
-    for key in &source.secrets {
-        if let (Some(from), Some(to)) = (secret_ref(was, key), secret_ref(now, key)) {
-            migrate_derived(&from, &to).map_err(|e| e.to_string())?;
-        }
+    for key in &now.secrets {
+        migrate_derived(&secret_ref(was, key), &secret_ref(now, key)).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -187,7 +171,7 @@ struct LiveSource {
     /// already taken **on the session** — a live fact this map owns, where the editor asks the
     /// same question of the project's stored defs. It is also what says whether the connection
     /// accepts writes ([`SourceDef::read_only`](strata_model::SourceDef::read_only)).
-    def: ConnectionDef,
+    def: SourceDef,
     /// The latest enumeration — the connect-time one until a statement that changed what the
     /// source holds re-runs it ([`relist`](Live::relist)). Read by
     /// [`Sources::listing`](super::Sources::listing) rather than asking the source again.
@@ -219,7 +203,7 @@ fn shown_of(source: &SourceDef) -> BTreeSet<String> {
         .collect()
 }
 
-/// The live source connections this engine holds — the [`Connections`](super::Connections)
+/// The live source connections this engine holds — the [`Sources`](super::Sources)
 /// shape, for the same reasons.
 ///
 /// A handle rather than a plain field because [`Sources::connect`](super::Sources::connect) spawns its work onto the
@@ -232,7 +216,7 @@ pub struct Live(Arc<Mutex<HashMap<String, LiveSource>>>);
 impl Live {
     /// The defs of every *other* live source connection — what [`check_catalog_name`] folds a
     /// candidate against.
-    fn peers(&self, name: &str) -> Vec<ConnectionDef> {
+    fn peers(&self, name: &str) -> Vec<SourceDef> {
         self.0
             .lock()
             .unwrap()
@@ -272,15 +256,10 @@ impl Live {
             .find(|(_, live)| fold_ident(&live.catalog) == folded)?;
         Some(Connected {
             name: name.clone(),
-            kind: live
-                .def
-                .provider
-                .source()
-                .map(|s| s.kind.clone())
-                .unwrap_or_default(),
+            kind: live.def.kind.clone(),
             source: Arc::clone(&live.source),
             provider: Arc::clone(&live.provider),
-            writable: live.def.provider.source().is_some_and(|s| !s.read_only),
+            writable: !live.def.read_only,
         })
     }
 
@@ -300,15 +279,12 @@ impl Live {
     ///
     /// Both, so the map holds one answer rather than two that can disagree. A no-op for a
     /// connection that is not live: the next connect reads the def anyway.
-    pub(crate) fn show(&self, conn: &ConnectionDef) {
-        let Some(source) = conn.provider.source() else {
-            return;
-        };
+    pub(crate) fn show(&self, conn: &SourceDef) {
         let mut held = self.0.lock().unwrap();
         let Some(live) = held.get_mut(&conn.named()) else {
             return;
         };
-        *live.shown.write().unwrap() = shown_of(source);
+        *live.shown.write().unwrap() = shown_of(conn);
         live.def = conn.clone();
     }
 
@@ -480,6 +456,20 @@ impl SourcesSnapshot {
             .map(|info| info.badge.to_string())
             .unwrap_or_else(|| kind.to_string())
     }
+
+    /// What connecting to `kind` yields, or `None` for a kind nothing is registered for.
+    ///
+    /// Read from the **registrants** rather than from a connection's row, so a def the engine has
+    /// not been told about yet still draws the contents its kind will have — a catalog's schemas
+    /// rather than a bucket's tables — instead of flickering through the wrong shape on the first
+    /// frame of a project open.
+    pub fn mode(&self, kind: &str) -> Option<SourceMode> {
+        let kind = kind.trim();
+        self.registrants
+            .iter()
+            .find(|info| info.kind == kind)
+            .map(|info| info.mode)
+    }
 }
 
 /// Read every connection this engine has been told about into one [`SourcesSnapshot`].
@@ -488,31 +478,31 @@ impl SourcesSnapshot {
 /// derived value. Asking a source anything is the registration pass's job.
 pub(crate) fn snapshot(
     ctx: &SessionContext,
-    registrants: &Sources,
+    registrants: &Registrants,
     live: &Live,
-    defs: &[ConnectionDef],
+    defs: &[SourceDef],
     generation: CatalogGen,
 ) -> SourcesSnapshot {
     let sources = defs
         .iter()
         .map(|def| {
             let name = def.named();
-            match def.provider.source() {
-                Some(source) => {
+            match registrants.mode(&def.kind) {
+                Some(SourceMode::Catalog) => {
                     let enumerated = live.listing(&name);
                     SourceListing {
                         live: enumerated.is_some(),
                         detail: SourceDetail::Catalog {
                             catalog: name.clone(),
                             schemas: enumerated
-                                .map(|listing| scoped(&listing, source))
+                                .map(|listing| scoped(&listing, def))
                                 .unwrap_or_default(),
                         },
                         name,
                     }
                 }
-                None => SourceListing {
-                    live: store::registered(ctx, &def.identity()),
+                _ => SourceListing {
+                    live: store_registered(ctx, registrants, def),
                     detail: SourceDetail::Store,
                     name,
                 },
@@ -557,9 +547,9 @@ pub enum SchemaVisibility {
 /// dropping it would leave the old catalog resolving for the life of the window.
 pub(crate) async fn connect(
     ctx: &SessionContext,
-    sources: &Sources,
+    sources: &Registrants,
     live: &Live,
-    conn: &ConnectionDef,
+    conn: &SourceDef,
     secrets: Arc<dyn SecretProvider>,
 ) -> Result<(), String> {
     let named = conn.named();
@@ -607,24 +597,24 @@ enum Prepared {
 /// meaning — but note that unlike the object-store arm the last steps here do reach the source,
 /// because a source's description cannot be checked any other way.
 async fn prepare(
-    sources: &Sources,
+    sources: &Registrants,
     live: &Live,
-    conn: &ConnectionDef,
+    conn: &SourceDef,
     secrets: Arc<dyn SecretProvider>,
 ) -> Result<Prepared, String> {
     let named = conn.named();
-    let def = conn
-        .provider
-        .source()
-        .ok_or_else(|| format!("'{named}' is not a data source"))?;
+    let def = conn;
     let source = sources.get(def.kind.trim())?;
-    source.check_address(&conn.address)?;
-    check_catalog_name(&live.peers(&named), conn)?;
+    source.check_address(conn.setting("address"))?;
+    let peers = live.peers(&named);
+    check_catalog_name(&peers, conn)?;
+    sources.check_unique(conn, &peers)?;
 
     match source.connect(conn, secrets).await? {
-        Sourced::Store { store, scheme } => {
-            let at = ObjectStoreUrl::parse(format!("{scheme}://{}", conn.address.trim()))
-                .map_err(|e| format!("Cannot register '{named}': {e}"))?;
+        Sourced::Store { store } => {
+            let at = registration_url(sources, conn).ok_or_else(|| {
+                format!("Cannot register '{named}': not a bucket Strata can key.")
+            })?;
             Ok(Prepared::Store(Registration::ObjectStore(at, store)))
         }
         Sourced::Catalog(handle) => {
@@ -633,7 +623,7 @@ async fn prepare(
             let shown: Shown = Arc::new(RwLock::new(shown_of(def)));
             let provider = Arc::new(SourceCatalogProvider::new(
                 catalog.clone(),
-                conn.identity(),
+                conn.named(),
                 Arc::clone(&handle),
                 &listing,
                 Arc::clone(&shown),
@@ -660,8 +650,44 @@ async fn prepare(
 /// Addressed by the connection's **name** like `store::disconnect` is by its identity, and silent
 /// about doing nothing for the same reason: a name this engine holds no source for is the ordinary
 /// case (every object-store connection, and every source that never connected).
-pub(crate) fn disconnect(ctx: &SessionContext, sources: &Live, name: &str) {
-    take_back(ctx, sources, name);
+pub(crate) fn disconnect(
+    ctx: &SessionContext,
+    registrants: &Registrants,
+    live: &Live,
+    def: Option<&SourceDef>,
+    name: &str,
+) {
+    if let Some(url) = def.and_then(|def| registration_url(registrants, def)) {
+        let _ = ctx.deregister_object_store(url.as_ref());
+    }
+    take_back(ctx, live, name);
+}
+
+/// The URL a store connection's object store is registered under, or `None` for a def whose kind
+/// registers a catalog instead.
+///
+/// The **one** composition site: `connect` registers under it and a Forget takes it back out by
+/// it, so the two cannot spell it differently. `ObjectStoreUrl::parse` is what refuses an address
+/// carrying a path, which would otherwise register under a key nothing looks up.
+pub(crate) fn registration_url(
+    registrants: &Registrants,
+    def: &SourceDef,
+) -> Option<ObjectStoreUrl> {
+    ObjectStoreUrl::parse(registrants.prefix(def)?).ok()
+}
+
+/// Whether an object store answers for `def` on this session right now.
+///
+/// Asked of the registry rather than remembered beside the def, because the registry is what a
+/// scan resolves through: a store connection is live exactly while a path under it can be read.
+/// `false` for a def whose kind registers a catalog, which puts no store on the session.
+pub(crate) fn store_registered(
+    ctx: &SessionContext,
+    registrants: &Registrants,
+    def: &SourceDef,
+) -> bool {
+    registration_url(registrants, def)
+        .is_some_and(|url| ctx.runtime_env().object_store(&url).is_ok())
 }
 
 /// One connection's namespaces, scoped and tagged against [`SourceDef::schemas`].
@@ -933,9 +959,6 @@ async fn relation_provider(
 /// the two name reads, asked once and answered together.
 #[cfg(test)]
 mod snapshot_tests {
-    use std::collections::BTreeMap;
-
-    use strata_model::{Provider, S3Auth, S3Store};
 
     use super::fake::{fake_def, TestDoc};
     use super::source::SourceKind;
@@ -944,16 +967,14 @@ mod snapshot_tests {
 
     /// A bucket connection whose credentials nothing here can resolve — it registers no store,
     /// which is exactly the state `live` has to be able to say.
-    fn bucket(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: "acme-lake".into(),
+    fn bucket(name: &str) -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), "acme-lake".into())]
+                .into_iter()
+                .collect(),
+            kind: "s3".into(),
             name: name.into(),
-            provider: Provider::S3(S3Store {
-                region: String::new(),
-                auth: S3Auth::Ambient,
-                ..Default::default()
-            }),
-            client_config: BTreeMap::new(),
+            ..Default::default()
         }
     }
 
@@ -1075,11 +1096,10 @@ mod snapshot_tests {
 /// reconciliation that keeps them true.
 #[cfg(test)]
 mod dependents_tests {
-    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::{env, fs, process};
 
-    use strata_model::{Provider, S3Auth, S3Store, SourceFormat, ViewDef};
+    use strata_model::{SourceFormat, ViewDef};
 
     use super::fake::{fake_def, TestDoc};
     use super::*;
@@ -1120,16 +1140,14 @@ mod dependents_tests {
 
     /// A bucket connection nothing can reach — membership is what this test needs, and a def the
     /// engine was told about is a member whatever the connect answered.
-    fn bucket(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: "acme-lake".into(),
+    fn bucket(name: &str) -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), "acme-lake".into())]
+                .into_iter()
+                .collect(),
+            kind: "s3".into(),
             name: name.into(),
-            provider: Provider::S3(S3Store {
-                region: String::new(),
-                auth: S3Auth::Ambient,
-                ..Default::default()
-            }),
-            client_config: BTreeMap::new(),
+            ..Default::default()
         }
     }
 

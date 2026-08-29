@@ -13,7 +13,8 @@
 use std::collections::HashSet;
 
 use freya::components::Disclosure;
-use strata_model::{CatalogKind, ColOwner, ProviderId, RemoteRef};
+use strata_engine::SourceMode;
+use strata_model::{CatalogKind, ColOwner, RemoteRef};
 use uuid::Uuid;
 
 use super::columns::ColRow;
@@ -233,10 +234,12 @@ pub struct Connection {
     pub name: String,
     /// Where it points, in its provider's own terms — the row's title.
     pub address: String,
-    /// Which provider serves it: the menu's Schemas… item, and the editor a press opens.
-    pub provider: ProviderId,
-    /// The short word this row wears — the **registered source's** own badge, or the object
-    /// store's provider label, taken from the snapshot rather than derived where the row paints.
+    /// What connecting to it yields — the menu's Schemas… item, and which consequence a Forget
+    /// spells out. The kind's own answer, carried here so no surface that *acts* on a connection
+    /// needs a registry.
+    pub mode: SourceMode,
+    /// The short word this row wears — the registered kind's own badge, taken from the snapshot
+    /// rather than derived where the row paints.
     pub badge: String,
     /// The catalog a **source** is addressed by, from the def rather than from a listing a
     /// collapsed row has not fetched. `None` on an object store, which has none.
@@ -251,7 +254,7 @@ impl Connection {
         Self {
             name: node.name.clone(),
             address: node.address.clone(),
-            provider: node.provider,
+            mode: node.mode,
             badge: node.badge.clone(),
             catalog,
             waiting: node.waiting,

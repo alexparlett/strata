@@ -28,7 +28,7 @@ use object_store::ObjectStore;
 use crate::fold_ident;
 use crate::secrets::SecretProvider;
 use crate::statements::Remote;
-use strata_model::ConnectionDef;
+use strata_model::SourceDef;
 
 /// Names a source for the registry, and for the surfaces that offer it.
 ///
@@ -47,6 +47,25 @@ pub trait SourceKind {
     const BADGE: &'static str;
     /// What connecting to it yields, which a form has to know before anything connects.
     const MODE: SourceMode;
+    /// The settings whose values must not repeat across this kind's sources.
+    ///
+    /// **Uniqueness is the kind's own rule**, because whether two sources describing the same
+    /// place is a mistake depends entirely on what the place is. Two object stores on one bucket
+    /// are: they register one URL between them, so tables under either would resolve through
+    /// whichever went in last. Two servers at one address are **ordinary** — four behind an SSM
+    /// tunnel differ in credentials and in nothing else, which is why the default is empty and
+    /// only the stores declare `&["address"]`.
+    ///
+    /// The **name** is never in here: it is the identity, and that it is unique is not a kind's
+    /// business ([`check_catalog_name`](strata_model::check_catalog_name)).
+    const UNIQUE: &'static [&'static str] = &[];
+    /// The URL scheme an object store registers under, for a [`SourceMode::Store`] kind.
+    ///
+    /// A const rather than a field of [`Sourced::Store`] for [`MODE`](Self::MODE)'s own reason:
+    /// a table's remote paths are composed onto `scheme://address` at **registration**, which
+    /// happens for defs whose source may never have connected. `None` for a catalog kind, which
+    /// registers no store and whose relations are addressed by name.
+    const SCHEME: Option<&'static str> = None;
     /// Whether Strata can be asked to **change** what this source holds — whether
     /// [`SourceCatalog::writer`] and friends are implemented at all.
     ///
@@ -74,12 +93,10 @@ pub enum SourceMode {
 /// What connecting produced.
 #[derive(Debug)]
 pub enum Sourced {
-    /// An object store, registered under `scheme://<address>`, which table defs then read paths
-    /// through.
-    Store {
-        store: Arc<dyn ObjectStore>,
-        scheme: &'static str,
-    },
+    /// An object store, registered under `scheme://<address>` — the scheme being the kind's own
+    /// [`SourceKind::SCHEME`], so a connected store and a table's composed paths cannot disagree
+    /// about it.
+    Store { store: Arc<dyn ObjectStore> },
     /// A live catalog handle, holding whatever it reaches its source through.
     Catalog(Arc<dyn SourceCatalog>),
 }
@@ -103,8 +120,6 @@ pub struct SourceSetting {
     /// The row's label, in the editor's register.
     pub label: &'static str,
     pub field: Field,
-    /// Where the value lands.
-    pub slot: Slot,
     /// The section this row sits under, `None` for one that sits above them all. A source's rows
     /// are drawn in the order it declares them, so a group's keys are declared together.
     pub group: Option<&'static str>,
@@ -119,25 +134,6 @@ pub struct SourceSetting {
     /// Ghost text in the empty box: an example of the value, never a value that could be saved by
     /// accident. Meaningless for [`Field::Choice`] and [`Field::Flag`], which have no empty state.
     pub placeholder: Option<&'static str>,
-}
-
-/// Where a declared setting's value lives once it is saved.
-///
-/// Two answers, because a connection def has two shapes of storage: an **open map** a source
-/// fills with whatever it declared, and the handful of **typed fields** things outside the
-/// registry read. `address` is typed rather than a `Setting` for one reason — a map key is
-/// optional, and `identity()`, `mint_name` and a remote table's path resolution all need every
-/// connection to *have* an address. A typed field makes a connection without one unrepresentable;
-/// a map key would make it a case to handle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Slot {
-    /// `SourceDef::config[key]` — or, for a [`Field::Secret`], this machine's keystore under
-    /// `{kind}-{key}`, with the def recording only the expectation.
-    Config,
-    /// The connection's address, judged by [`check_address`](DataSource::check_address). Exactly
-    /// one key per source declares it, and the conformance body refuses a source that declares
-    /// none or two.
-    Address,
 }
 
 /// A setting that only means something once another has a particular answer.
@@ -180,7 +176,7 @@ pub struct Located {
     /// The catalog the connection registered under, which is what a refusal about this relation
     /// names.
     pub connection: String,
-    /// The connection's identity — its kind and address, as `ConnectionDef` derives it.
+    /// The connection's identity — its kind and address, as `SourceDef` derives it.
     ///
     /// Distinct from [`connection`](Self::connection), which a user can rename: this is what says
     /// two providers read through the same source.
@@ -345,7 +341,7 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     /// all-or-nothing, not a handle that fails at the first query.
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String>;
 
@@ -516,11 +512,18 @@ pub struct SourceInfo {
     /// Whether it can be written to — [`SourceKind::WRITABLE`], and therefore whether a
     /// connection to it is offered the read-only toggle.
     pub writable: bool,
+    /// The settings two of its sources may not share — [`SourceKind::UNIQUE`].
+    pub unique: &'static [&'static str],
+    /// What its object stores register under — [`SourceKind::SCHEME`].
+    pub scheme: Option<&'static str>,
 }
 
-/// The sources an engine can serve a connection with, keyed by [`SourceKind::NAME`].
+/// The **kinds** an engine can serve a data source with, keyed by [`SourceKind::NAME`].
+///
+/// Named for what it holds — registrants, not sources. A *source* is one thing a project has;
+/// this is the set of things one could be.
 #[derive(Clone, Debug, Default)]
-pub struct Sources(BTreeMap<&'static str, Registrant>);
+pub struct Registrants(BTreeMap<&'static str, Registrant>);
 
 /// One entry: what a surface offers it as, and what serves it.
 #[derive(Clone, Debug)]
@@ -529,7 +532,7 @@ struct Registrant {
     source: Arc<dyn DataSource>,
 }
 
-impl Sources {
+impl Registrants {
     /// Adds `source` under its own name, displacing whatever was registered there.
     pub(crate) fn insert<S: DataSource + SourceKind>(&mut self, source: S) {
         self.0.insert(
@@ -542,6 +545,8 @@ impl Sources {
                     mode: S::MODE,
                     settings: source.settings(),
                     writable: S::WRITABLE,
+                    unique: S::UNIQUE,
+                    scheme: S::SCHEME,
                 },
                 source: Arc::new(source),
             },
@@ -569,6 +574,92 @@ impl Sources {
     /// What `kind` makes of `address`, or the sentence saying nothing serves that kind.
     pub(crate) fn check_address(&self, kind: &str, address: &str) -> Result<(), String> {
         self.get(kind)?.check_address(address)
+    }
+
+    /// Whether `candidate` repeats a setting its kind says two of its sources may not share.
+    ///
+    /// `existing` is what to fold it against, **`candidate` excluded by the caller** — the
+    /// project's stored defs for the editor, the live sources for a connect. The sentence is
+    /// minted here from the declaration (the kind's `LABEL`, the setting's `label`), so no source
+    /// writes prose and every kind refuses in the same words.
+    ///
+    /// # Errors
+    ///
+    /// Naming the source already holding those values, and which settings they are.
+    pub(crate) fn check_unique(
+        &self,
+        candidate: &SourceDef,
+        existing: &[SourceDef],
+    ) -> Result<(), String> {
+        let Some(held) = self.0.get(candidate.kind.trim()) else {
+            return Ok(());
+        };
+        let info = &held.info;
+        if info.unique.is_empty() {
+            return Ok(());
+        }
+        let same = |other: &SourceDef| {
+            other.kind.trim() == candidate.kind.trim()
+                && info.unique.iter().all(|key| {
+                    other
+                        .setting(key)
+                        .eq_ignore_ascii_case(candidate.setting(key))
+                })
+        };
+        let Some(other) = existing.iter().find(|other| same(other)) else {
+            return Ok(());
+        };
+        let labels: Vec<&str> = info
+            .unique
+            .iter()
+            .map(|key| {
+                info.settings
+                    .iter()
+                    .find(|declared| declared.key == *key)
+                    .map_or(*key, |declared| declared.label)
+            })
+            .collect();
+        Err(format!(
+            "The source '{}' is already a {} with the same {}. Point this one somewhere else, or \
+             edit that one.",
+            other.named(),
+            info.label,
+            labels.join(" and ")
+        ))
+    }
+
+    /// What connecting to `kind` yields, or `None` for a kind nothing is registered for.
+    ///
+    /// The registry answers, because the mode is declared on the kind — so "does this connection
+    /// have a catalog" is a question with a registry behind it rather than a field on the def that
+    /// could disagree with the source serving it.
+    pub(crate) fn mode(&self, kind: &str) -> Option<SourceMode> {
+        Some(self.0.get(kind.trim())?.info.mode)
+    }
+
+    /// What `kind` registers its object stores under, or `None` for a kind that registers none.
+    ///
+    /// The registry answers because the scheme is the *kind's*, and a table's remote paths are
+    /// composed before anything connects — so this is the one lookup that turns a def into the
+    /// `scheme://authority` its files hang off.
+    pub(crate) fn scheme(&self, kind: &str) -> Option<&'static str> {
+        self.0.get(kind.trim())?.info.scheme
+    }
+
+    /// The `scheme://authority` a source's remote paths hang off, or `None` for a source whose
+    /// relations are addressed by name rather than read as files.
+    ///
+    /// An address that already carries a scheme **is** the prefix: an HTTP source is addressed by
+    /// a whole origin, and only the person who typed it knows whether their server speaks `http`
+    /// or `https`, so the kind's own scheme is what the *other* stores hang their paths off and
+    /// nothing this one needs.
+    pub(crate) fn prefix(&self, def: &SourceDef) -> Option<String> {
+        let scheme = self.scheme(&def.kind)?;
+        let address = def.setting("address");
+        match address.contains("://") {
+            true => Some(address.to_string()),
+            false => Some(format!("{scheme}://{address}")),
+        }
     }
 }
 
@@ -626,7 +717,7 @@ mod tests {
     /// what the failed connection row shows.
     #[test]
     fn an_unregistered_kind_names_the_fix() {
-        let why = Sources::default()
+        let why = Registrants::default()
             .get("mongo")
             .expect_err("nothing registered");
         assert!(
@@ -634,7 +725,7 @@ mod tests {
             "{why}"
         );
         assert_eq!(
-            Sources::default().check_address("mongo", "somewhere"),
+            Registrants::default().check_address("mongo", "somewhere"),
             Err(why)
         );
     }

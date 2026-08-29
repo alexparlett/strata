@@ -16,12 +16,12 @@ use crate::generation::GenClock;
 use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::secrets::{KeystoreSecrets, SecretProvider};
 use crate::snapshots::{LocalIpcSnapshotStore, SnapshotStore};
-use crate::sources::source::{DataSource, SourceKind, Sources};
+use crate::sources::source::{DataSource, Registrants, SourceKind};
 use crate::sources::Live;
 use crate::tables::{InternalTableStore, LocalIpcTableStore};
 use crate::udf_package::UdfPackage;
 use crate::{
-    build_context, runtime_subset, Connections, Dependencies, Engine, InternalTables, SessionScope,
+    build_context, runtime_subset, Dependencies, Engine, InternalTables, SessionScope, SourceDefs,
 };
 
 /// The engine-id allocator — see [`Engine::id`].
@@ -54,7 +54,7 @@ pub struct EngineBuilder {
     udfs: Vec<Arc<dyn UdfPackage>>,
     memory_pool: Option<Arc<dyn MemoryPool>>,
     policy: Arc<dyn PolicyProvider>,
-    sources: Sources,
+    sources: Registrants,
     formats: Formats,
     snapshots: Option<Arc<dyn SnapshotStore>>,
     tables: Option<Arc<dyn InternalTableStore>>,
@@ -72,11 +72,15 @@ impl Default for EngineBuilder {
             udfs: vec![Arc::new(crate::udfs::StrataFunctions)],
             memory_pool: None,
             policy: Arc::new(CapabilityPolicyProvider::new(Capability::full())),
-            sources: Sources::default(),
+            sources: Registrants::default(),
             formats: Formats::shipped(),
             snapshots: None,
             tables: None,
         };
+        let builder = builder
+            .with_source(crate::sources::store::s3::S3)
+            .with_source(crate::sources::store::gcs::Gcs)
+            .with_source(crate::sources::store::http::Http);
         #[cfg(feature = "postgres")]
         let builder = builder.with_source(crate::sources::postgres::Pg);
         builder
@@ -247,7 +251,7 @@ impl EngineBuilder {
             tables,
             internal: InternalTables::default(),
             dependencies: Dependencies::default(),
-            connections: Connections::default(),
+            connections: SourceDefs::default(),
             generation: GenClock::default(),
             live: Live::default(),
             sources: self.sources,

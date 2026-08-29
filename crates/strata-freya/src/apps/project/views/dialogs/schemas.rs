@@ -9,7 +9,7 @@
 //! It is **not** display only, and has not been since DB-09: an unqualified name searches the
 //! schemas a connection shows, so this press moves what `orders` means. Two things follow, and
 //! both are Apply's ([`apply`]) — the session is told
-//! ([`Sources::show_schemas`](strata_engine::Sources::show_schemas)), and the **catalog
+//! ([`Connections::show_schemas`](strata_engine::Connections::show_schemas)), and the **catalog
 //! generation** the window holds is re-read, because diagnostics are a reconciliation against that
 //! number and completion's snapshot
 //! is keyed on it. Without the bump the tree redraws while every open tab keeps the verdict it
@@ -20,7 +20,7 @@
 //! spinner over a change that touched no engine state. The store's def-in-place write
 //! ([`ProjectState::update_connection_def`]) keeps the row's verdict, which is still true.
 //!
-//! The offer is [`Sources::listing`](strata_engine::Sources::listing)'s **scoped and tagged**
+//! The offer is [`Connections::listing`](strata_engine::Connections::listing)'s **scoped and tagged**
 //! answer and nothing derived beside it, so this picker, the tree and completion cannot disagree
 //! about what a connection shows — and this is the one surface that sees a schema the connection
 //! does *not* show, taking one back being what it is for. A connection that is not live has no
@@ -33,7 +33,7 @@ use freya::radio::{use_radio, use_radio_station, RadioStation};
 use std::collections::BTreeSet;
 
 use strata_engine::sources::{SchemaVisibility, SourceDetail};
-use strata_model::{Provider, SourceDef};
+use strata_model::SourceDef;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
@@ -100,7 +100,7 @@ fn offers(engine: &EngineCtx, name: &str, source: &SourceDef) -> (Vec<Offer>, bo
 /// catalog generation — the whole of what Apply does.
 ///
 /// Both of the last two are because this press moves what an unqualified name resolves to: the
-/// session learns the new set without a reconnect (`Sources::show_schemas`), and the surfaces that
+/// session learns the new set without a reconnect (`Connections::show_schemas`), and the surfaces that
 /// answer about names re-derive on that number and nothing else — every tab's diagnostics through
 /// `stale_tabs`, and the completion snapshot through its key. The discrete catalog mutation
 /// [`catalog_settled`] exists for, exactly as a Forget is.
@@ -115,11 +115,7 @@ fn apply(
     let mut project = project;
     {
         let mut p = project.write_channel(ProjChan::Connections);
-        p.update_connection_def(url, |def| {
-            if let Provider::Source(source) = &mut def.provider {
-                source.schemas.clone_from(&schemas);
-            }
-        });
+        p.update_connection_def(url, |def| def.schemas.clone_from(&schemas));
         engine.sources().show_schemas(url, &schemas);
         persisted_defs(&p, report);
     }
@@ -165,10 +161,7 @@ impl Component for SchemasPicker {
             .connections
             .iter()
             .find(|c| c.def.named() == url)
-            .and_then(|c| match &c.def.provider {
-                Provider::Source(source) => Some(source.clone()),
-                _ => None,
-            })
+            .map(|c| c.def.clone())
         else {
             slot.set(None);
             return rect().into_element();
@@ -286,7 +279,7 @@ mod tests {
     use freya_testing::TestingRunner;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::{ConnectionDef, SourceDef};
+    use strata_model::SourceDef;
 
     use super::*;
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
@@ -297,20 +290,16 @@ mod tests {
     }
 
     /// One database connection showing both of its schemas.
-    fn connection() -> ConnectionDef {
-        ConnectionDef {
-            address: "db.internal:5432/analytics".into(),
+    fn connection() -> SourceDef {
+        SourceDef {
             name: "analytics".into(),
-            provider: Provider::Source(SourceDef {
-                kind: Pg::NAME.to_string(),
-                config: [("user", "reader"), ("sslmode", "disable")]
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-                schemas: vec!["public".into(), "analytics".into()],
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: Pg::NAME.to_string(),
+            config: [("user", "reader"), ("sslmode", "disable")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            schemas: vec!["public".into(), "analytics".into()],
+            ..Default::default()
         }
     }
 
@@ -396,14 +385,11 @@ mod tests {
         click_text(&mut runner, "Apply");
 
         assert_eq!(
-            project.peek().connections[0].def.provider.clone(),
-            Provider::Source(SourceDef {
+            project.peek().connections[0].def.clone(),
+            SourceDef {
                 schemas: vec!["public".into()],
-                ..match connection().provider {
-                    Provider::Source(pg) => pg,
-                    _ => unreachable!(),
-                }
-            }),
+                ..connection()
+            },
             "the def keeps only the schemas still ticked"
         );
         assert_eq!(

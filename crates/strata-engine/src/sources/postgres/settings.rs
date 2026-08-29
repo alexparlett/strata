@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::sources::source::{Field, Slot, SourceSetting, When};
+use crate::sources::source::{Field, SourceSetting, When};
 
 /// The key a `PostgreSQL` connection's password is filed under, in the keystore and in the def's
 /// expectation set.
@@ -50,7 +50,6 @@ pub const SETTINGS: &[SourceSetting] = &[
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
-        slot: Slot::Address,
         group: CONNECTION,
         required: true,
         default: None,
@@ -62,7 +61,6 @@ pub const SETTINGS: &[SourceSetting] = &[
         key: "user",
         label: "USER",
         field: Field::Text,
-        slot: Slot::Config,
         group: CONNECTION,
         required: true,
         default: None,
@@ -77,7 +75,6 @@ pub const SETTINGS: &[SourceSetting] = &[
         key: PASSWORD,
         label: "PASSWORD",
         field: Field::Secret,
-        slot: Slot::Config,
         group: CONNECTION,
         required: false,
         default: None,
@@ -89,7 +86,6 @@ pub const SETTINGS: &[SourceSetting] = &[
         key: "sslmode",
         label: "SSL MODE",
         field: Field::Choice(SSL_MODES),
-        slot: Slot::Config,
         group: SSL,
         required: false,
         default: Some("prefer"),
@@ -101,7 +97,6 @@ pub const SETTINGS: &[SourceSetting] = &[
         key: "sslrootcert",
         label: "ROOT CERTIFICATE",
         field: Field::Path,
-        slot: Slot::Config,
         group: SSL,
         required: false,
         default: None,
@@ -394,15 +389,12 @@ mod tests {
     /// reader looks for, and the mode choices are the ones it accepts.
     #[test]
     fn every_declared_key_is_one_the_reader_reads() {
-        let declared: Vec<&str> = SETTINGS
-            .iter()
-            .filter(|key| key.slot == Slot::Config)
-            .map(|key| key.key)
-            .collect();
+        let declared: Vec<&str> = SETTINGS.iter().map(|key| key.key).collect();
         assert_eq!(
             declared,
-            vec!["user", "password", "sslmode", "sslrootcert"],
-            "the address is declared too, but it is `parse_address`'s to read and not this"
+            vec!["address", "user", "password", "sslmode", "sslrootcert"],
+            "the address is a setting like the rest — `parse_address` reads it, `PgSettings` the \
+             others"
         );
         let modes = SETTINGS
             .iter()

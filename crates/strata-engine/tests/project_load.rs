@@ -11,7 +11,7 @@
 use std::path::Path;
 
 use strata_core::project::load_defs;
-use strata_engine::register::{CatalogSpec, RegOutcome};
+use strata_engine::register::RegOutcome;
 use strata_engine::{Engine, RunTag, WsId};
 
 /// The dedicated project-load fixture (see the module doc + its `README.md`).
@@ -35,7 +35,7 @@ async fn fixture_project_registers_and_queries() {
 
     let mut outcomes = Vec::new();
     eng.catalog()
-        .sync(CatalogSpec::of_project(root, &defs), |o| outcomes.push(o))
+        .sync(eng.catalog().spec(root, &defs), |o| outcomes.push(o))
         .await;
     assert_eq!(
         outcomes.len(),

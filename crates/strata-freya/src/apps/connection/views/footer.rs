@@ -15,7 +15,7 @@
 //!    silent;
 //! 3. drops the object store the old URL registered, the one call the scan driver cannot make:
 //!    `engine::sources::store::connect` only ever sees the def it is given, so nothing else would ever
-//!    take that store back out (`Sources::disconnect` — the same call Forget makes);
+//!    take that store back out (`Connections::disconnect` — the same call Forget makes);
 //! 4. asks the project window's one scan driver for a whole-catalog pass, and leaves this window
 //!    watching its row ([`super::use_watch_connection`]).
 //!
@@ -32,7 +32,7 @@ use freya::radio::{use_radio_station, RadioStation};
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_engine::sources::{forget_secret, forget_secrets, migrate_secrets, put_secret};
-use strata_model::{check_catalog_name, ConnectionDef};
+use strata_model::{check_catalog_name, SourceDef};
 
 use crate::apps::connection::{ConnectionCtx, ConnectionTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
@@ -145,10 +145,10 @@ fn save_note(blocker: Option<String>, scanning: bool) -> Option<String> {
 /// def naming a source this build does not have.
 fn address_refusal(ctx: ConnectionCtx, engine: &EngineCtx) -> Option<String> {
     let def = ctx.draft.read().def();
-    let kind = def.provider.source()?.kind.clone();
+    let kind = def.kind.clone();
     engine
         .sources()
-        .check_address(&kind, &def.address)
+        .check_address(&kind, def.setting("address"))
         .err()
         .map(|why| why.to_string())
 }
@@ -194,7 +194,7 @@ fn catalog_clash(
 ) -> Option<String> {
     let def = ctx.draft.read().def();
     let editing = ctx.target.read().editing().map(str::to_string);
-    let existing: Vec<ConnectionDef> = project
+    let existing: Vec<SourceDef> = project
         .peek()
         .connections
         .iter()
@@ -231,8 +231,8 @@ enum SecretOp {
 /// Every key either the boxes or the def has an opinion about is walked in one order, so a put
 /// and a forget for one key cannot both be planned.
 fn secret_ops(
-    previous: Option<&ConnectionDef>,
-    next: &ConnectionDef,
+    previous: Option<&SourceDef>,
+    next: &SourceDef,
     typed: &BTreeMap<String, String>,
     removed: &BTreeSet<String>,
 ) -> Vec<SecretOp> {
@@ -240,23 +240,16 @@ fn secret_ops(
     // dropped provider is a keystore operation for a connection with secrets and nothing at all
     // for one without — and planning it anyway sends every such save down the worker path, which
     // on macOS is a Keychain prompt raised over an empty slot.
-    let was = previous.filter(|def| {
-        def.provider
-            .source()
-            .is_some_and(|source| !source.secrets.is_empty())
-    });
-    let Some(source) = next.provider.source() else {
-        return was.map(|_| vec![SecretOp::ForgetAll]).unwrap_or_default();
-    };
+    let was = previous.filter(|def| !def.secrets.is_empty());
 
     let mut ops = Vec::new();
-    match was.and_then(|def| def.provider.source().map(|old| old.kind.trim().to_string())) {
-        Some(kind) if kind != source.kind.trim() => ops.push(SecretOp::ForgetAll),
+    match was.map(|def| def.kind.trim()) {
+        Some(kind) if kind != next.kind.trim() => ops.push(SecretOp::ForgetAll),
         _ if was.is_some_and(|def| def.named() != next.named()) => ops.push(SecretOp::Rename),
         _ => {}
     }
 
-    let mut keys: BTreeSet<&str> = source.secrets.iter().map(String::as_str).collect();
+    let mut keys: BTreeSet<&str> = next.secrets.iter().map(String::as_str).collect();
     keys.extend(typed.keys().map(String::as_str));
     keys.extend(removed.iter().map(String::as_str));
     for key in keys {
@@ -279,8 +272,8 @@ fn secret_ops(
 /// secret somewhere else.
 fn run_secret_ops(
     ops: &[SecretOp],
-    previous: Option<&ConnectionDef>,
-    next: &ConnectionDef,
+    previous: Option<&SourceDef>,
+    next: &SourceDef,
 ) -> Result<(), String> {
     for op in ops {
         match op {
@@ -417,30 +410,31 @@ fn commit(
 mod tests {
     use std::collections::BTreeMap;
 
-    use strata_model::{Provider, S3Store, SourceDef};
+    use strata_model::SourceDef;
 
     use super::*;
 
     /// One source def: a kind, a name and the expectation of a `password`.
-    fn source(name: &str, address: &str, kind: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: address.into(),
+    fn source(name: &str, address: &str, kind: &str) -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), address.into())]
+                .into_iter()
+                .collect(),
             name: name.into(),
-            provider: Provider::Source(SourceDef {
-                kind: kind.into(),
-                secrets: BTreeSet::from(["password".to_string()]),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: kind.into(),
+            secrets: BTreeSet::from(["password".to_string()]),
+            ..Default::default()
         }
     }
 
-    fn store() -> ConnectionDef {
-        ConnectionDef {
-            address: "acme-lake".into(),
+    fn store() -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), "acme-lake".into())]
+                .into_iter()
+                .collect(),
+            kind: "s3".into(),
             name: "acme_lake".into(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: Default::default(),
+            ..Default::default()
         }
     }
 
@@ -459,14 +453,13 @@ mod tests {
     /// renaming one, or changing its kind, raises no Keychain prompt and keeps Save synchronous.
     #[test]
     fn a_connection_with_no_secrets_is_never_a_keystore_call() {
-        let bare = |name: &str, kind: &str| ConnectionDef {
-            address: "db:5432/analytics".into(),
+        let bare = |name: &str, kind: &str| SourceDef {
+            config: [("address".to_string(), "db:5432/analytics".into())]
+                .into_iter()
+                .collect(),
             name: name.into(),
-            provider: Provider::Source(SourceDef {
-                kind: kind.into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: kind.into(),
+            ..Default::default()
         };
         let held = bare("warehouse", "test");
         for next in [bare("depot", "test"), bare("warehouse", "other"), store()] {
@@ -493,16 +486,12 @@ mod tests {
             "blank is nothing"
         );
 
+        // A kind that declares no secret has no box to type one into, so the map is empty by
+        // construction — the editor keys it by the settings it drew.
         let s3 = store();
         assert_eq!(
-            secret_ops(
-                Some(&s3),
-                &s3,
-                &typed(&[("password", "hunter2")]),
-                &removed(&["password"])
-            ),
-            [],
-            "and a provider with no secret vocabulary has nothing to write"
+            secret_ops(Some(&s3), &s3, &BTreeMap::new(), &BTreeSet::new()),
+            []
         );
     }
 
@@ -623,11 +612,8 @@ mod tests {
             "remove from this machine"
         );
 
-        let unused = ConnectionDef {
-            provider: Provider::Source(SourceDef {
-                kind: "test".into(),
-                ..Default::default()
-            }),
+        let unused = SourceDef {
+            secrets: BTreeSet::new(),
             ..def.clone()
         };
         assert_eq!(

@@ -85,6 +85,7 @@ impl Workspace<'_> {
                     internal: engine.internal.clone(),
                     tables: engine.tables.clone(),
                     connections: engine.connections.clone(),
+                    registrants: engine.sources.clone(),
                     sources: engine.live.clone(),
                     formats: engine.formats.clone(),
                     scope: engine.session.clone(),

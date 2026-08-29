@@ -21,7 +21,7 @@ use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
+use strata_model::SourceDef;
 
 use super::model::Where;
 use super::views::{ConfigureBody, Footer};
@@ -46,14 +46,14 @@ fn project(root: &Path, connected: bool) -> ProjectState {
         name: "test".into(),
         connections: match connected {
             false => Vec::new(),
-            true => vec![ConnectionDef {
-                address: "acme-lake".into(),
+            true => vec![SourceDef {
+                kind: "s3".into(),
                 name: "acme_lake".into(),
-                provider: Provider::S3(S3Store {
-                    region: "eu-west-2".into(),
-                    ..Default::default()
-                }),
-                client_config: Default::default(),
+                config: [("region", "eu-west-2")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                ..Default::default()
             }],
         },
         ..Default::default()
@@ -176,7 +176,7 @@ fn remote_with_no_connection_explains_itself_and_blocks_save() {
     assert!(ctx.draft.peek().remote());
     assert_eq!(ctx.draft.peek().connection, None, "there is none to pick");
     assert!(
-        shows(&runner, "No S3 connections yet. Add one to continue."),
+        shows(&runner, "No connections yet. Add one to continue."),
         "the picker says why it is empty: {:?}",
         texts(&runner)
     );
@@ -319,7 +319,7 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
 fn a_forgotten_connection_is_named_and_blocks_save() {
     let mut draft = draft_both("/data/events.parquet", "events/");
     draft.location = Where::Remote;
-    draft.provider = ProviderId::S3;
+    draft.kind = "s3".into();
     draft.connection = Some("s3://gone".into());
     let (mut runner, _) = runner("forgotten", true, draft);
     settle(&mut runner);

@@ -652,9 +652,9 @@ mod tests {
     use std::{env, process};
 
     use crate::builder::test_context;
-    use crate::register::{table_spec, CatalogSpec, RegOutcome};
+    use crate::register::RegOutcome;
     use crate::statements::Fault;
-    use crate::{Connections, Engine, RunOutcome, RunRows, RunTag, StatementReport, WsId};
+    use crate::{Engine, RunOutcome, RunRows, RunTag, SourceDefs, StatementReport, WsId};
     use strata_core::project::{load_defs, save_defs, ProjectDefs};
 
     use super::*;
@@ -1017,7 +1017,7 @@ mod tests {
         let defs = load_defs(&root).unwrap();
         let mut out = Vec::new();
         cold.catalog()
-            .sync(CatalogSpec::of_project(&root, &defs), |o| out.push(o))
+            .sync(cold.catalog().spec(&root, &defs), |o| out.push(o))
             .await;
 
         match &out[..] {
@@ -1052,7 +1052,10 @@ mod tests {
         let cold = Engine::builder().build();
         let error = cold
             .catalog()
-            .register(table_spec(&root, &def, &Connections::default()))
+            .register(
+                cold.catalog()
+                    .table_spec(&root, &def, &SourceDefs::default()),
+            )
             .await
             .expect_err("no data");
 

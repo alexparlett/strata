@@ -24,10 +24,7 @@ pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
     ChartSeries, ChartSort, ChartX, Trend,
 };
-pub use connection::{
-    check_catalog, check_catalog_name, mint_free_name, mint_name, ConnectionDef, GcsAuth, GcsStore,
-    Provider, ProviderId, S3Auth, S3Store, SourceDef, WORKSPACE_CATALOG,
-};
+pub use connection::{check_catalog, check_catalog_name, SourceDef, WORKSPACE_CATALOG};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;

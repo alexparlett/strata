@@ -1,6 +1,6 @@
 //! **A connection, against a real S3 server** (W7) — the half no unit test can reach.
 //!
-//! `engine::store`'s unit tests stop at the registry: they prove a `ConnectionDef` produces a store
+//! `engine::store`'s unit tests stop at the registry: they prove a `SourceDef` produces a store
 //! under the right key, never that anything can be *read* through it. So this drives MinIO in a
 //! container and asserts the whole chain — connection → registered object store → a table def
 //! naming that connection → `register_external`'s listing and inference → rows. It is the only
@@ -38,13 +38,10 @@ use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
 use strata_core::project::{save_defs, ProjectDefs};
-use strata_engine::register::table_spec;
 use strata_engine::{
-    Connections, Engine, EngineError, RunOutcome, RunTag, StoreEffect, TableSpec, WsId,
+    Engine, EngineError, RunOutcome, RunTag, SourceDefs, StoreEffect, TableSpec, WsId,
 };
-use strata_model::{
-    ConnectionDef, CsvRead, Provider, S3Auth, S3Store, SourceFormat, TableDef, TableOrigin,
-};
+use strata_model::{CsvRead, SourceDef, SourceFormat, TableDef, TableOrigin};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
@@ -204,17 +201,17 @@ fn ambient() {
 
 /// The connection under test: S3-compatible, reached over plain HTTP at `endpoint`, signing
 /// with whatever the host's chain resolves.
-fn connection(endpoint: &str, auth: S3Auth) -> ConnectionDef {
-    ConnectionDef {
-        address: BUCKET.into(),
+fn connection(endpoint: &str, auth: &str) -> SourceDef {
+    let mut config = client_options();
+    config.insert("address".into(), BUCKET.into());
+    config.insert("region".into(), REGION.into());
+    config.insert("endpoint".into(), endpoint.into());
+    config.insert("auth".into(), auth.into());
+    SourceDef {
+        kind: "s3".into(),
         name: LAKE.into(),
-        provider: Provider::S3(S3Store {
-            region: REGION.into(),
-            auth,
-            endpoint: endpoint.into(),
-            allow_http: true,
-        }),
-        client_config: client_options(),
+        config,
+        ..Default::default()
     }
 }
 
@@ -234,12 +231,14 @@ fn client_options() -> BTreeMap<String, String> {
 /// It carries the same **client options** the S3 connection does, so `with_config` is proved
 /// through both routes into `ClientOptions`: `HttpBuilder`'s direct one here, and
 /// `AmazonS3ConfigKey::Client(..)` there.
-fn http_connection(endpoint: &str) -> ConnectionDef {
-    ConnectionDef {
-        address: endpoint.into(),
+fn http_connection(endpoint: &str) -> SourceDef {
+    let mut config = client_options();
+    config.insert("address".into(), endpoint.into());
+    SourceDef {
+        kind: "http".into(),
         name: ORIGIN.into(),
-        provider: Provider::Http,
-        client_config: client_options(),
+        config,
+        ..Default::default()
     }
 }
 
@@ -251,11 +250,8 @@ fn http_connection(endpoint: &str) -> ConnectionDef {
 /// The trailing `/` is load-bearing: without it `ListingTableUrl` reads the path as a single file
 /// (`engine::catalog::listing_url` only adds one for a local directory, which a bucket prefix is
 /// not).
-fn known(endpoint: &str) -> Connections {
-    Connections::of(&[
-        connection(endpoint, S3Auth::Ambient),
-        http_connection(endpoint),
-    ])
+fn known(endpoint: &str) -> SourceDefs {
+    SourceDefs::of(&[connection(endpoint, "ambient"), http_connection(endpoint)])
 }
 
 fn table(endpoint: &str) -> TableSpec {
@@ -267,7 +263,10 @@ fn table(endpoint: &str) -> TableSpec {
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
-    table_spec(Path::new("/nowhere"), &def, &known(endpoint))
+    Engine::builder()
+        .build()
+        .catalog()
+        .table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
 /// The **Hive-partitioned** table over that same bucket: one bucket-relative prefix, and the two
@@ -289,7 +288,10 @@ fn hive_table(endpoint: &str) -> TableSpec {
         ],
         origin: TableOrigin::External,
     };
-    table_spec(Path::new("/nowhere"), &def, &known(endpoint))
+    Engine::builder()
+        .build()
+        .catalog()
+        .table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
 /// The same object over the **HTTP** connection: one file, and deliberately no trailing slash.
@@ -308,7 +310,10 @@ fn http_table(endpoint: &str) -> TableSpec {
         partition_cols: Vec::new(),
         origin: TableOrigin::External,
     };
-    table_spec(Path::new("/nowhere"), &def, &known(endpoint))
+    Engine::builder()
+        .build()
+        .catalog()
+        .table_spec(Path::new("/nowhere"), &def, &known(endpoint))
 }
 
 /// **A typed `CREATE EXTERNAL TABLE` over the connected bucket** (ED-10) — a *phase* of the test
@@ -491,7 +496,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let engine = Engine::builder().build();
     let (ws, catalog, sources) = (engine.ws(WsId(1)), engine.catalog(), engine.sources());
     sources
-        .connect(connection(&endpoint, S3Auth::Ambient))
+        .connect(connection(&endpoint, "ambient"))
         .await
         .expect("the connection registers its object store");
 
@@ -655,7 +660,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    sources.disconnect(&connection(&endpoint, S3Auth::Ambient).named());
+    sources.disconnect(&connection(&endpoint, "ambient").named());
     let forgotten = TableSpec {
         name: "forgotten".into(),
         ..table(&endpoint)
@@ -675,7 +680,7 @@ async fn a_table_over_a_connection_reads_through_the_object_store() {
     let engine = Engine::builder().build();
     engine
         .sources()
-        .connect(connection(&endpoint, S3Auth::Ambient))
+        .connect(connection(&endpoint, "ambient"))
         .await
         .expect("a 403 is an authorization answer, not a description fault");
     let refused = engine

@@ -5,11 +5,11 @@ use std::sync::Arc;
 use datafusion::common::TableReference;
 use datafusion::logical_expr::TableType;
 use strata_arrow::column_info;
-use strata_model::{ConnectionDef, Provider};
+use strata_model::SourceDef;
 
 use crate::catalog;
 use crate::sources::source::SourceInfo;
-use crate::sources::store::{self, s3};
+use crate::sources::store::s3;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
 use crate::{fold_ident, Dependents, Engine, EngineError, CATALOG};
@@ -25,7 +25,7 @@ pub struct Sources<'a> {
 }
 
 impl Sources<'_> {
-    /// Register what one [`ConnectionDef`] describes: an **object store**, so tables can be
+    /// Register what one [`SourceDef`] describes: an **object store**, so tables can be
     /// registered over its bucket (W7), or a **database catalog**, so its relations resolve as
     /// `pg.public.orders`.
     ///
@@ -42,13 +42,13 @@ impl Sources<'_> {
     ///
     /// `Err` means nothing was registered, and carries what to fix — a missing region, a profile
     /// the credential chain does not answer for, a server that refused the user, a password this
-    /// machine does not have, a kind nothing is registered for. See `store::connect` and
-    /// [`sources::connect`].
+    /// machine does not have, a kind nothing is registered for. See [`sources::connect`], which is
+    /// the **one** path now: a bucket and a server are both a registrant answering `connect`.
     ///
     /// Moves the [`generation`](crate::Catalog::generation) on either arm: a refused connect
     /// takes back whatever this connection last registered, so a three-part name that resolved
     /// no longer does.
-    pub async fn connect(self, conn: ConnectionDef) -> Result<(), EngineError> {
+    pub async fn connect(self, conn: SourceDef) -> Result<(), EngineError> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
         let name = conn.named();
@@ -58,12 +58,7 @@ impl Sources<'_> {
         let secrets = Arc::clone(&engine.secrets);
         let settled = engine
             .rt()
-            .spawn(async move {
-                match conn.provider.source().is_some() {
-                    true => sources::connect(&ctx, &registrants, &live, &conn, secrets).await,
-                    false => store::connect(&ctx, &conn).await,
-                }
-            })
+            .spawn(async move { sources::connect(&ctx, &registrants, &live, &conn, secrets).await })
             .await
             .map_err(|e| EngineError::task("connect", e))?;
         if engine.connections.resolve(&name).is_none() {
@@ -80,17 +75,21 @@ impl Sources<'_> {
     /// and no answer to await. Dropping the handle is synchronous too — a pool's driver tasks
     /// end with it, on the runtime they were spawned on.
     ///
-    /// **Both arms are asked**, because a name is all this is given — the def is gone by the time
-    /// a Forget reaches here, which is why the identity an object store was registered under is
-    /// kept beside the name. Neither arm is a fault when it does nothing: see `store::disconnect`
-    /// and [`sources::disconnect`].
+    /// **Both a store and a catalog are taken back**, because a name is all this is given — which
+    /// is why the def an object store registered under is kept beside the name until now. Neither
+    /// is a fault when it does nothing: a connection that never worked registered nothing, and a
+    /// catalog kind put no store on the session at all. See [`sources::disconnect`].
     pub fn disconnect(self, name: &str) {
         let engine = self.engine;
-        if let Some(identity) = engine.connections.identity(name) {
-            store::disconnect(&engine.ctx, &identity);
-        }
+        let def = engine.connections.def(name);
+        sources::disconnect(
+            &engine.ctx,
+            &engine.sources,
+            &engine.live,
+            def.as_ref(),
+            name,
+        );
         engine.connections.forget(name);
-        sources::disconnect(&engine.ctx, &engine.live, name);
         engine.generation.bump();
     }
 
@@ -130,11 +129,9 @@ impl Sources<'_> {
     pub fn show_schemas(self, name: &str, schemas: &[String]) {
         let engine = self.engine;
         if let Some(mut def) = engine.connections.def(name) {
-            if let Provider::Source(source) = &mut def.provider {
-                source.schemas = schemas.to_vec();
-                engine.connections.note(&def);
-                engine.live.show(&def);
-            }
+            def.schemas = schemas.to_vec();
+            engine.connections.note(&def);
+            engine.live.show(&def);
         }
         engine.generation.bump();
     }
@@ -198,7 +195,7 @@ impl Sources<'_> {
     /// Costs no I/O.
     pub fn dependents(self, name: &str) -> Dependents {
         let engine = self.engine;
-        match engine.connections.def(name).and_then(|def| def.catalog()) {
+        match engine.catalog_of(name) {
             Some(catalog) => Dependents {
                 tables: Vec::new(),
                 views: engine.dependencies.reading(&catalog),
@@ -234,6 +231,29 @@ impl Sources<'_> {
         self.engine
             .sources
             .check_address(kind, address)
+            .map_err(EngineError::from)
+    }
+
+    /// Whether `candidate` repeats a setting its kind says two of its sources may not share.
+    ///
+    /// The kind's own rule ([`SourceKind::UNIQUE`](crate::SourceKind::UNIQUE)), asked of the
+    /// registry so the editor refuses at the field exactly what a connect would refuse — and, for
+    /// a kind that declares none, refuses nothing: two servers at one address differ in
+    /// credentials and in nothing else, which is ordinary.
+    ///
+    /// `existing` is what to fold it against, `candidate` excluded by the caller.
+    ///
+    /// # Errors
+    ///
+    /// Naming the source already holding those values, and which settings they are.
+    pub fn check_unique(
+        self,
+        candidate: &SourceDef,
+        existing: &[SourceDef],
+    ) -> Result<(), EngineError> {
+        self.engine
+            .sources
+            .check_unique(candidate, existing)
             .map_err(EngineError::from)
     }
 

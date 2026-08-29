@@ -29,7 +29,7 @@
 //! Still "left invalid" in both cases, because that is what happens: the defs survive, still
 //! naming the connection, and it is the next registration that has nothing to read.
 //!
-//! **Both halves are one engine read** ([`Sources::dependents`](strata_engine::Sources::dependents)),
+//! **Both halves are one engine read** ([`Connections::dependents`](strata_engine::Connections::dependents)),
 //! because both are derived from what registration established — a table's def named its
 //! connection, a view's plan named what it scanned — and this dialog re-deriving them was two
 //! copies of a dependency walk over data the engine produced. What is still the store's is the
@@ -49,8 +49,9 @@
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
+use strata_engine::SourceMode;
 use strata_engine::{drop_intent, Dependents};
-use strata_model::{CatalogKind, ProviderId, TableOrigin};
+use strata_model::{CatalogKind, TableOrigin};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -104,7 +105,7 @@ pub enum DropTarget {
     /// wrong thing about whatever it turns out to be.
     Connection {
         name: String,
-        provider: ProviderId,
+        mode: SourceMode,
     },
 }
 
@@ -160,11 +161,11 @@ impl DropTarget {
                 "Removes this saved query from the project. Any open tab keeps its SQL."
             }
             DropTarget::Connection {
-                provider: ProviderId::Source,
+                mode: SourceMode::Catalog,
                 ..
-            } => "Removes the database connection. Nothing in the database is deleted.",
+            } => "Removes the connection. Nothing on the server is deleted.",
             DropTarget::Connection {
-                provider: ProviderId::S3 | ProviderId::Gcs | ProviderId::Http,
+                mode: SourceMode::Store,
                 ..
             } => "Removes the object store from this project. Nothing in the bucket is deleted.",
         }
@@ -282,11 +283,11 @@ impl Component for DropConfirm {
         };
 
         let (dependents, consequence) = match (&target, target.kind()) {
-            (DropTarget::Connection { name, provider }, _) => {
+            (DropTarget::Connection { name, mode }, _) => {
                 let Dependents { tables, views } = engine.sources().dependents(name);
-                let line = match provider {
-                    ProviderId::Source => consequence(views.len(), target.noun()),
-                    _ => forget_consequence(tables.len(), views.len()),
+                let line = match mode {
+                    SourceMode::Catalog => consequence(views.len(), target.noun()),
+                    SourceMode::Store => forget_consequence(tables.len(), views.len()),
                 };
                 (tables.into_iter().chain(views).collect(), line)
             }
@@ -428,7 +429,7 @@ fn alive(catalog: Catalog, report: ReportCtx) -> bool {
 /// cannot, because `CREATE OR REPLACE VIEW` has already succeeded on the engine. The Problems
 /// drawer's `Project` scope carries the other half either way.
 ///
-/// **A Forget moves the catalog generation**, because `Sources::disconnect` takes a catalog off the
+/// **A Forget moves the catalog generation**, because `Connections::disconnect` takes a catalog off the
 /// session — the discrete catalog mutation [`catalog_settled`] exists for. Without it a query
 /// naming the forgotten database keeps whatever verdict it last had, and completion goes on
 /// offering names nothing resolves.
@@ -575,8 +576,7 @@ mod tests {
     use strata_engine::register::CatalogSpec;
     use strata_engine::{RunTag, TableMeta, TableSpec, ViewMeta, WsId};
     use strata_model::{
-        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceDef, SourceFormat,
-        TableDef, TableOrigin, ViewDef,
+        Origin, SavedQuery, SourceDef, SourceFormat, TableDef, TableOrigin, ViewDef,
     };
 
     use super::*;
@@ -643,17 +643,21 @@ mod tests {
         let defs = ProjectDefs {
             name: "test".into(),
             connections: vec![
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake".into(),
-                    provider: Provider::S3(S3Store::default()),
-                    client_config: Default::default(),
+                    kind: "s3".into(),
+                    ..Default::default()
                 },
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake2".into(),
-                    provider: Provider::Gcs(GcsStore::default()),
-                    client_config: Default::default(),
+                    kind: "gcs".into(),
+                    ..Default::default()
                 },
             ],
             tables: vec![table_over("orders", "lake"), table("users")],
@@ -702,7 +706,7 @@ mod tests {
     /// An engine holding **this fixture's catalog**, registered for real.
     ///
     /// The forget confirm reads what registration established
-    /// ([`Sources::dependents`](strata_engine::Sources::dependents)), so the store built inline
+    /// ([`Connections::dependents`](strata_engine::Connections::dependents)), so the store built inline
     /// above is only half the fixture: hand-writing what a connection is holding up would assert
     /// a state nothing produces.
     ///
@@ -1308,17 +1312,13 @@ mod tests {
         {
             let mut p = project;
             let mut write = p.write_channel(ProjChan::Connections);
-            write.upsert_connection(ConnectionDef {
-                address: "db.internal:5432/analytics".into(),
+            write.upsert_connection(SourceDef {
                 name: "analytics".into(),
-                provider: Provider::Source(SourceDef {
-                    kind: Pg::NAME.to_string(),
-                    config: [("user".to_string(), "reader".to_string())]
-                        .into_iter()
-                        .collect(),
-                    ..Default::default()
-                }),
-                client_config: Default::default(),
+                kind: Pg::NAME.to_string(),
+                config: [("user".to_string(), "reader".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
             });
         }
         let name = "analytics";
@@ -1327,13 +1327,13 @@ mod tests {
             &mut slot,
             DropTarget::Connection {
                 name: name.into(),
-                provider: ProviderId::Source,
+                mode: SourceMode::Catalog,
             },
         );
 
         assert!(texts(&runner)
             .iter()
-            .any(|t| t.contains("Nothing in the database is deleted")));
+            .any(|t| t.contains("Nothing on the server is deleted")));
         assert_eq!(
             consequence(1, "connection").as_deref(),
             Some("1 view reads this connection and will be left invalid:"),
@@ -1365,7 +1365,7 @@ mod tests {
             &mut slot,
             DropTarget::Connection {
                 name: "lake2".into(),
-                provider: ProviderId::Gcs,
+                mode: SourceMode::Store,
             },
         );
 
@@ -1408,7 +1408,7 @@ mod tests {
             &mut slot,
             DropTarget::Connection {
                 name: "lake".into(),
-                provider: ProviderId::S3,
+                mode: SourceMode::Store,
             },
         );
 
@@ -1452,7 +1452,7 @@ mod tests {
             &mut slot,
             DropTarget::Connection {
                 name: "lake".into(),
-                provider: ProviderId::S3,
+                mode: SourceMode::Store,
             },
         );
 

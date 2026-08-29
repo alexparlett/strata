@@ -22,7 +22,8 @@ use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_engine::quote_ident;
-use strata_model::{CatalogKind, Origin, ProviderId, SavedQuery};
+use strata_engine::SourceMode;
+use strata_model::{CatalogKind, Origin, SavedQuery};
 use uuid::Uuid;
 
 use super::node::Remote;
@@ -551,7 +552,7 @@ pub fn open_saved_query(actions: &CatalogActions, id: Uuid) {
 #[derive(Clone, Copy)]
 pub struct ConnectionActions {
     /// The remove-confirm slot provided at the window root. Setting it *is* Forget: the dialog
-    /// owns the store mutation, the persist, the keystore entry and the `Sources::disconnect`
+    /// owns the store mutation, the persist, the keystore entry and the `Connections::disconnect`
     /// behind it.
     drop_target: State<Option<DropTarget>>,
     /// The editor-window request slot, on the same terms: setting it *is* Edit, and
@@ -583,18 +584,16 @@ pub fn use_connection_actions() -> ConnectionActions {
 /// *Schemas…* is absent on an object store rather than parked, for [`table_menu`]'s reason: a
 /// bucket has no schemas to scope, ever, where parking means "not this second".
 ///
-/// *Edit connection* is the opposite call, and takes the opposite treatment: the editor draws a
-/// form from what a registered source **declared**, and an object store is not a registrant yet
-/// (EA-25), so there is no form for one — but there will be. It is **parked**, not dropped: a
-/// menu is a list of things you can do right now, and this is the case that word is for.
-pub fn connection_menu(actions: &ConnectionActions, name: String, provider: ProviderId) -> Menu {
+/// *Edit connection* is offered for **every** connection, because every connection is now a
+/// registrant's and the editor draws its form from what that kind declared. It was parked for
+/// exactly as long as the object stores were not registrants.
+pub fn connection_menu(actions: &ConnectionActions, name: String, mode: SourceMode) -> Menu {
     let actions = *actions;
-    let editable = provider == ProviderId::Source;
+    let catalogued = mode == SourceMode::Catalog;
     Menu::new()
         .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child(
             MenuButton::new()
-                .enabled(editable)
                 .on_press({
                     let name = name.clone();
                     move |_| {
@@ -605,7 +604,7 @@ pub fn connection_menu(actions: &ConnectionActions, name: String, provider: Prov
                 })
                 .child(menu_row(IconName::Pencil, "Edit connection")),
         )
-        .maybe_child(editable.then(|| {
+        .maybe_child(catalogued.then(|| {
             let name = name.clone();
             MenuButton::new()
                 .on_press(move |_| {
@@ -624,7 +623,7 @@ pub fn connection_menu(actions: &ConnectionActions, name: String, provider: Prov
                     let mut slot = actions.drop_target;
                     slot.set(Some(DropTarget::Connection {
                         name: name.clone(),
-                        provider,
+                        mode,
                     }));
                     ContextMenu::close();
                 })

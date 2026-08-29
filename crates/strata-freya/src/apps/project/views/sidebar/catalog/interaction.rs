@@ -18,11 +18,10 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_engine::sources::postgres::Pg;
 use strata_engine::SourceKind;
-use strata_engine::{TableMeta, ViewMeta};
+use strata_engine::{SourceMode, TableMeta, ViewMeta};
 use strata_model::{
-    CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, Provider, ProviderId,
-    RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceDef, SourceFormat, TableDef,
-    TableOrigin, ViewDef,
+    CatalogKind, ColOwner, ColRef, ColumnInfo, Origin, RemoteRef, RightPane, SavedQuery, SourceDef,
+    SourceFormat, TableDef, TableOrigin, ViewDef,
 };
 use uuid::Uuid;
 
@@ -1732,7 +1731,7 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
 /// The connection half of the tree (W7 · DB-05) — what the retired Connections pane's own suite
 /// asserted, re-expressed against the nodes that replaced it.
 ///
-/// A **database** connection can be listed no further than this without a server: `Sources::listing`
+/// A **database** connection can be listed no further than this without a server: `Connections::listing`
 /// reads the connect-time enumeration, so an unconnected database has no schemas and the node is
 /// a leaf. What its subtree looks like over a real server is
 /// `strata-engine/tests/postgres_federation.rs`, which drives the same scoped-and-tagged answer this
@@ -1740,32 +1739,31 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
 mod connections {
     use super::*;
 
-    pub fn s3(bucket: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: bucket.into(),
-            name: String::new(),
-            provider: Provider::S3(S3Store {
-                region: "eu-west-2".into(),
-                auth: S3Auth::Ambient,
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+    pub fn s3(bucket: &str) -> SourceDef {
+        SourceDef {
+            kind: "s3".into(),
+            name: bucket.replace('-', "_"),
+            config: [("address", bucket), ("region", "eu-west-2")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         }
     }
 
-    fn postgres(database: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: format!("db.internal:5432/{database}"),
-            name: String::new(),
-            provider: Provider::Source(SourceDef {
-                kind: Pg::NAME.to_string(),
-                config: [("user".to_string(), "reader".to_string())]
-                    .into_iter()
-                    .collect(),
-                schemas: vec!["public".into()],
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+    fn postgres(database: &str) -> SourceDef {
+        SourceDef {
+            kind: Pg::NAME.to_string(),
+            name: database.into(),
+            config: [
+                ("address", format!("db.internal:5432/{database}")),
+                ("user", "reader".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            schemas: vec!["public".into()],
+            ..Default::default()
         }
     }
 
@@ -1945,7 +1943,7 @@ mod connections {
             *h.drop_target.peek(),
             Some(DropTarget::Connection {
                 name: "lake".into(),
-                provider: ProviderId::S3
+                mode: SourceMode::Store
             })
         );
 
@@ -1955,17 +1953,16 @@ mod connections {
             *h.drop_target.peek(),
             Some(DropTarget::Connection {
                 name: "analytics".into(),
-                provider: ProviderId::Source
+                mode: SourceMode::Catalog
             })
         );
     }
 
-    /// Edit sets the editor slot by the connection's name — the row holds no editor of its own.
+    /// Edit sets the editor slot by the source's name — the row holds no editor of its own.
     ///
-    /// **And it is parked on an object store**, which is a press that does nothing rather than an
-    /// item that is missing: the editor draws a form from what a registered source declared, and
-    /// an object store is not a registrant yet (EA-25). Asserted by what the press *does*, not by
-    /// probing the item's enabled state, because the slot is the whole contract.
+    /// **Offered for every source**, bucket included: they are all registrants now, so the editor
+    /// draws every form from what its kind declared. Asserted by what the press *does*, because
+    /// the slot is the whole contract.
     #[test]
     fn edit_asks_for_the_editor_by_the_connections_name() {
         let (mut runner, h) = tree();
@@ -1977,13 +1974,12 @@ mod connections {
             Some(ConnectionTarget::Edit("analytics".into()))
         );
 
-        // A parked press does not close the menu either, so the object store goes last.
         right_click_row(&mut runner, "lake");
         click_text(&mut runner, "Edit connection");
         assert_eq!(
             *h.editor.peek(),
-            Some(ConnectionTarget::Edit("analytics".into())),
-            "a bucket has no form here, so the item is parked and the slot is untouched"
+            Some(ConnectionTarget::Edit("lake".into())),
+            "and a bucket opens the editor too, on the same terms"
         );
     }
 
@@ -2368,7 +2364,7 @@ fn the_tree_lays_out_within_its_panel_at_stub_width() {
 /// **The remote-relation gestures** (DB-06) — the statements they compose.
 ///
 /// Unit tests rather than driven ones, and that is a limit of the fixture rather than a choice: a
-/// relation row exists only while `Sources::listing` answers, and that answer is the connect-time
+/// relation row exists only while `Connections::listing` answers, and that answer is the connect-time
 /// enumeration held beside a live pool, so the rendered pane cannot reach one without a server.
 /// What a real server does with these names is
 /// `strata-engine/tests/postgres_federation.rs`, which runs the same

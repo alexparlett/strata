@@ -34,7 +34,7 @@ use datafusion_table_providers_postgres::DynPostgresConnectionPool;
 use secrecy::SecretString;
 use tokio::task::spawn_blocking;
 
-use strata_model::ConnectionDef;
+use strata_model::SourceDef;
 
 use self::dialect::PgDialect;
 use self::settings::{PgSettings, PASSWORD, PASSWORD_ENV};
@@ -71,19 +71,14 @@ impl DataSource for Pg {
     /// not.
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
-        let source = def
-            .provider
-            .source()
-            .ok_or_else(|| format!("'{}' is not a PostgreSQL connection.", def.named()))?;
-        let settings = PgSettings::read(&source.config)?;
-        let passwords = match source.secrets.contains(PASSWORD) {
+        let settings = PgSettings::read(&def.config)?;
+        let passwords = match def.secrets.contains(PASSWORD) {
             false => None,
             true => {
-                let request = secret_slot(def, PASSWORD, PASSWORD_ENV)
-                    .ok_or_else(|| format!("'{}' is not a data source.", def.named()))?;
+                let request = secret_slot(def, PASSWORD, PASSWORD_ENV);
                 Some(Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>)
             }
         };
@@ -270,11 +265,11 @@ ORDER BY 1, 2";
 
 /// The pool itself, with every failure turned into a sentence naming what to fix.
 async fn build_pool(
-    conn: &ConnectionDef,
+    conn: &SourceDef,
     settings: &PgSettings,
     passwords: Option<Arc<dyn PasswordProvider>>,
 ) -> Result<PostgresConnectionPool, String> {
-    let address = settings::parse_address(conn.address.trim())?;
+    let address = settings::parse_address(conn.setting("address"))?;
     let mut params = HashMap::from([
         ("host".to_string(), address.host.to_string()),
         ("port".to_string(), address.port.to_string()),
@@ -307,7 +302,7 @@ async fn build_pool(
 /// is a connection editor behind them. Nothing in any of it is a password: the crate builds its
 /// connection string without one on purpose, and our own provider's failure is
 /// [`SecretPassword`]'s sentence.
-fn refused(conn: &ConnectionDef, settings: &PgSettings, e: pool::Error) -> String {
+fn refused(conn: &SourceDef, settings: &PgSettings, e: pool::Error) -> String {
     match e {
         pool::Error::InvalidHostOrPortError { host, port, .. } => format!(
             "Cannot reach a PostgreSQL server at '{host}:{port}'. Check the address, and that \

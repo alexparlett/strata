@@ -22,10 +22,10 @@ use datafusion::sql::unparser::dialect::{DefaultDialect, Dialect};
 use datafusion::sql::TableReference;
 use futures::TryStreamExt;
 
-use strata_model::{ConnectionDef, Provider, SourceDef};
+use strata_model::SourceDef;
 
 use super::source::{
-    DataSource, Field, Listing, Located, Relation, Slot, SourceCatalog, SourceKind, SourceMode,
+    DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
     SourceSetting, Sourced, When,
 };
 use super::sql::{federated, SQLExecutor, SqlSpec};
@@ -41,16 +41,15 @@ pub(crate) fn fake_schema() -> SchemaRef {
 }
 
 /// A def for `catalog`, served by `S` at an address of its own.
-pub(crate) fn fake_def<S: SourceKind>(catalog: &str, address: &str) -> ConnectionDef {
-    ConnectionDef {
-        address: address.to_string(),
+pub(crate) fn fake_def<S: SourceKind>(catalog: &str, address: &str) -> SourceDef {
+    SourceDef {
+        config: [("address".to_string(), address.to_string())]
+            .into_iter()
+            .collect(),
+        kind: S::NAME.to_string(),
         name: catalog.to_string(),
-        provider: Provider::Source(SourceDef {
-            kind: S::NAME.to_string(),
-            schemas: vec!["public".to_string()],
-            ..Default::default()
-        }),
-        client_config: BTreeMap::new(),
+        schemas: vec!["public".to_string()],
+        ..Default::default()
     }
 }
 
@@ -150,7 +149,6 @@ const DOC_SETTINGS: &[SourceSetting] = &[
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
-        slot: Slot::Address,
         group: Some("CONNECTION"),
         required: true,
         default: None,
@@ -162,7 +160,6 @@ const DOC_SETTINGS: &[SourceSetting] = &[
         key: "collection_prefix",
         label: "PREFIX",
         field: Field::Text,
-        slot: Slot::Config,
         group: Some("CONNECTION"),
         required: false,
         default: None,
@@ -174,7 +171,6 @@ const DOC_SETTINGS: &[SourceSetting] = &[
         key: "mode",
         label: "MODE",
         field: Field::Choice(&["plain", "sharded"]),
-        slot: Slot::Config,
         group: Some("SHARDING"),
         required: false,
         default: Some("plain"),
@@ -186,7 +182,6 @@ const DOC_SETTINGS: &[SourceSetting] = &[
         key: "shard_key",
         label: "SHARD KEY",
         field: Field::Text,
-        slot: Slot::Config,
         group: Some("SHARDING"),
         required: true,
         default: None,
@@ -204,7 +199,6 @@ const SQL_SETTINGS: &[SourceSetting] = &[SourceSetting {
     key: "address",
     label: "ADDRESS",
     field: Field::Text,
-    slot: Slot::Address,
     group: None,
     required: true,
     default: None,
@@ -217,11 +211,11 @@ const SQL_SETTINGS: &[SourceSetting] = &[SourceSetting {
 impl DataSource for TestDoc {
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         Ok(Sourced::Catalog(Arc::new(DocCatalog(
-            self.rows(&def.address)?,
+            self.rows(def.setting("address"))?,
         ))))
     }
 
@@ -287,16 +281,16 @@ impl DataSource for TestSql {
 
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         let rows = self
             .connections
             .lock()
             .unwrap()
-            .get(def.address.trim())
+            .get(def.setting("address"))
             .map(Arc::clone)
-            .ok_or_else(|| format!("no fake source at '{}'", def.address))?;
+            .ok_or_else(|| format!("no fake source at '{}'", def.setting("address")))?;
         Ok(Sourced::Catalog(Arc::new(SqlCatalog(rows))))
     }
 }
@@ -402,7 +396,7 @@ impl SQLExecutor for MemExecutor {
 mod tests {
     use super::*;
     use crate::secrets::MemSecrets;
-    use crate::sources::source::{unsupported, Sources};
+    use crate::sources::source::{unsupported, Registrants};
     use crate::statements::Remote;
     use crate::{Engine, RunTag, WsId};
 
@@ -413,7 +407,7 @@ mod tests {
     /// **The contract every source keeps**, run against each of them: connecting yields the mode
     /// the kind declared, the handle names the kind it was registered under, and what it does not
     /// implement refuses in the trait's own words rather than in an arm's.
-    async fn conforms<S: DataSource + SourceKind>(source: S, def: &ConnectionDef) {
+    async fn conforms<S: DataSource + SourceKind>(source: S, def: &SourceDef) {
         let mode = S::MODE;
         let kind = S::NAME;
         declares_a_drawable_form(kind, source.settings());
@@ -449,7 +443,7 @@ mod tests {
                 .clone()
                 .table_provider(&Located {
                     connection: "fixture".into(),
-                    identity: def.identity(),
+                    identity: def.named(),
                     relation: "public.orders".into(),
                 })
                 .await
@@ -476,28 +470,15 @@ mod tests {
         }
     }
 
-    /// **Every declaration a source hands over has to be one a form can draw**, which is five
+    /// **Every declaration a source hands over has to be one a form can draw**, which is three
     /// things nothing else checks — because none of them shows up as a failure anywhere. The
     /// editor simply draws a form missing a setting the source needs, or drawing one twice.
     ///
     /// A [`When`] naming a key that is not declared beside it hides its row **forever**: the
     /// deciding value can never be typed, because there is no box to type it in. A duplicate key
-    /// gives one setting two rows, whose values overwrite each other. No [`Slot::Address`] means
-    /// a connection with nowhere to put its address; two means the second silently wins. And a
-    /// group interrupted by another group's key prints its heading twice.
+    /// gives one setting two rows, whose values overwrite each other. And a group interrupted by
+    /// another group's key prints its heading twice.
     fn declares_a_drawable_form(kind: &str, keys: &[SourceSetting]) {
-        let addresses = keys.iter().filter(|k| k.slot == Slot::Address).count();
-        assert_eq!(
-            addresses, 1,
-            "'{kind}' declares {addresses} address keys; every connection has exactly one address"
-        );
-        assert!(
-            keys.iter()
-                .filter(|k| k.slot == Slot::Address)
-                .all(|k| k.field == Field::Text),
-            "'{kind}' declares an address that is not typed into a box"
-        );
-
         let mut seen_groups: Vec<Option<&str>> = Vec::new();
         for declared in keys {
             assert_eq!(
@@ -707,7 +688,7 @@ mod tests {
     /// is how an embedder substitutes their own for a shipped one.
     #[test]
     fn a_second_registration_of_one_name_replaces_the_first() {
-        let mut sources = Sources::default();
+        let mut sources = Registrants::default();
         sources.insert(TestDoc::holding("first", &["orders"]));
         sources.insert(TestDoc::holding("second", &["events"]));
         assert_eq!(sources.registrants().len(), 1);

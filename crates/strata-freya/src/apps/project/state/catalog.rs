@@ -79,14 +79,19 @@ pub fn use_init_remote_scans() -> RemoteScans {
     scans
 }
 
-/// The catalog names of every database connection that is currently connected — what a remote
-/// relation's [`RemoteRef::connection`] is addressed by, from the defs that decide it.
+/// The names of every connection that is currently connected — what a remote relation's
+/// [`RemoteRef::connection`] is addressed by, from the defs that decide it.
+///
+/// Every connected one, not only the ones that register a catalog: a name is a name, whether a
+/// kind's mode makes relations under it is the registry's answer and this reader has none, and a
+/// name that can never key a remote scan prunes nothing. The predicate is "is this still
+/// connected", and it answers that exactly.
 fn connected_catalogs(project: &ProjectState) -> BTreeSet<String> {
     project
         .connections
         .iter()
         .filter(|row| matches!(row.reg, Reg::Ready(())))
-        .filter_map(|row| row.def.catalog())
+        .map(|row| row.def.named())
         .collect()
 }
 

@@ -311,7 +311,7 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
     let mut measured = cx.measured;
     let actions = cx.connections;
 
-    let (name, provider) = (connection.name.clone(), connection.provider);
+    let (name, mode) = (connection.name.clone(), connection.mode);
     let address = connection.address.clone();
     let mark = connection.catalog.clone();
     let mark_slot = mark
@@ -324,7 +324,7 @@ pub fn connection_row(at: &Place, connection: &Connection, cx: &RowCtx) -> RowBo
         mark_slot,
     );
 
-    let build_menu = move || connection_menu(&actions, name.clone(), provider);
+    let build_menu = move || connection_menu(&actions, name.clone(), mode);
     let menu_for_row = build_menu.clone();
     let (open, path) = (at.open, at.path.clone());
     let toggle = move |_: Event<PressEventData>| tree.toggle(&path, open);

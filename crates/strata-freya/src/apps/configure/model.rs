@@ -23,8 +23,7 @@ use strata_core::util::one_char;
 use strata_engine::export::quote_col;
 use strata_engine::{duplicate_column, fold_ident};
 use strata_model::{
-    ConnectionDef, CsvRead, FileCompression, JsonRead, JsonShape, ProviderId, SourceFormat,
-    TableDef, TableOrigin,
+    CsvRead, FileCompression, JsonRead, JsonShape, SourceDef, SourceFormat, TableDef, TableOrigin,
 };
 
 use crate::components::form::{Choice, Control, Group, Make, TextField};
@@ -172,8 +171,8 @@ pub struct ConfigureDraft {
     /// says why it is not re-derived from the scheme). Nothing may read this as a fact about the
     /// table: what the table reads through is [`store`](Self::store), and while the two disagree
     /// Save is blocked naming the missing URL (`views::footer`).
-    pub provider: ProviderId,
-    /// The chosen connection, by its [`name`](ConnectionDef::named) — how the project addresses one.
+    pub kind: String,
+    /// The chosen connection, by its [`name`](SourceDef::named) — how the project addresses one.
     ///
     /// Kept across a flip back to Local, like every format's options are kept across a
     /// format switch: looking at the local arm and coming back must not forget which bucket was
@@ -283,7 +282,7 @@ impl Default for ConfigureDraft {
             name: String::new(),
             format: FormatId::Parquet,
             location: Where::Local,
-            provider: ProviderId::S3,
+            kind: String::new(),
             connection: None,
             local_sources: Vec::new(),
             remote_source: String::new(),
@@ -322,14 +321,13 @@ impl ConfigureDraft {
     /// A def naming a **database** connection gets that treatment through the filter below: a table
     /// reads files, so the TYPE pill offers only [`ProviderId::OBJECT_STORES`], and a draft opening
     /// on a provider the pill cannot render would show no segment selected.
-    pub fn of(def: &TableDef, connections: &[ConnectionDef]) -> Self {
-        let provider = def
+    pub fn of(def: &TableDef, connections: &[SourceDef]) -> Self {
+        let kind = def
             .connection
             .as_deref()
             .and_then(|name| connections.iter().find(|c| c.named() == name))
-            .map(|c| c.provider.id())
-            .filter(|id| id.is_object_store())
-            .unwrap_or(ProviderId::S3);
+            .map(|c| c.kind.trim().to_string())
+            .unwrap_or_default();
         let remote = def.connection.is_some();
         let mut draft = Self {
             name: def.name.clone(),
@@ -338,7 +336,7 @@ impl ConfigureDraft {
                 true => Where::Remote,
                 false => Where::Local,
             },
-            provider,
+            kind,
             connection: def.connection.clone(),
             local_sources: match remote {
                 true => Vec::new(),
@@ -427,7 +425,7 @@ impl ConfigureDraft {
     /// `/data/events.parquet` under a bucket that had nothing to do with it — or, from an empty
     /// list, put a blank row in the one section whose toolbar is absent, so the path a remote
     /// table has was a row nobody added and nobody could remove.
-    pub fn set_location(&mut self, location: Where, connections: &[ConnectionDef]) {
+    pub fn set_location(&mut self, location: Where, connections: &[SourceDef]) {
         if self.location == location {
             return;
         }
@@ -442,7 +440,15 @@ impl ConfigureDraft {
             Where::Local => {}
             Where::Remote => {
                 if self.connection.is_none() {
-                    self.connection = first_connection(connections, self.provider);
+                    self.connection = first_connection(connections, &self.kind);
+                    // With no kind chosen yet there is nothing for the TYPE pill to light, so the
+                    // first connection the project has decides it — better than defaulting to a
+                    // kind written down here, which is the knowledge this window stopped holding.
+                    if let Some(named) = self.connection.as_deref() {
+                        if let Some(def) = connections.iter().find(|c| c.named() == named) {
+                            self.kind = def.kind.trim().to_string();
+                        }
+                    }
                 }
             }
         }
@@ -578,18 +584,18 @@ impl ConfigureDraft {
     /// unless the one already chosen is one of them. The picker below only ever offers this
     /// provider's connections, so leaving a foreign one selected would be a selection with no
     /// row to show it.
-    pub fn set_provider(&mut self, provider: ProviderId, connections: &[ConnectionDef]) {
-        if self.provider == provider {
+    pub fn set_provider(&mut self, kind: &str, connections: &[SourceDef]) {
+        if self.kind == kind {
             return;
         }
-        self.provider = provider;
+        self.kind = kind.to_string();
         let serves = self
             .connection
             .as_deref()
             .and_then(|name| connections.iter().find(|c| c.named() == name))
-            .is_some_and(|c| c.provider.id() == provider);
+            .is_some_and(|c| c.kind.trim() == kind);
         if !serves {
-            self.connection = first_connection(connections, provider);
+            self.connection = first_connection(connections, kind);
         }
     }
 
@@ -1045,17 +1051,17 @@ impl ConfigureDraft {
 /// `provider` is always one of [`ProviderId::OBJECT_STORES`] here, because the TYPE pill above
 /// this picker is the only thing that sets it and that is what it offers: a table reads *files*,
 /// and a database connection registers no object store to read them from.
-pub fn connections_for(connections: &[ConnectionDef], provider: ProviderId) -> Vec<String> {
+pub fn connections_for(connections: &[SourceDef], kind: &str) -> Vec<String> {
     connections
         .iter()
-        .filter(|c| c.provider.id() == provider)
-        .map(ConnectionDef::named)
+        .filter(|c| kind.trim().is_empty() || c.kind.trim() == kind.trim())
+        .map(SourceDef::named)
         .collect()
 }
 
 /// The connection a provider is picked *on* — its first, or none at all.
-fn first_connection(connections: &[ConnectionDef], provider: ProviderId) -> Option<String> {
-    connections_for(connections, provider).into_iter().next()
+fn first_connection(connections: &[SourceDef], kind: &str) -> Option<String> {
+    connections_for(connections, kind).into_iter().next()
 }
 
 /// The compression dropdown, shared by CSV and JSON — the same whole-file wrapping, and the same
@@ -1101,7 +1107,6 @@ fn first_char(raw: &str) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
-    use strata_model::{GcsStore, Provider, S3Store};
 
     use super::*;
 
@@ -1121,20 +1126,24 @@ mod tests {
     /// Two S3 buckets and one GCS, in the order a project keeps them — enough for the picker's
     /// three questions: which this provider serves, which is first, and what a switch does to a
     /// choice the new provider does not serve.
-    fn connections() -> Vec<ConnectionDef> {
+    fn connections() -> Vec<SourceDef> {
         ["acme-lake", "cold-store"]
             .into_iter()
-            .map(|address| ConnectionDef {
-                address: address.into(),
+            .map(|address| SourceDef {
+                config: [("address".to_string(), address.into())]
+                    .into_iter()
+                    .collect(),
                 name: address.replace('-', "_"),
-                provider: Provider::S3(S3Store::default()),
-                client_config: Default::default(),
+                kind: "s3".into(),
+                ..Default::default()
             })
-            .chain(std::iter::once(ConnectionDef {
-                address: "warehouse".into(),
+            .chain(std::iter::once(SourceDef {
+                config: [("address".to_string(), "warehouse".into())]
+                    .into_iter()
+                    .collect(),
                 name: "warehouse".into(),
-                provider: Provider::Gcs(GcsStore::default()),
-                client_config: Default::default(),
+                kind: "gcs".into(),
+                ..Default::default()
             }))
             .collect()
     }
@@ -1593,15 +1602,15 @@ mod tests {
         draft.set_location(Where::Remote, &connections);
         assert_eq!(draft.connection.as_deref(), Some("acme_lake"));
 
-        draft.set_provider(ProviderId::Gcs, &connections);
+        draft.set_provider("gcs", &connections);
         assert_eq!(draft.connection.as_deref(), Some("warehouse"));
 
-        draft.set_provider(ProviderId::S3, &connections);
+        draft.set_provider("s3", &connections);
         draft.connection = Some("cold_store".into());
-        draft.set_provider(ProviderId::S3, &connections);
+        draft.set_provider("s3", &connections);
         assert_eq!(draft.connection.as_deref(), Some("cold_store"));
 
-        draft.set_provider(ProviderId::Http, &connections);
+        draft.set_provider("http", &connections);
         assert_eq!(draft.connection, None);
         assert!(draft
             .blocker()
@@ -1640,7 +1649,7 @@ mod tests {
         };
         let draft = ConfigureDraft::of(&def, &connections());
         assert!(draft.remote());
-        assert_eq!(draft.provider, ProviderId::Gcs);
+        assert_eq!(draft.kind, "gcs");
         assert_eq!(draft.connection.as_deref(), Some("warehouse"));
         assert_eq!(draft.def(Path::new("/project")), def);
     }
@@ -1670,14 +1679,11 @@ mod tests {
     fn the_picker_offers_one_providers_connections() {
         let connections = connections();
         assert_eq!(
-            connections_for(&connections, ProviderId::S3),
+            connections_for(&connections, "s3"),
             ["acme_lake", "cold_store"]
         );
-        assert_eq!(
-            connections_for(&connections, ProviderId::Gcs),
-            ["warehouse"]
-        );
-        assert!(connections_for(&connections, ProviderId::Http).is_empty());
+        assert_eq!(connections_for(&connections, "gcs"), ["warehouse"]);
+        assert!(connections_for(&connections, "http").is_empty());
     }
 }
 

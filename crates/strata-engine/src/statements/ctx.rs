@@ -20,7 +20,7 @@ use crate::statements::classify::{denied, Form};
 use crate::statements::target::Target;
 use crate::statements::StmtKind;
 use crate::tables::InternalTableStore;
-use crate::{Connections, InternalTables};
+use crate::{InternalTables, SourceDefs};
 
 use super::arms::session::SessionScope;
 
@@ -66,7 +66,10 @@ pub struct StmtCtx {
     pub(crate) tables: Arc<dyn InternalTableStore>,
     /// Which object stores this project has a connection to — what a typed
     /// `CREATE EXTERNAL TABLE`'s `LOCATION` may name.
-    pub connections: Connections,
+    pub connections: SourceDefs,
+    /// The sources this engine can serve one with — what turns a connection's kind into the
+    /// `scheme://authority` its files hang off, which is the registry's answer and not the def's.
+    pub(crate) registrants: crate::sources::source::Registrants,
     /// The live database connections — what a write into a remote relation goes through,
     /// and what says whether one accepts writes at all.
     pub(crate) sources: Live,
@@ -151,15 +154,13 @@ mod tests {
     use crate::{
         Admit, DenyCode, Engine, Form, PolicyProvider, Principal, RunTag, TargetFacts, WsId,
     };
-    use strata_model::ConnectionDef;
+    use strata_model::SourceDef;
 
     /// `fake_def`, opted in to writes — the def-level gate is the arm's third and is not what
     /// these tests are about.
-    fn writable(def: ConnectionDef) -> ConnectionDef {
+    fn writable(def: SourceDef) -> SourceDef {
         let mut def = def;
-        if let strata_model::Provider::Source(source) = &mut def.provider {
-            source.read_only = false;
-        }
+        def.read_only = false;
         def
     }
 

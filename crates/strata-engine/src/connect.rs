@@ -25,7 +25,7 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::*;
 use object_store::ObjectStore;
 
-/// What one connection puts on the session — the two registries a `ConnectionDef` can reach.
+/// What one connection puts on the session — the two registries a `SourceDef` can reach.
 pub enum Registration {
     /// An object store, under the connection's own URL: what a scan of `s3://acme-lake/…`
     /// resolves through (W7).

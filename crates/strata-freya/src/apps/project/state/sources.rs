@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use strata_engine::sources::{SchemaListingView, SourceDetail, SourcesSnapshot};
-use strata_model::ProviderId;
+use strata_engine::SourceMode;
 
 use super::{ProjectState, Reg};
 
@@ -34,11 +34,13 @@ pub struct SourceNode {
     pub name: String,
     /// Where it points, in its provider's own terms — what the row draws as its title.
     pub address: String,
-    /// Which provider serves it, for the row's menu and the editor it opens.
-    pub provider: ProviderId,
     /// The short word its row wears: the registered kind's own, asked of the kind so that a
     /// connection nothing has connected yet is still badged for what serves it.
     pub badge: String,
+    /// What connecting to it yields — the row's menu and the consequence a Forget spells out.
+    /// From the registrants rather than from the connection's own row, so a def no pass has
+    /// reached yet still answers for the kind that serves it.
+    pub mode: SourceMode,
     /// The last pass has not answered for it yet.
     pub waiting: bool,
     /// What the last pass refused it with, if it did.
@@ -96,28 +98,24 @@ pub fn assemble(project: &ProjectState, snapshot: &SourcesSnapshot) -> Vec<Sourc
         .map(|row| {
             let name = row.def.named();
             let listing = snapshot.source(&name);
-            let contents = match (row.def.catalog(), listing.map(|l| &l.detail)) {
-                (Some(catalog), Some(SourceDetail::Catalog { schemas, .. })) => {
-                    SourceContents::Catalog {
-                        catalog,
-                        schemas: shown(schemas),
-                    }
-                }
-                (Some(catalog), _) => SourceContents::Catalog {
-                    catalog,
+            let catalogued = snapshot.mode(&row.def.kind) == Some(SourceMode::Catalog);
+            let contents = match (catalogued, listing.map(|l| &l.detail)) {
+                (true, Some(SourceDetail::Catalog { schemas, .. })) => SourceContents::Catalog {
+                    catalog: name.clone(),
+                    schemas: shown(schemas),
+                },
+                (true, _) => SourceContents::Catalog {
+                    catalog: name.clone(),
                     schemas: Vec::new(),
                 },
-                (None, _) => SourceContents::Store {
+                (false, _) => SourceContents::Store {
                     tables: over.remove(name.as_str()).unwrap_or_default(),
                 },
             };
             SourceNode {
-                badge: match row.def.provider.source() {
-                    Some(source) => snapshot.badge(&source.kind),
-                    None => row.def.provider.id().label().to_string(),
-                },
-                address: row.def.address.clone(),
-                provider: row.def.provider.id(),
+                badge: snapshot.badge(&row.def.kind),
+                mode: snapshot.mode(&row.def.kind).unwrap_or(SourceMode::Store),
+                address: row.def.setting("address").to_string(),
                 waiting: matches!(row.reg, Reg::Loading),
                 problem: row.reg.error().map(str::to_owned),
                 contents,
@@ -150,35 +148,30 @@ mod tests {
     use strata_engine::sources::source::{SourceInfo, SourceMode};
     use strata_engine::sources::{SchemaVisibility, SourceListing};
     use strata_engine::CatalogGen;
-    use strata_model::{
-        ConnectionDef, Provider, S3Auth, S3Store, SourceDef, SourceFormat, TableDef, TableOrigin,
-    };
+    use strata_model::{SourceDef, SourceFormat, TableDef, TableOrigin};
 
     use super::*;
 
-    fn bucket(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: "acme-lake".into(),
+    fn bucket(name: &str) -> SourceDef {
+        SourceDef {
             name: name.into(),
-            provider: Provider::S3(S3Store {
-                region: "eu-west-2".into(),
-                auth: S3Auth::Ambient,
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: "s3".into(),
+            config: [("region".to_string(), "eu-west-2".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
         }
     }
 
-    fn database(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: "db.internal:5432/analytics".into(),
+    fn database(name: &str) -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), "db.internal:5432/analytics".into())]
+                .into_iter()
+                .collect(),
             name: name.into(),
-            provider: Provider::Source(SourceDef {
-                kind: "postgres".into(),
-                schemas: vec!["public".into()],
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: "postgres".into(),
+            schemas: vec!["public".into()],
+            ..Default::default()
         }
     }
 
@@ -205,20 +198,34 @@ mod tests {
         )
     }
 
-    /// A snapshot carrying `sources`, with one registrant so a `postgres` def has a badge to
-    /// wear — the shape the engine hands over.
+    /// A snapshot carrying `sources`, with the two registrants these fixtures name so each def
+    /// has a badge and a mode to wear — the shape the engine hands over.
     fn snapshot(sources: Vec<SourceListing>) -> SourcesSnapshot {
         SourcesSnapshot {
             generation: CatalogGen::default(),
             sources,
-            registrants: vec![SourceInfo {
-                kind: "postgres",
-                label: "PostgreSQL",
-                badge: "PG",
-                mode: SourceMode::Catalog,
-                settings: &[],
-                writable: true,
-            }],
+            registrants: vec![
+                SourceInfo {
+                    kind: "postgres",
+                    label: "PostgreSQL",
+                    badge: "PG",
+                    mode: SourceMode::Catalog,
+                    settings: &[],
+                    writable: true,
+                    unique: &[],
+                    scheme: None,
+                },
+                SourceInfo {
+                    kind: "s3",
+                    label: "S3",
+                    badge: "S3",
+                    mode: SourceMode::Store,
+                    settings: &[],
+                    writable: false,
+                    unique: &[],
+                    scheme: Some("s3"),
+                },
+            ],
         }
     }
 

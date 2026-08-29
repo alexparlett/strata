@@ -75,8 +75,8 @@ pub use snapshots::{
     LocalIpcSnapshotStore, MemSnapshotStore, SnapshotSink, SnapshotStats, SnapshotStore,
 };
 pub use sources::source::{
-    DataSource, Field, Located, Slot, SourceCatalog, SourceInfo, SourceKind, SourceMode,
-    SourceSetting, Sourced, When,
+    DataSource, Field, Located, SourceCatalog, SourceInfo, SourceKind, SourceMode, SourceSetting,
+    Sourced, When,
 };
 pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
@@ -120,10 +120,10 @@ use generation::GenClock;
 use providers::{StrataCatalogList, StrataCatalogProvider};
 use query::{run_and_snapshot, CellFormat};
 use snapshots::snapshot_name;
-use sources::source::Sources as SourceRegistry;
+use sources::source::Registrants as SourceRegistry;
 use sources::Live;
 use statements::arms::StrataFunctionFactory;
-use strata_model::{Cell, ConnectionDef, QueryOutput, SnapshotId, TabId};
+use strata_model::{Cell, QueryOutput, SnapshotId, SourceDef, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -508,8 +508,8 @@ pub struct Engine {
     internal: InternalTables,
     /// What each registered name reads — see [`Dependencies`].
     dependencies: Dependencies,
-    /// Which connections this engine has been told about — see [`Connections`].
-    connections: Connections,
+    /// Which connections this engine has been told about — see [`Sources`].
+    connections: SourceDefs,
     /// What generation of the catalog this engine is at — see [`CatalogGen`].
     generation: GenClock,
     /// The source connections that are **live**: their handles and the catalogs they registered
@@ -628,7 +628,7 @@ impl Dependencies {
     /// The tables read through the connection called `name`, alphabetically.
     ///
     /// Case-insensitive, because a connection's name is a SQL identifier and
-    /// [`Connections::resolve`] answers that way — which is also what decides, one level down,
+    /// [`Sources::resolve`] answers that way — which is also what decides, one level down,
     /// whether the table registered over that store at all.
     fn over(&self, name: &str) -> Vec<String> {
         self.named(|scans| match scans {
@@ -725,9 +725,9 @@ impl Dependencies {
 /// every def, and [`Sources::disconnect`] — the Forget gesture and the edit that moves a
 /// connection's identity — is the one removal.
 #[derive(Clone, Debug, Default)]
-pub struct Connections(Arc<Mutex<BTreeMap<String, ConnectionDef>>>);
+pub struct SourceDefs(Arc<Mutex<BTreeMap<String, SourceDef>>>);
 
-impl Connections {
+impl SourceDefs {
     /// The connection `name` addresses, **in the connection's own spelling** — `None` when this
     /// project has none.
     ///
@@ -748,15 +748,9 @@ impl Connections {
             .cloned()
     }
 
-    /// What the connection called `name` **is** — the `(kind, address)` pair, for the one thing
-    /// that still needs it: composing the URL its object store is registered under.
-    fn identity(&self, name: &str) -> Option<String> {
-        self.def(name).map(|def| def.identity())
-    }
-
     /// The def this engine was last handed for the connection called `name`, matched the way
     /// [`resolve`](Self::resolve) matches.
-    fn def(&self, name: &str) -> Option<ConnectionDef> {
+    fn def(&self, name: &str) -> Option<SourceDef> {
         let held = self.0.lock().unwrap();
         held.get(name).cloned().or_else(|| {
             held.iter()
@@ -771,7 +765,7 @@ impl Connections {
     /// **Membership, not liveness**, exactly as the rest of this type is: a connection whose
     /// credentials this machine cannot resolve today is still one the project has, and the
     /// listing says so by answering `live: false` rather than by leaving it out.
-    fn all(&self) -> Vec<ConnectionDef> {
+    fn all(&self) -> Vec<SourceDef> {
         self.0.lock().unwrap().values().cloned().collect()
     }
 
@@ -783,7 +777,7 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, held)| held.identity().eq_ignore_ascii_case(identity))
+            .find(|(_, held)| held.named().eq_ignore_ascii_case(identity))
             .map(|(name, _)| name.clone())
     }
 
@@ -795,7 +789,37 @@ impl Connections {
     /// hand are the only thing that can. Building the same type from them rather than reading the
     /// defs directly is what keeps one lookup rule — including the case-insensitive fallback,
     /// which a hand-rolled `find` over the defs would quietly drop.
-    pub fn of(defs: &[ConnectionDef]) -> Self {
+    /// The `scheme://authority` the connection called `name` hangs its remote paths off, or
+    /// `None` for one that reads no files.
+    ///
+    /// The registry answers the scheme, because it is the *kind's*; this holds the def that names
+    /// the kind. Both halves are needed and neither has the other, which is why the composition
+    /// lives here rather than on either.
+    pub fn prefix(&self, registrants: &sources::source::Registrants, name: &str) -> Option<String> {
+        registrants.prefix(&self.def(name)?)
+    }
+
+    /// The connection a written `scheme://authority/…` reads through, by name.
+    ///
+    /// [`prefix`](Self::prefix) backwards, for the one caller that arrives with a URL rather than
+    /// with a connection — a typed `CREATE EXTERNAL TABLE … LOCATION 's3://acme-lake/events/'`,
+    /// which has to be matched against the project's own connections. Matched by **prefix**
+    /// rather than by parsing the URL into a kind, because two kinds can share a scheme and only
+    /// the project's own defs say which bucket is which.
+    pub fn by_prefix(
+        &self,
+        registrants: &sources::source::Registrants,
+        url: &str,
+    ) -> Option<String> {
+        let url = url.trim_end_matches('/');
+        self.all().into_iter().find_map(|def| {
+            let prefix = registrants.prefix(&def)?;
+            let prefix = prefix.trim_end_matches('/');
+            url.eq_ignore_ascii_case(prefix).then(|| def.named())
+        })
+    }
+
+    pub fn of(defs: &[SourceDef]) -> Self {
         let held = Self::default();
         for def in defs {
             held.note(def);
@@ -814,11 +838,11 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, def)| (name.clone(), def.identity()))
+            .map(|(name, def)| (name.clone(), def.setting("address").to_string()))
             .collect()
     }
 
-    fn note(&self, def: &ConnectionDef) {
+    fn note(&self, def: &SourceDef) {
         self.0.lock().unwrap().insert(def.named(), def.clone());
     }
 
@@ -981,6 +1005,32 @@ impl Engine {
     /// The one assembly site, read by every surface that writes a result to a caller-named path —
     /// the typed `COPY` (through `StmtCtx::owned`), the Export window and the agent's
     /// `export_result` — so the three cannot fence different places.
+    /// The catalog the connection called `name` registers, or `None` for one that registers an
+    /// object store instead.
+    ///
+    /// A source's relations are addressed through a catalog, and that catalog is the connection's
+    /// own name — one field, so no surface can spell it differently. **Whether** a connection has
+    /// one is the *kind's* answer ([`SourceMode`]), which is why this is asked of the engine and
+    /// not of the def: the def carries what a registry-less reader needs, and this reader has a
+    /// registry.
+    /// The catalog `defs` describe, with every table's sources resolved against `root`.
+    ///
+    /// Composed by the **engine** rather than by the spec itself, because turning a table's
+    /// connection into the `scheme://authority` its files hang off is a registry question now: the
+    /// scheme belongs to the kind. A host with defs in hand and no engine cannot answer it, and
+    /// every host that syncs has one.
+    pub(crate) fn registry(&self) -> &sources::source::Registrants {
+        &self.sources
+    }
+
+    pub(crate) fn catalog_of(&self, name: &str) -> Option<String> {
+        let def = self.connections.def(name)?;
+        match self.sources.mode(&def.kind)? {
+            SourceMode::Catalog => Some(def.named()),
+            SourceMode::Store => None,
+        }
+    }
+
     pub(crate) fn owned_storage(&self) -> Vec<export::Owned> {
         let root = self.data_root.lock().unwrap().clone();
         export::owned_roots(

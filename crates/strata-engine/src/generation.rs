@@ -40,7 +40,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::{env, fs, process};
 
-    use strata_model::{ConnectionDef, Provider, S3Auth, S3Store, SourceFormat, ViewDef};
+    use strata_model::{SourceDef, SourceFormat, ViewDef};
 
     use super::*;
     use crate::register::CatalogSpec;
@@ -85,15 +85,14 @@ mod tests {
 
     /// A connection refused before any socket opens (S3 with no region), so the connection
     /// gestures can be driven without dialing out.
-    fn unreachable(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: "no-region".into(),
+    fn unreachable(name: &str) -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), "no-region".into())]
+                .into_iter()
+                .collect(),
+            kind: "s3".into(),
             name: name.into(),
-            provider: Provider::S3(S3Store {
-                auth: S3Auth::Anonymous,
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            ..Default::default()
         }
     }
 

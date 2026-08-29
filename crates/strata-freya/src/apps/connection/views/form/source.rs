@@ -82,10 +82,13 @@ pub(super) fn rows(
 /// are addressed under (`lake.public.orders`).
 ///
 /// One field for both, because they are one thing: a second "display name" beside the identifier
-/// is two names for one connection and a question about which one a confirm quotes. Blank is not
-/// nameless — the address mints one, which is what the box shows as its placeholder — and a
-/// rename is a store-funnel operation, so what this box writes is a draft and Save is what moves
-/// the dependent table refs and this machine's keystore entries with it.
+/// is two names for one source and a question about which one a confirm quotes.
+///
+/// **The user writes it, and nothing derives it.** Two sources may hold identical settings and
+/// differ only here — four servers behind one tunnel that differ in credentials and in nothing
+/// else — so a name is the one thing a source cannot be given for free. A rename is a
+/// store-funnel operation: what this box writes is a draft, and Save is what moves the dependent
+/// table refs and this machine's keystore entries with it.
 #[derive(PartialEq)]
 struct NameField {
     key: DiffKey,
@@ -112,18 +115,13 @@ impl Component for NameField {
             let name = text.read().clone();
             ctx.edit(move |draft| draft.name = name);
         });
-        let minted = ctx.draft.read().minted();
-
         Row::new("NAME")
+            .required()
             .hint(
                 "What this connection is called, and the catalog its tables are queried by: \
                  'lake' makes a table 'lake.public.orders'",
             )
-            .child(
-                ValueField::new(text)
-                    .width(Size::px(NARROW_WIDTH))
-                    .placeholder(minted),
-            )
+            .child(ValueField::new(text).width(Size::px(NARROW_WIDTH)))
     }
 }
 

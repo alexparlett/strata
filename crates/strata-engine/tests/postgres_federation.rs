@@ -4,7 +4,7 @@
 //! Everything the Postgres arm does is a round trip: the pool's construction *is* the probe, the
 //! catalog is built from an introspection query, a provider is built from a second one, and the
 //! point of the whole workstream — a same-source subplan leaving as one SQL statement — only
-//! exists once a server has parsed and answered it. A unit test can prove a `ConnectionDef`
+//! exists once a server has parsed and answered it. A unit test can prove a `SourceDef`
 //! yields a well-formed parameter map, and nothing beyond that.
 //!
 //! **A real server rather than a mock**, the same argument as `object_store_minio.rs`: the
@@ -46,18 +46,17 @@ use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
 
 use strata_engine::profile::{aggregates, profile_sql};
-use strata_engine::register::{table_spec, CatalogSpec, RegOutcome};
+use strata_engine::register::RegOutcome;
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
 use strata_engine::sources::{
     migrate_secrets, put_secret, SchemaListingView, SchemaVisibility, SourceDetail,
 };
 use strata_engine::{
-    sql, Connections, Engine, EngineError, RunOutcome, RunTag, StopReason, StoreEffect, ViewMeta,
+    sql, Engine, EngineError, RunOutcome, RunTag, SourceDefs, StopReason, StoreEffect, ViewMeta,
     WsId,
 };
 use strata_model::{
-    Cell, ConnectionDef, CsvRead, Provider, SourceDef, SourceFormat, StatKey, TableDef,
-    TableOrigin, ViewDef,
+    Cell, CsvRead, SourceDef, SourceFormat, StatKey, TableDef, TableOrigin, ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -154,31 +153,29 @@ async fn seed(port: u16) {
 ///
 /// **Read-only**, which is the shipped default — [`writable`] is what the write phases connect
 /// with, so every phase before them is driven through exactly the connection a user gets.
-fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
-    ConnectionDef {
-        address: format!("127.0.0.1:{port}/{DATABASE}"),
+fn connection(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
+    SourceDef {
+        kind: "postgres".into(),
         name: catalog.into(),
-        provider: Provider::Source(SourceDef {
-            kind: "postgres".into(),
-            config: BTreeMap::from([
-                ("user".to_string(), USER.to_string()),
-                ("sslmode".to_string(), "disable".to_string()),
-            ]),
-            secrets: BTreeSet::from([PASSWORD_KEY.to_string()]),
-            schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
-            read_only: true,
-        }),
-        client_config: BTreeMap::new(),
+        config: BTreeMap::from([
+            (
+                "address".to_string(),
+                format!("127.0.0.1:{port}/{DATABASE}"),
+            ),
+            ("user".to_string(), USER.to_string()),
+            ("sslmode".to_string(), "disable".to_string()),
+        ]),
+        secrets: BTreeSet::from([PASSWORD_KEY.to_string()]),
+        schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
+        read_only: true,
     }
 }
 
 /// The same connection opted in to writes (DB-10) — the one setting that separates them, so a
 /// re-connect with this is exactly the user turning the toggle off.
-fn writable(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
+fn writable(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
     let mut def = connection(port, catalog, schemas);
-    if let Provider::Source(source) = &mut def.provider {
-        source.read_only = false;
-    }
+    def.read_only = false;
     def
 }
 
@@ -193,7 +190,7 @@ fn mocked_keystore() {
 
 /// File `value` under the slot `conn` derives, exactly as the connection editor will — the
 /// def stores no reference, so this is the only place the id exists.
-fn store_password(conn: &ConnectionDef, value: &str) {
+fn store_password(conn: &SourceDef, value: &str) {
     put_secret(conn, PASSWORD_KEY, value).expect("this machine's keystore answers");
 }
 
@@ -395,7 +392,7 @@ async fn enumeration(engine: &Engine) {
 }
 
 /// Is `conn` a connection this engine holds live right now? — the snapshot's own answer.
-fn live(engine: &Engine, conn: &ConnectionDef) -> bool {
+fn live(engine: &Engine, conn: &SourceDef) -> bool {
     engine
         .sources()
         .listing()
@@ -729,7 +726,7 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
     fs::write(dir.join("tiers.csv"), "customer,tier\n10,gold\n20,silver\n").expect("the fixture");
     engine
         .catalog()
-        .register(table_spec(
+        .register(engine.catalog().table_spec(
             dir,
             &TableDef {
                 name: "tiers".into(),
@@ -739,7 +736,7 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
-            &Connections::default(),
+            &SourceDefs::default(),
         ))
         .await
         .expect("a local file table");
@@ -991,7 +988,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     .expect("the fixture");
     engine
         .catalog()
-        .register(table_spec(
+        .register(engine.catalog().table_spec(
             dir,
             &TableDef {
                 name: "local_events".into(),
@@ -1001,7 +998,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
-            &Connections::default(),
+            &SourceDefs::default(),
         ))
         .await
         .expect("a local table with a JSON text column");
@@ -1967,7 +1964,7 @@ async fn ctas_name_semantics(engine: &Engine) {
 /// The failure is a cast the *values* refuse: the plan's schema is `Int32`, so the server table is
 /// created with an `INTEGER` column, and 'acme' only fails once rows are actually moving. A
 /// literal would have been folded away at planning, before anything was created.
-async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
+async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &SourceDef) {
     let Err(why) = engine
         .ws(WsId(1))
         .run(
@@ -2342,7 +2339,7 @@ async fn replay(engine: &Engine, root: &Path, defs: &ProjectDefs) -> Vec<RegOutc
     let mut out = Vec::new();
     engine
         .catalog()
-        .sync(CatalogSpec::of_project(root, defs), |o| out.push(o))
+        .sync(engine.catalog().spec(root, defs), |o| out.push(o))
         .await;
     out
 }

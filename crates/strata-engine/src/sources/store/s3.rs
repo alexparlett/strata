@@ -1,70 +1,300 @@
-//! **S3, and anything that speaks it.** The bucket's store, and the credential bridge that keeps
-//! it signed.
+//! **S3, and anything that speaks it.** The bucket's store, the four ways one is authorised, and
+//! the credential bridge that keeps it signed.
 //!
-//! The one arm with a credential chain of its own, which is the whole reason `aws-config` is a
-//! dependency: `object_store` alone reads the `AWS_*` variables and stops, so "log in the way you
-//! already do" — a profile, SSO, `credential_process`, an assumed role — is not something it can
-//! express. Nothing here holds a key: a credential value exists for the length of one signed
-//! request, inside [`SdkCredentials::get_credential`].
+//! The one registrant with a credential chain of its own, which is the whole reason `aws-config`
+//! is a dependency: `object_store` alone reads the `AWS_*` variables and stops, so "log in the way
+//! you already do" — a profile, SSO, `credential_process`, an assumed role — is not something it
+//! can express.
+//!
+//! **Authorisation is a declared setting, not four kinds.** Ambient, a named profile, static keys
+//! and anonymous are four ways of *building* one store over one bucket, and the difference lives
+//! in [`connect`](S3::connect)'s own body. Making them four registrants would give one bucket four
+//! identities, which the upsert clash check would then permit — and all four compose the same
+//! `s3://bucket` registration URL, so they would silently displace each other's store.
+//!
+//! Only the static-keys mode holds a secret, and it holds it the way every secret is held:
+//! [`Field::Secret`] keys whose values live in this machine's keystore and reach `connect` through
+//! a [`SecretRequest`], never through the def.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
+use async_trait::async_trait;
 use aws_config::profile::ProfileFileCredentialsProvider;
 use aws_config::provider_config::ProviderConfig;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_types::os_shim_internal::{Env, Fs};
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, AwsCredentialProvider};
-use object_store::{ClientConfigKey, CredentialProvider, Error, ObjectStore};
+use object_store::{CredentialProvider, Error};
 
-use strata_model::{ConnectionDef, S3Auth, S3Store};
+use strata_core::secret::Secret;
+use strata_model::SourceDef;
 
-use super::built;
+use super::{built, check_bucket, client_options, client_settings, probe as reachable};
+use crate::secrets::SecretProvider;
+use crate::sources::secret_slot;
+use crate::sources::source::{
+    DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced, When,
+};
 
-/// The bucket's store: the region, the endpoint, the credentials and the client options, in the
-/// one place S3's rules are written.
-///
-/// Every way it can fail is a way of describing the connection wrong, which is what lets
-/// [`connect`](super::connect) treat the registration itself as one line with one meaning.
-pub(super) async fn build(
-    conn: &ConnectionDef,
-    s3: &S3Store,
-    options: &[(ClientConfigKey, String)],
-) -> Result<Arc<dyn ObjectStore>, String> {
-    let region = s3.region.trim();
-    if region.is_empty() {
-        return Err("This S3 connection needs a region.".into());
+/// How this bucket is signed. libpq's `sslmode` shape: the source's own words, handed to its own
+/// `connect` body, and the credential rows below hang off whichever is chosen.
+pub const AUTH: &[&str] = &["ambient", "profile", "keys", "anonymous"];
+/// The keys whose rows only mean something under `keys`.
+const STATIC: &[&str] = &["keys"];
+/// The key a static-credentials secret is filed under, in the keystore and the def's expectation
+/// set.
+pub const SECRET_KEY: &str = "secret_access_key";
+pub const SESSION_TOKEN: &str = "session_token";
+/// What a static-credentials connection reads from the environment when this machine's keystore
+/// holds nothing — AWS's own conventions, stated here because they are this source's vocabulary.
+const SECRET_ENV: &[&str] = &["AWS_SECRET_ACCESS_KEY"];
+const TOKEN_ENV: &[&str] = &["AWS_SESSION_TOKEN"];
+
+const BUCKET: Option<&str> = Some("BUCKET");
+const AUTH_GROUP: Option<&str> = Some("AUTHENTICATION");
+
+/// What an S3 connection is described by, beyond the client options every store shares.
+const OWN: &[SourceSetting] = &[
+    SourceSetting {
+        key: "address",
+        label: "BUCKET",
+        field: Field::Text,
+        group: BUCKET,
+        required: true,
+        default: None,
+        when: None,
+        hint: Some("The bucket name alone. A path belongs to the table that reads it"),
+        placeholder: Some("my-bucket"),
+    },
+    SourceSetting {
+        key: "region",
+        label: "REGION",
+        field: Field::Text,
+        group: BUCKET,
+        required: true,
+        default: None,
+        when: None,
+        hint: Some("S3 can't detect a bucket's region, and guessing it reads the wrong bucket"),
+        placeholder: Some("us-east-1"),
+    },
+    SourceSetting {
+        key: "endpoint",
+        label: "ENDPOINT",
+        field: Field::Text,
+        group: BUCKET,
+        required: false,
+        default: None,
+        when: None,
+        hint: Some(
+            "An S3-compatible endpoint: MinIO, Cloudflare R2, Alibaba OSS, Tencent COS. Blank \
+             means AWS itself",
+        ),
+        placeholder: Some("https://s3.example.com"),
+    },
+    SourceSetting {
+        key: "auth",
+        label: "AUTHENTICATION",
+        field: Field::Choice(AUTH),
+        group: AUTH_GROUP,
+        required: false,
+        default: Some("ambient"),
+        when: None,
+        hint: Some(
+            "'ambient' resolves whatever this machine already has: environment, ~/.aws, SSO, \
+             instance roles",
+        ),
+        placeholder: None,
+    },
+    SourceSetting {
+        key: "profile",
+        label: "AWS PROFILE",
+        field: Field::Text,
+        group: AUTH_GROUP,
+        required: true,
+        default: None,
+        when: Some(When {
+            key: "auth",
+            values: &["profile"],
+        }),
+        hint: Some("A profile named in this machine's own ~/.aws configuration"),
+        placeholder: None,
+    },
+    SourceSetting {
+        key: "access_key_id",
+        label: "ACCESS KEY ID",
+        field: Field::Text,
+        group: AUTH_GROUP,
+        required: true,
+        default: None,
+        when: Some(When {
+            key: "auth",
+            values: STATIC,
+        }),
+        hint: None,
+        placeholder: Some("AKIA…"),
+    },
+    SourceSetting {
+        key: SECRET_KEY,
+        label: "SECRET ACCESS KEY",
+        field: Field::Secret,
+        group: AUTH_GROUP,
+        required: true,
+        default: None,
+        when: Some(When {
+            key: "auth",
+            values: STATIC,
+        }),
+        hint: None,
+        placeholder: None,
+    },
+    SourceSetting {
+        key: SESSION_TOKEN,
+        label: "SESSION TOKEN",
+        field: Field::Secret,
+        group: AUTH_GROUP,
+        required: false,
+        default: None,
+        when: Some(When {
+            key: "auth",
+            values: STATIC,
+        }),
+        hint: Some("For temporary credentials. Blank for long-lived keys"),
+        placeholder: None,
+    },
+];
+
+/// Its own settings, then every client option — assembled once, because `CLIENT_KEYS` is a runtime
+/// table and a declaration is a `&'static [SourceSetting]`.
+static SETTINGS: LazyLock<Vec<SourceSetting>> =
+    LazyLock::new(|| [OWN, &client_settings()].concat());
+
+/// S3 and every store that speaks it.
+#[derive(Debug)]
+pub struct S3;
+
+impl SourceKind for S3 {
+    const NAME: &'static str = "s3";
+    const LABEL: &'static str = "S3";
+    const BADGE: &'static str = "S3";
+    const MODE: SourceMode = SourceMode::Store;
+    /// Two of these on one address would register a single URL between them, so tables under
+    /// either would resolve through whichever went in last.
+    const UNIQUE: &'static [&'static str] = &["address"];
+    const SCHEME: Option<&'static str> = Some("s3");
+}
+
+#[async_trait]
+impl DataSource for S3 {
+    fn settings(&self) -> &'static [SourceSetting] {
+        &SETTINGS
     }
-    let mut builder = AmazonS3Builder::new()
-        .with_bucket_name(conn.address.trim())
-        .with_region(region);
-    let endpoint = s3.endpoint.trim();
-    if !endpoint.is_empty() {
-        if endpoint.starts_with("http://") && !s3.allow_http {
-            return Err(format!(
-                "The endpoint '{endpoint}' is plain HTTP. Turn on 'Allow plain HTTP' for this \
-                 connection, or give it an https endpoint."
-            ));
+
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html>,
+    /// general-purpose buckets. The S3-compatible stores that ride this kind (R2, MinIO, OSS, COS)
+    /// are all at least this strict, so applying AWS's rules to them refuses nothing they would
+    /// have accepted.
+    ///
+    /// **Not exhaustive, on purpose:** S3 reserves further names no local check can settle, and a
+    /// bucket that exists is still one you may not be able to read. This catches what is
+    /// *statically* wrong, so the user is told at the field instead of by a signing error.
+    fn check_address(&self, address: &str) -> Result<(), String> {
+        check_bucket(address)
+    }
+
+    /// Build the bucket's store, resolving credentials by whichever mode the def chose.
+    ///
+    /// The chain is resolved **once** and the answer thrown away; the provider on the store
+    /// resolves per request, so rotating credentials keep working.
+    async fn connect(
+        &self,
+        def: &SourceDef,
+        secrets: Arc<dyn SecretProvider>,
+    ) -> Result<Sourced, String> {
+        let value = |key: &str| def.config.get(key).map(|v| v.trim()).unwrap_or_default();
+        let region = value("region");
+        if region.is_empty() {
+            return Err("This S3 connection needs a region.".into());
         }
-        builder = builder
-            .with_endpoint(endpoint)
-            .with_allow_http(s3.allow_http);
-    }
-    builder = match &s3.auth {
-        S3Auth::Anonymous => builder.with_skip_signature(true),
-        S3Auth::Ambient => builder.with_credentials(ambient_credentials(region).await?),
-        S3Auth::Profile { name } => {
-            let profile = name.trim();
-            if profile.is_empty() {
-                return Err("This S3 connection needs a profile name.".into());
+        let mut builder = AmazonS3Builder::new()
+            .with_bucket_name(def.setting("address"))
+            .with_region(region);
+
+        let endpoint = value("endpoint");
+        if !endpoint.is_empty() {
+            // Plain HTTP is derived from the endpoint the user typed rather than offered beside
+            // it: `http://` is already the decision, and a switch for it is a second answer to a
+            // question that has one.
+            let allow_http = endpoint.starts_with("http://");
+            builder = builder.with_endpoint(endpoint).with_allow_http(allow_http);
+        }
+
+        builder = match value("auth") {
+            "anonymous" => builder.with_skip_signature(true),
+            "profile" => {
+                let profile = value("profile");
+                if profile.is_empty() {
+                    return Err("This S3 connection needs a profile name.".into());
+                }
+                builder.with_credentials(profile_credentials(region, profile).await?)
             }
-            builder.with_credentials(profile_credentials(region, profile).await?)
+            "keys" => {
+                let id = value("access_key_id");
+                if id.is_empty() {
+                    return Err("This S3 connection needs an access key id.".into());
+                }
+                let secret = read(&secrets, def, SECRET_KEY, SECRET_ENV)
+                    .await?
+                    .ok_or_else(|| {
+                        let request = secret_slot(def, SECRET_KEY, SECRET_ENV);
+                        format!(
+                            "This S3 connection has no secret access key on this machine. {}",
+                            request.fixes()
+                        )
+                    })?;
+                let token = read(&secrets, def, SESSION_TOKEN, TOKEN_ENV).await?;
+                builder = builder
+                    .with_access_key_id(id)
+                    .with_secret_access_key(secret.expose());
+                match token {
+                    Some(token) => builder.with_token(token.expose()),
+                    None => builder,
+                }
+            }
+            _ => builder.with_credentials(ambient_credentials(region).await?),
+        };
+
+        for (key, value) in client_options(def) {
+            builder = builder.with_config(AmazonS3ConfigKey::Client(key), value);
         }
-    };
-    for (key, value) in options {
-        builder = builder.with_config(AmazonS3ConfigKey::Client(*key), value);
+        let store = built(def, builder.build())?;
+        reachable(&store, || {
+            format!(
+                "The bucket '{}' does not answer in region '{region}'. Check the region, or that \
+                 the bucket exists.",
+                def.setting("address")
+            )
+        })
+        .await?;
+        Ok(Sourced::Store { store })
     }
-    built(conn, builder.build())
+}
+
+/// Read one of this connection's secrets **off the render-free worker**, the way every keystore
+/// read is: the store is a blocking platform call, and `connect` is on the engine's runtime.
+///
+/// `Ok(None)` for a key nothing is stored for, which is the ordinary case for an optional one.
+async fn read(
+    secrets: &Arc<dyn SecretProvider>,
+    def: &SourceDef,
+    key: &str,
+    env: &'static [&'static str],
+) -> Result<Option<Secret>, String> {
+    let request = secret_slot(def, key, env);
+    let secrets = Arc::clone(secrets);
+    tokio::task::spawn_blocking(move || secrets.secret(&request))
+        .await
+        .map_err(|e| format!("Reading a secret failed: {e}"))?
 }
 
 /// Every profile named in this machine's own AWS configuration, sorted — what the connection
@@ -212,17 +442,22 @@ mod tests {
     use std::fs;
     use std::process;
 
-    use strata_model::Provider;
-
     use super::*;
 
-    /// One S3 connection over `name`, for the arm to build a store from.
-    fn bucket(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: name.into(),
-            name: String::new(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: Default::default(),
+    /// One S3 connection over `name`, signed by the named profile `readonly`.
+    fn bucket(name: &str) -> SourceDef {
+        SourceDef {
+            kind: S3::NAME.into(),
+            name: name.into(),
+            config: [
+                ("region", "eu-west-2"),
+                ("auth", "profile"),
+                ("profile", "readonly"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+            ..Default::default()
         }
     }
 
@@ -286,16 +521,9 @@ mod tests {
             .expect_err("refused");
         assert!(missing.contains("no-such-profile"), "{missing}");
 
-        build(
+        S3.connect(
             &bucket("signed-lake"),
-            &S3Store {
-                region: "eu-west-2".into(),
-                auth: S3Auth::Profile {
-                    name: "readonly".into(),
-                },
-                ..Default::default()
-            },
-            &[],
+            Arc::new(crate::secrets::MemSecrets::new()),
         )
         .await
         .expect("a store the profile signs for");

@@ -49,7 +49,7 @@
 //! **An edit that moves the name moves what every surface addresses this connection by**, and
 //! what the old name registered survives it: `engine::sources::store::connect` only ever sees the
 //! def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the same
-//! `Sources::disconnect` call Forget makes — and for a source that move takes the keystore
+//! `Connections::disconnect` call Forget makes — and for a source that move takes the keystore
 //! entries with it, since each slot is derived from the name.
 //!
 //! **Closing discards the draft, deliberately without asking** — nothing is written until Save,
@@ -429,9 +429,7 @@ fn probe_secrets(ctx: ConnectionCtx) {
             .collect(),
     );
     for key in asking {
-        let Some(slot) = secret_slot(&def, key, &[]) else {
-            continue;
-        };
+        let slot = secret_slot(&def, key, &[]);
         spawn(async move {
             let read = offload(move || slot.key().get()).await;
             let answer = match read {

@@ -323,7 +323,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use crate::register::{CatalogSpec, RegOutcome};
+    use crate::register::RegOutcome;
     use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunRows, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
@@ -742,7 +742,7 @@ mod tests {
         let cold = Engine::builder().build();
         let mut out = Vec::new();
         cold.catalog()
-            .sync(CatalogSpec::of_project(&root, &defs), |o| out.push(o))
+            .sync(cold.catalog().spec(&root, &defs), |o| out.push(o))
             .await;
 
         let failed: Vec<&RegOutcome> = out

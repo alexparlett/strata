@@ -3,7 +3,7 @@
 //!
 //! ## Why this is a query at all
 //!
-//! Everything else the data-sources tree draws under a database is free: `Sources::listing` reads
+//! Everything else the data-sources tree draws under a database is free: `Connections::listing` reads
 //! the connect-time enumeration held beside the pool, so schemas and relation names cost nothing.
 //! A relation's **columns** are the exception — DB-02 builds a relation's `TableProvider` lazily
 //! precisely so that connecting to a database with a thousand tables is one round trip rather than
@@ -20,7 +20,7 @@
 //! reaching into a pane it does not belong to.
 //!
 //! That is two entries over one relation, and it costs one extra *call* and no extra work:
-//! `Sources::describe_remote` answers from the provider the connection caches per relation, so
+//! `Connections::describe_remote` answers from the provider the connection caches per relation, so
 //! every read after the first is local.
 //!
 //! ## Why the catalog generation is in the key

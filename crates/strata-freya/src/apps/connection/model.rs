@@ -16,11 +16,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::{Field, Slot, SourceInfo, SourceSetting, When};
-use strata_model::{check_catalog, mint_name, ConnectionDef, Provider, SourceDef};
+use strata_engine::{Field, SourceInfo, SourceSetting, When};
+use strata_model::{check_catalog, SourceDef};
 
 /// What this window is editing: a new connection, or an existing one by
-/// [`named`](ConnectionDef::named).
+/// [`named`](SourceDef::named).
 ///
 /// The name is the handle — the one thing every surface addresses a connection by — and it is
 /// also what makes this window single-instance per target: two windows on one def would both
@@ -174,7 +174,7 @@ pub fn noun(key: &SourceSetting) -> String {
 /// **One type, because a connection is one thing.** The address is a declared key like the rest
 /// ([`Slot::Address`]); it simply lands on a typed field rather than in the open map, which is
 /// what [`value`](Self::value) and [`set`](Self::set) route. This is the shape the *def* takes
-/// when `ConnectionDef` and `SourceDef` collapse (EA-25) — the draft gets there first because it
+/// when `SourceDef` and `SourceDef` collapse (EA-25) — the draft gets there first because it
 /// has no serde to migrate.
 ///
 /// **Nothing here is named after a source.** The keys arrive from the registry
@@ -190,15 +190,13 @@ pub struct ConnectionDraft {
     /// [`kind`](Self::kind) and never apart from it, so the rows drawn and the values written
     /// cannot describe different sources.
     pub settings: &'static [SourceSetting],
-    /// The handle: the connection's display name and its SQL catalog identifier, one field.
-    /// Blank is not nameless — [`named`](Self::named) mints one from the address.
+    /// **The identity**: what the user calls this source, and the catalog its relations are
+    /// addressed under. Never derived — a blank one is refused, not filled in.
     ///
     /// **The editor's own row, not a declared one**: the store keys by it, the catalog is named
     /// by it and `check_catalog` judges it, and a source has no opinion about any of that. A kind
     /// that could omit it could produce an unnameable connection.
     pub name: String,
-    /// Where the connection points, in its kind's own terms — the [`Slot::Address`] key's value.
-    pub address: String,
     /// A value per declared [`Slot::Config`] key, as typed. Trimmed into the def, never on the
     /// way in. **No [`Field::Secret`] value is ever here** — those go to this machine's keystore.
     pub config: BTreeMap<String, String>,
@@ -236,31 +234,19 @@ impl ConnectionDraft {
     /// def naming a kind nothing answers to opens with no rows, which is the honest form for a
     /// connection this build cannot describe.
     ///
-    /// # Panics
-    ///
-    /// If `def` is not a source. Unreachable by gesture — the editor is only offered for a
-    /// registrant's def — and a silent empty draft here would let Save rewrite an object store's
-    /// connection as something else.
-    pub fn of(def: &ConnectionDef, registrants: &[SourceInfo]) -> Self {
-        let Provider::Source(source) = &def.provider else {
-            panic!(
-                "edit '{}': its provider is not a registered source, so there is no form for it",
-                def.named()
-            );
-        };
+    pub fn of(def: &SourceDef, registrants: &[SourceInfo]) -> Self {
         let settings = registrants
             .iter()
-            .find(|info| info.kind == source.kind.trim())
+            .find(|info| info.kind == def.kind.trim())
             .map_or(&[][..], |info| info.settings);
         Self {
-            kind: source.kind.trim().to_string(),
+            kind: def.kind.trim().to_string(),
             settings,
             name: def.named(),
-            address: def.address.clone(),
-            config: source.config.clone(),
-            secrets: source.secrets.clone(),
-            schemas: source.schemas.clone(),
-            read_only: source.read_only,
+            config: def.config.clone(),
+            secrets: def.secrets.clone(),
+            schemas: def.schemas.clone(),
+            read_only: def.read_only,
         }
     }
 
@@ -275,9 +261,6 @@ impl ConnectionDraft {
     /// Routed by the key's [`Slot`], which is the whole of what a slot means here.
     pub fn value(&self, key: &str) -> String {
         let declared = self.declared(key);
-        if declared.is_some_and(|declared| declared.slot == Slot::Address) {
-            return self.address.clone();
-        }
         match self.config.get(key) {
             Some(typed) => typed.clone(),
             None => declared
@@ -287,19 +270,10 @@ impl ConnectionDraft {
         }
     }
 
-    /// Type into `key`'s box.
-    ///
-    /// **An address loses a scheme typed with it**, because the kind states the scheme and the
-    /// identity puts it back. Stripped on the way in rather than on the way out, the rule a
-    /// length-capped field follows: a box showing `postgres://db:5432/analytics` over a def
-    /// storing `db:5432/analytics` shows one thing and means another.
+    /// Type into `key`'s box. Every setting lands the same way — there is no key this form
+    /// treats differently, which is what "a source is its properties" means here.
     pub fn set(&mut self, key: &str, value: String) {
-        match self.declared(key).map(|declared| declared.slot) {
-            Some(Slot::Address) => self.address = strip_scheme(&value).to_string(),
-            _ => {
-                self.config.insert(key.to_string(), value);
-            }
-        }
+        self.config.insert(key.to_string(), value);
     }
 
     /// Whether `declared` is offered at all — its [`When`] asked of the key that decides.
@@ -318,10 +292,10 @@ impl ConnectionDraft {
     /// The def this draft describes — **projected through the declaration**, so a value left
     /// behind by a trip through the picker is held for the user and written for nobody, and every
     /// value is trimmed here rather than on the way in.
-    pub fn def(&self) -> ConnectionDef {
+    pub fn def(&self) -> SourceDef {
         let mut config = BTreeMap::new();
         let mut secrets = BTreeSet::new();
-        for declared in self.settings.iter().filter(|d| d.slot == Slot::Config) {
+        for declared in self.settings {
             match declared.field {
                 Field::Secret => {
                     if self.secrets.contains(declared.key) {
@@ -337,36 +311,22 @@ impl ConnectionDraft {
                 }
             }
         }
-        ConnectionDef {
-            address: self.address.trim().to_string(),
+        SourceDef {
+            kind: self.kind.trim().to_string(),
             name: self.named(),
-            client_config: BTreeMap::new(),
-            provider: Provider::Source(SourceDef {
-                kind: self.kind.trim().to_string(),
-                config,
-                secrets,
-                schemas: self.schemas.clone(),
-                read_only: self.read_only,
-            }),
+            config,
+            secrets,
+            schemas: self.schemas.clone(),
+            read_only: self.read_only,
         }
     }
 
-    /// What this connection is called — **the handle**, and the SQL catalog identifier with it.
+    /// What this source is called — **the identity**, and the SQL catalog identifier with it.
     ///
-    /// The name box, or [`mint_name`] over the address for anything left blank.
-    /// [`ConnectionDef::named`]'s own rule, so the draft and the def cannot disagree about what a
-    /// blank name means.
+    /// Trimmed and nothing more: a blank name is refused by [`blocker`](Self::blocker), never
+    /// filled in from an address behind the user.
     pub fn named(&self) -> String {
-        match self.name.trim() {
-            "" => self.minted(),
-            named => named.to_string(),
-        }
-    }
-
-    /// What this connection is called when nothing has been typed in the name box — the address's
-    /// own mint, which is what the box shows as its placeholder.
-    pub fn minted(&self) -> String {
-        mint_name(self.address.trim())
+        self.name.trim().to_string()
     }
 
     /// Why this draft cannot be saved yet, or `None` when it can.
@@ -395,24 +355,6 @@ impl ConnectionDraft {
     }
 }
 
-/// `postgres://db:5432/analytics` → `db:5432/analytics`. Anything that is not a scheme is left
-/// alone, so a host with a port (`example.com:8080`) survives — `://` is what makes it a scheme,
-/// not the colon.
-fn strip_scheme(typed: &str) -> &str {
-    let Some((scheme, rest)) = typed.split_once("://") else {
-        return typed;
-    };
-    match !scheme.is_empty()
-        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    {
-        true => rest,
-        false => typed,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use strata_engine::SourceMode;
@@ -427,7 +369,6 @@ mod tests {
             key: "address",
             label: "ADDRESS",
             field: Field::Text,
-            slot: Slot::Address,
             group: Some("CONNECTION"),
             required: true,
             default: None,
@@ -439,7 +380,6 @@ mod tests {
             key: "user",
             label: "USER",
             field: Field::Text,
-            slot: Slot::Config,
             group: Some("CONNECTION"),
             required: true,
             default: None,
@@ -451,7 +391,6 @@ mod tests {
             key: "password",
             label: "PASSWORD",
             field: Field::Secret,
-            slot: Slot::Config,
             group: Some("CONNECTION"),
             required: false,
             default: None,
@@ -463,7 +402,6 @@ mod tests {
             key: "mode",
             label: "MODE",
             field: Field::Choice(&["off", "on"]),
-            slot: Slot::Config,
             group: Some("SECURITY"),
             required: false,
             default: Some("off"),
@@ -475,7 +413,6 @@ mod tests {
             key: "certificate",
             label: "ROOT CERTIFICATE",
             field: Field::Path,
-            slot: Slot::Config,
             group: Some("SECURITY"),
             required: true,
             default: None,
@@ -488,12 +425,11 @@ mod tests {
         },
     ];
 
-    /// A second kind, taking nothing but an address.
+    /// A second kind, taking one setting the first does not.
     const OTHER_SETTINGS: &[SourceSetting] = &[SourceSetting {
-        key: "address",
-        label: "ADDRESS",
+        key: "prefix",
+        label: "PREFIX",
         field: Field::Text,
-        slot: Slot::Address,
         group: None,
         required: true,
         default: None,
@@ -510,6 +446,8 @@ mod tests {
             mode: SourceMode::Catalog,
             settings,
             writable: true,
+            unique: &[],
+            scheme: None,
         }
     }
 
@@ -518,10 +456,12 @@ mod tests {
             kind: "test".into(),
             settings: TEST_SETTINGS,
             name: "warehouse".into(),
-            address: "db.internal:5432/analytics".into(),
-            config: [("user".to_string(), "reader".to_string())]
-                .into_iter()
-                .collect(),
+            config: [
+                ("address".to_string(), "db.internal:5432/analytics".into()),
+                ("user".to_string(), "reader".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         }
     }
@@ -529,53 +469,45 @@ mod tests {
     /// The round trip an edit is: open on a def, touch nothing, Save writes back what was there.
     #[test]
     fn a_def_survives_the_draft_untouched() {
-        let def = ConnectionDef {
-            address: "db.internal:5432/analytics".into(),
+        let def = SourceDef {
             name: "warehouse".into(),
-            provider: Provider::Source(SourceDef {
-                kind: "test".into(),
-                config: [
-                    ("user", "reader"),
-                    ("mode", "on"),
-                    ("certificate", "/c.pem"),
-                ]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-                secrets: BTreeSet::from(["password".to_string()]),
-                schemas: vec!["public".into(), "analytics".into()],
-                read_only: false,
-            }),
-            client_config: Default::default(),
+            kind: "test".into(),
+            config: [
+                ("user", "reader"),
+                ("mode", "on"),
+                ("certificate", "/c.pem"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+            secrets: BTreeSet::from(["password".to_string()]),
+            schemas: vec!["public".into(), "analytics".into()],
+            read_only: false,
         };
         assert_eq!(ConnectionDraft::of(&def, &[info(TEST_SETTINGS)]).def(), def);
     }
 
-    /// **The address is a declared key whose value lands on a typed field.** That is the whole of
-    /// what a [`Slot`] means: the row is declared like any other — label, hint, placeholder,
-    /// required — while `identity()` and [`mint_name`] still read an address every connection is
-    /// guaranteed to have, which a key in the open map could not promise.
+    /// **The address is an ordinary setting.** No routing, no typed field, no normalising: it is
+    /// declared like every other key and lands in `config` beside them, which is what "a source is
+    /// its kind, its name and its properties" means.
+    ///
+    /// What a value may *be* — a scheme pasted in front of it, say — is the kind's own rule,
+    /// refused by its `check_address` and never trimmed off behind the user here.
     #[test]
-    fn the_address_is_a_declared_key_over_a_typed_field() {
+    fn the_address_is_an_ordinary_setting() {
         let mut draft = source_draft();
         assert_eq!(draft.value("address"), "db.internal:5432/analytics");
 
         draft.set("address", "postgres://other:5433/sales".into());
         assert_eq!(
-            draft.address, "other:5433/sales",
-            "written through the router, and a pasted scheme goes"
+            draft.value("address"),
+            "postgres://other:5433/sales",
+            "kept verbatim; the kind is what refuses it"
         );
-        assert_eq!(draft.value("address"), "other:5433/sales");
-
-        let def = draft.def();
-        assert_eq!(def.address, "other:5433/sales");
-        let Provider::Source(source) = &def.provider else {
-            panic!("a source def");
-        };
-        assert!(
-            !source.config.contains_key("address"),
-            "and it never reaches the open map: {:?}",
-            source.config
+        assert_eq!(
+            draft.def().config.get("address").map(String::as_str),
+            Some("postgres://other:5433/sales"),
+            "and it lands in the settings map like any other key"
         );
     }
 
@@ -597,14 +529,13 @@ mod tests {
     /// draw.
     #[test]
     fn a_def_whose_kind_is_not_registered_opens_with_no_declaration() {
-        let def = ConnectionDef {
-            address: "somewhere".into(),
+        let def = SourceDef {
+            config: [("address".to_string(), "somewhere".into())]
+                .into_iter()
+                .collect(),
             name: "mystery".into(),
-            provider: Provider::Source(SourceDef {
-                kind: "mongo".into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            kind: "mongo".into(),
+            ..Default::default()
         };
         let draft = ConnectionDraft::of(&def, &[info(TEST_SETTINGS)]);
         assert_eq!(draft.kind, "mongo");
@@ -620,9 +551,7 @@ mod tests {
         let mut draft = source_draft();
         draft.set("certificate", "/certs/rds.pem".into());
 
-        let Provider::Source(def) = draft.def().provider else {
-            panic!("a source def");
-        };
+        let def = draft.def();
         assert_eq!(def.config.get("user").map(String::as_str), Some("reader"));
         assert_eq!(
             def.config.get("mode").map(String::as_str),
@@ -632,15 +561,11 @@ mod tests {
 
         draft.adopt(&info(OTHER_SETTINGS));
         let moved = draft.def();
-        let Provider::Source(other) = &moved.provider else {
-            panic!("a source def");
-        };
         assert!(
-            other.config.is_empty(),
+            moved.config.is_empty(),
             "this kind takes none of them: {:?}",
-            other.config
+            moved.config
         );
-        assert_eq!(moved.address, "db.internal:5432/analytics");
 
         draft.adopt(&info(TEST_SETTINGS));
         assert_eq!(
@@ -713,9 +638,7 @@ mod tests {
             "/certs/rds.pem",
             "hidden is not forgotten"
         );
-        let Provider::Source(def) = draft.def().provider else {
-            panic!("a source def");
-        };
+        let def = draft.def();
         assert_eq!(
             def.config.get("certificate").map(String::as_str),
             Some("/certs/rds.pem"),
@@ -724,17 +647,18 @@ mod tests {
     }
 
     /// **A blank name box is not a nameless connection**: the address mints one, which is what
-    /// the box shows as its placeholder and what every surface then addresses it by.
+    /// **A blank name is refused, not filled in.** A source is what the user called it, so there
+    /// is no address to mint one from and no silent name to be surprised by later.
     #[test]
-    fn a_blank_name_is_minted_from_the_address() {
+    fn a_blank_name_is_refused() {
         let mut draft = source_draft();
         draft.name = String::new();
-        assert_eq!(draft.minted(), "analytics");
-        assert_eq!(draft.named(), "analytics");
-        assert_eq!(draft.blocker(), None);
+        assert_eq!(draft.named(), "");
+        assert!(draft.blocker().unwrap().contains("no catalog name"));
 
         draft.name = " depot ".into();
-        assert_eq!(draft.named(), "depot", "and a typed one wins, trimmed");
+        assert_eq!(draft.named(), "depot", "and a typed one is trimmed");
+        assert_eq!(draft.blocker(), None);
     }
 
     /// **The name is checked on the terms a catalog identifier is**, so a name this form accepts
@@ -759,18 +683,16 @@ mod tests {
     #[test]
     fn a_source_defs_text_is_trimmed() {
         let mut draft = source_draft();
-        draft.address = "  db.internal:5432/analytics  ".into();
+        draft.set("address", "  db.internal:5432/analytics  ".into());
         draft.name = " warehouse ".into();
         draft.set("user", " reader ".into());
         draft.secrets.insert("password".into());
         draft.read_only = false;
 
         let def = draft.def();
-        assert_eq!(def.address, "db.internal:5432/analytics");
+        assert_eq!(def.setting("address"), "db.internal:5432/analytics");
         assert_eq!(def.named(), "warehouse");
-        let Provider::Source(source) = &def.provider else {
-            panic!("a source def");
-        };
+        let source = def;
         assert_eq!(
             source.config.get("user").map(String::as_str),
             Some("reader")

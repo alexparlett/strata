@@ -23,7 +23,10 @@
 
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
-use strata_model::{ConnectionDef, ProviderId};
+use strata_engine::{SourceInfo, SourceMode};
+
+use crate::apps::project::contexts::EngineCtx;
+use strata_model::SourceDef;
 
 use crate::apps::configure::model::{connections_for, Where};
 use crate::apps::configure::ConfigureCtx;
@@ -128,8 +131,8 @@ impl Component for ObjectStore {
 ///
 /// The defs themselves rather than a projection of them: the two questions asked here (which
 /// connections does this provider serve, and which provider serves this URL) are both answered
-/// from `ConnectionDef`, and a second shape would be a second thing to keep true.
-fn use_connections() -> Vec<ConnectionDef> {
+/// from `SourceDef`, and a second shape would be a second thing to keep true.
+fn use_connections() -> Vec<SourceDef> {
     use_radio::<ProjectState, ProjChan>(ProjChan::Connections)
         .read()
         .connections
@@ -145,7 +148,7 @@ fn use_connections() -> Vec<ConnectionDef> {
 /// its client-option map) on every render of a section that re-renders per keystroke, to serve a
 /// handler that runs on a click. It would also wake these two on a channel neither of them draws
 /// anything from.
-fn connections_at_press(station: RadioStation<ProjectState, ProjChan>) -> Vec<ConnectionDef> {
+fn connections_at_press(station: RadioStation<ProjectState, ProjChan>) -> Vec<SourceDef> {
     station
         .peek()
         .connections
@@ -171,16 +174,17 @@ impl Component for ProviderFilter {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<ConfigureCtx>();
         let station = use_radio_station::<ProjectState, ProjChan>();
-        let current = ctx.draft.read().provider;
+        let engine = use_consume::<EngineCtx>();
+        let current = ctx.draft.read().kind.clone();
 
         let mut pill = SegmentedToggle::new().form();
-        for id in ProviderId::OBJECT_STORES {
+        for info in stores(&engine) {
             pill = pill.child(
-                ToggleSegment::text(id.label())
-                    .selected(id == current)
+                ToggleSegment::text(info.label)
+                    .selected(info.kind == current)
                     .on_press(move |_| {
                         let connections = connections_at_press(station);
-                        ctx.edit(move |draft| draft.set_provider(id, &connections));
+                        ctx.edit(move |draft| draft.set_provider(info.kind, &connections));
                     }),
             );
         }
@@ -199,11 +203,19 @@ impl Component for ConnectionPicker {
         let ctx = use_consume::<ConfigureCtx>();
         let mut request = use_consume::<ConnectionRequest>();
         let connections = use_connections();
-        let (provider, chosen) = {
+        let engine = use_consume::<EngineCtx>();
+        let (kind, chosen) = {
             let draft = ctx.draft.read();
-            (draft.provider, draft.connection.clone())
+            (draft.kind.clone(), draft.connection.clone())
         };
-        let offered = connections_for(&connections, provider);
+        // The kind's own label, not its registry key: the sentence is read by a person, and `gcs`
+        // is what the def is filed under rather than what anyone calls it.
+        let label = stores(&engine)
+            .into_iter()
+            .find(|info| info.kind == kind)
+            .map(|info| info.label.to_string())
+            .unwrap_or_default();
+        let offered = connections_for(&connections, &kind);
 
         let mut options: Vec<Element> = offered
             .iter()
@@ -259,14 +271,29 @@ impl Component for ConnectionPicker {
                     .width(Size::fill())
                     .padding(Gaps::new(EMPTY_GAP, 0., 0., 0.))
                     .child(
-                        Caption::new(format!(
-                            "No {} connections yet. Add one to continue.",
-                            provider.label()
-                        ))
+                        Caption::new(match label.is_empty() {
+                            true => "No connections yet. Add one to continue.".to_string(),
+                            false => format!("No {label} connections yet. Add one to continue."),
+                        })
                         .color(form.hint_color)
                         .width(Size::fill())
                         .wrap(),
                     )
             }))
     }
+}
+
+/// The kinds a table's files can be read through — every **Store**-mode registrant, which is the
+/// narrower question the old `ProviderId::OBJECT_STORES` constant answered.
+///
+/// Asked of the registry rather than listed here, so a store an embedder registers is offered on
+/// the same terms as a shipped one: a table reads *files*, and a source that answers with a
+/// catalog has none to read.
+fn stores(engine: &EngineCtx) -> Vec<SourceInfo> {
+    engine
+        .sources()
+        .registrants()
+        .into_iter()
+        .filter(|info| info.mode == SourceMode::Store)
+        .collect()
 }

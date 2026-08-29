@@ -16,8 +16,8 @@ use freya::prelude::{
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
-use strata_engine::register::{table_spec, CatalogSpec, RegOutcome};
-use strata_engine::{Connections, TableSpec};
+use strata_engine::register::{CatalogSpec, RegOutcome};
+use strata_engine::{SourceDefs, TableSpec};
 use strata_model::{SessionSnapshot, ViewDef, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -165,7 +165,7 @@ pub fn use_init_project(
         let Some(guard) = claim_scan(catalog, &engine) else {
             return;
         };
-        let work = plan_scan(&station.peek(), &request.scope);
+        let work = plan_scan(&engine, &station.peek(), &request.scope);
         if request.seq > 0 {
             reset_rows(station, &work);
         }
@@ -211,8 +211,8 @@ enum ScanWork {
 ///
 /// Takes the state rather than the station, because it only reads it — and because that is what
 /// lets the name reconciliation below be pinned by a test that needs no window.
-fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
-    let known = Connections::of(
+fn plan_scan(engine: &EngineCtx, p: &ProjectState, scope: &ScanScope) -> ScanWork {
+    let known = SourceDefs::of(
         &p.connections
             .iter()
             .map(|c| c.def.clone())
@@ -224,7 +224,7 @@ fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
             tables: p
                 .tables
                 .iter()
-                .map(|t| table_spec(&p.root, &t.def, &known))
+                .map(|t| engine.catalog().table_spec(&p.root, &t.def, &known))
                 .collect(),
             views: p
                 .refresh_order(p.views.iter().map(|v| v.def.name.clone()).collect())
@@ -239,7 +239,7 @@ fn plan_scan(p: &ProjectState, scope: &ScanScope) -> ScanWork {
             .find(|t| ProjectState::same_name(&t.def.name, name))
         {
             Some(row) => ScanWork::Table {
-                spec: table_spec(&p.root, &row.def, &known),
+                spec: engine.catalog().table_spec(&p.root, &row.def, &known),
                 views: p
                     .views_to_refresh(&row.def.name)
                     .into_iter()
@@ -922,7 +922,9 @@ mod tests {
             },
         );
 
-        let ScanWork::Table { spec, .. } = plan_scan(&p, &ScanScope::Table("mytable".into()))
+        let engine = EngineCtx::default();
+        let ScanWork::Table { spec, .. } =
+            plan_scan(&engine, &p, &ScanScope::Table("mytable".into()))
         else {
             panic!("the folded request must find the row");
         };
@@ -932,7 +934,7 @@ mod tests {
         );
         assert!(
             matches!(
-                plan_scan(&p, &ScanScope::Table("gone".into())),
+                plan_scan(&engine, &p, &ScanScope::Table("gone".into())),
                 ScanWork::Nothing
             ),
             "a name with no row at all is nothing to do"
@@ -963,7 +965,7 @@ mod tests {
             ));
 
         let scan = |station: RadioStation<ProjectState, ProjChan>| {
-            let work = plan_scan(&station.peek(), &ScanScope::All);
+            let work = plan_scan(&EngineCtx::default(), &station.peek(), &ScanScope::All);
             block_on(register_defs(engine.clone(), station, log, work));
         };
         let resolves = |name: &str, tag: u128| {
