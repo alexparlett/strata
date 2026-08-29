@@ -10,11 +10,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use strata_arrow::config::DisplayStamp;
 use strata_engine::export::{
     Codec, Compression, Csv, ExportReport, ExportSpec, Format, Json, Parquet, Partition, Scope,
     Statistics, WriterVersion,
 };
 use strata_engine::{Engine, RunOutcome, RunRows, RunTag, WsId};
+use strata_model::PageQuery;
 
 /// Five rows, three columns, unsorted on `column1` so a sorted export is observable.
 const SQL: &str = "SELECT * FROM (VALUES (3, 'c', true), (1, 'a', false), (5, 'e', true), (2, 'b', false), (4, 'd', true)) AS t";
@@ -483,7 +485,14 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
     assert_ne!(second.snapshot.unwrap(), snap, "a genuinely new snapshot");
 
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("the pinned snapshot survived the re-run");
     let rows = eng
@@ -496,7 +505,14 @@ async fn a_pin_keeps_a_snapshot_exportable_across_a_rerun() {
 
     drop(pin);
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("retired once the last hold released");
 
@@ -519,7 +535,14 @@ async fn an_unpinned_snapshot_still_retires_at_the_rerun() {
         .expect("run 2");
 
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("no pin, so §4's immediate retire still applies");
 }
@@ -545,13 +568,27 @@ async fn the_last_hold_is_the_one_that_retires() {
 
     drop(one);
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("one hold left, still alive");
 
     drop(two);
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("last hold released, deferred retire lands");
 }
@@ -570,13 +607,27 @@ async fn a_pin_survives_the_owning_tab_closing() {
     let pin = eng.snapshot(snap).pin();
     eng.ws(WsId(1)).cleanup();
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("still readable while held");
 
     drop(pin);
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("retired with the last hold");
 }
@@ -595,7 +646,14 @@ async fn releasing_a_pin_alone_retires_nothing() {
 
     drop(eng.snapshot(snap).pin());
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("still the workspace's current snapshot");
 }
@@ -661,7 +719,14 @@ async fn a_dropped_export_holds_its_pin_until_the_write_ends() {
         .await
         .expect("re-run");
     eng.snapshot(snap)
-        .page(1, 2, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 2,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect_err("no pin left holding it open");
 

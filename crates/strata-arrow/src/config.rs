@@ -458,20 +458,33 @@ pub fn is_display_key(name: &str) -> bool {
     name.trim().starts_with("datafusion.format.")
 }
 
-/// Just the `datafusion.format.*` entries of `overrides` — the **display** half, which
-/// changes how already-materialized values are rendered rather than what is read.
+/// The settings that change how an already-materialized value renders (`datafusion.format.*`).
 ///
-/// A read that formats values (`query::CellFormat`) answers differently
-/// after one of these moves, with no restart and no new snapshot, so a consumer that caches
-/// such an answer has to carry this subset in the answer's identity. The chart's read is the
-/// one that does (`docs/CHART_SPEC.md` §5 — its axis labels come out of `CellFormat`); the
-/// grid re-reads its pages for other reasons often enough not to have needed it.
-pub fn display_subset(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    overrides
-        .iter()
-        .filter(|(k, _)| is_display_key(k))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+/// These take effect with no restart, so a read that formats values takes one rather than
+/// reading a live config: the caller states the rendering, and can cache the answer under it.
+/// [`Default`] is the built-in defaults.
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
+pub struct DisplayStamp(BTreeMap<String, String>);
+
+impl DisplayStamp {
+    /// Returns the effective value for a display `key`: the stamp's entry, else the built-in
+    /// default.
+    #[must_use]
+    pub fn effective(&self, key: &str) -> Option<String> {
+        effective(&self.0, key)
+    }
+}
+
+/// Returns just the `datafusion.format.*` entries of `overrides`.
+#[must_use]
+pub fn display_subset(overrides: &BTreeMap<String, String>) -> DisplayStamp {
+    DisplayStamp(
+        overrides
+            .iter()
+            .filter(|(k, _)| is_display_key(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    )
 }
 
 /// The effective value for `key` given the overrides map — the override if present, else
@@ -514,5 +527,61 @@ pub fn value_error(key: &str, value: &str) -> Option<String> {
             .then(|| "Expected a ±HH:MM offset (e.g. +00:00) or a named zone.".to_string()),
         Kind::Enum(opts) => (!opts.iter().any(|o| o.eq_ignore_ascii_case(v)))
             .then(|| format!("Expected one of: {}.", opts.join(", "))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn overrides(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    /// The stamp is the display half and nothing else.
+    ///
+    /// The non-display key is a **custom** one, with no built-in default behind it: [`effective`]
+    /// answers a catalogued key whether or not the map holds it, so a known key cannot tell
+    /// "filtered out" from "unset".
+    #[test]
+    fn a_stamp_carries_the_display_keys_and_no_others() {
+        let stamp = display_subset(&overrides(&[
+            ("datafusion.format.null", "∅"),
+            ("custom.not.a.display.key", "512"),
+        ]));
+        assert_eq!(
+            stamp.effective("datafusion.format.null").as_deref(),
+            Some("∅")
+        );
+        assert_eq!(stamp.effective("custom.not.a.display.key"), None);
+    }
+
+    /// The keying property this type exists for: moving a non-display key leaves the stamp
+    /// equal, so a page already read under it stays a cache hit.
+    #[test]
+    fn a_non_display_override_leaves_the_stamp_equal() {
+        let before = display_subset(&overrides(&[("datafusion.format.null", "∅")]));
+        let after = display_subset(&overrides(&[
+            ("datafusion.format.null", "∅"),
+            ("datafusion.execution.target_partitions", "4"),
+        ]));
+        assert_eq!(before, after);
+
+        let moved = display_subset(&overrides(&[("datafusion.format.null", "NULL")]));
+        assert_ne!(before, moved);
+    }
+
+    /// An unset display key answers its built-in default, so [`DisplayStamp::default`] is the
+    /// engine's own rendering rather than blank strings.
+    #[test]
+    fn an_unset_display_key_answers_its_built_in_default() {
+        let stamp = DisplayStamp::default();
+        assert_eq!(
+            stamp.effective("datafusion.format.null"),
+            effective(&BTreeMap::new(), "datafusion.format.null"),
+        );
     }
 }

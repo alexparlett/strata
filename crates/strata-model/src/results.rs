@@ -1,5 +1,6 @@
-//! Query-results vocabulary: a formatted [`Cell`], a page of [`QueryOutput`], and the
-//! [`SnapshotId`] identifying the immutable result snapshot a Run materialized.
+//! Query-results vocabulary: a formatted [`Cell`], a page of [`QueryOutput`], the
+//! [`PageQuery`] naming a later page of it, and the [`SnapshotId`] identifying the immutable
+//! result snapshot a Run materialized.
 
 use super::ColumnInfo;
 
@@ -37,4 +38,17 @@ pub struct QueryOutput {
     pub page: usize,
     pub page_size: usize,
     pub elapsed_ms: u128,
+}
+
+/// Which page of a settled snapshot to read, and how to order it.
+///
+/// `sort` is applied as an `ORDER BY` over the *whole* snapshot before the page window, never as
+/// a rewrite of it; `None` reads in snapshot order.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct PageQuery {
+    /// 1-based.
+    pub page: usize,
+    pub page_size: usize,
+    /// `(column name, ascending)`.
+    pub sort: Option<(String, bool)>,
 }

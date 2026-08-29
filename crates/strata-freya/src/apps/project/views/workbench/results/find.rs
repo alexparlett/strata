@@ -115,9 +115,10 @@ pub fn filter_page(needle: Option<&str>, data: &Rc<GridData>, row_base: usize) -
 /// the rows, so this is the whole key.
 #[derive(Clone, PartialEq)]
 pub enum PageKey {
-    /// The Run's own page 1 — page 1 at the Run's page size, unsorted.
+    /// The Run's own page 1 — page 1 at the Run's page size, unsorted, and still under the
+    /// display config it was rendered with.
     Run,
-    /// A read of the snapshot: `(snapshot, page, page size, sort)`.
+    /// A read of the snapshot: `(snapshot, query, display)`.
     Snapshot(PageSpec),
 }
 
@@ -209,8 +210,9 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_arrow::config::DisplayStamp;
     use strata_arrow::{column_info, RecordBatch, Schema};
-    use strata_model::{Cell, SnapshotId};
+    use strata_model::{Cell, PageQuery, SnapshotId};
 
     use super::*;
 
@@ -313,9 +315,12 @@ mod tests {
     fn spec(page: usize) -> PageSpec {
         PageSpec {
             snapshot: SnapshotId(1),
-            page,
-            page_size: 100,
-            sort: None,
+            query: PageQuery {
+                page,
+                page_size: 100,
+                sort: None,
+            },
+            display: DisplayStamp::default(),
         }
     }
 

@@ -51,7 +51,7 @@ use rmcp::service::Peer;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
 use strata_engine::{Engine, EngineError};
-use strata_model::SnapshotId;
+use strata_model::{PageQuery, SnapshotId};
 use uuid::Uuid;
 
 use crate::describe;
@@ -919,11 +919,13 @@ impl<H: Host> StrataTools<H> {
         };
 
         let sort = params.sort.map(|s| (s.column, s.ascending));
-        match engine
-            .snapshot(snapshot)
-            .page(page, last.page_size, sort)
-            .await
-        {
+        let q = PageQuery {
+            page,
+            page_size: last.page_size,
+            sort,
+        };
+        let display = engine.display();
+        match engine.snapshot(snapshot).page(q, display).await {
             Ok(read) => Ok(PageResult {
                 query_session: params.query_session,
                 columns: last.columns,

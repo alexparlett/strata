@@ -203,8 +203,9 @@ async fn Workspace::run(tag: RunTag, sql, page_size) -> Result<RunOutcome, Engin
 // Run's Query arm: execute once → spool a fresh snapshot → page 1 + handle back.
 async fn Workspace::query(tag: RunTag, sql, page_size) -> Result<RunRows, EngineError>
 
-// Read: bounded LIMIT/OFFSET (+ optional whole-snapshot ORDER BY) over one snapshot.
-async fn SnapshotReads::page(page, page_size, sort: Option<(String, bool)>)
+// Read: bounded LIMIT/OFFSET (+ optional whole-snapshot ORDER BY) over one snapshot,
+// its cells rendered through the display stamp the caller hands in.
+async fn SnapshotReads::page(q: PageQuery, display: DisplayStamp)
     -> Result<SnapshotPage, EngineError>
 
 // Explain: parsed plan tree, no snapshot.
@@ -234,6 +235,15 @@ good run and fail both. (This is the one request-id-shaped thing in the facade, 
 deliberately engine-internal: it never crosses the boundary, has no UI representation, and
 replaces nothing the tag can do.)
 
+**A read that renders cells takes a `DisplayStamp`** (`strata_arrow::config`, constructible only
+by `display_subset`): the `datafusion.format.*` subset moves on a live engine with no restart and
+no new snapshot, so a read that consulted the engine's own copy would answer differently under an
+input its caller could not put in a cache key. Handing it in makes the hidden input an argument —
+`page` and `chart` take one; `trend` is numbers only and visibly does not. A **Run** is the
+exception, and reports rather than asks: it is keyed by the caller's nonce and there is no earlier
+moment at which a stamp could have been named, so it renders under the engine's live config and
+says which one it used (`RunRows::display`).
+
 `sort` stays a read-time parameter (an `ORDER BY` over the whole snapshot before the page
 window), never a rewrite of the snapshot. An **unsorted** read is `ORDER BY` the row
 ordinal (§9) — a bare `LIMIT/OFFSET` over the registered table has **no** inherent order, and
@@ -259,7 +269,7 @@ QuerySpec {
 }
 RunQuery(Captured<EngineCtx>): QueryCapability<Keys = QuerySpec, Ok = QueryOutcome, Err = EngineError>
 
-QueryOutcome::Rows(RunRows { output: QueryOutput, batch: RecordBatch })    // mode: Run
+QueryOutcome::Rows(RunRows { output, batch, display: DisplayStamp })        // mode: Run
 QueryOutcome::Plan(QueryPlan)                                               // mode: Explain
 QueryOutcome::Statement(StatementReport)   // mode: Run, intercepted statement — no snapshot,
                                            // and none retired (docs/STATEMENTS_SPEC.md)
@@ -267,9 +277,8 @@ QueryOutcome::Statement(StatementReport)   // mode: Run, intercepted statement �
 // A page read — targets one immutable snapshot. THIS is the safe cache key.
 PageSpec {
     snapshot: SnapshotId,
-    page: usize,
-    page_size: usize,
-    sort: Option<(String, bool)>,
+    query: PageQuery,       // page, page_size, sort
+    display: DisplayStamp,  // the datafusion.format.* subset the cells render through
 }
 FetchSnapshotPage(Captured<EngineCtx>): QueryCapability<Keys = PageSpec, Ok = SnapshotPage, Err = EngineError>
 ```
@@ -298,17 +307,26 @@ identity — a hand-built variant is a *different* entry, i.e. a duplicate execu
 freya-query itself (fork) never cleans an entry whose execution is still in flight, so even an
 eviction can't orphan a running press into a duplicate dispatch.
 
-Page reads are keyed `(snapshot, page, page_size, sort)` — all reads of an immutable set, so
-cache hits are sound forever: a revisited page renders with **zero** engine traffic. Reads of a
-retired snapshot fail cleanly (table's gone) — reachable only through a stale subscriber, since
-a new Run hands the UI a new handle and the old `PageSpec`s die with their subscribers.
+Page reads are keyed `(snapshot, query, display)` — all reads of an immutable set under a stated
+rendering, so cache hits are sound forever: a revisited page renders with **zero** engine traffic.
+The display stamp is in the key because the cells are formatted through it and Settings ▸ Engine ▸
+Properties moves it without a restart; carrying it makes such a change a *new* entry rather than a
+stale one, and keeps `stale_time(MAX)` honest. Reads of a retired snapshot fail cleanly (table's
+gone) — reachable only through a stale subscriber, since a new Run hands the UI a new handle and
+the old `PageSpec`s die with their subscribers.
+
+**Page 1 rides the Run entry, which cannot re-key on a display change** — its identity is the
+nonce. So the results pane compares the stamp the run reported (`RunRows::display`) with the app's
+current one, and when they differ page 1 stops being served natively and goes through `PageSpec`
+like any other page. That is what makes a format change update the whole visible grid rather than
+every page but the first; nothing re-executes, because the nonce never moves.
 
 Run flow end-to-end:
 
 1. Run press: `request.set(Some(QuerySpec { tab, run: RunId::new(), sql: editor_text, mode: Run, page_size }))`.
 2. Results element (and the tab's keeper pin): `use_query(spec.query(&engine))` →
    `Pending/Loading` renders Running.
-3. `RunQuery::run` → `engine.run(tab.into(), run.into(), sql, page_size).await` — the direct
+3. `RunQuery::run` → `engine.ws(tab.into()).run(run.into(), sql, page_size).await` — the direct
    facade call (§5, the statement router; a `SELECT` reaches `query` one match arm further in);
    the query settles; grid renders page 1 from `QueryOutput` + holds the handle.
 4. Paging/sort: the grid drives `use_query(FetchSnapshotPage)` with

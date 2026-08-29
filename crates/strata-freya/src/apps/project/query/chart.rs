@@ -11,7 +11,8 @@
 //! entry keyed on the pair alone would keep serving labels rendered under a format the user
 //! has since changed. [`ChartSpec::display`] carries that subset, which makes the change a
 //! *new entry* rather than a stale one, and keeps `stale_time(MAX)` honest: given a fixed
-//! snapshot, a fixed request and a fixed display config, the answer never changes.
+//! snapshot, a fixed request and a fixed display config, the answer never changes. The read
+//! renders through that same stamp, so what is in the key is what came out.
 //!
 //! The subset comes from the **app config** (the store `use_engine_config` drives the engine
 //! from), not from the engine's own copy, because that is the reactive source: a window
@@ -21,10 +22,10 @@
 //!
 //! [`SnapshotReads::chart`]: strata_engine::SnapshotReads::chart
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
+use strata_arrow::config::DisplayStamp;
 use strata_engine::EngineError;
 use strata_model::{ChartData, ChartQuery, SnapshotId, Trend};
 
@@ -38,7 +39,7 @@ pub struct ChartSpec {
     pub query: ChartQuery,
     /// The engine's `datafusion.format.*` overrides — see the module note. Built with
     /// [`strata_arrow::config::display_subset`], never assembled by hand.
-    pub display: BTreeMap<String, String>,
+    pub display: DisplayStamp,
 }
 
 impl ChartSpec {
@@ -67,7 +68,7 @@ impl QueryCapability for FetchChart {
     async fn run(&self, spec: &ChartSpec) -> Result<ChartData, EngineError> {
         self.0
             .snapshot(spec.snapshot)
-            .chart(spec.query.clone())
+            .chart(spec.query.clone(), spec.display.clone())
             .await
     }
 }
@@ -159,7 +160,7 @@ mod tests {
                 series: None,
                 cap: 1_000,
             },
-            display: BTreeMap::new(),
+            display: DisplayStamp::default(),
         };
         let ChartData::Table { axis, series } = block_on(charts.run(&spec)).expect("chart") else {
             panic!("a Rows read answers a table");

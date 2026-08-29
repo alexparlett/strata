@@ -90,6 +90,7 @@ mod tests {
         "set_config",
         "restart_owed",
         "overrides",
+        "display",
         "formats",
     ];
 

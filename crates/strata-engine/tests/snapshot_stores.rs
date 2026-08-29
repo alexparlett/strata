@@ -11,8 +11,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use strata_arrow::config::DisplayStamp;
 use strata_engine::{Engine, LocalIpcSnapshotStore, MemSnapshotStore, RunTag, WsId};
-use strata_model::{ChartData, ChartQuery, SnapshotId};
+use strata_model::{ChartData, ChartQuery, PageQuery, SnapshotId};
 
 const SQL: &str = "SELECT column1 AS region, column2 AS amount, column3 AS qty \
      FROM (VALUES ('eu', 30.0, 3), ('us', 20.0, 2), ('ap', 10.0, 1)) AS t \
@@ -51,7 +52,14 @@ async fn run(eng: &Engine) -> SnapshotId {
 async fn reads(eng: &Engine, snap: SnapshotId) {
     let rows = eng
         .snapshot(snap)
-        .page(1, 10, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 10,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 1")
         .rows;
@@ -64,7 +72,14 @@ async fn reads(eng: &Engine, snap: SnapshotId) {
 
     let sorted = eng
         .snapshot(snap)
-        .page(2, 2, Some(("region".into(), true)))
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 2,
+                sort: Some(("region".into(), true)),
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("a sorted page")
         .rows;
@@ -73,12 +88,15 @@ async fn reads(eng: &Engine, snap: SnapshotId) {
 
     let data = eng
         .snapshot(snap)
-        .chart(ChartQuery::Rows {
-            x: Some("region".into()),
-            ys: vec!["amount".into()],
-            series: None,
-            cap: 1_000,
-        })
+        .chart(
+            ChartQuery::Rows {
+                x: Some("region".into()),
+                ys: vec!["amount".into()],
+                series: None,
+                cap: 1_000,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("chart");
     let ChartData::Table { axis, series } = data else {

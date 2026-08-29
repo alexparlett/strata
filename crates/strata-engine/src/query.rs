@@ -13,7 +13,7 @@
 //! (`docs/SNAPSHOT_SPEC.md`). Lifecycle (which ws owns which snapshot, when to retire one) is the
 //! facade's own bookkeeping, in [`super::Engine`].
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,9 +33,9 @@ use futures::StreamExt;
 use crate::snapshots::ordinal::ordinal_name;
 use crate::snapshots::{snapshot_name, SnapshotSink, SnapshotStats, SnapshotStore};
 use strata_arrow::column_info;
-use strata_arrow::config::effective;
+use strata_arrow::config::DisplayStamp;
 use strata_core::util::{clip, DISPLAY_CHARS};
-use strata_model::{Cell, ColumnInfo, QueryOutput, SnapshotId};
+use strata_model::{Cell, ColumnInfo, PageQuery, QueryOutput, SnapshotId};
 
 /// Run the query **once**, streaming every batch straight into a fresh snapshot while counting
 /// the exact total and capturing the first page — no separate `COUNT`, no re-read, bounded
@@ -226,10 +226,13 @@ async fn materialize(
     ))
 }
 
-/// Display formatting for grid cells, derived from the engine's `datafusion.format.*`
-/// overrides (W2). Owns the format strings so an arrow [`FormatOptions`] can borrow
-/// them; `null` is the literal shown for NULL cells (which stay flagged `null: true`
-/// for the grid's own dimmed styling, so only the text changes).
+/// Display formatting for grid cells, resolved from a [`DisplayStamp`]. Owns the format strings
+/// so an arrow [`FormatOptions`] can borrow them; `null` is the
+/// literal shown for NULL cells (which stay flagged `null: true` for the grid's own dimmed
+/// styling, so only the text changes).
+///
+/// From a stamp rather than from the engine's live config, so a cached read renders through the
+/// value it is keyed on.
 pub struct CellFormat {
     null: String,
     date: String,
@@ -237,8 +240,8 @@ pub struct CellFormat {
 }
 
 impl CellFormat {
-    pub fn new(overrides: &BTreeMap<String, String>) -> Self {
-        let eff = |k: &str| effective(overrides, k).unwrap_or_default();
+    pub fn new(display: &DisplayStamp) -> Self {
+        let eff = |k: &str| display.effective(k).unwrap_or_default();
         Self {
             null: eff("datafusion.format.null"),
             date: eff("datafusion.format.date_format"),
@@ -302,15 +305,13 @@ fn append_batch_capped(
 pub async fn fetch_page(
     ctx: &SessionContext,
     snapshot: SnapshotId,
-    page: usize,
-    page_size: usize,
-    sort: Option<(String, bool)>,
+    q: PageQuery,
     ord: Option<String>,
     fmt: &CellFormat,
 ) -> Result<Page, String> {
     let snap = snapshot_name(snapshot);
-    let offset = page.saturating_sub(1).saturating_mul(page_size);
-    read_page(ctx, &snap, offset, page_size, sort, ord, fmt).await
+    let offset = q.page.saturating_sub(1).saturating_mul(q.page_size);
+    read_page(ctx, &snap, offset, q.page_size, q.sort, ord, fmt).await
 }
 
 async fn read_page(

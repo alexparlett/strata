@@ -92,6 +92,7 @@ pub use udf_package::UdfPackage;
 
 use secrets::SecretProvider;
 
+use strata_arrow::config::{display_subset, DisplayStamp};
 use strata_arrow::{config, RecordBatch};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -150,15 +151,20 @@ impl From<TabId> for WsId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RunTag(pub u128);
 
-/// A settled query: the snapshot handle with page 1, and the page-1 batch.
+/// A settled query: the snapshot handle with page 1, that page still typed, and the display
+/// config its cells were rendered under.
 ///
-/// Two views of the same rows. `output` holds them as display cells, formatted under the engine's
-/// live `datafusion.format.*` config; `batch` holds them still typed, for a caller that copies or
-/// exports them rather than showing them.
+/// `output` holds the rows as display cells; `batch` holds the same rows typed, for a caller
+/// that copies or exports them rather than showing them.
+///
+/// `display` is reported rather than asked for. A run renders under the config the engine is
+/// running with when it is dispatched, so a caller showing these rows compares this against the
+/// config it holds now to tell whether they still render the way a fresh read would.
 #[derive(Debug)]
 pub struct RunRows {
     pub output: QueryOutput,
     pub batch: RecordBatch,
+    pub display: DisplayStamp,
 }
 
 /// One page of a settled snapshot: the cells, and the same rows still typed.
@@ -408,11 +414,14 @@ struct Lifecycle {
 /// engine itself. The mapping is total: nothing public sits outside it.
 ///
 /// ```no_run
+/// # use strata_arrow::config::DisplayStamp;
 /// # use strata_engine::{Engine, EngineError, RunTag, WsId};
+/// # use strata_model::PageQuery;
 /// # async fn read(engine: &Engine, ws: WsId, tag: RunTag) -> Result<(), EngineError> {
 /// let run = engine.ws(ws).query(tag, "SELECT 1".into(), 100).await?;
 /// let snapshot = run.output.snapshot.expect("a query settles a snapshot");
-/// let page_2 = engine.snapshot(snapshot).page(2, 100, None).await?;
+/// let window = PageQuery { page: 2, page_size: 100, sort: None };
+/// let page_2 = engine.snapshot(snapshot).page(window, run.display).await?;
 /// # let _ = (run.batch, page_2.rows, page_2.batch);
 /// # Ok(())
 /// # }
@@ -972,6 +981,12 @@ impl Engine {
         self.overrides.lock().unwrap().clone()
     }
 
+    /// The display half of this engine's overrides, for a caller with no display config of its
+    /// own to hand a read.
+    pub fn display(&self) -> DisplayStamp {
+        display_subset(&self.overrides.lock().unwrap())
+    }
+
     /// The engine's runtime (always present while the engine lives — see the field).
     fn rt(&self) -> &Runtime {
         self.rt.as_ref().expect("engine runtime")
@@ -1170,7 +1185,8 @@ impl Engine {
     ) -> Result<RunRows, EngineError> {
         let snapshot = SnapshotId(self.snap_seq.fetch_add(1, Ordering::Relaxed));
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
-        let fmt = CellFormat::new(&self.overrides.lock().unwrap());
+        let display = self.display();
+        let fmt = CellFormat::new(&display);
         let task = {
             let mut lc = self.lifecycle.lock().unwrap();
             if let Some(prev) = lc.inflight.remove(&ws) {
@@ -1215,7 +1231,11 @@ impl Engine {
                         lc.current.insert(ws, snap);
                         lc.stats.insert(snap, stats);
                     }
-                    Ok(RunRows { output, batch })
+                    Ok(RunRows {
+                        output,
+                        batch,
+                        display,
+                    })
                 } else {
                     self.retire_snapshot(snapshot);
                     Err(EngineError::Stopped(StopReason::SupersededRun))
@@ -1713,7 +1733,7 @@ mod tests {
 
     use crate::builder::test_context;
     use crate::statements::Fault;
-    use strata_model::{SourceFormat, StatKey};
+    use strata_model::{PageQuery, SourceFormat, StatKey};
 
     use super::*;
 
@@ -2653,7 +2673,14 @@ mod tests {
         let out = second.expect("the newer dispatch settles Ok").output;
         let snap = out.snapshot.expect("…owning a snapshot of its own");
         eng.snapshot(snap)
-            .page(1, 10, None)
+            .page(
+                PageQuery {
+                    page: 1,
+                    page_size: 10,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("…which the older dispatch did not retire");
         if let Err(e) = &first {
@@ -2695,8 +2722,18 @@ mod tests {
         assert_eq!(routed.rows, direct.rows);
         assert_eq!(routed.columns.len(), direct.columns.len());
         let snap = routed.snapshot.expect("a snapshot handle");
-        let SnapshotPage { rows: page2, .. } =
-            eng.snapshot(snap).page(2, 2, None).await.expect("page 2");
+        let SnapshotPage { rows: page2, .. } = eng
+            .snapshot(snap)
+            .page(
+                PageQuery {
+                    page: 2,
+                    page_size: 2,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
+            .await
+            .expect("page 2");
         assert_eq!(page2.len(), 1);
     }
 
@@ -2772,7 +2809,14 @@ mod tests {
             assert!(eng.snapshot(snap).live(), "{stmt} retired the snapshot");
         }
         eng.snapshot(snap)
-            .page(1, 10, None)
+            .page(
+                PageQuery {
+                    page: 1,
+                    page_size: 10,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("…and it still reads");
         assert!(!eng.ws(ws).is_running(), "nothing left in flight either");

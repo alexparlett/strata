@@ -9,9 +9,10 @@
 //! The fixtures here are deliberately **over** the split threshold — the failure was invisible
 //! below it, which is why no test ever saw it.
 
+use strata_arrow::config::DisplayStamp;
 use strata_engine::export::{Compression, Csv, ExportSpec, Format, Partition, Scope};
 use strata_engine::{Engine, RunRows, RunTag, SnapshotPage, WsId};
-use strata_model::{Cell, SnapshotId};
+use strata_model::{Cell, PageQuery, SnapshotId};
 
 /// Wide enough (an md5 column) that 3M rows cross 10 MB many times over. `ORDER BY i` makes
 /// the *result* order the generation order, so a page's contents are predictable — without
@@ -44,13 +45,27 @@ async fn pages_over_the_split_threshold_are_stable_and_in_result_order() {
     for page in [1usize, 2, 15_000, 30_000] {
         let first = eng
             .snapshot(snap)
-            .page(page, page_size, None)
+            .page(
+                PageQuery {
+                    page,
+                    page_size,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("page")
             .rows;
         let again = eng
             .snapshot(snap)
-            .page(page, page_size, None)
+            .page(
+                PageQuery {
+                    page,
+                    page_size,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("page again")
             .rows;
@@ -78,19 +93,40 @@ async fn a_sorted_read_is_stable_across_page_windows_on_ties() {
     let sort = Some(("k".to_string(), true));
     let one = eng
         .snapshot(snap)
-        .page(1, 100, sort.clone())
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 100,
+                sort: sort.clone(),
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("sorted page 1")
         .rows;
     let two = eng
         .snapshot(snap)
-        .page(2, 100, sort.clone())
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 100,
+                sort: sort.clone(),
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("sorted page 2")
         .rows;
     let two_again = eng
         .snapshot(snap)
-        .page(2, 100, sort)
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 100,
+                sort,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("sorted page 2 again")
         .rows;
@@ -127,7 +163,14 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
     let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
     let fetched = eng
         .snapshot(snap)
-        .page(1, 100, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 100,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 1")
         .rows;
@@ -139,13 +182,27 @@ async fn an_unordered_query_pages_the_order_the_spool_froze() {
 
     let p2a = eng
         .snapshot(snap)
-        .page(2, 100, None)
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 100,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 2")
         .rows;
     let p2b = eng
         .snapshot(snap)
-        .page(2, 100, None)
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 100,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 2 again")
         .rows;
@@ -164,6 +221,7 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
     let RunRows {
         output: out,
         batch: page1,
+        ..
     } = eng
         .ws(WsId(1))
         .query(
@@ -181,7 +239,14 @@ async fn the_ordinal_is_bookkeeping_and_never_leaks() {
 
     let batch = eng
         .snapshot(snap)
-        .page(1, 10, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 10,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page")
         .batch;
@@ -238,7 +303,18 @@ async fn a_user_column_named_like_the_ordinal_survives() {
     let snap = out.snapshot.expect("snapshot");
     assert_eq!(out.columns[0].name, "__strata_ord");
 
-    let SnapshotPage { rows, batch } = eng.snapshot(snap).page(1, 10, None).await.expect("page");
+    let SnapshotPage { rows, batch } = eng
+        .snapshot(snap)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 10,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
+        .await
+        .expect("page");
     assert_eq!(batch.schema().fields().len(), 1, "only the user's column");
     assert_eq!(
         ints(&rows, 0),
@@ -269,13 +345,27 @@ async fn a_users_partitioned_window_survives_beneath_the_ordinal() {
     for page in [1usize, 15_000] {
         let first = eng
             .snapshot(snap)
-            .page(page, 100, None)
+            .page(
+                PageQuery {
+                    page,
+                    page_size: 100,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("page")
             .rows;
         let again = eng
             .snapshot(snap)
-            .page(page, 100, None)
+            .page(
+                PageQuery {
+                    page,
+                    page_size: 100,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("page again")
             .rows;
@@ -315,7 +405,14 @@ async fn an_unordered_partitioned_window_stays_row_consistent() {
     let spooled: Vec<String> = out.rows.iter().map(|r| r[0].text.clone()).collect();
     let fetched = eng
         .snapshot(snap)
-        .page(1, 100, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 100,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("page 1")
         .rows;
@@ -325,13 +422,27 @@ async fn an_unordered_partitioned_window_stays_row_consistent() {
     for page in [1usize, 20_000] {
         let rows = eng
             .snapshot(snap)
-            .page(page, 100, None)
+            .page(
+                PageQuery {
+                    page,
+                    page_size: 100,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("page")
             .rows;
         let again = eng
             .snapshot(snap)
-            .page(page, 100, None)
+            .page(
+                PageQuery {
+                    page,
+                    page_size: 100,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
             .await
             .expect("page again")
             .rows;
@@ -356,7 +467,18 @@ async fn a_user_window_aliased_like_the_ordinal_keeps_its_values() {
     )
     .await;
 
-    let SnapshotPage { rows, batch } = eng.snapshot(snap).page(2, 100, None).await.expect("page 2");
+    let SnapshotPage { rows, batch } = eng
+        .snapshot(snap)
+        .page(
+            PageQuery {
+                page: 2,
+                page_size: 100,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
+        .await
+        .expect("page 2");
     let schema = batch.schema();
     let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(
@@ -390,8 +512,18 @@ async fn explain_runs_and_pages_without_an_ordinal() {
             .output;
         assert!(out.total > 0, "{sql} returns plan rows");
         let snap = out.snapshot.expect("plan rows materialize");
-        let SnapshotPage { rows, batch } =
-            eng.snapshot(snap).page(1, 10, None).await.expect("page");
+        let SnapshotPage { rows, batch } = eng
+            .snapshot(snap)
+            .page(
+                PageQuery {
+                    page: 1,
+                    page_size: 10,
+                    sort: None,
+                },
+                DisplayStamp::default(),
+            )
+            .await
+            .expect("page");
         assert!(!rows.is_empty());
         let schema = batch.schema();
         assert!(
@@ -429,7 +561,14 @@ async fn duplicate_named_columns_still_read() {
     let snap = out.snapshot.expect("snapshot");
     let rows = eng
         .snapshot(snap)
-        .page(1, 10, None)
+        .page(
+            PageQuery {
+                page: 1,
+                page_size: 10,
+                sort: None,
+            },
+            DisplayStamp::default(),
+        )
         .await
         .expect("a duplicate-named result must stay readable")
         .rows;
