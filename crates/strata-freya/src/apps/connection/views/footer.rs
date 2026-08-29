@@ -14,7 +14,7 @@
 //!    never heard about is gone on the next open, which is what P4-15 exists to stop being
 //!    silent;
 //! 3. drops the object store the old URL registered, the one call the scan driver cannot make:
-//!    `engine::store::connect` only ever sees the def it is given, so nothing else would ever
+//!    `engine::sources::store::connect` only ever sees the def it is given, so nothing else would ever
 //!    take that store back out (`Sources::disconnect` — the same call Forget makes);
 //! 4. asks the project window's one scan driver for a whole-catalog pass, and leaves this window
 //!    watching its row ([`super::use_watch_connection`]).

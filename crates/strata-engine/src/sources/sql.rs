@@ -6,12 +6,15 @@
 //! [`SourceCatalog`](super::source::SourceCatalog) demands nothing of it.
 //!
 //! The stack is assembled a level below `datafusion-table-providers`' own factory, which leaves
-//! every one of `datafusion-federation`'s rewrite hooks at its `None` default
+//! every one of `datafusion-federation`'s hooks at its `None` default
 //! (`datafusion-federation#129` asks for exactly this pattern). Those hooks are on the executor,
-//! so [`AnalyzedExecutor`] is where the source's AST rewrite reaches the statement going out, its
-//! recoding reaches the error coming back, and the connection's identity is stamped as the fusion
-//! key — stamped here, because a source that forgot it would federate two connections' relations
-//! into one statement sent to whichever executor won.
+//! so [`AnalyzedExecutor`] is where the source's recoding reaches the error coming back and the
+//! connection's identity is stamped as the fusion key — stamped here, because a source that forgot
+//! it would federate two connections' relations into one statement sent to whichever executor won.
+//!
+//! What a source spells differently is its **dialect**'s, not this module's: the statement is
+//! unparsed through `spec.dialect`, so a source that renders a call as an operator expression says
+//! so once and is obeyed on every path its SQL is written on.
 
 use std::sync::Arc;
 
@@ -110,29 +113,22 @@ impl OptimizerRule for WritesStayHome {
     }
 }
 
-/// Builds a source's AST rewrite.
-///
-/// A factory rather than the rewrite itself: `AstAnalyzer` is a `FnMut` taken by value every time
-/// a plan is unparsed, so there is one per statement rather than one per provider.
-pub type AstRewrite = Arc<dyn Fn() -> AstAnalyzer + Send + Sync>;
-
 /// What a SQL-speaking source brings to [`federated`].
 ///
 /// The fields come from one object in practice, a `SqlTable` being both provider and executor,
 /// and are named separately because nothing here requires that.
 pub struct SqlSpec {
-    /// The unparser dialect the plan is rendered in: the source's SQL, not DataFusion's.
+    /// The unparser dialect the plan is rendered in: the source's SQL, not DataFusion's — down to
+    /// the calls it spells as something other than a call.
     pub dialect: Arc<dyn Dialect>,
     /// What sends the rendered statement and streams back what it answers.
     pub executor: Arc<dyn SQLExecutor>,
     /// The provider a scan the federation rule does not take falls back to, which a mixed join's
     /// local side reads through.
-    pub provider: Arc<dyn TableProvider>,
-    /// The source's own rewrite of the statement about to leave, where it has one.
     ///
-    /// What a dialect override cannot express: a UDF call unparses by name, and a source that
-    /// spells the same operation as an operator expression needs the shape changed, not the word.
-    pub analyzer: Option<AstRewrite>,
+    /// It renders its own scan, so a source hands it the **same** dialect it puts in `dialect`, or
+    /// the two paths speak differently about one connection.
+    pub provider: Arc<dyn TableProvider>,
 }
 
 /// Returns the federated read provider for one relation.
@@ -147,7 +143,6 @@ pub fn federated(
     let executor = Arc::new(AnalyzedExecutor {
         inner: spec.executor,
         dialect: spec.dialect,
-        analyzer: spec.analyzer,
         source,
         connection: at.connection.clone(),
         context: at.identity.clone(),
@@ -167,11 +162,10 @@ pub fn federated(
 ///
 /// Held as `Arc<dyn SQLExecutor>` rather than a concrete provider type, whose generic parameters
 /// are a pooled connection and a driver's parameter type: a signature naming them would tie this
-/// module to one driver. Every method delegates but the four that are the point.
+/// module to one driver. Every method delegates but the three that are the point.
 struct AnalyzedExecutor {
     inner: Arc<dyn SQLExecutor>,
     dialect: Arc<dyn Dialect>,
-    analyzer: Option<AstRewrite>,
     source: Arc<dyn SourceCatalog>,
     /// The catalog the connection registered under — what a refusal names.
     connection: String,
@@ -196,7 +190,7 @@ impl SQLExecutor for AnalyzedExecutor {
         Arc::clone(&self.dialect)
     }
 
-    /// Delegated, because a wrapper that answers for an executor has to answer for all three
+    /// Delegated, because a wrapper that answers for an executor has to answer for **both** its
     /// rewrite hooks: taking the trait's default would silently drop a rewrite the wrapped
     /// executor supplies.
     ///
@@ -208,8 +202,11 @@ impl SQLExecutor for AnalyzedExecutor {
         self.inner.logical_optimizer()
     }
 
+    /// Delegated for the same reason, and nothing of ours rides it: a statement leaves in the
+    /// source's own spelling because it was *unparsed* in the source's own dialect, which is a
+    /// rendering decision and belongs where rendering is decided.
     fn ast_analyzer(&self) -> Option<AstAnalyzer> {
-        self.analyzer.as_ref().map(|rewrite| rewrite())
+        self.inner.ast_analyzer()
     }
 
     fn execute(

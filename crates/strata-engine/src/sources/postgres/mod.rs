@@ -12,6 +12,7 @@
 //! `SecretProvider` ([`SecretPassword`]), from this machine's keystore or from `PGPASSWORD`.
 //! Passwordless authentication is `None` rather than a mode anything has to know about.
 
+mod dialect;
 mod json;
 pub mod settings;
 mod write;
@@ -23,7 +24,6 @@ use std::sync::{Arc, LazyLock};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableProvider;
-use datafusion::sql::unparser::dialect::PostgreSqlDialect;
 use datafusion_table_providers_common::sql::db_connection_pool::PasswordProvider;
 use datafusion_table_providers_common::sql::sql_provider_datafusion::SqlTable;
 use datafusion_table_providers_common::util::secrets::to_secret_map;
@@ -36,6 +36,7 @@ use tokio::task::spawn_blocking;
 
 use strata_model::ConnectionDef;
 
+use self::dialect::PgDialect;
 use self::settings::{PgSettings, PASSWORD, PASSWORD_ENV};
 use crate::catalog::readable;
 use crate::secrets::{SecretProvider, SecretRequest};
@@ -137,32 +138,31 @@ impl SourceCatalog for PgCatalog {
         })))
     }
 
-    /// One call into the SQL assembly, over the crate's `SqlTable` in `PostgreSQL`'s unparser
-    /// dialect.
+    /// One call into the SQL assembly, over the crate's `SqlTable` in this connection's own
+    /// unparser dialect.
+    ///
+    /// The **same** dialect value on both, which is what puts the JSON rewrite on the federated
+    /// statement and on the fallback provider's own scan alike: `SqlTable` is what a scan the
+    /// federation rule does not take reads through.
     async fn table_provider(
         self: Arc<Self>,
         at: &Located,
     ) -> Result<Arc<dyn TableProvider>, String> {
         let pool: Arc<DynPostgresConnectionPool> =
             Arc::clone(&self.pool) as Arc<DynPostgresConnectionPool>;
-        let dialect = Arc::new(PostgreSqlDialect {});
+        let dialect = Arc::new(PgDialect::new(at.connection.clone()));
         let table = Arc::new(
             SqlTable::new(Pg::NAME, &pool, at.relation.clone())
                 .await
                 .map_err(|e| e.to_string())?
                 .with_dialect(dialect.clone()),
         );
-        let connection = at.connection.clone();
         Ok(federated(
             self,
             SqlSpec {
                 dialect,
                 executor: Arc::clone(&table) as Arc<dyn SQLExecutor>,
                 provider: table,
-                analyzer: Some(Arc::new(move || {
-                    let connection = connection.clone();
-                    Box::new(move |statement| json::push_down(statement, &connection))
-                })),
             },
             at,
         ))

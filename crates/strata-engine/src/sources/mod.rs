@@ -1,10 +1,11 @@
 //! **Data sources**: turning a [`ConnectionDef`] whose provider names a source into a live
 //! connection and registering it on the session as a **catalog** (`docs/CONNECTIONS_SPEC.md`).
 //!
-//! The sibling of [`store`](super::store), deliberately not a path through it: an object store is
-//! registered per bucket and answers about *files*, a source is registered as a catalog and
-//! answers about *relations*. What the two share is the connection def, the `Reg` row it settles
-//! onto, the pass's first phase, and the all-or-nothing contract.
+//! The catalog half of this layer. [`store`] is the other, and neither is a path through the
+//! other: an object store is registered per bucket and answers about *files*, a source is
+//! registered as a catalog and answers about *relations*. What the two share is the connection
+//! def, the `Reg` row it settles onto, the pass's first phase, and the all-or-nothing contract —
+//! which is what puts them under one roof, and what EA-25 turns into one trait.
 //!
 //! **This module is the shell, and it knows nothing about any source.** What a source *is* lives
 //! behind [`DataSource`](source::DataSource), keyed by the kind a def names; what is here is
@@ -28,6 +29,7 @@
 pub mod providers;
 pub mod source;
 pub mod sql;
+pub(crate) mod store;
 
 #[cfg(feature = "postgres")]
 pub mod postgres;
@@ -53,7 +55,7 @@ use super::providers::deregister_catalog;
 use super::secrets::{SecretProvider, SecretRequest};
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
-use crate::{store, CatalogGen};
+use crate::CatalogGen;
 use strata_core::secret::{migrate_derived, Secret, SecretRef};
 
 /// The keystore slot one of `conn`'s secrets lives in — **the one place the derivation is

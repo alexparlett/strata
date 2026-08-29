@@ -58,7 +58,6 @@ pub mod snapshots;
 pub mod sources;
 pub mod sql;
 pub mod statements;
-mod store;
 pub mod tables;
 pub mod udf_package;
 pub mod udfs;

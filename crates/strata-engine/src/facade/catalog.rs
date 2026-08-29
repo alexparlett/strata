@@ -9,12 +9,13 @@ use strata_model::ViewDef;
 
 use crate::catalog::{self, TableMeta, TableSpec, ViewMeta};
 use crate::register::{self, CatalogSpec, PassReport, RegOutcome};
+use crate::sources::store;
 use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
-    fold_ident, profile, store, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun,
-    Scans, StopReason,
+    fold_ident, profile, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun, Scans,
+    StopReason,
 };
 
 /// This engine's workspace catalog, from [`Engine::catalog`].

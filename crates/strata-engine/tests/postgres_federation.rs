@@ -853,9 +853,15 @@ async fn exotic_types_and_refusals(engine: &Engine) {
 /// **JSON accessors over a remote column** (DB-08) — a phase of the test above.
 ///
 /// The rewrite is judged by the *server*, which is the whole reason this lives here: a unit test
-/// can pin the operator syntax the mapping table produces (and does, next to the table), but only
-/// `PostgreSQL` can say that `->>` over a `jsonb` column means what `json_as_text` means over the
-/// text that column arrives as.
+/// can pin the operator syntax the connection's dialect produces (and does, beside it in
+/// `sources::postgres::dialect`), but only `PostgreSQL` can say that `->>` over a `jsonb` column
+/// means what `json_as_text` means over the text that column arrives as.
+///
+/// **The rewrite is the connection's unparser dialect**, so the statement is *written* with the
+/// operator rather than rewritten into one afterwards. Two things that reads differently in a plan
+/// and are pinned below: a federated node carries no `rewritten_executor_sql=`, and a refused
+/// statement carries no `base_sql=` either — federation prints that field only when the plan
+/// unparses, and for these the refusal is what unparsing answers.
 ///
 /// Two spellings here are the **parser's** business rather than this task's, and both are the same
 /// before and after it. `->>` has to be parenthesised against a comparison: sqlparser gives every
@@ -881,16 +887,16 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
         .collect();
     assert_eq!(federated.len(), 1, "the whole read federates:\n{plan}");
     assert!(
-        federated[0].contains("json_as_text"),
-        "the unparser writes the UDF call, which is what there is to rewrite:\n{}",
+        federated[0].contains("base_sql=")
+            && federated[0].contains("->>")
+            && !federated[0].contains("json_as_text"),
+        "the statement that leaves carries the operator, not the function:\n{}",
         federated[0]
     );
-    let Some((_, rewritten)) = federated[0].split_once("rewritten_executor_sql=") else {
-        panic!("the rewrite did not run:\n{}", federated[0]);
-    };
     assert!(
-        rewritten.contains("->>") && !rewritten.contains("json_as_text"),
-        "the statement that leaves carries the operator, not the function: {rewritten}"
+        !federated[0].contains("rewritten_executor_sql="),
+        "and it leaves that way because it was unparsed that way, not rewritten afterwards:\n{}",
+        federated[0]
     );
 
     assert_eq!(
@@ -962,6 +968,19 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     assert!(
         !why.contains("does not exist"),
         "…and it is Strata's sentence rather than a raw SQLSTATE: {why}"
+    );
+
+    let refused = explain(
+        engine,
+        57,
+        &format!(
+            "SELECT id FROM {CATALOG}.public.events WHERE json_get_str(payload, 'type') = 'click'"
+        ),
+    )
+    .await;
+    assert!(
+        refused.contains("VirtualExecutionPlan") && !refused.contains("base_sql="),
+        "a plan whose statement cannot be written down shows no statement:\n{refused}"
     );
 
     fs::create_dir_all(dir).expect("a fixture folder");

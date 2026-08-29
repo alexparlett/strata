@@ -19,7 +19,8 @@ Two rules shape everything below:
 - **DataFusion resolves nothing itself.** There is no built-in "read `s3://…`": the embedder
   builds an `object_store` and registers it per bucket, or every scan fails with *"No suitable
   object store found"*. Registering that store is the whole of what an object-store connection
-  *does* (`crates/strata-engine/src/store.rs`). A source connection is the same shape against a
+  *does* (`crates/strata-engine/src/sources/store/` — the shell, plus a file per provider). A
+  source connection is the same shape against a
   different registry: it opens a live handle and registers a **catalog**
   (`crates/strata-engine/src/sources/`).
 
@@ -125,7 +126,8 @@ Credentials resolve **at query time** from the machine's own chains; the app nev
 out of them.
 
 **S3** wraps the AWS SDK's resolved credential provider in an `object_store`
-`CredentialProvider` (`engine::store::SdkCredentials`) that re-resolves **per request**, not once
+`CredentialProvider` (`engine::sources::store::s3`'s `SdkCredentials`) that re-resolves **per
+request**, not once
 at build. That is the point of wrapping the provider rather than copying a key out of it:
 SSO / assumed-role / IMDS credentials expire in minutes, and the SDK's provider is the thing that
 knows how to refresh them — an `aws sso login` in another terminal just works. The `aws-config`
@@ -141,7 +143,8 @@ the chosen profile, and a misspelled profile name would still connect green. So 
 `aws_config::defaults(…)` (the whole chain, whatever answers) and **Named profile** is
 `ProfileFileCredentialsProvider` standalone: that profile's own mechanism (`source_profile`,
 `role_arn`, `sso_session`, `credential_process`) and no fallback to anyone else's identity.
-Pinned by test (`store.rs`, `a_named_profile_signs_as_that_profile_and_not_as_the_environment`).
+Pinned by test (`sources/store/s3.rs`,
+`a_named_profile_signs_as_that_profile_and_not_as_the_environment`).
 
 **GCS** is native `object_store`: Ambient is ADC (`GOOGLE_APPLICATION_CREDENTIALS`, then the
 gcloud ADC file, then the GCE/GKE metadata server); Service-account uses
@@ -161,7 +164,7 @@ Both arms settle through one body (`engine::connect::settle`), which takes the t
 argument: the registries differ — an object store keyed by URL, a catalog keyed by its SQL name —
 and the contract does not.
 
-`engine::store::connect` **probes the credential chain before registering**: it resolves the
+`engine::sources::store::connect` **probes the credential chain before registering**: it resolves the
 chain once, throws the answer away, and only then registers the store. On `Err` nothing is
 registered — including anything an earlier pass registered under the same URL, which is
 deregistered rather than left behind. A connection is never both refused and live, which is what
@@ -503,12 +506,15 @@ crate's `DatabaseCatalogProvider`; the others are that it snapshots the listing 
 this exists for.
 
 A relation's provider is built **one level below** the crate's `PostgresTableFactory`
-(`engine/db/federate.rs`), which is that factory's three steps written out — the `SqlTable`, the
-PostgreSQL unparser dialect, the federation wrapper — plus an executor of ours around the crate's.
-`datafusion-table-providers` leaves every one of `datafusion-federation`'s rewrite hooks at its
-`None` default, and those hooks are the only place a statement can be touched between the unparser
-and the wire. The schema provider is still the one construction site, and the dialect, the wrapper
-and the per-relation cache are unchanged by the move.
+(`engine/sources/postgres/mod.rs`, over the assembly in `engine/sources/sql.rs`), which is that
+factory's three steps written out — the `SqlTable`, the connection's unparser dialect, the
+federation wrapper — plus an executor of ours around the crate's. The executor is what recodes the
+error coming back and stamps the connection's identity as federation's fusion key, so two
+connections to one server can never fuse into one statement. What the statement *says* is the
+dialect's, not the executor's: it is handed to the `SqlTable` and to the wrapper alike, so the
+federated statement and the fallback provider's own scan speak one connection's SQL. The schema
+provider is still the one construction site, and the wrapper and the per-relation cache are
+unchanged by the move.
 
 **The def:**
 
@@ -592,11 +598,14 @@ the app's own Postgres-style accessors already read. The crate's default would r
 relation for one such column. This is representation honesty rather than silent corruption: the
 value is intact, only the type is wider.
 
-**JSON accessors are rewritten into PostgreSQL's own operators, and an accessor that has no
-faithful spelling refuses by name** (`engine/db/json.rs`). `payload ->> 'type'` is planned as a
-`datafusion-functions-json` UDF call, and a UDF call unparses *by name* — so without this a
-federated subplan would carry `json_as_text(payload, 'type')` to a server that has no such
-function, and federation has no per-expression fallback to catch it. What pushes down:
+**JSON accessors are written as PostgreSQL's own operators, and an accessor that has no faithful
+spelling refuses by name** (`engine/sources/postgres/json.rs` — the family table and the refusals;
+`dialect.rs` — the connection's unparser dialect, whose
+`Dialect::scalar_function_to_sql_overrides` is where a call becomes an operator expression).
+`payload ->> 'type'` is planned as a `datafusion-functions-json` UDF call, and a UDF call unparses
+*by name* — so without this a federated subplan would carry `json_as_text(payload, 'type')` to a
+server that has no such function, and federation has no per-expression fallback to catch it. What
+pushes down:
 
 | Typed | Planned as | Sent as |
 |---|---|---|
@@ -623,8 +632,17 @@ that is `text` rather than `json` — recognised by the `SQLSTATE: 42883` the pr
 rather than by PostgreSQL's prose, which has at least three wordings for it. Those keep the
 server's own words and add ours on a line of their own. **`json_contains` is not `?`**: Postgres's `?` is also true for a string *array element* and
 takes no integer index, where the local function is false for both, so the faithful spelling is the
-arrow chain. None of this is reachable from a local JSON column: the rewrite rides the executor
-behind a remote relation's provider, and nothing else.
+arrow chain. None of this is reachable from a local JSON column: the dialect belongs to one
+connection and is reached only when that connection's SQL is being written.
+
+Two things read differently in a plan because the spelling is decided at the unparser rather than
+after it. A federated node's `base_sql=` already carries the operator, and there is no
+`rewritten_executor_sql=` beside it. And a **refused** statement has no `base_sql=` at all —
+federation prints that field only when the plan unparses — so an `EXPLAIN` over a query the family
+refuses shows the node without its statement; running it is what shows the sentence. A refused
+accessor in a `WHERE` also stops claiming pushdown: the fallback provider asks the dialect whether
+a filter can be written down, so a filter it cannot write is one DataFusion keeps and evaluates
+locally, where before it was written into the scan's SQL and refused by the server.
 
 ### Writing into a database (DB-10)
 
