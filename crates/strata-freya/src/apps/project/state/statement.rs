@@ -3,10 +3,10 @@
 //!
 //! An intercepted statement returns a `StoreEffect` rather than leaving its change somewhere to
 //! be discovered: the catalog is the `ProjectState` store, never a query, so the engine's answer
-//! is *applied* here exactly as `save_view` applies `Catalog::create_view`'s — store upsert on the
-//! matching [`ProjChan`] → the def written through the persist funnel at its mutation point →
-//! `catalog_settled`, which adopts the generation the engine is now at, so every tab's diagnostics
-//! re-derive against the catalog it now holds → the event log.
+//! is *applied* here — store upsert on the matching [`ProjChan`] → the def written through the
+//! persist funnel at its mutation point → `catalog_settled`, which adopts the generation the
+//! engine is now at, so every tab's diagnostics re-derive against the catalog it now holds → the
+//! event log.
 //!
 //! **One fold for every effect**, not one per capability. Each later ED task adds a `StoreEffect`
 //! arm and nothing else: no new persist path, no second adoption site, no second place that knows a
@@ -18,10 +18,12 @@
 //! local `applied` flag is the whole dedup — the pin is keyed by the press's nonce, so there is
 //! never a second observer of one settle.
 //!
-//! **A surface that dispatches its own run folds through the same body**, not a copy of it: the
+//! **A surface that dispatches its own work folds through the same body**, not a copy of it: the
 //! empty-table panel (IT-01) composes a `CREATE TABLE`, calls `Workspace::run` from a press and
-//! hands the report to [`settle`] through [`use_settle`]. A gesture that ran a statement and
-//! stopped there would have created a table the catalog never learns about.
+//! hands the report to [`settle`] through [`use_settle`]; ⌘S on a view (`editor::actions`) does
+//! the same with what `Catalog::create_view` answers. A gesture that ran a statement and stopped
+//! there would leave a table the catalog never learns about, and one that folded it itself would
+//! be a second body applying one effect.
 //!
 //! **And the log entry is recorded here, not by [`use_run_logging`](super::log::use_run_logging).**
 //! A statement's message claims something durable ("Table 't' created"), and only the fold knows
@@ -42,18 +44,18 @@ use super::log::{log_event, LogLevel};
 use super::persist::{persisted_defs, use_report, ReportCtx};
 use super::{ProjChan, ProjectState};
 
-/// The window's handles a fold writes through — resolved once at render, passed by value, like
-/// every other observer here (`save_view` takes the same set as arguments).
+/// The window's handles a fold writes through, resolved once at render and passed by value so a
+/// press that dispatches its own work can carry them into its task.
 #[derive(Clone, Copy)]
 pub struct Settle {
-    project: RadioStation<ProjectState, ProjChan>,
-    catalog: Catalog,
-    rescan: CatalogRescan,
+    pub project: RadioStation<ProjectState, ProjChan>,
+    pub catalog: Catalog,
+    pub rescan: CatalogRescan,
     /// Both reporting handles — the event log *and* the fault satellite. The log is reached
     /// through here rather than held beside it: `ReportCtx` already carries it, and a second
     /// field resolved from the same context would be one more thing that has to stay the same
     /// handle for a statement's success row and its write failure to land in one place.
-    report: ReportCtx,
+    pub report: ReportCtx,
 }
 
 /// Gather the fold's handles from the window's stores and context.

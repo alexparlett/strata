@@ -11,7 +11,7 @@
 //! Run's statement router is the engine's (ED-02), and Save saves the text as-is.
 
 use freya::prelude::spawn;
-use freya::radio::{Radio, RadioStation};
+use freya::radio::Radio;
 use strata_core::util::fmt_int;
 use strata_model::{Origin, SavedQuery, TabId, ViewDef};
 use uuid::Uuid;
@@ -19,8 +19,8 @@ use uuid::Uuid;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, QuerySpec, RunId, DEFAULT_PAGE_SIZE};
 use crate::apps::project::state::{
-    catalog_settled, log_event, persisted_defs, Catalog, Chan, LogCtx, LogLevel, ProjChan,
-    ProjectState, QueryTab, ReportCtx, SessionState,
+    catalog_settled, log_event, persisted_defs, settle, Chan, LogCtx, LogLevel, ProjChan, QueryTab,
+    SessionState, Settle,
 };
 
 /// A Run / Explain / Analyze press (P2-15 + ⌘↵): snapshot the tab's editor text *now*,
@@ -177,52 +177,34 @@ pub fn clear(mut session: Radio<SessionState, Chan>, id: TabId) {
 /// The Save button: write the buffer to the tab's save target, dispatching on its
 /// origin (see the module doc). A blank buffer never saves.
 ///
-/// `log` is the window's event log: a save is a project mutation, so its outcome is recorded
-/// there (P3-13).
-pub fn save(
-    session: Radio<SessionState, Chan>,
-    project: RadioStation<ProjectState, ProjChan>,
-    engine: EngineCtx,
-    catalog: Catalog,
-    report: ReportCtx,
-    id: TabId,
-) {
+/// `to` is the statement fold's handles: a save is a project mutation, so it writes the store,
+/// persists and records its outcome through the bundle every statement's outcome goes through.
+pub fn save(session: Radio<SessionState, Chan>, engine: EngineCtx, to: Settle, id: TabId) {
     let Some((sql, name, origin)) = read_tab(session, id) else {
         return;
     };
     match origin {
-        Origin::View(view) => save_view(
-            session, project, engine, catalog, report, id, view, sql, false,
-        ),
-        Origin::SavedQuery(qid) => save_query(session, project, report, id, qid, name, sql),
-        Origin::Scratch => save_query(session, project, report, id, Uuid::new_v4(), name, sql),
+        Origin::View(view) => save_view(session, engine, to, id, view, sql, false),
+        Origin::SavedQuery(qid) => save_query(session, to, id, qid, name, sql),
+        Origin::Scratch => save_query(session, to, id, Uuid::new_v4(), name, sql),
     }
 }
 
 /// The Eye button: save the buffer as a **new** catalog view, auto-named with the
 /// first free `saved_view_N` (tables + views share one SQL namespace) — and rename
 /// the tab to it, since the view's name is its identity.
-pub fn save_as_view(
-    session: Radio<SessionState, Chan>,
-    project: RadioStation<ProjectState, ProjChan>,
-    engine: EngineCtx,
-    catalog: Catalog,
-    report: ReportCtx,
-    id: TabId,
-) {
+pub fn save_as_view(session: Radio<SessionState, Chan>, engine: EngineCtx, to: Settle, id: TabId) {
     let Some((sql, _, _)) = read_tab(session, id) else {
         return;
     };
     let name = {
-        let p = project.peek();
+        let p = to.project.peek();
         (1..)
             .map(|i| format!("saved_view_{i}"))
             .find(|n| p.name_in_use(n).is_none())
             .unwrap()
     };
-    save_view(
-        session, project, engine, catalog, report, id, name, sql, true,
-    );
+    save_view(session, engine, to, id, name, sql, true);
 }
 
 /// The tab's savable state: `(sql, trimmed name, origin)`; `None` when the tab is
@@ -237,30 +219,32 @@ fn read_tab(session: Radio<SessionState, Chan>, id: TabId) -> Option<(String, St
     Some((sql, t.name.trim().to_string(), t.origin.clone()))
 }
 
-/// Write `sql` as the view `name`: def first (row → `Loading`, persisted at the
-/// mutation point), bind the tab, then `CREATE OR REPLACE VIEW` on the engine with
-/// the answer landing on the row exactly like load-time registration (Ready with
-/// columns/deps, or Failed with the planner's error).
-#[allow(clippy::too_many_arguments)]
+/// Write `sql` as the view `name`: def first, bind the tab, then `Catalog::create_view` on the
+/// engine, whose report goes through [`settle`].
+///
+/// **The def is written twice on the way to Ready, and both writes are load-bearing.** This one
+/// puts a `Loading` row in the sidebar while the engine works and keeps the view across a crash
+/// mid-registration; the fold's is the engine's answer landing, and it is the write that decides
+/// whether the success row is logged — a save announced over a failed write is the log promising
+/// a view the next open loses. The failure arm stays here, because the fold has none to give it.
 fn save_view(
     mut session: Radio<SessionState, Chan>,
-    mut project: RadioStation<ProjectState, ProjChan>,
     engine: EngineCtx,
-    catalog: Catalog,
-    report: ReportCtx,
+    to: Settle,
     id: TabId,
     name: String,
     sql: String,
     rename: bool,
 ) {
-    let persisted = {
+    let mut project = to.project;
+    {
         let mut p = project.write_channel(ProjChan::Views);
         p.upsert_view(ViewDef {
             name: name.clone(),
             sql: sql.clone(),
         });
-        persisted_defs(&p, report)
-    };
+        persisted_defs(&p, to.report);
+    }
     session.write_channel(Chan::Tabs).bind_saved(
         id,
         rename.then(|| name.clone()),
@@ -268,27 +252,22 @@ fn save_view(
     );
     spawn(async move {
         match engine.catalog().create_view(name.clone(), sql).await {
-            Ok(meta) => {
-                if persisted {
-                    log_event(report.log, LogLevel::Ok, format!("Saved view '{name}'"));
-                }
-                project
-                    .write_channel(ProjChan::Views)
-                    .view_registered(&name, meta);
+            Ok(report) => {
+                let _ = settle(to, &engine, &report);
             }
             Err(e) => {
                 tracing::error!("create view '{name}' failed: {e}");
                 log_event(
-                    report.log,
+                    to.report.log,
                     LogLevel::Error,
                     format!("View '{name}' failed to register: {e}"),
                 );
                 project
                     .write_channel(ProjChan::Views)
                     .view_failed(&name, e.to_string());
+                catalog_settled(to.catalog, &engine);
             }
         }
-        catalog_settled(catalog, &engine);
     });
 }
 
@@ -296,8 +275,7 @@ fn save_view(
 /// the query being overwritten — a fresh one has no run yet), persist, and bind the tab.
 fn save_query(
     mut session: Radio<SessionState, Chan>,
-    mut project: RadioStation<ProjectState, ProjChan>,
-    report: ReportCtx,
+    to: Settle,
     id: TabId,
     qid: Uuid,
     name: String,
@@ -306,6 +284,7 @@ fn save_query(
     if name.is_empty() {
         return;
     }
+    let mut project = to.project;
     let saved = {
         let mut p = project.write_channel(ProjChan::Queries);
         let meta = p
@@ -320,10 +299,10 @@ fn save_query(
             sql,
             meta,
         });
-        persisted_defs(&p, report)
+        persisted_defs(&p, to.report)
     };
     if saved {
-        log_event(report.log, LogLevel::Ok, format!("Saved query '{name}'"));
+        log_event(to.report.log, LogLevel::Ok, format!("Saved query '{name}'"));
     }
     session
         .write_channel(Chan::Tabs)

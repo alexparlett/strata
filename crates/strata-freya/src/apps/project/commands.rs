@@ -34,7 +34,9 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::close::{close_project, CloseGuard, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::state::{use_catalog_selection, CatalogSelection, Chan, SessionState};
+use crate::apps::project::state::{
+    use_catalog_selection, use_settle, CatalogSelection, Chan, SessionState, Settle,
+};
 use crate::apps::project::views::{
     actions, use_catalog_actions, CatalogActions, ConnectionRequest,
 };
@@ -79,6 +81,8 @@ pub struct PaletteCtx {
     pub session: Radio<SessionState, Chan>,
     /// Run's in-flight gate and Save-as-view's engine.
     pub engine: EngineCtx,
+    /// Where Save as view folds what the engine answered.
+    pub settle: Settle,
     /// Where a COLUMNS row lands: the inspected column (P3-08).
     pub selection: CatalogSelection,
     /// The connection editor's request slot. The pane's `+` folds under panel pressure and has
@@ -100,6 +104,7 @@ pub fn use_palette_ctx() -> PaletteCtx {
         catalog: use_catalog_actions(),
         session: use_radio::<SessionState, Chan>(Chan::Tabs),
         engine: use_consume::<EngineCtx>(),
+        settle: use_settle(),
         selection: use_catalog_selection(),
         connection: use_consume::<ConnectionRequest>(),
         open: use_consume::<OpenCtx>(),
@@ -145,14 +150,7 @@ impl PaletteCommands {
               keywords = "create persist")]
     fn save_as_view(ctx: &PaletteCtx) {
         let Some(id) = ctx.active_tab() else { return };
-        actions::save_as_view(
-            ctx.session,
-            ctx.catalog.project,
-            ctx.engine.clone(),
-            ctx.catalog.catalog,
-            ctx.catalog.report,
-            id,
-        );
+        actions::save_as_view(ctx.session, ctx.engine.clone(), ctx.settle, id);
     }
 
     /// Register files, folders or globs

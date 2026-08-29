@@ -1,8 +1,6 @@
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryMode, RunId};
-use crate::apps::project::state::{
-    use_catalog, use_report, Chan, ProjChan, ProjectState, SessionState,
-};
+use crate::apps::project::state::{use_settle, Chan, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
@@ -11,7 +9,7 @@ use crate::components::run_button::{RunButton, RunState};
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::theme::{use_roles, Role};
 use freya::prelude::*;
-use freya::radio::{use_radio, use_radio_station};
+use freya::radio::use_radio;
 use strata_core::config::Command;
 use strata_model::TabId;
 
@@ -46,9 +44,7 @@ impl Component for EditorToolbar {
         let (bg, border) = (roles.get(Role::Background), roles.get(Role::Border));
         let radio = use_radio::<SessionState, Chan>(Chan::Tab(id));
         let engine = use_consume::<EngineCtx>();
-        let project = use_radio_station::<ProjectState, ProjChan>();
-        let catalog = use_catalog();
-        let report = use_report();
+        let settle = use_settle();
         let request_radio = use_radio::<SessionState, Chan>(Chan::Request(id));
 
         let in_flight = request_radio
@@ -77,7 +73,7 @@ impl Component for EditorToolbar {
         let view_engine = engine.clone();
 
         let run_press = move |_| match in_flight {
-            Some(run) => actions::cancel_run(&engine, radio, report.log, id, run),
+            Some(run) => actions::cancel_run(&engine, radio, settle.report.log, id, run),
             None => press(QueryMode::Run),
         };
 
@@ -105,13 +101,13 @@ impl Component for EditorToolbar {
             )
             .separator()
             .item(action(IconName::Eye, "Save as view").on_press(move |_| {
-                actions::save_as_view(radio, project, view_engine.clone(), catalog, report, id);
+                actions::save_as_view(radio, view_engine.clone(), settle, id);
             }))
             .item(
                 action(IconName::Save, "Save query")
                     .hint(Command::SaveQuery)
                     .on_press(move |_| {
-                        actions::save(radio, project, save_engine.clone(), catalog, report, id);
+                        actions::save(radio, save_engine.clone(), settle, id);
                     }),
             );
 

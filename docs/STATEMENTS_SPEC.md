@@ -674,9 +674,11 @@ split in its own refusal). VALUES tuples stay silent (the content is the user's 
 ### 6.3 Typed view DDL — `CREATE VIEW` and `DROP VIEW`
 
 **A second gesture into the funnel ⌘S already uses** (`engine/statements/arms/views.rs`). `views::create` is
-the body `Catalog::create_view` spawns for Save-as-view, so a view is indistinguishable by origin:
+the body `Catalog::create_view` runs for Save-as-view, so a view is indistinguishable by origin:
 one store row, one `project.json` entry, one set of deps, and either gesture edits the row the
-other made. The effect is `StoreEffect::ViewUpserted { def, meta }` — the same pair Save folds.
+other made. Both answer a `StatementReport` carrying
+`StoreEffect::ViewUpserted { def, meta }`, and **both are folded by `state::settle`** — Save keeps
+no store write of its own, which is what stops one effect being applied two ways.
 
 The statement is **never run natively**, for two reasons. DataFusion's own
 `CREATE OR REPLACE VIEW` over a **table** name silently replaces the table (`context/mod.rs`, the
@@ -686,15 +688,31 @@ the store write-back needs a `ViewMeta`, which introspecting for afterwards is t
 catalog invariant forbids — `views::create` reads it off the freshly-registered view's own
 `DataFrame`, where the planner has already resolved everything.
 
+**Nothing is rendered back into SQL to get there.** `views::create` holds a name and a definition
+query, so it puts them straight onto DataFusion's own `LogicalPlan::Ddl(CreateView { name, input,
+or_replace, definition })` and executes that: the node carries `definition: Option<String>`, so
+`ViewDef.sql` rides onto the registered `ViewTable`, and what runs is the type coercion, the
+duplicate-column check and the registration a typed `CREATE VIEW` gets. No statement text is
+composed for a parser to read back, which is what keeps a name like `Sales 2024` from depending on
+being quoted correctly on the way in. `views::drop` is the matching half: deregistering the folded
+reference is the whole of what DataFusion's own `DropView` execution does, with that execution's
+type test in front of it so `IF EXISTS` stays silent about a name that is a table.
+
+The one thing the plan-built form has to check for itself is that the body **is a query**. ⌘S
+saves whatever is in the buffer and a `CreateView` node takes any plan as its input, so without
+the check a view's next scan could run a `DROP`; sqlparser gives it away for free on the typed
+path, which cannot parse `CREATE VIEW v AS DROP TABLE t` at all. A body that is not a query is
+refused by name: *"A view's definition must be a query"*.
+
 `ViewDef` is `{ name, sql }` and nothing else, so a typed statement has to arrive at exactly that
 pair: the folded target name (`TableReference::parse_str`, DataFusion's own identifier
 normalization) and the **definition query's canonical rendering** — the query node alone, not the
 statement around it. That is what makes the row round-trip, because it is the same string ⌘S
 would have saved from a tab holding that query. It is also why the clauses `CREATE VIEW` can
-carry are refused **by name**, from a destructure with no `..`: the statement is rebuilt around
-the query, so a clause nobody read is a clause silently dropped, and `CREATE TEMPORARY VIEW`
-would create a permanent one. A clause sqlparser learns later is a compile error rather than a
-promise Strata quietly breaks.
+carry are refused **by name**, from a destructure with no `..`: the statement is *reduced* to
+that pair and the plan node carries nothing else, so a clause nobody read is a clause silently
+dropped, and `CREATE TEMPORARY VIEW` would create a permanent one. A clause sqlparser learns
+later is a compile error rather than a promise Strata quietly breaks.
 
 The fences, all resolved before anything runs:
 
@@ -731,7 +749,14 @@ one that would have to move both surfaces at once.
 Profiles are cancelled by `Engine::settle_effect` off the returned effect rather than inside the
 arm, for the reason `TableRemoved` gives: the statement runs in a task that cannot reach the
 lifecycle. The direct gestures (⌘S, the pane's drop confirm) cancel in `Catalog::create_view` /
-`drop_view`, which never produce an effect.
+`drop_view` before dispatching, because the entry a redefinition is about is the one a scan in
+flight is still counting.
+
+Those two facade calls differ from the arms in one place only, and it is the sentence: a report
+minted by a gesture is worded as the gesture (*"Saved view 'v'"*), where the typed statement says
+whether it created or replaced and what a drop left invalid. The registration pass takes a third
+door, `Catalog::register_view`, which is `create_view` without the report — it wants the
+`ViewMeta` for a `RegOutcome::View` and has no gesture to word a sentence about.
 
 Replay needs no code of its own: a typed view is a `ViewDef`, and the view phase's fixed-point
 rounds order a chain from cold exactly as they do a saved one.
