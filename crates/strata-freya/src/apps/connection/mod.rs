@@ -41,7 +41,7 @@
 //! else, because that reason describes the very field the user still has in front of them.
 //!
 //! **An edit that moves the address, the provider or a database's user moves the connection's
-//! identity**, and what the old URL registered survives it: `engine::store::connect` only ever
+//! identity**, and what the old URL registered survives it: `engine::sources::store::connect` only ever
 //! sees the def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the
 //! same `Sources::disconnect` call Forget makes — and for a database that move takes the keystore
 //! entry with it, since the reference is derived from the URL.

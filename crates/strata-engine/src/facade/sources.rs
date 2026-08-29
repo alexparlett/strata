@@ -9,9 +9,10 @@ use strata_model::{ConnectionDef, Provider};
 
 use crate::catalog;
 use crate::sources::source::SourceInfo;
+use crate::sources::store::{self, s3};
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, store, Dependents, Engine, EngineError, CATALOG};
+use crate::{fold_ident, Dependents, Engine, EngineError, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -322,7 +323,7 @@ impl Sources<'_> {
     }
 
     /// The AWS profile names this machine's own configuration defines — what the connection
-    /// editor's **Named profile** picker offers (W7 · 03). See `store::aws_profiles`; no
+    /// editor's **Named profile** picker offers (W7 · 03). See `store::s3::aws_profiles`; no
     /// profile's *contents* are read.
     ///
     /// On the engine rather than beside the surface that asks for it, for the two reasons every
@@ -332,7 +333,7 @@ impl Sources<'_> {
     pub async fn aws_profiles(self) -> Vec<String> {
         self.engine
             .rt()
-            .spawn(store::aws_profiles())
+            .spawn(s3::aws_profiles())
             .await
             .unwrap_or_default()
     }

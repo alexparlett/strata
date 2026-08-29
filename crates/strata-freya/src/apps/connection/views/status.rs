@@ -2,11 +2,11 @@
 //! connection instead of a table.
 //!
 //! There is no success block: success is the window closing. And there is no pre-flight probe
-//! either: `engine::store::connect` resolves the credential chain once before it registers
+//! either: `engine::sources::store::connect` resolves the credential chain once before it registers
 //! anything, so the answer this waits for *is* the probe. A second check here would be a request
 //! to the bucket asking a question the pass has already answered.
 //!
-//! The failure text is whatever the engine returned. `engine::store` writes those messages for
+//! The failure text is whatever the engine returned. `engine::sources::store` writes those messages for
 //! every caller — "This S3 connection needs a region", "The AWS profile 'analytics' resolved no
 //! credentials: …" — and this window must not grow a second set.
 //!

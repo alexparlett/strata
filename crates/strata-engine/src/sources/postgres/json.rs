@@ -11,19 +11,19 @@
 //! 'type'` is better SQL there than anything we could send instead.
 //!
 //! **[`FAMILY`] is the whole of what this module knows**, and it is the only source of "mapped":
-//! the rewrite reads it to translate, and [`support`] hands the same table to the engine as the
-//! source's [`FunctionMap`](crate::sources::source::FunctionMap). A member is mapped only where
-//! the operator means the *same thing* as the local function, judged against what the local
+//! [`override_call`] reads it to translate, and [`support`] hands the same table to the engine as
+//! the source's [`FunctionMap`](crate::sources::source::FunctionMap). A member is mapped only
+//! where the operator means the *same thing* as the local function, judged against what the local
 //! function returns — never a lossy approximation, because a query that answers differently
 //! depending on where it ran is worse than one that refuses.
-
-use std::ops::ControlFlow;
+//!
+//! *Where* the translation happens is [`dialect`](super::dialect)'s: the connection's own unparser
+//! dialect, so it is the same answer wherever the connection's SQL is written down.
 
 use datafusion::common::{DataFusionError, Result as DfResult};
-use datafusion::sql::sqlparser::ast::{
-    BinaryOperator, Expr, Function, FunctionArg, FunctionArgExpr, FunctionArguments, Statement,
-    VisitMut, VisitorMut,
-};
+use datafusion::logical_expr::Expr;
+use datafusion::sql::sqlparser::ast::{BinaryOperator, Expr as SqlExpr};
+use datafusion::sql::unparser::Unparser;
 
 use crate::sources::source::{unsupported_function, FunctionMap, Support, MATERIALIZE};
 
@@ -66,11 +66,11 @@ enum Spelling {
 /// **`json_union_to_text` is deliberately absent**, and it is the one omission that is not about
 /// semantics. It is never something a user typed: it is `query::json_unions_as_text`'s own
 /// projection over a `json_get` result, added after planning. Refusing it *by name* would name a
-/// function the user cannot see or remove — which is what a first version did, since it sits above
-/// the `json_get` in the statement and the traversal reaches an outer projection before the
-/// subquery under it. Left out, the `json_get` that put the union there is what refuses, in the
-/// user's own terms; and a union that reached a remote statement without one would fail on the
-/// server as an undefined function, which [`remote_refusal`] answers.
+/// function the user cannot see or remove — which is what a first version did. Left out, it is
+/// handed to `PostgreSqlDialect` like any other unknown name, whose default writes a call and
+/// unparses the arguments under it; the `json_get` that put the union there is what refuses then,
+/// in the user's own terms. And a union that reached a remote statement without one would fail on
+/// the server as an undefined function, which [`remote_refusal`] answers.
 const FAMILY: &[(&str, Option<Spelling>, &str)] = &[
     ("json_as_text", Some(Spelling::Text), ""),
     ("json_contains", Some(Spelling::Present), ""),
@@ -151,112 +151,82 @@ pub(super) fn remote_refusal(raw: &str, connection: &str) -> String {
     )
 }
 
-/// Rewrite every mapped accessor in `statement` into its operator form, and refuse the statement
-/// if it carries an unmapped one.
+/// How `connection` spells a call to `function`, or `None` where [`FAMILY`] has no opinion about
+/// the name — which is the caller's cue to fall through to `PostgreSqlDialect`'s own overrides.
 ///
-/// One pass over the whole statement, because one table answers both questions: a family name is
-/// either translated or is the refusal. Bottom-up, so a nested accessor is already an operator
-/// expression by the time the call around it is read.
-pub(super) fn push_down(mut statement: Statement, connection: &str) -> DfResult<Statement> {
-    match VisitMut::visit(&mut statement, &mut PushDown { connection }) {
-        ControlFlow::Continue(()) => Ok(statement),
-        ControlFlow::Break(why) => Err(DataFusionError::Execution(why)),
-    }
-}
-
-struct PushDown<'a> {
-    connection: &'a str,
-}
-
-impl VisitorMut for PushDown<'_> {
-    type Break = String;
-
-    fn post_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        let Expr::Function(function) = expr else {
-            return ControlFlow::Continue(());
-        };
-        let Some(called) = plain_call(function) else {
-            return ControlFlow::Continue(());
-        };
-        let Some(&(name, spelling, why)) = FAMILY.iter().find(|(known, ..)| *known == called)
-        else {
-            return ControlFlow::Continue(());
-        };
-        let Some(spelling) = spelling else {
-            return ControlFlow::Break(unsupported_function(name, self.connection, why));
-        };
-        match spelled(spelling, function) {
-            Some(operators) => {
-                *expr = operators;
-                ControlFlow::Continue(())
-            }
-            None => ControlFlow::Break(pathless_refusal(name, self.connection)),
-        }
-    }
-}
-
-/// The name of a plain scalar call — one identifier, a positional argument list, and none of the
-/// clauses a scalar function never carries.
-///
-/// Anything else wearing a family name is left alone: this rewrites what the unparser writes for a
-/// `ScalarFunction`, and a shape it does not write is not one to guess at.
-fn plain_call(function: &Function) -> Option<&str> {
-    let Function {
-        name,
-        uses_odbc_syntax: false,
-        parameters: FunctionArguments::None,
-        args: FunctionArguments::List(_),
-        filter: None,
-        null_treatment: None,
-        over: None,
-        within_group,
-    } = function
-    else {
-        return None;
+/// The two answers it does give come from one table because they are one question: a family name
+/// is either translated or is the refusal.
+pub(super) fn override_call(
+    unparser: &Unparser,
+    function: &str,
+    args: &[Expr],
+    connection: &str,
+) -> Option<DfResult<SqlExpr>> {
+    let &(name, spelling, why) = FAMILY.iter().find(|(known, ..)| *known == function)?;
+    let Some(spelling) = spelling else {
+        return Some(refused(unsupported_function(name, connection, why)));
     };
-    match (within_group.is_empty(), name.0.as_slice()) {
-        (true, [part]) => part.as_ident().map(|ident| ident.value.as_str()),
-        _ => None,
-    }
+    Some(
+        spelled(unparser, spelling, args)
+            .unwrap_or_else(|| refused(pathless_refusal(name, connection))),
+    )
 }
 
-/// `function`'s arguments as the operator expression `spelling` describes, or `None` where the
-/// call is not a value and a path of at least one key — which is the only shape either operator
-/// form can carry, and so is a refusal rather than a translation.
-fn spelled(spelling: Spelling, function: &Function) -> Option<Expr> {
-    let FunctionArguments::List(list) = &function.args else {
-        return None;
-    };
-    let args = list
-        .args
-        .iter()
-        .map(|arg| match arg {
-            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => Some(expr.clone()),
-            _ => None,
-        })
-        .collect::<Option<Vec<Expr>>>()?;
+/// A refusal, in the shape every hop between here and the results pane passes through unwrapped.
+fn refused(why: String) -> DfResult<SqlExpr> {
+    Err(DataFusionError::Execution(why))
+}
+
+/// `args` as the operator expression `spelling` describes, or `None` where the call is not a value
+/// and a path of at least one key — which is the only shape either operator form can carry, and so
+/// is a refusal rather than a translation.
+fn spelled(unparser: &Unparser, spelling: Spelling, args: &[Expr]) -> Option<DfResult<SqlExpr>> {
     let (value, path) = args.split_first()?;
     let (last, lead) = path.split_last()?;
-    let walked = lead.iter().fold(value.clone(), |value, key| {
-        operator(value, BinaryOperator::Arrow, key.clone())
-    });
-    match spelling {
-        Spelling::Text => Some(operator(walked, BinaryOperator::LongArrow, last.clone())),
-        Spelling::Present => Some(Expr::Nested(Box::new(Expr::IsNotNull(Box::new(operator(
+    Some(chained(unparser, spelling, value, lead, last))
+}
+
+/// The chain itself, once the call is known to carry a value and a path.
+///
+/// Each argument goes back through `unparser`, which is what makes a nested accessor an operator
+/// expression too: the inner call reaches this same override on the way past, and an inner member
+/// with no spelling refuses from in there.
+fn chained(
+    unparser: &Unparser,
+    spelling: Spelling,
+    value: &Expr,
+    lead: &[Expr],
+    last: &Expr,
+) -> DfResult<SqlExpr> {
+    let walked = lead.iter().try_fold(
+        unparser.expr_to_sql(value)?,
+        |walked, key| -> DfResult<SqlExpr> {
+            Ok(operator(
+                walked,
+                BinaryOperator::Arrow,
+                unparser.expr_to_sql(key)?,
+            ))
+        },
+    )?;
+    let last = unparser.expr_to_sql(last)?;
+    Ok(match spelling {
+        Spelling::Text => operator(walked, BinaryOperator::LongArrow, last),
+        Spelling::Present => SqlExpr::Nested(Box::new(SqlExpr::IsNotNull(Box::new(operator(
             walked,
             BinaryOperator::Arrow,
-            last.clone(),
-        )))))),
-    }
+            last,
+        ))))),
+    })
 }
 
 /// One operator application, parenthesised.
 ///
 /// **Every step is nested**, because what is being replaced is an atom: Postgres gives `->`,
 /// `->>` and every other user-level operator one precedence class, so an unparenthesised
-/// `'a' || x ->> 'k'` would bind as `('a' || x) ->> 'k'`.
-fn operator(value: Expr, op: BinaryOperator, key: Expr) -> Expr {
-    Expr::Nested(Box::new(Expr::BinaryOp {
+/// `'a' || x ->> 'k'` would bind as `('a' || x) ->> 'k'`. The unparser parenthesises the binary
+/// operators *it* writes and knows nothing about the ones written here.
+fn operator(value: SqlExpr, op: BinaryOperator, key: SqlExpr) -> SqlExpr {
+    SqlExpr::Nested(Box::new(SqlExpr::BinaryOp {
         left: Box::new(value),
         op,
         right: Box::new(key),
@@ -265,125 +235,7 @@ fn operator(value: Expr, op: BinaryOperator, key: Expr) -> Expr {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
-    use datafusion::sql::sqlparser::parser::Parser;
-
     use super::*;
-
-    /// The statements under test are what the unparser writes, so they are round-tripped through
-    /// the parser rather than hand-built.
-    fn rewritten(sql: &str) -> Result<String, String> {
-        let mut parsed = Parser::parse_sql(&PostgreSqlDialect {}, sql).expect("a statement");
-        let statement = parsed.pop().expect("one statement");
-        push_down(statement, "pg")
-            .map(|statement| statement.to_string())
-            .map_err(|e| e.to_string())
-    }
-
-    #[test]
-    fn an_accessor_becomes_the_operator_the_user_typed() {
-        assert_eq!(
-            rewritten("SELECT id FROM orders WHERE json_as_text(tags, 'channel') = 'web'"),
-            Ok("SELECT id FROM orders WHERE (tags ->> 'channel') = 'web'".to_string())
-        );
-    }
-
-    #[test]
-    fn a_path_chains_arrows_and_ends_in_the_text_one() {
-        assert_eq!(
-            rewritten("SELECT json_as_text(tags, 'a', 'b', 0) FROM orders"),
-            Ok("SELECT (((tags -> 'a') -> 'b') ->> 0) FROM orders".to_string())
-        );
-    }
-
-    /// `?` asks whether the path resolves, which `IS NOT NULL` over `->` answers and Postgres's
-    /// own `?` does not: `?` is true for a *string array element* too, where the local function is
-    /// false, and it does not accept an integer index at all.
-    #[test]
-    fn a_containment_test_asks_whether_the_path_resolves() {
-        assert_eq!(
-            rewritten("SELECT id FROM orders WHERE json_contains(tags, 'channel')"),
-            Ok("SELECT id FROM orders WHERE ((tags -> 'channel') IS NOT NULL)".to_string())
-        );
-        assert_eq!(
-            rewritten("SELECT json_contains(tags, 'a', 'b') FROM orders"),
-            Ok("SELECT (((tags -> 'a') -> 'b') IS NOT NULL) FROM orders".to_string())
-        );
-    }
-
-    #[test]
-    fn an_operator_expression_is_parenthesised_where_it_stands() {
-        assert_eq!(
-            rewritten("SELECT 'x' || json_as_text(tags, 'channel') FROM orders"),
-            Ok("SELECT 'x' || (tags ->> 'channel') FROM orders".to_string())
-        );
-    }
-
-    /// The planner collapses this shape into one call with a two-key path long before it reaches
-    /// here (`functions-json`'s own `unnest_json_calls`), so what this pins is the **order** — an
-    /// accessor inside another is never left behind as a function call.
-    #[test]
-    fn a_nested_accessor_is_rewritten_from_the_inside_out() {
-        assert_eq!(
-            rewritten("SELECT json_as_text(json_as_text(tags, 'a'), 'b') FROM orders"),
-            Ok("SELECT ((tags ->> 'a') ->> 'b') FROM orders".to_string())
-        );
-    }
-
-    /// `json_unions_as_text` wraps a union column in `json_union_to_text` after planning, so the
-    /// statement that reaches here has Strata's own projection above the user's `json_get` — and
-    /// the refusal has to name the one the user typed.
-    #[test]
-    fn the_union_returning_accessor_refuses_and_names_the_one_that_works() {
-        let why = rewritten("SELECT json_union_to_text(json_get(tags, 'channel')) FROM orders")
-            .expect_err("'->' has no server-side spelling");
-        assert!(
-            !why.contains("json_union_to_text"),
-            "the user never typed that one: {why}"
-        );
-        assert!(
-            why.contains("'json_get'") && why.contains("'->>'") && why.contains("'pg'"),
-            "the refusal names the function, the alternative and the connection: {why}"
-        );
-        assert!(why.contains("CREATE TABLE"), "and the way out: {why}");
-    }
-
-    #[test]
-    fn an_unmapped_member_refuses_without_claiming_an_alternative() {
-        let why = rewritten("SELECT json_length(tags, 'items') FROM orders")
-            .expect_err("counting has no faithful operator form");
-        assert!(
-            why.contains("'json_length'") && why.contains("'pg'") && why.contains("CREATE TABLE"),
-            "{why}"
-        );
-        assert!(
-            !why.contains("'->>'"),
-            "only '->' has an alternative to name: {why}"
-        );
-    }
-
-    /// A path is what both forms are built from, so a call without one is a refusal rather than a
-    /// half-translated expression — and it says *that*, rather than that the accessor is
-    /// unsupported, which the same accessor with a key would disprove on the next line.
-    #[test]
-    fn an_accessor_with_no_key_refuses_for_that_reason() {
-        let why = rewritten("SELECT json_as_text(tags) FROM orders")
-            .expect_err("there is nothing to look up");
-        assert!(
-            why.contains("'json_as_text'") && why.contains("without a key"),
-            "{why}"
-        );
-        assert!(rewritten("SELECT json_contains(tags) FROM orders").is_err());
-        assert!(rewritten("SELECT json_as_text(tags, 'a') FROM orders").is_ok());
-    }
-
-    #[test]
-    fn a_function_that_is_not_in_the_family_is_left_alone() {
-        assert_eq!(
-            rewritten("SELECT upper(name), json_valid(tags) FROM orders"),
-            Ok("SELECT upper(name), json_valid(tags) FROM orders".to_string())
-        );
-    }
 
     /// The wrapper's predicate reads the **code** the provider crate renders, so every wording
     /// `undefined_function` takes is covered and a relation that vanished — the catalog's own

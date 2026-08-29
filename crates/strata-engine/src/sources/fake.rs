@@ -270,7 +270,6 @@ impl SourceCatalog for SqlCatalog {
                     relation: at.relation.table().to_string(),
                 }),
                 provider,
-                analyzer: None,
             },
             at,
         ))

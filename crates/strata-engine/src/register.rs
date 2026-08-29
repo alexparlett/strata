@@ -25,7 +25,7 @@ use futures::stream::{self, StreamExt};
 use strata_model::{ConnectionDef, TableDef, ViewDef};
 
 use crate::catalog::registered;
-use crate::store::store_prefix;
+use crate::sources::store::store_prefix;
 use crate::{fold_ident, CatalogGen, Connections, Engine, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
