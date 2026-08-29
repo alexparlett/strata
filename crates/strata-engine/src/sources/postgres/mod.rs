@@ -42,8 +42,8 @@ use crate::catalog::readable;
 use crate::secrets::{SecretProvider, SecretRequest};
 use crate::sources::secret_slot;
 use crate::sources::source::{
-    ConnectionKey, DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind,
-    SourceMode, Sourced,
+    DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
+    SourceSetting, Sourced,
 };
 use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
 use crate::statements::Remote;
@@ -97,8 +97,8 @@ impl DataSource for Pg {
         settings::parse_address(address.trim()).map(|_| ())
     }
 
-    fn config_keys(&self) -> &'static [ConnectionKey] {
-        settings::KEYS
+    fn settings(&self) -> &'static [SourceSetting] {
+        settings::SETTINGS
     }
 }
 

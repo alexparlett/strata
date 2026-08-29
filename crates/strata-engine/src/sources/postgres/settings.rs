@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::sources::source::{ConnectionKey, Field, Slot, When};
+use crate::sources::source::{Field, Slot, SourceSetting, When};
 
 /// The key a `PostgreSQL` connection's password is filed under, in the keystore and in the def's
 /// expectation set.
@@ -45,8 +45,8 @@ const SSL: Option<&str> = Some("SSL");
 /// The address is a declared key like the rest ([`Slot::Address`]) — its value lands on the def's
 /// own field rather than in `config`, and everything else about the row is stated here, so
 /// nothing about a `PostgreSQL` connection is written down in the editor.
-pub const KEYS: &[ConnectionKey] = &[
-    ConnectionKey {
+pub const SETTINGS: &[SourceSetting] = &[
+    SourceSetting {
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
@@ -58,11 +58,11 @@ pub const KEYS: &[ConnectionKey] = &[
         hint: Some("The server and the database on it. The port is not assumed"),
         placeholder: Some("localhost:5432/appdb"),
     },
-    ConnectionKey {
+    SourceSetting {
         key: "user",
         label: "USER",
         field: Field::Text,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: CONNECTION,
         required: true,
         default: None,
@@ -73,11 +73,11 @@ pub const KEYS: &[ConnectionKey] = &[
         ),
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: PASSWORD,
         label: "PASSWORD",
         field: Field::Secret,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: CONNECTION,
         required: false,
         default: None,
@@ -85,11 +85,11 @@ pub const KEYS: &[ConnectionKey] = &[
         hint: None,
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "sslmode",
         label: "SSL MODE",
         field: Field::Choice(SSL_MODES),
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: SSL,
         required: false,
         default: Some("prefer"),
@@ -97,11 +97,11 @@ pub const KEYS: &[ConnectionKey] = &[
         hint: Some("Handed to the driver as written. 'prefer' encrypts when the server offers it"),
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "sslrootcert",
         label: "ROOT CERTIFICATE",
         field: Field::Path,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: SSL,
         required: false,
         default: None,
@@ -374,7 +374,7 @@ mod tests {
     /// the form offers cannot drift from what the driver does.
     #[test]
     fn the_certificate_is_shown_by_the_modes_that_read_it() {
-        let cert = KEYS
+        let cert = SETTINGS
             .iter()
             .find(|key| key.key == "sslrootcert")
             .expect("the declaration");
@@ -394,9 +394,9 @@ mod tests {
     /// reader looks for, and the mode choices are the ones it accepts.
     #[test]
     fn every_declared_key_is_one_the_reader_reads() {
-        let declared: Vec<&str> = KEYS
+        let declared: Vec<&str> = SETTINGS
             .iter()
-            .filter(|key| key.slot == Slot::Setting)
+            .filter(|key| key.slot == Slot::Config)
             .map(|key| key.key)
             .collect();
         assert_eq!(
@@ -404,13 +404,14 @@ mod tests {
             vec!["user", "password", "sslmode", "sslrootcert"],
             "the address is declared too, but it is `parse_address`'s to read and not this"
         );
-        let modes = KEYS
+        let modes = SETTINGS
             .iter()
             .find(|key| key.key == "sslmode")
             .map(|key| key.field);
         assert_eq!(modes, Some(Field::Choice(SSL_MODES)));
         assert_eq!(
-            KEYS.iter()
+            SETTINGS
+                .iter()
                 .find(|key| key.key == PASSWORD)
                 .map(|key| key.field),
             Some(Field::Secret),

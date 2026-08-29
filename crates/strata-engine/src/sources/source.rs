@@ -97,7 +97,7 @@ pub enum Sourced {
 /// other rule is the source's own, asked by [`connect`](DataSource::connect), which is the real
 /// gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ConnectionKey {
+pub struct SourceSetting {
     /// What this setting is called in the def, and what a [`When`] elsewhere names it by.
     pub key: &'static str,
     /// The row's label, in the editor's register.
@@ -133,7 +133,7 @@ pub struct ConnectionKey {
 pub enum Slot {
     /// `SourceDef::config[key]` — or, for a [`Field::Secret`], this machine's keystore under
     /// `{kind}-{key}`, with the def recording only the expectation.
-    Setting,
+    Config,
     /// The connection's address, judged by [`check_address`](DataSource::check_address). Exactly
     /// one key per source declares it, and the conformance body refuses a source that declares
     /// none or two.
@@ -159,7 +159,7 @@ pub struct When {
     pub values: &'static [&'static str],
 }
 
-/// What kind of value a [`ConnectionKey`] takes, and therefore what the editor draws for it.
+/// What kind of value a [`SourceSetting`] takes, and therefore what the editor draws for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     Text,
@@ -372,7 +372,7 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     /// The values live in [`SourceDef::config`](strata_model::SourceDef), except a
     /// [`Field::Secret`], whose value goes to the keystore. Empty for a source configured by its
     /// address alone.
-    fn config_keys(&self) -> &'static [ConnectionKey] {
+    fn settings(&self) -> &'static [SourceSetting] {
         &[]
     }
 }
@@ -511,8 +511,8 @@ pub struct SourceInfo {
     pub label: &'static str,
     pub badge: &'static str,
     pub mode: SourceMode,
-    /// The settings the editor draws for it — [`DataSource::config_keys`].
-    pub keys: &'static [ConnectionKey],
+    /// The settings the editor draws for it — [`DataSource::settings`].
+    pub settings: &'static [SourceSetting],
     /// Whether it can be written to — [`SourceKind::WRITABLE`], and therefore whether a
     /// connection to it is offered the read-only toggle.
     pub writable: bool,
@@ -540,7 +540,7 @@ impl Sources {
                     label: S::LABEL,
                     badge: S::BADGE,
                     mode: S::MODE,
-                    keys: source.config_keys(),
+                    settings: source.settings(),
                     writable: S::WRITABLE,
                 },
                 source: Arc::new(source),

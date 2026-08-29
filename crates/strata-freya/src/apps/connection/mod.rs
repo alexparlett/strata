@@ -410,7 +410,7 @@ fn probe_secrets(ctx: ConnectionCtx) {
     let asking: Vec<&'static str> = {
         let draft = ctx.draft.peek();
         draft
-            .keys
+            .settings
             .iter()
             .filter(|declared| declared.field == Field::Secret)
             .filter(|declared| draft.secrets.contains(declared.key))

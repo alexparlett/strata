@@ -2,7 +2,7 @@
 //! chosen ([`ConnectionDraft`]), and why a draft cannot be saved yet.
 //!
 //! **A draft is a source and nothing else, and this module names no source.** [`ConnectionDraft`]
-//! is a key-to-value map beside the keys the registry handed over ([`ConnectionKey`]), so a kind
+//! is a key-to-value map beside the keys the registry handed over ([`SourceSetting`]), so a kind
 //! the engine gains is a kind this form already edits, and a kind it does not serve has no shape
 //! here at all. The same rule the flat `SourceDef` follows one layer down: what a source is
 //! configured by is the source's business.
@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::{ConnectionKey, Field, Slot, SourceInfo, When};
+use strata_engine::{Field, Slot, SourceInfo, SourceSetting, When};
 use strata_model::{check_catalog, mint_name, ConnectionDef, Provider, SourceDef};
 
 /// What this window is editing: a new connection, or an existing one by
@@ -164,7 +164,7 @@ impl SecretRow {
 /// The label is the row's own eyebrow (`PASSWORD`), and a sentence cannot carry it in that
 /// register. Derived rather than declared, so a key that reaches the form reaches its sentences
 /// with it and a source has one fewer thing to state.
-pub fn noun(key: &ConnectionKey) -> String {
+pub fn noun(key: &SourceSetting) -> String {
     key.label.to_lowercase()
 }
 
@@ -189,7 +189,7 @@ pub struct ConnectionDraft {
     /// What that kind declares it takes, as the registry handed it over. Set with
     /// [`kind`](Self::kind) and never apart from it, so the rows drawn and the values written
     /// cannot describe different sources.
-    pub keys: &'static [ConnectionKey],
+    pub settings: &'static [SourceSetting],
     /// The handle: the connection's display name and its SQL catalog identifier, one field.
     /// Blank is not nameless — [`named`](Self::named) mints one from the address.
     ///
@@ -199,7 +199,7 @@ pub struct ConnectionDraft {
     pub name: String,
     /// Where the connection points, in its kind's own terms — the [`Slot::Address`] key's value.
     pub address: String,
-    /// A value per declared [`Slot::Setting`] key, as typed. Trimmed into the def, never on the
+    /// A value per declared [`Slot::Config`] key, as typed. Trimmed into the def, never on the
     /// way in. **No [`Field::Secret`] value is ever here** — those go to this machine's keystore.
     pub config: BTreeMap<String, String>,
     /// Which of the kind's secret-typed keys this connection has a value for — the def's
@@ -226,7 +226,7 @@ impl ConnectionDraft {
     /// Adopt `info`'s kind and its declaration together.
     pub fn adopt(&mut self, info: &SourceInfo) {
         self.kind = info.kind.to_string();
-        self.keys = info.keys;
+        self.settings = info.settings;
     }
 
     /// Seed the draft from an existing def — every field it holds, so the window opens showing
@@ -248,13 +248,13 @@ impl ConnectionDraft {
                 def.named()
             );
         };
-        let keys = registrants
+        let settings = registrants
             .iter()
             .find(|info| info.kind == source.kind.trim())
-            .map_or(&[][..], |info| info.keys);
+            .map_or(&[][..], |info| info.settings);
         Self {
             kind: source.kind.trim().to_string(),
-            keys,
+            settings,
             name: def.named(),
             address: def.address.clone(),
             config: source.config.clone(),
@@ -265,8 +265,8 @@ impl ConnectionDraft {
     }
 
     /// The key `key` is declared as, or `None` where this kind does not take it.
-    pub fn declared(&self, key: &str) -> Option<&'static ConnectionKey> {
-        self.keys.iter().find(|declared| declared.key == key)
+    pub fn declared(&self, key: &str) -> Option<&'static SourceSetting> {
+        self.settings.iter().find(|declared| declared.key == key)
     }
 
     /// What the box for `key` shows: what has been typed, or what the key declares when nothing
@@ -308,7 +308,7 @@ impl ConnectionDraft {
     /// with what was in it, and [`def`](Self::def) still writes it: what a mode reads is the
     /// source's business, and a path typed under one is not a thing to discard because the mode
     /// moved.
-    pub fn shows(&self, declared: &ConnectionKey) -> bool {
+    pub fn shows(&self, declared: &SourceSetting) -> bool {
         match declared.when {
             None => true,
             Some(When { key, values }) => values.contains(&self.value(key).trim()),
@@ -321,7 +321,7 @@ impl ConnectionDraft {
     pub fn def(&self) -> ConnectionDef {
         let mut config = BTreeMap::new();
         let mut secrets = BTreeSet::new();
-        for declared in self.keys.iter().filter(|d| d.slot == Slot::Setting) {
+        for declared in self.settings.iter().filter(|d| d.slot == Slot::Config) {
             match declared.field {
                 Field::Secret => {
                     if self.secrets.contains(declared.key) {
@@ -384,7 +384,7 @@ impl ConnectionDraft {
         if let Err(why) = check_catalog(&self.named()) {
             return Some(why);
         }
-        self.keys
+        self.settings
             .iter()
             .filter(|declared| declared.required && self.shows(declared))
             .find(|declared| match declared.field {
@@ -422,8 +422,8 @@ mod tests {
     /// A declaration exercising every facet a form is drawn from — an address, two groups, a
     /// default, a conditional key and a required one — and named after nothing shipped, because
     /// the form is not allowed to know a shipped kind either.
-    const TEST_KEYS: &[ConnectionKey] = &[
-        ConnectionKey {
+    const TEST_SETTINGS: &[SourceSetting] = &[
+        SourceSetting {
             key: "address",
             label: "ADDRESS",
             field: Field::Text,
@@ -435,11 +435,11 @@ mod tests {
             hint: Some("Where the test source is"),
             placeholder: None,
         },
-        ConnectionKey {
+        SourceSetting {
             key: "user",
             label: "USER",
             field: Field::Text,
-            slot: Slot::Setting,
+            slot: Slot::Config,
             group: Some("CONNECTION"),
             required: true,
             default: None,
@@ -447,11 +447,11 @@ mod tests {
             hint: Some("The role to log in as"),
             placeholder: None,
         },
-        ConnectionKey {
+        SourceSetting {
             key: "password",
             label: "PASSWORD",
             field: Field::Secret,
-            slot: Slot::Setting,
+            slot: Slot::Config,
             group: Some("CONNECTION"),
             required: false,
             default: None,
@@ -459,11 +459,11 @@ mod tests {
             hint: None,
             placeholder: None,
         },
-        ConnectionKey {
+        SourceSetting {
             key: "mode",
             label: "MODE",
             field: Field::Choice(&["off", "on"]),
-            slot: Slot::Setting,
+            slot: Slot::Config,
             group: Some("SECURITY"),
             required: false,
             default: Some("off"),
@@ -471,11 +471,11 @@ mod tests {
             hint: None,
             placeholder: None,
         },
-        ConnectionKey {
+        SourceSetting {
             key: "certificate",
             label: "ROOT CERTIFICATE",
             field: Field::Path,
-            slot: Slot::Setting,
+            slot: Slot::Config,
             group: Some("SECURITY"),
             required: true,
             default: None,
@@ -489,7 +489,7 @@ mod tests {
     ];
 
     /// A second kind, taking nothing but an address.
-    const OTHER_KEYS: &[ConnectionKey] = &[ConnectionKey {
+    const OTHER_SETTINGS: &[SourceSetting] = &[SourceSetting {
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
@@ -502,13 +502,13 @@ mod tests {
         placeholder: None,
     }];
 
-    fn info(keys: &'static [ConnectionKey]) -> SourceInfo {
+    fn info(settings: &'static [SourceSetting]) -> SourceInfo {
         SourceInfo {
             kind: "test",
             label: "Test source",
             badge: "TST",
             mode: SourceMode::Catalog,
-            keys,
+            settings,
             writable: true,
         }
     }
@@ -516,7 +516,7 @@ mod tests {
     fn source_draft() -> ConnectionDraft {
         ConnectionDraft {
             kind: "test".into(),
-            keys: TEST_KEYS,
+            settings: TEST_SETTINGS,
             name: "warehouse".into(),
             address: "db.internal:5432/analytics".into(),
             config: [("user".to_string(), "reader".to_string())]
@@ -548,7 +548,7 @@ mod tests {
             }),
             client_config: Default::default(),
         };
-        assert_eq!(ConnectionDraft::of(&def, &[info(TEST_KEYS)]).def(), def);
+        assert_eq!(ConnectionDraft::of(&def, &[info(TEST_SETTINGS)]).def(), def);
     }
 
     /// **The address is a declared key whose value lands on a typed field.** That is the whole of
@@ -583,13 +583,13 @@ mod tests {
     /// list of registrants: "none chosen" is a state only a build with no sources can reach.
     #[test]
     fn a_new_draft_adopts_the_first_registrant() {
-        let draft = ConnectionDraft::new(&[info(TEST_KEYS)]);
+        let draft = ConnectionDraft::new(&[info(TEST_SETTINGS)]);
         assert_eq!(draft.kind, "test");
-        assert_eq!(draft.keys, TEST_KEYS);
+        assert_eq!(draft.settings, TEST_SETTINGS);
 
         let bare = ConnectionDraft::new(&[]);
         assert!(bare.kind.is_empty(), "nothing to offer, nothing set");
-        assert!(bare.keys.is_empty());
+        assert!(bare.settings.is_empty());
     }
 
     /// **A def naming a kind nothing is registered for opens with no rows** rather than with the
@@ -606,9 +606,9 @@ mod tests {
             }),
             client_config: Default::default(),
         };
-        let draft = ConnectionDraft::of(&def, &[info(TEST_KEYS)]);
+        let draft = ConnectionDraft::of(&def, &[info(TEST_SETTINGS)]);
         assert_eq!(draft.kind, "mongo");
-        assert!(draft.keys.is_empty(), "nothing declares its rows");
+        assert!(draft.settings.is_empty(), "nothing declares its rows");
     }
 
     /// **The form writes what the kind declares and nothing else.** A value typed under one kind
@@ -630,7 +630,7 @@ mod tests {
             "a key the box never touched is written as the key declares it"
         );
 
-        draft.adopt(&info(OTHER_KEYS));
+        draft.adopt(&info(OTHER_SETTINGS));
         let moved = draft.def();
         let Provider::Source(other) = &moved.provider else {
             panic!("a source def");
@@ -642,7 +642,7 @@ mod tests {
         );
         assert_eq!(moved.address, "db.internal:5432/analytics");
 
-        draft.adopt(&info(TEST_KEYS));
+        draft.adopt(&info(TEST_SETTINGS));
         assert_eq!(
             draft.value("certificate"),
             "/certs/rds.pem",
@@ -681,7 +681,7 @@ mod tests {
     /// **kept** — moving the deciding key back brings the box back with what was in it.
     #[test]
     fn a_key_another_keys_answer_hides_is_not_asked_about() {
-        let cert = TEST_KEYS
+        let cert = TEST_SETTINGS
             .iter()
             .find(|declared| declared.key == "certificate")
             .expect("the conditional key");
@@ -820,14 +820,14 @@ mod tests {
     /// so a source with two credentials has two rows that read differently.
     #[test]
     fn a_secret_rows_sentences_name_the_key_they_are_about() {
-        let key = TEST_KEYS
+        let key = TEST_SETTINGS
             .iter()
             .find(|declared| declared.key == "password")
             .expect("the declaration");
         assert_eq!(noun(key), "password");
         assert!(SecretRow::Typed.note(&noun(key)).contains("This password"));
 
-        let other = ConnectionKey {
+        let other = SourceSetting {
             label: "SECRET ACCESS KEY",
             ..*key
         };

@@ -14,7 +14,7 @@
 //! `sources().check_address` and said in the footer.
 
 use freya::prelude::*;
-use strata_engine::{ConnectionKey, Field, SourceInfo};
+use strata_engine::{Field, SourceInfo, SourceSetting};
 
 use crate::apps::connection::model::{noun, SecretProbe, SecretRow};
 use crate::apps::connection::ConnectionCtx;
@@ -32,7 +32,7 @@ use super::{qualifier, NARROW_WIDTH};
 const TOOL_GAP: f32 = SP_3;
 
 /// Every row a source has: the handle, then the kind's declared keys in the order it declared
-/// them — the address among them — under whatever [`ConnectionKey::group`] headings it asked for,
+/// them — the address among them — under whatever [`SourceSetting::group`] headings it asked for,
 /// and finally the read-only switch, for a kind that says it can be written to.
 ///
 /// A key the draft does not `show` gets no row: a setting another
@@ -49,7 +49,7 @@ const TOOL_GAP: f32 = SP_3;
 pub(super) fn rows(
     form: Form,
     ctx: ConnectionCtx,
-    keys: &'static [ConnectionKey],
+    keys: &'static [SourceSetting],
     registrant: &Option<SourceInfo>,
     scope: &str,
 ) -> Form {
@@ -135,7 +135,7 @@ impl Component for NameField {
 /// drawn as a plain box and written into the def.
 #[derive(PartialEq)]
 struct KeyField {
-    declared: ConnectionKey,
+    declared: SourceSetting,
     key: DiffKey,
 }
 
@@ -226,7 +226,7 @@ impl Component for KeyField {
 /// another component's render cannot (the hook count has to be fixed per render).
 #[derive(PartialEq)]
 struct TextKey {
-    declared: ConnectionKey,
+    declared: SourceSetting,
     key: DiffKey,
 }
 
@@ -279,7 +279,7 @@ impl Component for TextKey {
 /// expectation nothing holds.
 #[derive(PartialEq)]
 struct SecretField {
-    declared: ConnectionKey,
+    declared: SourceSetting,
     key: DiffKey,
 }
 

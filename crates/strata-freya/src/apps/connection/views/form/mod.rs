@@ -54,7 +54,7 @@ impl Component for Fields {
         let engine = use_consume::<EngineCtx>();
         let (kind, keys) = {
             let draft = ctx.draft.read();
-            (draft.kind.clone(), draft.keys)
+            (draft.kind.clone(), draft.settings)
         };
         let registrant = engine
             .sources()

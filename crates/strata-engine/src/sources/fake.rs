@@ -25,8 +25,8 @@ use futures::TryStreamExt;
 use strata_model::{ConnectionDef, Provider, SourceDef};
 
 use super::source::{
-    ConnectionKey, DataSource, Field, Listing, Located, Relation, Slot, SourceCatalog, SourceKind,
-    SourceMode, Sourced, When,
+    DataSource, Field, Listing, Located, Relation, Slot, SourceCatalog, SourceKind, SourceMode,
+    SourceSetting, Sourced, When,
 };
 use super::sql::{federated, SQLExecutor, SqlSpec};
 use crate::secrets::SecretProvider;
@@ -145,8 +145,8 @@ impl SourceKind for TestDoc {
 /// A declaration exercising every facet a form is drawn from: an address, two groups, a default,
 /// a conditional key and a required one — so the contract body below has something to pass on and
 /// a surface has something to render.
-const DOC_KEYS: &[ConnectionKey] = &[
-    ConnectionKey {
+const DOC_SETTINGS: &[SourceSetting] = &[
+    SourceSetting {
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
@@ -158,11 +158,11 @@ const DOC_KEYS: &[ConnectionKey] = &[
         hint: Some("Where the documents are"),
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "collection_prefix",
         label: "PREFIX",
         field: Field::Text,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("CONNECTION"),
         required: false,
         default: None,
@@ -170,11 +170,11 @@ const DOC_KEYS: &[ConnectionKey] = &[
         hint: Some("What every collection this connection reads is named under"),
         placeholder: Some("app_"),
     },
-    ConnectionKey {
+    SourceSetting {
         key: "mode",
         label: "MODE",
         field: Field::Choice(&["plain", "sharded"]),
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("SHARDING"),
         required: false,
         default: Some("plain"),
@@ -182,11 +182,11 @@ const DOC_KEYS: &[ConnectionKey] = &[
         hint: None,
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "shard_key",
         label: "SHARD KEY",
         field: Field::Text,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("SHARDING"),
         required: true,
         default: None,
@@ -200,7 +200,7 @@ const DOC_KEYS: &[ConnectionKey] = &[
 ];
 
 /// The one key a source with nothing to configure still declares.
-const SQL_KEYS: &[ConnectionKey] = &[ConnectionKey {
+const SQL_SETTINGS: &[SourceSetting] = &[SourceSetting {
     key: "address",
     label: "ADDRESS",
     field: Field::Text,
@@ -225,8 +225,8 @@ impl DataSource for TestDoc {
         ))))
     }
 
-    fn config_keys(&self) -> &'static [ConnectionKey] {
-        DOC_KEYS
+    fn settings(&self) -> &'static [SourceSetting] {
+        DOC_SETTINGS
     }
 }
 
@@ -281,8 +281,8 @@ impl SourceKind for TestSql {
 
 #[async_trait]
 impl DataSource for TestSql {
-    fn config_keys(&self) -> &'static [ConnectionKey] {
-        SQL_KEYS
+    fn settings(&self) -> &'static [SourceSetting] {
+        SQL_SETTINGS
     }
 
     async fn connect(
@@ -416,7 +416,7 @@ mod tests {
     async fn conforms<S: DataSource + SourceKind>(source: S, def: &ConnectionDef) {
         let mode = S::MODE;
         let kind = S::NAME;
-        declares_a_drawable_form(kind, source.config_keys());
+        declares_a_drawable_form(kind, source.settings());
         let connected = source.connect(def, secrets()).await.expect("a fixture");
         let catalog = match (connected, mode) {
             (Sourced::Catalog(catalog), SourceMode::Catalog) => catalog,
@@ -485,7 +485,7 @@ mod tests {
     /// gives one setting two rows, whose values overwrite each other. No [`Slot::Address`] means
     /// a connection with nowhere to put its address; two means the second silently wins. And a
     /// group interrupted by another group's key prints its heading twice.
-    fn declares_a_drawable_form(kind: &str, keys: &[ConnectionKey]) {
+    fn declares_a_drawable_form(kind: &str, keys: &[SourceSetting]) {
         let addresses = keys.iter().filter(|k| k.slot == Slot::Address).count();
         assert_eq!(
             addresses, 1,
@@ -689,7 +689,10 @@ mod tests {
         assert_eq!(doc.label, TestDoc::LABEL);
         assert_eq!(doc.badge, TestDoc::BADGE);
         assert_eq!(doc.mode, SourceMode::Catalog);
-        assert_eq!(doc.keys, DOC_KEYS, "the form draws the source's own keys");
+        assert_eq!(
+            doc.settings, DOC_SETTINGS,
+            "the form draws the source's own declaration"
+        );
         assert_eq!(
             engine
                 .sources()

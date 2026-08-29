@@ -27,7 +27,7 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_engine::secrets::SecretProvider;
 use strata_engine::{
-    ConnectionKey, DataSource, Engine, Field, Slot, SourceInfo, SourceKind, SourceMode, Sourced,
+    DataSource, Engine, Field, Slot, SourceInfo, SourceKind, SourceMode, SourceSetting, Sourced,
     When,
 };
 use strata_model::{ConnectionDef, Provider, S3Store, SourceDef};
@@ -52,8 +52,8 @@ impl SourceKind for TestSource {
     const WRITABLE: bool = true;
 }
 
-const TEST_KEYS: &[ConnectionKey] = &[
-    ConnectionKey {
+const TEST_SETTINGS: &[SourceSetting] = &[
+    SourceSetting {
         key: "address",
         label: "ADDRESS",
         field: Field::Text,
@@ -65,11 +65,11 @@ const TEST_KEYS: &[ConnectionKey] = &[
         hint: Some("The server and the database on it"),
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "user",
         label: "USER",
         field: Field::Text,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("CONNECTION"),
         required: true,
         default: None,
@@ -77,11 +77,11 @@ const TEST_KEYS: &[ConnectionKey] = &[
         hint: Some("The role to log in as"),
         placeholder: Some("reader"),
     },
-    ConnectionKey {
+    SourceSetting {
         key: "password",
         label: "PASSWORD",
         field: Field::Secret,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("CONNECTION"),
         required: false,
         default: None,
@@ -89,11 +89,11 @@ const TEST_KEYS: &[ConnectionKey] = &[
         hint: None,
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "mode",
         label: "MODE",
         field: Field::Choice(&["off", "on"]),
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("SECURITY"),
         required: false,
         default: Some("off"),
@@ -101,11 +101,11 @@ const TEST_KEYS: &[ConnectionKey] = &[
         hint: None,
         placeholder: None,
     },
-    ConnectionKey {
+    SourceSetting {
         key: "certificate",
         label: "ROOT CERTIFICATE",
         field: Field::Path,
-        slot: Slot::Setting,
+        slot: Slot::Config,
         group: Some("SECURITY"),
         required: true,
         default: None,
@@ -137,8 +137,8 @@ impl DataSource for TestSource {
         }
     }
 
-    fn config_keys(&self) -> &'static [ConnectionKey] {
-        TEST_KEYS
+    fn settings(&self) -> &'static [SourceSetting] {
+        TEST_SETTINGS
     }
 }
 
@@ -154,7 +154,7 @@ fn registrant() -> SourceInfo {
         label: TestSource::LABEL,
         badge: TestSource::BADGE,
         mode: TestSource::MODE,
-        keys: TEST_KEYS,
+        settings: TEST_SETTINGS,
         writable: TestSource::WRITABLE,
     }
 }
@@ -283,7 +283,7 @@ fn click_lowest(runner: &mut TestingRunner, text: &str) {
 fn source_draft() -> ConnectionDraft {
     ConnectionDraft {
         kind: TestSource::NAME.into(),
-        keys: TEST_KEYS,
+        settings: TEST_SETTINGS,
         name: "warehouse".into(),
         address: "db.internal/analytics".into(),
         config: [("user".to_string(), "reader".to_string())]
@@ -377,8 +377,8 @@ fn a_registered_sources_rows_are_the_ones_it_declared() {
         "a new draft opens on the first registrant"
     );
     assert_eq!(
-        ctx.draft.peek().keys,
-        TEST_KEYS,
+        ctx.draft.peek().settings,
+        TEST_SETTINGS,
         "carrying its declaration, not just its name"
     );
 

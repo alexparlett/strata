@@ -75,8 +75,8 @@ pub use snapshots::{
     LocalIpcSnapshotStore, MemSnapshotStore, SnapshotSink, SnapshotStats, SnapshotStore,
 };
 pub use sources::source::{
-    ConnectionKey, DataSource, Field, Located, Slot, SourceCatalog, SourceInfo, SourceKind,
-    SourceMode, Sourced, When,
+    DataSource, Field, Located, Slot, SourceCatalog, SourceInfo, SourceKind, SourceMode,
+    SourceSetting, Sourced, When,
 };
 pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};

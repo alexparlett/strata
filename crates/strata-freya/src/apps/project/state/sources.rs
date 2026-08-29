@@ -216,7 +216,7 @@ mod tests {
                 label: "PostgreSQL",
                 badge: "PG",
                 mode: SourceMode::Catalog,
-                keys: &[],
+                settings: &[],
                 writable: true,
             }],
         }
