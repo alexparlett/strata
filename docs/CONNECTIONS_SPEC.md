@@ -243,54 +243,105 @@ toggle, and on HTTP it is derived from the scheme the user typed.
 ## The connection editor
 
 A **child window** of the project window (`crates/strata-freya/src/apps/connection/`), one per
-def. Its rows, top to bottom — and which rows exist depends on the provider, and only on the
-provider (a control that cannot mean anything for the chosen provider is not shipped disabled):
+def. **It serves registered sources and nothing else, and it names none of them**: every row comes
+from what the chosen source *declared*, so registering a `DataSource` puts a working editor in
+front of it with no UI code, and a provider the registry does not serve has no form here at all.
+A control that cannot mean anything for the chosen source is not shipped disabled — and that goes
+for a whole form as much as for one row.
 
-1. **PROVIDER** — segmented pill, S3 / GCS / HTTP / PG (`ProviderId::ALL`, since this is the
-   picker that constant is for; the Configure window's LOCATION pill asks the narrower
-   `OBJECT_STORES` question).
-2. **The address box** — BUCKET for S3/GCS, URL for HTTP. A database has no single address box:
-   it splits `ConnectionDef::address` into **URL** (`host:port`) and **DATABASE** (`appdb`),
-   because a server and the database on it are two things Postgres names separately. The stored
-   def is still one `host:port/database` string, so the source's own parse remains the only parse of
-   that grammar.
-3. **CATALOG**, **USER**, **PASSWORD**, **SSL MODE** (PG only), in that order. CATALOG is
-   the connection's **name**, the prefix Strata queries it by (`pg` makes
-   `pg.public.orders`) — Strata's name for the connection, not anything the server has, and its
-   hint says so. It is the user's choice rather than derived from DATABASE, because two servers'
-   `analytics` would derive one prefix. It is not needed for an everyday query: a bare name
-   resolves across the connections (DB-09, below), and the prefix is what reaches *across* sources
-   or tells two same-named relations apart. The
-   certificate path under SSL MODE appears for the two verifying modes and is optional there
-   (blank is the machine's own trust store). There is no SCHEMAS row: schema enablement is a
-   tree-node gesture (DB-05), where the live enumeration already sits and where one picker serves
-   New and Edit alike — a second surface for the same list is two controls that can disagree.
-4. **AUTHENTICATION** (S3 and GCS only) — the mode pill plus whatever it refers to. The S3
-   profile is picked from a `Select` over the machine's own configuration
-   (`Sources::aws_profiles` reads the section headers of `~/.aws/config` and `~/.aws/credentials`
-   — names only, nothing from a profile's body).
-5. **REGION** and **ENDPOINT** (S3 only). A new connection opens with a **blank** region —
-   `us-east-1` is the placeholder, never the value, because a seeded `us-east-1` is exactly the
-   silent builder default in the user's handwriting. Blank blocks Save and says why.
-6. **CLIENT OPTIONS** (object stores only) — the key/value table, edited as rows and committed as
-   a map. A database speaks no HTTP, so the row and its validator are gated together.
-7. A standing note saying where credentials actually come from — per provider, and for PG the one
-   that says the password is this machine's keystore's and a colleague enters their own.
+1. **PROVIDER** — a segmented pill, one segment per **registered source**, badged with its own
+   `SourceKind::BADGE`. Pressing one carries the kind *and its declaration* (`SourceInfo::keys`)
+   onto the draft, so the rows below and the values written cannot describe different sources. A
+   new connection opens on the first registrant, because "none chosen" is a state only a build
+   with no sources can reach.
+2. **NAME** — the handle: what every surface calls this connection *and* the catalog its relations
+   are addressed under (`lake` makes `lake.public.orders`). One field, because they are one thing.
+   Blank is not nameless: the address mints one (`mint_name`), which is what the box shows as its
+   placeholder. **The editor's own row, not a declared one** — the store keys by it, `check_catalog`
+   judges it, and a source has no opinion about any of that; a kind that could omit it could
+   produce an unnameable connection.
+3. **One row per declared `ConnectionKey`**, in the order the kind declared them, under whatever
+   `group` headings it asked for. The whole row is declared: `label` is the eyebrow, `hint` the ⓘ
+   tooltip, `placeholder` the box's ghost text, `required` the REQUIRED marker, `default` what an
+   untouched box shows and writes, `when` **whether the row exists at all**, `field` the dress
+   (`Text` a box, `Choice` a `Select` over the kind's own words, `Path` a file field — the path,
+   never the contents — `Flag` a switch, `Secret` the secret dress below), and `slot` **where the
+   value lands**. So the entire `PostgreSQL` form is `sources/postgres/settings.rs`: its address,
+   USER, PASSWORD, SSL MODE and ROOT CERTIFICATE, the CONNECTION and SSL sections they sit in, the
+   certificate appearing only under `verify-ca`/`verify-full`, and the sentence explaining each.
+4. **READ ONLY** — the editor's own row too, and for the mirror reason: the sentence beside it is
+   Strata's policy about Strata's gate, so a kind declaring it would be every kind copy-pasting
+   our words. What *is* the kind's is whether it can be written to at all — `SourceKind::WRITABLE`,
+   which is what decides the row exists. It replaced `MODE` as the gate, which was only ever a
+   proxy: a catalog you can read and not write is an ordinary source.
 
-A field's error lives in the **footer**, not on the field: one value both disables Save and
-explains it, so the form cannot hold two accounts of its own validity. Two of those the draft
-cannot answer alone, and both read the project's stored defs beside it — the URL clash, and a
-catalog name another database connection holds (`check_catalog_name`).
+**The address is a declared key** (`Slot::Address`) whose value lands on the def's own typed field
+rather than in `config`. That is the whole of what a slot means, and the reason for the split is
+one rule: a map key is optional, and `identity()`, `mint_name` and a remote table's path
+resolution all need every connection to *have* an address. A typed field makes a connection
+without one unrepresentable where a map key would make it a case to handle. Everything else about
+the row — its label, its grammar's explanation, its placeholder — is declared like any other key's,
+which is why there is no `address_hint` anywhere.
 
-**The PASSWORD row reports this machine, not the def.** The settings window's API-key marker is
-honest because it minted the reference when it stored one; a def carries only the *expectation*,
-so the row probes the local keystore once at mount and shows one of: no password expected, stored
-on this machine, expected but not stored here, still asking, or the keystore's own refusal. The
-two clearing gestures are deliberately separate presses — *remove from this machine* deletes the
-local entry and leaves the def's expectation standing, while *this connection uses no password*
-edits the shared def to expect none. Conflating them means one person casually breaking
-every colleague who has a password. There is no mode pill: a password is optional, so absence is
-a state rather than a mode.
+**The object stores have no form here yet** (EA-25). `Provider::{S3, Gcs, Http}` are typed arms
+with typed settings, which is the one thing a declaration-driven form cannot render, so rather
+than keep a hand-written dress beside the generic one the editor waits for them to become
+`DataSource`s like any other. Defs already on disk are listed, queried, refreshed and forgotten
+exactly as before — only *editing* one is withheld, and the catalog row's **Edit connection** is
+**parked** rather than dropped, because it is "not this second" and not "never" (where *Schemas…*
+is dropped on a bucket, which has none, ever). `ConnectionDraft::of` panics on a non-source def:
+unreachable by gesture, and better than letting Save rewrite a bucket's connection as something
+else. What went with the dress: the S3/GCS auth pills and the AWS-profile picker, REGION and
+ENDPOINT, and the CLIENT OPTIONS table.
+
+A `When { key, values }` is how a setting says it only means something once another has a
+particular answer. A hidden setting **keeps its value** — moving the deciding key back brings the
+box back with what was in it, and the def still carries it, because what a mode reads is the
+source's business and not a reason to discard a path — and it is **required of nobody**: a
+question that is not asked cannot be unanswered.
+
+The conformance body (`sources/fake.rs`) refuses five declarations, because none of them shows up
+as a failure anywhere else — the editor simply draws a form missing a setting the source needs, or
+draws one twice. A `When` naming a key its source does not declare hides its row **forever** (the
+deciding value can never be typed, because there is no box to type it in); a `When` over no values
+is the same as never; a duplicate key gives one setting two rows whose values overwrite each
+other; no `Slot::Address`, or two, leaves a connection with nowhere to put its address or a second
+that silently wins; and a group interrupted by another group's key prints its heading twice. It
+also checks `WRITABLE` against what the connected handle implements, **in both directions** — a
+source that claims it cannot be written to and quietly has a writer hides a control that works,
+and one that claims it can and has none offers a control that cannot.
+
+A form ends with its last row: **there is no standing note**. A paragraph about where a kind keeps
+its credentials is prose only that kind can write, and the editor writing it generically produced
+a sentence true of every source and useful about none. What each secret box does with what is
+typed into it is the row's own note, which is specific because it reports this machine.
+
+There is no SCHEMAS row: schema enablement is a tree-node gesture (DB-05), where the live
+enumeration already sits and where one picker serves New and Edit alike — a second surface for the
+same list is two controls that can disagree, and the editor is pre-connect, so it has nothing to
+enumerate from.
+
+Last comes a standing note saying where credentials actually come from — per provider, and for a
+source off its **declaration**: whether the kind takes any `Field::Secret` at all, because no
+sentence here may name a setting only one kind has.
+
+**What the form can be wrong about is the handle, and a shown `required` key being empty.** What a
+*value* may be is the kind's own rule, asked by `connect`, whose refusal lands on the connection's
+row. A field's error lives in the **footer**, not on the field: one value both disables Save and
+explains it, so the form cannot hold two accounts of its own validity. Three of those the draft
+cannot answer alone — the kind's address rule (asked of the registry), a name another connection
+holds, and a catalog name another source connection holds (`check_catalog_name`).
+
+**A `Field::Secret` row reports this machine, not the def.** The settings window's API-key marker
+is honest because it minted the reference when it stored one; a def carries only the
+*expectation* (`SourceDef::secrets`), so each expected key probes the local keystore once at
+mount and shows one of: none expected, stored on this machine, expected but not stored here, still
+asking, or the keystore's own refusal. Every sentence names the key off its declared label, so a
+source with two credentials has two rows that read differently. The two clearing gestures are
+deliberately separate presses — *remove from this machine* deletes that one local entry and leaves
+the def's expectation standing, while *this connection uses no …* edits the shared def to expect
+none. Conflating them means one person casually breaking every colleague who has one. There is no
+mode pill: a secret is optional wherever its key says so, so absence is a state rather than a mode.
 
 Save writes the def through the store's own funnel, persists the project, **deregisters what the
 old name registered** when the edit moved it (nothing downstream ever sees the def it replaced),
@@ -298,7 +349,9 @@ and asks for a whole-catalog registration pass; the window then watches its own 
 when the connection settles. A **rename** goes through `rename_connection`, which moves the tables
 reading through it in the same settle. A source has one step in front of all of that: whatever
 this machine's keystore owes, on a worker, so a keystore that refuses writes nothing — the move
-when the name changed, then the put or the delete, all of it `sources`' own.
+when the name changed, then a put or a delete **per declared key**, all of it `sources`' own
+(`put_secret` / `forget_secret` / `forget_secrets` / `migrate_secrets`). A moved *kind* is a moved
+keystore family (`{kind}-{key}`), so it forgets the old kind's entries rather than migrating them.
 
 An **address** move with an unchanged name needs nothing further of Save's: connecting replaces on
 re-connect, and the whole-catalog pass is what re-connects.
@@ -559,7 +612,7 @@ connection, authenticates, builds the pool and runs `SELECT 1`; any of them fail
 answer. There is no separate reachability step, because unlike a bucket — whose description can be
 well-formed and wrong in a way only the bucket knows — a database either let us in or did not. A
 reconnect **replaces**: whatever that URL last registered comes out, under the name it went in
-under, so the editor's rename (same URL, new catalog name) is handled by the registration rather
+under, so the editor's rename (same address, new name) is handled by the registration rather
 than by a surface remembering.
 
 **Schema visibility scopes display and the *implicit* search, never the resolution of a name the

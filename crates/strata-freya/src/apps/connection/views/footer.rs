@@ -3,9 +3,9 @@
 //! **This is the only thing in the window that writes anything.** Cancel just closes; nothing is
 //! committed until Save.
 //!
-//! A database connection has a fifth step, and it comes **first**: whatever this machine's
-//! keystore owes the password ([`password_ops`]). A def that expects one over a
-//! keystore that refused the write is a connection nothing can log in with.
+//! A source connection has a fifth step, and it comes **first**: whatever this machine's keystore
+//! owes the secrets its kind declares ([`secret_ops`]). A def that expects one over a keystore
+//! that refused the write is a connection nothing can log in with.
 //!
 //! 1. writes the def onto the shared project store — removing the row it is **moving from**
 //!    first, when the edit changed the bucket or the provider and therefore the connection's
@@ -29,9 +29,10 @@
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
 
-use strata_engine::sources::postgres::settings::PASSWORD;
-use strata_engine::sources::{forget_secrets, migrate_secrets, put_secret};
-use strata_model::{check_catalog_name, ConnectionDef, Provider};
+use std::collections::{BTreeMap, BTreeSet};
+
+use strata_engine::sources::{forget_secret, forget_secrets, migrate_secrets, put_secret};
+use strata_model::{check_catalog_name, ConnectionDef};
 
 use crate::apps::connection::{ConnectionCtx, ConnectionTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
@@ -207,67 +208,90 @@ fn catalog_clash(
 ///
 /// A plan rather than a verdict because the *order* is the content of the answer: a rename has to
 /// reach the new slots before a put lands on one. Where a slot is and what a rename does to it are
-/// the engine's — this says only which of the three things happened to the box.
+/// the engine's — this says only which of these things happened to which box.
 #[derive(Clone, PartialEq, Eq, Debug)]
-enum PasswordOp {
+enum SecretOp {
     /// The connection was renamed, so its secrets move with it.
     Rename,
-    /// A password was typed.
-    Put(String),
-    /// *Remove from this machine*, the "uses no password" edit, or a connection that is no longer
-    /// a source — in which case nothing would ever name the entry again.
-    Forget,
+    /// A value was typed into `key`'s box.
+    Put { key: String, value: String },
+    /// *Remove from this machine*, or the "uses no …" edit, for one declared key.
+    Forget { key: String },
+    /// Everything the **previous** def kept here: a connection that is no longer a source, or one
+    /// whose kind moved — in which case nothing would ever name the old slots again, since the
+    /// family is the kind.
+    ForgetAll,
 }
 
 /// Plan a save of `next` over `previous`, the def as this window opened it.
 ///
 /// Pure, and called from Save rather than from `def()`: `blocker` assembles a def per keystroke,
 /// so a keystore write there would be a platform call — on macOS a Keychain prompt — per frame.
-fn password_ops(
+///
+/// Every key either the boxes or the def has an opinion about is walked in one order, so a put
+/// and a forget for one key cannot both be planned.
+fn secret_ops(
     previous: Option<&ConnectionDef>,
     next: &ConnectionDef,
-    typed: &str,
-    removed: bool,
-) -> Vec<PasswordOp> {
-    let was = previous.filter(|def| matches!(def.provider, Provider::Source(_)));
-    let expects = next
-        .provider
-        .source()
-        .is_some_and(|source| source.secrets.contains(PASSWORD));
-    let mut ops = Vec::new();
+    typed: &BTreeMap<String, String>,
+    removed: &BTreeSet<String>,
+) -> Vec<SecretOp> {
+    // Only a def that actually **holds** something has anything to move or forget. A rename or a
+    // dropped provider is a keystore operation for a connection with secrets and nothing at all
+    // for one without — and planning it anyway sends every such save down the worker path, which
+    // on macOS is a Keychain prompt raised over an empty slot.
+    let was = previous.filter(|def| {
+        def.provider
+            .source()
+            .is_some_and(|source| !source.secrets.is_empty())
+    });
+    let Some(source) = next.provider.source() else {
+        return was.map(|_| vec![SecretOp::ForgetAll]).unwrap_or_default();
+    };
 
-    if !expects {
-        ops.extend(was.map(|_| PasswordOp::Forget));
-        return ops;
+    let mut ops = Vec::new();
+    match was.and_then(|def| def.provider.source().map(|old| old.kind.trim().to_string())) {
+        Some(kind) if kind != source.kind.trim() => ops.push(SecretOp::ForgetAll),
+        _ if was.is_some_and(|def| def.named() != next.named()) => ops.push(SecretOp::Rename),
+        _ => {}
     }
-    if was.is_some_and(|def| def.named() != next.named()) {
-        ops.push(PasswordOp::Rename);
-    }
-    match typed.trim().is_empty() {
-        false => ops.push(PasswordOp::Put(typed.trim().to_string())),
-        true if removed => ops.push(PasswordOp::Forget),
-        true => {}
+
+    let mut keys: BTreeSet<&str> = source.secrets.iter().map(String::as_str).collect();
+    keys.extend(typed.keys().map(String::as_str));
+    keys.extend(removed.iter().map(String::as_str));
+    for key in keys {
+        match typed.get(key).map(|value| value.trim()).unwrap_or_default() {
+            "" if removed.contains(key) => ops.push(SecretOp::Forget {
+                key: key.to_string(),
+            }),
+            "" => {}
+            value => ops.push(SecretOp::Put {
+                key: key.to_string(),
+                value: value.to_string(),
+            }),
+        }
     }
     ops
 }
 
 /// Carry `ops` out in order, stopping at the first refusal. Blocking, so it runs on a worker; a
 /// keystore that refuses is reported and the save does not happen, never answered by writing the
-/// password somewhere else.
-fn run_password_ops(
-    ops: &[PasswordOp],
+/// secret somewhere else.
+fn run_secret_ops(
+    ops: &[SecretOp],
     previous: Option<&ConnectionDef>,
     next: &ConnectionDef,
 ) -> Result<(), String> {
     for op in ops {
         match op {
-            PasswordOp::Rename => {
+            SecretOp::Rename => {
                 if let Some(was) = previous {
                     migrate_secrets(was, next)?;
                 }
             }
-            PasswordOp::Put(typed) => put_secret(next, PASSWORD, typed)?,
-            PasswordOp::Forget => forget_secrets(previous.unwrap_or(next))?,
+            SecretOp::Put { key, value } => put_secret(next, key, value)?,
+            SecretOp::Forget { key } => forget_secret(next, key)?,
+            SecretOp::ForgetAll => forget_secrets(previous.unwrap_or(next))?,
         }
     }
     Ok(())
@@ -306,11 +330,11 @@ fn save(
             .find(|c| c.def.named() == name)
             .map(|row| row.def.clone())
     });
-    let ops = password_ops(
+    let ops = secret_ops(
         previous.as_ref(),
         &def,
-        &ctx.password.peek(),
-        *ctx.password_removed.peek(),
+        &ctx.secret_values.peek(),
+        &ctx.secret_removed.peek(),
     );
     if ops.is_empty() {
         commit(ctx, project, rescan, engine, report);
@@ -319,16 +343,15 @@ fn save(
 
     ctx.status.set(Status::Storing);
     spawn(async move {
-        let landed = offload(move || run_password_ops(&ops, previous.as_ref(), &def)).await;
+        let landed = offload(move || run_secret_ops(&ops, previous.as_ref(), &def)).await;
         match landed {
             Some(Ok(())) => commit(ctx, project, rescan, engine, report),
             Some(Err(why)) => ctx.status.set(Status::Failed(format!(
-                "The password could not be written to this machine's keystore, so nothing was \
-                 saved. {why}"
+                "This machine's keystore could not be written, so nothing was saved. {why}"
             ))),
             None => ctx.status.set(Status::Failed(
-                "The password could not be written to this machine's keystore: a worker did not \
-                 answer. Nothing was saved."
+                "This machine's keystore could not be written: a worker did not answer. Nothing \
+                 was saved."
                     .into(),
             )),
         }
@@ -337,7 +360,7 @@ fn save(
 
 /// The rest of Save, once this machine's keystore is in the state the def is about to claim.
 ///
-/// Split out rather than inlined behind an `await`, so a save with no password work stays
+/// Split out rather than inlined behind an `await`, so a save with no keystore work stays
 /// synchronous: made asynchronous for everyone, the interaction tests that press this button
 /// would assert a frame that has not happened yet.
 fn commit(
@@ -392,157 +415,244 @@ fn commit(
 
 #[cfg(test)]
 mod tests {
-    use crate::apps::connection::model::PgDraft;
-    use strata_engine::sources::postgres::Pg;
-    use strata_engine::SourceKind;
-    use strata_model::S3Store;
+    use std::collections::BTreeMap;
+
+    use strata_model::{Provider, S3Store, SourceDef};
 
     use super::*;
 
-    fn named(name: &str, address: &str, user: &str) -> ConnectionDef {
+    /// One source def: a kind, a name and the expectation of a `password`.
+    fn source(name: &str, address: &str, kind: &str) -> ConnectionDef {
         ConnectionDef {
             address: address.into(),
             name: name.into(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: name.into(),
-                    user: user.into(),
-                    password: true,
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            provider: Provider::Source(SourceDef {
+                kind: kind.into(),
+                secrets: BTreeSet::from(["password".to_string()]),
+                ..Default::default()
+            }),
             client_config: Default::default(),
         }
     }
 
-    fn pg(address: &str, user: &str) -> ConnectionDef {
+    fn store() -> ConnectionDef {
         ConnectionDef {
-            address: address.into(),
-            name: "warehouse".into(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: "warehouse".into(),
-                    user: user.into(),
-                    password: true,
-                    ..Default::default()
-                }
-                .def(),
-            ),
-            client_config: Default::default(),
-        }
-    }
-
-    /// **Nothing typed, nothing moved, nothing pressed is no keystore call at all**, so an
-    /// ordinary Save never raises a Keychain prompt for a password nobody touched.
-    #[test]
-    fn a_save_that_touches_no_password_asks_the_keystore_nothing() {
-        let def = pg("db:5432/analytics", "reader");
-        assert_eq!(password_ops(Some(&def), &def, "", false), []);
-        assert_eq!(
-            password_ops(None, &def, "  ", false),
-            [],
-            "blank is nothing"
-        );
-
-        let s3 = ConnectionDef {
             address: "acme-lake".into(),
             name: "acme_lake".into(),
             provider: Provider::S3(S3Store::default()),
             client_config: Default::default(),
-        };
-        assert_eq!(password_ops(Some(&s3), &s3, "hunter2", true), []);
+        }
     }
 
-    /// **A rename moves the entry, and the move comes before the put.** The slot is derived from
-    /// the connection's name, so renaming one moves it; run the other way round, a save that
-    /// renamed *and* typed a new password would carry the old one over it.
+    fn typed(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    fn removed(keys: &[&str]) -> BTreeSet<String> {
+        keys.iter().map(|k| (*k).to_string()).collect()
+    }
+
+    /// **A connection that holds no secret is never a keystore call**, whatever moved — so
+    /// renaming one, or changing its kind, raises no Keychain prompt and keeps Save synchronous.
     #[test]
-    fn a_rename_moves_the_entry_before_anything_lands_on_the_new_slot() {
-        let old = named("warehouse", "db:5432/analytics", "reader");
-        let new = named("depot", "db:5432/analytics", "reader");
+    fn a_connection_with_no_secrets_is_never_a_keystore_call() {
+        let bare = |name: &str, kind: &str| ConnectionDef {
+            address: "db:5432/analytics".into(),
+            name: name.into(),
+            provider: Provider::Source(SourceDef {
+                kind: kind.into(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        };
+        let held = bare("warehouse", "test");
+        for next in [bare("depot", "test"), bare("warehouse", "other"), store()] {
+            assert_eq!(
+                secret_ops(Some(&held), &next, &BTreeMap::new(), &BTreeSet::new()),
+                [],
+                "nothing is stored, so there is nothing to move or forget"
+            );
+        }
+    }
+
+    /// **Nothing typed, nothing moved, nothing pressed is no keystore call at all**, so an
+    /// ordinary Save never raises a Keychain prompt for a secret nobody touched.
+    #[test]
+    fn a_save_that_touches_no_secret_asks_the_keystore_nothing() {
+        let def = source("warehouse", "db:5432/analytics", "test");
         assert_eq!(
-            password_ops(Some(&old), &new, "", false),
-            [PasswordOp::Rename]
+            secret_ops(Some(&def), &def, &BTreeMap::new(), &BTreeSet::new()),
+            []
         );
         assert_eq!(
-            password_ops(Some(&old), &new, "hunter2", false),
-            [PasswordOp::Rename, PasswordOp::Put("hunter2".into())]
+            secret_ops(None, &def, &typed(&[("password", "  ")]), &BTreeSet::new()),
+            [],
+            "blank is nothing"
         );
 
-        let moved_address = pg("db:5433/analytics", "reader");
+        let s3 = store();
         assert_eq!(
-            password_ops(Some(&old), &moved_address, "", false),
+            secret_ops(
+                Some(&s3),
+                &s3,
+                &typed(&[("password", "hunter2")]),
+                &removed(&["password"])
+            ),
+            [],
+            "and a provider with no secret vocabulary has nothing to write"
+        );
+    }
+
+    /// **A rename moves the entries, and the move comes before the put.** The slot is derived from
+    /// the connection's name, so renaming one moves it; run the other way round, a save that
+    /// renamed *and* typed a new value would carry the old one over it.
+    #[test]
+    fn a_rename_moves_the_entries_before_anything_lands_on_the_new_slots() {
+        let old = source("warehouse", "db:5432/analytics", "test");
+        let new = source("depot", "db:5432/analytics", "test");
+        assert_eq!(
+            secret_ops(Some(&old), &new, &BTreeMap::new(), &BTreeSet::new()),
+            [SecretOp::Rename]
+        );
+        assert_eq!(
+            secret_ops(
+                Some(&old),
+                &new,
+                &typed(&[("password", "hunter2")]),
+                &BTreeSet::new()
+            ),
+            [
+                SecretOp::Rename,
+                SecretOp::Put {
+                    key: "password".into(),
+                    value: "hunter2".into()
+                }
+            ]
+        );
+
+        let moved_address = source("warehouse", "db:5433/analytics", "test");
+        assert_eq!(
+            secret_ops(
+                Some(&old),
+                &moved_address,
+                &BTreeMap::new(),
+                &BTreeSet::new()
+            ),
             [],
             "the address moved and the name did not, so the slot did not move"
         );
     }
 
-    /// **A typed password is trimmed to nothing or stored, never both** — `Secret::new`'s fork, so
-    /// a cleared box cannot become an empty stored password.
+    /// **A moved kind is a moved family, so the old slots are dropped rather than migrated.** The
+    /// keystore family is `{kind}-{key}`, and nothing would ever name the old one again.
     #[test]
-    fn a_typed_password_is_stored_under_the_connections_own_slot() {
-        let def = pg("db:5432/analytics", "reader");
+    fn a_moved_kind_forgets_what_the_old_kind_kept_here() {
+        let old = source("warehouse", "db:5432/analytics", "test");
+        let moved = source("warehouse", "db:5432/analytics", "other");
         assert_eq!(
-            password_ops(Some(&def), &def, " hunter2 ", false),
-            [PasswordOp::Put("hunter2".into())]
-        );
-        assert_eq!(
-            password_ops(Some(&def), &def, "hunter2", true),
-            [PasswordOp::Put("hunter2".into())],
-            "typing over a pending removal is the password you meant"
+            secret_ops(Some(&old), &moved, &BTreeMap::new(), &BTreeSet::new()),
+            [SecretOp::ForgetAll]
         );
     }
 
-    /// **Every way of abandoning a password deletes this machine's entry**, including switching
-    /// the provider away from the source arm — which drops the expectation from the def entirely,
-    /// so nothing would ever name that slot again.
+    /// **A typed value is trimmed to nothing or stored, never both** — `Secret::new`'s fork, so a
+    /// cleared box cannot become an empty stored secret. And a source with two credentials plans
+    /// one op per box.
     #[test]
-    fn an_abandoned_password_is_deleted_from_this_machine() {
-        let def = pg("db:5432/analytics", "reader");
+    fn a_typed_secret_is_stored_under_its_own_key() {
+        let def = source("warehouse", "db:5432/analytics", "test");
         assert_eq!(
-            password_ops(Some(&def), &def, "", true),
-            [PasswordOp::Forget],
+            secret_ops(
+                Some(&def),
+                &def,
+                &typed(&[("password", " hunter2 ")]),
+                &BTreeSet::new()
+            ),
+            [SecretOp::Put {
+                key: "password".into(),
+                value: "hunter2".into()
+            }]
+        );
+        assert_eq!(
+            secret_ops(
+                Some(&def),
+                &def,
+                &typed(&[("password", "hunter2")]),
+                &removed(&["password"])
+            ),
+            [SecretOp::Put {
+                key: "password".into(),
+                value: "hunter2".into()
+            }],
+            "typing over a pending removal is the secret you meant"
+        );
+        assert_eq!(
+            secret_ops(
+                Some(&def),
+                &def,
+                &typed(&[("password", "hunter2"), ("token", "t-1")]),
+                &BTreeSet::new()
+            ),
+            [
+                SecretOp::Put {
+                    key: "password".into(),
+                    value: "hunter2".into()
+                },
+                SecretOp::Put {
+                    key: "token".into(),
+                    value: "t-1".into()
+                }
+            ],
+            "one op per box, never one for the connection"
+        );
+    }
+
+    /// **Every way of abandoning a secret deletes this machine's entry** — and abandoning one of a
+    /// source's credentials leaves the others alone, which is why the op names its key.
+    #[test]
+    fn an_abandoned_secret_is_deleted_from_this_machine() {
+        let def = source("warehouse", "db:5432/analytics", "test");
+        assert_eq!(
+            secret_ops(Some(&def), &def, &BTreeMap::new(), &removed(&["password"])),
+            [SecretOp::Forget {
+                key: "password".into()
+            }],
             "remove from this machine"
         );
 
         let unused = ConnectionDef {
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: "warehouse".into(),
-                    user: "reader".into(),
-                    password: false,
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            provider: Provider::Source(SourceDef {
+                kind: "test".into(),
+                ..Default::default()
+            }),
             ..def.clone()
         };
         assert_eq!(
-            password_ops(Some(&def), &unused, "", true),
-            [PasswordOp::Forget],
+            secret_ops(
+                Some(&def),
+                &unused,
+                &BTreeMap::new(),
+                &removed(&["password"])
+            ),
+            [SecretOp::Forget {
+                key: "password".into()
+            }],
             "this connection uses no password"
         );
 
-        let s3 = ConnectionDef {
-            address: "acme-lake".into(),
-            name: "acme_lake".into(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: Default::default(),
-        };
         assert_eq!(
-            password_ops(Some(&def), &s3, "", false),
-            [PasswordOp::Forget],
-            "and the slot deleted is the one the old def named, not the new URL's"
+            secret_ops(Some(&def), &store(), &BTreeMap::new(), &BTreeSet::new()),
+            [SecretOp::ForgetAll],
+            "and a connection that is no longer a source keeps none of them"
         );
     }
 
     #[test]
     fn an_actionable_blocker_outranks_the_re_scan() {
-        let blocker = || Some("An S3 connection needs a region.".to_string());
+        let blocker = || Some("This connection has no user.".to_string());
         assert_eq!(save_note(blocker(), true), blocker());
         assert_eq!(save_note(blocker(), false), blocker());
     }

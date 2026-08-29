@@ -9,7 +9,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::apps::connection::model::PgDraft;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
@@ -22,8 +21,8 @@ use strata_engine::SourceKind;
 use strata_engine::{TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColOwner, ColRef, ColumnInfo, ConnectionDef, Origin, Provider, ProviderId,
-    RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceFormat, TableDef, TableOrigin,
-    ViewDef,
+    RemoteRef, RightPane, S3Auth, S3Store, SavedQuery, SourceDef, SourceFormat, TableDef,
+    TableOrigin, ViewDef,
 };
 use uuid::Uuid;
 
@@ -1758,16 +1757,14 @@ mod connections {
         ConnectionDef {
             address: format!("db.internal:5432/{database}"),
             name: String::new(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: database.into(),
-                    user: "reader".into(),
-                    schemas: vec!["public".into()],
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            provider: Provider::Source(SourceDef {
+                kind: Pg::NAME.to_string(),
+                config: [("user".to_string(), "reader".to_string())]
+                    .into_iter()
+                    .collect(),
+                schemas: vec!["public".into()],
+                ..Default::default()
+            }),
             client_config: Default::default(),
         }
     }
@@ -1963,17 +1960,30 @@ mod connections {
         );
     }
 
-    /// Edit sets the editor slot by the same URL — the row holds no editor of its own.
+    /// Edit sets the editor slot by the connection's name — the row holds no editor of its own.
+    ///
+    /// **And it is parked on an object store**, which is a press that does nothing rather than an
+    /// item that is missing: the editor draws a form from what a registered source declared, and
+    /// an object store is not a registrant yet (EA-25). Asserted by what the press *does*, not by
+    /// probing the item's enabled state, because the slot is the whole contract.
     #[test]
-    fn edit_asks_for_the_editor_by_the_connections_url() {
+    fn edit_asks_for_the_editor_by_the_connections_name() {
         let (mut runner, h) = tree();
 
-        right_click_row(&mut runner, "lake");
+        right_click_row(&mut runner, "db.internal:5432/analytics");
         click_text(&mut runner, "Edit connection");
-
         assert_eq!(
             *h.editor.peek(),
-            Some(ConnectionTarget::Edit("lake".into()))
+            Some(ConnectionTarget::Edit("analytics".into()))
+        );
+
+        // A parked press does not close the menu either, so the object store goes last.
+        right_click_row(&mut runner, "lake");
+        click_text(&mut runner, "Edit connection");
+        assert_eq!(
+            *h.editor.peek(),
+            Some(ConnectionTarget::Edit("analytics".into())),
+            "a bucket has no form here, so the item is parked and the slot is untouched"
         );
     }
 
@@ -1983,22 +1993,20 @@ mod connections {
     fn only_a_database_is_offered_its_schemas() {
         let (mut runner, h) = tree();
 
+        right_click_row(&mut runner, "db.internal:5432/analytics");
+        assert!(shows(&runner, "Schemas…"));
+        click_text(&mut runner, "Schemas…");
+        assert_eq!(
+            *h.schemas.peek(),
+            Some("analytics".into()),
+            "the picker is asked for by the connection's name"
+        );
+
         right_click_row(&mut runner, "lake");
         assert!(
             !shows(&runner, "Schemas…"),
             "a bucket has no schemas: {:?}",
             texts(&runner)
-        );
-        click_text(&mut runner, "Edit connection");
-
-        right_click_row(&mut runner, "db.internal:5432/analytics");
-        assert!(shows(&runner, "Schemas…"));
-        click_text(&mut runner, "Schemas…");
-
-        assert_eq!(
-            *h.schemas.peek(),
-            Some("analytics".into()),
-            "the picker is asked for by the connection's URL"
         );
     }
 

@@ -60,6 +60,7 @@ impl SourceKind for Pg {
     const LABEL: &'static str = "PostgreSQL";
     const BADGE: &'static str = "PG";
     const MODE: SourceMode = SourceMode::Catalog;
+    const WRITABLE: bool = true;
 }
 
 #[async_trait]

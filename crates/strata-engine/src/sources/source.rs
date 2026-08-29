@@ -47,6 +47,15 @@ pub trait SourceKind {
     const BADGE: &'static str;
     /// What connecting to it yields, which a form has to know before anything connects.
     const MODE: SourceMode;
+    /// Whether Strata can be asked to **change** what this source holds — whether
+    /// [`SourceCatalog::writer`] and friends are implemented at all.
+    ///
+    /// Declared rather than inferred from [`MODE`](Self::MODE), which was only ever a proxy: a
+    /// catalog you can read and not write is an ordinary source, and offering it a read-only
+    /// toggle is offering a control that can never do anything. Defaults to `false`, so a source
+    /// that says nothing is one Strata never writes to; the conformance body checks the claim
+    /// against what the handle actually implements, in both directions.
+    const WRITABLE: bool = false;
 }
 
 /// What connecting to a source yields.
@@ -75,22 +84,79 @@ pub enum Sourced {
     Catalog(Arc<dyn SourceCatalog>),
 }
 
-/// One setting a source declares.
+/// One setting a source declares — **a row of the connection form, entire**.
 ///
-/// The editor renders these rows rather than knowing any source's fields, and per-key validation
-/// derives from the [`Field`]; what a value *means* is judged by
-/// [`connect`](DataSource::connect), which is the real gate.
+/// The editor renders these rather than knowing any source's fields: what the row is called, what
+/// it explains about itself, what it looks like, where its value lands, which section it sits in,
+/// and whether it is offered at all. Rendering a row with a label it was given and anything else
+/// it invents is the placement law broken where it is hardest to see, because the result compiles
+/// and looks finished.
+///
+/// What a value may *be* is not here. Per-key validation is what the [`Field`] implies — a choice
+/// is a picker, so an illegal word is unreachable; a required box is refused empty — and every
+/// other rule is the source's own, asked by [`connect`](DataSource::connect), which is the real
+/// gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConnectionKey {
-    /// The key it is stored under in [`SourceDef::config`](strata_model::SourceDef), or — for a
-    /// [`Field::Secret`] — the key it is filed under in the keystore.
+    /// What this setting is called in the def, and what a [`When`] elsewhere names it by.
     pub key: &'static str,
     /// The row's label, in the editor's register.
     pub label: &'static str,
     pub field: Field,
+    /// Where the value lands.
+    pub slot: Slot,
+    /// The section this row sits under, `None` for one that sits above them all. A source's rows
+    /// are drawn in the order it declares them, so a group's keys are declared together.
+    pub group: Option<&'static str>,
     pub required: bool,
     /// What the value is when the connection says nothing.
     pub default: Option<&'static str>,
+    /// When this setting is offered at all — `None` for one that always is.
+    pub when: Option<When>,
+    /// What the row explains about itself — one sentence, no full stop, in the editor's hint
+    /// register. `None` for a setting whose label is the whole story.
+    pub hint: Option<&'static str>,
+    /// Ghost text in the empty box: an example of the value, never a value that could be saved by
+    /// accident. Meaningless for [`Field::Choice`] and [`Field::Flag`], which have no empty state.
+    pub placeholder: Option<&'static str>,
+}
+
+/// Where a declared setting's value lives once it is saved.
+///
+/// Two answers, because a connection def has two shapes of storage: an **open map** a source
+/// fills with whatever it declared, and the handful of **typed fields** things outside the
+/// registry read. `address` is typed rather than a `Setting` for one reason — a map key is
+/// optional, and `identity()`, `mint_name` and a remote table's path resolution all need every
+/// connection to *have* an address. A typed field makes a connection without one unrepresentable;
+/// a map key would make it a case to handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    /// `SourceDef::config[key]` — or, for a [`Field::Secret`], this machine's keystore under
+    /// `{kind}-{key}`, with the def recording only the expectation.
+    Setting,
+    /// The connection's address, judged by [`check_address`](DataSource::check_address). Exactly
+    /// one key per source declares it, and the conformance body refuses a source that declares
+    /// none or two.
+    Address,
+}
+
+/// A setting that only means something once another has a particular answer.
+///
+/// A root certificate is read by the verifying SSL modes and by no other, so offering the box
+/// beside `disable` is offering a control that cannot do anything. Declared rather than left to
+/// the editor, because which values of which key make a setting relevant is the source's own
+/// knowledge — the same reason the values themselves are.
+///
+/// A setting this hides **keeps its value** (moving the deciding key back brings the box back
+/// with what was in it) and is **not required of anyone**: a question that is not asked cannot be
+/// unanswered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct When {
+    /// Another key of the same source. One that names no declared key would hide its row forever,
+    /// which the conformance body refuses.
+    pub key: &'static str,
+    /// The values of [`key`](Self::key) that offer the setting.
+    pub values: &'static [&'static str],
 }
 
 /// What kind of value a [`ConnectionKey`] takes, and therefore what the editor draws for it.
@@ -447,6 +513,9 @@ pub struct SourceInfo {
     pub mode: SourceMode,
     /// The settings the editor draws for it — [`DataSource::config_keys`].
     pub keys: &'static [ConnectionKey],
+    /// Whether it can be written to — [`SourceKind::WRITABLE`], and therefore whether a
+    /// connection to it is offered the read-only toggle.
+    pub writable: bool,
 }
 
 /// The sources an engine can serve a connection with, keyed by [`SourceKind::NAME`].
@@ -472,6 +541,7 @@ impl Sources {
                     badge: S::BADGE,
                     mode: S::MODE,
                     keys: source.config_keys(),
+                    writable: S::WRITABLE,
                 },
                 source: Arc::new(source),
             },

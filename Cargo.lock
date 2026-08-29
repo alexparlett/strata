@@ -9440,6 +9440,7 @@ name = "strata-freya"
 version = "0.3.2"
 dependencies = [
  "async-io",
+ "async-trait",
  "datafusion",
  "freya",
  "freya-testing",

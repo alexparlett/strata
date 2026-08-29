@@ -36,7 +36,9 @@ const BROWSE_ICON: f32 = 15.;
 #[derive(PartialEq)]
 pub struct ValueField {
     value: State<String>,
-    placeholder: Option<&'static str>,
+    /// A `String` rather than a `&'static str`, because a placeholder can be **derived**: the
+    /// connection editor's name box shows the name its address would mint.
+    placeholder: Option<String>,
     width: Size,
     height: Size,
     /// Characters the box will hold; anything beyond is trimmed from the state itself.
@@ -87,8 +89,8 @@ impl ValueField {
         self
     }
 
-    pub fn placeholder(mut self, placeholder: &'static str) -> Self {
-        self.placeholder = Some(placeholder);
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = Some(placeholder.into());
         self
     }
 
@@ -176,9 +178,7 @@ impl Component for ValueField {
                 .maybe(self.masked, |el| el.mode(InputMode::new_password()))
                 .compact()
                 .map(self.a11y_id, Input::a11y_id)
-                .maybe(self.placeholder.is_some(), |el| {
-                    el.placeholder(self.placeholder.unwrap_or_default())
-                })
+                .map(self.placeholder.clone(), Input::placeholder)
                 .map(self.leading.clone(), Input::leading)
                 .maybe(self.bare, |el| {
                     el.background(Color::TRANSPARENT)

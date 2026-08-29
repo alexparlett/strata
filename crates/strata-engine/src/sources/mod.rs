@@ -108,8 +108,24 @@ pub fn put_secret(conn: &ConnectionDef, key: &str, value: &str) -> Result<(), St
     }
 }
 
+/// Forget one of `conn`'s secrets on this machine, leaving the others alone.
+///
+/// What *remove from this machine* owes for a single declared key: a source with two credentials
+/// keeps the one that was not abandoned, and the def's expectation is untouched, so a colleague's
+/// own entry still answers.
+///
+/// # Errors
+///
+/// If the keystore refused.
+pub fn forget_secret(conn: &ConnectionDef, key: &str) -> Result<(), String> {
+    let Some(slot) = secret_ref(conn, key) else {
+        return Ok(());
+    };
+    slot.delete().map_err(|e| e.to_string())
+}
+
 /// Forget every secret `conn` holds on this machine — the Forget gesture's keystore half, and
-/// what a save owes when a connection stops expecting one.
+/// what a save owes when a connection stops being a source at all.
 ///
 /// Silent about a slot with nothing in it, which is the ordinary case for a connection that never
 /// had a secret stored on this machine.
@@ -122,9 +138,7 @@ pub fn forget_secrets(conn: &ConnectionDef) -> Result<(), String> {
         return Ok(());
     };
     for key in &source.secrets {
-        if let Some(slot) = secret_ref(conn, key) {
-            slot.delete().map_err(|e| e.to_string())?;
-        }
+        forget_secret(conn, key)?;
     }
     Ok(())
 }

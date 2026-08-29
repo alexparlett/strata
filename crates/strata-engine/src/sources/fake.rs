@@ -25,8 +25,8 @@ use futures::TryStreamExt;
 use strata_model::{ConnectionDef, Provider, SourceDef};
 
 use super::source::{
-    ConnectionKey, DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind,
-    SourceMode, Sourced,
+    ConnectionKey, DataSource, Field, Listing, Located, Relation, Slot, SourceCatalog, SourceKind,
+    SourceMode, Sourced, When,
 };
 use super::sql::{federated, SQLExecutor, SqlSpec};
 use crate::secrets::SecretProvider;
@@ -142,13 +142,75 @@ impl SourceKind for TestDoc {
     const MODE: SourceMode = SourceMode::Catalog;
 }
 
-/// One key, so a test has something to assert a declaration reaches a surface with.
-const DOC_KEYS: &[ConnectionKey] = &[ConnectionKey {
-    key: "collection_prefix",
-    label: "PREFIX",
+/// A declaration exercising every facet a form is drawn from: an address, two groups, a default,
+/// a conditional key and a required one — so the contract body below has something to pass on and
+/// a surface has something to render.
+const DOC_KEYS: &[ConnectionKey] = &[
+    ConnectionKey {
+        key: "address",
+        label: "ADDRESS",
+        field: Field::Text,
+        slot: Slot::Address,
+        group: Some("CONNECTION"),
+        required: true,
+        default: None,
+        when: None,
+        hint: Some("Where the documents are"),
+        placeholder: None,
+    },
+    ConnectionKey {
+        key: "collection_prefix",
+        label: "PREFIX",
+        field: Field::Text,
+        slot: Slot::Setting,
+        group: Some("CONNECTION"),
+        required: false,
+        default: None,
+        when: None,
+        hint: Some("What every collection this connection reads is named under"),
+        placeholder: Some("app_"),
+    },
+    ConnectionKey {
+        key: "mode",
+        label: "MODE",
+        field: Field::Choice(&["plain", "sharded"]),
+        slot: Slot::Setting,
+        group: Some("SHARDING"),
+        required: false,
+        default: Some("plain"),
+        when: None,
+        hint: None,
+        placeholder: None,
+    },
+    ConnectionKey {
+        key: "shard_key",
+        label: "SHARD KEY",
+        field: Field::Text,
+        slot: Slot::Setting,
+        group: Some("SHARDING"),
+        required: true,
+        default: None,
+        when: Some(When {
+            key: "mode",
+            values: &["sharded"],
+        }),
+        hint: None,
+        placeholder: None,
+    },
+];
+
+/// The one key a source with nothing to configure still declares.
+const SQL_KEYS: &[ConnectionKey] = &[ConnectionKey {
+    key: "address",
+    label: "ADDRESS",
     field: Field::Text,
-    required: false,
+    slot: Slot::Address,
+    group: None,
+    required: true,
     default: None,
+    when: None,
+    hint: None,
+    placeholder: None,
 }];
 
 #[async_trait]
@@ -219,6 +281,10 @@ impl SourceKind for TestSql {
 
 #[async_trait]
 impl DataSource for TestSql {
+    fn config_keys(&self) -> &'static [ConnectionKey] {
+        SQL_KEYS
+    }
+
     async fn connect(
         &self,
         def: &ConnectionDef,
@@ -350,6 +416,7 @@ mod tests {
     async fn conforms<S: DataSource + SourceKind>(source: S, def: &ConnectionDef) {
         let mode = S::MODE;
         let kind = S::NAME;
+        declares_a_drawable_form(kind, source.config_keys());
         let connected = source.connect(def, secrets()).await.expect("a fixture");
         let catalog = match (connected, mode) {
             (Sourced::Catalog(catalog), SourceMode::Catalog) => catalog,
@@ -377,7 +444,7 @@ mod tests {
         if let Err(why) = catalog.create_relation(&at, fake_schema()).await {
             assert_eq!(why, unsupported(kind, "have relations created in it"));
         }
-        if let Err(why) = catalog.writer(
+        let written = catalog.writer(
             catalog
                 .clone()
                 .table_provider(&Located {
@@ -389,8 +456,81 @@ mod tests {
                 .expect("a read provider"),
             &at,
             fake_schema(),
-        ) {
-            assert_eq!(why, unsupported(kind, "be written to"));
+        );
+        // `WRITABLE` is what the editor offers a read-only toggle on, so a source whose claim and
+        // whose handle disagree either hides a control that works or offers one that cannot.
+        match (S::WRITABLE, written) {
+            (false, Err(why)) => assert_eq!(
+                why,
+                unsupported(kind, "be written to"),
+                "'{kind}' says it is not writable but refuses in its own words, so it has a \
+                 writer it is not admitting to"
+            ),
+            (false, Ok(_)) => panic!("'{kind}' says it is not writable and then wrote"),
+            (true, Err(why)) => assert_ne!(
+                why,
+                unsupported(kind, "be written to"),
+                "'{kind}' says it is writable and has no writer"
+            ),
+            (true, Ok(_)) => {}
+        }
+    }
+
+    /// **Every declaration a source hands over has to be one a form can draw**, which is five
+    /// things nothing else checks — because none of them shows up as a failure anywhere. The
+    /// editor simply draws a form missing a setting the source needs, or drawing one twice.
+    ///
+    /// A [`When`] naming a key that is not declared beside it hides its row **forever**: the
+    /// deciding value can never be typed, because there is no box to type it in. A duplicate key
+    /// gives one setting two rows, whose values overwrite each other. No [`Slot::Address`] means
+    /// a connection with nowhere to put its address; two means the second silently wins. And a
+    /// group interrupted by another group's key prints its heading twice.
+    fn declares_a_drawable_form(kind: &str, keys: &[ConnectionKey]) {
+        let addresses = keys.iter().filter(|k| k.slot == Slot::Address).count();
+        assert_eq!(
+            addresses, 1,
+            "'{kind}' declares {addresses} address keys; every connection has exactly one address"
+        );
+        assert!(
+            keys.iter()
+                .filter(|k| k.slot == Slot::Address)
+                .all(|k| k.field == Field::Text),
+            "'{kind}' declares an address that is not typed into a box"
+        );
+
+        let mut seen_groups: Vec<Option<&str>> = Vec::new();
+        for declared in keys {
+            assert_eq!(
+                keys.iter()
+                    .filter(|other| other.key == declared.key)
+                    .count(),
+                1,
+                "'{kind}' declares '{}' twice",
+                declared.key
+            );
+            if seen_groups.last() != Some(&declared.group) {
+                assert!(
+                    !seen_groups.contains(&declared.group),
+                    "'{kind}' returns to the group {:?} after leaving it, so its heading is \
+                     printed twice",
+                    declared.group
+                );
+                seen_groups.push(declared.group);
+            }
+            let Some(when) = declared.when else { continue };
+            assert!(
+                keys.iter().any(|other| other.key == when.key),
+                "'{kind}' shows '{}' by '{}', which it does not declare, so the row can never \
+                 appear",
+                declared.key,
+                when.key
+            );
+            assert!(
+                !when.values.is_empty(),
+                "'{kind}' shows '{}' by no value of '{}', which is the same as never",
+                declared.key,
+                when.key
+            );
         }
     }
 

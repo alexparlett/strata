@@ -1,32 +1,163 @@
 //! The connection editor driven the way a user drives it: which controls a provider has, and
 //! what Save actually writes.
 //!
+//! **Every form here is driven through a source that exists nowhere in the app.** `TestSource` is
+//! declared in this file, registered on this test's own engine, and the editor draws its whole
+//! form from that registration — which is the deliverable: a `DataSource` an embedder writes gets
+//! a working editor with no code named after it. Nothing in `apps/connection` mentions a kind, so
+//! there is no shipped source to drive these tests with that would prove anything weaker.
+//!
 //! The window **root** is not mounted — it needs the app-globals, a menubar scope and an owner
 //! window id, none of which say anything about the editor. What is mounted is the pair that does:
 //! the fields and the footer, over the same contexts the real window provides them.
 //!
 //! Asserted through rendered text and the store, because that is the deliverable: a form whose
-//! controls match the provider, and a Save that writes one def, deregisters the one it moved off,
-//! and then waits rather than claiming success.
+//! controls are the ones its source declared, and a Save that writes one def, deregisters the one
+//! it moved off, and then waits rather than claiming success.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use freya::prelude::*;
 use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::sources::postgres::Pg;
-use strata_engine::SourceKind;
-use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
+use strata_engine::secrets::SecretProvider;
+use strata_engine::{
+    ConnectionKey, DataSource, Engine, Field, Slot, SourceInfo, SourceKind, SourceMode, Sourced,
+    When,
+};
+use strata_model::{ConnectionDef, Provider, S3Store, SourceDef};
 
-use super::model::PgDraft;
-
-use super::views::{ConnectionBody, Footer, OPTION_KEY_WIDTH};
-use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, PasswordProbe, Status};
+use super::views::{ConnectionBody, Footer};
+use super::{ConnectionCtx, ConnectionDraft, ConnectionTarget, SecretProbe, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{CatalogState, Log, PersistFaults, ProjChan, ProjectState, ScanRequest};
 use crate::theme::strata_theme;
+
+/// A source with no server behind it, declaring one key of every shape the form draws. Registered
+/// on this test's engine and on nothing else, so every row it produces is produced by the
+/// declaration alone.
+#[derive(Debug)]
+struct TestSource;
+
+impl SourceKind for TestSource {
+    const NAME: &'static str = "test-source";
+    const LABEL: &'static str = "Test source";
+    const BADGE: &'static str = "TST";
+    const MODE: SourceMode = SourceMode::Catalog;
+    const WRITABLE: bool = true;
+}
+
+const TEST_KEYS: &[ConnectionKey] = &[
+    ConnectionKey {
+        key: "address",
+        label: "ADDRESS",
+        field: Field::Text,
+        slot: Slot::Address,
+        group: Some("CONNECTION"),
+        required: true,
+        default: None,
+        when: None,
+        hint: Some("The server and the database on it"),
+        placeholder: None,
+    },
+    ConnectionKey {
+        key: "user",
+        label: "USER",
+        field: Field::Text,
+        slot: Slot::Setting,
+        group: Some("CONNECTION"),
+        required: true,
+        default: None,
+        when: None,
+        hint: Some("The role to log in as"),
+        placeholder: Some("reader"),
+    },
+    ConnectionKey {
+        key: "password",
+        label: "PASSWORD",
+        field: Field::Secret,
+        slot: Slot::Setting,
+        group: Some("CONNECTION"),
+        required: false,
+        default: None,
+        when: None,
+        hint: None,
+        placeholder: None,
+    },
+    ConnectionKey {
+        key: "mode",
+        label: "MODE",
+        field: Field::Choice(&["off", "on"]),
+        slot: Slot::Setting,
+        group: Some("SECURITY"),
+        required: false,
+        default: Some("off"),
+        when: None,
+        hint: None,
+        placeholder: None,
+    },
+    ConnectionKey {
+        key: "certificate",
+        label: "ROOT CERTIFICATE",
+        field: Field::Path,
+        slot: Slot::Setting,
+        group: Some("SECURITY"),
+        required: true,
+        default: None,
+        when: Some(When {
+            key: "mode",
+            values: &["on"],
+        }),
+        hint: None,
+        placeholder: None,
+    },
+];
+
+#[async_trait]
+impl DataSource for TestSource {
+    async fn connect(
+        &self,
+        _def: &ConnectionDef,
+        _secrets: Arc<dyn SecretProvider>,
+    ) -> Result<Sourced, String> {
+        Err("This test source has no server.".into())
+    }
+
+    /// A naming rule of its own, so the editor's address refusal can be shown to be **the kind's**
+    /// rather than one written in the form.
+    fn check_address(&self, address: &str) -> Result<(), String> {
+        match address.contains('/') {
+            true => Ok(()),
+            false => Err("A test address is 'server/database'.".into()),
+        }
+    }
+
+    fn config_keys(&self) -> &'static [ConnectionKey] {
+        TEST_KEYS
+    }
+}
+
+/// An engine serving [`TestSource`] and nothing else this crate ships.
+fn engine() -> EngineCtx {
+    EngineCtx::of(Engine::builder().with_source(TestSource).build())
+}
+
+/// The registration the draft is edited against — what the picker would have adopted.
+fn registrant() -> SourceInfo {
+    SourceInfo {
+        kind: TestSource::NAME,
+        label: TestSource::LABEL,
+        badge: TestSource::BADGE,
+        mode: TestSource::MODE,
+        keys: TEST_KEYS,
+        writable: TestSource::WRITABLE,
+    }
+}
 
 /// A scratch project folder for one test — `env::temp_dir()` + pid, the convention every test
 /// that really writes `.strata/project.json` follows, because the OS temp dir is machine-shared
@@ -35,7 +166,11 @@ fn temp_root(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("strata-connection-{tag}-{}", std::process::id()))
 }
 
-/// One S3 connection to edit, so a moved identity has something to move off.
+/// One connection already in the project, so a name clash has something to clash with.
+///
+/// An **object store**, deliberately: it is a def this editor has no form for, and it still has
+/// to be listed, keyed and clashed against exactly as before — nothing about withholding its
+/// *form* touches the store.
 fn project(root: &Path) -> ProjectState {
     let defs = ProjectDefs {
         name: "test".into(),
@@ -71,8 +206,9 @@ type Handles = (
 
 /// The editor over `draft`, opened on `target`, against its own scratch project.
 ///
-/// No keystore is opened: the window's password probe is a root `use_hook` and the root is not
-/// mounted, so `password_probe` is seeded with the answer that read would have parked.
+/// No keystore is opened: the window's secret probes are a root `use_hook` and the root is not
+/// mounted, so `secret_probes` starts empty, which reads as the answer that read would have
+/// parked for a key nothing is stored for.
 fn runner(
     tag: &'static str,
     target: ConnectionTarget,
@@ -83,7 +219,7 @@ fn runner(
         app,
         (480., 900.).into(),
         move |r| {
-            r.provide_root_context(EngineCtx::default);
+            r.provide_root_context(engine);
             r.provide_root_context(|| State::create(CatalogState::Cold));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| State::create(Log::default()));
@@ -92,15 +228,13 @@ fn runner(
                 RadioStation::<ProjectState, ProjChan>::create(project(&root))
             });
             let ctx = r.provide_root_context(|| ConnectionCtx {
-                password_expected: State::create(draft.pg.password),
+                secret_expected: State::create(draft.secrets.clone()),
                 draft: State::create(draft.clone()),
                 target: State::create(target.clone()),
                 status: State::create(Status::Idle),
-                profiles: State::create(Some(Vec::new())),
-                selected_option: State::create(None),
-                password: State::create(String::new()),
-                password_removed: State::create(false),
-                password_probe: State::create(PasswordProbe::Absent),
+                secret_values: State::create(BTreeMap::new()),
+                secret_removed: State::create(BTreeSet::new()),
+                secret_probes: State::create(BTreeMap::new()),
             });
             (ctx, project, rescan)
         },
@@ -109,7 +243,7 @@ fn runner(
 }
 
 /// Settle the tree — several passes, because the fields mount buffers that report on their own
-/// first effect and the authority box echoes itself once.
+/// first effect and the address box echoes itself once.
 fn settle(runner: &mut TestingRunner) {
     for _ in 0..6 {
         runner.sync_and_update();
@@ -122,38 +256,6 @@ fn texts(runner: &TestingRunner) -> Vec<String> {
 
 fn shows(runner: &TestingRunner, text: &str) -> bool {
     texts(runner).iter().any(|t| t == text)
-}
-
-/// The laid-out box of the text run `text` — for the assertions that are about *geometry* rather
-/// than about which element is in the tree.
-fn text_area(runner: &TestingRunner, text: &str) -> Area {
-    runner
-        .find(|node, element| {
-            Label::try_downcast(element)
-                .filter(|l| l.text == text)
-                .map(|_| node.layout().area)
-        })
-        .unwrap_or_else(|| panic!("no text run {text:?} in the tree: {:?}", texts(runner)))
-}
-
-/// The laid-out box of the **editable** text `text` — an `Input`'s content is a `paragraph`, not
-/// a `label`, so [`text_area`] cannot see the client-option boxes at all.
-fn field_area(runner: &TestingRunner, text: &str) -> Area {
-    runner
-        .find(|node, element| {
-            Paragraph::try_downcast(element)
-                .filter(|p| p.spans.iter().any(|span| span.text.as_ref() == text))
-                .map(|_| node.layout().area)
-        })
-        .unwrap_or_else(|| panic!("no editable text {text:?} in the tree"))
-}
-
-/// The centre of a laid-out box, in the coordinates the runner's cursor takes.
-fn centre(area: Area) -> (f64, f64) {
-    (
-        (area.min_x() + area.width() / 2.) as f64,
-        (area.min_y() + area.height() / 2.) as f64,
-    )
 }
 
 /// Press the **lowest** run of `text` — the footer's buttons sit under everything, and a label in
@@ -177,83 +279,18 @@ fn click_lowest(runner: &mut TestingRunner, text: &str) {
     settle(runner);
 }
 
-fn s3_draft() -> ConnectionDraft {
+/// A draft on [`TestSource`], as the picker would have left it.
+fn source_draft() -> ConnectionDraft {
     ConnectionDraft {
-        address: "acme-lake".into(),
-        region: "eu-west-2".into(),
+        kind: TestSource::NAME.into(),
+        keys: TEST_KEYS,
+        name: "warehouse".into(),
+        address: "db.internal/analytics".into(),
+        config: [("user".to_string(), "reader".to_string())]
+            .into_iter()
+            .collect(),
         ..Default::default()
     }
-}
-
-/// **Which controls exist is the provider's answer, and switching it re-asks.** S3 has a region
-/// and an endpoint; HTTP has neither, and no auth either — it is anonymous by construction, so a
-/// disabled auth pill would be a control that can never mean anything.
-///
-/// The scheme chip follows the same rule: shown for HTTP, where `http` and `https` would
-/// otherwise be a guess, and hidden for S3 and GCS, where the picker directly above states it.
-#[test]
-fn a_providers_controls_are_the_ones_that_provider_has() {
-    let (mut runner, (ctx, ..)) = runner("providers", ConnectionTarget::New, s3_draft());
-    settle(&mut runner);
-
-    assert!(shows(&runner, "PROVIDER"), "{:?}", texts(&runner));
-    assert!(shows(&runner, "BUCKET"));
-    assert!(shows(&runner, "AUTHENTICATION"));
-    assert!(shows(&runner, "REGION"));
-    assert!(shows(&runner, "ENDPOINT"));
-    assert!(shows(&runner, "BUCKET"), "S3 names a bucket, not a URL");
-
-    click_lowest(&mut runner, "HTTP");
-
-    assert_eq!(ctx.draft.peek().provider, ProviderId::Http);
-    assert!(shows(&runner, "URL"), "{:?}", texts(&runner));
-    assert!(
-        !shows(&runner, "AUTHENTICATION"),
-        "HTTP is always anonymous"
-    );
-    assert!(!shows(&runner, "REGION"));
-    assert!(!shows(&runner, "ENDPOINT"));
-    assert!(!shows(&runner, "BUCKET"));
-    assert!(
-        shows(
-            &runner,
-            "An HTTP connection needs a scheme: write 'https://aserver' or 'http://aserver'."
-        ),
-        "{:?}",
-        texts(&runner)
-    );
-
-    click_lowest(&mut runner, "S3");
-    assert_eq!(ctx.draft.peek().region, "eu-west-2");
-    assert!(shows(&runner, "REGION"));
-}
-
-/// **Save is off, and the footer says why, in the same breath.** The two are one value: this used
-/// to be the failure mode worth guarding, where a button was disabled by one expression and
-/// explained by another.
-#[test]
-fn a_draft_that_cannot_be_saved_says_so_beside_the_button() {
-    let draft = ConnectionDraft {
-        region: String::new(),
-        ..s3_draft()
-    };
-    let (mut runner, (ctx, project, rescan)) = runner("blocked", ConnectionTarget::New, draft);
-    settle(&mut runner);
-
-    assert!(
-        shows(
-            &runner,
-            "An S3 connection needs a region. It can't be auto-detected."
-        ),
-        "{:?}",
-        texts(&runner)
-    );
-
-    click_lowest(&mut runner, "Save");
-
-    assert_eq!(project.peek().connections.len(), 1, "nothing was written");
-    assert_eq!(*ctx.status.peek(), Status::Idle);
-    assert_eq!(rescan.peek().seq, 0, "and no pass was asked for");
 }
 
 /// **Save writes the def, asks for the pass, and then waits.** It does not claim success: the
@@ -261,226 +298,227 @@ fn a_draft_that_cannot_be_saved_says_so_beside_the_button() {
 /// row is back to `Loading`.
 #[test]
 fn saving_writes_the_def_and_waits_for_the_pass() {
-    let (mut runner, (ctx, project, rescan)) = runner("save", ConnectionTarget::New, s3_draft());
+    let (mut runner, (ctx, project, rescan)) =
+        runner("save", ConnectionTarget::New, source_draft());
     settle(&mut runner);
 
     click_lowest(&mut runner, "Save");
 
-    let urls: Vec<String> = project
+    let names: Vec<String> = project
         .peek()
         .connections
         .iter()
         .map(|c| c.def.named())
         .collect();
-    assert_eq!(urls, ["acme_lake", "old_lake"]);
+    assert_eq!(names, ["warehouse", "old_lake"], "sorted by address");
     assert_eq!(
         *ctx.status.peek(),
-        Status::Connecting("acme_lake".into()),
+        Status::Connecting("warehouse".into()),
         "the window is waiting on its own row, not claiming it connected"
     );
     assert_eq!(rescan.peek().seq, 1, "one pass asked for");
     assert_eq!(
         *ctx.target.peek(),
-        ConnectionTarget::Edit("acme_lake".into())
+        ConnectionTarget::Edit("warehouse".into())
     );
 }
 
-/// **An edit that moves the bucket moves the connection's identity**, so the row it moved off has
-/// to go — otherwise the project keeps a def under the old URL and the pass registers both.
+/// **An edit that renames a connection leaves no row behind** — otherwise the project keeps a def
+/// under the old name and the pass registers both.
 #[test]
-fn an_edit_that_moves_the_bucket_leaves_no_row_behind() {
-    let draft = ConnectionDraft {
-        address: "new-lake".into(),
-        region: "eu-west-2".into(),
-        ..Default::default()
-    };
-    let (mut runner, (_, project, _)) =
-        runner("moved", ConnectionTarget::Edit("old_lake".into()), draft);
+fn an_edit_that_renames_leaves_no_row_behind() {
+    let mut draft = source_draft();
+    draft.name = "depot".into();
+    let (mut runner, (_, mut project, _)) =
+        runner("moved", ConnectionTarget::Edit("warehouse".into()), draft);
+    {
+        let mut p = project.write_channel(ProjChan::Connections);
+        p.upsert_connection(ConnectionDef {
+            address: "db.internal/analytics".into(),
+            name: "warehouse".into(),
+            provider: Provider::Source(SourceDef {
+                kind: TestSource::NAME.into(),
+                ..Default::default()
+            }),
+            client_config: Default::default(),
+        });
+    }
     settle(&mut runner);
 
     click_lowest(&mut runner, "Save");
 
-    let urls: Vec<String> = project
+    let names: Vec<String> = project
         .peek()
         .connections
         .iter()
         .map(|c| c.def.named())
         .collect();
-    assert_eq!(urls, ["new_lake"], "the old URL's row is gone");
+    assert_eq!(names, ["depot", "old_lake"], "the old name's row is gone");
 }
 
-/// **The client-options header stands at the split it declares, empty or not.**
+/// **A registered source's rows are the ones it declared, and there are no others.**
 ///
-/// This is the bug a first attempt at the test missed, and the miss is worth recording. The
-/// empty-state `Table` carried no `column_widths`, so `TableRow` fell back to an equal share per
-/// cell — and because `Table` hands its config down through a plain `provide_context` that
-/// `use_try_consume` reads **once per render**, the header did not re-read it when rows arrived and
-/// changed the Table's props. So the strip laid out 50/50 in the empty state and *stayed* 50/50
-/// over rows that were 210px/flex.
-///
-/// A test comparing the two states therefore passed on the broken code: they agreed, at the wrong
-/// number. What has to be asserted is the **declared** split, which is why this reads
-/// `OPTION_KEY_WIDTH` rather than the other state.
-///
-/// The fork no longer goes stale either — `TableConfigContext` is a `Readable`, so a row re-reads a
-/// split that changes under it (`freya-components/src/table.rs`). This still declares the same
-/// widths in both branches, because the two fixes answer different halves: the fork's makes a
-/// *change* propagate, and this one means there is no change to propagate, so the header does not
-/// move even for the frame the first row lands in.
-///
-/// On laid-out geometry, because that *is* the bug — the element tree was right in both states.
+/// This is the deliverable in one test: `TestSource` exists only in this file, nothing in
+/// `apps/connection` names it, and the form is a name, an address, a box per declared key in the
+/// dress its `Field` asks for, and the read-only switch its `MODE` earns. There is no
+/// object-store vocabulary to be absent, because there is no object-store dress.
 #[test]
-fn the_client_options_header_stands_at_the_split_it_declares() {
-    let (mut runner, (ctx, ..)) = runner("options-header", ConnectionTarget::New, s3_draft());
-    settle(&mut runner);
-
-    let split = |runner: &TestingRunner| {
-        let option = text_area(runner, "Option");
-        let value = text_area(runner, "Value");
-        (value.min_x() - option.min_x()).round()
-    };
-
-    assert!(
-        shows(
-            &runner,
-            "No client options. The defaults suit most connections."
-        ),
-        "{:?}",
-        texts(&runner)
+fn a_registered_sources_rows_are_the_ones_it_declared() {
+    let (mut runner, (ctx, ..)) = runner(
+        "declared-rows",
+        ConnectionTarget::New,
+        ConnectionDraft::new(&[registrant()]),
     );
-    assert_eq!(
-        split(&runner),
-        OPTION_KEY_WIDTH,
-        "empty, and already correct"
-    );
-
-    ctx.edit(|draft| {
-        draft.client_config.add("timeout".into(), "30s".into());
-    });
     settle(&mut runner);
-    assert!(!shows(
-        &runner,
-        "No client options. The defaults suit most connections."
-    ));
 
     assert_eq!(
-        split(&runner),
-        OPTION_KEY_WIDTH,
-        "and unmoved once a row exists, at the split it declares"
+        ctx.draft.peek().kind,
+        TestSource::NAME,
+        "a new draft opens on the first registrant"
     );
-}
-
-/// **Clicking into either box of a client-option row selects that row**, because the toolbar acts
-/// on the selection: a value typed into a row the highlight never moved to is a Remove aimed at
-/// the wrong one.
-///
-/// It has to be the *field's* focus that does it, not the row's press. `Input` stops propagation
-/// on its focus press (`on_input_focus_press`), so a click that lands in a box never reaches
-/// `TableRow::on_press` — which is exactly how the value box lost its selection when the row's one
-/// a11y id moved to the name box for the suggestion panel.
-#[test]
-fn clicking_into_either_box_of_an_option_row_selects_it() {
-    let (mut runner, (ctx, ..)) = runner("options-select", ConnectionTarget::New, s3_draft());
-    settle(&mut runner);
-
-    ctx.edit(|draft| {
-        draft.client_config.add("timeout".into(), "30s".into());
-        draft
-            .client_config
-            .add("user_agent".into(), "strata".into());
-    });
-    settle(&mut runner);
-    let ids: Vec<u64> = ctx
-        .draft
-        .peek()
-        .client_config
-        .rows()
-        .iter()
-        .map(|row| row.id)
-        .collect();
-    assert_eq!(ids.len(), 2);
-
-    let mut slot = ctx.selected_option;
-    slot.set(None);
-    settle(&mut runner);
-
-    let point = centre(field_area(&runner, "strata"));
-    runner.move_cursor(point);
-    runner.click_cursor(point);
-    settle(&mut runner);
     assert_eq!(
-        *ctx.selected_option.peek(),
-        Some(ids[1]),
-        "clicking the value box selected its own row"
+        ctx.draft.peek().keys,
+        TEST_KEYS,
+        "carrying its declaration, not just its name"
     );
 
-    let point = centre(field_area(&runner, "timeout"));
-    runner.move_cursor(point);
-    runner.click_cursor(point);
-    settle(&mut runner);
-    assert_eq!(*ctx.selected_option.peek(), Some(ids[0]));
-}
-
-/// **The database arm's rows are its own, and none of the object stores' are** — a region, an
-/// endpoint, an auth pill and a client-options table cannot mean anything for a database.
-///
-/// Driven through the picker rather than mounted on a Postgres draft, because reaching this arm
-/// at all is half the deliverable: the picker iterated `OBJECT_STORES` while the rows did not
-/// exist, and nothing else would have said so.
-#[test]
-fn a_database_has_the_database_rows_and_none_of_the_object_stores() {
-    let (mut runner, (ctx, ..)) = runner("pg-rows", ConnectionTarget::New, s3_draft());
-    settle(&mut runner);
-
-    click_lowest(&mut runner, "PG");
-    assert_eq!(ctx.draft.peek().provider, ProviderId::Source);
-
-    for row in ["URL", "DATABASE", "CATALOG", "USER", "PASSWORD", "SSL MODE"] {
-        assert!(shows(&runner, row), "{row}: {:?}", texts(&runner));
-    }
     for row in [
-        "BUCKET",
-        "REGION",
-        "ENDPOINT",
-        "AUTHENTICATION",
-        "CLIENT OPTIONS",
+        "PROVIDER",
+        "NAME",
+        "ADDRESS",
+        "USER",
+        "PASSWORD",
+        "MODE",
+        "READ ONLY",
     ] {
-        assert!(!shows(&runner, row), "{row} is object-store vocabulary");
+        assert!(shows(&runner, row), "{row}: {:?}", texts(&runner));
     }
     assert!(
         !shows(&runner, "ROOT CERTIFICATE"),
-        "'prefer' does not verify, so there is nothing for a certificate to do"
+        "'off' does not read a certificate, so there is no control for one"
     );
+    for heading in ["CONNECTION", "SECURITY"] {
+        assert!(
+            shows(&runner, heading),
+            "{heading}: the sections the kind grouped its keys into, {:?}",
+            texts(&runner)
+        );
+    }
+    assert!(
+        !shows(&runner, "READ ONLY") || registrant().writable,
+        "the read-only switch is offered because the kind says it can be written to"
+    );
+    assert!(
+        shows(&runner, TestSource::BADGE),
+        "and the picker offers it by its own badge"
+    );
+}
 
-    ctx.edit(|draft| draft.pg.sslmode = "verify-full".to_string());
+/// **A row appears and disappears on another row's answer, and the kind is what says so.**
+///
+/// `TestSource` declares its certificate `shown` by `mode: on` — the shape `Pg` uses for
+/// `sslmode`'s two verifying modes. The editor holds no condition of its own; it asks the draft,
+/// which asks the declaration.
+#[test]
+fn a_declared_condition_is_what_puts_a_row_on_screen() {
+    let (mut runner, (ctx, ..)) = runner("conditional", ConnectionTarget::New, source_draft());
+    settle(&mut runner);
+    assert!(!shows(&runner, "ROOT CERTIFICATE"));
+
+    ctx.edit(|draft| draft.set("mode", "on".into()));
     settle(&mut runner);
     assert!(shows(&runner, "ROOT CERTIFICATE"), "{:?}", texts(&runner));
 
-    click_lowest(&mut runner, "S3");
-    assert!(shows(&runner, "REGION"));
-    assert!(!shows(&runner, "DATABASE"));
-    assert!(!shows(&runner, "CATALOG"));
+    ctx.edit(|draft| draft.set("mode", "off".into()));
+    settle(&mut runner);
+    assert!(!shows(&runner, "ROOT CERTIFICATE"), "and back again");
 }
 
-/// **A database's blockers block, and the footer is where they are said** — including the one the
-/// draft cannot answer on its own, a catalog name another connection in this project holds.
+/// **A source's form has no standing note.** What each secret box does with what is typed into it
+/// is the row's own sentence, which is specific because it reports this machine; a paragraph about
+/// the kind is prose only the kind could write.
 #[test]
-fn a_database_draft_is_blocked_and_explained_beside_the_button() {
-    let draft = ConnectionDraft {
-        provider: ProviderId::Source,
-        address: "db.internal:5432/analytics".into(),
-        pg: PgDraft {
-            user: "reader".into(),
-            ..Default::default()
-        },
-        ..Default::default()
+fn a_sources_form_ends_with_its_last_row() {
+    let (mut runner, ..) = runner("no-note", ConnectionTarget::New, source_draft());
+    settle(&mut runner);
+
+    let said = texts(&runner);
+    assert!(
+        !said.iter().any(|t| t.contains("The project file keeps")),
+        "no standing note: {said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|t| t.contains("signs in without a password")),
+        "but the secret row still reports this machine: {said:?}"
+    );
+}
+
+/// **A section heading is printed once, when the group changes** — and a group whose every key is
+/// hidden prints no heading at all, because the heading rides the first row that survives the
+/// declaration's own conditions.
+#[test]
+fn a_group_heading_rides_the_rows_that_survive() {
+    let (mut runner, (ctx, ..)) = runner("groups", ConnectionTarget::New, source_draft());
+    settle(&mut runner);
+
+    let headings = |runner: &TestingRunner| {
+        texts(runner)
+            .into_iter()
+            .filter(|t| t == "CONNECTION" || t == "SECURITY")
+            .collect::<Vec<_>>()
     };
-    let (mut runner, (ctx, mut project, rescan)) =
-        runner("pg-blocked", ConnectionTarget::New, draft);
+    assert_eq!(
+        headings(&runner),
+        ["CONNECTION", "SECURITY"],
+        "one each, in declaration order — MODE keeps SECURITY on screen"
+    );
+
+    ctx.edit(|draft| draft.set("mode", "on".into()));
+    settle(&mut runner);
+    assert_eq!(
+        headings(&runner),
+        ["CONNECTION", "SECURITY"],
+        "and revealing a second key under it does not print it twice"
+    );
+    assert!(shows(&runner, "ROOT CERTIFICATE"));
+}
+
+/// **The address is refused by the kind's own rule**, reached through
+/// `sources().check_address` — so the sentence under the button is the one `connect` would have
+/// given, and this form holds no copy of it to drift.
+#[test]
+fn an_address_is_refused_in_the_kinds_own_words() {
+    let mut draft = source_draft();
+    draft.address = "db.internal".into();
+    let (mut runner, (ctx, _, rescan)) = runner("address", ConnectionTarget::New, draft);
     settle(&mut runner);
 
     assert!(
-        shows(&runner, "This connection has no catalog name."),
+        shows(&runner, "A test address is 'server/database'."),
+        "{:?}",
+        texts(&runner)
+    );
+    click_lowest(&mut runner, "Save");
+    assert_eq!(rescan.peek().seq, 0, "and nothing was asked for");
+
+    ctx.edit(|draft| draft.set("address", "db.internal/analytics".into()));
+    settle(&mut runner);
+    assert!(!shows(&runner, "A test address is 'server/database'."));
+}
+
+/// **A required declared key that is empty blocks the save, and the form says which one.** That
+/// is the only thing a generic form can be wrong about — what a value may *be* is the kind's
+/// rule, and `connect` is where it is asked.
+#[test]
+fn a_required_declared_key_blocks_the_save() {
+    let mut draft = source_draft();
+    draft.config.clear();
+    let (mut runner, (ctx, project, rescan)) = runner("required", ConnectionTarget::New, draft);
+    settle(&mut runner);
+
+    assert!(
+        shows(&runner, "This connection has no user."),
         "{:?}",
         texts(&runner)
     );
@@ -488,24 +526,45 @@ fn a_database_draft_is_blocked_and_explained_beside_the_button() {
     assert_eq!(project.peek().connections.len(), 1, "nothing was written");
     assert_eq!(rescan.peek().seq, 0);
 
+    ctx.edit(|draft| draft.set("user", "reader".into()));
+    settle(&mut runner);
+    click_lowest(&mut runner, "Save");
+    assert_eq!(
+        rescan.peek().seq,
+        1,
+        "and it saves once the box is answered"
+    );
+}
+
+/// **A name another connection already holds is refused, and a blank box is not blank.** The
+/// address mints the handle, so a source with no name typed still saves under a name every
+/// surface can address it by.
+#[test]
+fn a_name_clash_is_explained_beside_the_button() {
+    let mut draft = source_draft();
+    draft.name = String::new();
+    let (mut runner, (ctx, mut project, rescan)) = runner("name", ConnectionTarget::New, draft);
+    settle(&mut runner);
+
+    assert_eq!(
+        ctx.draft.peek().named(),
+        "analytics",
+        "minted from the address"
+    );
+
     {
         let mut p = project.write_channel(ProjChan::Connections);
         p.upsert_connection(ConnectionDef {
-            address: "other:5432/sales".into(),
+            address: "other/sales".into(),
             name: "warehouse".into(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: "warehouse".into(),
-                    user: "reader".into(),
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            provider: Provider::Source(SourceDef {
+                kind: TestSource::NAME.into(),
+                ..Default::default()
+            }),
             client_config: Default::default(),
         });
     }
-    ctx.edit(|draft| draft.pg.name = "WAREHOUSE".into());
+    ctx.edit(|draft| draft.name = "WAREHOUSE".into());
     settle(&mut runner);
 
     let said = texts(&runner);
@@ -515,52 +574,36 @@ fn a_database_draft_is_blocked_and_explained_beside_the_button() {
         "a folded clash against another connection: {said:?}"
     );
 
-    ctx.edit(|draft| draft.pg.name = "pg".into());
+    ctx.edit(|draft| draft.name = "depot".into());
     settle(&mut runner);
     click_lowest(&mut runner, "Save");
     assert_eq!(rescan.peek().seq, 1, "and it saves once the name is free");
 }
 
-/// **Editing a database connection's identity does not make it clash with itself.**
+/// **Editing a source connection's settings does not make it clash with itself.**
 ///
-/// `check_catalog_name` skips the candidate by comparing URLs, and a database connection's URL
-/// carries its user — so changing only the USER moves the identity, the stored row stops matching,
-/// and the draft reads as clashing with the very connection it is replacing. The footer quoted
-/// that connection's own old URL back and Save stayed disabled short of also renaming the catalog,
-/// which is not what the user was doing.
+/// `check_catalog_name` skips the candidate by comparing identities, so a change to a declared
+/// key must leave the row this window opened on out of the clash set — otherwise the footer
+/// quotes that connection's own name back and Save never re-enables.
 #[test]
-fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
-    let draft = ConnectionDraft {
-        provider: ProviderId::Source,
-        address: "db.internal:5432/analytics".into(),
-        pg: PgDraft {
-            kind: Pg::NAME.to_string(),
-            name: "pg".into(),
-            user: "reader".into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let stored = "analytics";
+fn editing_a_source_connection_does_not_clash_with_the_row_it_replaces() {
     let (mut runner, (ctx, mut project, _)) = runner(
-        "pg-self-clash",
-        ConnectionTarget::Edit(stored.into()),
-        draft,
+        "self-clash",
+        ConnectionTarget::Edit("warehouse".into()),
+        source_draft(),
     );
     {
         let mut p = project.write_channel(ProjChan::Connections);
         p.upsert_connection(ConnectionDef {
-            address: "db.internal:5432/analytics".into(),
-            name: "analytics".into(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: "pg".into(),
-                    user: "reader".into(),
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            address: "db.internal/analytics".into(),
+            name: "warehouse".into(),
+            provider: Provider::Source(SourceDef {
+                kind: TestSource::NAME.into(),
+                config: [("user".to_string(), "reader".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            }),
             client_config: Default::default(),
         });
     }
@@ -568,14 +611,9 @@ fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
 
     // The footer holds the station rather than subscribing to it, so this edit is what re-renders
     // it — and it has to land with the row already stored, or the clash never gets asked about.
-    ctx.edit(|draft| draft.pg.user = "writer".into());
+    ctx.edit(|draft| draft.set("user", "writer".into()));
     settle(&mut runner);
 
-    assert_eq!(
-        ctx.draft.peek().def().identity(),
-        "postgres:db.internal:5432/analytics",
-        "the address is unchanged, so the clash is the name's question and not the address's"
-    );
     let said = texts(&runner);
     assert!(
         !said
@@ -586,48 +624,44 @@ fn editing_a_database_connection_does_not_clash_with_the_row_it_replaces() {
     assert_eq!(ctx.draft.peek().blocker(), None);
 }
 
-/// **A password typed into a new connection reaches the def as an expectation and nothing more.**
+/// **A secret typed into a new connection reaches the def as an expectation and nothing more.**
 /// The value is bound for this machine's keystore, which no test opens; what is asserted is the
 /// half that is the def's.
 #[test]
-fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine() {
-    let draft = ConnectionDraft {
-        provider: ProviderId::Source,
-        address: "db.internal:5432/analytics".into(),
-        pg: PgDraft {
-            kind: Pg::NAME.to_string(),
-            name: "pg".into(),
-            user: "reader".into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let (mut runner, (ctx, ..)) = runner("pg-password", ConnectionTarget::New, draft);
+fn a_declared_secret_is_an_expectation_in_the_def_and_a_value_on_this_machine() {
+    let (mut runner, (ctx, ..)) = runner("secret", ConnectionTarget::New, source_draft());
     settle(&mut runner);
 
-    assert!(!ctx.draft.peek().pg.password);
+    assert!(ctx.draft.peek().secrets.is_empty());
     assert!(
         shows(&runner, "This connection signs in without a password."),
         "{:?}",
         texts(&runner)
     );
 
-    let mut typed = ctx.password;
-    typed.set("hunter2".into());
+    ctx.set_secret("password", "hunter2".into());
     settle(&mut runner);
     assert!(
-        ctx.draft.peek().pg.password,
+        ctx.draft.peek().secrets.contains("password"),
         "typing one is what makes the def expect one"
     );
     assert!(shows(
         &runner,
         "This password goes into this machine's keystore when you save."
     ));
+    let Provider::Source(def) = ctx.draft.peek().def().provider else {
+        panic!("a source def");
+    };
+    assert!(
+        !def.config.contains_key("password"),
+        "and no secret value reaches the def: {:?}",
+        def.config
+    );
 
-    typed.set(String::new());
+    ctx.set_secret("password", String::new());
     settle(&mut runner);
     assert!(
-        !ctx.draft.peek().pg.password,
+        !ctx.draft.peek().secrets.contains("password"),
         "and clearing the box puts back what the def said, rather than leaving a committed \
          expectation nothing holds"
     );
@@ -635,28 +669,25 @@ fn a_database_password_is_an_expectation_in_the_def_and_a_value_on_this_machine(
 
 /// **The two clearing gestures are two presses, and only one of them edits the def.** Made
 /// casually on a machine with no entry, "this connection uses no password" breaks the colleague
-/// who has one, so it is never what a removal does.
+/// who has one, so it is never what a removal does. The press names the key, off its declared
+/// label, so a source with two credentials offers two distinguishable presses.
 #[test]
-fn removing_a_password_from_this_machine_is_not_declaring_the_connection_has_none() {
-    let draft = ConnectionDraft {
-        provider: ProviderId::Source,
-        address: "db.internal:5432/analytics".into(),
-        pg: PgDraft {
-            kind: Pg::NAME.to_string(),
-            name: "pg".into(),
-            user: "reader".into(),
-            password: true,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+fn removing_a_secret_from_this_machine_is_not_declaring_the_connection_has_none() {
+    let mut draft = source_draft();
+    draft.secrets.insert("password".into());
     let (mut runner, (ctx, ..)) = runner(
-        "pg-forget",
-        ConnectionTarget::Edit("analytics".into()),
+        "secret-forget",
+        ConnectionTarget::Edit("warehouse".into()),
         draft,
     );
-    let mut probe = ctx.password_probe;
-    probe.set(PasswordProbe::Stored);
+    {
+        let mut probes = ctx.secret_probes;
+        probes.set(
+            [("password".to_string(), SecretProbe::Stored)]
+                .into_iter()
+                .collect(),
+        );
+    }
     settle(&mut runner);
 
     assert!(
@@ -670,69 +701,120 @@ fn removing_a_password_from_this_machine_is_not_declaring_the_connection_has_non
 
     click_lowest(&mut runner, "Remove from this machine");
     assert!(
-        ctx.draft.peek().pg.password,
+        ctx.draft.peek().secrets.contains("password"),
         "the connection still expects one, so other machines keep theirs"
     );
-    assert!(*ctx.password_removed.peek());
+    assert!(ctx.secret_removed.peek().contains("password"));
 
     click_lowest(&mut runner, "This connection uses no password");
     assert!(
-        !ctx.draft.peek().pg.password,
+        !ctx.draft.peek().secrets.contains("password"),
         "this one is a def edit, and it is the only one that is"
     );
     assert!(
-        *ctx.password_removed.peek(),
+        ctx.secret_removed.peek().contains("password"),
         "and it drops this machine's entry too, which nothing would name again"
     );
 }
 
-/// **This machine's answer is not the def's**: a def that expects a password says one
-/// is expected, not that this machine holds one.
+/// **This machine's answer is not the def's**: a def that expects a secret says one is expected,
+/// not that this machine holds one.
 #[test]
-fn the_password_row_says_what_this_machine_holds() {
-    let draft = ConnectionDraft {
-        provider: ProviderId::Source,
-        address: "db.internal:5432/analytics".into(),
-        pg: PgDraft {
-            kind: Pg::NAME.to_string(),
-            name: "pg".into(),
-            user: "reader".into(),
-            password: true,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let (mut runner, (ctx, ..)) = runner("pg-probe", ConnectionTarget::New, draft);
-    let mut probe = ctx.password_probe;
+fn a_secret_row_says_what_this_machine_holds() {
+    let mut draft = source_draft();
+    draft.secrets.insert("password".into());
+    let (mut runner, (ctx, ..)) = runner("secret-probe", ConnectionTarget::New, draft);
+    let mut probes = ctx.secret_probes;
 
     for (answer, said) in [
-        (PasswordProbe::Asking, "Checking this machine's keystore…"),
+        (SecretProbe::Asking, "Checking this machine's keystore…"),
         (
-            PasswordProbe::Stored,
+            SecretProbe::Stored,
             "A password is stored on this machine. Type a new one to replace it.",
         ),
         (
-            PasswordProbe::Absent,
+            SecretProbe::Absent,
             "This connection expects a password and none is stored on this machine. Enter it \
              here.",
         ),
     ] {
-        probe.set(answer);
+        probes.set([("password".to_string(), answer)].into_iter().collect());
         settle(&mut runner);
         assert!(shows(&runner, said), "{said:?}: {:?}", texts(&runner));
     }
 }
 
-/// A URL another connection already holds is refused, because `upsert_connection` replaces on it
-/// — so without this the save would silently take that connection's def out from under it. The
-/// def's *own* URL never clashes with itself.
+/// **A declared choice is a `Select` over the words the kind gave**, so a value it would refuse is
+/// unreachable — and a key nothing has touched is written as the key declares it.
 #[test]
-fn a_url_another_connection_holds_blocks_the_save() {
-    let draft = ConnectionDraft {
-        address: "old-lake".into(),
-        region: "eu-west-2".into(),
-        ..Default::default()
+fn a_declared_choice_writes_the_kinds_own_word() {
+    let (mut runner, (ctx, ..)) = runner("choice", ConnectionTarget::New, source_draft());
+    settle(&mut runner);
+
+    let Provider::Source(def) = ctx.draft.peek().def().provider else {
+        panic!("a source def");
     };
+    assert_eq!(
+        def.config.get("mode").map(String::as_str),
+        Some("off"),
+        "the declared default"
+    );
+
+    ctx.edit(|draft| draft.set("mode", "on".into()));
+    settle(&mut runner);
+    let Provider::Source(def) = ctx.draft.peek().def().provider else {
+        panic!("a source def");
+    };
+    assert_eq!(def.config.get("mode").map(String::as_str), Some("on"));
+}
+
+/// **A source's def is byte-equivalent through the form**: opened on a stored def and saved with
+/// nothing touched, what reaches the store is the def that was there.
+#[test]
+fn a_stored_source_def_survives_the_form_untouched() {
+    let stored = ConnectionDef {
+        address: "db.internal/analytics".into(),
+        name: "warehouse".into(),
+        provider: Provider::Source(SourceDef {
+            kind: TestSource::NAME.into(),
+            config: [
+                ("user", "reader"),
+                ("mode", "on"),
+                ("certificate", "/c.pem"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+            secrets: BTreeSet::from(["password".to_string()]),
+            schemas: vec!["public".into()],
+            read_only: false,
+        }),
+        client_config: Default::default(),
+    };
+    let draft = ConnectionDraft::of(&stored, &[registrant()]);
+    let (mut runner, (ctx, ..)) = runner(
+        "round-trip",
+        ConnectionTarget::Edit("warehouse".into()),
+        draft,
+    );
+    settle(&mut runner);
+
+    assert_eq!(
+        ctx.draft.peek().def(),
+        stored,
+        "every box mounted and reported, and nothing moved"
+    );
+}
+
+/// **A name another connection already holds is refused**, because `upsert_connection` replaces
+/// on it — so without this the save would silently take that connection's def out from under it.
+///
+/// The connection it clashes with is an **object store**, which this editor has no form for: what
+/// a def is keyed by has nothing to do with whether this window can draw it.
+#[test]
+fn a_name_another_connection_holds_blocks_the_save() {
+    let mut draft = source_draft();
+    draft.name = "old_lake".into();
     let (mut runner, (_, project, _)) = runner("clash", ConnectionTarget::New, draft);
     settle(&mut runner);
 

@@ -1,7 +1,18 @@
-//! The **connection editor** (W7 · 03 / design `Connections.dc.html`) — add a remote source to
-//! this project, or edit one: its provider, its address, and where that provider's credentials
-//! are to be found. Four providers, three of them object stores and one a **database** (DB-04),
-//! which is a fourth segment on the same pill rather than a surface of its own.
+//! The **connection editor** (W7 · 03 / design `Connections.dc.html`) — add a data source to this
+//! project, or edit one: which registered kind serves it, where it is, and how it signs in.
+//!
+//! **It names no source, and it has no second dress.** A registrant's rows are its own
+//! declaration ([`SourceInfo::keys`](strata_engine::SourceInfo)), carried onto the draft by the
+//! picker and rendered generically by [`views`], so registering a `DataSource` puts a working
+//! editor in front of it with nothing here to change — and a provider the registry does not serve
+//! has no form here at all.
+//!
+//! **The object stores are therefore not editable here yet.** `Provider::{S3, Gcs, Http}` are
+//! typed arms with typed settings, which is the one thing a declaration-driven form cannot
+//! render; rather than keep a hand-written dress beside the generic one, they wait for EA-25 to
+//! make them `DataSource`s like any other. Defs already on disk are listed, queried, refreshed
+//! and forgotten exactly as before — only *editing* one is withheld, and the catalog menu parks
+//! that item rather than dropping it, because it is "not this second" and not "never".
 //!
 //! **A window, not a modal**, and the Configure window's shape throughout. The canvas is a
 //! 480 × 588 frame with traffic lights, a drag bar and its own footer, so this is a child window
@@ -14,17 +25,12 @@
 //! windows on one def would both `upsert_connection` and both persist, so the second would
 //! silently revert the first.
 //!
-//! **No secret reaches the def, and the object-store arms have no field that could.** Their auth
-//! controls choose between the host's own chain, a named `~/.aws` profile and a service-account
-//! key **file path** — [`strata_model::S3Auth`] and [`strata_model::GcsAuth`] have no variant
-//! carrying a key, so a form built from them cannot grow one by accident.
-//!
-//! **A database password is the one secret this window handles, and it never touches the draft.**
-//! A server has no host-side credential chain to defer to, so the box exists; it writes this
-//! machine's OS keystore under a reference derived from the connection's URL, while the def
+//! **A source's secrets are declared keys, and none of them touches the draft.** A server has no
+//! host-side credential chain to defer to, so the boxes exist; each writes this machine's OS
+//! keystore under a slot the engine derives from the connection's name and the key, while the def
 //! records only the expectation ([`strata_model::SourceDef::secrets`]). The typed text lives on
-//! [`ConnectionCtx::password`] for the window's lifetime, the settings window's rule for provider
-//! keys one surface along.
+//! [`ConnectionCtx::secret_values`] for the window's lifetime, the settings window's rule for
+//! provider keys one surface along.
 //!
 //! **No theme of its own** (Configure's rule): the chrome is `components::window`, everything
 //! form-shaped is the shared `form` theme, and the semantic tones come through `tones()`.
@@ -40,11 +46,11 @@
 //! keeps it open carrying the engine's own reason — worth staying open for here more than anywhere
 //! else, because that reason describes the very field the user still has in front of them.
 //!
-//! **An edit that moves the address, the provider or a database's user moves the connection's
-//! identity**, and what the old URL registered survives it: `engine::sources::store::connect` only ever
-//! sees the def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the
-//! same `Sources::disconnect` call Forget makes — and for a database that move takes the keystore
-//! entry with it, since the reference is derived from the URL.
+//! **An edit that moves the name moves what every surface addresses this connection by**, and
+//! what the old name registered survives it: `engine::sources::store::connect` only ever sees the
+//! def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the same
+//! `Sources::disconnect` call Forget makes — and for a source that move takes the keystore
+//! entries with it, since each slot is derived from the name.
 //!
 //! **Closing discards the draft, deliberately without asking** — nothing is written until Save,
 //! so a close costs a form rather than data (Configure settled this; a dirty-close confirm was
@@ -59,10 +65,10 @@ use freya::prelude::*;
 use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_core::config::Command;
-use strata_engine::sources::postgres::settings::PASSWORD;
 use strata_engine::sources::secret_slot;
-use strata_model::ProviderId;
+use strata_engine::Field;
 
 use crate::apps::connection::views::{use_watch_connection, ConnectionBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
@@ -76,7 +82,7 @@ use crate::state::{use_share_config, AppCtx};
 use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
-pub use model::{ConnectionDraft, ConnectionTarget, PasswordProbe, PasswordRow};
+pub use model::{ConnectionDraft, ConnectionTarget, SecretProbe};
 
 /// Everything a press of the pane's `+`, its empty-state CTA or a row's **Edit connection**
 /// needs, resolved where the stores and the DI handles both live and carried to the trigger as a
@@ -145,32 +151,22 @@ pub struct ConnectionCtx {
     /// re-points it at what it just wrote (see [`views::Footer`]).
     pub target: State<ConnectionTarget>,
     pub status: State<Status>,
-    /// The AWS profile names this machine defines — the **Named profile** picker's options,
-    /// read once at mount (`Sources::aws_profiles`). `None` until that read answers, which is
-    /// what lets the picker say "looking" rather than "you have none".
-    pub profiles: State<Option<Vec<String>>>,
-    /// Which client-option row the table's toolbar acts on.
-    ///
-    /// **Window state, not draft state** — `ConfigureCtx::selected_path`'s rule, and for its
-    /// reason: it is a way of looking rather than part of the def, and on the draft every click
-    /// on a row would count as an edit and clear the engine's failure message out from under a
-    /// user who was still reading it.
-    pub selected_option: State<Option<u64>>,
-    /// **The PASSWORD box's text** — window-lifetime, in memory, and nowhere near the draft
-    /// (`apps/settings/views/ai/keys.rs`'s rule: a secret has nowhere in a def to live). A
-    /// `String` because that is what the box binds; it is wrapped in a `Secret` at the moment it
-    /// is written.
-    pub password: State<String>,
-    /// **What the def expects with the box empty**, which is why `pg.password` cannot also be the
-    /// seed: clearing the box has to put back what the def said, and a value the box overwrites
-    /// has forgotten it. A stray keystroke would otherwise commit an expectation nothing holds.
-    pub password_expected: State<bool>,
-    /// A pending delete of this machine's entry, from either press that abandons it. Separate
-    /// from [`password_expected`](Self::password_expected) because that is where the two presses
+    /// **What is typed into each secret box** — window-lifetime, in memory, and nowhere near the
+    /// draft (`apps/settings/views/ai/keys.rs`'s rule: a secret has nowhere in a def to live).
+    /// Keyed by the declared key, because a source may take more than one credential; `String`
+    /// because that is what a box binds, wrapped in a `Secret` at the moment it is written.
+    pub secret_values: State<BTreeMap<String, String>>,
+    /// **What the def expects with every box empty**, which is why the draft's own expectation set
+    /// cannot also be the seed: clearing a box has to put back what the def said, and a value the
+    /// box overwrites has forgotten it. A stray keystroke would otherwise commit an expectation
+    /// nothing holds.
+    pub secret_expected: State<BTreeSet<String>>,
+    /// Pending deletes of this machine's entries, from either press that abandons one. Separate
+    /// from [`secret_expected`](Self::secret_expected) because that is where the two presses
     /// part: a removal leaves the expectation standing, so other machines keep their own.
-    pub password_removed: State<bool>,
-    /// What this machine's keystore said about the entry the def expects.
-    pub password_probe: State<PasswordProbe>,
+    pub secret_removed: State<BTreeSet<String>>,
+    /// What this machine's keystore said about each entry the def expects.
+    pub secret_probes: State<BTreeMap<String, SecretProbe>>,
 }
 
 impl ConnectionCtx {
@@ -197,6 +193,50 @@ impl ConnectionCtx {
         if matches!(*self.status.peek(), Status::Failed(_)) {
             self.status.set(Status::Idle);
         }
+    }
+
+    /// Type into `key`'s secret box. Idempotent, so the box and this map settle rather than ring.
+    pub fn set_secret(mut self, key: &str, value: String) {
+        if self.secret_values.peek().get(key) == Some(&value) {
+            return;
+        }
+        let mut next = self.secret_values.peek().clone();
+        next.insert(key.to_string(), value);
+        self.secret_values.set(next);
+    }
+
+    /// Cancel a pending removal of `key`'s entry — what typing a new value means.
+    pub fn keep_secret(mut self, key: &str) {
+        if !self.secret_removed.peek().contains(key) {
+            return;
+        }
+        let mut next = self.secret_removed.peek().clone();
+        next.remove(key);
+        self.secret_removed.set(next);
+    }
+
+    /// **Remove from this machine**: drop this machine's entry at Save and leave the expectation
+    /// standing, so a colleague keeps their own.
+    pub fn forget_secret_here(self, key: &str) {
+        self.set_secret(key, String::new());
+        let mut removed = self.secret_removed;
+        let mut next = removed.peek().clone();
+        next.insert(key.to_string());
+        removed.set(next);
+    }
+
+    /// **This connection uses no …**: the same local delete, plus the edit to the *shared* def
+    /// that says nothing should ever expect one again.
+    pub fn disuse_secret(self, key: &str) {
+        self.forget_secret_here(key);
+        let mut expected = self.secret_expected;
+        let mut next = expected.peek().clone();
+        next.remove(key);
+        expected.set(next);
+        let key = key.to_string();
+        self.edit(move |draft| {
+            draft.secrets.remove(&key);
+        });
     }
 }
 
@@ -300,69 +340,33 @@ impl App for ConnectionApp {
         let ctx = use_provide_context({
             let target = self.target.clone();
             let project = self.project;
+            let registrants = self.engine.sources().registrants();
             move || {
                 let draft = match target.editing() {
-                    None => ConnectionDraft::default(),
-                    Some(url) => project
+                    None => ConnectionDraft::new(&registrants),
+                    Some(name) => project
                         .peek()
                         .connections
                         .iter()
-                        .find(|c| c.def.named() == url)
-                        .map(|row| ConnectionDraft::of(&row.def))
+                        .find(|c| c.def.named() == name)
+                        .map(|row| ConnectionDraft::of(&row.def, &registrants))
                         .unwrap_or_else(|| {
-                            panic!("edit '{url}': no such connection in this project")
+                            panic!("edit '{name}': no such connection in this project")
                         }),
                 };
                 ConnectionCtx {
-                    password_expected: State::create(draft.pg.password),
+                    secret_expected: State::create(draft.secrets.clone()),
                     draft: State::create(draft),
                     target: State::create(target),
                     status: State::create(Status::Idle),
-                    profiles: State::create(None),
-                    selected_option: State::create(None),
-                    password: State::create(String::new()),
-                    password_removed: State::create(false),
-                    password_probe: State::create(PasswordProbe::Asking),
+                    secret_values: State::create(BTreeMap::new()),
+                    secret_removed: State::create(BTreeSet::new()),
+                    secret_probes: State::create(BTreeMap::new()),
                 }
             }
         });
 
-        use_hook({
-            let engine = self.engine.clone();
-            move || {
-                let mut profiles = ctx.profiles;
-                spawn(async move {
-                    let found = engine.sources().aws_profiles().await;
-                    profiles.set(Some(found));
-                });
-            }
-        });
-
-        use_hook(move || {
-            let expects = {
-                let draft = ctx.draft.peek();
-                (draft.provider == ProviderId::Source && draft.pg.password)
-                    .then(|| secret_slot(&draft.def(), PASSWORD, &[]))
-                    .flatten()
-            };
-            let Some(slot) = expects else { return };
-            let mut probe = ctx.password_probe;
-            spawn(async move {
-                let read = offload(move || slot.key().get()).await;
-                probe.set(match read {
-                    Some(Ok(Some(_))) => PasswordProbe::Stored,
-                    Some(Ok(None)) => PasswordProbe::Absent,
-                    Some(Err(why)) => PasswordProbe::Refused(format!(
-                        "This machine's keystore could not be read, so whether a password is \
-                         stored here is unknown. {why}"
-                    )),
-                    None => PasswordProbe::Refused(
-                        "This machine's keystore could not be read: a worker did not answer."
-                            .into(),
-                    ),
-                });
-            });
-        });
+        use_hook(move || probe_secrets(ctx));
 
         use_watch_connection(ctx);
 
@@ -393,5 +397,57 @@ impl App for ConnectionApp {
                     _ => false,
                 }
             })))
+    }
+}
+
+/// Ask this machine's keystore about every secret the def **expects**, one read per declared key.
+///
+/// "Expected" is a fact about the shared def and "stored" is a fact about this machine; only the
+/// keystore knows the second, which is why the row cannot simply echo the def. A key nothing
+/// expects is not asked about — the answer would be [`SecretProbe::Absent`], which is what an
+/// unprobed key already reads as.
+fn probe_secrets(ctx: ConnectionCtx) {
+    let asking: Vec<&'static str> = {
+        let draft = ctx.draft.peek();
+        draft
+            .keys
+            .iter()
+            .filter(|declared| declared.field == Field::Secret)
+            .filter(|declared| draft.secrets.contains(declared.key))
+            .map(|declared| declared.key)
+            .collect()
+    };
+    if asking.is_empty() {
+        return;
+    }
+    let def = ctx.draft.peek().def();
+    let mut probes = ctx.secret_probes;
+    probes.set(
+        asking
+            .iter()
+            .map(|key| ((*key).to_string(), SecretProbe::Asking))
+            .collect(),
+    );
+    for key in asking {
+        let Some(slot) = secret_slot(&def, key, &[]) else {
+            continue;
+        };
+        spawn(async move {
+            let read = offload(move || slot.key().get()).await;
+            let answer = match read {
+                Some(Ok(Some(_))) => SecretProbe::Stored,
+                Some(Ok(None)) => SecretProbe::Absent,
+                Some(Err(why)) => SecretProbe::Refused(format!(
+                    "This machine's keystore could not be read, so whether a value is stored \
+                     here is unknown. {why}"
+                )),
+                None => SecretProbe::Refused(
+                    "This machine's keystore could not be read: a worker did not answer.".into(),
+                ),
+            };
+            let mut next = probes.peek().clone();
+            next.insert(key.to_string(), answer);
+            probes.set(next);
+        });
     }
 }

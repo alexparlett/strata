@@ -286,10 +286,9 @@ mod tests {
     use freya_testing::TestingRunner;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
-    use strata_model::ConnectionDef;
+    use strata_model::{ConnectionDef, SourceDef};
 
     use super::*;
-    use crate::apps::connection::model::PgDraft;
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
     use crate::theme::strata_theme;
 
@@ -302,17 +301,15 @@ mod tests {
         ConnectionDef {
             address: "db.internal:5432/analytics".into(),
             name: "analytics".into(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: "pg".into(),
-                    user: "reader".into(),
-                    sslmode: "disable".into(),
-                    schemas: vec!["public".into(), "analytics".into()],
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            provider: Provider::Source(SourceDef {
+                kind: Pg::NAME.to_string(),
+                config: [("user", "reader"), ("sslmode", "disable")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                schemas: vec!["public".into(), "analytics".into()],
+                ..Default::default()
+            }),
             client_config: Default::default(),
         }
     }

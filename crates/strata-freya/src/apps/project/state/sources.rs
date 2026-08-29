@@ -217,6 +217,7 @@ mod tests {
                 badge: "PG",
                 mode: SourceMode::Catalog,
                 keys: &[],
+                writable: true,
             }],
         }
     }

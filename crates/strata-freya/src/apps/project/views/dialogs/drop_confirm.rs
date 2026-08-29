@@ -568,7 +568,6 @@ mod tests {
 
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
-    use crate::apps::connection::model::PgDraft;
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
     use strata_core::project::{self as project_io, ProjectDefs};
@@ -576,8 +575,8 @@ mod tests {
     use strata_engine::register::CatalogSpec;
     use strata_engine::{RunTag, TableMeta, TableSpec, ViewMeta, WsId};
     use strata_model::{
-        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
-        TableOrigin, ViewDef,
+        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceDef, SourceFormat,
+        TableDef, TableOrigin, ViewDef,
     };
 
     use super::*;
@@ -1312,15 +1311,13 @@ mod tests {
             write.upsert_connection(ConnectionDef {
                 address: "db.internal:5432/analytics".into(),
                 name: "analytics".into(),
-                provider: Provider::Source(
-                    PgDraft {
-                        kind: Pg::NAME.to_string(),
-                        name: "analytics".into(),
-                        user: "reader".into(),
-                        ..Default::default()
-                    }
-                    .def(),
-                ),
+                provider: Provider::Source(SourceDef {
+                    kind: Pg::NAME.to_string(),
+                    config: [("user".to_string(), "reader".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                }),
                 client_config: Default::default(),
             });
         }

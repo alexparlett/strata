@@ -10,10 +10,6 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 
 pub use footer::Footer;
-/// The client-option table's key column, for the test that pins the header to it — see
-/// `interaction::the_client_options_header_stands_at_the_split_it_declares`.
-#[cfg(test)]
-pub use form::OPTION_KEY_WIDTH;
 pub use title_bar::TitleBar;
 
 use crate::apps::connection::views::form::Fields;

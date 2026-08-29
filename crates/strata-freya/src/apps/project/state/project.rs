@@ -1025,10 +1025,11 @@ impl ProjectState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::connection::model::PgDraft;
     use strata_engine::sources::postgres::Pg;
     use strata_engine::SourceKind;
-    use strata_model::{GcsAuth, GcsStore, Provider, S3Store, SourceFormat, TableOrigin};
+    use strata_model::{
+        GcsAuth, GcsStore, Provider, S3Store, SourceDef, SourceFormat, TableOrigin,
+    };
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
@@ -2021,16 +2022,14 @@ mod tests {
         ConnectionDef {
             address: format!("db.internal:5432/{database}"),
             name: String::new(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: database.into(),
-                    user: "reader".into(),
-                    schemas: schemas.iter().map(ToString::to_string).collect(),
-                    ..Default::default()
-                }
-                .def(),
-            ),
+            provider: Provider::Source(SourceDef {
+                kind: Pg::NAME.to_string(),
+                config: [("user".to_string(), "reader".to_string())]
+                    .into_iter()
+                    .collect(),
+                schemas: schemas.iter().map(ToString::to_string).collect(),
+                ..Default::default()
+            }),
             client_config: Default::default(),
         }
     }

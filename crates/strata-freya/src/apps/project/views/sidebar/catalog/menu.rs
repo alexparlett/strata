@@ -582,12 +582,19 @@ pub fn use_connection_actions() -> ConnectionActions {
 ///
 /// *Schemas…* is absent on an object store rather than parked, for [`table_menu`]'s reason: a
 /// bucket has no schemas to scope, ever, where parking means "not this second".
+///
+/// *Edit connection* is the opposite call, and takes the opposite treatment: the editor draws a
+/// form from what a registered source **declared**, and an object store is not a registrant yet
+/// (EA-25), so there is no form for one — but there will be. It is **parked**, not dropped: a
+/// menu is a list of things you can do right now, and this is the case that word is for.
 pub fn connection_menu(actions: &ConnectionActions, name: String, provider: ProviderId) -> Menu {
     let actions = *actions;
+    let editable = provider == ProviderId::Source;
     Menu::new()
         .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child(
             MenuButton::new()
+                .enabled(editable)
                 .on_press({
                     let name = name.clone();
                     move |_| {
@@ -598,7 +605,7 @@ pub fn connection_menu(actions: &ConnectionActions, name: String, provider: Prov
                 })
                 .child(menu_row(IconName::Pencil, "Edit connection")),
         )
-        .maybe_child((provider == ProviderId::Source).then(|| {
+        .maybe_child(editable.then(|| {
             let name = name.clone();
             MenuButton::new()
                 .on_press(move |_| {
