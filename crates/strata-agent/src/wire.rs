@@ -5,8 +5,13 @@
 //! that is what reads well to a model. The projections between them are the `from_*` functions
 //! here, so no tool assembles a response by hand.
 //!
-//! Two conventions hold throughout:
+//! Three conventions hold throughout:
 //!
+//! - **A field that is omitted says `default`.** schemars decides whether the schema calls a
+//!   field `required` from `default`, not from `skip_serializing_if` — so a `Vec` that is left
+//!   out when empty and does not say `default` is advertised as a key every answer carries and
+//!   then does not, which a client validating `structuredContent` against the `outputSchema`
+//!   rejects call by call. An `Option` is optional to schemars either way.
 //! - **A cell is `null` or a string.** Rows arrive already formatted by the engine's `CellFormat`,
 //!   so numbers come back as strings and a null becomes JSON `null` rather than the configured NULL
 //!   rendering, which is presentation.
@@ -303,7 +308,7 @@ pub struct TablesResult {
     /// are not defs of this project and 'matching' does not reach them. Read one by three-part
     /// name ('pg.public.orders'), list them with SHOW TABLES, and read one relation's schema
     /// with `describe_table` under that same name.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub databases: Vec<String>,
     /// Present only when the answer is one window of more.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,30 +499,30 @@ pub struct DescribeResult {
     pub connection: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
     /// Source paths the def holds in total; present only when 'sources' shows fewer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources_total: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub partitions: Vec<PartitionWire>,
     /// The row count the source reports for free. Absent when it reports none — never
     /// counted, never derived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<ColumnWire>,
     /// Top-level columns the schema holds in total; present only when 'columns' shows
     /// fewer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub columns_total: Option<usize>,
     /// Base tables a view scans.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reads: Vec<String>,
     /// Fields 'matching' found, each addressed by a path this tool accepts back.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matches: Vec<MatchWire>,
     /// How many fields 'matching' matched — stated even at zero, so an empty answer cannot
     /// read as an unsearched one. Absent only when no 'matching' was given. Counts every
@@ -566,7 +571,7 @@ pub struct ColumnWire {
     pub dtype: String,
     pub kind: KindWire,
     pub nullable: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ColumnWire>,
     /// Direct children this column has in total; present only when 'children' shows fewer.
     /// Reach the rest with `describe_table`'s 'path' and 'page', or 'matching'.
@@ -580,12 +585,12 @@ pub struct ColumnWire {
     pub keys_total: Option<usize>,
     /// A few of that set's real keys, exactly as the file spells them — what `describe_table`'s
     /// 'path' takes to descend into one of them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub key_examples: Vec<String>,
     /// Facts the source reports **for free** — read at registration, never computed. Empty
     /// for every format without metadata to read, which is every format but Parquet and
     /// Arrow. Profiling is deliberately not exposed (the spec's "The policy gate").
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<StatWire>,
 }
 
