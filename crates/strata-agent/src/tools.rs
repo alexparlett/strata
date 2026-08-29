@@ -45,6 +45,7 @@ use std::time::{Duration, Instant};
 
 use http::request::Parts;
 use rmcp::handler::server::common::{AsRequestContext, FromContextPart};
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{JsonObject, ProtocolVersion};
 use rmcp::service::Peer;
@@ -628,6 +629,72 @@ fn session_handle(text: &str) -> Result<QuerySessionId, AgentError> {
         .map_err(|_| AgentError::NotFound(format!("No open query session '{text}'.")))
 }
 
+/// The formats JSON Schema itself defines (2020-12 §7.3). Everything else in a `format`
+/// keyword was written for a vocabulary the reader may not share, which for a schema crossing
+/// to an unknown client is the same as writing nothing.
+const JSON_SCHEMA_FORMATS: &[&str] = &[
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
+];
+
+/// Drop every `format` this schema states that JSON Schema does not define, at any depth.
+///
+/// Cheap when there is nothing to drop — the walk is over a schema of at most a few hundred
+/// nodes, built once per `tools/list`, and the schema is only cloned out of its `Arc` when a
+/// format actually goes.
+fn plain_json_schema(schema: &mut Arc<JsonObject>) {
+    fn strip(value: &mut Value) -> bool {
+        let mut dropped = false;
+        match value {
+            Value::Object(map) => {
+                if map
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .is_some_and(|format| !JSON_SCHEMA_FORMATS.contains(&format))
+                {
+                    map.remove("format");
+                    dropped = true;
+                }
+                for node in map.values_mut() {
+                    dropped |= strip(node);
+                }
+            }
+            Value::Array(items) => {
+                for node in items {
+                    dropped |= strip(node);
+                }
+            }
+            _ => {}
+        }
+        dropped
+    }
+
+    let mut plain = Value::Object(JsonObject::clone(schema));
+    if strip(&mut plain) {
+        let Value::Object(plain) = plain else {
+            unreachable!("an object stays an object")
+        };
+        *schema = Arc::new(plain);
+    }
+}
+
 /// **The vocabulary itself** — the eleven tools as plain methods, with no rmcp type in any
 /// signature.
 ///
@@ -642,6 +709,32 @@ fn session_handle(text: &str) -> Result<QuerySessionId, AgentError> {
 /// Answers are the wire types unchanged: a facade unwrapping them into tidier in-process shapes
 /// would be a second vocabulary, and the loop serializes them back for the model anyway.
 impl<H: Host> StrataTools<H> {
+    /// The router every surface advertises from, **with Rust's integer widths taken back out of
+    /// the schemas**.
+    ///
+    /// schemars writes a `usize` as `"format": "uint"` and a `u64` as `"format": "uint64"`, which
+    /// are Rust widths and not JSON Schema formats — the `minimum` beside them already says
+    /// everything the width promises about the value. What a client does with a format it does
+    /// not know is the client's choice and neither is good: the reference SDK logs a line per
+    /// field it reads, and a validator in strict mode refuses to compile the schema at all —
+    /// which loses the tool, and with it the `tools/list` that carried it. One pass here rather
+    /// than an attribute on two dozen fields, because the next count added would carry the
+    /// width again.
+    ///
+    /// The seam is rmcp's own: `#[tool_handler(router = ...)]` and [`manifest`](Self::manifest)
+    /// both read the vocabulary through this, so `tools/list`, a `tools/call` and the in-process
+    /// loop are handed the same schemas.
+    fn advertised() -> ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        for route in router.map.values_mut() {
+            plain_json_schema(&mut route.attr.input_schema);
+            if let Some(schema) = route.attr.output_schema.as_mut() {
+                plain_json_schema(schema);
+            }
+        }
+        router
+    }
+
     /// **The vocabulary as data** — what a model is handed so it can ask for these tools by
     /// name.
     ///
@@ -656,7 +749,7 @@ impl<H: Host> StrataTools<H> {
     ///
     /// A method for the caller's sake: the router *is* the vocabulary, not this value's state.
     pub fn manifest(&self) -> Vec<ToolSpec> {
-        let mut tools: Vec<ToolSpec> = Self::tool_router()
+        let mut tools: Vec<ToolSpec> = Self::advertised()
             .list_all()
             .into_iter()
             .map(|tool| ToolSpec {
@@ -1221,6 +1314,7 @@ impl<H: Host> StrataTools<H> {
 }
 
 #[tool_handler(
+    router = Self::advertised(),
     name = "strata",
     instructions = "Strata is a local parquet/CSV/JSON query workspace over Apache DataFusion. \
 SQL is read-only: SELECT, EXPLAIN, SHOW and DESCRIBE run; everything else is refused. \
@@ -2401,7 +2495,7 @@ mod tests {
     #[test]
     fn the_manifest_is_derived_from_the_router_that_serves_mcp() {
         let tools = StrataTools::new(MockHost::new(Vec::new()));
-        let mut router = StrataTools::<MockHost>::tool_router().list_all();
+        let mut router = StrataTools::<MockHost>::advertised().list_all();
         let manifest = tools.manifest();
 
         router.sort_by(|a, b| a.name.cmp(&b.name));
@@ -2420,6 +2514,44 @@ mod tests {
                 "{} carries the router's schema",
                 spec.name
             );
+        }
+    }
+
+    /// **Nothing a tool advertises states a `format` JSON Schema does not define.**
+    ///
+    /// The widths schemars writes for Rust's integers (`uint`, `uint64`) are the ones that get
+    /// here on their own, and both schemas are checked because both are compiled by whoever
+    /// reads them: a client that validates what it is handed refuses a tool over a format it
+    /// does not know, and refuses the `tools/list` that carried it.
+    #[test]
+    fn a_tool_advertises_no_format_json_schema_does_not_define() {
+        fn formats(value: &Value, into: &mut Vec<String>) {
+            match value {
+                Value::Object(map) => {
+                    if let Some(format) = map.get("format").and_then(Value::as_str) {
+                        into.push(format.to_string());
+                    }
+                    map.values().for_each(|node| formats(node, into));
+                }
+                Value::Array(items) => items.iter().for_each(|node| formats(node, into)),
+                _ => {}
+            }
+        }
+
+        for tool in StrataTools::<MockHost>::advertised().list_all() {
+            let mut stated = Vec::new();
+            formats(
+                &Value::Object(JsonObject::clone(&tool.input_schema)),
+                &mut stated,
+            );
+            if let Some(schema) = &tool.output_schema {
+                formats(&Value::Object(JsonObject::clone(schema)), &mut stated);
+            }
+            let unknown: Vec<&String> = stated
+                .iter()
+                .filter(|format| !JSON_SCHEMA_FORMATS.contains(&format.as_str()))
+                .collect();
+            assert!(unknown.is_empty(), "{} advertises {unknown:?}", tool.name);
         }
     }
 

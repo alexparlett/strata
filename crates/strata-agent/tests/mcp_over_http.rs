@@ -7,16 +7,18 @@
 //! content arrives as structured content, and that the bearer check answers **401 before any
 //! tool runs**.
 
+use std::collections::HashMap;
 use std::time::Duration;
 use std::{env, fs, process};
 
+use jsonschema::Validator;
 use reqwest::Client;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ServiceExt;
 use serde_json::json;
-use strata_agent::host::{CatalogEntry, RegState};
+use strata_agent::host::{CatalogEntry, Described, RegState};
 use strata_agent::mock::{MockHost, MockProject};
 use strata_agent::{AgentServer, MCP_PATH};
 use strata_engine::TableSpec;
@@ -40,7 +42,7 @@ async fn serve(tag: &str) -> (AgentServer, String) {
     fs::write(root.join("people.csv"), "id,name\n1,ana\n2,ben\n").unwrap();
 
     let project = MockProject::new("sales", &root);
-    project
+    let meta = project
         .engine
         .catalog()
         .register(TableSpec {
@@ -53,12 +55,21 @@ async fn serve(tag: &str) -> (AgentServer, String) {
         })
         .await
         .unwrap();
-    let project = project.with_catalog(vec![CatalogEntry::Table {
-        name: "people".into(),
-        format: "csv".into(),
-        sources: vec!["people.csv".into()],
-        reg: RegState::Ready,
-    }]);
+    let project = project
+        .with_catalog(vec![CatalogEntry::Table {
+            name: "people".into(),
+            format: "csv".into(),
+            sources: vec!["people.csv".into()],
+            reg: RegState::Ready,
+        }])
+        .with_described(Described::Table {
+            name: "people".into(),
+            format: "csv".into(),
+            sources: vec!["people.csv".into()],
+            partitions: Vec::new(),
+            rows: meta.rows,
+            columns: meta.columns,
+        });
 
     let server = AgentServer::start(0, TOKEN.into(), MockHost::new(vec![project]))
         .expect("the agent server binds");
@@ -174,6 +185,99 @@ async fn a_client_lists_the_tools_and_calls_them() {
         text.contains("DROP is not supported in the editor"),
         "{text}"
     );
+
+    client.cancel().await.ok();
+}
+
+/// **Every answer validates against the `outputSchema` the same connection advertised.**
+///
+/// MCP says `structuredContent` conforms to the tool's output schema, and the reference client
+/// enforces it on every call — so a schema that overstates what an answer carries is not a
+/// cosmetic drift, it is the tool failing at the client with the server none the wiser. It
+/// happened: `skip_serializing_if` leaves an empty `Vec` out, schemars reads only `default`
+/// when deciding what is `required`, and so `list_tables`, `run` and `read_page` advertised
+/// keys their answers omitted — every call refused with "must have required property".
+///
+/// The whole vocabulary is driven rather than the three that broke, and against the *emptiest*
+/// project that still answers: no database catalogs, flat columns, no free statistics. That is
+/// the shape an omitted field is omitted in, and the shape a happier fixture would hide.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_answer_validates_against_the_schema_it_advertised() {
+    let (_server, url) = serve("schemas").await;
+    let export = env::temp_dir().join(format!("strata_agent_http_{}_schemas.csv", process::id()));
+    let _ = fs::remove_file(&export);
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(url).auth_header(TOKEN),
+    );
+    let client = ().serve(transport).await.expect("the client initializes against the server");
+
+    let schemas: HashMap<String, Validator> = client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tool| {
+            let schema = tool
+                .output_schema
+                .expect("every tool answers structured content");
+            let schema = serde_json::to_value(&*schema).unwrap();
+            let validator = jsonschema::validator_for(&schema)
+                .unwrap_or_else(|e| panic!("{}'s output schema does not compile: {e}", tool.name));
+            (tool.name.to_string(), validator)
+        })
+        .collect();
+
+    let session = client
+        .call_tool(CallToolRequestParams::new("open_query_session"))
+        .await
+        .unwrap()
+        .structured_content
+        .expect("structured content")["query_session"]
+        .as_str()
+        .expect("a query-session handle")
+        .to_string();
+
+    let calls = [
+        ("list_projects", json!({})),
+        ("list_tables", json!({})),
+        ("describe_table", json!({ "name": "people" })),
+        ("list_functions", json!({ "matching": "abs" })),
+        ("validate", json!({ "sql": "SELECT id FROM people" })),
+        ("list_query_sessions", json!({})),
+        (
+            "run",
+            json!({ "query_session": session, "sql": "SELECT id FROM people ORDER BY id", "page_size": 1 }),
+        ),
+        ("read_page", json!({ "query_session": session, "page": 2 })),
+        (
+            "export_result",
+            json!({ "query_session": session, "path": export.display().to_string(), "format": "csv" }),
+        ),
+        ("close_query_session", json!({ "query_session": session })),
+    ];
+
+    for (tool, arguments) in calls {
+        let answer = client
+            .call_tool(
+                CallToolRequestParams::new(tool)
+                    .with_arguments(arguments.as_object().unwrap().clone()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(answer.is_error, Some(true), "{tool}: {answer:?}");
+        let structured = answer
+            .structured_content
+            .unwrap_or_else(|| panic!("{tool} answered no structured content"));
+        let errors: Vec<String> = schemas[tool]
+            .iter_errors(&structured)
+            .map(|e| format!("{} at {}", e, e.instance_path()))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "{tool}'s answer does not match its own output schema: {}\n{structured:#}",
+            errors.join("; ")
+        );
+    }
 
     client.cancel().await.ok();
 }
