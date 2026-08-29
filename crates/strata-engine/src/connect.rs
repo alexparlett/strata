@@ -27,9 +27,19 @@ use object_store::ObjectStore;
 
 /// What one data source puts on the session — the two registries a `SourceDef` can reach.
 pub enum Registration {
-    /// An object store, under the data source's own URL: what a scan of `s3://acme-lake/…`
-    /// resolves through (W7).
-    ObjectStore(ObjectStoreUrl, Arc<dyn ObjectStore>),
+    /// An object store, under the data source's own URL — what a scan of `s3://acme-lake/…`
+    /// resolves through (W7) — **and** the catalog its tables are placed in, under the data
+    /// source's own name.
+    ///
+    /// Two registries, one arm, because they are one act: a store data source that put its
+    /// object store on the session and not its catalog would resolve every path and hold no
+    /// table, and the take-back has exactly the same reason to be atomic (EA-25 item 3).
+    Store {
+        at: ObjectStoreUrl,
+        store: Arc<dyn ObjectStore>,
+        catalog: String,
+        provider: Arc<dyn CatalogProvider>,
+    },
     /// A catalog, under the name the data source chose: what `pg.public.orders` resolves
     /// through (DB).
     Catalog(String, Arc<dyn CatalogProvider>),
@@ -47,8 +57,17 @@ pub fn settle(
     take_back: impl FnOnce(),
 ) -> Result<(), String> {
     match prepared {
-        Ok(Registration::ObjectStore(url, store)) => {
-            ctx.register_object_store(url.as_ref(), store);
+        Ok(Registration::Store {
+            at,
+            store,
+            catalog,
+            provider,
+        }) => {
+            // The object store first, unchanged: the catalog's tables are built from paths that
+            // resolve through it, so a registration in the other order would have a catalog on
+            // the session for a moment where nothing under it could be read.
+            ctx.register_object_store(at.as_ref(), store);
+            ctx.register_catalog(catalog, provider);
             Ok(())
         }
         Ok(Registration::Catalog(name, catalog)) => {

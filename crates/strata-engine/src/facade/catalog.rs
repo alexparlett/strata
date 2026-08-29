@@ -9,7 +9,7 @@ use strata_core::project::ProjectDefs;
 use strata_model::TableDef;
 use strata_model::ViewDef;
 
-use crate::catalog::{self, TableMeta, TableSpec, ViewMeta};
+use crate::catalog::{self, deregister_anywhere, TableMeta, TableSpec, ViewMeta};
 use crate::register::{self, CatalogSpec, PassReport, RegOutcome};
 use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
@@ -86,7 +86,7 @@ impl Catalog<'_> {
     /// Moves the [`generation`](Self::generation) whether or not `table` was registered.
     pub fn deregister(self, table: &str) {
         self.cancel_profile(table);
-        let _ = self.engine.ctx.deregister_table(table);
+        deregister_anywhere(&self.engine.ctx, table);
         self.engine.note_origin(table, false);
         self.engine.note_scans(table, None);
         self.engine.generation.bump();

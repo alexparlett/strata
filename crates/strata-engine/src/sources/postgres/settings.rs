@@ -192,7 +192,7 @@ pub struct PgAddress<'a> {
 /// `db.internal/analytics` while it means `:5432` shows one thing and connects to another.
 /// Userinfo is refused because the role is its own declared key.
 ///
-/// The **data source-string** rules ([`check_conn_value`]) apply to the host and the database for
+/// The **connection-string** rules ([`check_conn_value`]) apply to the host and the database for
 /// the same reason they apply to the user: all three are interpolated into a libpq string with no
 /// quoting.
 pub fn parse_address(address: &str) -> Result<PgAddress<'_>, String> {

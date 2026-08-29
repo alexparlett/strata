@@ -478,6 +478,100 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
 /// with a 403 because the rejection case's wrong key arrived mid-run. Sequential phases in a
 /// single test are the fix that does not depend on `--test-threads=1` being remembered, and
 /// they cost one container instead of two.
+/// **A bucket table lives in its data source's catalog** (EA-25 item 3), which is what makes
+/// forgetting the source take its tables with it.
+///
+/// The four things that follow from the placement, in one run against a real store:
+///
+/// 1. the table addresses as `<data source>.public.<name>` — *always available*;
+/// 2. and still resolves **bare**, through `sql::qualify`'s cross-catalog search — *never
+///    required*, so nothing a user already writes moves;
+/// 3. a view over it is created and survives, its dependency recorded as a **workspace** name
+///    (the checkability split: a bucket table is one of the project's own rows);
+/// 4. forgetting the data source deregisters the catalog, so the table stops resolving —
+///    structure rather than a per-table deregistration a failure could half-finish.
+///
+/// The view is the one thing the placement does **not** change, and the assertion says so: a
+/// view captures the provider `Arc` its plan was built against, so it does not stop resolving
+/// with the catalog. It degrades where it always did, on the object store the forget took off
+/// the session — which is the same sentence a forgotten bucket produced before the tables
+/// moved.
+#[tokio::test]
+async fn a_bucket_table_lives_in_its_data_sources_catalog() {
+    let (_minio, endpoint) = minio().await;
+    seed(&endpoint, &[("data/regions.csv", REGIONS_CSV)]).await;
+    ambient();
+
+    let engine = Engine::builder().build();
+    let (ws, catalog, sources) = (engine.ws(WsId(1)), engine.catalog(), engine.sources());
+    sources
+        .connect(source(&endpoint, "ambient"))
+        .await
+        .expect("the data source registers its object store and its catalog");
+    catalog
+        .register(table(&endpoint))
+        .await
+        .expect("the table registers over the bucket");
+
+    let qualified = ws
+        .query(
+            RunTag(1),
+            format!("SELECT * FROM {LAKE}.public.regions"),
+            50,
+        )
+        .await
+        .expect("the table addresses through its data source's catalog")
+        .output;
+    assert_eq!(qualified.total, 3, "the qualified address reads the rows");
+
+    let bare = ws
+        .query(RunTag(2), "SELECT * FROM regions".into(), 50)
+        .await
+        .expect("a bare name still resolves across catalogs")
+        .output;
+    assert_eq!(
+        bare.total, qualified.total,
+        "'regions' and '{LAKE}.public.regions' are one table reached two ways"
+    );
+
+    let report = catalog
+        .create_view("over_bucket".into(), "SELECT region FROM regions".into())
+        .await
+        .expect("a view over a bucket table");
+    let Some(StoreEffect::ViewUpserted { meta, .. }) = report.effect else {
+        panic!("a saved view answers with the def and the meta it recorded");
+    };
+    assert_eq!(
+        meta.tables,
+        ["regions"],
+        "a bucket table is def-backed, so the view records it as a checkable workspace name"
+    );
+    assert!(
+        meta.remote.is_empty(),
+        "and not as a server-enumerated relation: {:?}",
+        meta.remote
+    );
+
+    sources.disconnect(LAKE);
+
+    let refused = ws
+        .query(RunTag(3), "SELECT * FROM regions".into(), 50)
+        .await
+        .expect_err("forgetting the data source took its catalog, and its tables with it");
+    assert!(
+        refused.to_string().contains("regions"),
+        "the refusal names the table that stopped resolving: {refused}"
+    );
+    let refused = ws
+        .query(RunTag(4), "SELECT * FROM over_bucket".into(), 50)
+        .await
+        .expect_err("the view reads a table that is gone");
+    assert!(
+        refused.to_string().contains(BUCKET),
+        "the view degrades on the bucket it can no longer reach: {refused}"
+    );
+}
+
 #[tokio::test]
 async fn a_table_over_a_source_reads_through_the_object_store() {
     let (_minio, endpoint) = minio().await;

@@ -15,7 +15,7 @@ use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::TableReference;
 
 use crate::policy::Locality;
-use crate::providers::in_workspace;
+use crate::providers::{in_workspace, is_store_catalog};
 use crate::sql::qualified;
 use crate::{fold_ident, CATALOG, SCHEMA};
 
@@ -140,7 +140,7 @@ impl Remote {
 /// data source's own gates — is it writable, may this caller reach it — are asked of the resolved
 /// answer, not folded into it.
 pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
-    if in_workspace(name) {
+    if in_workspace(name) || in_store_catalog(ctx, name) {
         return Target::Workspace {
             name: name.table().to_string(),
         };
@@ -159,6 +159,27 @@ pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
             qualifier: name.to_string(),
         },
     }
+}
+
+/// Whether `name` addresses a relation inside a **store** data source's catalog — a bucket table,
+/// which is one of the project's own rows placed there rather than a relation a server describes.
+///
+/// [`resolve_target`] answers [`Workspace`](Target::Workspace) for one, and that is the whole of
+/// EA-25's store-connection flavour: a store catalog is **placement, not a namespace**, so
+/// `lake.strata.sales` and a bare `sales` are the same project row reached two ways — exactly as
+/// `strata.strata.sales` already is. Every arm therefore answers as it did before the tables
+/// moved: `DROP TABLE` drops the def, `INSERT`'s internal gate refuses a table Strata does not
+/// store, `COPY`'s fence is unmoved, and the bare name registration takes is the name in hand.
+///
+/// It is **not** [`in_workspace`], which asks whose *namespace* a name is in and so must keep
+/// answering false here: that predicate is what reserves `__snap_`, and a store catalog holding a
+/// relation somebody called `__snap_3` reserves nothing.
+fn in_store_catalog(ctx: &SessionContext, name: &TableReference) -> bool {
+    matches!(
+        name,
+        TableReference::Full { catalog, schema, .. }
+            if schema.as_ref() == SCHEMA && is_store_catalog(ctx, catalog)
+    )
 }
 
 /// [`resolve_target`] off a **parsed** name, for the arms that must answer before anything plans:

@@ -100,7 +100,7 @@ pub struct ConfigureLaunch {
     /// this is not a subtle bug — `use_report` consumes both halves and **panics** when one is
     /// missing, which is how the first version of this crashed the moment Configure opened.
     pub report: ReportCtx,
-    /// The project window's **data source-editor request** (W7 · 04) — what the CONNECTION
+    /// The project window's **data-source editor request** (W7 · 04) — what the CONNECTION
     /// picker's *New data source…* sets.
     ///
     /// The slot rather than a second `open_source` call: that window needs the project
@@ -233,7 +233,7 @@ pub struct ConfigureApp {
     pub engine: EngineCtx,
     pub target: ConfigureTarget,
     pub report: ReportCtx,
-    /// The project window's data source-editor request — see [`ConfigureLaunch::editor`].
+    /// The project window's data-source editor request — see [`ConfigureLaunch::editor`].
     pub editor: SourceRequest,
     /// The window this one belongs to. Carried rather than looked up because the root's own
     /// `use_register_window` re-reports its kind, and an entry that forgot its owner would stop

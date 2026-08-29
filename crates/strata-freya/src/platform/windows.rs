@@ -182,7 +182,7 @@ impl Windows {
 
     /// Every live window by id — for the questions the named accessors above don't cover: which
     /// project a child window's owner is showing now ([`crate::platform::owner`]), and whether a
-    /// Configure or data source-editor window is already open on a given owner's def.
+    /// Configure or data-source editor window is already open on a given owner's def.
     pub fn by_id(&self) -> &HashMap<WindowId, WindowKind> {
         &self.by_id
     }

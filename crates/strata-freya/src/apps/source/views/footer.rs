@@ -19,7 +19,7 @@
 //! 4. asks the project window's one scan driver for a whole-catalog pass, and leaves this window
 //!    watching its row ([`super::use_watch_data source`]).
 //!
-//! **A whole-catalog pass, not a data source-shaped one.** `plan_scan` puts data sources in
+//! **A whole-catalog pass, not a source-shaped one.** `plan_scan` puts data sources in
 //! `ScanScope::All` alone, deliberately: the case that needs a re-connect is a region corrected
 //! or an `aws sso login` run, which is exactly this window — and every table over the bucket was
 //! registered against the store this save replaces, so re-registering the data source alone would

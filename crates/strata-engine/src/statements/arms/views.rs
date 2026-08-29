@@ -104,7 +104,7 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         .table(registered)
         .await
         .map_err(|e| view_error(ctx, &e.to_string()))?;
-    let deps = plan_deps(t.logical_plan());
+    let deps = plan_deps(ctx, t.logical_plan());
     let columns = t.schema().fields().iter().map(|f| column_info(f)).collect();
     Ok(ViewMeta {
         columns,

@@ -1788,7 +1788,7 @@ mod data_sources {
             sources: vec![s3("lake"), postgres("analytics")],
             ..Default::default()
         };
-        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-data sources"));
+        let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-sources"));
         p.source_registered("lake");
         p.table_registered(
             "events",
@@ -2211,7 +2211,7 @@ mod data_sources {
                     name: "test".into(),
                     ..Default::default()
                 },
-                PathBuf::from("/tmp/strata-tree-no-data sources"),
+                PathBuf::from("/tmp/strata-tree-no-sources"),
             )
         }
 

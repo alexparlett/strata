@@ -159,7 +159,7 @@ fn registrant() -> SourceInfo {
 /// that really writes `.strata/project.json` follows, because the OS temp dir is machine-shared
 /// and a hardcoded path collides between parallel test binaries.
 fn temp_root(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("strata-data source-{tag}-{}", std::process::id()))
+    std::env::temp_dir().join(format!("strata-source-{tag}-{}", std::process::id()))
 }
 
 /// One data source already in the project, so a name clash has something to clash with.

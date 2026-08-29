@@ -660,7 +660,7 @@ mod tests {
     /// **A binding holds back the bare name and nothing else.** Matching a held name on its last
     /// part alone exempted `warehouse.public.orders` from the check whenever the statement bound a
     /// CTE called `orders` — and since the splice skips a name outside the target catalog, that
-    /// out-of-data source relation went to the `pg` server verbatim.
+    /// out-of-source relation went to the `pg` server verbatim.
     #[test]
     fn a_binding_does_not_exempt_a_qualified_name_that_ends_in_it() {
         let why = rewritten(

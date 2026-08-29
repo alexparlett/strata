@@ -53,7 +53,7 @@ use self::source::{
 };
 use super::connect::{self, Registration};
 use super::fold_ident;
-use super::providers::deregister_catalog;
+use super::providers::{deregister_catalog, is_store_catalog, StoreCatalogProvider};
 use super::secrets::{SecretProvider, SecretRequest};
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
@@ -572,8 +572,22 @@ pub(crate) async fn connect(
 /// registered it under. Silent when there is nothing: a first connect, or a def that has never
 /// worked.
 fn take_back(ctx: &SessionContext, live: &Live, name: &str) {
-    if let Some(previous) = live.take(name) {
-        deregister_catalog(ctx, &previous);
+    match live.take(name) {
+        // A catalog data source's row remembers the name it registered under, which an edit may
+        // have moved off the data source's own.
+        Some(previous) => {
+            deregister_catalog(ctx, &previous);
+        }
+        // A store data source keeps no row here — what it holds is answered by the table defs
+        // read through it — and its catalog is under its own name (EA-25 item 3). Guarded by
+        // the provider's own type, because a name is all this is given and a *refused* data
+        // source must take back only what it registered: a def named after the workspace
+        // catalog is refused by `check_catalog_name`, and deregistering by name alone would
+        // then take the workspace off the session on its way out.
+        None if is_store_catalog(ctx, name) => {
+            deregister_catalog(ctx, name);
+        }
+        None => {}
     }
 }
 
@@ -615,7 +629,12 @@ async fn prepare(
             let at = registration_url(sources, conn).ok_or_else(|| {
                 format!("Cannot register '{named}': not a bucket Strata can key.")
             })?;
-            Ok(Prepared::Store(Registration::ObjectStore(at, store)))
+            Ok(Prepared::Store(Registration::Store {
+                at,
+                store,
+                catalog: named.clone(),
+                provider: Arc::new(StoreCatalogProvider::new(named.clone())),
+            }))
         }
         Sourced::Catalog(handle) => {
             let listing = Arc::new(handle.enumerate().await?);
@@ -644,12 +663,16 @@ async fn prepare(
     }
 }
 
-/// Forget the catalog a data source registered — the Forget gesture's engine half, and the half
-/// an edit that moves a data source's URL also needs.
+/// Forget what a data source registered — the Forget gesture's engine half, and the half an edit
+/// that moves a data source's URL also needs.
 ///
-/// Addressed by the data source's **name** like `store::disconnect` is by its identity, and silent
-/// about doing nothing for the same reason: a name this engine holds no source for is the ordinary
-/// case (every object-store data source, and every source that never connected).
+/// **Both registries, both modes.** A store data source has an object store keyed by its URL and
+/// a catalog under its own name; a catalog data source has only the second. Taking the catalog
+/// out is what makes forgetting a bucket structural: its tables were placed in it, so they stop
+/// resolving with it rather than needing a deregistration each (EA-25 item 3).
+///
+/// Addressed by the data source's **name**, and silent about doing nothing: a name this engine
+/// never registered anything for is the ordinary case (a source that failed to connect).
 pub(crate) fn disconnect(
     ctx: &SessionContext,
     registrants: &Registrants,

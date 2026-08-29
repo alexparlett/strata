@@ -1806,7 +1806,45 @@ mod tests {
             ],
             ..Default::default()
         };
-        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-data sources-store-test"))
+        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-sources-store-test"))
+    }
+
+    /// **A name is unique across the whole project, catalogs notwithstanding** (EA-25 item 3).
+    ///
+    /// A store data source's catalog is *placement*, not a namespace liberalization: a bucket
+    /// table's provider lives in its source's catalog, and the name it lives under is still the
+    /// project's own, checked against every table, view and saved query regardless of what any
+    /// of them reads through. Asserted explicitly because the placement is exactly the change
+    /// that would tempt a per-catalog answer, and a bare name would then be ambiguous.
+    #[test]
+    fn a_name_is_taken_across_the_whole_project_whatever_it_reads_through() {
+        let over = |name: &str, source: &str| TableDef {
+            name: name.into(),
+            format: SourceFormat::from_name("csv"),
+            source: Some(source.into()),
+            paths: vec!["data/".into()],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::External,
+        };
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: vec![over("regions", "lake"), over("events", "lake2")],
+            ..Default::default()
+        };
+        let p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-global-names"));
+
+        for name in ["regions", "events"] {
+            assert_eq!(
+                p.name_in_use(name),
+                Some(CatalogKind::Table),
+                "'{name}' is taken whichever data source it reads through"
+            );
+        }
+        assert!(
+            p.name_taken("REGIONS").is_some(),
+            "and case-insensitively, like every other name in the catalog"
+        );
+        assert_eq!(p.name_in_use("unused"), None);
     }
 
     /// Forget takes the row it was asked for and **only** that one. Keyed on the name, so the

@@ -19,7 +19,9 @@ use strata_model::{ColumnInfo, JsonShape, SourceFormat, Stat, StatKey};
 
 use crate::formats::Formats;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
-use crate::providers::{in_workspace, replace_table};
+use crate::providers::{
+    def_backed, def_catalogs, def_home, def_ref, in_workspace, remove_table, replace_table,
+};
 use crate::snapshots::is_snapshot_name;
 use crate::sql::qualified;
 use crate::statements::Fault;
@@ -110,8 +112,9 @@ pub async fn register_external(
     if is_snapshot_name(&spec.name) {
         return Err(Fault::ReservedName.message());
     }
+    let home = def_home(ctx, spec.source.as_deref());
     let built = build_provider(ctx, formats, tables, spec).await;
-    swap_in(ctx, &spec.name, built)?;
+    swap_in(ctx, &home, &spec.name, built)?;
     table_meta(ctx, spec.name.as_str()).await
 }
 
@@ -227,37 +230,59 @@ async fn build_listing(
 /// provider or the new one and never neither.
 fn swap_in(
     ctx: &SessionContext,
+    catalog: &str,
     name: &str,
     built: Result<Arc<dyn TableProvider>, String>,
 ) -> Result<(), String> {
     match built {
-        Ok(table) => replace_table(ctx, name, table).map(|_| ()),
+        Ok(table) => replace_table(ctx, catalog, name, table).map(|_| ()),
         Err(why) => {
-            let _ = ctx.deregister_table(name);
+            let _ = remove_table(ctx, catalog, name);
             Err(why)
         }
     }
 }
 
-/// What the workspace catalog holds, as `(name, is it a view)` — what
+/// What this engine holds a def for, as `(name, is it a view)` — what
 /// [`sync`](crate::register::sync) diffs a desired set against.
+///
+/// **Every def-backed catalog**, not just the workspace: a table that reads through a live store
+/// data source is registered in *that* source's catalog, and a removal diff that looked only at
+/// the workspace would report it absent and then deregister nothing. Names are unique across the
+/// whole project, so one flat list still answers, and the caller needs no idea where a name was
+/// placed.
 ///
 /// Read through `table_names`, so the result spool is not in it: a `__snap_` entry is a snapshot
 /// some tab is still paging, and no def names one. The kind comes from `table_type`, a map read
-/// for this schema.
+/// per schema.
 pub(crate) async fn registered(ctx: &SessionContext) -> Vec<(String, bool)> {
-    let Some(schema) = ctx
-        .catalog(CATALOG)
-        .and_then(|catalog| catalog.schema(SCHEMA))
-    else {
-        return Vec::new();
-    };
     let mut held = Vec::new();
-    for name in schema.table_names() {
-        let view = matches!(schema.table_type(&name).await, Ok(Some(TableType::View)));
-        held.push((name, view));
+    for catalog in def_catalogs(ctx) {
+        let Some(schema) = ctx
+            .catalog(&catalog)
+            .and_then(|catalog| catalog.schema(SCHEMA))
+        else {
+            continue;
+        };
+        for name in schema.table_names() {
+            let view = matches!(schema.table_type(&name).await, Ok(Some(TableType::View)));
+            held.push((name, view));
+        }
     }
     held
+}
+
+/// Take `name` out of whichever def-backed catalog holds it.
+///
+/// Addressed by the bare name because that is all a drop, a removal diff or a re-registration
+/// failure has — the def's own name, unique across the project. Silent about a name nothing
+/// holds, which is every arm that deregisters defensively.
+pub(crate) fn deregister_anywhere(ctx: &SessionContext, name: &str) {
+    for catalog in def_catalogs(ctx) {
+        if matches!(remove_table(ctx, &catalog, name), Ok(Some(_))) {
+            return;
+        }
+    }
 }
 
 /// How many levels down the listing below will look.
@@ -869,7 +894,7 @@ pub struct PlanDeps {
     pub aliases: Vec<String>,
 }
 
-pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
+pub fn plan_deps(ctx: &SessionContext, plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
     use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::logical_expr::LogicalPlan;
     let mut tables = BTreeSet::new();
@@ -879,7 +904,11 @@ pub fn plan_deps(plan: &datafusion::logical_expr::LogicalPlan) -> PlanDeps {
         match node {
             LogicalPlan::TableScan(scan) => {
                 if scan.source.get_logical_plan().is_none() {
-                    match in_workspace(&scan.table_name) {
+                    // **Checkability**, not namespace: a bucket table is one of the project's
+                    // own rows placed in its data source's catalog, so it is reconcilable
+                    // against them and belongs in `tables` under its bare name. Only a
+                    // server-enumerated relation, which no row can be found for, is `remote`.
+                    match def_backed(ctx, &scan.table_name) {
                         true => tables.insert(scan.table_name.table().to_string()),
                         false => remote.insert(scan.table_name.to_string()),
                     };
@@ -984,7 +1013,7 @@ async fn readers(
         let Some(plan) = provider.get_logical_plan() else {
             continue;
         };
-        if reads(&plan_deps(&plan)) {
+        if reads(&plan_deps(ctx, &plan)) {
             readers.push(table);
         }
     }
@@ -1013,7 +1042,10 @@ pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProf
             qualified(parts.iter().map(String::as_str)),
         ),
     };
-    let df = ctx.table(name).await.map_err(|e| e.to_string())?;
+    let df = ctx
+        .table(def_ref(ctx, name))
+        .await
+        .map_err(|e| e.to_string())?;
     let columns: Vec<ColumnInfo> = df
         .schema()
         .fields()
@@ -1039,22 +1071,27 @@ pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProf
 /// data pages. Everything lands `None` for a source that reports nothing (CSV/JSON),
 /// which the inspector renders as an absent row rather than a guess.
 pub(super) async fn table_meta(ctx: &SessionContext, name: &str) -> Result<TableMeta, String> {
-    let df = ctx.table(name).await.map_err(|e| e.to_string())?;
+    let at = def_ref(ctx, name);
+    let df = ctx.table(at.clone()).await.map_err(|e| e.to_string())?;
     let mut columns: Vec<ColumnInfo> = df
         .schema()
         .fields()
         .iter()
         .map(|f| column_info(f))
         .collect();
-    let rows = free_stats(ctx, name, &mut columns).await;
+    let rows = free_stats(ctx, &at, &mut columns).await;
     Ok(TableMeta { columns, rows })
 }
 
 /// Fold the source's free statistics onto `columns`, returning the row count. Best
 /// effort throughout: anything unavailable simply stays `None`.
-async fn free_stats(ctx: &SessionContext, name: &str, columns: &mut [ColumnInfo]) -> Option<u64> {
+async fn free_stats(
+    ctx: &SessionContext,
+    at: &TableReference,
+    columns: &mut [ColumnInfo],
+) -> Option<u64> {
     use datafusion::datasource::listing::ListingTable;
-    let provider = ctx.table_provider(name).await.ok()?;
+    let provider = ctx.table_provider(at.clone()).await.ok()?;
     let lt = provider.downcast_ref::<ListingTable>()?;
     let state = ctx.state();
     let stats = lt
@@ -1663,7 +1700,7 @@ mod cross_source_tests {
     /// What one view reads, as the plan reports it.
     async fn deps(ctx: &SessionContext, sql: &str) -> PlanDeps {
         let plan = ctx.sql(sql).await.expect("plans");
-        plan_deps(plan.logical_plan())
+        plan_deps(ctx, plan.logical_plan())
     }
 
     /// A remote scan is recorded **qualified**, a workspace scan **bare**, and a cross-source
