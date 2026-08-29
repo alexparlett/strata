@@ -14,15 +14,13 @@
 use crate::apps::project::close::{CloseTarget, TabCloser};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::RunId;
-use crate::apps::project::state::{
-    use_catalog, use_report, Chan, ProjChan, ProjectState, SessionState,
-};
+use crate::apps::project::state::{use_settle, Chan, SessionState};
 use crate::keymap::on_commands;
 use editor::actions;
 use editor::tab::EditorTab;
 use empty::EmptyState;
 use freya::prelude::*;
-use freya::radio::{use_radio, use_radio_station};
+use freya::radio::use_radio;
 use results::Results;
 use strata_core::config::Command;
 
@@ -81,9 +79,7 @@ impl Component for Workbench {
         });
 
         let config = use_config_station();
-        let project = use_radio_station::<ProjectState, ProjChan>();
-        let catalog = use_catalog();
-        let report = use_report();
+        let settle = use_settle();
         let mut cmd_radio = radio;
         let shortcuts = on_commands(config, move |cmd| {
             let active = cmd_radio.read().active;
@@ -108,7 +104,7 @@ impl Component for Workbench {
                 }
                 Command::SaveQuery => {
                     let Some(id) = active else { return false };
-                    actions::save(cmd_radio, project, engine.clone(), catalog, report, id);
+                    actions::save(cmd_radio, engine.clone(), settle, id);
                     true
                 }
                 _ => false,

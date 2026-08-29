@@ -1765,6 +1765,15 @@ mod tests {
         }
     }
 
+    /// The [`ViewMeta`] a [`Catalog::create_view`] report carries — the answer these tests are
+    /// about, one level in from the sentence the gesture wraps it in.
+    fn view_meta(report: &StatementReport) -> &ViewMeta {
+        match &report.effect {
+            Some(StoreEffect::ViewUpserted { meta, .. }) => meta,
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// Drive `fut` to its first await point and hand it back still owned, so a test can drop
     /// it there. One poll is all it takes: a dispatch's bookkeeping is synchronous and runs
     /// before the `await` on the spawned work, so after this the entry is published and the
@@ -2236,12 +2245,16 @@ mod tests {
             .iter()
             .enumerate()
         {
-            let meta = eng
+            let saved = eng
                 .catalog()
                 .create_view((*name).into(), "SELECT 1 AS n".into())
                 .await
                 .unwrap_or_else(|e| panic!("create {name:?}: {e}"));
-            assert_eq!(meta.columns.len(), 1, "the view's own schema came back");
+            assert_eq!(
+                view_meta(&saved).columns.len(),
+                1,
+                "the view's own schema came back"
+            );
 
             let ws = WsId(1);
             let select = format!("SELECT * FROM {}", quote_ident(name));
@@ -2274,12 +2287,16 @@ mod tests {
             .await
             .expect("create");
 
-        let meta = eng
+        let derived = eng
             .catalog()
             .create_view("Derived".into(), "SELECT * FROM dailysales".into())
             .await
             .expect("a def referencing the folded name");
-        assert_eq!(meta.columns.len(), 1, "…and planned against it");
+        assert_eq!(
+            view_meta(&derived).columns.len(),
+            1,
+            "…and planned against it"
+        );
 
         for sql in ["SELECT * FROM dailysales", "SELECT * FROM DailySales"] {
             let RunRows { output: out, .. } = eng

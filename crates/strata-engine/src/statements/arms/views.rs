@@ -1,9 +1,9 @@
 //! **Views** — the body every gesture that creates or drops one runs, and the two typed
 //! statements that are a second gesture into it. `docs/STATEMENTS_SPEC.md` §6.3.
 //!
-//! A view is Save's artifact: ⌘S wraps the tab's plain query in `CREATE OR REPLACE VIEW` and
-//! folds the answer into the store. Typed view DDL is the **same funnel entered a second way** —
-//! [`create`] is what [`Catalog::create_view`](crate::Catalog::create_view) spawns, so a
+//! A view is Save's artifact: ⌘S hands the tab's plain query to [`create`] and folds the answer
+//! into the store. Typed view DDL is the **same funnel entered a second way** —
+//! [`create`] is what [`Catalog::create_view`](crate::Catalog::create_view) runs, so a
 //! view is indistinguishable by origin: one store row, one `project.json` entry, one set of deps,
 //! and either gesture edits the row the other made.
 //!
@@ -18,10 +18,15 @@
 //! **The def stores `ViewDef { name, sql }` and nothing else**, so a typed statement has to arrive
 //! at exactly that pair: the folded target name, and the definition **query's** canonical rendering
 //! rather than the statement around it. That is what makes the row round-trip, and it is why every
-//! clause `CREATE VIEW` can carry is refused by name ([`definition`]) — the statement is rebuilt
-//! around the query, so a clause we did not read is a clause silently dropped.
+//! clause `CREATE VIEW` can carry is refused by name ([`definition`]): the statement is *reduced*
+//! to that pair and the node [`create`] builds carries nothing else, so a clause nobody read is a
+//! clause silently dropped.
 
-use datafusion::logical_expr::{DdlStatement, LogicalPlan, TableType};
+use std::sync::Arc;
+
+use datafusion::logical_expr::{
+    CreateView as CreateViewPlan, DdlStatement, LogicalPlan, TableType,
+};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{CreateTableOptions, CreateView, Statement as SqlStatement};
@@ -30,6 +35,7 @@ use datafusion::sql::TableReference;
 use strata_arrow::column_info;
 
 use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
+use crate::fold_ident;
 use crate::policy::Principal;
 use crate::snapshots::is_snapshot_name;
 use crate::statements::ctx::StmtCtx;
@@ -37,7 +43,6 @@ use crate::statements::pipeline::{resolved_one, Qualified};
 use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::target::{elsewhere, resolve_named, resolve_target, Target};
 use crate::statements::{Fault, StmtKind};
-use crate::{fold_ident, quote_ident};
 use strata_model::ViewDef;
 
 use super::{existing, left_invalid, remote};
@@ -45,18 +50,23 @@ use super::{existing, left_invalid, remote};
 /// What [`elsewhere`] calls the objects these statements create.
 const WHAT: &str = "Views";
 
+/// The refusal for a body that is not a query. [`CreateViewPlan`] takes any plan as its input and
+/// ⌘S saves whatever is in the buffer, so without this a view's next scan could run a `DROP`.
+const NOT_A_QUERY: &str = "A view's definition must be a query";
+
 /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and what it reads
 /// — the body behind both gestures.
 ///
-/// `name` is whatever the user typed (it rides in `.strata/project.json`, a shared, committed
-/// file), so it goes through [`quote_ident`] rather than straight into the statement — which is
-/// the only reason a name like `Sales 2024` can be a view at all. The view's identity is then
-/// [`fold_ident(name)`](fold_ident), which is what the lookup below asks for.
+/// **Built as a plan node, never as text.** The definition query and
+/// [`fold_ident(name)`](fold_ident) go onto DataFusion's own [`CreateViewPlan`], and executing
+/// that is what registers the view: the type coercion, the duplicate-column check and the
+/// registration are the ones a typed statement gets. No statement text is composed for a parser
+/// to read back, so a name like `Sales 2024` does not depend on being quoted correctly.
 ///
-/// **Parsed and resolved rather than handed to `ctx.sql`** ([`resolved_one`]): a view's body
-/// is a read like any other, and resolving it is what makes [`plan_deps`] record a body reading a
-/// connection's `orders` as the *remote* dependency it is. The def still stores the SQL the user
-/// wrote.
+/// **The body is parsed and resolved rather than handed to `ctx.sql`** ([`resolved_one`]): a
+/// view's body is a read like any other, and resolving it is what makes [`plan_deps`] record a
+/// body reading a connection's `orders` as the *remote* dependency it is. The def still stores
+/// the SQL the user wrote.
 ///
 /// A failure comes back through [`view_error`], the table funnel's `register_error` from the
 /// other side: one diagnosis — a relation a database connection no longer has — in front of the
@@ -68,20 +78,30 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
     if is_snapshot_name(name) {
         return Err(Fault::ReservedName.message());
     }
-    let stmt = format!("CREATE OR REPLACE VIEW {} AS {sql}", quote_ident(name));
-    let stmt = resolved_one(ctx, &stmt).map_err(|e| view_error(ctx, &e.message()))?;
-    let plan = ctx
+    let body = resolved_one(ctx, sql).map_err(|e| view_error(ctx, &e.message()))?;
+    let DFStatement::Statement(query) = &body else {
+        return Err(NOT_A_QUERY.into());
+    };
+    if !matches!(query.as_ref(), SqlStatement::Query(_)) {
+        return Err(NOT_A_QUERY.into());
+    }
+    let input = ctx
         .state()
-        .statement_to_plan(stmt)
+        .statement_to_plan(body)
         .await
         .map_err(|e| view_error(ctx, &e.to_string()))?;
-    let df = ctx
-        .execute_logical_plan(plan)
-        .await
-        .map_err(|e| view_error(ctx, &e.to_string()))?;
-    let _ = df.collect().await;
+    let registered = TableReference::bare(fold_ident(name));
+    ctx.execute_logical_plan(LogicalPlan::Ddl(DdlStatement::CreateView(CreateViewPlan {
+        name: registered.clone(),
+        input: Arc::new(input),
+        or_replace: true,
+        definition: Some(sql.to_string()),
+        temporary: false,
+    })))
+    .await
+    .map_err(|e| view_error(ctx, &e.to_string()))?;
     let t = ctx
-        .table(TableReference::bare(fold_ident(name)))
+        .table(registered)
         .await
         .map_err(|e| view_error(ctx, &e.to_string()))?;
     let deps = plan_deps(t.logical_plan());
@@ -94,11 +114,18 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
     })
 }
 
-/// Drop the SQL view `name` (idempotent — `IF EXISTS`). Quoted the same way [`create`] quoted it,
-/// so the drop names the same view.
+/// Drop the SQL view `name` (idempotent — `IF EXISTS`), addressed as the same folded reference
+/// [`create`] registered it under.
+///
+/// Deregistering is the whole of what DataFusion's own `DropView` execution does, and the type
+/// test in front of it is that execution's too: a name resolving to a *table* is not this
+/// statement's to take out, and `IF EXISTS` says so silently — [`drop_statement`] has already
+/// refused it by name.
 pub async fn drop(ctx: &SessionContext, name: &str) -> Result<(), String> {
-    ctx.sql(&format!("DROP VIEW IF EXISTS {}", quote_ident(name)))
-        .await
+    if existing(ctx, name).await != Some(TableType::View) {
+        return Ok(());
+    }
+    ctx.deregister_table(TableReference::bare(fold_ident(name)))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -392,8 +419,13 @@ mod tests {
             .await
             .expect("saved");
         assert_eq!(
-            saved, meta,
-            "⌘S over the typed def is the same registration"
+            upserted(&saved),
+            (def.clone(), meta),
+            "⌘S over the typed def is the same effect, folded by the same body"
+        );
+        assert_eq!(
+            saved.message, "Saved view 'v'",
+            "worded as the gesture, which is what the log records"
         );
 
         let replaced = statement(&eng, "CREATE OR REPLACE VIEW v AS SELECT 1 AS other")
@@ -630,6 +662,35 @@ mod tests {
                 .iter()
                 .all(|row| row[0] != "a.b.c.d"),
             "and nothing was created under the dotted name"
+        );
+    }
+
+    /// **A view's body is a query, and only this door has to check it.** The typed path hands
+    /// over a `Query` node by construction — sqlparser will not parse
+    /// `CREATE VIEW v AS DROP TABLE t` at all — where ⌘S saves the buffer as it stands and a
+    /// `CreateView` node takes any plan as its input. Unchecked, the view's next scan runs the
+    /// statement.
+    #[tokio::test]
+    async fn a_body_that_is_not_a_query_is_refused() {
+        let eng = Engine::builder().build();
+        for body in ["DROP TABLE t", "SET datafusion.execution.batch_size = 1"] {
+            assert_eq!(
+                eng.catalog()
+                    .create_view("v".into(), body.into())
+                    .await
+                    .expect_err("refused")
+                    .to_string(),
+                "A view's definition must be a query"
+            );
+        }
+        assert!(
+            read(
+                &eng,
+                "SELECT table_name FROM information_schema.tables WHERE table_name = 'v'"
+            )
+            .await
+            .is_empty(),
+            "a refusal creates nothing"
         );
     }
 
