@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 
+use crate::export::Owned;
 use crate::formats::Formats;
 use crate::functions::Functions;
 use crate::policy::{Admit, PolicyProvider, Principal, TargetFacts};
@@ -52,6 +53,12 @@ pub struct StmtCtx {
     pub sql: String,
     /// Where an internal table's data may be written.
     pub root: DataRoot,
+    /// Where a write may **not** land — the roots this engine's stores hold their bytes under,
+    /// plus the project's own `.strata/` ([`export::owned_roots`](crate::export::owned_roots)).
+    ///
+    /// Gathered at dispatch beside `root`, and for the same reason: a store that follows the
+    /// project answers about the project this statement is running against.
+    pub(crate) owned: Vec<Owned>,
     /// Which registered tables Strata owns the data of.
     pub internal: InternalTables,
     /// Where those tables' bytes live ([`EngineBuilder::with_table_store`](crate::EngineBuilder::with_table_store))

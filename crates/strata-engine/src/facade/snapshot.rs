@@ -138,11 +138,12 @@ impl SnapshotReads<'_> {
             .get(&snapshot)
             .cloned()
             .unwrap_or_default();
+        let owned = self.engine.owned_storage();
         let task = {
             let ctx = self.engine.ctx.clone();
             self.engine.rt().spawn(async move {
                 let _holding = holding;
-                export::run_export(&ctx, snapshot, spec, &stats).await
+                export::run_export(&ctx, snapshot, spec, &stats, &owned).await
             })
         };
 
@@ -174,8 +175,7 @@ impl SnapshotReads<'_> {
         path: String,
         format: export::Format,
     ) -> Result<export::ExportReport, EngineError> {
-        let root = self.engine.data_root.lock().unwrap().clone();
-        export::check_destination(&path, root.as_deref())?;
+        export::check_destination(&path, &self.engine.owned_storage())?;
         self.export(export::ExportSpec {
             path,
             scope: export::Scope::All,

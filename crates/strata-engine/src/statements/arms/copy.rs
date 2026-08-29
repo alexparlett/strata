@@ -1,46 +1,30 @@
-//! **Typed `COPY … TO`** — dispatched natively, behind the two checks only the Export
-//! window used to provide. `docs/STATEMENTS_SPEC.md` §6.4.
+//! **Typed `COPY … TO`** — DataFusion's own write, composed into a [`CopyJob`] like every other.
+//! `docs/STATEMENTS_SPEC.md` §6.4.
 //!
-//! Nothing about the *write* is ours. What the editor adds is the pair of refusals the managed
-//! Export surface had been standing in for, both about a statement that would otherwise succeed
-//! and produce something wrong:
+//! Nothing about the *write* is ours. What this arm adds is one refusal, about a statement that
+//! would otherwise succeed and produce something wrong: **a partition identifier has to be one
+//! bare word.** DataFusion's COPY parser renders each with `Ident::to_string()` and the planner
+//! looks it up by that string, so a quoted `PARTITIONED BY ("order date")` fails about a column
+//! the user never named. It is asked here rather than in the shared write path because it can
+//! only be asked before planning — by the time a job exists the planner has already resolved
+//! those names and thrown its own message.
 //!
-//! - **A partition identifier has to be one bare word.** DataFusion's COPY parser renders each with
-//!   `Ident::to_string()` and the planner looks it up by that string, so a quoted
-//!   `PARTITIONED BY ("order date")` fails about a column the user never named. Refused first, in
-//!   the Export window's own words ([`partition_columns_are_bare_words`]).
-//! - **A NULL in a partition column is silent corruption.** There is no
-//!   `__HIVE_DEFAULT_PARTITION__`: the row is filed under a *neighbouring* value's directory, so
-//!   the output reads back claiming a value it never had. Export answers this from the snapshot
-//!   write pass's free counts; a typed COPY has no snapshot, so it pays for one extra scan
-//!   ([`no_null_partition_values`]).
-//! - **A target inside storage Strata owns is refused.** A stray file under an internal table's
-//!   directory is phantom rows on its next scan. The gate is
-//!   [`refuse_owned_target`](crate::export::refuse_owned_target), which lives beside the
-//!   other two in `engine::export` because three surfaces write a result to a path and the user
-//!   reads one rule.
+//! The owned-storage fence and the NULL-partition refusal are [`run_copy`]'s, which is what makes
+//! them the same two refusals the Export window and the agent answer to. A typed COPY's evidence
+//! for the second is [`NullEvidence::Count`]: it reads live tables and has no snapshot's free
+//! counts, so it pays for one extra scan — a pre-flight, not a lock.
 //!
-//! The reserved-name half is the router's: a `__snap_` relation anywhere in the source refuses with
-//! `Fault::ReservedName`, which keeps `COPY (SELECT * FROM __snap_3) TO …` from writing
+//! The reserved-name half is the router's: a `__snap_` relation anywhere in the source refuses
+//! with `Fault::ReservedName`, which keeps `COPY (SELECT * FROM __snap_3) TO …` from writing
 //! `__strata_ord` into a user's file.
-//!
-//! The Export window is **unchanged** and remains the snapshot-backed, race-free path. A typed COPY
-//! reads live tables, twice when it is partitioned — the gate is a pre-flight, not a lock.
 
-use std::sync::Arc;
-
-use datafusion::arrow::array::Int64Array;
-use datafusion::dataframe::DataFrame;
-use datafusion::functions_aggregate::count::count_all;
-use datafusion::functions_aggregate::expr_fn::count;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{ident, SQLOptions, SessionContext};
+use datafusion::prelude::SQLOptions;
 use datafusion::sql::parser::Statement as DFStatement;
 
-use crate::export::{
-    copy_row_count, partition_columns_are_bare_words, partition_null_refusal, refuse_owned_target,
-};
+use crate::export::partition_columns_are_bare_words;
 use crate::policy::Principal;
+use crate::statements::copy_job::{run_copy, CopyJob, NullEvidence};
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::StatementOutcome;
@@ -50,18 +34,16 @@ use strata_core::util::plural;
 /// Write a typed `COPY … TO`'s source to disk and report the rows it wrote.
 ///
 /// **The plan that was gated is the plan that runs.** The statement is planned once — planning a
-/// `COPY` executes nothing, since execution lives only in `execute_logical_plan` — and that one
-/// value is what the NULL gate counts over and what is then driven. Re-dispatching the user's text
+/// `COPY` executes nothing, since execution lives only in `execute_logical_plan` — and the node's
+/// own five values become the [`CopyJob`] that is then driven. Re-dispatching the user's text
 /// through `ctx.sql` would judge one plan and execute another, which is the rule the `INSERT` arm
-/// already keeps. Driving the plan *is* `ctx.sql` minus the re-parse: `execute_logical_plan`
-/// special-cases `Ddl` and `Statement` and hands everything else, `Copy` included, to exactly this.
+/// already keeps.
 pub async fn copy_to(
     cx: &StmtCtx,
     _who: &Principal,
     stmt: &Qualified,
 ) -> Result<StatementOutcome, String> {
     let ctx = &cx.ctx;
-    let root = &cx.root;
     let DFStatement::CopyTo(copy) = &**stmt else {
         return Err(format!(
             "{} did not parse as a copy",
@@ -75,14 +57,6 @@ pub async fn copy_to(
         .statement_to_plan((**stmt).clone())
         .await
         .map_err(|e| e.to_string())?;
-    let LogicalPlan::Copy(copying) = &plan else {
-        return Err(format!("{} did not plan as a copy", StmtKind::Copy.label()));
-    };
-    let target = copying.output_url.clone();
-    let partition_by = copying.partition_by.clone();
-    let input = Arc::clone(&copying.input);
-
-    refuse_owned_target(&target, root.as_deref(), StmtKind::Copy.label())?;
 
     SQLOptions::new()
         .with_allow_dml(true)
@@ -91,82 +65,31 @@ pub async fn copy_to(
         .verify_plan(&plan)
         .map_err(|e| e.to_string())?;
 
-    no_null_partition_values(ctx, &input, &partition_by).await?;
-
-    let batches = DataFrame::new(ctx.state(), plan)
-        .collect()
-        .await
-        .map_err(|e| e.to_string())?;
-    let rows = copy_row_count(&batches);
+    let LogicalPlan::Copy(copying) = plan else {
+        return Err(format!("{} did not plan as a copy", StmtKind::Copy.label()));
+    };
+    let target = copying.output_url.clone();
+    let job = CopyJob {
+        input: copying.input,
+        target: copying.output_url,
+        file_type: copying.file_type,
+        options: copying.options,
+        partition_by: copying.partition_by,
+    };
+    let rows = run_copy(
+        ctx,
+        job,
+        &cx.owned,
+        NullEvidence::Count,
+        StmtKind::Copy.label(),
+    )
+    .await?;
 
     Ok(StatementOutcome {
         message: format!("Exported {} to '{target}'", plural(rows, "row")),
         count: Some(rows as u64),
         effect: None,
     })
-}
-
-/// Refuse a partitioned `COPY` whose partition columns contain NULLs, in the Export window's
-/// wording ([`partition_null_refusal`]).
-///
-/// **One extra scan, and it is the whole cost of generality.** The Export window reads exact null
-/// counts the snapshot's write pass already produced, for free; a typed COPY's source is any query
-/// at all, so the only way to know is to ask. Counted over the *planned input* rather than a
-/// rendered `SELECT`, so the thing measured is the thing that will be written.
-///
-/// The shape is `profile::aggregates`': positional, total first, then one non-null count per
-/// partition column. `count(col)` already skips nulls, so a null count is a subtraction and the
-/// fallible `ExprFunctionExt` FILTER builder is not needed.
-///
-/// **Proceed only on an exact zero** — the Export window's rule, kept for its reason: a count that
-/// could not be read is not a count of zero, and both readings are a reason to decline. A missing
-/// *total* is different, and loud: nothing was measured at all.
-async fn no_null_partition_values(
-    ctx: &SessionContext,
-    input: &LogicalPlan,
-    partition_by: &[String],
-) -> Result<(), String> {
-    if partition_by.is_empty() {
-        return Ok(());
-    }
-    let mut names: Vec<&str> = Vec::with_capacity(partition_by.len());
-    for name in partition_by {
-        if !names.contains(&name.as_str()) {
-            names.push(name);
-        }
-    }
-    let mut exprs = vec![count_all()];
-    exprs.extend(names.iter().map(|name| count(ident(*name))));
-
-    let batches = DataFrame::new(ctx.state(), input.clone())
-        .aggregate(Vec::new(), exprs)
-        .map_err(|e| e.to_string())?
-        .collect()
-        .await
-        .map_err(|e| e.to_string())?;
-    let read = |index: usize| -> Option<i64> {
-        let batch = batches.first()?;
-        batch
-            .columns()
-            .get(index)?
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .filter(|a| !a.is_empty())
-            .map(|a| a.value(0))
-    };
-
-    let Some(rows) = read(0) else {
-        return Err(format!(
-            "{} could not count the partition columns' NULL values",
-            StmtKind::Copy.label()
-        ));
-    };
-    for (index, name) in names.iter().enumerate() {
-        if read(index + 1) != Some(rows) {
-            return Err(partition_null_refusal(name));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

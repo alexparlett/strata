@@ -1,5 +1,10 @@
-//! Export one result snapshot to disk via `COPY … TO` (one file, or a Hive
-//! directory when partition columns are given).
+//! Export one result snapshot to disk — one file, or a Hive directory when partition columns
+//! are given.
+//!
+//! **The spec is the whole of what a caller says; the writing is `statements::copy_job`'s.** This
+//! module turns an [`ExportSpec`] into the [`CopyJob`] every write in the engine goes through: the
+//! rows as a `DataFrame` over the snapshot, the writer out of the session's own format registry,
+//! and the options in DataFusion's own namespaced spelling. Nothing here composes SQL.
 //!
 //! **The spec is shaped so an impossible export can't be spelled.** Write options belong to
 //! the format that has them ([`Format`] carries its own struct), so "a CSV delimiter on a
@@ -12,28 +17,32 @@
 //! the same immutable table the grid pages, with the same [`ExportSpec::sort`] the grid is
 //! showing, so what lands on disk is what was on screen.
 //!
-//! **The gates an export answers to live here, and the statements reach them.** Three surfaces
-//! write a result to a path — the Export window, a typed `COPY … TO` (`statements::arms::copy`), and the
-//! agent's `export_result` (QE-05) — and none of them may land in storage Strata owns. So
-//! [`refuse_owned_target`], [`partition_columns_are_bare_words`] and [`partition_null_refusal`]
-//! are all this module's, called by whichever surface reaches them, rather than each having its
-//! own copy of a rule the user reads as one.
+//! **Where a write may land is this module's, and every surface that writes one reaches it.**
+//! Three of them do — the Export window, a typed `COPY … TO` (`statements::arms::copy`) and the
+//! agent's `export_result` (QE-05) — and none may land in storage Strata owns
+//! ([`refuse_owned_target`], over the roots [`owned_roots`] gathers) or name a partition column
+//! that is not one bare word ([`partition_columns_are_bare_words`]). One copy of a rule the user
+//! reads as one.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs::{self, Metadata};
 use std::path::{is_separator, Component, Path, PathBuf};
+use std::sync::Arc;
 
-use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::file_options::file_type::FileType;
+use datafusion::datasource::file_format::format_as_file_type;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{Expr, LogicalPlan};
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::dialect::Dialect;
 
-use super::snapshots::local_ipc::snapshots_root;
 use super::snapshots::snapshot_name;
+use crate::snapshots::SnapshotStats;
 use crate::sql;
+use crate::statements::copy_job::{run_copy, CopyJob, NullEvidence};
 use strata_core::project::strata_dir;
 use strata_model::SnapshotId;
 
@@ -111,8 +120,10 @@ pub enum Format {
 }
 
 impl Format {
-    /// The `STORED AS` keyword.
-    fn stored_as(&self) -> &str {
+    /// The word this format is registered under — the `STORED AS` keyword in an editor, and the
+    /// key DataFusion resolves the writer under here. One name for both, so a format the editor
+    /// can write is a format the window can write.
+    fn word(&self) -> &str {
         match self {
             Self::Csv(_) => "CSV",
             Self::Json(_) => "JSON",
@@ -120,6 +131,81 @@ impl Format {
             Self::Arrow => "ARROW",
             Self::Extension { format, .. } => format,
         }
+    }
+
+    /// The writer, out of the session's own file-format registry.
+    ///
+    /// **The same lookup the `COPY` planner does**, so a typed `STORED AS geojson` and a
+    /// `Format::Extension { format: "geojson" }` resolve to one writer or to neither.
+    ///
+    /// # Errors
+    ///
+    /// Nothing is registered under this format's word.
+    pub(crate) fn file_type(&self, state: &SessionState) -> Result<Arc<dyn FileType>, String> {
+        let word = self.word();
+        state
+            .get_file_format_factory(word)
+            .map(format_as_file_type)
+            .ok_or_else(|| format!("Can't write '{word}': no writer is registered for it"))
+    }
+
+    /// The write options this format contributes, in DataFusion's own namespaced spelling.
+    ///
+    /// # Errors
+    ///
+    /// A CSV single-character option that is not one ASCII byte ([`ascii_byte`]).
+    pub(crate) fn options(&self) -> Result<HashMap<String, String>, String> {
+        let pairs: Vec<(&str, String)> = match self {
+            Format::Csv(csv) => {
+                let mut pairs = vec![
+                    ("has_header", csv.header.to_string()),
+                    ("delimiter", ascii_byte("delimiter", csv.delimiter)?),
+                    ("quote", ascii_byte("quote character", csv.quote)?),
+                    ("double_quote", csv.double_quote.to_string()),
+                    ("null_value", csv.null_value.clone()),
+                    ("compression", csv.compression.as_option().into()),
+                ];
+                if let Some(escape) = csv.escape {
+                    pairs.push(("escape", ascii_byte("escape character", escape)?));
+                }
+                pairs
+            }
+            Format::Json(json) => vec![("compression", json.compression.as_option().into())],
+            Format::Parquet(pq) => vec![
+                ("compression", pq.compression.as_option()),
+                ("statistics_enabled", pq.statistics.as_option().into()),
+                (
+                    "max_row_group_size",
+                    pq.max_row_group_size.max(1).to_string(),
+                ),
+                ("writer_version", pq.writer_version.as_option().into()),
+                ("dictionary_enabled", pq.dictionary.to_string()),
+            ],
+            Format::Arrow => vec![],
+            Format::Extension { options, .. } => {
+                return Ok(options
+                    .iter()
+                    .map(|(key, value)| (namespaced(key), value.clone()))
+                    .collect())
+            }
+        };
+        Ok(pairs
+            .into_iter()
+            .map(|(key, value)| (namespaced(key), value))
+            .collect())
+    }
+}
+
+/// An option key as DataFusion's own `COPY` planner would file it: lowercased, and prefixed with
+/// `format.` when it carries no namespace of its own.
+///
+/// `SqlToRel::parse_options_map`'s rule, restated because a plan-built `COPY` never passes through
+/// it — and applied to a registrant's own keys, which may already name a namespace, exactly as to
+/// ours.
+fn namespaced(key: &str) -> String {
+    match key.contains('.') {
+        true => key.to_lowercase(),
+        false => format!("format.{}", key.to_lowercase()),
     }
 }
 
@@ -310,97 +396,97 @@ impl Partition {
     }
 }
 
-/// Export one snapshot via `COPY (…) TO … STORED AS`. A plain file path (extension)
-/// → one file; partition columns → a Hive-partitioned directory.
-/// Returns `(path, rows_written)`.
-pub async fn run_export(
+/// Write one snapshot per `spec`. A plain file path (extension) → one file; partition columns →
+/// a Hive-partitioned directory. Returns `(path, rows_written)`.
+pub(crate) async fn run_export(
     ctx: &SessionContext,
     snapshot: SnapshotId,
     spec: ExportSpec,
-    stats: &crate::snapshots::SnapshotStats,
+    stats: &SnapshotStats,
+    owned: &[Owned],
 ) -> Result<(String, usize), String> {
     let snap = snapshot_name(snapshot);
     let Ok(table) = ctx.table(snap.as_str()).await else {
         return Err("No results to export — run a query first".to_string());
     };
-    let schema = table.schema().inner().clone();
 
-    let select = select_sql(&snap, &spec, &schema, stats.ord.as_deref());
-
-    extension_words_are_plain(&spec.format, ctx)?;
     partition_columns_are_bare_words(&spec.partition.columns, ctx)?;
-    partition_columns_have_no_nulls(&spec.partition.columns, &schema, stats)?;
 
-    let mut options = format_pairs(&spec.format)?;
-    let part_clause = if spec.partition.is_flat() {
-        String::new()
-    } else {
-        options.push((
+    let mut options = spec.format.options()?;
+    if !spec.partition.is_flat() {
+        options.insert(
             KEEP_PARTITION_COLUMNS.to_string(),
             spec.partition.keep_columns.to_string(),
-        ));
-        format!(" PARTITIONED BY ({})", spec.partition.columns.join(", "))
+        );
+    }
+    let job = CopyJob {
+        input: Arc::new(snapshot_rows(table, &spec, stats.ord.as_deref())?),
+        target: spec.path.clone(),
+        file_type: spec.format.file_type(&ctx.state())?,
+        options,
+        partition_by: spec.partition.columns.clone(),
     };
-    let opts = options_clause(&options);
-
-    let esc = quote_literal(&spec.path);
-    let stored = spec.format.stored_as();
-    let stmt = format!("COPY ({select}) TO '{esc}' STORED AS {stored}{part_clause}{opts}");
-
-    let df = ctx.sql(&stmt).await.map_err(|e| e.to_string())?;
-    let batches = df.collect().await.map_err(|e| e.to_string())?;
-    Ok((spec.path, copy_row_count(&batches)))
+    let rows = run_copy(ctx, job, owned, NullEvidence::Snapshot(stats), "Export").await?;
+    Ok((spec.path, rows))
 }
 
-/// The `SELECT` the COPY wraps: the result's columns — **explicitly, never `*`** — over the
-/// whole snapshot or one page window, in the grid's order.
+/// The rows the export writes: the result's columns — **explicitly, never `*`** — over the whole
+/// snapshot or one page window, in the grid's order.
 ///
-/// Explicit because the snapshot file carries the ordinal column
-/// (`docs/SNAPSHOT_SPEC.md` §9), and a `COPY` must not write bookkeeping into the user's
-/// file. The ordinal is what the read *orders by* instead: alone for an unsorted export, as
-/// the tie-break under a user sort — the same rule as `fetch_page`, which is what makes "the
-/// file matches what was on screen" true rather than hopeful (an unordered `LIMIT/OFFSET`
-/// over a split scan is nondeterministic, measured in §9).
+/// Explicit because the snapshot carries the ordinal column (`docs/SNAPSHOT_SPEC.md` §9), and a
+/// write must not put bookkeeping in the user's file. The ordinal is what the read *orders by*
+/// instead: alone for an unsorted export, as the tie-break under a user sort — the same rule as
+/// `fetch_page`, which is what makes "the file matches what was on screen" true rather than
+/// hopeful (an unordered `LIMIT/OFFSET` over a split scan is nondeterministic, measured in §9).
 ///
-/// The sort goes **before** the window, so "this page" means the page the user is looking
-/// at rather than an arbitrary slice re-ordered afterwards. `NULLS LAST` in both directions
-/// matches the grid's own ordering (Rz6).
-fn select_sql(snap: &str, spec: &ExportSpec, schema: &Schema, ord: Option<&str>) -> String {
-    let columns = schema
+/// **Sorted, then windowed, then projected**, which is what a `SELECT … ORDER BY … LIMIT` means:
+/// "this page" is the page the user is looking at rather than an arbitrary slice re-ordered
+/// afterwards, and the ordinal is still there to sort by when the projection drops it.
+/// `NULLS LAST` in both directions matches the grid's own ordering (Rz6).
+fn snapshot_rows(
+    table: DataFrame,
+    spec: &ExportSpec,
+    ord: Option<&str>,
+) -> Result<LogicalPlan, String> {
+    let columns: Vec<Expr> = table
+        .schema()
         .fields()
         .iter()
         .map(|f| f.name().as_str())
-        .filter(|name| ord != Some(*name))
-        .map(quote_col)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut sql = format!("SELECT {columns} FROM {snap}");
+        .filter(|name| ord != Some(name))
+        .map(ident)
+        .collect();
+
     let mut order = Vec::new();
     if let Some((name, asc)) = &spec.sort {
-        let dir = if *asc { "ASC" } else { "DESC" };
-        order.push(format!("{} {dir} NULLS LAST", quote_col(name)));
+        order.push(ident(name).sort(*asc, false));
     }
     if let Some(ord) = ord {
-        order.push(quote_col(ord));
+        order.push(ident(ord).sort(true, false));
     }
+
+    let mut rows = table;
     if !order.is_empty() {
-        sql.push_str(&format!(" ORDER BY {}", order.join(", ")));
+        rows = rows.sort(order).map_err(|e| e.to_string())?;
     }
     if let Scope::Page { page, page_size } = spec.scope {
         let offset = page.saturating_sub(1).saturating_mul(page_size);
-        sql.push_str(&format!(" LIMIT {page_size} OFFSET {offset}"));
+        rows = rows
+            .limit(offset, Some(page_size))
+            .map_err(|e| e.to_string())?;
     }
-    sql
+    rows.select(columns)
+        .map(DataFrame::into_unoptimized_plan)
+        .map_err(|e| e.to_string())
 }
 
 /// A **result column name** rendered into SQL: double-quoted verbatim, embedded quotes
 /// doubled. Deliberately not the crate's `quote_ident`, which folds a bare word to
 /// lowercase — right for catalog names (that fold is their registered identity), wrong for
-/// a result column, whose name is exactly what the user's query produced. (Replaces the
-/// old local escape that the `ORDER BY` used; same rendering, one name.)
+/// a result column, whose name is exactly what the user's query produced.
 ///
-/// `pub` for the Shape panel (Chart 09), which composes SQL over result columns on exactly
-/// these terms.
+/// `pub` for the Shape panel, which composes SQL over result columns on exactly these terms. An
+/// export renders no name at all: the columns it reads are [`Expr`]s over the snapshot's schema.
 pub fn quote_col(name: impl AsRef<str>) -> String {
     format!("\"{}\"", name.as_ref().replace('"', "\"\""))
 }
@@ -418,66 +504,6 @@ pub fn quote_col(name: impl AsRef<str>) -> String {
 /// refusing it as unknown.
 const KEEP_PARTITION_COLUMNS: &str = "execution.keep_partition_by_columns";
 
-/// The `'key' 'value'` pairs a format contributes to ` OPTIONS (…)`.
-///
-/// Keys are bare and uppercase: DataFusion's COPY planner lowercases them and applies the
-/// `format.` prefix itself, so these resolve onto `CsvOptions` / `JsonOptions` /
-/// `TableParquetOptions` field names. A key that carries its own namespace
-/// ([`KEEP_PARTITION_COLUMNS`]) keeps it — the planner only prefixes a key with no dot in it.
-fn format_pairs(format: &Format) -> Result<Vec<(String, String)>, String> {
-    let pairs: Vec<(&str, String)> = match format {
-        Format::Csv(csv) => {
-            let mut pairs = vec![
-                ("HAS_HEADER", csv.header.to_string()),
-                ("DELIMITER", ascii_byte("delimiter", csv.delimiter)?),
-                ("QUOTE", ascii_byte("quote character", csv.quote)?),
-                ("DOUBLE_QUOTE", csv.double_quote.to_string()),
-                ("NULL_VALUE", quote_literal(&csv.null_value)),
-                ("COMPRESSION", csv.compression.as_option().into()),
-            ];
-            if let Some(escape) = csv.escape {
-                pairs.push(("ESCAPE", ascii_byte("escape character", escape)?));
-            }
-            pairs
-        }
-        Format::Json(json) => vec![("COMPRESSION", json.compression.as_option().into())],
-        Format::Parquet(pq) => vec![
-            ("COMPRESSION", pq.compression.as_option()),
-            ("STATISTICS_ENABLED", pq.statistics.as_option().into()),
-            (
-                "MAX_ROW_GROUP_SIZE",
-                pq.max_row_group_size.max(1).to_string(),
-            ),
-            ("WRITER_VERSION", pq.writer_version.as_option().into()),
-            ("DICTIONARY_ENABLED", pq.dictionary.to_string()),
-        ],
-        Format::Arrow => vec![],
-        Format::Extension { options, .. } => {
-            return Ok(options
-                .iter()
-                .map(|(key, value)| (key.clone(), quote_literal(value)))
-                .collect())
-        }
-    };
-    Ok(pairs
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value))
-        .collect())
-}
-
-/// The ` OPTIONS (…)` clause for a set of pairs, or an empty string for none.
-fn options_clause(pairs: &[(String, String)]) -> String {
-    if pairs.is_empty() {
-        return String::new();
-    }
-    let body = pairs
-        .iter()
-        .map(|(key, value)| format!("'{key}' '{value}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(" OPTIONS ({body})")
-}
-
 /// A single-character CSV option as its **byte value**, which is how it must be sent.
 ///
 /// DataFusion parses these `u8` fields by trying `str::parse::<u8>()` *first* and only then
@@ -492,86 +518,25 @@ fn ascii_byte(what: &str, c: char) -> Result<String, String> {
     Ok((c as u32).to_string())
 }
 
-/// Escape a value for a single-quoted SQL literal. Every option value and the path land
-/// inside `'…'`, so an embedded quote would otherwise close the literal early.
-fn quote_literal(raw: &str) -> String {
-    raw.replace('\'', "''")
-}
-
-/// Why a partition column containing NULLs is refused, in the one wording both surfaces use.
-///
-/// Shared with the typed `COPY` arm (`statements::arms::copy`), which reaches the same conclusion by a
-/// different route — a pre-flight count over the statement's own source, since a typed COPY has
-/// no snapshot behind it and therefore none of the write pass's free counts. Two mechanisms, one
-/// sentence: the fact the user is told is the same fact, and a second phrasing of it would read
-/// like a second rule.
-pub(super) fn partition_null_refusal(name: &str) -> String {
-    format!(
-        "Can't partition by '{name}': it contains NULL values, and a NULL has no folder name — \
-         those rows would be written under another value and read back wrong. Partition by a \
-         column with no NULLs, or filter them out of the query first"
-    )
-}
-
-/// Refuse a partitioned export whose partition columns contain NULLs.
-///
-/// **Why this is a hard block and not a warning.** A directory name cannot hold a NULL, and
-/// DataFusion 54 does not use the Hive convention (`__HIVE_DEFAULT_PARTITION__`) for one: it
-/// files the row under a *neighbouring* value's directory instead, so it reads back claiming a
-/// value it never had. That is silent data corruption, in the user's own output, discoverable
-/// only by comparing against the source — so the export declines rather than warns.
-///
-/// **Answered from what the write pass counted, not by scanning and not from a footer.** The
-/// snapshot is Arrow IPC, which carries no column statistics at all — but nothing was ever gained
-/// by asking the file. `query::materialize` streams every batch to write it, and
-/// `Array::null_count` is a stored field, so the exact per-column count is a running sum over
-/// data already in hand ([`snapshots::SnapshotStats`], held for the snapshot's lifetime in
-/// `Lifecycle`). Free to produce, and a slice index to read.
-///
-/// The rule is "proceed only on an exact zero". `stats` is exact by construction — it counted
-/// every row that was written — so there is no "unknown" reading to disambiguate, which the
-/// footer route did have.
-fn partition_columns_have_no_nulls(
-    columns: &[String],
-    schema: &Schema,
-    stats: &crate::snapshots::SnapshotStats,
-) -> Result<(), String> {
-    for name in columns {
-        let index = schema
-            .fields()
-            .iter()
-            .position(|f| f.name() == name)
-            .ok_or_else(|| format!("Can't partition by '{name}': the result has no such column"))?;
-        if stats.nulls.get(index).copied() != Some(0) {
-            return Err(partition_null_refusal(name));
-        }
-    }
-    Ok(())
-}
-
 /// Refuse any partition column the engine's own parser dialect doesn't read as a single
 /// bare word.
 ///
-/// `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option: the COPY parser
-/// re-renders each with `Ident::to_string()`, so a quoted name reaches the planner with its quotes
-/// attached and matches no field. Bare is case-preserving here, so every name the tokenizer reads
-/// as one word round-trips and one it does not simply cannot be expressed — worth saying plainly
-/// rather than emitting a statement that fails on a stray token.
+/// `PARTITIONED BY` takes **bare** identifiers, and quoting is not an option: a Hive directory
+/// segment is `name=value`, so a name the tokenizer does not read as one word can never equal the
+/// segment it was written under. Bare is case-preserving here, so every name that round-trips is
+/// accepted and one that cannot be expressed is said so plainly.
 ///
 /// Its own sync function rather than an inline check, because the resolved dialect is not `Send`
 /// and [`run_export`] is spawned onto the engine runtime.
 ///
-/// **Shared with the two typed statements that carry a `PARTITIONED BY`** — `statements::arms::copy`, which
-/// asks it of the very strings `CopyToStatement::partitioned_by` holds, and
-/// `statements::arms::external`,
-/// whose `CreateExternalTable::table_partition_cols` are built the same way. Both are
-/// `Ident::to_string()`'s output, so a quoted `PARTITIONED BY ("order date")` arrives here *with
-/// its quotes* — which for a COPY is a name that matches no field, and for a registration is a
-/// partition column whose stored name can never equal a `key=` folder segment. One clause, one
-/// rule, so the wording names **`PARTITIONED BY`** rather than either statement. The bad name is
-/// rendered inside single quotes rather than by `Debug` so that case reads as what the user typed
-/// instead of as escaped Rust.
-pub(super) fn partition_columns_are_bare_words(
+/// **Shared by the three surfaces that carry a `PARTITIONED BY`** — the Export window, whose
+/// columns are the spec's, and the two typed statements, whose columns are
+/// `Ident::to_string()`'s output. A quoted `PARTITIONED BY ("order date")` therefore arrives here
+/// *with its quotes*, which for a `COPY` is a name matching no field and for a registration is a
+/// stored name no folder segment can equal. One clause, one rule, so the wording names
+/// **`PARTITIONED BY`** rather than any statement. The bad name is rendered inside single quotes
+/// rather than by `Debug`, so it reads as what the user typed instead of as escaped Rust.
+pub(crate) fn partition_columns_are_bare_words(
     columns: &[String],
     ctx: &SessionContext,
 ) -> Result<(), String> {
@@ -580,43 +545,6 @@ pub(super) fn partition_columns_are_bare_words(
         Some(bad) => Err(format!(
             "Can't partition by '{bad}': PARTITIONED BY takes unquoted column names, so a \
              partition column has to be a single plain word"
-        )),
-        None => Ok(()),
-    }
-}
-
-/// Refuse a registered format whose own words cannot be spliced into the statement.
-///
-/// Its name reaches the `COPY` **unquoted** (`STORED AS geojson`), so no escaping can make it
-/// safe; its option keys are quoted but are read as config *paths* rather than as values, so a
-/// key that would need escaping is one no writer could have accepted. Every other [`Format`] arm
-/// names both with `&'static str` literals — this is the one arm where they are the caller's own
-/// strings, and [`Format`] is public API an embedder may fill from anywhere.
-///
-/// Refused rather than escaped for the reason the partition columns are: these are grammar, not
-/// data. The path and the option *values* are the opposite case and stay escaped, any byte being
-/// legitimate in either.
-fn extension_words_are_plain(format: &Format, ctx: &SessionContext) -> Result<(), String> {
-    let Format::Extension { format, options } = format else {
-        return Ok(());
-    };
-    let dialect = sql::lex::dialect(ctx.state().config_options().sql_parser.dialect.as_ref());
-    if !is_bare_word(dialect.as_ref(), format) {
-        return Err(format!(
-            "Can't write '{format}': STORED AS takes an unquoted format name, so a format has to \
-             be a single plain word"
-        ));
-    }
-    let plain = |key: &str| {
-        !key.is_empty()
-            && key
-                .split('.')
-                .all(|part| is_bare_word(dialect.as_ref(), part))
-    };
-    match options.keys().find(|key| !plain(key)) {
-        Some(bad) => Err(format!(
-            "Can't write with the option '{bad}': an option key is a plain word, or plain words \
-             separated by dots"
         )),
         None => Ok(()),
     }
@@ -636,13 +564,47 @@ fn is_bare_word(dialect: &dyn Dialect, name: &str) -> bool {
         && rest.all(|c| dialect.is_identifier_part(c))
 }
 
-/// Refuse a write whose target lands in storage Strata owns — the project's `.strata/` directory
-/// (internal table data, the session, the conversations) or the snapshot spool.
+/// One root a write must stay out of, and what it holds — the phrase its refusal reads.
+pub(crate) type Owned = (PathBuf, &'static str);
+
+/// Every root a write must stay out of: what this engine's stores say they keep their bytes
+/// under, plus the project's own `.strata/`.
 ///
-/// **The two fenced roots are the two places a stray file changes what Strata later reads.** A
-/// file under `.strata/tables/<slug>/` is listed by that table's next scan; one under the snapshot
-/// spool is read back as a result. Everywhere else on the disk is the user's own, and a write that
-/// overwrites their file is the statement doing what it says.
+/// **The stores are asked rather than guessed.** Where results live is a
+/// [`SnapshotStore`](crate::snapshots::SnapshotStore) and where Strata's own tables live is an
+/// [`InternalTableStore`](crate::tables::InternalTableStore); a store with nothing on the
+/// filesystem answers nothing and fences nothing.
+///
+/// The project's own directory is here rather than answered by the table store, because it holds
+/// more than tables — the session, the conversations — and is fenced whether or not a store
+/// follows it. Order is the order a refusal is worded in, so the nested default
+/// (`.strata/tables`, under `.strata/`) reads as the project's own data.
+pub(crate) fn owned_roots(
+    root: Option<&Path>,
+    snapshots: Vec<PathBuf>,
+    tables: Vec<PathBuf>,
+) -> Vec<Owned> {
+    let mut owned: Vec<Owned> = snapshots
+        .into_iter()
+        .map(|dir| (dir, "holds query results"))
+        .collect();
+    if let Some(root) = root {
+        owned.push((strata_dir(root), "holds this project's own data"));
+    }
+    owned.extend(
+        tables
+            .into_iter()
+            .map(|dir| (dir, "holds tables Strata owns the data of")),
+    );
+    owned
+}
+
+/// Refuse a write whose target lands in storage Strata owns.
+///
+/// **What is fenced is where a stray file changes what Strata later reads.** A file under a
+/// table's directory is listed by that table's next scan; one under the snapshot spool is read
+/// back as a result. Everywhere else on the disk is the user's own, and a write that overwrites
+/// their file is the statement doing what it says.
 ///
 /// **Resolved, never compared as text.** A relative target is the process's cwd away from an
 /// absolute one, and `'.strata/../.strata/tables'` names the fenced directory without sharing its
@@ -651,13 +613,13 @@ fn is_bare_word(dialect: &dyn Dialect, name: &str) -> bool {
 /// anchored on the deepest ancestor that *does* exist — which is what makes a symlinked project
 /// folder compare equal to the path the fence was built from.
 ///
-/// `subject` is what the sentence is about, because two surfaces reach this and the user reads a
-/// refusal as being about the thing they did: `COPY` for the typed statement (`statements::arms::copy`),
-/// `Export` for [`check_destination`]'s caller. Only the subject differs — the rule, the roots and
-/// the reason are one copy.
-pub(super) fn refuse_owned_target(
+/// `subject` is what the sentence is about, because three surfaces reach this and the user reads a
+/// refusal as being about the thing they did: `COPY` for the typed statement, `Export` for the
+/// window and for [`check_destination`]'s caller. Only the subject differs — the rule, the roots
+/// and the reason are one copy.
+pub(crate) fn refuse_owned_target(
     target: &str,
-    root: Option<&Path>,
+    owned: &[Owned],
     subject: &str,
 ) -> Result<(), String> {
     let local = match target.split_once("://") {
@@ -671,12 +633,8 @@ pub(super) fn refuse_owned_target(
     };
     let path = resolve(Path::new(local.as_ref()));
 
-    let mut fenced = vec![(PathBuf::from(snapshots_root()), "holds query results")];
-    if let Some(root) = root {
-        fenced.push((strata_dir(root), "holds this project's own data"));
-    }
-    for (dir, what) in fenced {
-        if path.starts_with(resolve(&dir)) {
+    for (dir, what) in owned {
+        if path.starts_with(resolve(dir)) {
             return Err(format!(
                 "{subject} can't write into '{}', which {what}",
                 dir.display(),
@@ -784,7 +742,7 @@ fn names_one_file(path: &str) -> bool {
 /// The typed `COPY` is unaffected and keeps exactly one of these ([`refuse_owned_target`]): a
 /// statement the user typed in their own editor may overwrite their own file and may ask for a
 /// directory of part files, which is the statement doing what it says.
-pub(super) fn check_destination(path: &str, root: Option<&Path>) -> Result<(), String> {
+pub(crate) fn check_destination(path: &str, owned: &[Owned]) -> Result<(), String> {
     if path
         .split_once("://")
         .is_some_and(|(scheme, _)| is_url_scheme(scheme))
@@ -817,7 +775,7 @@ pub(super) fn check_destination(path: &str, root: Option<&Path>) -> Result<(), S
              rather than one file. Give the file an extension, such as '.csv'"
         ));
     }
-    refuse_owned_target(path, root, "Export")?;
+    refuse_owned_target(path, owned, "Export")?;
 
     let resolved = resolve(Path::new(path));
     if resolved.exists() {
@@ -834,11 +792,11 @@ pub(super) fn check_destination(path: &str, root: Option<&Path>) -> Result<(), S
     }
 }
 
-/// `COPY … TO` returns a single `UInt64` "count" column with the rows written.
+/// A write returns a single `UInt64` "count" column with the rows it wrote.
 ///
-/// Shared with `statements::arms::tables`, whose CTAS spool is a `COPY` too: the row count in its report and
-/// the one in an export's are the same fact read out of the same shape.
-pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
+/// One shape, three writers: DataFusion's `COPY` node answers it, and so does every
+/// `DataSinkExec` — which is why `sink`'s remote append reads its answer out of here too.
+pub(crate) fn copy_row_count(batches: &[RecordBatch]) -> usize {
     use datafusion::arrow::array::UInt64Array;
     let Some(batch) = batches.first() else {
         return 0;
@@ -859,8 +817,12 @@ pub(super) fn copy_row_count(batches: &[RecordBatch]) -> usize {
 mod tests {
     use std::{fs, process};
 
-    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion::arrow::array::{Int64Array, StringArray, UInt64Array};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
 
+    use crate::builder::test_context;
+    use crate::snapshots::{LocalIpcSnapshotStore, MemSnapshotStore};
     use crate::{Engine, RunRows, RunTag, WsId};
 
     use super::*;
@@ -875,73 +837,6 @@ mod tests {
         }
     }
 
-    /// **A registered format's own words are grammar, so they are refused rather than escaped.**
-    /// The name lands unquoted in `STORED AS` and an option key is read as a config path, so
-    /// neither can be made safe by escaping — and [`Format`] is public, so both are a caller's
-    /// strings on this arm alone. The values beside them stay escaped, any byte being legitimate
-    /// in one.
-    #[test]
-    fn a_registered_formats_name_and_option_keys_have_to_be_plain_words() {
-        let ctx = crate::builder::test_context(&BTreeMap::new());
-        let extension = |format: &str, options: BTreeMap<String, String>| Format::Extension {
-            format: format.to_string(),
-            options,
-        };
-        let none = BTreeMap::new;
-
-        assert!(extension_words_are_plain(&extension("geojson", none()), &ctx).is_ok());
-        assert!(extension_words_are_plain(
-            &extension(
-                "geojson",
-                BTreeMap::from([("format.crs".into(), "EPSG:4326".into())])
-            ),
-            &ctx
-        )
-        .is_ok());
-
-        assert_eq!(
-            extension_words_are_plain(&extension("geo json'); DROP TABLE t; --", none()), &ctx),
-            Err(
-                "Can't write 'geo json'); DROP TABLE t; --': STORED AS takes an unquoted format \
-                 name, so a format has to be a single plain word"
-                    .to_string()
-            )
-        );
-        assert_eq!(
-            extension_words_are_plain(
-                &extension(
-                    "geojson",
-                    BTreeMap::from([("format.crs', 'x'); DROP TABLE t; --".into(), "v".into())])
-                ),
-                &ctx
-            ),
-            Err(
-                "Can't write with the option 'format.crs', 'x'); DROP TABLE t; --': an option key \
-                 is a plain word, or plain words separated by dots"
-                    .to_string()
-            )
-        );
-        assert!(
-            extension_words_are_plain(
-                &extension("geojson", BTreeMap::from([(String::new(), "v".into())])),
-                &ctx
-            )
-            .is_err(),
-            "an empty key is not a word either"
-        );
-
-        assert!(
-            extension_words_are_plain(&Format::Csv(csv()), &ctx).is_ok(),
-            "the shipped arms name both with literals and have nothing to judge"
-        );
-    }
-
-    /// The ` OPTIONS (…)` a format alone contributes — what [`run_export`] then appends the
-    /// partition option to.
-    fn format_options(format: &Format) -> Result<String, String> {
-        Ok(options_clause(&format_pairs(format)?))
-    }
-
     fn csv() -> Csv {
         Csv {
             header: true,
@@ -954,104 +849,105 @@ mod tests {
         }
     }
 
+    /// The roots a project alone owns — what every fence test that is not about a store fences.
+    fn project_roots(root: &Path) -> Vec<Owned> {
+        owned_roots(Some(root), Vec::new(), Vec::new())
+    }
+
+    /// **Every option key is written the way DataFusion's own `COPY` planner would file it.** A
+    /// plan-built write never passes through `parse_options_map`, so the keys have to arrive
+    /// already lowercased and already namespaced — a bare `HAS_HEADER` reaches no `CsvOptions`
+    /// field at all and is silently nothing rather than an error.
     #[test]
-    fn scope_all_reads_the_whole_snapshot_in_snapshot_order() {
+    fn a_formats_options_are_namespaced_the_way_the_planner_files_them() {
+        let options = Format::Csv(csv()).options().expect("csv options");
         assert_eq!(
-            select_sql(
-                "__snap_1",
-                &spec(Format::Arrow),
-                &result_schema(),
-                Some("__strata_ord")
-            ),
-            "SELECT \"amount\", \"name\" FROM __snap_1 ORDER BY \"__strata_ord\""
+            options.get("format.has_header").map(String::as_str),
+            Some("true")
+        );
+        assert!(
+            options.keys().all(|key| key.starts_with("format.")),
+            "{options:?}"
         );
     }
 
-    #[test]
-    fn a_page_window_is_taken_after_the_sort() {
-        let mut s = spec(Format::Arrow);
-        s.sort = Some(("amount".into(), false));
-        s.scope = Scope::Page {
-            page: 3,
-            page_size: 100,
-        };
-        assert_eq!(
-            select_sql("__snap_7", &s, &result_schema(), Some("__strata_ord")),
-            "SELECT \"amount\", \"name\" FROM __snap_7 ORDER BY \"amount\" DESC NULLS LAST, \
-             \"__strata_ord\" LIMIT 100 OFFSET 200"
-        );
-    }
-
-    #[test]
-    fn a_quote_in_a_sorted_column_name_cant_break_out_of_the_identifier() {
-        let mut s = spec(Format::Arrow);
-        s.sort = Some((r#"we"ird"#.into(), true));
-        assert!(select_sql("__snap_1", &s, &result_schema(), None)
-            .contains(r#"ORDER BY "we""ird" ASC"#));
-    }
-
-    /// The snapshot table's schema as `run_export` sees it: the user's columns plus the
-    /// ordinal (a `UInt64`, the type the spool writer numbers with), which the SELECT must
-    /// exclude.
-    fn result_schema() -> Schema {
-        Schema::new(vec![
-            Field::new("amount", DataType::Int64, true),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("__strata_ord", DataType::UInt64, false),
-        ])
-    }
-
+    /// **A single-character CSV option travels as its byte value.** DataFusion parses these `u8`
+    /// fields by trying `str::parse::<u8>()` *first* and only then falling back to "the one ASCII
+    /// character", so the character `9` would arrive as byte 9 — a tab. The number has exactly one
+    /// reading.
     #[test]
     fn csv_single_char_options_are_sent_as_byte_values() {
-        let opts = format_options(&Format::Csv(csv())).expect("csv options");
-        assert!(opts.contains("'DELIMITER' '44'"), "{opts}");
-        assert!(opts.contains("'QUOTE' '34'"), "{opts}");
-        assert!(!opts.contains("ESCAPE"), "{opts}");
-    }
+        let options = Format::Csv(csv()).options().expect("csv options");
+        assert_eq!(
+            options.get("format.delimiter").map(String::as_str),
+            Some("44")
+        );
+        assert_eq!(options.get("format.quote").map(String::as_str), Some("34"));
+        assert!(!options.contains_key("format.escape"), "{options:?}");
 
-    #[test]
-    fn a_tab_delimiter_survives_as_a_byte() {
-        let opts = format_options(&Format::Csv(Csv {
+        let tabbed = Format::Csv(Csv {
             delimiter: '\t',
             ..csv()
-        }))
+        })
+        .options()
         .expect("csv options");
-        assert!(opts.contains("'DELIMITER' '9'"), "{opts}");
+        assert_eq!(
+            tabbed.get("format.delimiter").map(String::as_str),
+            Some("9")
+        );
     }
 
     #[test]
     fn a_non_ascii_delimiter_is_refused_in_our_own_words() {
-        let err = format_options(&Format::Csv(Csv {
+        let err = Format::Csv(Csv {
             delimiter: '£',
             ..csv()
-        }))
+        })
+        .options()
         .expect_err("non-ASCII delimiter");
         assert!(err.contains("single ASCII character"), "{err}");
     }
 
+    /// **An option value is a value, so it travels verbatim.** It used to be escaped for a
+    /// single-quoted SQL literal, because the option clause was rendered text; a plan carries the
+    /// string itself, and doubling the quote now would put the doubled quote in the user's file.
     #[test]
-    fn a_quote_in_the_null_text_cant_close_the_literal() {
-        let opts = format_options(&Format::Csv(Csv {
+    fn a_quote_in_the_null_text_travels_as_itself() {
+        let options = Format::Csv(Csv {
             null_value: "it's null".into(),
             ..csv()
-        }))
+        })
+        .options()
         .expect("csv options");
-        assert!(opts.contains("'NULL_VALUE' 'it''s null'"), "{opts}");
+        assert_eq!(
+            options.get("format.null_value").map(String::as_str),
+            Some("it's null")
+        );
     }
 
     #[test]
     fn a_parquet_level_rides_inside_the_codec_string() {
-        let opts = format_options(&Format::Parquet(Parquet {
+        let options = Format::Parquet(Parquet {
             compression: Codec::Zstd(9),
             statistics: Statistics::Page,
             max_row_group_size: 1_048_576,
             writer_version: WriterVersion::V1,
             dictionary: true,
-        }))
+        })
+        .options()
         .expect("parquet options");
-        assert!(opts.contains("'COMPRESSION' 'zstd(9)'"), "{opts}");
-        assert!(opts.contains("'MAX_ROW_GROUP_SIZE' '1048576'"), "{opts}");
-        assert!(opts.contains("'WRITER_VERSION' '1.0'"), "{opts}");
+        assert_eq!(
+            options.get("format.compression").map(String::as_str),
+            Some("zstd(9)")
+        );
+        assert_eq!(
+            options.get("format.max_row_group_size").map(String::as_str),
+            Some("1048576")
+        );
+        assert_eq!(
+            options.get("format.writer_version").map(String::as_str),
+            Some("1.0")
+        );
     }
 
     #[test]
@@ -1061,21 +957,74 @@ mod tests {
     }
 
     #[test]
-    fn arrow_writes_no_options_clause_at_all() {
-        assert_eq!(format_options(&Format::Arrow).expect("arrow"), "");
+    fn arrow_writes_no_options_at_all() {
+        assert!(Format::Arrow.options().expect("arrow").is_empty());
     }
 
-    /// **Keep-columns rides in the statement, never in the session.** It is the one option that
-    /// is not a format option, and it keeps its `execution.` namespace so the COPY planner reads
-    /// it and `TableOptions::set` skips it. The `SET` this replaced was global and unrestored, so
-    /// one partitioned export decided the answer for every later one.
+    /// **A registrant's own option keys are its own.** They arrive in whatever spelling its writer
+    /// reads them in, so a key that already names a namespace keeps it and a bare one is filed
+    /// under `format.` — the planner's rule, applied to a caller's strings rather than to ours.
+    /// Nothing is refused: a key is a map key now, not grammar spliced into a statement.
+    #[test]
+    fn a_registered_formats_keys_follow_the_planners_own_namespacing() {
+        let options = Format::Extension {
+            format: "geojson".into(),
+            options: BTreeMap::from([
+                ("CRS".into(), "EPSG:4326".into()),
+                ("format.precision".into(), "7".into()),
+            ]),
+        }
+        .options()
+        .expect("a registrant's options");
+        assert_eq!(
+            options.get("format.crs").map(String::as_str),
+            Some("EPSG:4326")
+        );
+        assert_eq!(
+            options.get("format.precision").map(String::as_str),
+            Some("7")
+        );
+    }
+
+    /// **The writer is the session's, resolved by the same key `STORED AS` resolves.** So a format
+    /// the editor can write is one the window can write, and a name nothing is registered under is
+    /// refused here rather than deep inside a planner.
+    #[test]
+    fn a_format_resolves_the_writer_the_stored_as_word_resolves() {
+        let state = test_context(&BTreeMap::new()).state();
+        for format in [
+            Format::Csv(csv()),
+            Format::Json(Json::default()),
+            Format::Parquet(Parquet::default()),
+            Format::Arrow,
+        ] {
+            format.file_type(&state).expect("a shipped writer");
+        }
+        assert_eq!(
+            Format::Extension {
+                format: "geojson".into(),
+                options: BTreeMap::new(),
+            }
+            .file_type(&state)
+            .err(),
+            Some("Can't write 'geojson': no writer is registered for it".to_string())
+        );
+    }
+
+    /// **Keep-columns rides in the statement, never in the session.** It is the one option that is
+    /// not a format option, and it keeps its `execution.` namespace so the COPY planner reads it
+    /// and `TableOptions::set` skips it. The `SET` this replaced was global and unrestored, so one
+    /// partitioned export decided the answer for every later one.
     #[test]
     fn keeping_partition_columns_is_a_copy_option_in_its_own_namespace() {
-        let mut pairs = format_pairs(&Format::Arrow).expect("arrow");
-        pairs.push((KEEP_PARTITION_COLUMNS.to_string(), true.to_string()));
         assert_eq!(
-            options_clause(&pairs),
-            " OPTIONS ('execution.keep_partition_by_columns' 'true')"
+            KEEP_PARTITION_COLUMNS,
+            "execution.keep_partition_by_columns"
+        );
+        assert_eq!(
+            namespaced(KEEP_PARTITION_COLUMNS),
+            KEEP_PARTITION_COLUMNS,
+            "a key that names its own namespace keeps it"
         );
     }
 
@@ -1084,6 +1033,92 @@ mod tests {
         assert_eq!(Compression::None.extension(), "");
         assert_eq!(Compression::Gzip.extension(), ".gz");
         assert_eq!(Compression::Zstd.extension(), ".zst");
+    }
+
+    /// A snapshot as the export sees one: the result's columns plus the ordinal, last.
+    fn snapshot_frame(ctx: &SessionContext) -> DataFrame {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("amount", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("__strata_ord", DataType::UInt64, false),
+        ]));
+        let rows = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![3, 1])),
+                Arc::new(StringArray::from(vec!["c", "a"])),
+                Arc::new(UInt64Array::from(vec![1_u64, 2])),
+            ],
+        )
+        .expect("a snapshot batch");
+        ctx.read_batch(rows).expect("a frame over the snapshot")
+    }
+
+    /// **The ordinal orders the read and is then projected away.** It is bookkeeping
+    /// (`docs/SNAPSHOT_SPEC.md` §9) and must never reach the user's file, but it is also the only
+    /// thing that makes an unsorted export deterministic — so it is sorted by first and dropped
+    /// last, which is what a `SELECT … ORDER BY` means and what the projection here has to keep
+    /// true now that there is no SQL saying it.
+    #[test]
+    fn the_ordinal_orders_the_read_and_never_lands_in_the_file() {
+        let ctx = test_context(&BTreeMap::new());
+        let plan = snapshot_rows(
+            snapshot_frame(&ctx),
+            &spec(Format::Arrow),
+            Some("__strata_ord"),
+        )
+        .expect("a read of the whole snapshot");
+
+        assert_eq!(
+            plan.schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect::<Vec<_>>(),
+            ["amount", "name"],
+        );
+        let text = plan.display_indent().to_string();
+        assert!(
+            text.contains("Sort: ?table?.__strata_ord ASC NULLS LAST"),
+            "{text}"
+        );
+    }
+
+    /// **The window is taken after the sort**, so "this page" is the page the user is looking at
+    /// rather than an arbitrary slice re-ordered afterwards — and the user's sort is `NULLS LAST`
+    /// in both directions, matching the grid, with the ordinal as the tie-break.
+    #[test]
+    fn a_page_window_is_taken_after_the_sort() {
+        let ctx = test_context(&BTreeMap::new());
+        let mut s = spec(Format::Arrow);
+        s.sort = Some(("amount".into(), false));
+        s.scope = Scope::Page {
+            page: 3,
+            page_size: 100,
+        };
+        let text = snapshot_rows(snapshot_frame(&ctx), &s, Some("__strata_ord"))
+            .expect("a page read")
+            .display_indent()
+            .to_string();
+
+        let sort =
+            text.find("Sort: ?table?.amount DESC NULLS LAST, ?table?.__strata_ord ASC NULLS LAST");
+        let limit = text.find("Limit: skip=200, fetch=100");
+        assert!(sort.is_some() && limit.is_some(), "{text}");
+        assert!(limit < sort, "the limit sits above the sort: {text}");
+    }
+
+    /// A snapshot with no ordinal (an `EXPLAIN`, or duplicate column names) reads unordered and
+    /// keeps every column it has — there is nothing to sort by and nothing to hide.
+    #[test]
+    fn a_snapshot_with_no_ordinal_reads_unordered() {
+        let ctx = test_context(&BTreeMap::new());
+        let text = snapshot_rows(snapshot_frame(&ctx), &spec(Format::Arrow), None)
+            .expect("an unordered read")
+            .display_indent()
+            .to_string();
+        assert!(!text.contains("Sort:"), "{text}");
+        assert!(text.contains("__strata_ord"), "{text}");
     }
 
     #[test]
@@ -1096,8 +1131,8 @@ mod tests {
     }
 
     /// **And it is the *engine's* dialect that decides.** `region#eu` is one identifier under
-    /// `generic` and three tokens under `postgresql`, so a hardcoded dialect here would emit a
-    /// `PARTITIONED BY` the planner rejects with the very parser message this check replaces.
+    /// `generic` and three tokens under `postgresql`, so a hardcoded dialect here would wave
+    /// through a partition column a typed `PARTITIONED BY` could never name.
     #[test]
     fn bare_words_are_judged_by_the_configured_dialect() {
         assert!(is_bare_word(
@@ -1138,16 +1173,68 @@ mod tests {
         let root = env::temp_dir().join(format!("strata-copy-fence-{}", process::id()));
         let owned = strata_dir(&root).join("tables/sales/x://y");
 
-        refuse_owned_target(&owned.to_string_lossy(), Some(&root), "COPY")
+        refuse_owned_target(&owned.to_string_lossy(), &project_roots(&root), "COPY")
             .expect_err("a local path inside .strata is refused whatever is in its name");
-        refuse_owned_target("s3://acme-lake/out.parquet", Some(&root), "COPY")
+        refuse_owned_target("s3://acme-lake/out.parquet", &project_roots(&root), "COPY")
             .expect("a remote target is not local storage");
         refuse_owned_target(
             &root.join("out.parquet").to_string_lossy(),
-            Some(&root.join("elsewhere")),
+            &project_roots(&root.join("elsewhere")),
             "COPY",
         )
         .expect("the user's own file");
+    }
+
+    /// **The fence asks the stores; it does not guess.** Where results live is a `SnapshotStore`
+    /// and where Strata's own tables live is an `InternalTableStore` — so an engine on a store
+    /// rooted somewhere of its own fences *that* root, and one whose store keeps nothing on the
+    /// filesystem fences nothing on its account. This used to be the default snapshot store's
+    /// shared temp root, named unconditionally: fenced for an engine that never wrote there, and
+    /// wide open for one that wrote somewhere else.
+    #[test]
+    fn the_fence_is_where_the_stores_say_their_bytes_are() {
+        let spool = env::temp_dir().join(format!("strata-fence-spool-{}", process::id()));
+        let held = env::temp_dir().join(format!("strata-fence-tables-{}", process::id()));
+        let owned = owned_roots(None, vec![spool.clone()], vec![held.clone()]);
+
+        let refused = |dir: &Path| {
+            refuse_owned_target(&dir.join("out.csv").to_string_lossy(), &owned, "COPY")
+                .expect_err("owned storage")
+        };
+        assert!(refused(&spool).contains("holds query results"));
+        assert!(refused(&held).contains("holds tables Strata owns the data of"));
+
+        assert!(
+            owned_roots(None, Vec::new(), Vec::new()).is_empty(),
+            "a store with nothing on disk fences nothing, and no project fences nothing"
+        );
+    }
+
+    /// **And the engine is what asks them.** Driven through `Engine` rather than through
+    /// `owned_roots` because the claim is that the store an embedder passed is the store the fence
+    /// reads — a mem store leaves the machine-shared spool unfenced, and a store rooted elsewhere
+    /// fences its own root.
+    #[tokio::test]
+    async fn an_engines_fence_follows_the_stores_it_was_built_with() {
+        let spool = env::temp_dir().join(format!("strata-fence-engine-{}", process::id()));
+        let _ = fs::remove_dir_all(&spool);
+
+        let held = Engine::builder()
+            .with_snapshot_store(LocalIpcSnapshotStore::new_in(&spool))
+            .build();
+        assert!(
+            held.owned_storage().iter().any(|(dir, _)| dir == &spool),
+            "the store's own root is what is fenced"
+        );
+
+        let none = Engine::builder()
+            .with_snapshot_store(MemSnapshotStore::new())
+            .build();
+        assert!(
+            none.owned_storage().is_empty(),
+            "a store with no filesystem storage fences none of it"
+        );
+        let _ = fs::remove_dir_all(&spool);
     }
 
     /// **A caller-named destination has to be a new local file, and each refusal says which rule
@@ -1157,10 +1244,11 @@ mod tests {
     #[test]
     fn a_callers_destination_has_to_name_a_new_local_file() {
         let root = scratch("destination");
+        let owned = project_roots(&root);
         let taken = root.join("taken.csv");
         fs::write(&taken, "n\n1\n").unwrap();
 
-        let refused = |path: &str| check_destination(path, Some(&root)).expect_err(path);
+        let refused = |path: &str| check_destination(path, &owned).expect_err(path);
         assert!(refused("s3://acme-lake/out.parquet").contains("names a remote location"));
         assert!(refused("file:///tmp/out.csv").contains("names a remote location"));
         assert!(refused("out.csv").contains("is relative"));
@@ -1170,7 +1258,7 @@ mod tests {
             refused(&root.join("nope/out.csv").display().to_string()).contains("does not exist")
         );
 
-        check_destination(&root.join("fresh.csv").display().to_string(), Some(&root))
+        check_destination(&root.join("fresh.csv").display().to_string(), &owned)
             .expect("a new file beside the project is the caller's own");
         let _ = fs::remove_dir_all(&root);
     }
@@ -1186,7 +1274,8 @@ mod tests {
     #[test]
     fn a_destination_that_would_not_be_one_file_is_refused() {
         let root = scratch("one-file");
-        let refused = |path: &str| check_destination(path, Some(&root)).expect_err(path);
+        let owned = project_roots(&root);
+        let refused = |path: &str| check_destination(path, &owned).expect_err(path);
 
         assert!(refused(&root.join("results").display().to_string()).contains("no file extension"));
         assert!(refused(&root.join("out.").display().to_string()).contains("no file extension"));
@@ -1197,7 +1286,7 @@ mod tests {
         assert!(refused(&root.join("a*b/out.csv").display().to_string()).contains("pattern"));
 
         assert!(names_one_file("/tmp/.gitignore"), "a dotfile has one");
-        check_destination(&root.join(".gitignore").display().to_string(), Some(&root))
+        check_destination(&root.join(".gitignore").display().to_string(), &owned)
             .expect("DataFusion reads a dotfile as carrying an extension");
         let _ = fs::remove_dir_all(&root);
     }

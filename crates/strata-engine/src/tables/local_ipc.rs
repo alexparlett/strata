@@ -216,6 +216,13 @@ impl InternalTableStore for LocalIpcTableStore {
         }
         Ok(())
     }
+
+    /// The tables root **as of now**, which is what a following store can honestly answer: the
+    /// project it follows is set after the engine is built, and a store with no project behind it
+    /// holds nothing anywhere yet.
+    fn owned_storage(&self) -> Vec<PathBuf> {
+        self.dir().into_iter().collect()
+    }
 }
 
 /// Write every batch of `rows` into one new IPC file at `path`, in `crate::ipc`'s codec, and

@@ -40,6 +40,7 @@
 //! and the gate in front of it (`Catalog::is_internal`, asked of the *parsed* target) remains
 //! the only gate.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -109,4 +110,17 @@ pub trait InternalTableStore: Send + Sync + 'static {
     /// Deregistration is the engine's, not this — and it comes first, so nothing can plan
     /// against a table whose data is going.
     async fn discard(&self, slug: &str) -> Result<(), String>;
+
+    /// Return the filesystem roots this store keeps its bytes under, if any.
+    ///
+    /// Provided, defaulting to none, and read by the same write fence as
+    /// [`SnapshotStore::owned_storage`](crate::snapshots::SnapshotStore::owned_storage): a stray
+    /// file under a table's directory is listed by that table's very next scan, which is phantom
+    /// rows in the user's own query.
+    ///
+    /// Answer the **tables root**, not one table's directory — a slug that does not exist yet is
+    /// still somewhere a write must not land.
+    fn owned_storage(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }

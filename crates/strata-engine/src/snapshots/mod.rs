@@ -32,6 +32,7 @@
 //! store moves bytes, and is told when they stop being wanted.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -103,6 +104,20 @@ pub trait SnapshotStore: Send + Sync + 'static {
     /// empty set, which means "all of it" — including, for a store that claimed somewhere to put
     /// them, the claim.
     fn purge_orphans(&self, live: &HashSet<SnapshotId>);
+
+    /// Return the filesystem roots this store keeps its bytes under, if any.
+    ///
+    /// Provided, defaulting to none: a store in RAM or over an object store owns no directory a
+    /// local write could land in. What asks is the write fence — an export or a `COPY` landing
+    /// under one of these would be read back as a *result* by the next scan of it, so
+    /// [`export::refuse_owned_target`](crate::export::refuse_owned_target) refuses every path
+    /// beneath what is answered here.
+    ///
+    /// Answer the root a reader would have to look under, not the individual snapshot files, and
+    /// not a parent that also holds the user's own work.
+    fn owned_storage(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// One snapshot's write pass, from [`SnapshotStore::begin`].
