@@ -319,7 +319,7 @@ impl ConfigureDraft {
     /// the same treatment a format with no reader gets.
     ///
     /// A def naming a **database** data source gets that treatment through the filter below: a table
-    /// reads files, so the TYPE pill offers only [`ProviderId::OBJECT_STORES`], and a draft opening
+    /// reads files, so the TYPE pill offers only the Store-mode kinds, and a draft opening
     /// on a provider the pill cannot render would show no segment selected.
     pub fn of(def: &TableDef, sources: &[SourceDef]) -> Self {
         let kind = def
@@ -1048,9 +1048,9 @@ impl ConfigureDraft {
 /// pane, the registration outcome and the forget confirm all name one this way), and a bucket
 /// alone cannot tell `s3://lake` from `gs://lake`.
 ///
-/// `provider` is always one of [`ProviderId::OBJECT_STORES`] here, because the TYPE pill above
+/// `kind` is always a Store-mode registrant here, because the TYPE pill above
 /// this picker is the only thing that sets it and that is what it offers: a table reads *files*,
-/// and a data source registers no object store to read them from.
+/// and a database source registers no object store to read them from.
 pub fn sources_for(sources: &[SourceDef], kind: &str) -> Vec<String> {
     sources
         .iter()

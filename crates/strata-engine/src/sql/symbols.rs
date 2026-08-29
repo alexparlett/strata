@@ -123,7 +123,7 @@ pub struct RelationSym {
 pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
-    /// The project's database data sources, for the qualified offer (DB-06). Set through
+    /// The project's database sources, for the qualified offer (DB-06). Set through
     /// [`with_databases`](Self::with_databases) rather than taken by [`build`](Self::build),
     /// because a project with no database says nothing about them.
     pub databases: Vec<DatabaseSym>,

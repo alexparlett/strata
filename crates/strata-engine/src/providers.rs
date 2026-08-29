@@ -27,7 +27,7 @@
 //!   snapshot **by name**, so none notices. The prefix is [`is_snapshot_name`], beside the function
 //!   that mints the names, so the hiding rule and the naming rule cannot drift.
 //!
-//! That filter is **this** provider's, and a source data source's
+//! That filter is **this** provider's, and a data source's
 //! ([`SourceSchemaProvider`](super::sources::providers::SourceSchemaProvider)) deliberately has
 //! none: the namespace is the workspace
 //! catalog's, so a remote relation a server happens to call `__snap_x` is an ordinary table — the

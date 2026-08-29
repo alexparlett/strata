@@ -158,11 +158,11 @@ fn sources_at_press(station: RadioStation<ProjectState, ProjChan>) -> Vec<Source
 }
 
 /// **TYPE** — the provider whose data sources the picker offers. Its labels are
-/// [`ProviderId::label`]'s, the same table the pane's row badge and the data source editor's own
+/// the registrants' own labels, the same table the pane's row badge and the data source editor's own
 /// picker read.
 ///
-/// **[`ProviderId::OBJECT_STORES`], not `ALL`.** This row asks which data source a set of *files*
-/// is read through, and a data source registers no object store — offering one would put
+/// **Store-mode kinds only, not every registrant.** This row asks which data source a set of *files*
+/// is read through, and a database source registers no object store — offering one would put
 /// "read these parquet files through my Postgres data source" in the pill, and leave the
 /// CONNECTION picker under it empty with nothing saying why. `ALL` is a fixed-length const, so
 /// nothing about a new provider arm makes this loop notice on its own; the narrower list is what
@@ -284,7 +284,7 @@ impl Component for SourcePicker {
 }
 
 /// The kinds a table's files can be read through — every **Store**-mode registrant, which is the
-/// narrower question the old `ProviderId::OBJECT_STORES` constant answered.
+/// narrower question the retired `OBJECT_STORES` constant answered.
 ///
 /// Asked of the registry rather than listed here, so a store an embedder registers is offered on
 /// the same terms as a shipped one: a table reads *files*, and a source that answers with a

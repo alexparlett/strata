@@ -3,7 +3,7 @@
 //! **This is the only thing in the window that writes anything.** Cancel just closes; nothing is
 //! committed until Save.
 //!
-//! A source data source has a fifth step, and it comes **first**: whatever this machine's keystore
+//! A data source has a fifth step, and it comes **first**: whatever this machine's keystore
 //! owes the secrets its kind declares ([`secret_ops`]). A def that expects one over a keystore
 //! that refused the write is a data source nothing can log in with.
 //!

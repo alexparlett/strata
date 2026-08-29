@@ -51,7 +51,7 @@ pub enum FormatBadge {
     Json,
     Arrow,
     View,
-    /// A relation inside a database data source's catalog — no reader of ours at all: the server
+    /// A relation inside a database source's catalog — no reader of ours at all: the server
     /// holds the bytes and answers about them, which is the same reason its free tier is the
     /// schema and nothing else. Badged with the **data source** rather than with a format, because
     /// which data source a relation came through is the fact worth carrying in the title.

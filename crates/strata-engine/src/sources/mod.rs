@@ -214,7 +214,7 @@ fn shown_of(source: &SourceDef) -> BTreeSet<String> {
 pub struct Live(Arc<Mutex<HashMap<String, LiveSource>>>);
 
 impl Live {
-    /// The defs of every *other* live source data source — what [`check_catalog_name`] folds a
+    /// The defs of every *other* live data source — what [`check_catalog_name`] folds a
     /// candidate against.
     fn peers(&self, name: &str) -> Vec<SourceDef> {
         self.0
@@ -312,7 +312,7 @@ impl Live {
     }
 }
 
-/// One live source data source, as a statement reaches it — see [`Live::at`].
+/// One live data source, as a statement reaches it — see [`Live::at`].
 struct Connected {
     /// The data source's own name, which is what [`LiveSource`] is keyed by and therefore what a
     /// refresh has to name to put a new listing back — and what a
@@ -590,7 +590,7 @@ enum Prepared {
     },
 }
 
-/// Everything a source data source can be judged on: which kind serves it, its address by that
+/// Everything a data source can be judged on: which kind serves it, its address by that
 /// kind's own rule, its catalog name against the session's other sources, and the connect itself.
 ///
 /// Split from [`connect`] the way `store::prepare` is, so the registration is one line with one

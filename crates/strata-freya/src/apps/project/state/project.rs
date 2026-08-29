@@ -984,7 +984,7 @@ impl ProjectState {
     /// write, and the only one here that does not reset a row to `Loading`.
     ///
     /// Legitimate exactly because the field it exists for is **display-only**: registration
-    /// exposes every schema a source data source can reach and the def's own `schemas` scopes what
+    /// exposes every schema a data source can reach and the def's own `schemas` scopes what
     /// Strata shows, so what the last pass answered about this data source is still true after
     /// the write. Going through [`upsert_source`](Self::upsert_source) instead would
     /// replace the row with a fresh `Reg::Loading` that only a whole-catalog re-scan could

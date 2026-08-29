@@ -194,7 +194,7 @@ impl Component for AddSourceButton {
 
 /// The header's **↻ re-scan** (P3-03): ask for a re-connect of every data source, a re-infer of
 /// every table's schema from its def, and a re-create of the views over what that found — see
-/// [`refresh_catalog`]. On a data source the re-connect *is* the refresh: its schemas and
+/// [`refresh_catalog`]. On a database source the re-connect *is* the refresh: its schemas and
 /// relations are the connect-time enumeration.
 ///
 /// Its own component so the scan flag's subscription lives here rather than on the sidebar shell,

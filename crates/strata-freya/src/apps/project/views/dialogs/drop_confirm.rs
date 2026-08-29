@@ -100,7 +100,7 @@ pub enum DropTarget {
     /// lookup that can fail, and the wrong default tells the user nothing in the *bucket* is
     /// deleted about a source that holds no files.
     ///
-    /// The [`ProviderId`] rather than a "is it a database" flag, so a fifth provider is a compile
+    /// The [`SourceMode`] rather than a "is it a database" flag, so a third mode is a compile
     /// error in every arm that words this card instead of a silent `false` that promises the
     /// wrong thing about whatever it turns out to be.
     Source {

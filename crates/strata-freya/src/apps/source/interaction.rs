@@ -568,7 +568,7 @@ fn a_name_clash_is_explained_beside_the_button() {
     assert_eq!(rescan.peek().seq, 1, "and it saves once the name is free");
 }
 
-/// **Editing a source data source's settings does not make it clash with itself.**
+/// **Editing a data source's settings does not make it clash with itself.**
 ///
 /// `check_catalog_name` skips the candidate by comparing identities, so a change to a declared
 /// key must leave the row this window opened on out of the clash set — otherwise the footer
