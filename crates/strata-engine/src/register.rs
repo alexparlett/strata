@@ -288,7 +288,7 @@ pub(crate) async fn create_views(
         for def in pending {
             match engine
                 .catalog()
-                .create_view(def.name.clone(), def.sql.clone())
+                .register_view(def.name.clone(), def.sql.clone())
                 .await
             {
                 Ok(meta) => settled(RegOutcome::View {

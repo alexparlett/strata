@@ -145,14 +145,48 @@ impl Catalog<'_> {
             .unwrap_or_default()
     }
 
-    /// Create (or redefine) the SQL view `name` over `sql`, returning its columns and
-    /// what it reads — **the ⌘S gesture's entry into [`arms::create_view`]**, which a
-    /// typed `CREATE VIEW` enters through [`Workspace::run`](crate::Workspace::run) instead.
-    /// `CREATE OR REPLACE`: redefinition is the ⌘S-on-a-view path.
+    /// Creates or redefines the SQL view `name` over `sql` — the ⌘S gesture, where a typed
+    /// `CREATE VIEW` goes through [`Workspace::run`](crate::Workspace::run). `CREATE OR REPLACE`:
+    /// a view of that name is redefined rather than refused.
     ///
-    /// Moves the [`generation`](Self::generation) on either arm: a failed `CREATE OR REPLACE`
-    /// leaves the name resolving to a definition the caller has just been told is wrong.
-    pub async fn create_view(self, name: String, sql: String) -> Result<ViewMeta, EngineError> {
+    /// The report's effect is [`StoreEffect::ViewUpserted`], the one a typed `CREATE VIEW`
+    /// answers with, so one fold applies either; its message is worded for the gesture rather
+    /// than for the statement.
+    ///
+    /// Moves the [`generation`](Self::generation) on either arm: a failed redefinition leaves
+    /// the name resolving to a definition the caller has just been told is wrong.
+    pub async fn create_view(
+        self,
+        name: String,
+        sql: String,
+    ) -> Result<StatementReport, EngineError> {
+        let start = Instant::now();
+        let meta = self.register_view(name.clone(), sql.clone()).await?;
+        Ok(stamped(
+            StmtKind::CreateView,
+            start,
+            StatementOutcome {
+                message: format!("Saved view '{name}'"),
+                count: None,
+                effect: Some(StoreEffect::ViewUpserted {
+                    def: ViewDef { name, sql },
+                    meta,
+                }),
+            },
+        ))
+    }
+
+    /// [`create_view`](Self::create_view) without the report — the registration pass's entry,
+    /// which wants the [`ViewMeta`] for a [`RegOutcome::View`].
+    ///
+    /// The engine's own bookkeeping is here rather than in the report's
+    /// [`settle_effect`](Engine::settle_effect), because a replay has no sentence to ask for and
+    /// would otherwise leave the dependency map behind.
+    pub(crate) async fn register_view(
+        self,
+        name: String,
+        sql: String,
+    ) -> Result<ViewMeta, EngineError> {
         self.cancel_profile(&name);
         let ctx = self.engine.ctx.clone();
         let created_as = name.clone();
