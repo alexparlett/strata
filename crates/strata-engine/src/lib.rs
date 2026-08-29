@@ -976,6 +976,21 @@ impl Engine {
         self.formats.registrants()
     }
 
+    /// Where a write may **not** land: what this engine's two stores say they keep their bytes
+    /// under, plus the project's own `.strata/`.
+    ///
+    /// The one assembly site, read by every surface that writes a result to a caller-named path —
+    /// the typed `COPY` (through `StmtCtx::owned`), the Export window and the agent's
+    /// `export_result` — so the three cannot fence different places.
+    pub(crate) fn owned_storage(&self) -> Vec<export::Owned> {
+        let root = self.data_root.lock().unwrap().clone();
+        export::owned_roots(
+            root.as_deref(),
+            self.snapshots.owned_storage(),
+            self.tables.owned_storage(),
+        )
+    }
+
     /// The `datafusion.*` overrides this engine is running with.
     pub fn overrides(&self) -> BTreeMap<String, String> {
         self.overrides.lock().unwrap().clone()

@@ -443,8 +443,8 @@ The discipline the column demands — every reader accounts for it:
   is documented orderless, a scatter draws marks, and a histogram's bins are order-free.)
 - **Sorted reads**: the user's `ORDER BY` gets the ordinal appended as the **tie-break**, making
   sorts stable across page windows — ties were the same nondeterminism one layer down.
-- **Export** (`select_sql`): selects the result's columns explicitly, never `SELECT *` — a
-  `COPY` must not write bookkeeping into the user's file.
+- **Export** (`export::snapshot_rows`): projects the result's columns explicitly, never `*` — a
+  write must not put bookkeeping in the user's file.
 
 Cost: 8 bytes/row uncompressed; a monotonic sequence is near-free under the LZ4 the snapshot
 already uses. Written during the spool pass that is already streaming every batch.

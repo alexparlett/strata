@@ -1,38 +1,48 @@
-# Export options — the Export window and the COPY it writes
+# Export options — the Export window and the write it makes
 
-What the Export window offers per format, and the `COPY … TO` it produces. The window opens from
+What the Export window offers per format, and the write it produces. The window opens from
 the results toolbar on the run that is on screen, and it **pins that snapshot**
 (`SnapshotReads::pin`) for its whole life — so a re-run in the tab behind cannot retire or
-truncate the table under a running `COPY`, and an export is always an export of what was on
+truncate the table under a running write, and an export is always an export of what was on
 screen.
 
 Two sources of truth sit under this, and they are the ones to change:
 
-- **`strata-engine::export`** — `ExportSpec` and the SQL it renders. Every option a spec can
+- **`strata-engine::export`** — `ExportSpec` and the `CopyJob` it builds. Every option a spec can
   name is a field DataFusion honours; there is no key/value bag.
 - **`strata-freya::apps::export::model`** — `ExportDraft::groups`, the list the window renders.
   Options are **data**: a group is a label, an optional hint and a control, and every control
   carries the `Edit` it performs. Adding an option is a row in that function, not a branch in a
   component, and it is unit-tested without a renderer.
 
-Engine: **DataFusion 54**. Its `COPY` planner lowercases bare option keys and applies the
-`format.` prefix itself, so the keys below resolve onto `CsvOptions` / `JsonOptions` /
-`TableParquetOptions` field names.
+Engine: **DataFusion 54**. **Nothing here composes SQL.** The window builds the same
+`statements::copy_job::CopyJob` a typed `COPY … TO` destructures into — the rows as a plan, the
+writer out of the session's own format registry, the options as a map — and
+`copy_job::run_copy` gates it and drives it. So there is one write path, one set of gates and one
+option spelling; the `COPY (SELECT …) TO '…' OPTIONS (…)` this used to render, and the escaping
+rules that came with it, are gone.
 
-```sql
-COPY (SELECT "col_a", "col_b", … FROM <snapshot>
-      ORDER BY ["col" ASC|DESC NULLS LAST,] "__strata_ord"
-      [LIMIT n OFFSET m])
-TO '<path>' STORED AS <FMT> [PARTITIONED BY (a, b)] [OPTIONS (…)]
+The plan the window builds is:
+
+```text
+Projection: "col_a", "col_b", …          -- the result's columns, never the ordinal
+  Limit: skip=m, fetch=n                 -- only for `This page`
+    Sort: "col" ASC|DESC NULLS LAST, "__strata_ord" ASC NULLS LAST
+      TableScan: <snapshot>
 ```
 
-The `SELECT` names the result's columns **explicitly, never `*`**: the snapshot file carries the
-`__strata_ord` bookkeeping column, and a `COPY` must not write bookkeeping into the user's file.
-The ordinal is what the read *orders by* instead — alone for an unsorted export, as the tie-break
-under a user sort — so even an unsorted export carries an `ORDER BY`, which is what makes "the
-file matches what was on screen" true rather than hopeful: an unordered `LIMIT/OFFSET` over a
-split scan is nondeterministic (measured — `docs/SNAPSHOT_SPEC.md` §9). See
-`export::select_sql` and its tests.
+The projection names the result's columns **explicitly, never `*`**: the snapshot carries the
+`__strata_ord` bookkeeping column, and a write must not put bookkeeping in the user's file. The
+ordinal is what the read *sorts by* instead — alone for an unsorted export, as the tie-break under
+a user sort — so even an unsorted export is ordered, which is what makes "the file matches what
+was on screen" true rather than hopeful: an unordered `LIMIT/OFFSET` over a split scan is
+nondeterministic (measured — `docs/SNAPSHOT_SPEC.md` §9). See `export::snapshot_rows` and its
+tests.
+
+Option keys reach the plan **already namespaced** (`format.has_header`,
+`execution.keep_partition_by_columns`). A typed `COPY`'s bare keys are lowercased and prefixed by
+the SQL planner; a plan-built one never passes through it, so `export::namespaced` restates that
+one rule and the tables below name the bare key it is applied to.
 
 ---
 
@@ -111,13 +121,14 @@ fixed four. The shipped formats are ordinary registrants (`docs/IMPORT_OPTIONS.m
 an embedder added with `EngineBuilder::with_format` gets a card here the moment it declares
 `copy_to`, and a read-only one never does. `FormatId::offered` is the whole rule.
 
-**Its name and its option keys are refused unless they are plain words** — the name lands
-unquoted in `STORED AS`, and an option key is read by DataFusion as a config *path* rather than as
-a value, so neither can be made safe by escaping the way the destination path and the option
-values are. This is the one `Format` arm whose name and keys are the caller's own strings rather
-than `&'static str` literals, and `Format` is public API an embedder can fill from anywhere; the
-rule is the partition columns' rule, applied to the other two unquoted positions
-(`extension_words_are_plain`).
+**Its name is a registry key and its option keys are map keys**, so neither is grammar and
+neither is refused for its spelling. The name resolves the writer through the session's own
+`get_file_format_factory` — the same lookup a typed `STORED AS` does, so a format the editor can
+write is one the window can write, and a name nothing is registered under is refused by
+`Format::file_type`. The option keys go through `export::namespaced` exactly as ours do: one that
+already names a namespace keeps it, a bare one is filed under `format.`. (Both were refused
+unless they were plain words while the window rendered SQL and spliced them into it; a plan
+splices nothing.)
 
 A registered format's card carries its own word and **no options section** — just a `Note` saying
 the writer it was registered with decides how it is written. There is no options panel to draw:
@@ -177,13 +188,15 @@ Rules that cost something to rediscover:
   timestamp or a struct has none.
 - **Reordering is ▲▼ buttons, not drag-and-drop**, and order is the whole meaning of the list
   (outermost level first).
-- **Column names must be a single bare word.** DataFusion 54's COPY parser re-renders each
-  identifier with `Ident::to_string()`, so a quoted name arrives with its quotes attached and
-  matches no field. The export says so plainly rather than emitting SQL that fails on a stray token.
-- **Keep-columns rides in the statement's own `OPTIONS`**
+- **Column names must be a single bare word.** A Hive directory segment is `name=value`, so a name
+  the tokenizer does not read as one word can never equal the segment it was written under — and a
+  typed `PARTITIONED BY ("order date")` arrives at the planner with its quotes attached and matches
+  no field. `export::partition_columns_are_bare_words` is the one rule, shared by all three
+  surfaces that carry a `PARTITIONED BY`.
+- **Keep-columns rides in the write's own options**
   (`'execution.keep_partition_by_columns'`). It is a session config, but DataFusion's physical
-  planner reads that exact key out of the COPY's options first and only falls back to the session
-  when it is absent — so an export states its answer and leaves the engine's setting alone. It was
+  planner reads that exact key out of the COPY node's options first and only falls back to the
+  session when it is absent — so an export states its answer and leaves the engine's setting alone. It was
   a `SET` once, and never restored: invisible for as long as nothing could read it back, and one
   export deciding the answer for every later one the moment `SET` and `SHOW` became statements a
   user can type. The `execution.` namespace stays on the key because `TableOptions::set` skips
@@ -197,8 +210,8 @@ partitioned by `region`, it writes `region=emea` and `region=amer` and files the
 `region=amer`**. It reads back claiming a value it never had — no dropped row, no error, and
 unrecoverable once the source result is gone.
 
-`export::partition_columns_have_no_nulls` refuses the export and names the column. Two things make
-that cheap and reliable:
+`copy_job::no_null_partition_values` refuses the write and names the column. The Export window's
+evidence is `NullEvidence::Snapshot`, and two things make it cheap and reliable:
 
 - **It is neither a scan nor a footer read.** The snapshot is Arrow IPC, which carries no column
   statistics at all — but the file was never worth asking. `query::materialize` streams every batch
@@ -210,10 +223,9 @@ that cheap and reliable:
   entry is not zero nulls; it is a count we cannot vouch for, and that declines too.
 
 **The typed `COPY` reaches the same refusal by a different route.** A statement the user types has
-no snapshot behind it, so `arms::copy` counts over the statement's planned input before dispatching
-it — one extra scan per partitioned typed COPY, same exact-zero rule, and the same sentence from
-`export::partition_null_refusal`, so the two surfaces state one fact once
-(`STATEMENTS_SPEC.md` §6.4).
+no snapshot behind it, so its evidence is `NullEvidence::Count`: one pre-flight aggregate over the
+job's own input. Same gate, same exact-zero rule, same sentence — two ways of answering one
+question, so the surfaces state one fact once (`STATEMENTS_SPEC.md` §6.4).
 
 **Schema nullability is not the signal and cannot be** — DataFusion reports every column of every
 real table as nullable, parquet sources included (measured). Gating on `ColumnInfo.nullable` would

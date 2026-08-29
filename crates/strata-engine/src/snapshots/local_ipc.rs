@@ -250,6 +250,14 @@ impl SnapshotStore for LocalIpcSnapshotStore {
             }
         }
     }
+
+    /// The **shared root**, not this store's own claimed directory — because the fence is about
+    /// where snapshot bytes live, and every store in every process claims a sibling directory
+    /// under the same root ([`purge_root`]). A write landing in another store's directory is
+    /// read back as a result by whichever process holds that claim.
+    fn owned_storage(&self) -> Vec<PathBuf> {
+        vec![self.root.clone()]
+    }
 }
 
 /// One snapshot's IPC write pass.

@@ -802,24 +802,34 @@ arm already keeps. Driving it is `ctx.sql` minus the re-parse: `execute_logical_
 `Ddl` and `Statement` and hands everything else, `LogicalPlan::Copy` included, to exactly that.
 A source inside a database connection needs one more thing of that plan — §6.8.
 
-The Export window is **unchanged** and remains the snapshot-backed, race-free path: it writes the
-immutable table the grid is paging, so the file matches what was on screen. A typed COPY reads live
-tables — twice when it is partitioned — so its gate is a pre-flight, not a lock.
+**One write path serves both.** The plan's five values become a `statements::copy_job::CopyJob` —
+input, target, file type, options, partition columns — and `copy_job::run_copy` gates it and drives
+it. The Export window composes the same job from its `ExportSpec` (`docs/EXPORT_OPTIONS.md`)
+instead of rendering SQL, and the agent's `export_result` is a third gesture into that. So the
+gates below are one implementation, not three that happen to agree.
 
-What the editor adds, both of them about a statement that would otherwise *succeed* and produce
-something wrong:
+The Export window remains the snapshot-backed, race-free path: it writes the immutable table the
+grid is paging, so the file matches what was on screen. A typed COPY reads live tables — twice when
+it is partitioned — so its gate is a pre-flight, not a lock.
+
+The checks, all of them about a statement that would otherwise *succeed* and produce something
+wrong:
 
 | Check | Why | Where |
 |---|---|---|
 | A partition identifier is one bare word | DF 54's COPY parser renders each with `Ident::to_string()` and the planner looks it up by that string, so `PARTITIONED BY ("order date")` reaches `field_with_name` with its quotes attached and fails about a column nobody named | `export::partition_columns_are_bare_words` — **shared**, not copied, and asked before planning so the refusal is ours |
-| No NULL in a partition column | DF 54 has no `__HIVE_DEFAULT_PARTITION__`: it files the row under a *neighbouring* value's directory, so the output reads back claiming a value it never had | `arms::copy::no_null_partition_values`, in `export::partition_null_refusal`'s wording |
+| No NULL in a partition column | DF 54 has no `__HIVE_DEFAULT_PARTITION__`: it files the row under a *neighbouring* value's directory, so the output reads back claiming a value it never had | `copy_job::no_null_partition_values`, over `NullEvidence::Count` |
 | No `__snap_` source | a snapshot carries `__strata_ord`, which must never reach a user's file | the classifier (§4), `Fault::ReservedName` |
-| The target is not storage Strata owns | a file dropped under `.strata/tables/<slug>/` is listed by that table's next scan — phantom rows if the schema matches, a table that has started failing if it does not — and silent corruption is refused rather than warned about | `arms::copy::refuse_owned_target`, off the *resolved* path |
+| The target is not storage Strata owns | a file dropped under `.strata/tables/<slug>/` is listed by that table's next scan — phantom rows if the schema matches, a table that has started failing if it does not — and silent corruption is refused rather than warned about | `export::refuse_owned_target`, off the *resolved* path |
 
 The target check is the one that looks at where the write **lands** rather than what it reads, and
-it fences exactly two roots: the project's `.strata/` and the snapshot spool, because those are the
-two places a stray file changes what Strata later reads back. Everywhere else on the disk is the
-user's own, and a `COPY` that overwrites their file is the statement doing what it says. It compares
+the roots it fences are `export::owned_roots`': the project's `.strata/` plus whatever this
+engine's two stores say they keep their bytes under (`SnapshotStore::owned_storage`,
+`InternalTableStore::owned_storage`, both provided methods defaulting to none). The stores are
+asked rather than guessed, because where results and Strata-owned tables live is an embedder's
+choice — a store in RAM fences nothing, and one rooted somewhere of its own fences that root.
+Everywhere else on the disk is the user's own, and a `COPY` that overwrites their file is the
+statement doing what it says. It compares
 resolved paths and never text — a relative `output_url` is the process's cwd away from an absolute
 one, and `.strata/../.strata/tables` names the directory without sharing its prefix. Since the
 target need not exist yet, the path is made absolute, its `.` and `..` folded, and both sides
@@ -827,21 +837,21 @@ anchored on the deepest ancestor that *does* exist, which is what makes a symlin
 compare equal rather than slipping past. A target carrying a non-`file:` scheme is an object
 store's and not a path into this machine at all.
 
-The NULL gate's *mechanism* differs from the window's because the sources do. The window reads
-exact per-column counts the snapshot's write pass already produced, for free; a typed COPY's source
-is any query at all, so it counts — `count_all()` plus one `count(col)` per partition column over
-the **planned input**, positionally decoded, the shape `profile::aggregates` uses. One extra scan
-per partitioned typed COPY, the honest price of the same guarantee over an arbitrary source. The
-rule is identical: **proceed only on an exact zero**, a count that could not be read being a reason
-to decline just as a positive one is.
+The NULL gate is one rule with two kinds of evidence, because the sources differ. The window hands
+`NullEvidence::Snapshot`: exact per-column counts the snapshot's write pass already produced, for
+free. A typed COPY's source is any query at all, so it hands `NullEvidence::Count` and the gate
+counts — `count_all()` plus one `count(col)` per partition column over the **planned input**,
+positionally decoded, the shape `profile::aggregates` uses. One extra scan per partitioned typed
+COPY, the honest price of the same guarantee over an arbitrary source. The rule and the sentence
+are identical: **proceed only on an exact zero**, a count that could not be read being a reason to
+decline just as a positive one is.
 
 The report is "Exported N rows to '<path>'" off the sink's own `count` column, and the effect is
 `None` — a COPY changes nothing the catalog holds, while history and the event log record it like
 any successful run. `COPY`'s policy message stays defined as the **agent** path's refusal;
 the editor path simply no longer reaches them.
 
-One thing moved on the window's side with this: `keep_partition_by_columns` is now stated in the
-`COPY`'s own `OPTIONS` rather than by a session `SET`. DataFusion's physical planner reads that key
+`keep_partition_by_columns` is stated in the write's own options rather than by a session `SET`. DataFusion's physical planner reads that key
 out of the statement's options and only falls back to the session config when it is absent, and the
 `SET` was never restored — invisible for as long as nothing could read it back, and now that `SET`
 and `SHOW` are statements a user can type (§6.5) one partitioned export would otherwise be deciding

@@ -81,6 +81,7 @@ impl Workspace<'_> {
                     ctx: engine.ctx.clone(),
                     sql,
                     root,
+                    owned: engine.owned_storage(),
                     internal: engine.internal.clone(),
                     tables: engine.tables.clone(),
                     connections: engine.connections.clone(),

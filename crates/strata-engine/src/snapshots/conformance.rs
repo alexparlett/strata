@@ -5,6 +5,7 @@
 //! [`LocalIpcSnapshotStore`](super::LocalIpcSnapshotStore) happens to do.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -150,10 +151,35 @@ async fn the_contract(store: &dyn SnapshotStore) {
         "the ordinal numbers the rows in the order they were handed over, across batches"
     );
 
+    names_where_its_bytes_are(&store.owned_storage());
+
     store.retire(id);
     assert!(
         store.open(&ctx, id).await.is_err(),
         "a retired snapshot is gone"
+    );
+}
+
+/// **What a store names as its storage is where its bytes are** — the whole basis of the write
+/// fence (`export::refuse_owned_target`), which refuses a `COPY` beneath these roots and nothing
+/// else. A root that is relative would be compared against a process cwd the store never meant,
+/// and a root holding nothing after a settle is a fence over the wrong place.
+///
+/// Answering nothing is the default and says nothing, so it is asserted about only when a store
+/// does answer.
+fn names_where_its_bytes_are(roots: &[PathBuf]) {
+    if roots.is_empty() {
+        return;
+    }
+    assert!(
+        roots.iter().all(|root| root.is_absolute()),
+        "a store names its storage absolutely: {roots:?}"
+    );
+    assert!(
+        roots
+            .iter()
+            .any(|root| root.read_dir().is_ok_and(|mut it| it.next().is_some())),
+        "a settled snapshot is somewhere under what the store named: {roots:?}"
     );
 }
 
