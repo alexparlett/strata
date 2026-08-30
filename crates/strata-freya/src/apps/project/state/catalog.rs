@@ -165,6 +165,23 @@ impl CatalogState {
 /// It is not a mirror of the store's rows. The rows are the defs, which are the store's; this is
 /// what happened when the engine was asked to register them, keyed by name and stamped with the
 /// generation each answer was given at.
+///
+/// **Why it has to exist at all**, rather than each surface re-reading the engine on whatever
+/// already wakes it: a **data source** has no payload. A table's answer lands `TableMeta` on its
+/// row and a view's lands `ViewInfo`, so those surfaces are woken by the store write that carries
+/// it — but connecting learns nothing a row could carry, so a source outcome writes nothing and
+/// there is no channel to wake the tree. This is that channel, and once it exists it serves the
+/// rest, which is also what keeps every row on screen describing one instant.
+///
+/// The obligation that comes with it: **a gesture that makes the engine register something owes a
+/// [`registrations_settled`]**. Today every such path is one of the three named there — the pass's
+/// fold, the statement fold, and the scan claim's release — and the two gestures that reach the
+/// engine off-piste (Configure's rename `deregister`, the source editor's rename `disconnect`)
+/// take their row out of the store first and then ask for a pass, so neither leaves a row joined
+/// against a stale answer. A fourth would have to keep that true itself, which is the one thing
+/// this shape cannot enforce the way the engine's own bookkeeping does (there,
+/// `note_registration` *is* the generation bump). Making the trigger structural instead is
+/// EA-30's.
 pub type RegistrationsCtx = State<Registrations>;
 
 /// Provide this window's ledger view, seeded from the engine. Called by `use_init_project`, which
