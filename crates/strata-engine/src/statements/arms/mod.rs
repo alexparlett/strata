@@ -42,10 +42,10 @@ use std::time::Instant;
 use datafusion::catalog::TableProvider;
 use datafusion::logical_expr::TableType;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 
 use crate::fold_ident;
 use crate::policy::Principal;
+use crate::providers::def_ref;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, StatementReport};
@@ -127,8 +127,11 @@ pub(crate) fn stamped(
 /// `impl Into<TableReference> for &str` parses, and a name that needed quoting does not survive a
 /// parse, so it would be looked up under a name nothing ever registered.
 pub(crate) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableType> {
+    // Through `def_ref`, because a project name is not always in the workspace catalog: a table
+    // that reads through a live store data source is registered in *that* source's catalog
+    // (EA-25 item 3), and a bare lookup would report an existing table as absent.
     let provider: Arc<dyn TableProvider> = ctx
-        .table_provider(TableReference::bare(fold_ident(name)))
+        .table_provider(def_ref(ctx, &fold_ident(name)))
         .await
         .ok()?;
     Some(provider.table_type())
@@ -174,6 +177,7 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
 /// the landing is `tests/postgres_federation.rs`'s, where a real server can take an insert.
 #[cfg(test)]
 mod tests {
+    use datafusion::sql::TableReference;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};

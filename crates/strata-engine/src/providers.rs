@@ -355,6 +355,24 @@ pub(crate) fn def_catalogs(ctx: &SessionContext) -> Vec<String> {
     names
 }
 
+/// Takes `name` out of whichever def-backed catalog holds it, answering that catalog **and** the
+/// provider it removed.
+///
+/// The catalog comes back because a caller that has to put the table back has to put it back
+/// where it was: a drop that fails after deregistering would otherwise re-register a bucket
+/// table into the workspace, which resolves under the same name and reads through nothing.
+pub(crate) fn take_table(
+    ctx: &SessionContext,
+    name: &str,
+) -> Option<(String, Arc<dyn TableProvider>)> {
+    for catalog in def_catalogs(ctx) {
+        if let Ok(Some(provider)) = remove_table(ctx, &catalog, name) {
+            return Some((catalog, provider));
+        }
+    }
+    None
+}
+
 /// The reference that **resolves** the project's own bare `name` — a plain name in the workspace,
 /// and the full three-part address when a live store data source's catalog holds it.
 ///

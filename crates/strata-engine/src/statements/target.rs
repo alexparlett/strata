@@ -27,6 +27,9 @@ use crate::{fold_ident, CATALOG, SCHEMA};
 pub enum Target {
     /// The workspace catalog's one schema, under the bare name registration takes.
     Workspace { name: String },
+    /// A table in a **store** data source's catalog (EA-25) — one of the project's own rows,
+    /// whose data is files in a bucket.
+    Store(Stored),
     /// A relation inside a live data source's catalog.
     Remote(Remote),
     /// A qualifier that resolves to no catalog at all — [`elsewhere`]'s wording.
@@ -41,7 +44,10 @@ impl Target {
     /// there is nothing there to hold a grant over.
     pub fn locality(&self) -> Option<Locality> {
         match self {
-            Target::Workspace { .. } => Some(Locality::Local),
+            // A bucket table is **file-backed and the project's own**, so it holds the local
+            // grant it held when it lived in the workspace catalog. The axis is where the work
+            // happens, not which catalog resolves the name: nothing about it is a server's.
+            Target::Workspace { .. } | Target::Store(_) => Some(Locality::Local),
             Target::Remote(_) => Some(Locality::Remote),
             Target::Nowhere { .. } => None,
         }
@@ -60,9 +66,59 @@ impl Target {
     pub fn workspace(self, what: &str) -> Result<String, String> {
         match self {
             Target::Workspace { name } => Ok(name),
+            Target::Store(at) => Err(in_store(&at.address(), &at.source, what)),
             Target::Remote(at) => Err(in_database(&at.address(), &at.source)),
             Target::Nowhere { .. } => Err(elsewhere(what)),
         }
+    }
+
+    /// The project's own name for a **def-backed** table — the workspace's, or one in a store
+    /// data source's catalog.
+    ///
+    /// The answer for an arm that manages a table the project holds a row for, wherever that
+    /// row's provider was placed: `DROP TABLE regions` names the same def whether it is written
+    /// bare or as `lake.public.regions`, because a store catalog is where a def is *registered*
+    /// and never a second namespace to be in. The arm resolves the name through
+    /// [`def_ref`](crate::providers::def_ref) rather than being handed a catalog, so it needs no
+    /// idea which of the two placements it got.
+    ///
+    /// Separate from [`workspace`](Self::workspace) rather than folded into it: that one is for
+    /// arms that act on the workspace and **nothing else**, and a store catalog is one of the
+    /// things they refuse.
+    ///
+    /// # Errors
+    ///
+    /// The name is a relation inside a database data source, or a qualifier that resolves to no
+    /// catalog at all.
+    pub fn def(self, what: &str) -> Result<String, String> {
+        match self {
+            Target::Workspace { name } => Ok(name),
+            Target::Store(at) => Ok(at.name),
+            Target::Remote(at) => Err(in_database(&at.address(), &at.source)),
+            Target::Nowhere { .. } => Err(elsewhere(what)),
+        }
+    }
+}
+
+/// One table in a **store** data source's catalog: the data source it reads through, and the
+/// project's own name for it.
+///
+/// `name` is bare on purpose — it is what the def carries, what every registration takes and what
+/// a drop removes. The catalog is *placement*: it decides where the provider was put and what a
+/// Forget takes away, and it is never a second namespace, because table names are unique across
+/// the whole project.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stored {
+    /// The data source's name, which is the catalog its tables are registered in.
+    pub source: String,
+    /// The project's own name for the table.
+    pub name: String,
+}
+
+impl Stored {
+    /// The address a message prints — [`qualified`], for the reason [`Remote::address`] is.
+    pub fn address(&self) -> String {
+        qualified([self.source.as_str(), SCHEMA, self.name.as_str()])
     }
 }
 
@@ -140,10 +196,30 @@ impl Remote {
 /// data source's own gates — is it writable, may this caller reach it — are asked of the resolved
 /// answer, not folded into it.
 pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
-    if in_workspace(name) || in_store_catalog(ctx, name) {
+    if in_workspace(name) {
         return Target::Workspace {
             name: name.table().to_string(),
         };
+    }
+    // A store data source's catalog is **ours**, so it answers here and never falls through to
+    // the database search below: it has one schema like the workspace's, and a name written
+    // against any other resolves to nothing in it — which is `Nowhere`, exactly as
+    // `strata.other.t` already is, rather than a relation on some server.
+    if let TableReference::Full {
+        catalog, schema, ..
+    } = name
+    {
+        if is_store_catalog(ctx, catalog) {
+            return match schema.as_ref() == SCHEMA {
+                true => Target::Store(Stored {
+                    source: catalog.to_string(),
+                    name: name.table().to_string(),
+                }),
+                false => Target::Nowhere {
+                    qualifier: name.to_string(),
+                },
+            };
+        }
     }
     let TableReference::Full { catalog, .. } = name else {
         return Target::Nowhere {
@@ -159,27 +235,6 @@ pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
             qualifier: name.to_string(),
         },
     }
-}
-
-/// Whether `name` addresses a relation inside a **store** data source's catalog — a bucket table,
-/// which is one of the project's own rows placed there rather than a relation a server describes.
-///
-/// [`resolve_target`] answers [`Workspace`](Target::Workspace) for one, and that is the whole of
-/// EA-25's store-connection flavour: a store catalog is **placement, not a namespace**, so
-/// `lake.strata.sales` and a bare `sales` are the same project row reached two ways — exactly as
-/// `strata.strata.sales` already is. Every arm therefore answers as it did before the tables
-/// moved: `DROP TABLE` drops the def, `INSERT`'s internal gate refuses a table Strata does not
-/// store, `COPY`'s fence is unmoved, and the bare name registration takes is the name in hand.
-///
-/// It is **not** [`in_workspace`], which asks whose *namespace* a name is in and so must keep
-/// answering false here: that predicate is what reserves `__snap_`, and a store catalog holding a
-/// relation somebody called `__snap_3` reserves nothing.
-fn in_store_catalog(ctx: &SessionContext, name: &TableReference) -> bool {
-    matches!(
-        name,
-        TableReference::Full { catalog, schema, .. }
-            if schema.as_ref() == SCHEMA && is_store_catalog(ctx, catalog)
-    )
 }
 
 /// [`resolve_target`] off a **parsed** name, for the arms that must answer before anything plans:
@@ -214,6 +269,21 @@ fn source_catalog(ctx: &SessionContext, catalog: &str) -> Option<String> {
     ctx.catalog_names()
         .into_iter()
         .find(|registered| fold_ident(registered) == folded)
+}
+
+/// The wording for a statement that will **not** create or drop a name inside a **store** data
+/// source's catalog.
+///
+/// Its own sentence rather than [`in_database`]'s, because the reason is a different one and so
+/// is the fix: a store catalog holds the tables this project reads through a bucket, and what
+/// decides which bucket a table reads through is its own LOCATION, not the catalog somebody
+/// wrote in front of the name. Saying "which describes its own relations" of a bucket would be
+/// simply untrue.
+pub fn in_store(name: &str, source: &str, what: &str) -> String {
+    format!(
+        "'{name}' is in the data source '{source}', which holds the tables this project reads \
+         through it. {what} are created in the project, so write the name without a catalog"
+    )
 }
 
 /// The wording for a statement that will **not** touch a name inside a data source's
@@ -265,6 +335,67 @@ mod tests {
     fn resolved(ctx: &SessionContext, name: &str) -> Target {
         resolve_target(ctx, &TableReference::parse_str(name))
     }
+
+    /// **A store data source's catalog is its own answer** (EA-25 item 6), and the difference
+    /// between the two helpers is the point of it.
+    ///
+    /// A bucket table is file-backed and the project's own, so an arm that *manages a def*
+    /// reaches it by its bare name ([`Target::def`]) and every gate answers as it did before the
+    /// tables moved. An arm that acts on the workspace and nothing else
+    /// ([`Target::workspace`]) refuses it — in the store catalog's own words, not the
+    /// database one's, because a bucket does not describe its own relations.
+    ///
+    /// Folding this into [`Target::Workspace`] was tried and is what this test exists to stop:
+    /// the bare name it handed back resolves only in the workspace, so `DROP TABLE` on a bucket
+    /// table answered "does not exist" about a table that was right there.
+    #[test]
+    fn a_bucket_table_is_a_target_of_its_own() {
+        let ctx = session();
+        ctx.register_catalog(
+            "lake",
+            std::sync::Arc::new(crate::providers::StoreCatalogProvider::new("lake".into())),
+        );
+
+        let target = resolved(&ctx, "lake.public.regions");
+        assert_eq!(
+            target,
+            Target::Store(Stored {
+                source: "lake".into(),
+                name: "regions".into(),
+            })
+        );
+        assert_eq!(
+            target.locality(),
+            Some(Locality::Local),
+            "file-backed: it holds the grant it held in the workspace"
+        );
+
+        assert_eq!(
+            resolved(&ctx, "lake.public.regions").def(WHAT_TABLES),
+            Ok("regions".to_string()),
+            "an arm managing the def gets the project's own name"
+        );
+
+        let refused = resolved(&ctx, "lake.public.regions")
+            .workspace(WHAT_VIEWS)
+            .expect_err("a view is not created inside a bucket's catalog");
+        assert!(
+            refused.contains("'lake'") && refused.contains("without a catalog"),
+            "the refusal names the data source and the fix: {refused}"
+        );
+        assert!(
+            !refused.contains("describes its own relations"),
+            "and it is not the database wording, which would be untrue of a bucket: {refused}"
+        );
+
+        assert!(
+            matches!(resolved(&ctx, "lake.other.regions"), Target::Nowhere { .. }),
+            "the store catalog has one schema, like the workspace"
+        );
+    }
+
+    const WHAT_TABLES: &str = "Tables";
+    const WHAT_VIEWS: &str = "Views";
 
     /// **The three spellings of the workspace's one schema are one answer**, and the qualified
     /// one is folded on the catalog and exact on the schema — the way the things that resolve

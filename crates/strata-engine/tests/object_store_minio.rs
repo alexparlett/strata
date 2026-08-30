@@ -552,6 +552,35 @@ async fn a_bucket_table_lives_in_its_data_sources_catalog() {
         meta.remote
     );
 
+    // **The statement arms reach a bucket table.** `DROP TABLE` is the one that proved the
+    // placement needs its own `Target` arm rather than being folded into the workspace's: the
+    // arm resolves the name it is handed, and a bare lookup answers "does not exist" about a
+    // table sitting in its data source's catalog.
+    let dropped = engine
+        .ws(WsId(1))
+        .run(RunTag(5), "DROP TABLE regions".into(), 50)
+        .await
+        .expect("a bucket table is one of the project's own rows, and drops like one");
+    let RunOutcome::Statement(report) = dropped else {
+        panic!("a drop is an intercepted statement, not a result");
+    };
+    assert!(
+        report.message.contains("regions"),
+        "the drop names the table it removed: {}",
+        report.message
+    );
+    assert!(
+        ws.query(RunTag(6), "SELECT * FROM regions".into(), 50)
+            .await
+            .is_err(),
+        "and the name stops resolving, so the provider really came out of the store catalog"
+    );
+
+    catalog
+        .register(table(&endpoint))
+        .await
+        .expect("and it registers again");
+
     sources.disconnect(LAKE);
 
     let refused = ws

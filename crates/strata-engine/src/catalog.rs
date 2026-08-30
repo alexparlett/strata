@@ -21,6 +21,7 @@ use crate::formats::Formats;
 use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::providers::{
     def_backed, def_catalogs, def_home, def_ref, in_workspace, remove_table, replace_table,
+    take_table,
 };
 use crate::snapshots::is_snapshot_name;
 use crate::sql::qualified;
@@ -278,11 +279,7 @@ pub(crate) async fn registered(ctx: &SessionContext) -> Vec<(String, bool)> {
 /// failure has — the def's own name, unique across the project. Silent about a name nothing
 /// holds, which is every arm that deregisters defensively.
 pub(crate) fn deregister_anywhere(ctx: &SessionContext, name: &str) {
-    for catalog in def_catalogs(ctx) {
-        if matches!(remove_table(ctx, &catalog, name), Ok(Some(_))) {
-            return;
-        }
-    }
+    let _ = take_table(ctx, name);
 }
 
 /// How many levels down the listing below will look.

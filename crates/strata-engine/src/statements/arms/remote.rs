@@ -53,7 +53,7 @@ pub(super) fn target(ctx: &SessionContext, kind: StmtKind, stmt: &DFStatement) -
     };
     match target {
         Target::Remote(at) => Some(at),
-        Target::Workspace { .. } | Target::Nowhere { .. } => None,
+        Target::Workspace { .. } | Target::Store(_) | Target::Nowhere { .. } => None,
     }
 }
 

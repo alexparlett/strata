@@ -120,7 +120,7 @@ impl StmtCtx {
             Target::Remote(at) => source_facts(&self.live, &at.source),
             // The second arm is unreachable past the guard above, and is stated rather than
             // wildcarded so a fourth kind of target has to decide what it tells the provider.
-            Target::Workspace { .. } | Target::Nowhere { .. } => TargetFacts {
+            Target::Workspace { .. } | Target::Store(_) | Target::Nowhere { .. } => TargetFacts {
                 locality,
                 ..Default::default()
             },
